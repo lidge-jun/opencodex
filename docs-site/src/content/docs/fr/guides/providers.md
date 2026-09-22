@@ -121,7 +121,8 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth utilise la passerelle d'abonnement Grok CLI distincte. Le remplacement par clé API utilise `https://api.x.ai/v1` et peut injecter Priority Processing. Catalogue Grok découvert en direct en priorité ; `grok-4.5` est le modèle de repli par défaut. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Modèles Claude ; liste des modèles récupérée en direct depuis `/v1/models`. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Modèles de programmation Kimi K2.7/K2.6/K2.5. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Modèles Kimi Code. L'alias `kimi-for-coding` pointe actuellement vers K2.8 Preview (contexte de 1 M de tokens, raisonnement `low`/`high`/`max`, texte et images). `k3-256k` offre une limite fixe de 256 K. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Réutilise la connexion OAuth de `kimi` avec les mêmes modèles sur le protocole Responses. Le contenu du raisonnement reste chiffré côté serveur ; les appels d'outils et leurs résultats restent visibles. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Passerelle d'abonnement Nous Research (le même service en amont que celui utilisé par Hermes Agent). Connexion par autorisation d'appareil auprès de `portal.nousresearch.com` ; le jeton d'accès est le JWT d'inférence envoyé avec chaque requête. Le catalogue mixte de modèles payants et `:free` (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) est découvert en direct pour le compte connecté. Les jetons d'actualisation sont à usage unique et renouvelés à chaque actualisation. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | La connexion initiale importe la session de l'installation locale de `kiro-cli`, déjà authentifiée (sous Unix, installez avec `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; puis exécutez `kiro-cli login`). **Ajouter un compte** déconnecte `kiro-cli`, lance une nouvelle connexion dans le navigateur qui change le compte utilisé par `kiro-cli`, puis enregistre les métadonnées propres au profil. Les comptes OpenCodex existants sont préservés ; une annulation ou un échec restaure la session `kiro-cli` précédente. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth avec le protocole Cloud Code Assist. La découverte en direct utilise le point de terminaison CCA authentifié `v1internal:fetchAvailableModels` et publie les modèles d'agent accessibles au compte connecté ; le catalogue maintenu reste la solution de repli. |
@@ -159,6 +160,14 @@ par l'appelant ; il n'en génère jamais. Selon la documentation de Kimi, une cl
 est nécessaire pour améliorer le taux de succès du cache du Coding Plan ; les requêtes dépourvues de clé le
 restent. Si un service en amont explicitement activé rejette ce champ, opencodex ne le retire pas avant de
 réessayer et ne modifie pas la configuration enregistrée. Tous les autres fournisseurs le refusent par défaut.
+
+Les prix de `k3`, `k3[1m]` et `k3-256k` pour `kimi`, `kimi-code` et `kimi-responses`
+sont des estimations fondées sur les [tarifs de l'API](https://platform.kimi.ai/docs/pricing/chat),
+avec l'écriture en cache par défaut de cinq minutes. Ils ne représentent ni la facturation ni
+les quotas du Code Plan : la variante 1 M consomme environ deux fois le quota de `k3-256k`.
+L'alias `kimi-for-coding` pointe désormais vers K2.8 Preview ; son ancien tarif K2.7 n'est plus
+utilisé. Son coût reste inconnu sans `modelCosts` fourni par l'utilisateur, et les règles de routage
+qui excluent les coûts inconnus peuvent donc l'écarter.
 
 Vous pouvez également démarrer OAuth à partir du [tableau de bord Web](/fr/guides/web-dashboard/).
 
@@ -283,7 +292,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 96 préréglages intégrés : 80 à clé, 12 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 97 préréglages intégrés : 80 à clé, 13 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 

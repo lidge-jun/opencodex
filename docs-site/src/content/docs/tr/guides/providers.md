@@ -134,7 +134,8 @@ ocx logout <saglayici>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth ayrı Grok CLI abonelik ağ geçidini kullanır. API anahtarı geçersiz kılması `https://api.x.ai/v1` kullanır ve Priority Processing ekleyebilir. Canlı öncelikli Grok kataloğu; `grok-4.5` geri dönüş varsayılanıdır. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude modelleri; canlı model listesi `/v1/models` üzerinden getirilir. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 kodlama modelleri. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code modelleri. `kimi-for-coding` artık K2.8 Preview modelini gösterir; 1 milyon token bağlam, `low`/`high`/`max` akıl yürütme ve metin ile görsel girdisi sunar. `k3-256k` için bağlam sınırı sabit 256K'dır. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | `kimi` ile aynı OAuth oturumunu ve model listesini Responses üzerinden kullanır. Akıl yürütme içeriği sunucuda şifreli kalır; araç çağrıları ve sonuçları görünürdür. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research abonelik ağ geçidi (Hermes Agent'ın kullandığı aynı arka uç). `portal.nousresearch.com`'a karşı cihaz yetkilendirmesi girişi; erişim belirteci istek başına çıkarım JWT'sidir. Oturum açmış hesaptan canlı olarak keşfedilen karışık ücretli + `:free` model kataloğu (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...). Yenileme belirteçleri tek kullanımlıktır ve her yenilemede döndürülür. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | İlk oturum açma, kurulu ve oturum açılmış `kiro-cli` oturumunu içe aktarır (Unix'te `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` ile kurun; Windows PowerShell'de `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` kullanın; ardından `kiro-cli login` çalıştırın). **Hesap ekle**, `kiro-cli` oturumunu kapatır, `kiro-cli` tarafından kullanılan hesabı değiştiren yeni bir tarayıcı girişi başlatır ve hesap kapsamlı profil meta verilerini saklar. Mevcut OpenCodex hesapları korunur ve iptal veya başarısızlık önceki `kiro-cli` oturumunu geri yükler. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Cloud Code Assist hattı üzerinden Google OAuth. Canlı keşif CCA'nın kimlik doğrulamalı `v1internal:fetchAvailableModels` uç noktasını kullanır ve oturum açmış hesap için kullanılabilir olan ajan modellerini yayınlar; sürdürülen katalog geri dönüş olarak kalır. |
@@ -174,6 +175,13 @@ oturum/görev anahtarı belgelerken, anahtarsız istekler anahtarsız kalır. Da
 edilmiş bir yukarı akış alanı reddederse opencodex bunu kaldırmaz ve yeniden
 denemez veya kayıtlı yapılandırmayı değiştirmez. Diğer sağlayıcılar varsayılan
 olarak reddedilir kalır.
+
+`kimi`, `kimi-code` ve `kimi-responses` için `k3`, `k3[1m]` ve `k3-256k` maliyetleri,
+varsayılan beş dakikalık önbellek yazma ücretini kullanan [API fiyatlarına](https://platform.kimi.ai/docs/pricing/chat)
+dayalı tahminlerdir. Code Plan faturasını veya kotasını yansıtmazlar: K3'ün 1M sürümü,
+`k3-256k` modelinin yaklaşık iki katı kota tüketir. `kimi-for-coding` artık K2.8 Preview'a
+yönlendiği için eski K2.7 fiyatı kullanılmaz. Kullanıcı `modelCosts` tanımlamadıkça maliyet
+bilinmez; bilinmeyen maliyetleri dışlayan yönlendirme kuralları bu takma adı eleyebilir.
 
 OAuth'u [web kontrol panelinden](/tr/guides/web-dashboard/) de
 başlatabilirsiniz.
@@ -316,7 +324,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 96 yerleşik önayar ile birlikte gelir: 80 anahtar tabanlı, 12
+opencodex 97 yerleşik önayar ile birlikte gelir: 80 anahtar tabanlı, 13
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer

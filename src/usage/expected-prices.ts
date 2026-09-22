@@ -146,9 +146,12 @@ const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-deta
  * cache-write charge.
  */
 const DEEPSEEK_V41_FLASH: Cost4 = { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 };
-// Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
-// cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
-const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cacheWrite derived = input, Kimi auto-cache has no write billing)";
+// Historical K2 rows retain their 2026-07-20 verification; they do not price retargeted aliases.
+const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (historical official table; cacheWrite derived from cache-miss input)";
+// K3 publishes a separate cache-write price: $3/1M for the default 5-minute TTL.
+// Coding presets share an endpoint/product, but these API reference estimates are not plan
+// billing or quota: K3's 1M model consumes about twice the quota of k3-256k.
+const KIMI_K3_PRICING = "https://platform.kimi.ai/docs/pricing/chat (API reference estimate; default 5-minute cache-write rate, not Code Plan billing/quota); https://www.kimi.com/code/docs/en/kimi-code/models.html";
 // Z.AI publishes one USD table for the international surface; the Coding Plan
 // subscription and the domestic bigmodel.cn endpoints bill differently
 // (subscription quota / CNY tiers), so every GLM row below is verified-derived:
@@ -306,25 +309,31 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // Kimi / Moonshot — official price tables are now published (2026-07-20 re-check;
   // previously empty). kimi = Kimi Code OAuth surface, moonshot = CN key surface,
   // kimi-code = API key surface (expected list price, not actual billing).
-  { provider: "kimi", modelId: "k3", cost4: KIMI_K3, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: k3 (official docs: k3[1m] is the 1M-context compat notation for k3) ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi", modelId: "kimi-for-coding", cost4: KIMI_K27_CODE, source: `derived: kimi-k2.7-code (Kimi Code maps to K2.7 Code per official model docs) ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "moonshot", modelId: "kimi-k3", cost4: KIMI_K3, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
+  // kimi-for-coding now serves K2.8 Preview. No verified K2.8 price: keep all three
+  // Coding presets unknown rather than reusing the alias's retired K2.7 price.
+  { provider: "moonshot", modelId: "kimi-k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "k3", cost4: KIMI_K3, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: k3 ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "kimi-for-coding", cost4: KIMI_K27_CODE, source: `derived: kimi-k2.7-code ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
+  // Responses reuses the kimi OAuth account and the same Coding endpoint/model seeds.
+  { provider: "kimi-responses", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi-responses", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi-responses", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   // Qwen3.8-Max: vendor-published input/output rate (verified). See QWEN38_MAX_PRICING
   // for what that source does and does not cover.
   { provider: "alibaba-token-plan", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },

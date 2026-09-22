@@ -158,7 +158,7 @@ there. Feature code is grouped by responsibility:
 | Evidence and contracts | `src/compatibility/`, `src/lab/` |
 | Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/`, `src/generated/` |
 
-`src/generated/` is build output committed for the runtime; it is not edited by hand.
+`src/generated/` is committed build output, not hand-edited; `scripts/generate-model-metadata.ts` derives `kimi-responses` → Moonshot metadata from the registry's `jawcodeBundle` while keeping its provider row distinct.
 
 `src/server/` is split by responsibility: `index.ts` owns the listener and the startup transaction
 while `index/serve-options.ts` owns route ordering; `responses.ts` and `responses/core.ts` compose

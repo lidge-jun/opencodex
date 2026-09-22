@@ -1,5 +1,11 @@
 # Providers And Adapters
 
+Kimi Coding's Chat, API-key, and optional Responses presets consume the same model seeds in
+`src/providers/registry/model-seeds.ts`, including the native `k3-256k` ID. The Responses preset
+shares the `kimi` OAuth account and Coding endpoint, keeps Chat as the featured default, and
+enables adjacent tool-result repair on its Responses wire. Its metadata alias is generated from
+the registry; sharing authentication does not implicitly share a usage-price namespace.
+
 OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
 the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).

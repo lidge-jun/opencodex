@@ -733,7 +733,7 @@ describe("provider registry parity", () => {
     expect(deriveKeyLoginMap().zai.modelMaxOutputTokens?.["glm-5.3[1m]"]).toBe(131_072);
     // `zhipu-bigmodel-coding` opts in for the same reason `zai` does: it serves the same
     // bracketed GLM ids, and that vendor's OpenAI path returns 400 code 1211 for them.
-    expect(optedInProviders).toEqual(["kimi", "zai", "zhipu-bigmodel-coding", "kimi-code"]);
+    expect(optedInProviders).toEqual(["kimi", "kimi-responses", "zai", "zhipu-bigmodel-coding", "kimi-code"]);
 
     const config: OcxConfig = {
       port: 10100,
@@ -981,7 +981,7 @@ describe("provider registry parity", () => {
     // k3-256k). Seeding a retired id in a metadata list would re-arm the model-rename
     // migration on every boot (#5066); saved rows still naming one are repaired by
     // MODEL_RENAMES instead.
-    const codingModels = ["k3", "k3[1m]", "kimi-for-coding"];
+    const codingModels = ["k3", "k3[1m]", "k3-256k", "kimi-for-coding"];
     const parityLists = [
       "noReasoningModels",
       "noTemperatureModels",
@@ -991,10 +991,10 @@ describe("provider registry parity", () => {
       "preserveReasoningContentModels",
     ] as const;
 
-    for (const providerId of ["kimi", "kimi-code"]) {
+    for (const providerId of ["kimi", "kimi-code", "kimi-responses"]) {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.models).toEqual(codingModels);
-      // The whole point of the refresh: both presets default to the live alias. A
+      // Every Coding preset defaults to the live alias. A
       // registry rollback to the retired default would silently pass without this.
       expect(entry?.defaultModel).toBe("kimi-for-coding");
       expect(entry?.models).not.toContain("kimi-k2.7-code");
@@ -1018,15 +1018,22 @@ describe("provider registry parity", () => {
       // Key-pool 429 rotation rebuilds the provider from the persisted config (not the routed
       // one), so the flag must survive seeding/enrichment, not just the router's registry backfill.
       expect(providerConfigSeed(entry!).promptCacheKey).toBe(true);
-      const enriched: OcxProviderConfig = { adapter: "openai-chat", baseUrl: entry!.baseUrl };
+      const enriched: OcxProviderConfig = { adapter: entry!.adapter, baseUrl: entry!.baseUrl };
       enrichProviderFromCatalog(providerId, enriched);
       expect(enriched.promptCacheKey).toBe(true);
       expect(entry?.noReasoningModels).not.toContain("k3");
       expect(entry?.noReasoningModels).not.toContain("k3[1m]");
       expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);
       expect(entry?.modelReasoningEfforts?.["k3[1m]"]).toEqual(["low", "high", "max"]);
-      for (const modelId of ["k3", "k3[1m]"]) {
+      for (const modelId of ["k3", "k3[1m]", "k3-256k"]) {
+        expect(entry?.noReasoningModels).not.toContain(modelId);
+        expect(entry?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
         expect(entry?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
+        expect(entry?.modelInputModalities?.[modelId]).toEqual(["text", "image"]);
+        for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
+          expect(entry?.[field]).toContain(modelId);
+        }
+        expect(entry?.autoToolChoiceOnlyModels).not.toContain(modelId);
         expect(entry?.modelReasoningEffortMap?.[modelId]).toEqual({
           none: "none",
           low: "low",
@@ -1047,6 +1054,24 @@ describe("provider registry parity", () => {
       // 260921: K2.8 gave kimi-for-coding the same adjustable low/high/max ladder as k3.
       expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
     }
+
+    // The Responses preset shares the kimi OAuth account (same oauthId, no second login)
+    // and carries identical model metadata; the wire is the only difference.
+    const kimiResp = PROVIDER_REGISTRY.find(provider => provider.id === "kimi-responses");
+    expect(kimiResp).toBeDefined();
+    expect(kimiResp?.adapter).toBe("openai-responses");
+    expect(kimiResp?.authKind).toBe("oauth");
+    expect(kimiResp?.oauthId).toBe("kimi");
+    expect(kimiResp?.requiresAdjacentResponsesToolResults).toBe(true);
+    expect(kimiResp?.models).toEqual(codingModels);
+    expect(kimiResp?.defaultModel).toBe("kimi-for-coding");
+    expect(kimiResp?.modelContextWindows?.["kimi-for-coding"]).toBe(1_048_576);
+    expect(kimiResp?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
+    expect(kimiResp?.modelDefaultReasoningEfforts?.["kimi-for-coding"]).toBe("max");
+    expect(kimiResp?.modelInputModalities?.["kimi-for-coding"]).toEqual(["text", "image"]);
+    expect(kimiResp?.featured).toBe(false);
+    expect(kimiResp?.baseUrl).toBe(PROVIDER_REGISTRY.find(provider => provider.id === "kimi")?.baseUrl);
+    expect(resolveMetadataProvider("kimi-responses")).toBe("moonshot");
 
     const kimi = PROVIDER_REGISTRY.find(provider => provider.id === "kimi")!;
     const kimiModel = applyProviderConfigHints("kimi", providerConfigSeed(kimi), { provider: "kimi", id: "k3" });
@@ -1437,6 +1462,7 @@ describe("provider registry parity", () => {
       "anthropic-apikey": "anthropic",
       "anthropic-key": "anthropic",
       kimi: "moonshot",
+      "kimi-responses": "moonshot",
       "opencode-go": "opencode-go",
       openrouter: "openrouter",
       google: "google",

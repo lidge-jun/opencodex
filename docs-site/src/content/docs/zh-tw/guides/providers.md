@@ -107,7 +107,8 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth 使用獨立的 Grok CLI 訂閱 gateway。API key 覆寫使用 `https://api.x.ai/v1`，並可能注入 Priority Processing。優先使用即時 Grok catalog；fallback 預設為 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；即時模型列表從 `/v1/models` 取得。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 coding 模型。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code 模型。`kimi-for-coding` 目前指向 K2.8 Preview，支援 100 萬 token 上下文、`low`/`high`/`max` 推理及文字、圖片輸入。`k3-256k` 的上下文上限固定為 256K。 |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | 以 Responses 協定共用 `kimi` 的 OAuth 登入與模型清單。推理內容在伺服器端維持加密，工具呼叫及結果仍可見。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 訂閱 gateway（Hermes Agent 使用相同 backend）。透過 `portal.nousresearch.com` 做 device-grant 登入；access token 是每次請求使用的 inference JWT。混合付費與 `:free` 模型 catalog（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）會從已登入帳號即時探索。Refresh token 為單次使用，每次 refresh 都會輪換。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初次登入會匯入已安裝且已登入的 `kiro-cli` session。Unix 可用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` 安裝；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`，再執行 `kiro-cli login`。**Add account** 會先登出 `kiro-cli`、啟動新的 browser login，切換 `kiro-cli` 所使用的帳號並保存 account-scoped profile metadata。既有 OpenCodex 帳號會保留；取消或失敗時會恢復先前的 `kiro-cli` session。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
@@ -138,6 +139,12 @@ Vertex 或 Cloud Code Assist 修復會輸出同樣不含內容的 `google-tool-s
 提供且穩定的 `prompt_cache_key` 轉送到 Chat Completions 請求，絕不自行產生。Kimi 文件指出，穩定的
 session／task key 有助提升 Code Plan cache hit rate；沒有 key 的請求仍保持 keyless。若已 opt-in 的上游
 拒絕此欄位，opencodex 不會移除欄位後重試，也不會修改已儲存設定。其他 provider 預設 deny-by-default。
+
+`kimi`、`kimi-code` 和 `kimi-responses` 的 `k3`、`k3[1m]`、`k3-256k` 費用是採用預設五分鐘
+快取寫入費率的 [API 價格](https://platform.kimi.ai/docs/pricing/chat)估算，並非 Code Plan 的實際
+帳單或額度用量。K3 的 1M 版本約耗用 `k3-256k` 兩倍額度。`kimi-for-coding` 已轉為 K2.8 Preview，
+因此不再套用舊 K2.7 價格；除非使用者設定 `modelCosts`，其費用估算會維持未知。排除未知費用的
+路由規則可能因此略過這個別名。
 
 也可以從 [web 儀表板](/zh-tw/guides/web-dashboard/) 啟動 OAuth。
 
@@ -239,7 +246,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 96 個 preset：80 個 key-based、12 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 97 個 preset：80 個 key-based、13 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 

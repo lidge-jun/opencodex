@@ -101,7 +101,8 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth 使用独立的 Grok CLI 订阅网关。API 密钥覆盖模式使用 `https://api.x.ai/v1`，并可能注入 Priority Processing。优先使用实时 Grok 目录；回退默认模型为 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；实时模型列表从 `/v1/models` 获取。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan 编程模型。默认使用稳定的 `kimi-for-coding` 别名（当前指向 K2.8 Preview）：100 万 token 上下文、可调 `low`/`high`/`max` 思考档（默认 `max`）、支持文本 + 图片输入。已下架的 `kimi-k2.x` 选择会在升级时自动迁移到该别名。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan 编程模型。默认使用稳定的 `kimi-for-coding` 别名（当前指向 K2.8 Preview）：100 万 token 上下文、可调 `low`/`high`/`max` 思考档（默认 `max`）、支持文本 + 图片输入。已下架的 `kimi-k2.x` 选择会在升级时自动迁移到该别名。进阶：添加 `kimi-responses` 预设可让同一 Kimi 账号登录走 OpenAI Responses 协议（思考内容在服务端保持加密，工具调用保持可见；Chat 预设保留明文推理）。 |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | 同一 Kimi 账号登录（复用 `kimi` 的 OAuth 凭据）走 OpenAI Responses 协议。模型名单与能力与 `kimi` 相同；思考内容在服务端保持加密，工具调用与结果保持可见。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 订阅网关（与 Hermes Agent 使用同一后端）。通过设备授权登录 `portal.nousresearch.com`；access 令牌是每个请求的 inference JWT。付费 + `:free` 模型混合目录（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）会从已登录账户实时发现。Refresh 令牌是单次使用，每次刷新都会轮换。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 首次登录会导入已安装并已登录的 Kiro CLI 会话（Unix 使用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`；然后运行 `kiro-cli login`）。**添加账户**会先退出 `kiro-cli`，再启动新的浏览器登录，从而切换 `kiro-cli` 自身使用的账户，并保存账户范围的配置文件元数据。现有 OpenCodex 账户会保留；如果取消或失败，则恢复之前的 `kiro-cli` 会话。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 通过 Cloud Code Assist 协议使用 Google OAuth。实时发现调用已认证的 CCA `v1internal:fetchAvailableModels` 端点，并仅发布当前登录账户可用的 agent 模型；维护中的目录仍作为回退。 |
@@ -130,10 +131,17 @@ Vertex 或 Cloud Code Assist 修复会输出同样不含内容的 `google-tool-s
 Nous refresh 发生终止性失败后，请运行 `ocx login nous` 重新认证。
 
 对于规范的 Kimi Coding Plan 预设（`kimi` 账号登录和 `kimi-code` API key），opencodex
-只会把调用方提供的稳定 `prompt_cache_key` 转发到 Chat Completions 请求，绝不自行生成。Kimi
+只会把调用方提供的稳定 `prompt_cache_key` 转发到 Chat Completions 请求（Responses 协议接受同名字段，但 opencodex 目前不在 Responses 发送它），绝不自行生成。Kimi
 文档要求使用稳定的会话/任务 key 来提高 Code Plan 缓存命中率；没有 key 的请求仍保持不带 key。
 若已 opt-in 的上游拒绝该字段，opencodex 不会删除字段后重试，也不会改动已保存配置；其他
 provider 仍保持 deny-by-default。
+
+`kimi`、`kimi-code` 和 `kimi-responses` 中 `k3`、`k3[1m]`、`k3-256k` 的费用是 **API 参考价格估算**，
+采用已公布的默认 5 分钟缓存写入价格，不代表 Code Plan 的实际账单或额度消耗：K3 的 1M 版本消耗
+约为 `k3-256k` 两倍的额度。`kimi-for-coding` 已切换为 K2.8 Preview，因此不再使用旧 K2.7 价格；
+除非用户配置 `modelCosts`，否则其估算保持未知。要求已知价格的路由策略或拒绝未知估算的费用上限
+可能会排除此别名。参见 [Kimi 模型配置](https://www.kimi.com/code/docs/en/kimi-code/models.html) 和
+[API 价格](https://platform.kimi.ai/docs/pricing/chat)。
 
 你也可以从 [web 仪表盘](/zh-cn/guides/web-dashboard/) 启动 OAuth。
 
@@ -173,7 +181,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 96 个预设：80 个密钥预设、12 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 97 个预设：80 个密钥预设、13 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 

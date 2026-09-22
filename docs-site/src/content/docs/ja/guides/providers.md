@@ -110,7 +110,8 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth は独立した Grok CLI サブスクリプションゲートウェイを使用します。API キーのオーバーライドは `https://api.x.ai/v1` を使用し、Priority Processing を注入する場合があります。ライブ一覧を優先し、フォールバックのデフォルトモデルは `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude モデル; ライブモデル一覧は `/v1/models` から取得。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 コーディングモデル。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code のモデル。`kimi-for-coding` は現在 K2.8 Preview を指し、100 万トークンのコンテキスト、`low`/`high`/`max` の推論、テキストと画像入力に対応します。`k3-256k` の上限は固定で 256K です。 |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | `kimi` と同じ OAuth ログインとモデル一覧を Responses 方式で使用します。推論内容はサーバー側で暗号化されたままですが、ツール呼び出しと結果は確認できます。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research サブスクリプションゲートウェイ（Hermes Agent と同じバックエンド）。`portal.nousresearch.com` へのデバイスグラントログイン; access トークンはリクエストごとの inference JWT。有料 + `:free` モデルの混在カタログ（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` など）はサインイン中のアカウントからライブ探索されます。Refresh トークンは単回使用で、更新のたびにローテーションされます。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
@@ -146,6 +147,13 @@ opencodex は呼び出し元が指定した安定した `prompt_cache_key` だ�
 安定したセッション/タスク key が必須とされています。key のないリクエストは keyless のままです。
 opt-in した上流がこのフィールドを拒否しても、opencodex はフィールドを削除して再試行したり、保存済み
 設定を変更したりしません。他のプロバイダーは deny-by-default のままです。
+
+`kimi`、`kimi-code`、`kimi-responses` の `k3`、`k3[1m]`、`k3-256k` に表示する料金は、
+デフォルトの 5 分間キャッシュ書き込み料金を含む [API 価格](https://platform.kimi.ai/docs/pricing/chat)
+に基づく推定値です。Code Plan の請求額や割り当て量を示すものではありません。1M 版の K3 は
+`k3-256k` の約 2 倍の割り当て量を消費します。`kimi-for-coding` は K2.8 Preview に切り替わったため、
+旧 K2.7 の料金は適用されません。ユーザーが `modelCosts` を指定しない限り推定料金は不明のままで、
+不明な料金を除外するルーティング規則では選択対象から外れることがあります。
 
 [ウェブダッシュボード](/ja/guides/web-dashboard/)からも OAuth を開始できます。
 
@@ -185,7 +193,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 96 個含まれています。キー方式 80、OAuth 12、ローカル 3、
+opencodex には組み込みプリセットが 97 個含まれています。キー方式 80、OAuth 13、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 

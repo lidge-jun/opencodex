@@ -18,6 +18,7 @@ const PROVIDER_ALIASES: Record<string, string> = {
   "anthropic-apikey": "anthropic",
   "anthropic-key": "anthropic",
   "kimi": "moonshot",
+  "kimi-responses": "moonshot",
   "opencode-go": "opencode-go",
   "openrouter": "openrouter",
   "google": "google",
