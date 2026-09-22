@@ -3,7 +3,7 @@
  * so the proxy must relay it to an OpenAI upstream instead of the /v1/* JSON-404 guard.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../../src/codex/auth-api";
@@ -1343,6 +1343,28 @@ test("sideband frame log preserves delivery without recording damaged or clean t
     globalThis.WebSocket = RealWebSocket;
     await server.stop(true);
     await upstream.stop(true);
+  }
+});
+
+// appendFileSync's mode option only applies when it creates the file, so an
+// existing permissive log would have stayed readable by other local users.
+// appendOwnerOnly hardens the opened descriptor instead.
+test("frame log hardens a pre-existing permissive file", async () => {
+  if (process.platform === "win32") return;
+  const { logLiveSidebandStage } = await import("../../src/server/live");
+  const frameLogPath = join(TEST_DIR, "frames-permissive.jsonl");
+  const previousFrameLog = process.env.OCX_LIVE_FRAME_LOG;
+  try {
+    writeFileSync(frameLogPath, "", { mode: 0o644 });
+    chmodSync(frameLogPath, 0o644);
+    process.env.OCX_LIVE_FRAME_LOG = frameLogPath;
+    logLiveSidebandStage("relay-attached");
+    expect(statSync(frameLogPath).mode & 0o777).toBe(0o600);
+    const line = readFileSync(frameLogPath, "utf8").trim();
+    expect(JSON.parse(line)).toMatchObject({ stage: "relay-attached" });
+  } finally {
+    if (previousFrameLog === undefined) delete process.env.OCX_LIVE_FRAME_LOG;
+    else process.env.OCX_LIVE_FRAME_LOG = previousFrameLog;
   }
 });
 

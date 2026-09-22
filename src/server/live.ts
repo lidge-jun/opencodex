@@ -27,7 +27,7 @@ import { codexCompatibleUrl } from "../codex/context-compat";
  * - `GET /v1/realtime?model=` — RealtimeV2 standalone (no intent)
  * - `GET /v1/live?model=` — Frameless standalone
  */
-import { appendFileSync } from "node:fs";
+import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
@@ -107,6 +107,21 @@ export const LIVE_CLIENT_PROTOCOL_HEADERS = [
  * disabled entirely when the env var is unset.
  */
 export const LIVE_FRAME_LOG_ENV = "OCX_LIVE_FRAME_LOG";
+/**
+ * Append one JSONL record with owner-only permissions. `appendFileSync`'s `mode` only applies
+ * when it creates the file, so an existing permissive log would stay readable by other local
+ * users. Open for append, harden the opened descriptor, then write.
+ */
+function appendOwnerOnly(path: string, line: string): void {
+  const fd = openSync(path, "a", 0o600);
+  try {
+    try { fchmodSync(fd, 0o600); } catch { /* platforms without fchmod keep the create mode */ }
+    writeSync(fd, line);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
   const logPath = process.env[LIVE_FRAME_LOG_ENV];
   if (!logPath) return;
@@ -135,7 +150,7 @@ export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
       bytes,
       fffd,
     };
-    appendFileSync(logPath, `${JSON.stringify(record)}\n`, { mode: 0o600 });
+    appendOwnerOnly(logPath, `${JSON.stringify(record)}\n`);
   } catch {
     // Frame forensics must never break the relay.
   }
@@ -169,7 +184,7 @@ export function logLiveSidebandStage(
     const record: Record<string, unknown> = { ts: new Date().toISOString(), stage };
     if (detail?.status !== undefined) record.status = detail.status;
     if (detail?.code !== undefined) record.code = detail.code;
-    appendFileSync(logPath, JSON.stringify(record) + "\n", { mode: 0o600 });
+    appendOwnerOnly(logPath, JSON.stringify(record) + "\n");
   } catch {
     // Diagnostics must never break the relay.
   }

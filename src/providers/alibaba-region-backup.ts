@@ -17,7 +17,13 @@ const DEFAULT_IO: AlibabaBackupIO = {
   read: path => readFileSync(path),
   copy: (source, destination) => copyFileSync(source, destination),
   harden: path => {
-    try { chmodSync(path, 0o600); } catch { /* platform may ignore chmod */ }
+    // POSIX: a failed chmod must not publish a credential-bearing backup with weak permissions.
+    // Windows keeps its own control via hardenSecretPath below, which is the required check.
+    if (process.platform === "win32") {
+      try { chmodSync(path, 0o600); } catch { /* Windows may not support POSIX chmod */ }
+    } else {
+      chmodSync(path, 0o600);
+    }
     if (process.platform === "win32") hardenSecretPath(path, { required: true });
   },
   publishNoReplace: linkSync,
