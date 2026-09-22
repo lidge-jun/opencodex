@@ -137,18 +137,16 @@ describe("GitHub Actions hardening", () => {
 
     const keyringJob = ci.jobs?.["keyring-smoke"] as {
       "runs-on"?: string;
-      strategy?: {
-        matrix?: {
-          include?: Array<{ name: string; runner: string }>;
-        };
-      };
+      strategy?: { matrix?: { include?: unknown } };
     } | undefined;
     expect(keyringJob?.["runs-on"]).toBe("${{ matrix.runner }}");
-    expect(keyringJob?.strategy?.matrix?.include).toEqual([
-      { name: "ubuntu", runner: "ubuntu-latest" },
-      { name: "windows", runner: "windows-latest" },
-      { name: "macos", runner: "macos-latest" },
-    ]);
+    // The macOS leg must come and go with the native selection, so the include
+    // list is a JSON output of the changes job read through fromJSON instead of
+    // a literal here. Which legs that output carries is pinned in
+    // ci-scope-reduction.test.ts.
+    expect(String(keyringJob?.strategy?.matrix?.include)).toMatch(
+      /fromJSON\(needs\.changes\.outputs\.[A-Za-z][A-Za-z_-]*\)/,
+    );
     expectSecureLinuxKeyringBootstrap(workflow);
     // Every job must stay bounded — an unbounded job can hang a queue for hours.
     // Asserted structurally rather than by counting the string: a count passes if
@@ -252,9 +250,9 @@ describe("GitHub Actions hardening", () => {
     expect(hasExactShellCommand(gatesGuiRun, "cd gui && bun test --isolate tests")).toBe(true);
     expect(hasExactShellCommand(gatesGuiRun, "cd gui && bun test tests")).toBe(false);
 
-    // macOS shards cover every CI-relevant change. They may skip
-    // only when the shared path filter says the entire expensive suite is out of
-    // scope (for example a docs-site-only PR).
+    // macOS shards cover every CI-relevant change that can reach the native
+    // surface. They may skip when the shared path filter puts the whole
+    // expensive suite out of scope, or when a PR touches no native path.
     const macosSteps = (ci.jobs?.["platform-macos"] as { steps?: { name?: string; env?: Record<string, string>; run?: string }[] })?.steps ?? [];
     // The 60s per-test ceiling is part of the pinned shape: dropping it silently
     // restores the timing-flake class this lane kept surfacing.
@@ -275,8 +273,13 @@ describe("GitHub Actions hardening", () => {
     expect(macosTestStep?.run).not.toContain("for attempt in");
     expect(macosTestStep?.run).not.toContain("while true");
     expect((ci.jobs?.["platform-macos"] as { needs?: string; if?: string })?.needs).toBe("changes");
-    expect((ci.jobs?.["platform-macos"] as { if?: string })?.if)
-      .toBe("github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'");
+    // Native-gated together with widget and desktop-shell: on a pull request the
+    // job additionally requires the native path filter, so a src-only PR stops
+    // paying for a macOS shard. ci-scope-reduction.test.ts evaluates this
+    // condition against the events that select the job.
+    expect((ci.jobs?.["platform-macos"] as { if?: string })?.if).toBe(
+      "github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')",
+    );
 
     // Whole-pool control lives on dispatch so every push does not pay the
     // unsharded macOS critical path. Keep the unsharded full-membership control and the
@@ -440,9 +443,11 @@ describe("GitHub Actions hardening", () => {
       }
     }
 
-    // The push trigger stays pinned to the release-relevant lines: release.yml
-    // gates on main and preview, so widening this one would pull an unrelated
-    // branch into that path.
+    // The push trigger stays pinned to the release-relevant lines: main and
+    // preview MUST stay because release.yml requires a successful push-event
+    // run for the exact release SHA and states that a pull-request run does
+    // not qualify. dev is deliberately absent: its integration evidence is
+    // the pull_request run, with workflow_dispatch for anything else.
     const ci = Bun.YAML.parse(await readText(".github/workflows/ci.yml")) as {
       on?: {
         push?: { branches?: string[]; paths?: string[] };
@@ -451,7 +456,7 @@ describe("GitHub Actions hardening", () => {
       jobs?: Record<string, Record<string, unknown> | undefined>;
     };
     expect([...(ci.on?.push?.branches ?? [])].sort())
-      .toEqual(["dev", "main", "preview"]);
+      .toEqual(["main", "preview"]);
 
     // The PR trigger must carry NO base-branch filter, and the two triggers
     // differ on purpose. GitHub matches `branches:` against the BASE ref, so
@@ -537,7 +542,9 @@ describe("GitHub Actions hardening", () => {
     expect(scopeIndex).toBeGreaterThan(filterIndex);
 
     const scopedCondition = "github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'";
-    for (const jobName of ["test", "storage-policy", "gates", "platform-macos", "keyring-smoke", "docker-smoke"]) {
+    // platform-macos is native-gated and pinned to the native condition above,
+    // so it must not be read against this ci-only condition.
+    for (const jobName of ["test", "storage-policy", "gates", "keyring-smoke", "docker-smoke"]) {
       const job = ci.jobs?.[jobName] as { needs?: string; if?: string } | undefined;
       expect(`${jobName}:${job?.needs}`).toBe(`${jobName}:changes`);
       expect(`${jobName}:${job?.if}`).toBe(`${jobName}:${scopedCondition}`);

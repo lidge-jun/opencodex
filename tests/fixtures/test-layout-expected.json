@@ -1450,6 +1450,7 @@
   "combo-authoritative-reset.test.ts": "codex-integration",
   "devin-stated-reset-hardening.test.ts": "providers",
   "devin-stated-reset-retry.test.ts": "providers",
+  "ci-scope-reduction.test.ts": "ci-workflows",
   "ci-structure-gate.test.ts": "ci-workflows",
   "responses-code-mode-patch-compile.test.ts": "responses",
   "gui-codex-usage-score-parity.test.ts": "gui",

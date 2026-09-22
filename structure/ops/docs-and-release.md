@@ -148,9 +148,9 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`/`dev`; manual dispatch | Linux runs four suite shards plus `gates`; macOS runs two shards. Windows runs nine shards only on manual dispatch with `lane=all` (or empty), not on push events. Linux runs at-most-12-file processes with a 120-second process bound; Windows uses measured six-file/480-second processes and all-file scope so its full-suite contract is unchanged. The dedicated Windows batch step sets `OCX_TEST_NO_QUEUE=1` because its sequential processes are one logical runner; each process still creates an isolated home and arms the test guards before the lock boundary. No lane retries: a test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence. Aggregate `ci` is event-aware — it derives which jobs this event requested and requires `success` from each of them and `skipped` from the rest, and on a `lane=all` dispatch it reads the run's own job list and requires nine concrete successful `windows N/9` results. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
+| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`; manual dispatch | A pull request verifies Linux and TypeScript: Linux runs four suite shards plus `gates` alongside the scoped docs, structure, packaging, keyring, and npm-global jobs. The `platform-macos` macOS suite, the `widget` macOS widget + Tauri app-bundle build, and the `desktop-shell` Rust toolchain build are native-gated: they run on `main`/`preview` pushes and manual dispatch, and on a pull request only when the `changes` job's native path filter selects the change. `dev` pushes start nothing; dev integration is covered by the pull-request run, while `main` and `preview` must stay push triggers because `release.yml` requires a push-event run for the exact release SHA. Windows runs nine shards only on manual dispatch with `lane=all` (or empty), not on push events. Linux runs at-most-12-file processes with a 120-second process bound; Windows uses measured six-file/480-second processes and all-file scope so its full-suite contract is unchanged. The dedicated Windows batch step sets `OCX_TEST_NO_QUEUE=1` because its sequential processes are one logical runner; each process still creates an isolated home and arms the test guards before the lock boundary. No lane retries: a test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence. Aggregate `ci` is event-aware — it derives which jobs this event requested and requires `success` from each of them and `skipped` from the rest, and on a `lane=all` dispatch it reads the run's own job list and requires nine concrete successful `windows N/9` results. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
 | `.github/workflows/dev-version-bump.yml` | Manual dispatch with an intended version and `pre-move` or `repair` mode | Opens the reviewed pull request that moves `dev` past a release target. The default `pre-move` mode runs before promotion and publication; explicit `repair` mode retains the post-publish catch-up path. It is neither called by `release.yml` nor triggered by publication. |
-| `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires successful Cross-platform CI for the exact `GITHUB_SHA`, requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. |
+| `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires a successful push-event Cross-platform CI run for the exact `GITHUB_SHA` (a pull-request run does not qualify), requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. This is the deploy path; the pull-request build gate is the `docs-site-build` job in `ci.yml`. |
 | `.github/workflows/service-lifecycle.yml` | `pull_request` to `main`/`dev` and `push`, both filtered on the service path set (`src/service.ts`, `src/cli.ts`, `src/cli/index.ts`, `src/lib/bun-runtime.ts`, `package.json`, `bun.lock`, the workflow), or manual dispatch | Service-lifecycle smoke on three platforms: Linux systemd, macOS launchd, and Windows Scheduled Tasks. Each installs, verifies, stops via `ocx stop`, and uninstalls. The path list is kept in sync with the `release.yml` service-gate regex. |
 | `.github/workflows/enforce-pr-target.yml` | `pull_request_target` (opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize) plus default-branch `status` events filtered to successful `CodeRabbit` statuses | The `enforce-target` gate: rejects pull requests whose head ancestry sits on the `main` tip while far behind `dev`, rejects empty or malformed descriptions, requires a GUI screenshot when the title/body mentions `gui` (immediately waivable with the maintainer-controlled `gui-screenshot-waived` label; legacy maintainer comments remain compatibility evidence on later PR events), keeps contributor PRs in draft until a four-box readiness checklist is complete, verifies the CI / latest-dev / Codex+CodeRabbit-findings claims (review threads plus current-head CodeRabbit review-body findings outside the diff range), and adds a `review-ready` status label at the ready moment. CodeRabbit status SHAs must resolve to exactly one open current-head PR before writes. Stacked child PRs targeting another open PR's head skip the wrong-base gate. |
@@ -377,11 +377,23 @@ preview has closed that stable patch line.
 
 The [desktop membership contract](../runtime.md#codex-desktop-process-membership) has adapter regression coverage on every host and real PowerShell prefilter regression coverage with synthetic CIM rows on Windows in `tests/clients/desktop-app-restart.test.ts`. A skipped Windows lane does not exercise that native filter; uid-dependent POSIX cases in `tests/clients/desktop-app-restart-posix.test.ts` are skipped on Windows.
 
-`.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. Linux runs
-the suite in four shards with a separate `gates` job, and macOS runs it in two shards. Windows
-runs the full suite in nine shards only on manual `workflow_dispatch` with `lane=all` (or an
-empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix, and an
-aggregate green `ci` check on those events legitimately includes a deliberate Windows skip.
+`.github/workflows/ci.yml` is the ordinary quality gate for runtime/package changes. A pull
+request verifies Linux and TypeScript: Linux runs the suite in four shards with a separate
+`gates` job alongside the scoped docs, structure, packaging, keyring, and npm-global jobs. The
+`platform-macos` macOS suite, the `widget` macOS widget + Tauri app-bundle build, and the
+`desktop-shell` Rust toolchain build are native-gated: they run on the promotion pushes to
+`main` and `preview` and on explicit `workflow_dispatch`, and on a pull request only when the
+`changes` job's native path filter selects the change. `dev` pushes start nothing — dev
+integration is covered by the pull-request run — while `main` and `preview` must remain push
+triggers because `release.yml` requires a successful push-event run for the exact release SHA
+and does not accept a pull-request run. Windows runs the full suite in nine shards only on manual
+`workflow_dispatch` with `lane=all` (or an empty lane), and an aggregate green `ci` check
+legitimately includes deliberate skips for every job the event did not request.
+
+This scoping accepts a real coverage loss: a green pull request no longer proves the macOS suite,
+the Rust toolchain, or the app bundle. Those regressions are caught at the promotion push to
+`preview` or `main`, before publication, and on demand by explicit dispatch — a pull request
+that is green is not full-platform proof.
 
 No recovery retry can turn a failed workflow green. Linux, Windows, macOS shards and macOS control use
 `scripts/ci/run-bun-test-batches.sh`, but
@@ -428,8 +440,9 @@ The CI intentionally does not build docs, run coverage, or perform remote Ubuntu
 Those stay outside the default gate until a concrete regression justifies the extra runtime.
 
 The Release workflow remains manual and publish-focused. Before any dry-run or publish step, it
-checks that the exact release commit (`GITHUB_SHA`) already has a successful Cross-platform CI run,
-that `dev` already outranks the target, and that the target passes the fresh global tag-ordering gate.
+checks that the exact release commit (`GITHUB_SHA`) already has a successful push-event
+Cross-platform CI run — a pull-request run does not qualify — that `dev` already outranks the
+target, and that the target passes the fresh global tag-ordering gate.
 This keeps release runs short and makes release a deployment of a verified commit after the required
 `dev` pre-move rather than a second CI pipeline.
 
