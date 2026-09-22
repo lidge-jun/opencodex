@@ -118,7 +118,7 @@ describe("desktop runtime identity", () => {
     expect(body).toContain("_ => return None,");
     // And the sequence does not report Ready against an instance it could not identify: the
     // management token is only ever sent to a bound one, so a dashboard there would not load.
-    const callers = startup.match(/bind\(app, &proxy, deadline\)\.await\.is_none\(\)/g) || [];
+    const callers = startup.match(/bind\(app, &?proxy, deadline\)\.await\.is_none\(\)/g) || [];
     expect(callers).toHaveLength(2);
   });
 

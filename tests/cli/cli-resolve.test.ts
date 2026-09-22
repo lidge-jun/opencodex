@@ -11,6 +11,27 @@ import type { LiveProxy } from "../../src/server/proxy-liveness";
 import type { ConfigDiagnostics } from "../../src/config";
 import { repoPath } from "../helpers/repo-root";
 
+const OWNERSHIP_NONE = { kind: "none", revision: 0 } as const;
+const OWNERSHIP_OWNED = {
+  kind: "owned",
+  ownership: { owner: "desktop", installId: "install-a", consentGeneration: 3 },
+  revision: 7,
+} as const;
+const OWNERSHIP_UNKNOWN = { kind: "unknown", reason: "a service state path could not be read" } as const;
+
+const TAKEOVER_SUPPORTED = {
+  kind: "supported",
+  protocolVersion: 1,
+  minimumCliVersion: "2.61.0",
+  token: "deadbeef",
+} as const;
+const TAKEOVER_BLOCKED = {
+  kind: "blocked",
+  reason: "managing-cli-unsupported",
+  detail: "path uses OpenCodex 2.59.0; 2.61.0 or later is required",
+  minimumCliVersion: "2.61.0",
+} as const;
+
 function fakeLive(overrides: Partial<LiveProxy> = {}): LiveProxy {
   return {
     pid: 4242,
@@ -35,7 +56,7 @@ describe("parseResolveArgs", () => {
 
 describe("buildResolveJson", () => {
   test("a live runtime-record proxy answers with its own port and identity", () => {
-    const json = buildResolveJson({ port: 12345 }, fakeLive(), "/home/fixture/.opencodex", "1.2.3");
+    const json = buildResolveJson({ port: 12345 }, fakeLive(), "/home/fixture/.opencodex", "1.2.3", OWNERSHIP_OWNED, TAKEOVER_SUPPORTED);
     expect(json).toEqual({
       schema: RESOLVE_SCHEMA,
       cliVersion: "1.2.3",
@@ -49,17 +70,19 @@ describe("buildResolveJson", () => {
         source: "runtime",
         version: "9.9.9",
       },
+      ownership: OWNERSHIP_OWNED,
+      takeover: TAKEOVER_SUPPORTED,
     });
   });
 
   test("without a live proxy the configured port is the effective one", () => {
-    const json = buildResolveJson({ port: 12345 }, null, "/home/fixture/.opencodex", "1.2.3");
+    const json = buildResolveJson({ port: 12345 }, null, "/home/fixture/.opencodex", "1.2.3", OWNERSHIP_NONE, TAKEOVER_BLOCKED);
     expect(json.port).toEqual({ effective: 12345, configured: 12345, source: "config" });
     expect(json.liveness).toEqual({ status: "absent-proven", pid: null, port: null, source: null });
   });
 
   test("an absent configured port resolves to the CLI default", () => {
-    const json = buildResolveJson({}, null, "/home/fixture/.opencodex", "1.2.3");
+    const json = buildResolveJson({}, null, "/home/fixture/.opencodex", "1.2.3", OWNERSHIP_NONE, TAKEOVER_BLOCKED);
     expect(json.port).toEqual({
       effective: RESOLVE_DEFAULT_PORT,
       configured: RESOLVE_DEFAULT_PORT,
@@ -69,7 +92,7 @@ describe("buildResolveJson", () => {
 
   test("optional liveness identity fields are omitted, never null-coerced", () => {
     const legacy = fakeLive({ version: undefined, role: undefined, hostname: undefined });
-    const json = buildResolveJson({}, legacy, "/h", "1.2.3");
+    const json = buildResolveJson({}, legacy, "/h", "1.2.3", OWNERSHIP_NONE, TAKEOVER_BLOCKED);
     expect(json.liveness).toEqual({
       status: "live",
       pid: 4242,
@@ -78,6 +101,20 @@ describe("buildResolveJson", () => {
     });
   });
 });
+
+/** Deterministic ownership seams: the production defaults read the real state directory. */
+function ioOwnership(
+  ownership: typeof OWNERSHIP_NONE | typeof OWNERSHIP_OWNED | typeof OWNERSHIP_UNKNOWN = OWNERSHIP_NONE,
+  managers?: ReturnType<NonNullable<Parameters<typeof runResolve>[1]>["observeManagers"]> ,) {
+  return {
+    resolveOwnership: () => ownership,
+    resolveState: () => ({ kind: "none", revision: 0, needsRepair: false }) as const,
+    observeManagers: () => managers ?? ({
+      "service-registration": { status: "absent" },
+      path: { status: "absent" },
+    }) as ReturnType<NonNullable<Parameters<typeof runResolve>[1]>["observeManagers"]>,
+  };
+}
 
 describe("runResolve", () => {
   test("prints exactly one JSON document and exits 0 for a live proxy", async () => {
@@ -88,13 +125,20 @@ describe("runResolve", () => {
       readDiagnostics: () => ({ config: { port: 12345 }, source: "file", error: null } as ConfigDiagnostics),
       findLive: async () => fakeLive(),
       cliVersion: () => "1.2.3",
+      ...ioOwnership(OWNERSHIP_OWNED),
+      resolveState: () => ({ kind: "state", state: { ownershipProtocolVersion: 1 } as never, revision: 7, needsRepair: false }),
+      observeManagers: () => ({
+        "service-registration": { status: "observed", version: "2.61.0", identity: "registered" },
+        path: { status: "observed", version: "2.61.0", identity: "path" },
+      }),
       stdout: { log: value => lines.push(value) },
       stderr: { error: value => errors.push(value) },
     });
     expect(code).toBe(0);
     expect(errors).toEqual([]);
     expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toEqual({
+    const document = JSON.parse(lines[0]!);
+    expect(document).toMatchObject({
       schema: RESOLVE_SCHEMA,
       cliVersion: "1.2.3",
       configHome: "/home/fixture/.opencodex",
@@ -107,7 +151,9 @@ describe("runResolve", () => {
         source: "runtime",
         version: "9.9.9",
       },
+      ownership: OWNERSHIP_OWNED,
     });
+    expect(document.takeover).toMatchObject({ kind: "supported", protocolVersion: 1 });
   });
 
   test("a proven-absent verdict is a successful answer, not a failure", async () => {
@@ -119,6 +165,7 @@ describe("runResolve", () => {
       readRuntime: () => null,
       probeEndpoint: () => "dead",
       cliVersion: () => "1.2.3",
+      ...ioOwnership(),
       stdout: { log: value => lines.push(value) },
     });
     expect(code).toBe(0);
@@ -136,6 +183,7 @@ describe("runResolve", () => {
       readRuntime: () => ({ port: 10110, hostname: "127.0.0.1" }),
       probeEndpoint: async () => "dead",
       cliVersion: () => "1.2.3",
+      ...ioOwnership(),
       stdout: { log: value => lines.push(value) },
     });
     expect(code).toBe(0);
@@ -155,6 +203,7 @@ describe("runResolve", () => {
         readRuntime: () => null,
         probeEndpoint,
         cliVersion: () => "1.2.3",
+        ...ioOwnership(),
         stdout: { log: value => lines.push(value) },
         stderr: { error: value => errors.push(value) },
       });
@@ -177,6 +226,7 @@ describe("runResolve", () => {
       readRuntime: () => ({ port: 10110, hostname: "127.0.0.1" }),
       probeEndpoint: endpoint => { seen.push(String(endpoint.port)); return endpoint.port === 10110 ? "unknown" : "dead"; },
       cliVersion: () => "1.2.3",
+      ...ioOwnership(),
       stdout: { log: () => {} },
       stderr: { error: () => {} },
     });
@@ -194,6 +244,7 @@ describe("runResolve", () => {
       readRuntime: () => ({ port: 10110, hostname: "127.0.0.1" }),
       probeEndpoint: endpoint => { seen.push(String(endpoint.port)); return "dead"; },
       cliVersion: () => "1.2.3",
+      ...ioOwnership(),
       stdout: { log: value => lines.push(value) },
     });
     expect(code).toBe(0);
@@ -209,6 +260,7 @@ describe("runResolve", () => {
       readDiagnostics: () => { throw new Error("config.json is not readable"); },
       findLive: async () => null,
       cliVersion: () => "1.2.3",
+      ...ioOwnership(),
       stdout: { log: value => lines.push(value) },
       stderr: { error: value => errors.push(value) },
     });
@@ -229,6 +281,7 @@ describe("runResolve", () => {
       readDiagnostics: () => ({ config: {}, source: "fallback", error: "invalid_json" } as ConfigDiagnostics),
       findLive: async () => { probed = true; return null; },
       cliVersion: () => "1.2.3",
+      ...ioOwnership(),
       stdout: { log: value => lines.push(value) },
       stderr: { error: value => errors.push(value) },
     });
@@ -253,12 +306,15 @@ describe("runResolve", () => {
       readDiagnostics: () => ({ config: { port: 12345 }, source: "file", error: null } as ConfigDiagnostics),
       findLive: async () => fakeLive(),
       cliVersion: () => "1.2.3",
+      ...ioOwnership(),
       stdout: { log: value => lines.push(value) },
     });
     expect(code).toBe(0);
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(4);
     expect(lines[0]).toBe("Config home: /home/fixture/.opencodex");
     expect(lines[1]).toContain("Proxy live on port 10110 (PID 4242, 9.9.9)");
+    expect(lines[2]).toBe("Owner: none recorded");
+    expect(lines[3]).toBe("Takeover: blocked (managing-cli-unobserved: no managing OpenCodex CLI installation was observed)");
     expect(lines.every(line => { try { JSON.parse(line); return false; } catch { return true; } })).toBe(true);
   });
 
@@ -271,9 +327,96 @@ describe("runResolve", () => {
       readRuntime: () => null,
       probeEndpoint: () => "dead",
       cliVersion: () => "1.2.3",
+      ...ioOwnership(),
       stdout: { log: value => lines.push(value) },
     });
     expect(code).toBe(0);
     expect(lines[1]).toBe(`No live proxy (absence proven); effective port ${RESOLVE_DEFAULT_PORT} (configured).`);
+  });
+});
+
+describe("resolve ownership and takeover fields", () => {
+  async function resolveWith(io: Parameters<typeof runResolve>[1]) {
+    const lines: string[] = [];
+    const code = await runResolve({ json: true }, {
+      configDir: () => "/h",
+      readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
+      findLive: async () => null,
+      readRuntime: () => null,
+      probeEndpoint: () => "dead",
+      cliVersion: () => "1.2.3",
+      stdout: { log: value => lines.push(value) },
+      stderr: { error: () => {} },
+      ...io,
+    });
+    return { code, json: JSON.parse(lines[0]!) as { ownership: unknown; takeover: { kind: string; reason?: string } } };
+  }
+
+  test("no recorded claim lands as kind none and never blocks the verdict", async () => {
+    const { code, json } = await resolveWith(ioOwnership());
+    expect(code).toBe(0);
+    expect(json.ownership).toEqual(OWNERSHIP_NONE);
+    expect(json.takeover.kind).toBe("blocked");
+    expect(json.takeover.reason).toBe("managing-cli-unobserved");
+  });
+
+  test("a recorded claim is carried through with its revision", async () => {
+    const { code, json } = await resolveWith({
+      ...ioOwnership(OWNERSHIP_OWNED),
+      resolveState: () => ({ kind: "state", state: { ownershipProtocolVersion: 1 } as never, revision: 7, needsRepair: false }),
+      observeManagers: () => ({
+        "service-registration": { status: "observed", version: "2.61.0", identity: "registered" },
+        path: { status: "observed", version: "2.61.0", identity: "path" },
+      }),
+    });
+    expect(code).toBe(0);
+    expect(json.ownership).toEqual(OWNERSHIP_OWNED);
+    expect(json.takeover).toMatchObject({ kind: "supported", protocolVersion: 1 });
+  });
+
+  test("an unreadable claim is unknown on the wire and blocks takeover without failing resolve", async () => {
+    const { code, json } = await resolveWith(ioOwnership(OWNERSHIP_UNKNOWN));
+    expect(code).toBe(0);
+    expect(json.ownership).toEqual(OWNERSHIP_UNKNOWN);
+    expect(json.takeover).toMatchObject({
+      kind: "blocked",
+      reason: "ownership-unknown",
+      detail: "a service state path could not be read",
+    });
+  });
+
+  test("a below-floor managing CLI blocks takeover with the real version", async () => {
+    const { code, json } = await resolveWith({
+      ...ioOwnership(),
+      observeManagers: () => ({
+        "service-registration": { status: "absent" },
+        path: { status: "observed", version: "2.59.0", identity: "path" },
+      }),
+    });
+    expect(code).toBe(0);
+    expect(json.takeover).toMatchObject({ kind: "blocked", reason: "managing-cli-unsupported" });
+  });
+
+  test("both managers at or above the floor answer supported with a token", async () => {
+    const { json } = await resolveWith({
+      ...ioOwnership(),
+      // An observed registration must be backed by an ownership-aware install state.
+      resolveState: () => ({ kind: "state", state: { ownershipProtocolVersion: 1 } as never, revision: 0, needsRepair: false }),
+      observeManagers: () => ({
+        "service-registration": { status: "observed", version: "2.62.0", identity: "registered" },
+        path: { status: "observed", version: "2.61.0", identity: "path" },
+      }),
+    });
+    expect(json.takeover).toMatchObject({ kind: "supported", protocolVersion: 1, minimumCliVersion: "2.61.0" });
+    expect(typeof (json.takeover as { token?: unknown }).token).toBe("string");
+  });
+
+  test("a throwing observation is managing-cli-unknown, not an exception", async () => {
+    const { code, json } = await resolveWith({
+      ...ioOwnership(),
+      observeManagers: () => { throw new Error("probe blew up"); },
+    });
+    expect(code).toBe(0);
+    expect(json.takeover).toMatchObject({ kind: "blocked", reason: "managing-cli-unknown", detail: "probe blew up" });
   });
 });

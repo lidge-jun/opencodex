@@ -95,7 +95,8 @@ describe("desktop CLI contracts", () => {
     const run = startup.slice(at);
     const unknown = run.indexOf("let Some(answer) = resolution.resolved() else {");
     const attach = run.indexOf("match resolve::live_verdict(&resolution) {");
-    const guard = run.indexOf("if !resolve::may_start(&resolution) {");
+    // A takeover proves its own absence by stopping what was there, so it skips this guard.
+    const guard = run.indexOf("if !took_over && !resolve::may_start(&resolution) {");
     const spawn = run.indexOf("spawn_runtime(app, endpoint, &watch)");
     expect(unknown).toBeGreaterThan(-1);
     expect(attach).toBeGreaterThan(unknown);

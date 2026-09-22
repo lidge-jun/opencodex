@@ -1,4 +1,5 @@
 mod auth;
+mod claim;
 #[cfg(target_os = "macos")]
 mod companion_query;
 mod companion_usage;
@@ -176,6 +177,17 @@ fn retry_startup(app: tauri::AppHandle) {
     startup::begin(&app);
 }
 
+/// The user's answer to the takeover prompt the startup sequence is waiting on.
+///
+/// The sequence holds a oneshot for exactly the duration of the prompt; a decision arriving
+/// with nothing pending is a click after the fact, and it changes nothing.
+#[tauri::command]
+fn decide_takeover(app: tauri::AppHandle, approved: bool) {
+    if let Some(startup) = app.try_state::<startup::Startup>() {
+        startup.decide_takeover(approved);
+    }
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -209,7 +221,8 @@ pub fn run() {
             hide_dashboard,
             startup_snapshot,
             startup_phases,
-            retry_startup
+            retry_startup,
+            decide_takeover
         ])
         .setup(|app| {
             app.manage(AppState::new());
