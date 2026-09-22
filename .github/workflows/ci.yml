@@ -60,7 +60,7 @@ on:
 permissions:
   contents: read
 
-# Retrigger CI after dir-fsync / oauth deadline follow-ups (tip 34a1ac46).
+# Release promotions require fresh push-based CI evidence for the published commit.
 concurrency:
   # `push` and `pull_request` want supersession: a newer head on the same ref
   # makes the older one irrelevant, and cancelling it saves an hour of runners
