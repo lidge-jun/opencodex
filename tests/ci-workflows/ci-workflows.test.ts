@@ -1033,7 +1033,14 @@ describe("GitHub Actions hardening", () => {
     expect(releaseNotesBuilder).toContain("release changelog failed coverage validation");
 
     expect(workflow).toMatch(/gh release create[\s\S]*?--notes-file "\$notes_file"/);
-    expect(workflow).not.toContain("gh release edit");
+    // The release is created as a draft and published only after the verified
+    // bundle is attached, because a published release is immutable and rejects
+    // every later upload. That draft flip is the one edit allowed: notes still
+    // come from the validated notes file, never from an edit or a regeneration.
+    for (const edit of workflow.match(/gh release edit[^\n]*/g) ?? []) {
+      expect(edit).toContain("--draft=false");
+      expect(edit).not.toContain("--notes");
+    }
     expect(workflow).not.toContain("--generate-notes");
 
     const createStep = workflow
