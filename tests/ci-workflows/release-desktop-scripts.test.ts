@@ -347,6 +347,24 @@ describe("local bundle builds", () => {
     expect(runBuildLocal(deps)).toBe(0);
     const formats = calls.map(args => args[args.indexOf("--bundles") + 1]);
     expect(formats).toEqual(["app", "dmg"]);
+    for (const args of calls) {
+      const config = JSON.parse(args[args.indexOf("--config") + 1]!);
+      expect(config.bundle.macOS.signingIdentity).toBe("-");
+      expect(config.bundle.createUpdaterArtifacts).toBe(false);
+    }
+  });
+
+  test("local signing is macOS-only and retains the release signing configuration", () => {
+    const { calls, deps } = depsFor({}, { platform: "win32" });
+    expect(runBuildLocal(deps)).toBe(0);
+    expect(JSON.parse(calls[0]![calls[0]!.indexOf("--config") + 1]!).bundle.macOS).toBeUndefined();
+    const config = JSON.parse(readFileSync(repoPath("desktop/src-tauri/tauri.conf.json"), "utf8"));
+    expect(config.bundle.createUpdaterArtifacts).toBe(true);
+    expect(config.bundle.macOS.signingIdentity).toBeUndefined();
+    const entitlements = readFileSync(repoPath("desktop/src-tauri", config.bundle.macOS.entitlements), "utf8");
+    expect([...entitlements.matchAll(/<key>([^<]+)<\/key>/g)].map(match => match[1]))
+      .toEqual(["com.apple.security.cs.allow-jit"]);
+    expect(entitlements).toMatch(/<key>com\.apple\.security\.cs\.allow-jit<\/key>\s*<true\s*\/>/);
   });
 
   test("summarizeAttempts decides the exit code from the per-format outcomes", () => {

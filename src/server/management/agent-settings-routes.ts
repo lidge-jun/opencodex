@@ -1024,7 +1024,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         rethrowManagementBodyTooLarge(error);
         return jsonResponse({ error: "invalid JSON body" }, 400);
       }
-      const { resolveClaudeDesktopApplyMode, applyDesktopFirstParty, removeDesktopFirstParty } = await import("../../claude/desktop-first-party");
+      const { resolveClaudeDesktopApplyMode, applyDesktopFirstParty, captureDesktopFirstPartyRollback, removeDesktopFirstParty } = await import("../../claude/desktop-first-party");
       const requested = (parsed as { mode?: unknown } | null)?.mode;
       let desktopMode: "first-party" | "gateway" = resolveClaudeDesktopApplyMode(config);
       if (requested !== undefined) {
@@ -1055,25 +1055,8 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const desired = setIntegrationEnabled("claude-desktop", true);
         if (!desired.ok) return jsonResponse({ error: desired.message }, desired.retryable ? 409 : 500);
         mirrorDesiredEnabledOntoSnapshot(config, "claude-desktop", true);
-        // First-party replaces gateway: the two must never be active together.
         const { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } = await import("../../claude/desktop-3p");
-        const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
-        const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
-        let gatewayRemoved = false;
-        if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
-          const removed = (deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint, replaceWhileEnabled: true });
-          if (!removed.ok) {
-            return jsonResponse({
-              error: removed.kind === "cleanup_incomplete"
-                ? "Claude Desktop now points at standard mode, but gateway credential cleanup is incomplete; first-party env was not applied."
-                : "The gateway profile could not be removed safely, so first-party mode was not applied.",
-              code: "claude_desktop_gateway_removal_failed",
-              reason: removed.reason ?? removed.kind,
-              ...(removed.residualPaths ? { residualPaths: removed.residualPaths } : {}),
-            }, removed.kind === "cleanup_incomplete" ? 500 : 409);
-          }
-          gatewayRemoved = removed.changed;
-        }
+        const rollback = captureDesktopFirstPartyRollback(config);
         const applied = applyDesktopFirstParty(config);
         if (!applied.ok) {
           const { firstPartyRefusalMessage } = await import("./native-integration-routes");
@@ -1083,6 +1066,29 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
             reason: applied.reason,
             path: applied.path,
           }, applied.reason === "foreign_env" || applied.reason === "intercept_disabled" ? 409 : 500);
+        }
+        // Remove the gateway only after the replacement env was written.
+        const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
+        const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
+        let gatewayRemoved = false;
+        if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
+          const removed = (deps.removeDesktop3pStandardPivot ?? removeDesktop3pStandardPivot)({ appliedFingerprint, replaceWhileEnabled: true });
+          if (!removed.ok) {
+            const restored = removed.changed || !applied.changed || rollback();
+            const modeSaved = !removed.changed || (await persistDesktopModeField(config, "first-party")).ok;
+            const warning = [restored ? "" : "first-party settings rollback did not complete",
+              modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");
+            return jsonResponse({
+              error: removed.kind === "cleanup_incomplete"
+                ? "Claude Desktop now points at standard mode, but gateway credential cleanup is incomplete; the first-party connection remains active."
+                : "The gateway profile could not be removed safely, so first-party mode was not applied.",
+              code: "claude_desktop_gateway_removal_failed",
+              ...(warning ? { warning } : {}),
+              reason: removed.reason ?? removed.kind,
+              ...(removed.residualPaths ? { residualPaths: removed.residualPaths } : {}),
+            }, removed.kind === "cleanup_incomplete" ? 500 : 409);
+          }
+          gatewayRemoved = removed.changed;
         }
         const modeSaved = await persistDesktopModeField(config, "first-party");
         return jsonResponse({
@@ -1097,15 +1103,6 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
           caCertPath: applied.env.NODE_EXTRA_CA_CERTS,
           ...(modeSaved.ok ? {} : { warning: `First-party env was applied, but the mode marker was not saved (${modeSaved.reason}).` }),
         });
-      }
-      // Gateway mode replaces first-party: the two must never be active together.
-      const firstPartyRemoved = removeDesktopFirstParty();
-      if (!firstPartyRemoved.ok) {
-        return jsonResponse({
-          error: `Claude Code settings could not be parsed (${firstPartyRemoved.path}); the first-party proxy env could not be removed before switching to gateway mode.`,
-          code: "claude_desktop_first_party_refused",
-          reason: firstPartyRemoved.reason,
-        }, 500);
       }
       const { setIntegrationEnabled, claudeDesktopIntegrationEnabled } = await import("../../codex/desired-state");
       const desired = setIntegrationEnabled("claude-desktop", true);
@@ -1158,6 +1155,15 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         nativeContextLimits(latest),
       );
       if (!result.written) return jsonResponse({ error: result.reason ?? "Claude Desktop apply failed", saved: true, path: result.path }, 500);
+      // The new gateway is committed; retire the previous first-party env now.
+      const firstPartyRemoved = removeDesktopFirstParty();
+      if (!firstPartyRemoved.ok) {
+        return jsonResponse({
+          error: `Claude Code settings could not be parsed (${firstPartyRemoved.path}); the first-party proxy env could not be removed after applying gateway mode.`,
+          code: "claude_desktop_first_party_refused",
+          reason: firstPartyRemoved.reason,
+        }, 500);
+      }
       const modeSaved = await persistDesktopModeField(config, "gateway");
       const modeWarning = modeSaved.ok ? undefined : `Claude Desktop was applied, but the gateway mode marker was not saved (${modeSaved.reason}).`;
       const { claudeDesktopPolicyWarning, probeClaudeDesktopPolicy } = await import("../../claude/desktop-policy");

@@ -172,10 +172,12 @@ claude.ai-only features are unavailable. Select it explicitly (`--gateway`, the 
 selector, or the legacy `--static` / `--hybrid` / `--discovery-only` flags, which imply it).
 
 Mode is persisted as `claudeCode.desktopMode`. Installs that already applied a gateway profile
-keep gateway after updating; nothing is switched silently. Switching in either direction removes
-the other mode's configuration (only values OpenCodex wrote — a foreign `HTTPS_PROXY` or
+keep gateway after updating; nothing is switched silently. Switching first applies the replacement,
+then removes the other mode's configuration (only values OpenCodex wrote — a foreign `HTTPS_PROXY` or
 `NODE_EXTRA_CA_CERTS`, for example a corporate proxy, is never overwritten and the apply is
-refused instead). Fully quit and reopen Desktop after switching. `ocx ensure` refreshes a stale
+refused instead). A failed replacement preserves the previous connection. If retiring the old
+configuration fails after the replacement was written, the command reports incomplete cleanup;
+resolve that error before restarting Desktop. Fully quit and reopen Desktop after a successful switch. `ocx ensure` refreshes a stale
 first-party env when the integration is ON and removes it when OFF. Set
 `claudeCode.intercept.enabled: false` to disable the proxy entirely; first-party then cannot be
 applied and an implicit apply falls back to gateway. On a connected client the proxy runs on the

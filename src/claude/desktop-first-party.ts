@@ -23,6 +23,7 @@ import { claudeInterceptEnabled, claudeInterceptProxyPort } from "./intercept/ru
 import {
   applyClaudeInterceptSettings,
   buildClaudeInterceptEnv,
+  captureClaudeInterceptSettingsRollback,
   inspectClaudeInterceptSettings,
   removeClaudeInterceptSettings,
   type ClaudeInterceptEnv,
@@ -122,6 +123,16 @@ export interface DesktopFirstPartyInspection {
 export interface DesktopFirstPartyOptions {
   opencodexConfigDir?: string;
   claudeConfigDir?: string;
+}
+
+/** Prepare rollback before replacing a gateway, without changing settings. */
+export function captureDesktopFirstPartyRollback(
+  config: Pick<OcxConfig, "claudeCode" | "port">,
+  options: DesktopFirstPartyOptions = {},
+): () => boolean {
+  return captureClaudeInterceptSettingsRollback(
+    desktopFirstPartyTarget(config, options.opencodexConfigDir).env, options.claudeConfigDir,
+  );
 }
 
 export function inspectDesktopFirstParty(

@@ -106,7 +106,9 @@ public actor ProxyClient {
         if let models = settings.models, !models.isEmpty {
             query.append(URLQueryItem(name: "models", value: models.joined(separator: ",")))
         }
-        return try await get("api/usage/timeline", query: query)
+        query.append(contentsOf: settings.hiddenProviders.map { URLQueryItem(name: "hiddenProvider", value: $0) })
+        let timeline: UsageTimeline = try await get("api/usage/timeline", query: query)
+        return timeline.projected(settings)
     }
 
     public func quotas() async throws -> [QuotaReport] {

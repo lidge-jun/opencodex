@@ -233,7 +233,7 @@ test("no radio is checked and the picker is disabled until /status answers", asy
   const gatewayStatus = statusPayload({ mode: "gateway", activeProfile: true, firstParty: undefined });
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
-    value: async (url: string, init?: RequestInit) => {
+    value: async (url: string) => {
       const path = String(url);
       if (path.includes("/status")) await gate;
       const body = path.includes("/status") ? gatewayStatus : profilePayload();

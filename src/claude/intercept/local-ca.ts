@@ -1,6 +1,7 @@
-import { createHash, generateKeyPairSync, createPrivateKey, createPublicKey, sign, type KeyObject } from "node:crypto";
+import { createHash, generateKeyPairSync, createPrivateKey, createPublicKey, sign, X509Certificate, type KeyObject } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { withClientLifecycleSync } from "../../client/lifecycle-lock";
 
 /**
  * Local certificate authority for the Claude intercept listener.
@@ -254,7 +255,8 @@ function loadPersistedCa(dir: string): LocalInterceptCa | null {
     const keyPem = readFileSync(keyPath, "utf8");
     const privateKey = createPrivateKey(keyPem);
     const publicKey = createPublicKey(keyPem);
-    if (!certPem.includes("BEGIN CERTIFICATE")) return null;
+    const certificate = new X509Certificate(certPem);
+    if (!certificate.ca || !certificate.checkPrivateKey(privateKey) || !certificate.verify(publicKey)) return null;
     return { certPem, keyPem, publicKey, privateKey };
   } catch { // no-excuse-ok: catch -- an unreadable or corrupt authority is regenerated below.
     return null;
@@ -269,10 +271,28 @@ function loadPersistedCa(dir: string): LocalInterceptCa | null {
 export function ensureLocalInterceptCa(configDir: string): LocalInterceptCa {
   const dir = claudeInterceptStateDir(configDir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const existing = loadPersistedCa(dir);
-  if (existing) return existing;
-  const ca = createLocalInterceptCa();
-  writeFileAtomic(join(dir, CA_KEY_FILE), ca.keyPem, 0o600);
-  writeFileAtomic(join(dir, CLAUDE_INTERCEPT_CA_CERT_FILE), ca.certPem, 0o644);
-  return ca;
+  // A separate SQLite namespace binds exclusion to the explicit CA directory.
+  // The OS releases it on crash; a contending caller fails before touching either
+  // PEM. Readers also take the lease so they cannot observe half a publication.
+  return withClientLifecycleSync(() => {
+    const existing = loadPersistedCa(dir);
+    if (existing) return existing;
+    const ca = createLocalInterceptCa();
+    writeFileAtomic(join(dir, CA_KEY_FILE), ca.keyPem, 0o600);
+    writeFileAtomic(join(dir, CLAUDE_INTERCEPT_CA_CERT_FILE), ca.certPem, 0o644);
+    return ca;
+  }, { lockPath: join(dir, "ca-publication.sqlite") });
+}
+
+/** Startup may race a settings apply publishing the same CA. Retry only lease
+ * contention, before binding listeners, without blocking the main event loop. */
+export async function ensureLocalInterceptCaForStartup(configDir: string): Promise<LocalInterceptCa> {
+  for (let attempt = 0; ; attempt += 1) {
+    try { return ensureLocalInterceptCa(configDir); }
+    catch (error) {
+      if (attempt >= 49 || !(error instanceof Error)
+        || !("code" in error) || error.code !== "client_lifecycle_busy") throw error;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+  }
 }

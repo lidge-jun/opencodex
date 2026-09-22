@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import {
   TIMELINE_HOURS,
+  isTimelineModelId,
   type TimelineAggregation,
   type TimelineGrouping,
   type TimelineMetric,
@@ -64,7 +65,7 @@ function validModels(value: unknown, key: string): value is string[] | null {
   return value === null
     || (Array.isArray(value)
       && value.length <= 100
-      && value.every(model => typeof model === "string" && /^[^/\s]+\/[^/\s]+$/.test(model)));
+      && value.every(isTimelineModelId));
 }
 
 function validateValue(key: keyof CompanionSettings, value: unknown): string | null {

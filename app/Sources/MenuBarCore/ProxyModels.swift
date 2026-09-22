@@ -147,6 +147,10 @@ public struct UsageModelRow: Decodable, Equatable, Sendable {
     public let provider: String?
     public let model: String?
     public let requests: Int?
+    public let measuredRequests: Int?
+    public let estimatedRequests: Int?
+    public let inputTokens: Int?
+    public let outputTokens: Int?
     public let totalTokens: Int?
     public let estimatedCostUsd: Double?
 }

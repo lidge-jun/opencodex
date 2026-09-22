@@ -3,6 +3,13 @@ import type { OcxDocumentContent } from "../types";
 const DATA_URL = /^data:([^;,]+)((?:;[^;,]*)*),(.*)$/s;
 const BASE64_PAYLOAD = /^[A-Za-z0-9+/]+={0,2}$/;
 
+function usableBase64(payload: string): boolean {
+  if (!BASE64_PAYLOAD.test(payload)) return false;
+  // Preserve valid unpadded encodings, but a single sextet cannot represent any byte.
+  // Padding, when present, must complete a four-character quantum. No payload allocation.
+  return payload.endsWith("=") ? payload.length % 4 === 0 : payload.length % 4 !== 1;
+}
+
 /** The one marker vocabulary for an attached document, derived from what the part knows. */
 export function inlineDocumentMarker(filename: string | undefined): string {
   return filename !== undefined && filename.length > 0 ? `[document: ${filename}]` : "[document]";
@@ -24,7 +31,7 @@ export function inlineDocumentFromDataUrl(
   if (!match) return undefined;
   const mediaType = match[1]!;
   const payload = match[3]!;
-  if (!hasBase64Parameter(match[2] ?? "") || !BASE64_PAYLOAD.test(payload)) return undefined;
+  if (!hasBase64Parameter(match[2] ?? "") || !usableBase64(payload)) return undefined;
   return {
     type: "document",
     text: inlineDocumentMarker(filename),
@@ -50,7 +57,7 @@ export function inlineDocumentDataUrl(part: OcxDocumentContent): string {
 export function isInlineDocumentDataUrl(value: unknown): boolean {
   if (typeof value !== "string" || value.length === 0) return false;
   const match = DATA_URL.exec(value);
-  return match !== null && hasBase64Parameter(match[2] ?? "") && BASE64_PAYLOAD.test(match[3]!);
+  return match !== null && hasBase64Parameter(match[2] ?? "") && usableBase64(match[3]!);
 }
 
 function hasBase64Parameter(parameters: string): boolean {

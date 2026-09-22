@@ -178,7 +178,7 @@ public struct ProxySnapshot: Equatable, Sendable {
 
     /// One normalized row per provider for the compact quota list.
     public var quotaRows: [NormalizedQuota] {
-        quotas.map { $0.normalized() }
+        quotas.filter { !settings.hiddenProviders.contains($0.provider) }.map { $0.normalized() }
     }
 
     public var visibleProviders: [ProviderSummary] {

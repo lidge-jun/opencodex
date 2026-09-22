@@ -90,7 +90,7 @@ struct OpenCodexWidgetView: View {
                 quotaView(snapshot)
             } else if let chart = snapshot.chart {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Last \(windowLabel(chart))").font(.caption).foregroundStyle(.secondary)
+                    Text("Last \(windowLabel(chart))\(chart.incomplete == true ? " · partial" : "")").font(.caption).foregroundStyle(.secondary)
                     chartView(chart, flexible: false).widgetAccentable()
                 }
             } else {
@@ -116,7 +116,7 @@ struct OpenCodexWidgetView: View {
                 }
             }
             if let chart = snapshot.chart {
-                Text("Last \(windowLabel(chart)) · \(chart.series.count) models")
+                Text("Last \(windowLabel(chart)) · \(chart.series.count) models\(chart.incomplete == true ? " · partial" : "")")
                     .font(.caption).foregroundStyle(.secondary)
                 chartView(chart, flexible: true)
                     .frame(maxHeight: .infinity)

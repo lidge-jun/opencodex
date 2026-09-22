@@ -31,6 +31,17 @@ function fixture() {
   return { root, workspace, outside };
 }
 
+function privateBubblewrapFixture(): string {
+  // The production guard checks every ancestor, so tmpdir's shared /tmp parent
+  // is deliberately ineligible. Own a disposable sibling under the trusted
+  // interpreter directory without chmod'ing the interpreter or shared parents.
+  const root = mkdtempSync(join(dirname(realpathSync(process.execPath)), "ocx-bwrap-fixture-"));
+  roots.push(root);
+  const path = join(root, "bwrap");
+  writeFileSync(path, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  return path;
+}
+
 function fakeNativeHelper(root: string, response: Record<string, unknown>, requestPath?: string) {
   const path = join(root, "ocx-remote-helper-test.mjs");
   const source = [
@@ -83,14 +94,15 @@ describe("remote workspace Linux command sandbox", () => {
 
   test("builds a minimal bubblewrap argv with one writable workspace", () => {
     const state = fixture();
+    const bubblewrapPath = privateBubblewrapFixture();
     const argv = linuxRemoteWorkspaceCommandArgv({
       command: ["/bin/sh", "-lc", "pwd"],
       root: state.workspace,
       cwd: join(state.workspace, "project"),
       timeoutMs: 1_000,
       maxOutputBytes: 4_096,
-    }, { bubblewrapPath: process.execPath });
-    expect(argv[0]).toBe(process.execPath);
+    }, { bubblewrapPath });
+    expect(argv[0]).toBe(realpathSync(bubblewrapPath));
     expect(argv).toContain("--unshare-net");
     expect(argv).toContain("--clearenv");
     expect(argv).toContain("--bind");
@@ -291,7 +303,7 @@ describe("remote workspace Linux command sandbox", () => {
       timeoutMs: 1_000,
       maxOutputBytes: 4_096,
     }, {
-      bubblewrapPath: process.execPath,
+      bubblewrapPath: privateBubblewrapFixture(),
       toolchainRoots: [substituted],
     })).toThrow("remain a real directory");
   });

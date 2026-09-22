@@ -12,6 +12,12 @@ bunx tauri dev
 The sidecar is generated from the repository's standalone binary build and is
 not checked into git.
 
+The macOS tray panel is a SwiftUI/AppKit static library built from
+`app/Sources/NativeTray` by the Rust build script and linked into this process.
+Open `app/Package.swift` in Xcode to build the `NativeTray` and `NativeTrayTests`
+schemes alongside the widget. macOS release builds need Xcode 26 or later for
+Apple Liquid Glass; the application deployment target remains macOS 13.
+
 The CI desktop-shell job performs Rust-only checks. It creates an empty
 platform-named sidecar stub and a placeholder dashboard resource directory
 solely for Tauri's external-binary and resource validation; it does not build

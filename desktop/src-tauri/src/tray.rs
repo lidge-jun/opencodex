@@ -334,44 +334,62 @@ fn refresh_title(tray: &tauri::tray::TrayIcon<Wry>, proxy: &ProxyClient) {
         let Ok(settings) = proxy.companion_settings().await else {
             return;
         };
-        let Ok(usage) = proxy.usage_summary().await else {
+        let Ok(usage) = proxy.usage_today().await else {
             return;
         };
         let quotas = proxy.quotas().await.unwrap_or(Value::Null);
-        if let Some(title) = render_title(&settings, &usage, &quotas) {
-            let _ = tray.set_title(Some(&title));
-        }
+        let title = render_title(&settings, &usage, &quotas);
+        let _ = tray.set_title(title.as_deref());
     });
 }
 
 pub(crate) fn render_title(settings: &Value, usage: &Value, quotas: &Value) -> Option<String> {
+    let settings = settings.get("settings").unwrap_or(settings);
     let metric = settings
-        .pointer("/settings/menuBarMetric")
+        .get("menuBarMetric")
         .and_then(Value::as_str)
         .unwrap_or("tokens");
-    let summary = usage.get("summary").unwrap_or(usage);
-    let quota = quota_percent(quotas);
-    let value = match metric {
-        "requests" => formatting::count(summary.get("requests").and_then(Value::as_i64)),
-        "cost" => formatting::cost(summary.get("estimatedCostUsd").and_then(Value::as_f64)),
-        "quota" => format_percent(quota),
-        "none" => return None,
-        _ => formatting::tokens(summary.get("totalTokens").and_then(Value::as_i64)),
-    };
+    let visible_summary = crate::companion_usage::filtered_summary(usage, settings);
+    let summary = visible_summary.as_ref().unwrap_or(&Value::Null);
+    let quota = quota_percent(quotas, settings);
     let template = settings
-        .pointer("/settings/menuBarTemplate")
+        .get("menuBarTemplate")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty());
+    let value = match metric {
+        "requests" => formatting::count(
+            summary
+                .get("requests")
+                .and_then(crate::companion_usage::integer),
+        ),
+        "cost" => formatting::cost(summary.get("estimatedCostUsd").and_then(Value::as_f64)),
+        "quota" => format_percent(quota),
+        "none" if template.is_none() => return None,
+        "none" => String::new(),
+        _ => formatting::tokens(
+            summary
+                .get("totalTokens")
+                .and_then(crate::companion_usage::integer),
+        ),
+    };
     let rendered = template
         .map(|value| {
             value
                 .replace(
                     "{requests}",
-                    &formatting::count(summary.get("requests").and_then(Value::as_i64)),
+                    &formatting::count(
+                        summary
+                            .get("requests")
+                            .and_then(crate::companion_usage::integer),
+                    ),
                 )
                 .replace(
                     "{totalTokens}",
-                    &formatting::tokens(summary.get("totalTokens").and_then(Value::as_i64)),
+                    &formatting::tokens(
+                        summary
+                            .get("totalTokens")
+                            .and_then(crate::companion_usage::integer),
+                    ),
                 )
                 .replace(
                     "{costUsd}",
@@ -379,11 +397,19 @@ pub(crate) fn render_title(settings: &Value, usage: &Value, quotas: &Value) -> O
                 )
                 .replace(
                     "{inputTokens}",
-                    &formatting::tokens(summary.get("inputTokens").and_then(Value::as_i64)),
+                    &formatting::tokens(
+                        summary
+                            .get("inputTokens")
+                            .and_then(crate::companion_usage::integer),
+                    ),
                 )
                 .replace(
                     "{outputTokens}",
-                    &formatting::tokens(summary.get("outputTokens").and_then(Value::as_i64)),
+                    &formatting::tokens(
+                        summary
+                            .get("outputTokens")
+                            .and_then(crate::companion_usage::integer),
+                    ),
                 )
                 .replace("{quotaPercent}", &format_percent(quota))
         })
@@ -401,10 +427,16 @@ pub(crate) fn render_title(settings: &Value, usage: &Value, quotas: &Value) -> O
     }
 }
 
-fn quota_percent(value: &Value) -> Option<f64> {
+fn quota_percent(value: &Value, settings: &Value) -> Option<f64> {
     let reports = value.get("reports")?.as_array()?;
     let mut values = Vec::new();
     for report in reports {
+        if crate::companion_usage::hidden(
+            settings,
+            crate::companion_usage::text(report, "provider"),
+        ) {
+            continue;
+        }
         let Some(quota) = report.get("quota") else {
             continue;
         };
@@ -465,6 +497,55 @@ fn tray_anchor(app: &AppHandle) -> tauri::PhysicalPosition<f64> {
 
 #[cfg(test)]
 mod tests {
+    use super::render_title;
+    use serde_json::json;
+
+    #[test]
+    fn icon_only_clears_the_title_but_a_template_and_unavailable_data_keep_their_meaning() {
+        let usage = json!({"summary":{"requests":7,"totalTokens":12}});
+        assert_eq!(
+            render_title(
+                &json!({"settings":{"menuBarMetric":"none"}}),
+                &usage,
+                &json!({})
+            ),
+            None
+        );
+        assert_eq!(
+            render_title(
+                &json!({"settings":{"menuBarMetric":"none","menuBarTemplate":"{requests}"}}),
+                &usage,
+                &json!({})
+            ),
+            Some("7".into())
+        );
+        assert_eq!(
+            render_title(
+                &json!({"settings":{"menuBarMetric":"tokens","hiddenProviders":["hidden"]}}),
+                &usage,
+                &json!({})
+            ),
+            Some("—".into())
+        );
+    }
+
+    #[test]
+    fn title_uses_filtered_whole_counts_and_ignores_hidden_quota_reports() {
+        let settings =
+            json!({"settings":{"menuBarMetric":"requests","hiddenProviders":["hidden"]}});
+        let usage = json!({"summary":{"requests":99},"models":[
+            {"provider":"hidden","model":"m","requests":97},
+            {"provider":"visible","model":"m","requests":2}
+        ]});
+        assert_eq!(
+            render_title(&settings, &usage, &json!({})),
+            Some("2".into())
+        );
+        let settings = json!({"settings":{"menuBarMetric":"quota","hiddenProviders":["hidden"]}});
+        let quotas = json!({"reports":[{"provider":"hidden","quota":{"weeklyPercent":1}}, {"provider":"visible","quota":{"weeklyPercent":75}}]});
+        assert_eq!(render_title(&settings, &usage, &quotas), Some("75%".into()));
+    }
+
     /// This file's own source, read at compile time, with the test module cut off.
     ///
     /// Slicing at the test attribute matters: the assertions below quote the very call names they

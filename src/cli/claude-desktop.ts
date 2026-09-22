@@ -18,6 +18,7 @@ import {
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
 import {
   applyDesktopFirstParty,
+  captureDesktopFirstPartyRollback,
   isClaudeDesktopMode,
   recordClaudeDesktopMode,
   removeDesktopFirstParty,
@@ -250,17 +251,24 @@ async function applyFirstPartyDesktop(
   const config = loadConfig();
   const desired = setIntegrationEnabled("claude-desktop", true);
   if (!desired.ok) return { ok: false, path: "", reason: desired.message };
-  // First-party replaces gateway; the two must never be active together.
+  // Establish the replacement before deleting the working gateway. A refused
+  // cleanup restores only our managed env keys, preserving unrelated settings.
+  const rollback = captureDesktopFirstPartyRollback(config);
+  const applied = applyDesktopFirstParty(config);
+  if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason };
   const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
   const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
   if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
     const removed = removeDesktop3pStandardPivot({ appliedFingerprint, replaceWhileEnabled: true });
     if (!removed.ok) {
-      return { ok: false, path: library.selectedProfilePath ?? "", reason: removed.kind === "cleanup_incomplete" ? "gateway_cleanup_incomplete" : `gateway_profile_active:${removed.reason ?? removed.kind}` };
+      const restored = removed.changed || !applied.changed || rollback();
+      const modeSaved = !removed.changed || saveDesktopMode("first-party", deps);
+      const warning = [restored ? "" : "first-party settings rollback did not complete",
+        modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");
+      return { ok: false, path: library.selectedProfilePath ?? "", reason: removed.kind === "cleanup_incomplete" ? "gateway_cleanup_incomplete" : `gateway_profile_active:${removed.reason ?? removed.kind}`,
+        ...(warning ? { warning } : {}) };
     }
   }
-  const applied = applyDesktopFirstParty(config);
-  if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason };
   const saved = saveDesktopMode("first-party", deps);
   return {
     ok: true,
@@ -275,10 +283,11 @@ export async function applyDesktop(
   deps: ApplyProfileDeps = {},
 ): Promise<{ ok: boolean; path: string; reason?: string; warning?: string }> {
   if (target.kind === "first-party") return applyFirstPartyDesktop(deps);
-  // Gateway replaces first-party; the two must never be active together.
-  const removed = removeDesktopFirstParty();
-  if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable" };
   const result = await applyProfile(profile, target.mode, deps);
+  if (!result.ok) return result;
+  // Keep the current first-party connection until gateway application succeeds.
+  const removed = removeDesktopFirstParty();
+  if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable", warning: "gateway applied; first-party cleanup remains incomplete" };
   if (result.ok && !saveDesktopMode("gateway", deps)) {
     return { ...result, warning: [result.warning, "desktop mode marker was not saved"].filter(Boolean).join(" ") };
   }

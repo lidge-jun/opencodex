@@ -12,6 +12,8 @@
  */
 
 html.tray-document {
+  height: 100%;
+  overflow: hidden;
   color-scheme: dark;
   background: #1d1d1f;
 
@@ -37,6 +39,8 @@ html.tray-document[data-tray-vibrancy='on'] {
 }
 
 .tray-document body {
+  height: 100%;
+  overflow: hidden;
   margin: 0;
   min-width: 0;
   background: var(--tray-surface);
@@ -52,9 +56,12 @@ html.tray-document[data-tray-vibrancy='on'] {
   overflow: hidden;
 }
 
-.tray-document #root { min-height: 100vh; }
+.tray-document #root { height: 100%; min-height: 0; }
 
 .tray-page {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   width: 100%;
   max-width: 440px;
   min-width: 0;

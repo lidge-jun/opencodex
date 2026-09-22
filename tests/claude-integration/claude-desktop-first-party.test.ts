@@ -9,7 +9,8 @@ import {
   resolveClaudeDesktopApplyMode,
   resolveClaudeDesktopMode,
 } from "../../src/claude/desktop-first-party";
-import { parseDesktopApplyArgs } from "../../src/cli/claude-desktop";
+import { applyDesktop, parseDesktopApplyArgs } from "../../src/cli/claude-desktop";
+import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
 import { ensureClaudeDesktopMatchesDesired } from "../../src/cli/ensure-desired-integrations";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { setIntegrationEnabled } from "../../src/codex/desired-state";
@@ -30,12 +31,12 @@ function settings(): { env?: Record<string, string>; [key: string]: unknown } {
   return JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8")) as { env?: Record<string, string> };
 }
 
-async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig = config()) {
+async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig = config(), deps: Parameters<typeof handleManagementAPI>[3] = {}) {
   const url = new URL(`http://127.0.0.1:10100${path}`);
   const response = await handleManagementAPI(new Request(url, {
     ...init,
     headers: { Host: url.host, "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  }), url, inputConfig, {});
+  }), url, inputConfig, deps);
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 
@@ -265,4 +266,78 @@ test("ensure reconciles first-party env: refreshes when ON and stale, removes wh
   ensureClaudeDesktopMatchesDesired({ ...deps, loadConfig: () => config({ clientIntegrations: { "claude-desktop": false } }) });
   expect(settings().env?.HTTPS_PROXY).toBeUndefined();
   expect(settings().env?.NODE_EXTRA_CA_CERTS).toBeUndefined();
+});
+
+for (const surface of ["cli", "api"] as const) {
+  for (const failure of ["intercept_disabled", "foreign_env", "unreadable", "ca_unavailable"] as const) {
+    test(`${surface} failed first-party ${failure} leaves the gateway profile active`, async () => {
+      const gateway = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) });
+      expect(gateway.status).toBe(200);
+      const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+      const appliedFingerprint = saved.claudeCode!.desktopProfile!.appliedFingerprint!;
+      const before = inspectDesktop3pConfigLibrary({ appliedFingerprint });
+      expect(before.kind).toBe("gateway_ours");
+      if (failure === "intercept_disabled") {
+        saved.claudeCode = { ...saved.claudeCode, intercept: { enabled: false } };
+        writeFileSync(join(root, "config.json"), JSON.stringify(saved));
+      } else if (failure === "ca_unavailable") {
+        writeFileSync(join(root, "claude-intercept"), "not a directory");
+      } else {
+        mkdirSync(claudeDir, { recursive: true });
+        writeFileSync(join(claudeDir, "settings.json"), failure === "unreadable"
+          ? "{broken" : JSON.stringify({ env: { HTTPS_PROXY: "http://corporate.example:3128" } }));
+      }
+      if (surface === "cli") {
+        expect(await applyDesktop(undefined, { kind: "first-party" })).toMatchObject({ ok: false, reason: failure });
+      } else {
+        const reply = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, saved);
+        expect(reply.body.reason).toBe(failure);
+      }
+      expect(inspectDesktop3pConfigLibrary({ appliedFingerprint })).toEqual(before);
+    });
+  }
+}
+
+test("CLI gateway apply refusal leaves the first-party connection intact", async () => {
+  expect(applyDesktopFirstParty(config()).ok).toBe(true);
+  const before = settings();
+  const result = await applyDesktop(undefined, { kind: "gateway", mode: "static" }, {
+    findLiveProxyImpl: async () => ({ pid: 4242, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+    postApplyImpl: async () => ({ ok: false, error: "replacement_refused" }),
+  });
+  expect(result).toMatchObject({ ok: false, reason: "replacement_refused" });
+  expect(settings()).toEqual(before);
+});
+
+test("a refused gateway cleanup restores the previous settings env", async () => {
+  expect((await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) })).status).toBe(200);
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  mkdirSync(claudeDir, { recursive: true });
+  const before = { theme: "dark", env: { FOO: "keep" } };
+  writeFileSync(join(claudeDir, "settings.json"), JSON.stringify(before));
+  const result = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, saved, {
+    removeDesktop3pStandardPivot: () => ({ ok: false, changed: false, kind: "unsafe", libraryPath: library, reason: "metadata_unreadable" }),
+  });
+  expect(result.status).toBe(409);
+  expect(result.body.code).toBe("claude_desktop_gateway_removal_failed");
+  expect(settings()).toEqual(before);
+  expect(inspectDesktop3pConfigLibrary({ appliedFingerprint: saved.claudeCode!.desktopProfile!.appliedFingerprint }).kind).toBe("gateway_ours");
+});
+
+test("a completed standard pivot keeps first-party active when credential cleanup is incomplete", async () => {
+  expect((await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) })).status).toBe(200);
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  const result = await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "first-party" }) }, saved, {
+    removeDesktop3pStandardPivot: options => {
+      const pivot = removeDesktop3pStandardPivot(options);
+      expect(pivot.ok && pivot.changed).toBe(true);
+      return { ok: false, changed: true, kind: "cleanup_incomplete", libraryPath: library, residualPaths: ["fixture-residue"] };
+    },
+  });
+  expect(result.status).toBe(500);
+  expect(result.body.reason).toBe("cleanup_incomplete");
+  expect(inspectDesktopFirstParty(config()).applied).toBe(true);
+  const after = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  expect(after.claudeCode?.desktopMode).toBe("first-party");
+  expect(after.claudeCode?.desktopProfile?.appliedFingerprint).toBeUndefined();
 });

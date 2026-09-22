@@ -68,8 +68,9 @@ export async function handleCompanionRoutes(ctx: ManagementContext): Promise<Res
     return response();
   }
   if (!("settings" in input)) return jsonResponse({ error: "provide settings or reset:true" }, 400, ctx.req, ctx.config);
-  const current = loadCompanionSettings().settings;
-  const updated = applyCompanionSettingsPatch(current, input.settings);
+  const current = loadCompanionSettings();
+  if (current.corrupt) return jsonResponse({ error: "Companion settings could not be read; use reset:true to replace them explicitly.", code: "companion_settings_corrupt" }, 409, ctx.req, ctx.config);
+  const updated = applyCompanionSettingsPatch(current.settings, input.settings);
   if ("error" in updated) return jsonResponse(updated, 400, ctx.req, ctx.config);
   saveCompanionSettings(updated);
   return response();

@@ -1,15 +1,54 @@
 import { describe, expect, test } from "bun:test";
 import {
   bucketMinutesForWindow,
+  companionTimelineQuery,
+  companionTimelineProjection,
   buildCompanionSettingsPatch,
   chartPolylinePoints,
   chartStackedBarRects,
   formatCompanionTokens,
   groupCompanionModels,
   toggleCompanionModels,
+  type UsageTimeline,
 } from "../src/pages/usage-companion-utils";
 
 describe("usage companion utilities", () => {
+  test("timeline queries encode nested models and repeated hidden providers", () => {
+    const models = ["provider/vendor/model+name"];
+    const hiddenProviders = ["work+private", "hidden"];
+    const query = companionTimelineQuery({ chartHours: 24, bucketMinutes: 60, tokenMetric: "total",
+      aggregation: "sum", chartGrouping: "model", models, hiddenProviders });
+    expect(new URLSearchParams(query.toString()).get("models")).toBe(models[0]);
+    expect(new URLSearchParams(query.toString()).getAll("hiddenProvider")).toEqual(hiddenProviders);
+  });
+
+  test("filter echoes preserve valid folded rows and old-server uncertainty stays visible", () => {
+    const timeline: UsageTimeline = { start: 0, end: 60, bucketSeconds: 60, buckets: 1, metric: "total",
+      aggregation: "sum", grouping: "model", availableModels: ["visible/m", "hidden/m"], missingMeasurements: 0, truncated: false,
+      series: [
+        { id: "visible/m", provider: "visible", model: "m", points: [2], total: 2 },
+        { id: "hidden/m", provider: "hidden", model: "m", points: [1], total: 1 },
+        { id: "other", provider: "", model: "other", points: [3], total: 3 },
+      ] };
+    const settings = { models: null, hiddenProviders: ["hidden"] };
+    const matched = companionTimelineProjection({ ...timeline, appliedFilters: settings }, settings);
+    expect(matched.series.map(row => row.id)).toEqual(["visible/m", "other"]);
+    expect(matched.availableModels).toEqual(["visible/m"]);
+    expect(matched.truncated).toBe(false);
+    for (const appliedFilters of [undefined, { models: null, hiddenProviders: ["different"] }]) {
+      const old = companionTimelineProjection({ ...timeline, appliedFilters }, settings);
+      expect(old.series.map(row => row.id)).toEqual(["visible/m"]);
+      expect(old.truncated).toBe(true);
+    }
+    const selected = { models: ["visible/m"], hiddenProviders: [] };
+    expect(companionTimelineProjection({ ...timeline, appliedFilters: selected }, selected).series.map(row => row.id)).toEqual(["visible/m", "other"]);
+    const empty = companionTimelineProjection(timeline, { models: [], hiddenProviders: [] });
+    expect(empty.series).toEqual([]);
+    expect(empty.availableModels).toEqual(timeline.availableModels);
+    expect(empty.truncated).toBe(false);
+    expect(companionTimelineProjection(timeline, { models: null, hiddenProviders: [] })).toEqual(timeline);
+  });
+
   test("maps chart windows to bounded buckets", () => {
     expect([6, 24, 72, 168].map(bucketMinutesForWindow)).toEqual([15, 60, 180, 360]);
   });
