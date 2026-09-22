@@ -79,7 +79,7 @@ if (argv[0] !== "test") {
   process.exit(97);
 }
 record("test");
-const matches = args => config.target === "main" ? args.includes("tests")
+const matches = args => config.target === "main" ? args.some(arg => arg.replace(/^\.\//, "") === "tests")
   : args.some(arg => arg.replace(/^\.\//, "") === "tests/" + config.target);
 if (!matches(argv)) process.exit(0);
 const attempts = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line))
@@ -108,6 +108,8 @@ function createFixture(directory: string, options: FixtureOptions): void {
   mkdirSync(join(directory, "scripts", "ci"), { recursive: true });
   copyFileSync(repoPath("scripts", "ci", "bun-crash-signatures.sh"),
     join(directory, "scripts", "ci", "bun-crash-signatures.sh"));
+  copyFileSync(repoPath("scripts", "ci", "sample-macos-stall.sh"),
+    join(directory, "scripts", "ci", "sample-macos-stall.sh"));
   for (const file of [...SERIAL_FILES, ...GENERAL_FILES]) {
     if (file === options.missing) continue;
     mkdirSync(dirname(join(directory, "tests", file)), { recursive: true });
@@ -133,9 +135,9 @@ function spawnErrorCode(error: unknown): string {
   return typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : "SPAWN_ERROR";
 }
 
-function runShell(directory: string, shard: number): Promise<{ status: number | null; output: string }> {
+function runShell(directory: string, shard: number, override?: string): Promise<{ status: number | null; output: string }> {
   // Use the runner's native /bin/bash (Bash 3 on macOS), never a shell mock.
-  const command = macosTestBlock(shard);
+  const command = override ?? macosTestBlock(shard);
   return new Promise((resolve, reject) => {
     let child: ChildProcessByStdio<null, Readable, Readable>;
     try {
@@ -265,7 +267,7 @@ function expectGeneralCall(call: Invocation, shard: number): void {
   // Account for every CLI argument: a name filter or extra exclusion could
   // silently drop ordinary files even while the serial ownership oracle passes.
   expect(call.argv.toSorted()).toEqual([
-    "test", "--isolate", "--timeout", "60000", "tests", `--shard=${shard}/2`,
+    "test", "--isolate", "--timeout", "60000", "./tests", `--shard=${shard}/2`,
     ...SERIAL_FILES.flatMap(file => ["--path-ignore-patterns", `**/${basename(file)}`]),
   ].toSorted());
   // Exact exclusions above plus the unrestricted tests root leave these files
@@ -276,16 +278,30 @@ function expectGeneralCall(call: Invocation, shard: number): void {
 // These are explicitly Unix Bash integration tests; Windows still runs the
 // existing cross-platform workflow source/layout contracts unchanged.
 describe.skipIf(process.platform === "win32")("macOS serial lane shell ownership", () => {
+  test("stall observer samples only an identified silent suite without signaling it", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ocx macos' observer-"));
+    try {
+      createFixture(directory, {});
+      const fixture = repoPath("tests", "fixtures", "macos-stall-observer.sh");
+      const result = await runShell(directory, 1,
+        `bash ${shellQuote(fixture)} "$PWD/probe" "$PWD/scripts/ci/sample-macos-stall.sh"`);
+      expect(result.status, result.output).toBe(0);
+      for (const scenario of ["silent", "absent", "ambiguous", "progress", "stop"]) {
+        expect(result.output).toContain(`PASS ${scenario}`);
+      }
+    } finally { removeTreeWithRetry(directory); }
+  }, SPAWN_BUDGET_MS);
+
   test("both shards own each canonical file exactly once in a fresh isolated process", async () => {
     const runs = [await runShard(1), await runShard(2)];
     for (const [index, run] of runs.entries()) {
       expect(run.status, run.output).toBe(0);
       const calls = testCalls(run);
-      const serial = calls.filter(call => !call.argv.includes("tests"));
+      const serial = calls.filter(call => !targets(call, "main"));
       const owned = SERIAL_FILES.filter((_, fileIndex) => fileIndex % 2 === index);
       // First oracle deliberately fails old CI for missing isolated ownership.
       expect(serial.length, "missing isolated ownership of canonical serial files").toBe(owned.length);
-      expect(calls.filter(call => call.argv.includes("tests"))).toHaveLength(1);
+      expect(calls.filter(call => targets(call, "main"))).toHaveLength(1);
       expectGeneralCall(calls[0]!, index + 1);
       expect(serial.map(testPaths)).toEqual(owned.map(file => [`tests/${file}`]));
       for (const call of serial) {
