@@ -1075,6 +1075,9 @@ The pending queue is limited to 32 frames and 8 MiB, with 1,024 advertised funct
 calls, a 32 MiB replay journal and at most 128 responses per owned connection.
 Injection journals share the pinned memory budget and 128 MiB aggregate ceiling
 with steering journals; see [steering memory limits](#steering-confirmation-deadlines-and-retained-context).
+The configured upstream body limit is checked before a result enters the queue,
+even while another result awaits acknowledgement. An `outbound_body_too_large`
+refusal leaves the connection usable for a corrected result without rerunning its tool.
 Each sent injection has a 90-second acknowledgement deadline that unrelated output
 cannot extend; a saved-result wait is limited to 30 minutes. Existing frame limits
 and stall timeouts still apply.

@@ -154,6 +154,7 @@ export class NativeInjectionChannel implements NativeResponseControl {
       if (call.state !== "available") injectionError("duplicate_injection", "This function result was already submitted; do not replay it.");
     }
     const text = JSON.stringify(frame);
+    this.assertOutboundFrame(text);
     const bytes = Buffer.byteLength(text);
     if (this.queue.length >= MAX_NATIVE_INJECTIONS || bytes + this.queueBytes > MAX_NATIVE_INJECTION_BYTES) {
       injectionError("injection_queue_full", "Native injection queue count or byte limit reached; no result was sent.");

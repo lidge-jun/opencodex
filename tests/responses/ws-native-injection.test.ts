@@ -10,6 +10,7 @@ import { NativeInjectionChannel } from "../../src/server/responses/native-inject
 import { MAX_NATIVE_INJECTIONS, MAX_NATIVE_INJECTION_BYTES, injectionResults } from "../../src/server/responses/native-injection-protocol";
 import { nativeResponseControlEligible } from "../../src/server/responses/native-response-control";
 import { NativeInjectionReplay } from "../../src/server/responses/native-injection-replay";
+import { nativeControlReplayRetainedStoreSnapshot } from "../../src/server/responses/native-steering-replay";
 import type { RequestLogContext } from "../../src/server/request-log";
 
 installInjectionFixture();
@@ -505,4 +506,47 @@ test("a configured-size refusal keeps the channel alive and frees the call for a
     channel.inject({ type: "response.inject", response_id: "root", input: [savedResult("c", "small")] });
     expect(sent).toHaveLength(1);
   } finally { detach(); }
+});
+
+test.each([false, true])("oversized injection is refused while another result awaits acknowledgement (public API = %s)", async api => {
+  const baseline = nativeControlReplayRetainedStoreSnapshot();
+  const settings = injectionConfig(api);
+  settings.maxUpstreamBodyBytes = 4096;
+  const { socket, send, sent, ws, id } = await beginInjection({}, settings);
+  const owner = ws.data.nativeControl;
+  const calls = [advertiseInjection(socket), advertiseInjection(socket, "call-2", 1)];
+  const first = { type: "response.inject", response_id: id, input: [savedResult("call-1", "first result")] };
+  send(first);
+  expect(socket.frames[1]).toEqual(first);
+  const retained = nativeControlReplayRetainedStoreSnapshot();
+  const oversized = { type: "response.inject", response_id: id, input: [savedResult("call-2", "x".repeat(8192))] };
+  const bytes = Buffer.byteLength(JSON.stringify(oversized));
+  expect(bytes).toBeGreaterThan(settings.maxUpstreamBodyBytes);
+  expect(bytes + Buffer.byteLength(JSON.stringify(first))).toBeLessThan(MAX_NATIVE_INJECTION_BYTES);
+
+  // Withhold the first acknowledgement: refusal must happen before the second result is queued.
+  send(oversized);
+  expect(sent.at(-1)?.error.code).toBe("outbound_body_too_large");
+  expect(socket.frames.filter(frame => frame.type === "response.inject")).toEqual([first]);
+  expect(nativeControlReplayRetainedStoreSnapshot()).toEqual(retained);
+  expect(ws.data.nativeControl).toBe(owner);
+  expect(socket.readyState).toBe(1);
+
+  acknowledgeInjection(socket, 100);
+  await waitForInjection(() => sent.some(event => event.type === "response.inject.created" && event.sequence_number === 100));
+  expect(ws.data.nativeControl).toBe(owner);
+  expect(socket.readyState).toBe(1);
+  expect(socket.frames.filter(frame => frame.type === "response.inject")).toEqual([first]);
+  const corrected = { type: "response.inject", response_id: id, input: [savedResult("call-2", "corrected result")] };
+  send(corrected);
+  expect(socket.frames.filter(frame => frame.type === "response.inject")).toEqual([first, corrected]);
+  acknowledgeInjection(socket, 101);
+  completeInjection(socket, { output: calls });
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(sent.filter(event => event.type === "error")).toHaveLength(1);
+  expect(sent.filter(event => event.type === "response.inject.created").map(event => event.sequence_number)).toEqual([100, 101]);
+  expect(sent.at(-1)?.type).toBe("response.completed");
+  expect(nativeControlReplayRetainedStoreSnapshot()).toEqual(baseline);
+  expect(InjectionSocket.all).toHaveLength(1);
+  expect(fallbackCalls).toBe(0);
 });

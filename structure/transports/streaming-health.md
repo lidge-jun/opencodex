@@ -374,8 +374,11 @@ and private socket. `src/server/responses/native-injection-protocol.ts` validate
 only string-valued developer `function_call_output` items for completed calls
 advertised by that response and lane. IDs are never global lookup keys. One physical
 injection awaits acknowledgement at a time because success carries a response ID,
-not an injection ID; further submissions remain in a bounded FIFO. Repeated call
-results, mismatched/repeated acknowledgements and unsupported shapes fail closed. On
+not an injection ID; further submissions remain in a bounded FIFO.
+The configured upstream body limit is checked before a result reserves calls or
+enters the queue, including while another result awaits acknowledgement. A size
+refusal leaves the original socket and outstanding result usable for a corrected submission.
+Repeated call results, mismatched/repeated acknowledgements and unsupported shapes fail closed. On
 non-forward routes, native events also enforce the current request's explicit tool
 catalog before advertising or relaying a client-executed call.
 
