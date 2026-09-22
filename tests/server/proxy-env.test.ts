@@ -291,9 +291,9 @@ describe("applyProxyEnv", () => {
   });
 
   test.each([
-    ["alone", {}],
-    ["beside an inherited HTTP proxy", { HTTP_PROXY: "http://proxy.invalid:3128" }],
-  ] as const)("an inherited SOCKS proxy %s: loopback goes direct, *.localhost stays on SOCKS", async (_label, inherited) => {
+    ["alone", {}, "http://localhost:11434/v1/models", "localhost,127.0.0.1,::1,[::1]"],
+    ["beside an inherited HTTP proxy", { HTTP_PROXY: "http://proxy.invalid:3128" }, "http://127.0.0.1:11434/v1/models", "127.0.0.1,::1,[::1]"],
+  ] as const)("an inherited SOCKS proxy %s: loopback goes direct, *.localhost stays on SOCKS", async (_label, inherited, loopbackUrl, expectedNoProxy) => {
     const refusing = createTcpServer(socket => socket.destroy());
     await new Promise<void>((resolve, reject) => {
       refusing.once("error", reject);
@@ -305,14 +305,15 @@ describe("applyProxyEnv", () => {
     process.env.ALL_PROXY = `socks5h://127.0.0.1:${address.port}`;
     Object.assign(process.env, inherited);
     applyProxyEnv(configWithProxy());
-    expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1]");
+    // Beside an HTTP(S) proxy Bun reads NO_PROXY too, with suffix matching, so no bare localhost.
+    expect(process.env.NO_PROXY).toBe(expectedNoProxy);
     let directCalls = 0;
     const direct = async () => {
       directCalls += 1;
       return new Response("direct");
     };
     try {
-      expect(await (await configuredOutboundFetch("http://localhost:11434/v1/models", undefined, direct)).text()).toBe("direct");
+      expect(await (await configuredOutboundFetch(loopbackUrl, undefined, direct)).text()).toBe("direct");
       expect(directCalls).toBe(1);
       await expect(configuredOutboundFetch("http://app.localhost:11434/v1/models", undefined, direct)).rejects.toThrow();
       expect(directCalls).toBe(1);
