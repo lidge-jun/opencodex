@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { SHIM_MARKER } from "../../src/codex/shim-templates";
 import {
   deriveCodexCliInstallationInput,
   type CodexCliInstallationSnapshot,
 } from "../../src/codex/cli-installation-targets";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
+const nativeTest = process.platform === "win32" && process.arch === "x64" ? test : test.skip;
 const PREFIX = "C:\\Users\\op\\AppData\\Roaming\\npm";
 const NODE_DIR = "C:\\Program Files\\nodejs";
 
@@ -240,6 +245,38 @@ describe("selected Codex CLI installation target derivation", () => {
         candidateSource: "selected",
       }),
     });
+  });
+
+  nativeTest("default probe passes absent PATHEXT entries and prefix-local node.exe", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-install-targets-"));
+    try {
+      const prefix = join(root, "npm");
+      const nodeDir = join(root, "node-bin");
+      mkdirSync(join(prefix, "node_modules", "@openai", "codex"), { recursive: true });
+      mkdirSync(join(nodeDir, "node_modules", "npm", "bin"), { recursive: true });
+      writeFileSync(join(prefix, "codex.cmd"), "@echo off\r\n");
+      writeFileSync(join(prefix, "node_modules", "@openai", "codex", "package.json"), "{}");
+      writeFileSync(join(nodeDir, "node.exe"), "");
+      writeFileSync(join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"), "");
+
+      const result = await deriveCodexCliInstallationInput({
+        codexCliPath: null,
+        path: `${prefix};${nodeDir}`,
+        pathExt: ".COM;.EXE;.BAT;.CMD",
+      });
+      expect(result).toEqual({
+        kind: "derived",
+        input: {
+          candidate: join(prefix, "codex.cmd"),
+          npmPrefix: prefix,
+          npmCli: join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"),
+          node: join(nodeDir, "node.exe"),
+          candidateSource: "selected",
+        },
+      });
+    } finally {
+      removeTreeWithRetry(root);
+    }
   });
 
   test("a relative path-shaped configured candidate refuses instead of substituting PATH codex", async () => {

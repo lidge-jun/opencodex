@@ -35,10 +35,20 @@ export type WindowsInstallationFilesResult =
     path: string; identity: WindowsInstallationFileIdentity; bytes: Uint8Array; digest: string;
   }[] }
   | { kind: "refused"; reason: "unsupported-platform" | "invalid-request" | "native-api-unavailable"
-    | "volume-unavailable" | "open-refused" | "reparse-point" | "not-regular-file"
+    | "volume-unavailable" | "not-found" | "open-refused" | "reparse-point" | "not-regular-file"
     | "size-limit" | "read-failed" | "identity-changed" | "inspection-failed" };
 
 type Refusal = Extract<WindowsInstallationFilesResult, { kind: "refused" }>["reason"];
+/** Only these two NTSTATUS values prove that a candidate or its ancestor is absent. */
+export function ntCreateFileRefusal(status: number): Refusal {
+  switch (status >>> 0) {
+    case 0xc0000034: // STATUS_OBJECT_NAME_NOT_FOUND
+    case 0xc000003a: // STATUS_OBJECT_PATH_NOT_FOUND
+      return "not-found";
+    default:
+      return "open-refused";
+  }
+}
 class InspectionRefusal extends Error {
   constructor(readonly reason: Refusal) { super(reason); }
 }
@@ -169,7 +179,7 @@ export async function inspectWindowsInstallationFiles(
       // Share READ only: while held, writes/reparse edits and delete/rename opens are refused.
       const result = nt!.symbols.NtCreateFile!(ffi.ptr(output), 0x100081, ffi.ptr(attributes),
         ffi.ptr(status), null, 0, 1, 1, 0x200020 | (directory ? 1 : 0), null, 0);
-      if (result < 0) throw new InspectionRefusal("open-refused");
+      if (result < 0) throw new InspectionRefusal(ntCreateFileRefusal(result));
       const handle = keep(output.readBigUInt64LE(0));
       inspect(handle, directory);
       return handle;

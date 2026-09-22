@@ -86,7 +86,7 @@ export async function deriveCodexCliInstallationInput(
   const exists = deps.exists ?? (async (path: string) => {
     const result = await safeRead(path, 0);
     if (result.kind === "observed") return true;
-    return result.kind === "refused" ? "refused" : false;
+    return result.reason === "not-found" ? false : "refused";
   });
   const fileContains = deps.fileContains ?? (async (path: string, marker: string) => {
     const result = await safeRead(path, SHIM_PROBE_BYTES, true);

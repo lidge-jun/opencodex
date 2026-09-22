@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   inspectWindowsInstallationFiles,
+  ntCreateFileRefusal,
   setWindowsInstallationFilesOpenedForTests,
 } from "../../src/codex/windows-installation-files";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -18,6 +19,14 @@ afterEach(() => {
 });
 
 describe("explicit Windows installation file snapshot", () => {
+  test("only missing-object NTSTATUS values permit another candidate", () => {
+    expect(ntCreateFileRefusal(0xc0000034 | 0)).toBe("not-found");
+    expect(ntCreateFileRefusal(0xc000003a | 0)).toBe("not-found");
+    for (const status of [0xc0000022, 0xc0000043, 0xc000050b]) {
+      expect(ntCreateFileRefusal(status | 0)).toBe("open-refused");
+    }
+  });
+
   test.each([
     "relative\\package.json", "C:package.json", "\\\\host\\share\\package.json",
     "\\\\?\\C:\\package.json", "C:\\test\\..\\package.json", "C:\\test\\.\\package.json",
@@ -38,6 +47,17 @@ describe("explicit Windows installation file snapshot", () => {
       { path: "C:\\node.exe", maxBytes: 256 * 1024 * 1024, hashOnly: true },
       { path: "C:\\other.exe", maxBytes: 256 * 1024 * 1024, hashOnly: true },
     ])).toEqual({ kind: "refused", reason: "invalid-request" });
+  });
+
+  nativeTest("reports absent leaf and ancestor as not-found", async () => {
+    mkdirSync(join(fixture, "present"));
+    for (const path of [
+      join(fixture, "present", "missing.cmd"),
+      join(fixture, "missing", "launcher.cmd"),
+    ]) {
+      expect(await inspectWindowsInstallationFiles([{ path, maxBytes: 0, metadataOnly: true }]))
+        .toEqual({ kind: "refused", reason: "not-found" });
+    }
   });
 
   nativeTest("reads real nested files under held ancestors and releases every handle", async () => {
