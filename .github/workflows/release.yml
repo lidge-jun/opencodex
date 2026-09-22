@@ -228,6 +228,7 @@ jobs:
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: stable
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
@@ -336,6 +337,13 @@ jobs:
           echo "$description" | grep -q "flags=.*runtime"
           echo "$description" | grep -q "Timestamp="
 
+      - name: Prepare Windows installer version
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bun desktop/scripts/windows-installer-config.ts "$RELEASE_VERSION" "$RUNNER_TEMP/opencodex-msi.json"
+
       # Release signing is intentionally secret-gated. Developer ID, notarization,
       # and updater signatures require maintainer-owned credentials; builds without
       # those secrets remain useful for local validation but are not release assets.
@@ -353,7 +361,7 @@ jobs:
           MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         # linuxdeploy suppresses its own stderr at the default verbosity. Keep
         # diagnostics on the first attempt; Apple signing commands stay non-verbose.
-        run: bunx tauri ${{ runner.os == 'Linux' && '--verbose' || '' }} build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        run: bunx tauri ${{ runner.os == 'Linux' && '--verbose' || '' }} build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config "${{ runner.os == 'Windows' && format('{0}/opencodex-msi.json', runner.temp) || '{}' }}"
 
       - name: Rename release assets
         shell: bash

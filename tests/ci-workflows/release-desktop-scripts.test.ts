@@ -1,3 +1,4 @@
+import { windowsInstallerConfig, windowsInstallerVersion } from "../../desktop/scripts/windows-installer-config";
 import { describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -27,6 +28,17 @@ function temporaryDirectory(): string {
 }
 
 describe("desktop release scripts", () => {
+  test("MSI uses numeric core while public SemVer metadata remains external", () => {
+    for (const version of ["2.61.0", "2.61.0-preview.20260922", "2.61.0-preview.20260922.1+build.7"]) {
+      expect(windowsInstallerVersion(version)).toBe("2.61.0");
+      expect(windowsInstallerConfig(version)).toEqual({ bundle: { windows: { wix: { version: "2.61.0" } } } });
+    }
+    expect(windowsInstallerVersion("255.255.65535")).toBe("255.255.65535");
+    for (const version of ["256.1.0", "1.256.0", "1.1.65536", "2.01.0", "2.1.0-01", "v2.1.0", "2.1", "2.1.0;evil", "999999999999999999.0.0"]) {
+      expect(() => windowsInstallerVersion(version)).toThrow();
+    }
+  });
+
   test("renames macOS DMG and updater archive and copies signatures", () => {
     const root = temporaryDirectory();
     try {
@@ -405,7 +417,7 @@ describe("widget extension signing", () => {
   ) as {
     jobs?: Record<string, {
       env?: Record<string, string>;
-      steps?: Array<{ name?: string; if?: string; run?: string; env?: Record<string, string> }>;
+      steps?: Array<{ name?: string; if?: string; run?: string; env?: Record<string, string>; with?: Record<string, string> }>;
     }>;
   };
   const steps = workflow.jobs?.["package-desktop"]?.steps ?? [];
@@ -416,6 +428,21 @@ describe("widget extension signing", () => {
   // was still correct.
   const indexOfStepRunning = (fragment: string) =>
     steps.findIndex(step => typeof step.run === "string" && step.run.includes(fragment));
+
+  test("release prepares both Mac architectures and wires only the MSI metadata override", () => {
+    const rust = steps.find(step => step.name === "Setup Rust");
+    expect(rust?.with?.targets).toContain("aarch64-apple-darwin,x86_64-apple-darwin");
+    expect(rust?.with?.targets).toContain("runner.os == 'macOS'");
+    const prepare = steps.find(step => step.name === "Prepare Windows installer version");
+    expect(prepare?.if).toBe("runner.os == 'Windows'");
+    expect(prepare?.env?.RELEASE_VERSION).toBe("${{ inputs.version }}");
+    expect(prepare?.run).toContain('windows-installer-config.ts "$RELEASE_VERSION" "$RUNNER_TEMP/opencodex-msi.json"');
+    const build = steps.find(step => step.name === "Build desktop bundles");
+    expect(build?.run).toContain("--config");
+    expect(build?.run).toContain("format('{0}/opencodex-msi.json', runner.temp)");
+    expect(build?.run).toContain("runner.os == 'Windows'");
+    expect(indexOfStep("Prepare Windows installer version")).toBeLessThan(indexOfStep("Build desktop bundles"));
+  });
 
   test("the release build hands the widget a signing identity and forbids an ad-hoc fallback", () => {
     const build = steps.find(step => step.name === "Build WidgetKit extension");
