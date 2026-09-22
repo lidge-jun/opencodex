@@ -4,6 +4,13 @@ import type { TKey } from "./en";
  * French i18n catalog. Must match the `TKey` set.
  */
 export const fr: Record<TKey, string> = {
+  "tray.updated": "Mis à jour {time} · toutes les 60s",
+  "tray.today": "Aujourd’hui",
+  "tray.input": "Entrée",
+  "tray.output": "Sortie",
+  "tray.cost": "Coût estimé",
+  "tray.cached": "{percent} en cache",
+
   "usage.incomplete": "Certains enregistrements d’utilisation n’ont pas pu être inclus. Les totaux, dates et classements reposent uniquement sur les enregistrements lisibles.",
   "models.pickerOrder.usageIncomplete": "Impossible d’enregistrer l’ordre par utilisation : l’historique est incomplet. Choisissez un autre ordre ou réparez d’abord l’historique.",
   "api.attribution.noRecordedUse": "Aucune utilisation dans les enregistrements lisibles",

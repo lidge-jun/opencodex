@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { parseServiceOwnershipRecord } from "../../src/service/state-record.mjs";
 import { repoPath } from "../helpers/repo-root";
 
 /**
  * The desktop app's half of the runtime-ownership claim.
  *
  * The claim lives in the shared service install state, which core owns across two files: the
- * validation that decides what a record may say is in `src/service/install-state-contract.mjs`,
+ * validation that decides what a record may say is in `src/service/state-record.mjs`,
  * and the types, the three answers a read can give and `ownershipGrantedTo` — the comparison an
  * installation applies to its own locally stored install id — are in `src/service/state.ts`. The
  * shell holds the other half, an id of its own to compare against, and mirrors the rule rather
@@ -21,7 +22,6 @@ const IDENTITY = repoPath(`${SHELL}/identity.rs`);
 const OWNERSHIP = repoPath(`${SHELL}/ownership.rs`);
 const STARTUP = repoPath(`${SHELL}/startup.rs`);
 const STATE = repoPath("src/service/state.ts");
-const CONTRACT = repoPath("src/service/install-state-contract.mjs");
 
 function code(path: string): string {
   return readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
@@ -31,7 +31,6 @@ describe("desktop install identity", () => {
   const identity = code(IDENTITY);
   const ownership = code(OWNERSHIP);
   const state = code(STATE);
-  const contract = code(CONTRACT);
 
   test("the installation's id is minted once and never rewritten", () => {
     // Exclusive, because two launches racing to mint would answer to two ids, and the second one
@@ -55,10 +54,13 @@ describe("desktop install identity", () => {
   });
 
   test("the owner values are the ones the record accepts", () => {
-    // Both halves of core's answer are read. The runtime rejection is what a record on disk meets,
-    // and the exported type is what every caller is compiled against; a parse that accepted a
-    // third owner and a type that forbade it would disagree exactly where a takeover happens.
-    expect(contract).toContain('value.owner !== "cli" && value.owner !== "desktop"');
+    // Exercise the parser a record on disk actually meets, while also pinning the exported type
+    // every caller compiles against. If runtime acceptance and the type diverge, this takeover
+    // boundary fails at review instead of after an installation has claimed the runtime.
+    const claim = { installId: "install-a", consentGeneration: 1 };
+    expect(parseServiceOwnershipRecord({ ...claim, owner: "cli" })).toEqual({ ...claim, owner: "cli" });
+    expect(parseServiceOwnershipRecord({ ...claim, owner: "desktop" })).toEqual({ ...claim, owner: "desktop" });
+    expect(parseServiceOwnershipRecord({ ...claim, owner: "another-owner" })).toBeNull();
     expect(state).toContain('export type ServiceOwner = "cli" | "desktop"');
     expect(ownership).toContain('#[serde(rename_all = "lowercase")]');
     expect(ownership).toContain("    Cli,");
