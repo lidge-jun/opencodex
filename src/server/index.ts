@@ -255,10 +255,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   const resolveServiceHomes = deps.resolveServiceHomes ?? currentServiceHomes;
   let startupOwnershipHomes: ReturnType<typeof currentServiceHomes> | null = null;
   let startupOwnershipStatePaths: readonly string[] | null = null;
-  // #2923: both synchronous startup ownership decisions keep their fresh,
-  // race-sensitive targeted task query. Only the expensive fallback listing is
-  // shared, and only while that targeted result stays byte-for-byte unchanged.
-  // Runtime ownership retries below intentionally omit this startup-local memo.
+  // #2923: retain a successful fallback listing only within the first startup
+  // ownership decision. A targeted query's bytes are not a Task Scheduler state
+  // generation, so the later race-sensitive decision must take a fresh listing.
+  // Runtime ownership retries below intentionally omit this startup-local memo too.
   const startupWindowsTaskListingCache = createWindowsTaskListingCache();
   try {
     const homes = resolveServiceHomes();
@@ -320,12 +320,13 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   const listenPort = port ?? config.port ?? 10100;
   setCorsOrigin(listenPort);
 
-  // Canonicalize an explicit "localhost" bind to IPv4 so it matches the injected base_url (which
+  // Canonicalize an explicit "localhost" bind (including its fully-qualified spelling) to IPv4
+  // so it matches the injected base_url (which
   // resolves localhost→127.0.0.1): on Windows `localhost` resolves ::1-first, but the injected URL
   // is 127.0.0.1, so binding literal "localhost" would reintroduce the F4 refusal. Wildcards
   // (0.0.0.0/::) and specific hosts are left untouched so intentional exposure is preserved.
   const configuredHost = config.hostname?.trim();
-  const bindHost = !configuredHost || /^localhost$/i.test(configuredHost) ? "127.0.0.1" : configuredHost;
+  const bindHost = !configuredHost || /^localhost\.?$/i.test(configuredHost) ? "127.0.0.1" : configuredHost;
 
   // Unauthenticated loopback listener (#1102). Off unless explicitly enabled.
   // A port-less enabled entry is the companion form: same port as the public listener, on
@@ -515,16 +516,14 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       // still unreadable to a browser dashboard -- which made exposing it pointless.
       return withCors(workflowDecisionRefusalResponse(workflow, undefined, refusalLog), req, policy);
     }
-    const releaseWorkflow = (): void => { if (workflow?.admitted) workflow.lease.release(); };
+    if (workflow?.admitted) lease.attach(workflow.lease);
     let response: Response;
     try {
       response = await runAdmittedBodyWork(req, policy, config.maxInboundBodyBytes, () => work(lease), refusalLog);
     } catch (error) {
-      releaseWorkflow();
       lease.release();
       throw error;
     }
-    releaseWorkflow();
     if (!lease.isTransferred()) {
       lease.release();
     }
@@ -554,7 +553,6 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     deps,
     startupOwnershipHomes,
     startupOwnershipStatePaths,
-    startupWindowsTaskListingCache,
   );
   const preparedNativeMainLifecycle = nativeOwnership.ownership !== "foreign"
     && startupOwnershipHomes !== null

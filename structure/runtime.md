@@ -382,9 +382,7 @@ Connected `ocx usage` reads `/v1/usage` through `src/client/hub-client.ts`, usin
 
 The client usage read requires HTTPS or loopback HTTP before adding the enrolled credential, and sets request `cache: "no-store"`; the hub response also forbids caching.
 
-The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](remote-workspace.md).
-
-Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
+The shared atomic replacement publisher identifies explicit Remote Workspace file writes as `remote-workspace`. Remote Workspace's separate, explicitly enabled server surface uses structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration and documents its isolated owner and support limits.
 
 Chat helper admission in `src/server/responses/request-sidecar-auth.ts` follows the
 [deferred stored-main contract](providers/openai-tiers.md): only a needed Direct OpenAI helper
