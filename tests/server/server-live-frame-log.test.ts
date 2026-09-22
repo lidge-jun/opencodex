@@ -4,7 +4,7 @@
  * start a server.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -52,6 +52,31 @@ test("a failed frame-log harden appends nothing", async () => {
     }),
   ).toThrow("harden denied");
   expect(readFileSync(frameLogPath, "utf8")).toBe("");
+});
+
+const windowsTest = process.platform === "win32" ? test : test.skip;
+windowsTest("a Windows ACL hardening failure appends nothing", async () => {
+  const { appendOwnerOnly } = await import("../../src/server/live");
+  const frameLogPath = join(TEST_DIR, "frames-acl-fail.jsonl");
+  writeFileSync(frameLogPath, "before\n");
+  expect(() => appendOwnerOnly(frameLogPath, "after\n", (_fd, openedPath) => {
+    if (openedPath === frameLogPath) throw new Error("ACL hardening failed");
+  })).toThrow("ACL hardening failed");
+  expect(readFileSync(frameLogPath, "utf8")).toBe("before\n");
+});
+
+test("a path replacement after hardening appends nothing to the held file", async () => {
+  if (process.platform === "win32") return;
+  const { appendOwnerOnly } = await import("../../src/server/live");
+  const frameLogPath = join(TEST_DIR, "frames-replaced.jsonl");
+  const movedPath = join(TEST_DIR, "frames-moved.jsonl");
+  writeFileSync(frameLogPath, "before\n");
+  expect(() => appendOwnerOnly(frameLogPath, "after\n", () => {
+    renameSync(frameLogPath, movedPath);
+    writeFileSync(frameLogPath, "replacement\n");
+  })).toThrow("Frame log path changed during hardening.");
+  expect(readFileSync(movedPath, "utf8")).toBe("before\n");
+  expect(readFileSync(frameLogPath, "utf8")).toBe("replacement\n");
 });
 
 test("frame diagnostics retain only metadata for text, binary, and bounded views", async () => {

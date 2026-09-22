@@ -27,7 +27,7 @@ import { codexCompatibleUrl } from "../codex/context-compat";
  * - `GET /v1/realtime?model=` — RealtimeV2 standalone (no intent)
  * - `GET /v1/live?model=` — Frameless standalone
  */
-import { closeSync, fchmodSync, openSync, writeSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, openSync, statSync, writeSync } from "node:fs";
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
@@ -42,6 +42,7 @@ import {
 import { formatCodexProviderForLog } from "../codex/routing";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
+import { hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential, type DataPlaneAdmission } from "./auth-cors";
@@ -110,26 +111,32 @@ export const LIVE_FRAME_LOG_ENV = "OCX_LIVE_FRAME_LOG";
 /**
  * Append one JSONL record with owner-only permissions. `appendFileSync`'s `mode` only applies
  * when it creates the file, so an existing permissive log would stay readable by other local
- * users. Open for append, harden the opened descriptor, then write — a failed harden on POSIX
- * must not leave the record in a file other local users can read.
+ * users. Open for append, harden the target, and verify that the path still names
+ * the opened file before writing. A failed harden or identity check writes nothing.
  */
 export function appendOwnerOnly(
   path: string,
   line: string,
-  harden: (fd: number) => void = hardenLogDescriptor,
+  harden: (fd: number, path: string) => void = hardenLogDescriptor,
 ): void {
   const fd = openSync(path, "a", 0o600);
   try {
-    harden(fd);
+    harden(fd, path);
+    const opened = fstatSync(fd, { bigint: true });
+    const named = statSync(path, { bigint: true });
+    if (!opened.isFile() || !named.isFile() || opened.ino === 0n || named.ino === 0n
+      || opened.dev !== named.dev || opened.ino !== named.ino) {
+      throw new Error("Frame log path changed during hardening.");
+    }
     writeSync(fd, line);
   } finally {
     closeSync(fd);
   }
 }
 
-function hardenLogDescriptor(fd: number): void {
+function hardenLogDescriptor(fd: number, path: string): void {
   if (process.platform === "win32") {
-    try { fchmodSync(fd, 0o600); } catch { /* Windows lacks POSIX fchmod */ }
+    hardenSecretPath(path, { required: true });
     return;
   }
   fchmodSync(fd, 0o600);
