@@ -6,6 +6,8 @@ import { UsageCompanionChart } from "./usage-companion-chart";
 import { desktopShellVersion, hostOs, isDesktopShell, type HostOs } from "../lib/desktop-shell";
 import {
   bucketMinutesForWindow,
+  companionTimelineQuery,
+  companionTimelineProjection,
   buildCompanionSettingsPatch,
   formatCompanionTokens,
   groupCompanionModels,
@@ -241,15 +243,7 @@ export default function UsageCompanionPanel({
 
   const chartQuery = useMemo(() => {
     if (!settings) return null;
-    const query = new URLSearchParams({
-      hours: String(settings.chartHours),
-      bucketMinutes: String(settings.bucketMinutes),
-      metric: settings.tokenMetric,
-      aggregation: settings.aggregation,
-      grouping: settings.chartGrouping,
-    });
-    if (settings.models?.length) query.set("models", settings.models.join(","));
-    return query;
+    return companionTimelineQuery(settings);
   }, [settings]);
 
   const loadTimeline = useCallback(async () => {
@@ -262,7 +256,8 @@ export default function UsageCompanionPanel({
     try {
       const result = await fetch(`${apiBase}/api/usage/timeline?${chartQuery}`, { signal: controller.signal });
       if (!result.ok) throw new Error(`${result.status} ${result.statusText}`.trim());
-      const next = await result.json() as UsageTimeline;
+      const raw = await result.json() as UsageTimeline;
+      const next = settings ? companionTimelineProjection(raw, settings) : raw;
       setTimeline(next);
       setAvailableModels(next.availableModels);
       const currentTotals = new Map<string, number>();
@@ -278,7 +273,7 @@ export default function UsageCompanionPanel({
     } finally {
       if (!controller.signal.aborted) setTimelineLoading(false);
     }
-  }, [apiBase, chartQuery]);
+  }, [settings, apiBase, chartQuery]);
 
   useEffect(() => {
     if (!visible || !chartQuery) return;

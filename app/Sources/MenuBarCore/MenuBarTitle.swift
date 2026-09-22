@@ -6,7 +6,8 @@ public enum MenuBarTitle {
         today: UsageReport?,
         quotas: [NormalizedQuota]
     ) -> String? {
-        let summary = today?.summary
+        let summary = today?.filteredSummary(settings)
+        let quotas = quotas.filter { !settings.hiddenProviders.contains($0.provider) }
         let values: [String: String] = [
             "requests": Format.count(summary?.requests),
             "totalTokens": Format.tokens(summary?.totalTokens),

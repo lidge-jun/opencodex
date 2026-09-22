@@ -237,8 +237,8 @@ client. It decides from three facts, in order:
 Four properties are load-bearing:
 
 - The store is observed through the same `IntegrationIO` seam as the config file, so status and
-  mutation cannot disagree about which file an operation is about. Only a regular file counts; a
-  failed stat is not evidence of a migration.
+  mutation cannot disagree about which file an operation is about. Only proven absence permits
+  legacy writes; failed observations and non-file stores refuse apply/refresh as unestablished.
 - The ownership record, the journal row and the undo guard all follow the target rather than the
   client. A row naming the store is restorable because the guard asks whether this client still
   names that location, not whether it is the config file.

@@ -3,7 +3,7 @@ import type { OcxConfig } from "../../types";
 import { getConfigDir } from "../../config/paths";
 import { CLAUDE_INTERCEPT_HOSTS, startConnectProxy, type ConnectProxyHandle } from "./connect-proxy";
 import { startClaudeInterceptListener } from "./listener";
-import { claudeInterceptCaCertPath, ensureLocalInterceptCa, issueLocalInterceptLeaf } from "./local-ca";
+import { claudeInterceptCaCertPath, ensureLocalInterceptCaForStartup, issueLocalInterceptLeaf } from "./local-ca";
 
 /**
  * Lifecycle for the Claude intercept pair (CONNECT proxy + TLS listener).
@@ -67,7 +67,7 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   const explicitPort = typeof options.config.claudeCode?.intercept?.port === "number";
   if (options.requestedPort === 0 && !explicitPort) return null;
   const configDir = options.configDir ?? getConfigDir();
-  const ca = ensureLocalInterceptCa(configDir);
+  const ca = await ensureLocalInterceptCaForStartup(configDir);
   const leaf = issueLocalInterceptLeaf(ca, CLAUDE_INTERCEPT_HOSTS);
   const listener = startClaudeInterceptListener<T>({
     leaf,

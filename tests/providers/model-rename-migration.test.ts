@@ -17,6 +17,8 @@ import {
 } from "../../src/providers/antigravity-models";
 import { getConfigPath, loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
+import { routeModel } from "../../src/router";
+import { requestPacingIntervalMs } from "../../src/providers/request-pacing";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const INTL_BASE_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
@@ -197,6 +199,51 @@ describe("registry model rename migration (#1610)", () => {
     expect(changed).toBe(true);
     expect(prov.defaultModel).toBe("kimi-for-coding");
     expect(prov.models).toEqual(["k3", "k3[1m]", "kimi-for-coding"]);
+  });
+
+  test("renamed operator aliases, wire policy and nested pacing remain effective", () => {
+    const from = "kimi-k2.7-code", to = "kimi-for-coding";
+    const stale = { defaultProvider: "kimi-code", providers: { "kimi-code": {
+      adapter: "openai-chat", baseUrl: "https://api.kimi.com/coding/v1", apiKey: "fixture-key",
+      models: [from], modelAliases: { [from]: "work" },
+      modelAdapters: { [from]: "openai-responses" }, modelCapabilities: { [from]: { inputModalities: ["text"] } },
+      modelMaxInputTokens: { [from]: 12345 }, modelPinnedReasoningEfforts: { [from]: "high" },
+      autoReviewModelOverrides: { [from]: "reviewer/model" },
+      requestPacing: { enabled: true, models: { [from]: { minIntervalMs: 125 } } },
+      noStructuredOutputModels: [from], requiresReasoningPlaceholderModels: [from],
+    } } } as unknown as OcxConfig;
+    const { config, changed } = projectModelRenames(stale);
+    expect(changed).toBe(true);
+    const prov = config.providers["kimi-code"]!;
+    const route = routeModel(config, "kimi-code/work");
+    expect(route.modelId).toBe(to);
+    expect(route.staticPolicy.model.adapter).toBe("openai-responses");
+    expect(route.staticPolicy.model.inputModalities).toEqual(["text"]);
+    expect(route.staticPolicy.model.maxInputTokens).toBe(12345);
+    expect(prov.modelPinnedReasoningEfforts).toEqual({ [to]: "high" });
+    expect(prov.autoReviewModelOverrides).toEqual({ [to]: "reviewer/model" });
+    expect(requestPacingIntervalMs(prov, to)).toBe(125);
+    expect(prov.requestPacing?.models?.[from]).toBeUndefined();
+    expect(prov.noStructuredOutputModels).toEqual([to]);
+    expect(prov.requiresReasoningPlaceholderModels).toEqual([to]);
+    expect(projectModelRenames(config).changed).toBe(false);
+  });
+
+  test("newer target alias and nested pacing win during a rename", () => {
+    const from = "kimi-k2.7-code", to = "kimi-for-coding";
+    const stale = { providers: { "kimi-code": {
+      adapter: "openai-chat", baseUrl: "https://api.kimi.com/coding/v1",
+      modelAliases: { [from]: "old", [to]: "new" },
+      autoReviewModelOverrides: { [from]: "reviewer/old", [to]: "reviewer/new" },
+      requestPacing: { enabled: true, minIntervalMs: 10, models: {
+        [from]: { minIntervalMs: 125 }, [to]: { minIntervalMs: 250 },
+      } },
+    } } } as unknown as OcxConfig;
+    const prov = projectModelRenames(stale).config.providers["kimi-code"]!;
+    expect(prov.modelAliases).toEqual({ [to]: "new" });
+    expect(prov.autoReviewModelOverrides).toEqual({ [to]: "reviewer/new" });
+    expect(prov.requestPacing?.minIntervalMs).toBe(10);
+    expect(prov.requestPacing?.models).toEqual({ [to]: { minIntervalMs: 250 } });
   });
 
   test("preserves explicit kimi-for-coding metadata while retiring old ids", () => {

@@ -17,8 +17,10 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-server-request-body-size-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+let previousHome: string | undefined;
 
 beforeEach(() => {
+  previousHome = process.env.OPENCODEX_HOME;
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   mkdirSync(TEST_DIR, { recursive: true });
   process.env.OPENCODEX_HOME = TEST_DIR;
@@ -26,6 +28,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
@@ -56,7 +60,7 @@ describe("server maxRequestBodySize (Issue #1601)", () => {
       // Drain the response so the connection closes cleanly.
       await res.text();
     } finally {
-      void server.stop(true);
+      await server.stop(true);
     }
   });
 });
@@ -92,7 +96,7 @@ describe("configurable listener body size (Issue #3573)", () => {
       expect(result.refused).toBe(false);
       expect(result.status).not.toBeNull();
     } finally {
-      void server.stop(true);
+      await server.stop(true);
     }
   });
 
@@ -105,7 +109,7 @@ describe("configurable listener body size (Issue #3573)", () => {
     try {
       expect((await postFixedBody(server.port)).refused).toBe(true);
     } finally {
-      void server.stop(true);
+      await server.stop(true);
     }
   });
 });

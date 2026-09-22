@@ -31,6 +31,49 @@ function attempt(totalTokens: number, ordinal: number): NonNullable<PersistedUsa
 }
 
 describe("usage timeline", () => {
+  test("nested native model ids remain selectable", () => {
+    const model = "github-models/openai/gpt-4.1";
+    const query = parseTimelineQuery(new URLSearchParams({ models: model }), now);
+    expect(query).toMatchObject({ models: [model] });
+    if ("error" in query) throw new Error(query.error);
+    const acc = createTimelineAccumulator(query);
+    acc.add(entry({ provider: "github-models", model: "openai/gpt-4.1", totalTokens: 7 }));
+    expect(acc.finish().series[0]?.total).toBe(7);
+  });
+
+  test("the final bucket includes current partial usage and excludes the old shifted edge", () => {
+    const clock = Date.UTC(2030, 0, 1, 12, 13);
+    const query = parseTimelineQuery(new URLSearchParams("hours=6&bucketMinutes=15"), clock);
+    if ("error" in query) throw new Error(query.error);
+    const acc = createTimelineAccumulator(query);
+    acc.add(entry({ timestamp: clock - 60_000, totalTokens: 7 }));
+    acc.add(entry({ timestamp: Date.UTC(2030, 0, 1, 6, 14), totalTokens: 99 }));
+    const result = acc.finish();
+    expect(result.end).toBe(Date.UTC(2030, 0, 1, 12, 15) / 1000);
+    expect(result.buckets).toBe(24);
+    expect(result.series[0]?.points.at(-1)).toBe(7);
+    expect(result.series[0]?.total).toBe(7);
+  });
+
+  test("hidden traffic is excluded before available models and other-series folding", () => {
+    const query = parseTimelineQuery(new URLSearchParams("hiddenProvider=hidden&hiddenProvider=hidden"), now);
+    if ("error" in query) throw new Error(query.error);
+    const acc = createTimelineAccumulator(query);
+    for (let index = 0; index < 25; index += 1) acc.add(entry({ provider: "visible", model: `m${index}`, totalTokens: 10 }));
+    acc.add(entry({ provider: "hidden", model: "tail", totalTokens: 1 }));
+    const result = acc.finish();
+    expect(result.availableModels).toHaveLength(25);
+    expect(result.appliedFilters).toEqual({ models: null, hiddenProviders: ["hidden"] });
+    expect(result.availableModels.some(id => id.startsWith("hidden/"))).toBe(false);
+    expect(result.series).toHaveLength(24);
+    expect(result.series.at(-1)?.id).toBe("other");
+    expect(result.series.reduce((total, row) => total + row.total, 0)).toBe(250);
+    const invalid = new URLSearchParams();
+    for (let index = 0; index < 101; index += 1) invalid.append("hiddenProvider", `p${index}`);
+    expect(parseTimelineQuery(invalid, now)).toEqual({ error: expect.any(String) });
+    expect(parseTimelineQuery(new URLSearchParams("hiddenProvider=two+words"), now)).toEqual({ error: expect.any(String) });
+  });
+
   test("parses defaults and rejects invalid values", () => {
     expect(parseTimelineQuery(new URLSearchParams(), now)).toMatchObject({
       hours: 24, bucketMinutes: 60, metric: "total", aggregation: "sum", grouping: "model", models: null,
@@ -111,7 +154,7 @@ describe("usage timeline", () => {
       }
       return acc.finish().series.at(-1);
     };
-    expect(make("max")?.points.at(-1)).toBe(2);
-    expect(make("average")?.points.at(-1)).toBe(1.5);
+    expect(make("max")?.total).toBe(2);
+    expect(make("average")?.total).toBe(1.5);
   });
 });

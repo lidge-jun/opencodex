@@ -393,7 +393,8 @@
         "src/cli/",
         "src/codex/",
         "src/lib/",
-        "src/service.ts"
+        "src/service.ts",
+        "src/update/"
       ]
     },
     {
@@ -412,6 +413,19 @@
       "scope": "Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration.",
       "documents": [
         "src/remote-control/"
+      ]
+    },
+    {
+      "path": "companion.md",
+      "tier": 5,
+      "title": "Companion usage",
+      "scope": "Shared timeline filtering, usage/quotas, native and web tray title, and WidgetKit display contracts.",
+      "documents": [
+        "src/companion/",
+        "src/usage/",
+        "gui/",
+        "app/",
+        "desktop/"
       ]
     }
   ],

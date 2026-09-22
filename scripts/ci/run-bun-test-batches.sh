@@ -6,6 +6,8 @@ readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"
 readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"
 readonly BATCH_KILL_GRACE_SECONDS="${BUN_TEST_BATCH_KILL_GRACE_SECONDS:-15}"
 readonly TEST_FILE_SCOPE="${BUN_TEST_FILE_SCOPE:-general}"
+readonly TEST_PARALLEL="${BUN_TEST_PARALLEL:-}"
+readonly PARALLEL_ARG="${TEST_PARALLEL:+--parallel=$TEST_PARALLEL}"
 # Runtime under test. Defaults to whatever `bun` PATH resolves to; the Bun 1.4
 # qualification lane sets OPENCODEX_BUN_PATH so the batches actually execute on
 # the candidate binary. Without this the lane would export an override, run the
@@ -45,6 +47,10 @@ if [[ ! "$BATCH_KILL_GRACE_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ "$TEST_FILE_SCOPE" != "general" && "$TEST_FILE_SCOPE" != "all" ]]; then
   echo "BUN_TEST_FILE_SCOPE must be general or all, got: $TEST_FILE_SCOPE" >&2
+  exit 64
+fi
+if [[ -n "$TEST_PARALLEL" && ! "$TEST_PARALLEL" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUN_TEST_PARALLEL must be a positive integer" >&2
   exit 64
 fi
 if ! command -v timeout >/dev/null 2>&1; then
@@ -100,7 +106,7 @@ run_test_once() {
   set +e
   timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
     "${BATCH_TIMEOUT_SECONDS}s" \
-    "$BUN_BIN" test --isolate --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
+    "$BUN_BIN" test --isolate ${PARALLEL_ARG:+"$PARALLEL_ARG"} --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
   status="${PIPESTATUS[0]}"
   set -e
 
@@ -171,7 +177,36 @@ attribute_batch_file_by_file() {
   fi
 }
 
-mapfile -d '' -t ALL_TEST_FILES < <(
+serial_manifest="$("$BUN_BIN" -e 'import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"; console.log(SERIAL_FULL_SUITE_FILES.join("\n"));')"
+[[ -n "$serial_manifest" ]] || { echo 'Empty isolated test manifest' >&2; exit 1; }
+SERIAL_FILES=()
+while IFS= read -r file; do
+  if [[ ! "$file" =~ ^[[:alnum:]_./-]+$ || "$file" == /* || "/$file/" == *"/../"* || "/$file/" == *"/./"* || ! -f "tests/$file" ]]; then
+    echo 'Invalid or missing isolated test path' >&2; exit 1
+  fi
+  for ((entry_index = 0; entry_index < ${#SERIAL_FILES[@]}; entry_index += 1)); do
+    [[ "${SERIAL_FILES[$entry_index]}" != "$file" ]] || { echo 'Duplicate isolated test path' >&2; exit 1; }
+  done
+  SERIAL_FILES+=("$file")
+done <<< "$serial_manifest"
+
+is_serial_test_file() {
+  local entry
+  # Dedicated worker-heavy families remain isolated when an unsharded platform
+  # control selects all files rather than delegating them to Linux-only jobs.
+  case "$1" in
+    */api-storage-policy*.test.ts|*/api-storage.test.ts|*/api-usage.test.ts) return 0 ;;
+  esac
+  for entry in "${SERIAL_FILES[@]}"; do
+    [[ "$1" != "tests/$entry" ]] || return 0
+  done
+  return 1
+}
+
+ALL_TEST_FILES=()
+while IFS= read -r -d '' path; do
+  ALL_TEST_FILES+=("$path")
+done < <(
   find tests -type f -print0 \
     | LC_ALL=C sort -z
 )
@@ -194,14 +229,39 @@ if (( ${#SELECTED_FILES[@]} == 0 )); then
   exit 1
 fi
 
-readonly TOTAL_BATCHES=$(( (${#SELECTED_FILES[@]} + BATCH_SIZE - 1) / BATCH_SIZE ))
+# Keep shard ownership and sorted execution order; split only the process boundary.
+BATCH_STARTS=()
+BATCH_LENGTHS=()
+pending_start=0
+pending_count=0
+for ((index = 0; index < ${#SELECTED_FILES[@]}; index += 1)); do
+  if is_serial_test_file "${SELECTED_FILES[$index]}"; then
+    if (( pending_count > 0 )); then
+      BATCH_STARTS+=("$pending_start"); BATCH_LENGTHS+=("$pending_count")
+      pending_count=0
+    fi
+    BATCH_STARTS+=("$index"); BATCH_LENGTHS+=(1)
+  else
+    if (( pending_count == 0 )); then pending_start=$index; fi
+    ((pending_count += 1))
+    if (( pending_count == BATCH_SIZE )); then
+      BATCH_STARTS+=("$pending_start"); BATCH_LENGTHS+=("$pending_count")
+      pending_count=0
+    fi
+  fi
+done
+if (( pending_count > 0 )); then
+  BATCH_STARTS+=("$pending_start"); BATCH_LENGTHS+=("$pending_count")
+fi
+readonly TOTAL_BATCHES=${#BATCH_STARTS[@]}
 echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (scope ${TEST_FILE_SCOPE}, batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
 echo "Nothing here is retried. A test failure, a process timeout and a Bun runtime crash each fail this shard on their first occurrence."
 echo "A timeout or a crash is additionally swept one file per process for attribution, after the shard has already failed; that sweep cannot turn it green."
 
 for ((batch_index = 0; batch_index < TOTAL_BATCHES; batch_index += 1)); do
-  start=$(( batch_index * BATCH_SIZE ))
-  batch=("${SELECTED_FILES[@]:start:BATCH_SIZE}")
+  start=${BATCH_STARTS[$batch_index]}
+  length=${BATCH_LENGTHS[$batch_index]}
+  batch=("${SELECTED_FILES[@]:start:length}")
   batch_number=$(( batch_index + 1 ))
 
   if run_test_once "$batch_number" "" "${batch[@]}"; then

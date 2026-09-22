@@ -1,4 +1,7 @@
 mod auth;
+#[cfg(target_os = "macos")]
+mod companion_query;
+mod companion_usage;
 mod endpoint;
 mod exit;
 mod first_run;
@@ -9,7 +12,17 @@ mod logging;
 // elsewhere would leave its contents unreachable, which -D warnings rejects.
 #[cfg(target_os = "macos")]
 mod menu;
+#[cfg(target_os = "macos")]
+mod native_tray_accounts;
+#[cfg(target_os = "macos")]
+mod native_tray_data;
+#[cfg(target_os = "macos")]
+mod native_tray_snapshot;
 mod ownership;
+#[cfg(not(target_os = "macos"))]
+mod popup;
+#[cfg(target_os = "macos")]
+#[path = "native_tray.rs"]
 mod popup;
 mod proxy;
 mod resolve;

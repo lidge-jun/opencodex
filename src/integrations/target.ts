@@ -140,13 +140,16 @@ export function resolveIntegrationTarget(args: {
   const declared = INTEGRATION_CLIENTS[clientId].currentStore;
   if (!declared) return configFileTarget(clientId, configPath, null);
   const storePath = declared.path(args.env, args.home);
-  /*
-   * Only a regular file. A failed stat is an unreadable path, not evidence
-   * that the client migrated, and a directory there is not a provider list the
-   * client loaded — refusing over either would block an apply that would have
-   * worked.
-   */
-  if (io.statKind(storePath) !== "file") return configFileTarget(clientId, configPath, null);
+  const kind = io.statKind(storePath);
+  if (kind === "missing") return configFileTarget(clientId, configPath, null);
+  // Only proven absence permits a legacy write. Unreadable or non-file stores
+  // cannot establish what the client reads; preserve the recorded removal target.
+  if (kind !== "file") {
+    const ineffective: IneffectiveWrite = { store: storePath, why: "unestablished-schema" };
+    return record?.clientId === clientId && record.configPath === storePath
+      ? storeTarget(declared, storePath, ineffective)
+      : configFileTarget(clientId, configPath, ineffective);
+  }
   const loaded = loadTarget(io, storePath);
   const parsed = loaded.ok ? parseConfig(loaded.before, declared.format) : PARSE_FAILED;
   const established = parsed !== PARSE_FAILED && declared.establishes(parsed);

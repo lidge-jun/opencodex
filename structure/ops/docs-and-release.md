@@ -165,6 +165,18 @@ Those controls still have no owner, so there is no image-publish workflow or off
 branch, not from `dev`. Landing a change to one of them on `dev` does not change live behavior until
 it is promoted, so those files follow the promotion model rather than ordinary integration.
 
+`scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
+full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
+alone with fresh process homes. Hosted batches preserve sorted round-robin shard membership
+and split only process boundaries; every selected file still runs once. The macOS control
+runs the complete 1/1 file list in sequential batches of at most 12 files with one worker.
+Storage-policy and API-usage families run as singletons, as do manifest-declared files.
+This preserves full test membership but does not claim cross-batch shared-process coverage.
+Every primary assertion failure, timeout or crash fails the run; diagnostic singleton
+attribution never turns a failed primary green. Each control batch has a 300-second process
+bound plus 15 seconds for forced reap, inside the unchanged 75-minute job cap. Other batch
+lanes keep their existing defaults; optional parallelism must be a positive integer.
+
 The Windows selector is an operational stability control, not a security boundary. A pull request
 controls the `pull_request` workflow body and can rewrite an event-name check, repository variable,
 or selector output. Because this is a public user-owned repository and runner groups are unavailable,
@@ -329,9 +341,13 @@ Every npm release version must map cleanly across four surfaces:
 | Git tag | `v<version>` does not exist before publish, then points at the exact release commit. |
 | GitHub Release | `v<version>` does not exist before publish, then is created from the exact release commit. |
 
-The release must fail before `npm publish` if npm, the Git tag, or the GitHub Release already has the
-requested version. This prevents partial releases where npm is published but GitHub Release creation
-fails afterward.
+Fresh publication refuses an existing npm version, Git tag or GitHub Release. An explicit
+resume skips npm publication only after the official registry returns a scalar, full-length
+`gitHead` exactly matching the audited `GITHUB_SHA`. `scripts/verify-release-resume.ts` validates
+that metadata; the publication step also requires the preflight's matching output before it
+acknowledges publication. Missing, malformed, unavailable or mismatched identity refuses resume.
+This checks registry source metadata, not cryptographic provenance. Fresh publication retains
+the existing OIDC trusted-publishing path.
 
 Two ordering checks run before publication. The version on `origin/dev` must strictly outrank the
 release target, proving the pre-move has landed. After a fresh tag fetch, the release target must also
@@ -350,8 +366,9 @@ git ls-remote origin refs/tags/v<version>
 gh release view v<version>
 ```
 
-If any of these commands reports an existing artifact for the requested version, stop before
-publishing. For a non-destructive recovery, choose the next unused version that also outranks the
+If any of these commands reports an existing artifact for the requested version, stop fresh
+publication. A previously acknowledged npm publication may use the explicit same-commit resume
+path above; it never republishes npm. Otherwise choose the next unused version that outranks the
 global tag set and release it through `scripts/release.ts`. A patch is not available once a higher-core
 preview has closed that stable patch line.
 
@@ -365,9 +382,11 @@ runs the full suite in nine shards only on manual `workflow_dispatch` with `lane
 empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix, and an
 aggregate green `ci` check on those events legitimately includes a deliberate Windows skip.
 
-Nothing in the workflow retries. Linux and Windows use `scripts/ci/run-bun-test-batches.sh`, but
+No recovery retry can turn a failed workflow green. Linux, Windows and macOS control use
+`scripts/ci/run-bun-test-batches.sh`, but
 each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
-Windows uses six files and 480 seconds. Windows selects all test families, while Linux leaves the
+Windows uses six files and 480 seconds. macOS control uses twelve files, 300 seconds and one
+worker across an unsharded 1/1 selection. Windows and macOS control select all test families, while Linux leaves the
 storage-policy and api-usage families to its dedicated jobs. The Windows step disables the
 user-scoped test-run queue with `OCX_TEST_NO_QUEUE=1`: the batches already run sequentially in one
 dedicated job, and queueing a new batch behind a surviving process from the preceding batch spends
@@ -487,3 +506,16 @@ Native steering generation overrides, explicit public-API eligibility and the co
 
 The public server configuration reference documents the optional
 [compaction routing override](../transports/responses.md#compaction-routing-overrides). Its regression file is registered in both test-layout inventories.
+
+## Bun updater ownership transaction
+
+`src/update/ownership-transaction.ts` holds one mutation lease across the Bun updater's awaited
+stop, package replacement and recovery work. The parent never puts its token in the global
+environment. Fixed stop/service/direct-recovery children can join it; package-manager and
+ancillary children receive environments without the capability. Refusals return through the
+lease boundary before exiting, and thrown failures release it after owner-aware recovery.
+Replacement and recovery inspect both the captured endpoint and the freshly read runtime record.
+Malformed or unreadable records remain unknown. Recovery requires the same complete owner
+identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.
+Direct recovery retains the lease until readiness or its bounded deadline. The normal successful
+manual-runtime update still prints the existing restart hint.

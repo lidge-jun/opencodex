@@ -2,7 +2,8 @@
 
 The companion settings contract in `src/companion/` persists menu-bar and widget display
 preferences, while `src/server/management/companion-routes.ts` exposes those settings and the
-usage timeline assembled by `src/usage/timeline.ts` to local clients.
+usage timeline assembled by `src/usage/timeline.ts` to local clients. Query, filter-echo and
+missing-measurement behavior follows the [companion usage contract](companion.md).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 Explicit Codex CLI installation observation is a local CLI surface, not a management API or GUI update permission. See the [read-only observation contract](runtime.md#explicit-codex-cli-installation-observation).
@@ -27,6 +28,14 @@ has no Tauri IPC capability. Companion settings control its sections and chart. 
 limits use account-level management reads rather than attributing aggregate provider
 quotas to individual accounts. Missing usage is distinct from measured zero. The popup
 shares the existing timeline renderer with the companion settings preview.
+`gui/src/pages/tray.css` keeps the document/root within the viewport and gives the page its
+own vertical scroll area. Long account lists can reach Refresh and Dashboard in both opaque
+and vibrant web windows without scrolling a second outer document.
+
+The macOS desktop uses a SwiftUI/AppKit panel for the same information, with transport owned
+by the existing Rust desktop client; the native boundary is described in
+[the desktop shell](desktop-shell.md#the-tray-icon-opens-a-usage-popup). Windows/Linux retain
+the web route. The native panel introduces no management endpoint or credential surface.
 
 ## Dashboard serving
 
@@ -127,6 +136,9 @@ be treated as implemented:
 - reauthenticate subsequent frames after the handshake.
 
 ## API ownership
+
+API-key PATCH validates the entire rename/scope patch on a detached entry before replacing live configuration. A rejected field changes neither the existing name nor either scope, including a later unrelated save.
+
 
 The provider editor admits `googleToolSchemaPolicy` as an editor-safe, non-secret field. Its value
 is validated as `compatible` or `reject-lossy` before live adoption and persistence; an invalid

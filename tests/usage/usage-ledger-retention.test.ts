@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -105,6 +105,21 @@ describe("usage ledger retention", () => {
     expect(after).toContain("appended-during-copy");
     // Nothing was trimmed either: the original file is exactly as it was, plus the new row.
     expect(after.split("\n").filter(line => line !== "").length).toBe(lines.length + 1);
+  });
+
+  test("a replacement after copying is preserved with the source handle already closed", () => {
+    writeRows(200, 16 * 1024);
+    const path = usageLogPath();
+    const before = readFileSync(path, "utf8");
+    const result = enforceUsageLedgerSizeLimit(MIN_USAGE_LEDGER_MAX_BYTES, {
+      onSpanCopied: () => {
+        // Also exercises Windows, where our own open reader would deny this rename.
+        renameSync(path, `${path}.previous`);
+        writeFileSync(path, before);
+      },
+    });
+    expect(result).toMatchObject({ kind: "deferred", reason: "revision-changed" });
+    expect(readFileSync(path, "utf8")).toBe(before);
   });
 
   test("the published file keeps owner-only permissions", () => {

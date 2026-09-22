@@ -1653,7 +1653,10 @@
     "chat-inbound-developer-position.test.ts": "responses",
     "release-pipeline-contract.test.ts": "ci-workflows",
     "desktop-proxy-direct-transport.test.ts": "clients",
-    "platform-dialog-guard.test.ts": "gui"
+    "platform-dialog-guard.test.ts": "gui",
+    "api-key-catalog-authority.test.ts": "providers",
+    "release-resume-identity.test.ts": "ci-workflows",
+    "update-bun-ownership-lease.test.ts": "update"
   },
   "migrated": [
     "adapters",

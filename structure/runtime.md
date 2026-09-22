@@ -13,6 +13,9 @@ Virtual models are the sole model-identity transition: the ordinary and compact 
 selected public id in diagnostics, rewrite `route.modelId` to the upstream wire id, and atomically
 replace `route.staticPolicy` before adapter or capability decisions continue. Model aliases are
 resolved before the route result is built, so their policy is already keyed by the native wire id.
+Live selector hints obey the [credential-scoped cache contract](catalog.md): a selection change
+cannot reuse the previous credential's roster to choose an alias target. Passive OAuth observation
+neither refreshes credentials nor repairs their storage.
 
 Routed Meta Muse requests use the registry-owned [Muse effort and header contract](providers-and-adapters.md); `max` reaches the provider through the existing reasoning mapper.
 
@@ -236,7 +239,7 @@ through `src/server/index/claude-intercept-lifecycle.ts` (fire-and-forget start,
 the ingress decision, `stop` joined into the listener shutdown) from `src/claude/intercept/runtime.ts`: a loopback HTTP CONNECT proxy (`src/claude/intercept/connect-proxy.ts`)
 and a loopback TLS listener (`src/claude/intercept/listener.ts`) that presents a leaf for
 `api.anthropic.com` signed by a per-install authority (`src/claude/intercept/local-ca.ts`, persisted
-under `<OPENCODEX_HOME>/claude-intercept/` with a 0600 key; never installed into an OS trust store).
+under `<OPENCODEX_HOME>/claude-intercept/` with a 0600 key; never installed into an OS trust store). CA reads and pair publication share a directory-bound SQLite lease; persisted certificates must match their private key and verify as a self-signed CA. Startup retries only lease contention with bounded asynchronous backoff before binding either listener.
 Claude Code reaches the pair through `HTTPS_PROXY` plus `NODE_EXTRA_CA_CERTS` in its settings env
 (`src/claude/intercept/settings.ts`), so no `ANTHROPIC_BASE_URL` rewrite is involved and the client
 still believes it talks to Anthropic. The proxy splices `CONNECT api.anthropic.com:443` onto the TLS
@@ -589,3 +592,7 @@ start holds the same lease through bind plus PID and runtime-address publication
 rollback cannot prove the socket closed, the process retains its lease until exit.
 The registration is never deleted; `ocx service install` releases the marker only after the
 registration succeeds.
+
+Bun updater lease and recovery behavior follows the [update transaction contract](ops/docs-and-release.md#bun-updater-ownership-transaction).
+
+Companion timeline and filtered totals follow the [companion usage contract](companion.md).

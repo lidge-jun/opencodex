@@ -3,12 +3,14 @@ import { X509Certificate } from "node:crypto";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { withClientLifecycleSync } from "../../src/client/lifecycle-lock";
 import {
   CLAUDE_INTERCEPT_CA_COMMON_NAME,
   claudeInterceptCaCertPath,
   claudeInterceptStateDir,
   createLocalInterceptCa,
   ensureLocalInterceptCa,
+  ensureLocalInterceptCaForStartup,
   issueLocalInterceptLeaf,
 } from "../../src/claude/intercept/local-ca";
 
@@ -72,4 +74,43 @@ test("a corrupt private key regenerates the authority instead of throwing", () =
   expect(regenerated.certPem).not.toBe(first.certPem);
   expect(new X509Certificate(regenerated.certPem).ca).toBe(true);
   expect(readFileSync(claudeInterceptCaCertPath(configDir), "utf8")).toBe(regenerated.certPem);
+});
+
+test("a certificate from a different CA is never loaded with the persisted key", () => {
+  const configDir = tmpConfigDir();
+  const first = ensureLocalInterceptCa(configDir);
+  writeFileSync(claudeInterceptCaCertPath(configDir), createLocalInterceptCa().certPem);
+  const repaired = ensureLocalInterceptCa(configDir);
+  expect(repaired.keyPem).not.toBe(first.keyPem);
+  const certificate = new X509Certificate(repaired.certPem);
+  expect(certificate.checkPrivateKey(repaired.privateKey)).toBe(true);
+  expect(certificate.verify(repaired.publicKey)).toBe(true);
+});
+
+test("a contending CA publisher cannot read or change a partial pair", () => {
+  const configDir = tmpConfigDir();
+  const first = ensureLocalInterceptCa(configDir);
+  const dir = claudeInterceptStateDir(configDir);
+  withClientLifecycleSync(() => {
+    writeFileSync(join(dir, "ca.key"), createLocalInterceptCa().keyPem);
+    const partialKey = readFileSync(join(dir, "ca.key"), "utf8");
+    expect(() => ensureLocalInterceptCa(configDir)).toThrow("client_lifecycle_busy");
+    expect(readFileSync(join(dir, "ca.key"), "utf8")).toBe(partialKey);
+    expect(readFileSync(claudeInterceptCaCertPath(configDir), "utf8")).toBe(first.certPem);
+  }, { lockPath: join(dir, "ca-publication.sqlite") });
+  const repaired = ensureLocalInterceptCa(configDir);
+  expect(new X509Certificate(repaired.certPem).checkPrivateKey(repaired.privateKey)).toBe(true);
+});
+
+test("startup retries CA contention after the publisher releases its lease", async () => {
+  const configDir = tmpConfigDir();
+  const first = ensureLocalInterceptCa(configDir);
+  const pending = withClientLifecycleSync(() => {
+    const startup = ensureLocalInterceptCaForStartup(configDir);
+    // Return a plain wrapper: the synchronous lease never spans an await.
+    return { startup };
+  }, { lockPath: join(claudeInterceptStateDir(configDir), "ca-publication.sqlite") });
+  const loaded = await pending.startup;
+  expect(loaded.certPem).toBe(first.certPem);
+  expect(loaded.keyPem).toBe(first.keyPem);
 });

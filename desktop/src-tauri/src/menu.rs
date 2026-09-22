@@ -17,6 +17,7 @@
 /// The id of the replacement Quit item. Nothing else in the app uses it, so a menu event carrying
 /// it is unambiguously this one.
 pub const QUIT_ID: &str = "app-menu-quit";
+pub const USAGE_ID: &str = "app-menu-show-usage";
 
 pub fn build(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::menu::{
@@ -90,7 +91,17 @@ pub fn build(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::W
                 app,
                 "View",
                 true,
-                &[&PredefinedMenuItem::fullscreen(app, None)?],
+                &[
+                    &MenuItem::with_id(
+                        app,
+                        USAGE_ID,
+                        "Show Usage",
+                        true,
+                        Some("CmdOrCtrl+Shift+U"),
+                    )?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::fullscreen(app, None)?,
+                ],
             )?,
             &Submenu::with_id_and_items(
                 app,
@@ -111,10 +122,20 @@ pub fn build(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::W
 
 /// Route an application-menu event.
 ///
-/// Only the replacement Quit is ours. Tray menu events are handled by the tray's own handler and
-/// carry different ids, so an id that is not [`QUIT_ID`] is left alone.
+/// Tray menu events carry different ids and retain their existing owner.
 pub fn on_event(app: &tauri::AppHandle, id: &str) {
+    use tauri::Manager;
     if id == QUIT_ID {
         crate::exit::gesture(app);
+    } else if id == USAGE_ID {
+        if let Some(proxy) = app.state::<crate::AppState>().proxy() {
+            let _ = crate::popup::show(
+                app,
+                proxy.endpoint(),
+                tauri::PhysicalPosition::new(0.0, 0.0),
+            );
+        } else if let Some(main) = app.get_webview_window("main") {
+            crate::window::show(&main);
+        }
     }
 }
