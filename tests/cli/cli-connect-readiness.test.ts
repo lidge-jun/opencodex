@@ -157,6 +157,10 @@ function runStatusProbe(options: {
       const rejectedDir = join(opencodexHome, "rejected");
       const selected = writeRuntimeFixture(selectedDir, "0.145.0");
       writeRuntimeFixture(lowerDir, "99.0.0");
+      if (options.externalInstalledRoot && process.platform === "win32") {
+        // Use a real executable for the Windows-only installed-root control.
+        copyFileSync(process.execPath, join(lowerDir, "codex.exe"));
+      }
       const preferred = options.preferred ?? "valid";
       runtimeEnv.CODEX_CLI_PATH = preferred === "valid" ? selected
         : preferred === "failed" ? writeRuntimeFixture(rejectedDir, "", false)
@@ -271,17 +275,10 @@ function runStatusProbe(options: {
           if (externalRoot) {
             const { execFileSync } = require("node:child_process");
             const sentinel = join(externalRoot, "OpenAI", "Codex", "bin", "fixture-installed", "codex.exe");
+            const lowerExecutable = join(dirs.lower, "codex.exe");
             const observeInstalled = env => {
               const sentinelCalls = [];
-              const lowerBefore = calls().lower.length;
-              // Windows process.env looks up PATH without case, but a spread plain
-              // object may contain only Path; the resolver reads env.PATH literally.
-              // Keep the lower launcher as the sole PATH alternative to the
-              // selected absolute CODEX_CLI_PATH and the installed sentinel.
-              for (const key of Object.keys(env)) {
-                if (key.toLowerCase() === "path") delete env[key];
-              }
-              env.PATH = dirs.lower;
+              const lowerCalls = [];
               resolveCodexRuntime({
                 env,
                 execFileSync: (file, args, options) => {
@@ -290,10 +287,11 @@ function runStatusProbe(options: {
                   if (call) sentinelCalls.push(call);
                   const output = execFileSync(file, args, options);
                   if (call) call.completed = true;
+                  if (file === lowerExecutable) lowerCalls.push(args.join(" "));
                   return output;
                 },
               });
-              return { sentinelCalls, lowerCalls: calls().lower.slice(lowerBefore) };
+              return { sentinelCalls, lowerCalls };
             };
             // Explicit deps make both observations cold without altering the ordinary cache oracle.
             runtime.installedIsolation = {
