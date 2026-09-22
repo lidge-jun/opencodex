@@ -618,6 +618,35 @@ describe("release asset verification", () => {
     }
   });
 
+  test("verifies Windows binary checksum records without weakening payload binding", () => {
+    const dir = temporaryDirectory();
+    const name = "ocx-1.0.0-bun-windows-x64.zip";
+    const asset = join(dir, name);
+    const checksum = `${asset}.sha256`;
+    // Standard sha256sum binary marker observed in release run 35728908862.
+    const digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    try {
+      writeFileSync(asset, "");
+      for (const newline of ["\n", "\r\n"]) {
+        writeFileSync(checksum, `${digest} *${name}${newline}`);
+        expect(verifyChecksums(dir)).toBe(1);
+      }
+      writeFileSync(checksum, `${digest} *different.zip\n`);
+      expect(() => verifyChecksums(dir)).toThrow(/must record its own payload/);
+      for (const record of [`${digest} ?${name}\n`, `${digest}*${name}\n`, `${digest} *${name}\nextra\n`]) {
+        writeFileSync(checksum, record);
+        expect(() => verifyChecksums(dir)).toThrow(/Malformed checksum record/);
+      }
+      writeFileSync(checksum, `${digest} *${name}\n`);
+      writeFileSync(asset, "changed");
+      expect(() => verifyChecksums(dir)).toThrow(/Checksum mismatch/);
+      rmSync(asset);
+      expect(() => verifyChecksums(dir)).toThrow(/which is missing/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects a tampered payload and a missing payload", () => {
     const dir = temporaryDirectory();
     try {
