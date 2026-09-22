@@ -235,11 +235,12 @@ Investigations and plans go to `devlog/`; the GUI design-system contract lives i
 When an investigation graduates into a maintained invariant, summarize it here under `structure/`
 and link public workflows from `docs-site/`.
 
-Pull-request screenshot evidence never enters the `dev` tree. Authors attach images through the
-description editor or commit them to the orphan `pr-assets` branch and link them by commit SHA; a
-"Protect pr-assets" ruleset blocks deletion and force-push there so pinned links stay valid. No
-workflow's `push` trigger matches that branch. `tests/ci-workflows/repo-hygiene.test.ts` rejects
-tracked files under the old evidence folders.
+Pull-request screenshot evidence stays out of the `dev` tree by rule. Authors attach images through
+the description editor or commit them to the orphan `pr-assets` branch and link them by commit SHA;
+a "Protect pr-assets" ruleset blocks deletion and force-push there so pinned links stay valid. No
+workflow's `push` trigger matches that branch. `tests/ci-workflows/repo-hygiene.test.ts` enforces
+only the retired paths: `docs/`, the three old evidence folders and five loose `assets/` images. An
+image committed anywhere else is caught by review, not by a gate.
 
 Cross-cutting structure contracts are maintained by editing `structure/manifest.json`, the authority
 statement, and any dependent whose local explanation changes. Regenerate `structure/INDEX.md` with
