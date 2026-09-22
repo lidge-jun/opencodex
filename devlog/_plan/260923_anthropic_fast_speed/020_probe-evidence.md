@@ -40,4 +40,3 @@ No account currently serves a fast turn: the feature is on, but fast draws on us
 ## Streaming
 
 claude-opus-4-6 fast stream: the echo is in `message_start.message.usage.speed` ("standard"); `message_delta.usage` carries no speed.
-

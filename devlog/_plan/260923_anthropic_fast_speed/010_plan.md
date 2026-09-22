@@ -44,5 +44,3 @@
 - Each new turn on an account without fast entitlement pays one refused round trip (about 400 ms) before the standard resend. Operators disable with `fastMode: false` or by not selecting `--fast`.
 - A refused first fast send inside a continuation or sidecar owner, Claude Messages native passthrough (caller auth, raw caller `speed`), and the Anthropic web-search provider sidecar keep today's handling.
 - None of the user's six OAuth accounts can currently run fast (four lack usage credits, two orgs have it disabled), so a confirmed `usage.speed: "fast"` echo is proven from the docs, not from a live 200.
-
-
