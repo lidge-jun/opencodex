@@ -319,8 +319,11 @@ function rewriteHistoricalCustomItems(
       continue;
     }
     const existing = calls.get(item.call_id);
-    if (existing && !sameHistoricalIdentity(existing, identity)) {
-      throw new RoutedCustomToolCompatError("historical_item", "call_id");
+    if (existing) {
+      throw new RoutedCustomToolCompatError(
+        "historical_item",
+        sameHistoricalIdentity(existing, identity) ? "duplicate_call_id" : "call_id",
+      );
     }
     calls.set(item.call_id, identity);
     if (item.type === "custom_tool_call") historicalCustomCallIds.add(item.call_id);
