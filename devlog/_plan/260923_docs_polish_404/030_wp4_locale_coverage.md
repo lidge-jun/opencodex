@@ -74,3 +74,49 @@ count and levels, identical fenced blocks, identical link count, no untranslated
   fragments. `docs-link-targets` still passes.
 - Commits: one per locale, `docs(<locale>): translate the pages English had and <locale> lacked`, then
   `docs(site): label every sidebar entry in all locales`.
+
+## wp4 P revision (2026-09-23, source pinned at `7b60e10439`)
+
+Re-verified: the missing-page scan over every English page outside `contributing/` prints exactly the
+18 rows above (112 copies). English sources are final after wp3; `guides/macos-menu-bar.md` and
+`guides/desktop-app.md` changed in wp3, and the wp3 C review requires the four existing
+`{ko,ja,zh-cn,ru}/guides/macos-menu-bar.md` to be retranslated before push.
+
+Dispatch: 14 gpt-6-sol workers, two per locale, disjoint write sets:
+
+- Group A (per locale): `guides/{codex-log-guard-reclaim,codex-log-guard,codex-native-context,cursor-private-inference,desktop-app,factory-droid,macos-menu-bar}.md`
+  — only the ones missing in that locale, plus a full retranslation of `macos-menu-bar.md` where it exists (ko ja zh-cn ru).
+- Group B (per locale): `guides/{integrations,minimax,native-main-profiles,remote-workspace,response-inspection,routing-profile-editor,subagent-v1-default}.md`,
+  `reference/{inbound-body-admission,platform-support}.md`, `troubleshooting/{codex-cannot-sign-in,disk-usage-temp-files}.md` — only missing ones.
+
+Workers do not build (one shared `docs-site/dist`); main builds once after all return, runs
+`.tmp/trans-parity.ts <locale> <pages…>` (mechanical contract above) and the Layer A build check, and sends
+failures back to the same worker. Main then edits `docs-site/astro.config.mjs` alone: each of the 18 slugs
+gets all seven `translations` labels equal to that locale file's frontmatter `title`. Existing labels that
+already match are left alone.
+
+Reflection (Plato) folds:
+
+- Sidebar `translations` keys are `fr ko "zh-CN" "zh-TW" ru ja tr` (`astro.config.mjs:68-69,77`), not the
+  `zh-cn`/`zh-tw` directory names.
+- Inbound links: once a translated page replaces English fallback, existing locale pages that link into it
+  with an English fragment break. Main repairs those inbound hrefs itself after the first build (Layer A names
+  them), under the wp2 ledger rule (hrefs only, link text and count unchanged); workers only fix failures in
+  their own files.
+- `guides/subagent-v1-default.md`'s relative SVG gains one `../`; root-relative public images keep their paths.
+
+Audit (Volta) folds: .tmp/trans-parity.ts now rejects an empty page list, checks the full 116-copy inventory when run bare, and adds title/description, admonition, table-row and inline-code checks; the verifier lane inspects table cells and admonitions explicitly.
+
+## wp4 outcome (C)
+
+- 14 worker packets; five hit a provider 429 at spawn time (fr A/B, zh-tw A/B, zh-cn B) and were re-dispatched
+  unchanged with lower concurrency. Bare `.tmp/trans-parity.ts`: checked 116, failing 0.
+- Inbound fix: ja/ko/zh-cn/ru `guides/integrations.md` link the English `/reference/management-api/#aside-profile-controls`;
+  their translated management-API pages never gained that section (pre-existing drift, out of scope).
+- Seven read-only gpt-6-sol verifiers: ja PASS; fr, ko, ru, tr, zh-cn GO-WITH-FIXES (0 blockers); zh-tw 1 blocker
+  ("authenticated" rendered as "verified" in `codex-native-context.md`) fixed. Applied: ru and tr "ad-hoc signing"
+  terminology, ru inference-endpoint and catalog sentence, tr grace-period sentence. Rejected by contract: English
+  labels inside fenced diagrams and code comments (fr, ko, zh-cn, zh-tw), which stay byte-identical to English.
+- Sidebar: 24 labels added from the translated titles. Five pages (codex-log-guard, codex-log-guard-reclaim,
+  native-main-profiles, routing-profile-editor, inbound-body-admission) have no sidebar entry; Platform Support uses a
+  `link:` entry that already had all seven labels.
