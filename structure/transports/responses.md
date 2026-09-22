@@ -458,8 +458,9 @@ specific delivery/preparation owner. Existing runtime Lab-boundary tests still s
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
 `src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body
-from the same events. `src/bridge/errors.ts` (`formatErrorResponse`) formats failures: only
-allowlisted transport verdicts survive it, so an arbitrary provider code is never forwarded to the
-client. `src/bridge/internal.ts` holds the shared usage shaping; `input_tokens_details` and
+from the same events. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
+keeps only allowlisted transport verdict codes. Adapter error events take a different path:
+`src/bridge/internal.ts` carries an event's own `code` into the SSE and JSON failure, after
+mapping cyber-policy codes to HTTP 400. The same file holds the shared usage shaping; `input_tokens_details` and
 `output_tokens_details` are always emitted, with zero defaults, because strict Responses clients
 deserialize them as required fields.

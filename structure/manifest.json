@@ -179,6 +179,8 @@
       "scope": "Mixed-wire model defaults, xAI agent-message continuation, declared-tool membership, and passthrough SSE stream shapes.",
       "documents": [
         "src/adapters/",
+        "src/bridge/",
+        "src/codex/",
         "src/lib/",
         "src/responses/",
         "src/server/"

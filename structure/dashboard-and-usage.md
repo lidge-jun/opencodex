@@ -470,7 +470,9 @@ do not read a source-tree `package.json`.
 ## Quota-reset notifications
 
 `src/quota/` implements the opt-in `quotaResetNotify` section. With the section absent, or enabled
-without a sink, nothing runs: no detection, no timer, no state file.
+without a sink, nothing is detected, delivered, or written. Startup still arms one unref'd poller
+interval (`src/server/background-lifecycle.ts`) whose tick is a no-op until the section is enabled,
+so enabling it takes effect without a restart.
 
 - `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list,
   and `src/quota/reset-detector.ts` compares two consecutive observations of a window and emits at
@@ -480,9 +482,10 @@ without a sink, nothing runs: no detection, no timer, no state file.
   `src/providers/quota.ts` reach it only through a lazy import, because both are statically
   reachable from `src/server/responses/core.ts` and a static edge would load the subsystem into
   every install.
-- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger, so a reset is delivered
-  once across restarts. `src/quota/reset-sinks.ts` delivers to a webhook or a local command; each
-  sink is best-effort and isolated from the other.
+- `src/quota/reset-seen-store.ts` keeps a durable already-notified ledger. The observer claims a
+  reset there before dispatch, so a reset is attempted at most once, across restarts and racing
+  observers; a failed delivery is not retried. `src/quota/reset-sinks.ts` delivers to a webhook or
+  a local command; each sink is best-effort and isolated from the other.
 - `src/quota/reset-poller.ts` is an opt-in idle refresh (default 15 minutes, floor 10). Without it,
   quota reports are fetched only when the dashboard or CLI asks, and an overnight reset goes
   unobserved. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
