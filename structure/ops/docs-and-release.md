@@ -301,6 +301,17 @@ Invariants:
 - Public docs (root READMEs + `docs-site` installation pages, all locales) state Node 18+ as the only
   prerequisite. Do not reintroduce "install Bun first" / "bun must be on PATH" guidance for npm users.
 
+### Package-tree integrity fence
+
+Installed npm, bun, and pnpm packages bind each server process to the package manifest identity
+observed at startup. Replacing that manifest under a live process fences `/healthz`, `/readyz`, and
+`/v1/*` with `package_tree_changed`. The first observed replacement starts an unref'd five-second
+stability timer; if the same new manifest identity remains readable and distinct, the timer enters the existing
+drain-and-restart handoff without waiting for another request. A temporarily unreadable manifest
+is polled until readable and then receives a fresh full stability interval, while a return to the
+startup identity cancels the pending restart. Failed restart admission retries after the same
+bounded delay. Source checkouts and standalone binaries remain outside this integrity fence.
+
 ## Release workflow
 
 Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs

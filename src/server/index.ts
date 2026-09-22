@@ -193,13 +193,9 @@ import {
   createLocalAttestationSecret,
 } from "../lib/local-management-attestation";
 import { createReadinessGate, type ReadinessGate } from "./readiness";
-import {
-  createRuntimePackageTreeIntegrityGuard,
-  type PackageTreeIntegrityGuard,
-} from "../lib/package-tree-integrity";
-import { detectInstall } from "../update/index";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
 import { createClaudeInterceptLifecycle } from "./index/claude-intercept-lifecycle";
+import { createPackageTreeIntegrityGuardForServer } from "./index/package-tree-guard";
 import { inspectStartupOwnership, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
 import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
 export { waitForFailedStartRollback } from "./index/spend-ledger-lifecycle";
@@ -536,8 +532,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // passes it in, and transitions it after the post-startup sync settles. When
   // no gate is supplied (tests, ad-hoc starts) a fresh pending gate is created.
   const readinessGate = deps.readinessGate ?? createReadinessGate();
-  const packageTreeIntegrity = deps.packageTreeIntegrity
-    ?? createRuntimePackageTreeIntegrityGuard(detectInstall());
+  const packageTreeIntegrity = createPackageTreeIntegrityGuardForServer(deps);
   // Actual bound port, filled in after Bun.serve binds so /readyz reports the
   // real ephemeral port for startServer(0). /healthz keeps its existing port
   // field (the requested listenPort) byte-for-byte.
@@ -755,6 +750,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     value: async (closeActiveConnections?: boolean): Promise<void> => {
       remoteWorkspaceStopping = true;
       liveCallBindings.clear();
+      // Disarm the package-tree restart timer before listener teardown: a queued
+      // replacement callback must not call acceptSystemRestart() after stop() has
+      // begun, or it would schedule a drain-and-restart on a stopped server.
+      packageTreeIntegrity.dispose();
       // The orchestration lives in `runListenerShutdown` so its two competing properties —
       // cleanup completes, failure propagates — are testable without a live socket.
       await runListenerShutdown(

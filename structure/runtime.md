@@ -188,6 +188,8 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
+The package-tree integrity fence for live package replacement follows the
+[update transaction contract](ops/docs-and-release.md#package-tree-integrity-fence).
 
 A busy preferred port is never resolved by starting somewhere else. Both questions a start asks
 about an existing proxy — the pre-bind owner check and the port-is-busy check in `src/cli/index.ts`
