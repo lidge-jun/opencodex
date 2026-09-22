@@ -19,6 +19,7 @@ import { createDevinAdapter } from "../../src/adapters/devin";
 import { parseCatalogBuffer, setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString, encodeVarintField } from "../../src/adapters/devin/cloud-direct/wire";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { saveCredential } from "../../src/oauth/store";
 import type { AdapterEvent } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -29,15 +30,16 @@ let home = "";
 const previousHome = process.env.OPENCODEX_HOME;
 const previousFetch = globalThis.fetch;
 let chatPosts = 0;
+let seenUrls: string[] = [];
 
-function seed(): void {
+function seed(tenantHost = host): void {
   const buffer = Buffer.concat([encodeMessage(1, Buffer.concat([
     encodeString(1, "swe-2-high"),
     encodeString(22, "swe-2-high"),
     encodeVarintField(18, 262_000),
     encodeVarintField(4, 0),
   ]))]);
-  setCachedCatalogForTests(parseCatalogBuffer(buffer, apiKey, host));
+  setCachedCatalogForTests(parseCatalogBuffer(buffer, apiKey, tenantHost));
 }
 
 // A Connect-RPC stream whose only frame is an end-stream trailer carrying the
@@ -58,10 +60,12 @@ function refusalResponse(message: string): Response {
 
 function stubTransport(message: string): void {
   chatPosts = 0;
+  seenUrls = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     // The seeded catalog cache means GetChatMessage is the only RPC this turn
     // performs; count it anyway so a replay is visible as a second send.
-    if (String(input).startsWith(CHAT_URL)) chatPosts += 1;
+    seenUrls.push(String(input));
+    if (String(input).endsWith(new URL(CHAT_URL).pathname)) chatPosts += 1;
     return refusalResponse(message);
   }) as typeof fetch;
 }
@@ -97,14 +101,16 @@ describe("devin adapter stated-reset wait", () => {
   });
 
   test("a stated reset beyond the allowance surfaces instead of holding the turn", async () => {
-    stubTransport("Your limit will reset in 21 minutes");
+    stubTransport(`Your limit will reset in 21 minutes; credential=${apiKey}`);
 
     const events = await runOneTurn();
 
-    // The provider's refusal is preserved verbatim — including the stated
-    // reset text — instead of the turn sleeping inside the shared slot.
+    // Preserve reset timing without forwarding the provider's credential-reflecting text.
     const error = events.find((event): event is Extract<AdapterEvent, { type: "error" }> => event.type === "error");
-    expect(error?.message).toContain("reset in 21 minutes");
+    expect(error).toMatchObject({ status: 429, errorType: "rate_limit_error", code: "resource_exhausted" });
+    expect(error?.message).toContain("retry after ~1260s");
+    expect(JSON.stringify(events)).not.toContain(apiKey);
+    expect(error?.message).not.toContain("Your limit");
     expect(events.some(event => event.type === "done")).toBe(false);
     expect(chatPosts).toBe(1);
   });
@@ -115,7 +121,26 @@ describe("devin adapter stated-reset wait", () => {
     const events = await runOneTurn();
 
     const error = events.find((event): event is Extract<AdapterEvent, { type: "error" }> => event.type === "error");
-    expect(error?.message).toContain("reset in 1 second");
+    expect(error?.message).toContain("retry after ~1s");
+    expect(chatPosts).toBe(1);
+  });
+
+  test("an alias-bound tenant refusal keeps one send and content-free reset timing", async () => {
+    const tenantHost = "https://server.eu.windsurf.com";
+    await saveCredential("devin-cli", {
+      access: apiKey, refresh: apiKey, expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli", apiBaseUrl: tenantHost,
+    });
+    seed(tenantHost);
+    stubTransport(`Your limit will reset in 1 second; credential=${apiKey}`);
+
+    const events = await runOneTurn();
+
+    expect(seenUrls).toEqual([`${tenantHost}${new URL(CHAT_URL).pathname}`]);
+    const error = events.find((event): event is Extract<AdapterEvent, { type: "error" }> => event.type === "error");
+    expect(error).toMatchObject({ status: 429, code: "resource_exhausted" });
+    expect(error?.message).toContain("retry after ~1s");
+    expect(JSON.stringify(events)).not.toContain(apiKey);
     expect(chatPosts).toBe(1);
   });
 });

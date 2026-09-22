@@ -644,9 +644,9 @@ export function createDevinAdapter(
         );
         // An admitted HTTP turn owns globally shared capacity until this call
         // emits. Never retain that capacity while waiting out a provider 429:
-        // the stated reset is surfaced as the original error message (the
-        // seconds figure stays inside that text for clients that parse it),
-        // and the shared slot is freed immediately.
+        // preserve the typed reset delay in generated diagnostic wording,
+        // never the raw trailer text that may reflect a credential. The
+        // refusal returns immediately so the caller can release its slot.
         for await (const event of streamChatEventsWithResetRetry({
           apiKey,
           apiServerUrl: host,

@@ -1176,8 +1176,8 @@ from (#4709).
 
 `run-turn-execution.ts` passes the same physical-send and recovery-withheld observers used by the
 request-building adapter path. Devin builds one `createAdapterPhysicalSend` for the whole
-`GetChatMessage` invocation, so its initial POST and at most two same-target replays report ordinals
-1, 2, and 3. The outer runTurn attempt already records ordinal 1, and the shared observer therefore
+`GetChatMessage` invocation. Its helper supports at most two pre-output replays, but the adapter sets
+zero wait allowance, so positive reset delays surface immediately. The outer runTurn records ordinal 1; the shared observer
 adds only ordinals above 1 to `sendCount`; the execution budget still reserves every ordinal. A
 replay reserves only after its server-stated wait. If admission is refused, no inference I/O occurs,
 `retry-send-budget` is recorded, and the preceding provider 429 remains the returned error.
