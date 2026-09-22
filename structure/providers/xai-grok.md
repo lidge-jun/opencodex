@@ -28,7 +28,8 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 `src/adapters/xai-web-search.ts` omits `auto`/`none` tool selection after normalization if no tools
 remain in either the top-level catalog or `additional_tools`. Cached-only search removal follows
-the same rule. Available forced function selectors remain intact.
+the same rule. When an omitted `none` selector stated the turn's only client-call prohibition,
+the explicit empty `tools` catalog preserves that denial. Available forced function selectors remain intact.
 `src/adapters/openai-responses/request-strips.ts` preserves valid xAI custom-call item ids and
 repairs missing/invalid ids from a stable digest of the JSON-encoded `(call_id, name, input)`
 string tuple. Incomplete tuples remain unchanged, and call/result pairing uses the original call id.

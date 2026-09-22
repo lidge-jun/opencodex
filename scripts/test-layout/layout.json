@@ -1669,7 +1669,9 @@
     "release-resume-identity.test.ts": "ci-workflows",
     "update-bun-ownership-lease.test.ts": "update",
     "cursor-request-compat.test.ts": "providers/cursor",
-    "responses-xai-request-compat.test.ts": "responses"
+    "responses-xai-request-compat.test.ts": "responses",
+    "responses-continuation-boundaries.test.ts": "responses",
+    "responses-custom-tool-historical-replay.test.ts": "responses"
   },
   "migrated": [
     "adapters",

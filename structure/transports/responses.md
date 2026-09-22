@@ -563,7 +563,9 @@ resumes by expansion rather than by asking the client to replay. Routed custom-t
 custom result has no local call, because its original wire type cannot be established and guessing it
 would send an unmatched result upstream. The check resolves the selected wire protocol and the
 request's own tool declarations after final route selection, so stateful destinations keep their
-upstream-owned native function and native-only custom continuations. Explicit input still receives
+upstream-owned native function and supported native custom continuations. An explicit custom-tool
+denial also requests recovery for unmapped historical results without a live catalog; history never
+adds current tool authorization. The [custom-tool compatibility contract](../providers/chat-compat.md#declared-hosted-tool-denials) owns lowering and final validation. Explicit input still receives
 orphan repair; this path asks the client to replay rather than reconstructing history. Content-channel reasoning stays content in SSE, JSON and stored replay output; native
 summary items and opaque blobs retain their upstream representation. Full-content replay
 fingerprints compare the same client-visible items without content-to-summary conversion.
