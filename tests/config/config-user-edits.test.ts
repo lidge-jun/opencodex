@@ -967,6 +967,77 @@ test("a detached snapshot save merges concurrent disabledModels edits by member"
   expect(diskConfig().disabledModels).toEqual(["test/discovered", "test/hand-hidden"]);
 });
 
+test("a detached snapshot save preserves a persisted modelDiscovery tombstone", () => {
+  writeDiskConfig({
+    modelDiscovery: {
+      knownModels: { test: { ids: ["seeded"], removed: [], updatedAt: "2026-09-01T00:00:00.000Z" } },
+    },
+  });
+  const snapshot = loadConfig();
+  armDetachedConfigBaseline(snapshot);
+  snapshot.modelDiscovery!.recentArrivals = {
+    test: [{ id: "discovered", at: "2026-09-02T00:00:00.000Z" }],
+  };
+
+  const deletingWriter = loadConfig();
+  deleteConfigTopLevelKey(deletingWriter, "modelDiscovery");
+  saveConfig(deletingWriter);
+
+  saveConfigPreservingClaudeCode(snapshot);
+
+  expect(diskConfig().modelDiscovery).toBeUndefined();
+  expect(diskConfig().configRebaseProvenance).toEqual({
+    version: 1,
+    deletedTopLevelKeys: ["modelDiscovery"],
+  });
+});
+
+test("an explicit modelDiscovery reintroduction clears persisted tombstone authority", () => {
+  writeDiskConfig({
+    modelDiscovery: {
+      knownModels: { test: { ids: ["seeded"], removed: [], updatedAt: "2026-09-01T00:00:00.000Z" } },
+    },
+  });
+  const snapshot = loadConfig();
+  armDetachedConfigBaseline(snapshot);
+  snapshot.modelDiscovery!.recentArrivals = {
+    test: [{ id: "discovered", at: "2026-09-02T00:00:00.000Z" }],
+  };
+
+  const deletingWriter = loadConfig();
+  deleteConfigTopLevelKey(deletingWriter, "modelDiscovery");
+  saveConfig(deletingWriter);
+  const reintroducingWriter = loadConfig();
+  reintroducingWriter.modelDiscovery = { newModelPolicy: "off" };
+  saveConfig(reintroducingWriter);
+
+  saveConfigPreservingClaudeCode(snapshot);
+
+  expect(diskConfig().modelDiscovery).toEqual({
+    newModelPolicy: "off",
+    recentArrivals: {
+      test: [{ id: "discovered", at: "2026-09-02T00:00:00.000Z" }],
+    },
+  });
+  expect(diskConfig().configRebaseProvenance).toBeUndefined();
+});
+
+test("a non-detached pending modelDiscovery edit keeps existing same-leaf precedence", () => {
+  writeDiskConfig({ modelDiscovery: { newModelPolicy: "on" } });
+  const live = loadConfig();
+  armClaudeCodeBaseline(live);
+  live.modelDiscovery!.newModelPolicy = "off";
+
+  const deletingWriter = loadConfig();
+  deleteConfigTopLevelKey(deletingWriter, "modelDiscovery");
+  saveConfig(deletingWriter);
+
+  saveConfigPreservingClaudeCode(live);
+
+  expect(diskConfig().modelDiscovery).toEqual({ newModelPolicy: "off" });
+  expect(diskConfig().configRebaseProvenance).toBeUndefined();
+});
+
 test("a live save merges concurrent disabledModels edits by member", () => {
   writeDiskConfig({ disabledModels: ["test/seeded"] });
   const live = loadConfig();

@@ -434,10 +434,12 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         // below would only discard concurrent hand edits. It merges every top-level
         // key — including configRebaseProvenance, so a cooperating writer's
         // deletion marker adopted from disk is honored instead of silently dropped —
-        // and reads deletion intent AFTER the merge, from the marker disk actually
-        // carries now rather than a stale one the snapshot loaded.
+        // and captures deletion intent from the current disk snapshot before the
+        // merge can temporarily restore a key and invalidate its deletion marker.
         const detached = detachedConfigSnapshots.has(config);
-        const deletedKeys = detached ? null : configRebaseDeletionKeys(config);
+        const deletedKeys = detached
+          ? configRebaseDeletionKeys(persistedDiagnostics.config)
+          : configRebaseDeletionKeys(config);
         const skipped = detached
           ? new Set(["claudeCode"])
           : new Set(["hostname", "port", "claudeCode", CONFIG_REBASE_PROVENANCE_KEY]);
@@ -470,7 +472,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
           persistedDiagnostics.config as unknown as Record<string, unknown>,
           skipped,
         );
-        for (const key of deletedKeys ?? configRebaseDeletionKeys(config)) {
+        for (const key of deletedKeys) {
           delete (config as unknown as Record<string, unknown>)[key];
         }
       }
