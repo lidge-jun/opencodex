@@ -29,6 +29,8 @@ import { handleResponses } from "../../src/server/responses";
 import { providerConfigSeed } from "../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import type { ResponsesTerminalRepairScheduler } from "../../src/server/responses-terminal-repair";
+import { bridgeSearchReplayScope, clearBridgeSearchReplayCacheForTests, peekBridgeSearchReplay } from "../../src/responses/bridge-search-replay-cache";
+import { reasoningReplayDestinationIdentity, reasoningReplayKeyCredentialIdentity } from "../../src/responses/reasoning-replay-cache";
 import {
   resetProviderRequestPacingForTest,
   setProviderRequestPacingRuntimeForTest,
@@ -1473,6 +1475,7 @@ describe("the reported turn, end to end through handleResponses", () => {
   });
 
   test("a complete but terminal-less leg still repairs, on the first leg AND the continuation", async () => {
+    clearBridgeSearchReplayCacheForTests();
     // Repair is registry-gated, so only a registry-keyed provider arms it: deepseek carries
     // modelResponsesTerminalRepair for the V4 flash ids. The fixture legs below emit a fully
     // complete item lifecycle and then stay open — the reported stall — with no terminal and
@@ -1581,7 +1584,7 @@ describe("the reported turn, end to end through handleResponses", () => {
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
-        headers: { "content-type": "application/json", authorization: "Bearer caller-inbound" },
+        headers: { "content-type": "application/json", authorization: "Bearer caller-inbound", "thread-id": "thread-repaired-search" },
         body: JSON.stringify({
           model: "deepseek/deepseek-v4-flash",
           stream: true,
@@ -1590,6 +1593,7 @@ describe("the reported turn, end to end through handleResponses", () => {
         }),
       }), cfg, { model: "", provider: "" }, {
         responsesTerminalRepairScheduler: scheduler,
+        admission: { kind: "loopback" },
       });
       const reader = response.body!.getReader();
       try {
@@ -1629,6 +1633,28 @@ describe("the reported turn, end to end through handleResponses", () => {
         expect(rest).toContain("response.completed");
         expect(rest).toContain("The current release is 2.50.0.");
         expect(rest).toContain("[DONE]");
+        const hosted = clientEvents(opened + rest).find(event =>
+          event.type === "response.output_item.added"
+          && (event.item as Record<string, unknown> | undefined)?.type === "web_search_call");
+        const cellId = (hosted?.item as Record<string, unknown> | undefined)?.id;
+        expect(typeof cellId).toBe("string");
+        const scope = {
+          clientPrincipalId: "loopback", clientThreadId: "thread-repaired-search",
+          current: {
+            providerName: "deepseek", adapterName: "openai-responses", modelId: "deepseek-v4-flash",
+            providerDestinationIdentity: reasoningReplayDestinationIdentity(cfg.providers.deepseek!.baseUrl),
+            credentialIdentity: reasoningReplayKeyCredentialIdentity({ apiKey: "fixture-key" }),
+          },
+        };
+        // Results produced by repaired legs retain the same caller/serving boundary as
+        // ordinary search legs; knowing the emitted cell id does not widen that boundary.
+        expect(peekBridgeSearchReplay(bridgeSearchReplayScope(scope), cellId as string)?.output)
+          .toContain("opencodex 2.50.0");
+        for (const changedScope of [
+          { ...scope, clientPrincipalId: "another-caller" },
+          { ...scope, clientThreadId: "another-thread" },
+          { ...scope, current: { ...scope.current, credentialIdentity: "another-key" } },
+        ]) expect(peekBridgeSearchReplay(bridgeSearchReplayScope(changedScope), cellId as string)).toBeUndefined();
       } finally {
         try { await reader.cancel(); } catch { /* already closed */ }
         firstLeg.end();
@@ -1637,6 +1663,7 @@ describe("the reported turn, end to end through handleResponses", () => {
     } finally {
       releaseSpendHome();
       globalThis.fetch = savedFetch;
+      clearBridgeSearchReplayCacheForTests();
     }
   });
 
