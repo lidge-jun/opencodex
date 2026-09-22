@@ -4,6 +4,13 @@ import type { TKey } from "./en";
  * Chinese i18n catalog; must match the `TKey` set (compile-checked).
  */
 export const zh: Record<TKey, string> = {
+  "tray.updated": "更新于 {time} · 每60秒",
+  "tray.today": "今天",
+  "tray.input": "输入",
+  "tray.output": "输出",
+  "tray.cost": "预估费用",
+  "tray.cached": "缓存 {percent}",
+
   "usage.incomplete": "部分用量记录无法计入。次数、日期和排名仅反映可读取的记录。",
   "models.pickerOrder.usageIncomplete": "用量历史不完整，无法保存最常用排序。请选择其他排序或先修复历史记录。",
   "api.attribution.noRecordedUse": "可读取的记录中没有使用记录",
