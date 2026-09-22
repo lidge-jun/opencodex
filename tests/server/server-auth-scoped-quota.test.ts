@@ -112,17 +112,23 @@ describe("server local API auth", () => {
     // ChatGPT sometimes wraps quota exhaustion in a generic 5xx. Suppressing the
     // same-workspace alternate must still record the normalized 429 on the refused
     // account — otherwise it earns only a transient failure and stays selectable.
-    const harness = await startPoolRetryHarness(() => new Response(
-      JSON.stringify({
-        error: {
-          code: "organization_spend_limit_exceeded",
-          message: "The usage limit has been reached",
-        },
-      }),
-      // No Retry-After: the send layer honours it as a real wait, so the cooldown must
-      // come from the normalized quota record's default, not the wire header.
-      { status: 502, headers: { "content-type": "application/json" } },
-    ));
+    // Both credentials carry the same workspace header, so the credential each physical send
+    // presents is the only evidence of which account it used.
+    const credentials: string[] = [];
+    const harness = await startPoolRetryHarness((_accountId, request) => {
+      credentials.push(request.headers.get("authorization") ?? "missing");
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: "organization_spend_limit_exceeded",
+            message: "The usage limit has been reached",
+          },
+        }),
+        // No Retry-After: the send layer honours it as a real wait, so the cooldown must
+        // come from the normalized quota record's default, not the wire header.
+        { status: 502, headers: { "content-type": "application/json" } },
+      );
+    });
     try {
       // pool-b shares pool-a's workspace, so the resolved alternate is suppressed.
       saveCodexAccountCredential("pool-b", {
@@ -133,9 +139,12 @@ describe("server local API auth", () => {
       });
       const response = await harness.request();
       expect(response.status).toBe(502);
-      // Both credentials carry the same workspace header, so only the exact one-send sequence
-      // proves the suppressed alternate was never physically sent.
-      expect(harness.dispatches).toEqual(["acct-pool-a"]);
+      // Same-account transient retries may repeat the refused credential; the suppressed
+      // alternate's credential must never be presented.
+      expect(credentials.length).toBeGreaterThan(0);
+      expect(credentials.length).toBe(harness.dispatches.length);
+      expect(credentials.some(value => value.includes("pool-b-token"))).toBe(false);
+      expect(new Set(credentials).size).toBe(1);
       const health = getCodexUpstreamHealth("pool-a");
       expect(health).toMatchObject({ cooldownSource: "default" });
       expect(health?.cooldownUntil).toBeGreaterThan(Date.now());
