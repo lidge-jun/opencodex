@@ -342,6 +342,15 @@ describe("undeclared historical custom-tool replay", () => {
     }, false)).toThrow(/historical_collision: declared_function_name/);
   });
 
+  test("rejects duplicate call IDs even when the historical call identity matches", () => {
+    expect(() => rewriteRoutedCustomToolsForUpstream({
+      input: [
+        { type: "custom_tool_call", call_id: "call_dup", name: "exec", input: "a" },
+        { type: "custom_tool_call", call_id: "call_dup", name: "exec", input: "a" },
+      ],
+    }, false)).toThrow(/historical_item: duplicate_call_id/);
+  });
+
   test("refuses call_id identity collisions", () => {
     expect(() => rewriteRoutedCustomToolsForUpstream({
       input: [
