@@ -1032,6 +1032,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         };
         return { changed: true, value: structuredClone(persisted.claudeCode) };
       });
+      if (outcome.status === "unavailable" && outcome.reason !== "conflict") {
+        return jsonResponse({ error: "Claude Desktop profile could not be saved (config " + outcome.reason + ")" }, 500);
+      }
       if (outcome.status === "unavailable" || outcome.value === null) {
         return jsonResponse({ error: "Claude Desktop profile changed during save" }, 409);
       }
