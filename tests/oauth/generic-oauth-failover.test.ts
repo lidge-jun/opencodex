@@ -262,6 +262,16 @@ describe("#2568 generic OAuth account failover", () => {
     expect(hasEligibleGenericOAuthFailoverTarget("xai", ids[1]!)).toBe(true);
   });
 
+  test("a one-account roster reports no eligible target even for a stale failed id", async () => {
+    const [solo] = await seed(1);
+    // The failed account can be removed after the request was sent, leaving one stored account
+    // whose id differs from the failed one. Rotation refuses a roster under two accounts, so the
+    // probe must not describe that state as a rotation the send budget withheld.
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", "removed-account")).toBe(false);
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", solo!)).toBe(false);
+    expect(rotateGenericOAuthAccountOn429(config(true), "xai", "removed-account", null)).toBeNull();
+  });
+
   test("Retry-After drives the cooldown length", async () => {
     const ids = await seed(2);
     rotateGenericOAuthAccountOn429(config(), "xai", ids[0]!, "600");
