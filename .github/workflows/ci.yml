@@ -677,7 +677,9 @@ jobs:
             exit 1
           fi
 
-          run_macos_suite tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"
+          # Root discovery at tests/: bare `tests` is a repository-wide name filter
+          # and retains unrelated directory descriptors in the pinned Bun runtime.
+          run_macos_suite ./tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"
           suite_status=$?
           if [ "$suite_status" -ne 0 ]; then exit "$suite_status"; fi
           for ((index=0; index<serial_count; index++)); do

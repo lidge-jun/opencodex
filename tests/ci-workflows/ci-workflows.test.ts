@@ -261,7 +261,7 @@ describe("GitHub Actions hardening", () => {
     const macosTestStep = macosSteps.find(step => step.name === "Test");
     expect(macosTestStep?.env?.MACOS_TEST_SHARD).toBe("${{ matrix.shard }}");
     expect(hasShellCommandHead(macosTestStep?.run, 'bun test --isolate --timeout 60000 "$@"')).toBe(true);
-    expect(hasExactShellCommand(macosTestStep?.run, 'run_macos_suite tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"')).toBe(true);
+    expect(hasExactShellCommand(macosTestStep?.run, 'run_macos_suite ./tests "--shard=$MACOS_TEST_SHARD/2" "${ignore_args[@]}"')).toBe(true);
     expect(hasExactShellCommand(macosTestStep?.run, 'run_macos_suite --parallel=1 "./tests/$file"')).toBe(true);
     expect(macosTestStep?.run).toContain('import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"');
     const macosShards = (ci.jobs?.["platform-macos"] as {

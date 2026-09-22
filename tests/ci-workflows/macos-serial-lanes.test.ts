@@ -79,7 +79,7 @@ if (argv[0] !== "test") {
   process.exit(97);
 }
 record("test");
-const matches = args => config.target === "main" ? args.includes("tests")
+const matches = args => config.target === "main" ? args.some(arg => arg.replace(/^\.\//, "") === "tests")
   : args.some(arg => arg.replace(/^\.\//, "") === "tests/" + config.target);
 if (!matches(argv)) process.exit(0);
 const attempts = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line))
@@ -267,7 +267,7 @@ function expectGeneralCall(call: Invocation, shard: number): void {
   // Account for every CLI argument: a name filter or extra exclusion could
   // silently drop ordinary files even while the serial ownership oracle passes.
   expect(call.argv.toSorted()).toEqual([
-    "test", "--isolate", "--timeout", "60000", "tests", `--shard=${shard}/2`,
+    "test", "--isolate", "--timeout", "60000", "./tests", `--shard=${shard}/2`,
     ...SERIAL_FILES.flatMap(file => ["--path-ignore-patterns", `**/${basename(file)}`]),
   ].toSorted());
   // Exact exclusions above plus the unrestricted tests root leave these files
@@ -297,11 +297,11 @@ describe.skipIf(process.platform === "win32")("macOS serial lane shell ownership
     for (const [index, run] of runs.entries()) {
       expect(run.status, run.output).toBe(0);
       const calls = testCalls(run);
-      const serial = calls.filter(call => !call.argv.includes("tests"));
+      const serial = calls.filter(call => !targets(call, "main"));
       const owned = SERIAL_FILES.filter((_, fileIndex) => fileIndex % 2 === index);
       // First oracle deliberately fails old CI for missing isolated ownership.
       expect(serial.length, "missing isolated ownership of canonical serial files").toBe(owned.length);
-      expect(calls.filter(call => call.argv.includes("tests"))).toHaveLength(1);
+      expect(calls.filter(call => targets(call, "main"))).toHaveLength(1);
       expectGeneralCall(calls[0]!, index + 1);
       expect(serial.map(testPaths)).toEqual(owned.map(file => [`tests/${file}`]));
       for (const call of serial) {

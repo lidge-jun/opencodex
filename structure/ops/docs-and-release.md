@@ -1,7 +1,9 @@
 # Docs And Release
 
-The sharded macOS test lane runs `scripts/ci/sample-macos-stall.sh` beside the
-unchanged Bun invocation. After sustained silence it identifies the owning shell's
+The sharded macOS test lane roots discovery at `./tests`, preserving the complete
+test root and shard ratio without Bun's repository-wide name-filter traversal.
+It runs `scripts/ci/sample-macos-stall.sh` beside the Bun invocation. After
+sustained silence it identifies the owning shell's
 single direct Bun child, records that process's descendants without argv or
 environment values, and requests one native stack sample. It never signals or
 retries the suite, and the original suite exit status still determines the job.
