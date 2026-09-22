@@ -1,4 +1,7 @@
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
+import { mkdtemp, rm, writeFile as nodeWriteFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AdapterRequest, ProviderAdapter } from "../base";
 import { mapReasoningEffort } from "../../reasoning-effort";
 import { buildSystemPrompt } from "../coding-agent/protocol";
@@ -6,14 +9,17 @@ import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps } from "../codi
 import { QODER_PROFILES, type QoderProfile } from "./profiles";
 import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessage } from "./scaffold-guard";
 
-export type QoderAdapterDeps = CodingAgentDeps;
+export interface QoderAdapterDeps extends CodingAgentDeps {
+  /** Test seam for the prompt staging write, so a failure exercises the real path. */
+  writeFile?: typeof nodeWriteFile;
+}
 
 export function buildQoderChildEnv(profile: QoderProfile, apiKey: string): Record<string, string> {
   return { ...baseScopedEnv(), NO_COLOR: "1", [profile.tokenEnv]: apiKey };
 }
 
 /** Single-shot, tools-disabled Qoder CLI invocation; Codex remains the tool owner. */
-export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderConfig): string[] {
+export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderConfig, systemPromptFile?: string): string[] {
   const args = [
     "-p",
     "--output-format", "stream-json",
@@ -27,8 +33,7 @@ export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderCo
   ];
   const effort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
   if (effort) args.push("--reasoning-effort", effort);
-  const system = buildSystemPrompt(parsed);
-  if (system) args.push("--append-system-prompt", system);
+  if (systemPromptFile) args.push("--append-system-prompt-file", systemPromptFile);
   return args;
 }
 
@@ -109,6 +114,7 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
       yield { type: "error", message: "Qoder adapter uses runTurn; the fetch/parseStream path is disabled." };
     },
     async runTurn(parsed, incoming, emit): Promise<void> {
+      const writeFile = deps.writeFile ?? nodeWriteFile;
       const hasImage = parsed.context.messages.some(message =>
         Array.isArray(message.content) && message.content.some(part => part.type === "image"),
       );
@@ -123,16 +129,41 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
         });
         return;
       }
-      await runCodingAgentTurn({
-        profiles: QODER_PROFILES,
-        provider,
-        parsed,
-        incoming,
-        emit: guardQoderScaffolding(emit),
-        buildArgs: (_profile, req, prov) => buildQoderArgs(req, prov),
-        buildEnv: (profile, apiKey) => buildQoderChildEnv(profile as QoderProfile, apiKey),
-        deps,
-      });
+      // argv is world-readable via process listing, so the folded system+developer prompt is
+      // staged in a private temp file and passed by path instead of embedded in the arguments.
+      const system = buildSystemPrompt(parsed);
+      let promptDir: string | undefined;
+      let promptFile: string | undefined;
+      try {
+        promptDir = system ? await mkdtemp(join(tmpdir(), "ocx-qoder-prompt-")) : undefined;
+        promptFile = promptDir ? join(promptDir, "system-prompt.txt") : undefined;
+        if (promptFile) await writeFile(promptFile, system!, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      } catch {
+        if (promptDir) await rm(promptDir, { recursive: true, force: true }).catch(() => {});
+        emit({
+          type: "error",
+          message: "Qoder system prompt could not be staged securely.",
+          status: 500,
+          errorType: "upstream_error",
+          code: "system_prompt_staging_failed",
+          retryable: false,
+        });
+        return;
+      }
+      try {
+        await runCodingAgentTurn({
+          profiles: QODER_PROFILES,
+          provider,
+          parsed,
+          incoming,
+          emit: guardQoderScaffolding(emit),
+          buildArgs: (_profile, req, prov) => buildQoderArgs(req, prov, promptFile),
+          buildEnv: (profile, apiKey) => buildQoderChildEnv(profile as QoderProfile, apiKey),
+          deps,
+        });
+      } finally {
+        if (promptDir) await rm(promptDir, { recursive: true, force: true }).catch(() => {});
+      }
     },
   };
 }

@@ -216,11 +216,15 @@ export async function fetchProviderModelsWithAuth(
     return observed(configured, "authoritative");
   }
   const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
-    ? prov.authMode === "oauth" && effectiveGoogleMode(name, prov) === "cloud-code-assist"
+    ? prov.authMode === "oauth" && (
+      effectiveGoogleMode(name, prov) === "cloud-code-assist"
+      || prov.adapter === "devin"
+    )
       ? await getValidAccessTokenSnapshot(name)
         .then(snapshot => ({
           apiKey: snapshot.accessToken,
           observed: false,
+          ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
         }))
         .catch(() => ({ apiKey: undefined, observed: false }))
@@ -309,7 +313,12 @@ export async function fetchProviderModelsWithAuth(
         "degraded",
       );
     }
-    const liveResult = await fetchDevinUsableModels({ apiKey, baseUrl: prov.baseUrl });
+    // The OAuth snapshot owns both values: never combine one account's durable
+    // key with the registry's default host or another account's tenant host.
+    const liveResult = await fetchDevinUsableModels({
+      apiKey,
+      baseUrl: auth.oauthApiBaseUrl ?? prov.baseUrl,
+    });
     if (liveResult.ok) {
       // Live catalog is the source of truth — use the discovered base models
       // directly, not a filtered subset of the static seed.

@@ -172,6 +172,9 @@ Provider live-model lists are cached with a configured TTL (`src/codex/model-cac
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
 deliberately does not, because a disabled provider is already excluded from the catalog gather
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
+Account-scoped discovery transports remain bound to the credential snapshot that supplied the
+token. In particular, Devin discovery uses the allowlisted tenant API base URL from that same
+snapshot rather than pairing a durable account key with the provider registry's default host.
 Entitlement-specific rosters (Qoder, Devin, Cursor) additionally bind their cache entry to an
 irreversible credential fingerprint: a credential switch observes neither the fresh nor the stale
 roster recorded under the previous credential, and a failed discovery's cooldown neither supplies

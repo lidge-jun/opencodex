@@ -1,4 +1,7 @@
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AdapterRequest, ProviderAdapter } from "../base";
 import { mapReasoningEffort } from "../../reasoning-effort";
 import { buildSystemPrompt } from "../coding-agent/protocol";
@@ -35,7 +38,12 @@ export function buildChildEnv(profile: CodeBuddyProfile, apiKey: string): Record
  * would require authorization is blocked. The turn is a single text/reasoning pass over stream-json;
  * Codex's tool catalog is not advertised in v1 (the control-protocol tool bridge is a fast-follow).
  */
-export function buildArgs(profile: CodeBuddyProfile, parsed: OcxParsedRequest, provider: OcxProviderConfig): string[] {
+export function buildArgs(
+  profile: CodeBuddyProfile,
+  parsed: OcxParsedRequest,
+  provider: OcxProviderConfig,
+  systemPromptFile?: string,
+): string[] {
   const args: string[] = [
     "-p",
     "--output-format", "stream-json",
@@ -50,8 +58,9 @@ export function buildArgs(profile: CodeBuddyProfile, parsed: OcxParsedRequest, p
   ];
   const effort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
   if (effort) args.push("--effort", effort);
-  const system = buildSystemPrompt(parsed);
-  if (system) args.push("--append-system-prompt", system);
+  // The vendor CLI documents no file-backed append flag, so the staged prompt replaces the default.
+  // That default targets interactive tool use, which this adapter disables end to end.
+  if (systemPromptFile) args.push("--system-prompt-file", systemPromptFile);
   // profile is retained for symmetry with the region-isolated design and future per-region flags.
   void profile;
   return args;
@@ -71,16 +80,44 @@ export function createCodeBuddyAdapter(provider: OcxProviderConfig, deps: CodeBu
     },
 
     async runTurn(parsed, incoming, emit): Promise<void> {
-      await runCodingAgentTurn({
-        profiles: CODEBUDDY_PROFILES,
-        provider,
-        parsed,
-        incoming,
-        emit: guardCodeBuddyScaffolding(emit),
-        buildArgs: (resolved, req, prov) => buildArgs(resolved as CodeBuddyProfile, req, prov),
-        buildEnv: (resolved, apiKey) => buildChildEnv(resolved as CodeBuddyProfile, apiKey),
-        deps,
-      });
+      // argv is world-readable via process listing, so the folded system+developer prompt is
+      // staged in a private temp file and passed by path instead of embedded in the arguments.
+      const system = buildSystemPrompt(parsed);
+      let promptDir: string | undefined;
+      let promptFile: string | undefined;
+      if (system) {
+        try {
+          promptDir = await mkdtemp(join(tmpdir(), "ocx-codebuddy-prompt-"));
+          promptFile = join(promptDir, "system-prompt.txt");
+          await writeFile(promptFile, system, { encoding: "utf8", mode: 0o600, flag: "wx" });
+        } catch {
+          if (promptDir) await rm(promptDir, { recursive: true, force: true }).catch(() => {});
+          emit({
+            type: "error",
+            message: "CodeBuddy system prompt could not be staged securely.",
+            status: 500,
+            errorType: "upstream_error",
+            code: "system_prompt_staging_failed",
+            retryable: false,
+          });
+          return;
+        }
+      }
+
+      try {
+        await runCodingAgentTurn({
+          profiles: CODEBUDDY_PROFILES,
+          provider,
+          parsed,
+          incoming,
+          emit: guardCodeBuddyScaffolding(emit),
+          buildArgs: (resolved, req, prov) => buildArgs(resolved as CodeBuddyProfile, req, prov, promptFile),
+          buildEnv: (resolved, apiKey) => buildChildEnv(resolved as CodeBuddyProfile, apiKey),
+          deps,
+        });
+      } finally {
+        if (promptDir) await rm(promptDir, { recursive: true, force: true }).catch(() => {});
+      }
     },
   };
 }
