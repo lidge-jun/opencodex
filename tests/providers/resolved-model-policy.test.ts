@@ -824,7 +824,7 @@ describe("resolved static model policy parity", () => {
       providerName: "anthropic",
       modelId: "claude-opus-5",
       provider: configured,
-      entry,
+      registryEntry: entry,
       transportMatchedRegistry: true,
     });
     expect(policy.model.contextWindow).toBe(150_000);
