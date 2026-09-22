@@ -126,17 +126,19 @@ describe("ocx claude native fallback", () => {
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
-  test("preserves an unrelated loopback gateway and its user credential", () => {
+  test("preserves an unrelated gateway, its user credential, and its host-managed guard", () => {
     for (const baseUrl of ["http://localhost:8080", "http://127.0.0.1:10100"]) {
       const env = buildNativeClaudeEnv(cfg({ port: 10100 }), {
         ANTHROPIC_BASE_URL: baseUrl,
         ANTHROPIC_API_KEY: "sk-ant-user-key",
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
       }, {
         preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"],
       });
 
       expect(env.ANTHROPIC_BASE_URL).toBe(baseUrl);
       expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user-key");
+      expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
     }
   });
 

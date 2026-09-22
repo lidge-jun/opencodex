@@ -120,10 +120,8 @@ describe("Claude Desktop profile", () => {
   });
 
   // The apply route writes `appliedFingerprint`/`appliedAt` back onto the stored profile so the
-  // GUI can show applied-vs-saved state. Every rebuild in this module must accept AND carry them:
-  // rejecting them broke the Desktop tab outright after the first apply, and silently dropping
-  // them would make a saved edit — or a single drag between families — report "not applied" for a
-  // config that is applied on disk.
+  // GUI can show applied-vs-saved state. Parsing and no-op rebuilds retain them, while a change to
+  // the desired Desktop config must clear them so the old on-disk config is not reported as current.
   describe("applied-state markers", () => {
     const applied = {
       appliedFingerprint: "0123456789abcdef",
@@ -140,23 +138,28 @@ describe("Claude Desktop profile", () => {
       expect(parsed.appliedAt).toBe(applied.appliedAt);
     });
 
-    test("reconcileDesktopProfile keeps them across a catalog change", () => {
+    test("reconcileDesktopProfile clears them across a catalog change", () => {
       const next = reconcileDesktopProfile(seeded(), [...models, { route: "test/new-model", label: "New" }]);
-      expect(next.appliedFingerprint).toBe(applied.appliedFingerprint);
-      expect(next.appliedAt).toBe(applied.appliedAt);
+      expect(next).not.toHaveProperty("appliedFingerprint");
+      expect(next).not.toHaveProperty("appliedAt");
     });
 
-    test("moveDesktopRoute keeps them — the drag-and-drop path", () => {
-      const moved = moveDesktopRoute(seeded(), "cursor/gpt-5.6-luna", "sonnet");
-      expect(moved.appliedFingerprint).toBe(applied.appliedFingerprint);
-      expect(moved.appliedAt).toBe(applied.appliedAt);
+    test("reconcileDesktopProfile keeps them when profile content is unchanged", () => {
+      expect(reconcileDesktopProfile(seeded(), models)).toMatchObject(applied);
     });
 
-    test("setDesktopFamilyDefault keeps them", () => {
+    test("moveDesktopRoute clears them — the drag-and-drop path", () => {
       const moved = moveDesktopRoute(seeded(), "cursor/gpt-5.6-luna", "sonnet");
-      const next = setDesktopFamilyDefault(moved, "sonnet", "cursor/gpt-5.6-luna");
-      expect(next.appliedFingerprint).toBe(applied.appliedFingerprint);
-      expect(next.appliedAt).toBe(applied.appliedAt);
+      expect(moved).not.toHaveProperty("appliedFingerprint");
+      expect(moved).not.toHaveProperty("appliedAt");
+    });
+
+    test("setDesktopFamilyDefault clears them only when the default changes", () => {
+      const changed = setDesktopFamilyDefault(seeded(), "opus", "native/gpt-5.6-sol");
+      expect(changed).not.toHaveProperty("appliedFingerprint");
+      expect(changed).not.toHaveProperty("appliedAt");
+      expect(setDesktopFamilyDefault(seeded(), "opus", "anthropic/claude-fable-5"))
+        .toMatchObject(applied);
     });
 
     test("a profile without the markers stays without them", () => {
