@@ -1538,7 +1538,7 @@ describe("020 coverage completions", () => {
     expect(res.body.code).toBe("invalid_body");
   });
 
-  test("41. unmapped layers stay distinct from the unprintable base prompt", async () => {
+  test("41. unmapped and unrendered layers stay distinct from the unprintable base prompt", async () => {
     // "not-exposed" is the base prompt's contract: it is confirmed to travel
     // outside the printable message list, and the GUI renders a
     // base-prompt-specific explanation for it. Reusing that reason for layers
@@ -1571,11 +1571,13 @@ describe("020 coverage completions", () => {
     // Mirrors UNMAPPED_LAYER_IDS in prompt-text-probe.ts.
     for (const id of [
       "model-switch", "context-window-guidance", "environments-instructions",
-      "tools", "multi-agent-mode", "personality", "realtime", "collaboration",
+      "tools", "multi-agent-mode", "personality", "realtime",
       "git-attribution",
     ]) {
       expect(res.body.layers[id]?.reason).toBe("unmapped");
     }
+    // The collaboration tag is known, but this fixture does not render it.
+    expect(res.body.layers.collaboration.reason).toBe("not-rendered");
     expectDecoyUntouched(fx);
   });
 
