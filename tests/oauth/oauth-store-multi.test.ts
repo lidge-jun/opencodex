@@ -292,7 +292,7 @@ describe("multi-account auth store", () => {
 
     // The management provider-delete route clears credentials this way.
     await replaceProviderAccountSet("xai", null);
-    expect(getAccountSet("xai")).toBeUndefined();
+    expect(getAccountSet("xai")).toBeNull();
     expect(existsSync(backup)).toBe(false);
   });
 
@@ -305,7 +305,7 @@ describe("multi-account auth store", () => {
     const warning = spyOn(console, "warn").mockImplementation(() => {});
     try {
       expect(await removeCredential("xai")).toBe("removed");
-      expect(getAccountSet("xai")).toBeUndefined();
+      expect(getAccountSet("xai")).toBeNull();
       expect(warning.mock.calls.some(call => String(call[0]).includes("could not remove deleted credentials from the legacy credential backup"))).toBe(true);
     } finally {
       warning.mockRestore();
