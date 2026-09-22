@@ -201,10 +201,12 @@ async function handleChatCompletionsWithBudget(
     // effort, failover, and per-attempt telemetry run before any native Chat send.
     if (!route.combo && !effortRow && isNativeChatRouteEligible(route, chatBody, config)) {
       chatNativeRoute = route;
+      // Reserve an input estimate for spend without recording it as usage: native Chat attempts
+      // keep the provider-reported counts, as they did before the reservation existed.
       if (logCtx.usageLogInputTokens === undefined) {
         const parts = [JSON.stringify(chatBody.messages ?? [])];
         if (chatBody.tools !== undefined) parts.push(JSON.stringify(chatBody.tools));
-        logCtx.usageLogInputTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
+        logCtx.spendInputEstimateTokens = Math.max(1, estimateTokens(parts.join("\n"), requestedModel));
       }
       const outputCeiling = chatBody.max_completion_tokens ?? chatBody.max_tokens;
       if (typeof outputCeiling === "number" && outputCeiling > 0) {

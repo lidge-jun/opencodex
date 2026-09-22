@@ -179,6 +179,8 @@ export interface RequestLogContext {
    * is reserved up front and settlement corrects it.
    */
   spendOutputCeilingTokens?: number;
+  /** Pre-send input estimate reserved for spend only; unlike usageLogInputTokens it never enters usage. */
+  spendInputEstimateTokens?: number;
   /** Settles this request's durable spend entries from `addFinalRequestLog`. */
   spendTracker?: RequestSpendSettlement;
   attempts?: PersistedUsageAttempt[];
