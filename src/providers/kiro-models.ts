@@ -5,6 +5,9 @@ export const KIRO_MODELS = [
   "gpt-5.6-terra",
   "gpt-5.6-luna",
   "claude-sonnet-5",
+  // 260923 preemptive: Claude Opus 5.5 added ahead of Kiro's catalog (kiro.dev did not list it on
+  // 2026-09-23). Mirrors claude-opus-5; calls fail upstream until Kiro ships the model.
+  "claude-opus-5.5",
   "claude-opus-5",
   "claude-opus-4.8",
   "claude-opus-4.7",
@@ -29,6 +32,7 @@ export const KIRO_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.6-terra": 272_000,
   "gpt-5.6-luna": 272_000,
   "claude-sonnet-5": 1_000_000,
+  "claude-opus-5.5": 1_000_000,
   "claude-opus-5": 1_000_000,
   "claude-opus-4.8": 1_000_000,
   "claude-opus-4.7": 1_000_000,

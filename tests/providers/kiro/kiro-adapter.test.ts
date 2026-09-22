@@ -1741,7 +1741,7 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
   });
 
   test("native-effort models reject efforts Kiro does not accept", async () => {
-    for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-opus-5"]) {
+    for (const modelId of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "claude-opus-5", "claude-opus-5.5"]) {
       await expect(createKiroAdapter(provider).buildRequest({
         ...parsedWith([{ role: "user", content: "solve" }], undefined, modelId),
         options: { reasoning: "minimal" },
@@ -1768,7 +1768,7 @@ describe("kiro adapter — per-model context windows (kiro.dev/docs/models)", ()
   });
 
   test("1M-context models map to 1_000_000", () => {
-    for (const id of ["claude-sonnet-5", "claude-opus-5", "claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-4.6"]) {
+    for (const id of ["claude-sonnet-5", "claude-opus-5.5", "claude-opus-5", "claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-4.6"]) {
       expect(kiro.models ?? []).toContain(id);
       expect(cw[id]).toBe(1_000_000);
     }

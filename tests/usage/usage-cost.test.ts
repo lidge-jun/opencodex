@@ -217,6 +217,11 @@ describe("resolveMatchedPrice", () => {
         status: "verified-derived",
       });
     }
+    // Preemptive rows (260923, ahead of the provider): Kiro's dotted id falls back onto the base
+    // Anthropic row, never a marked-up regional Bedrock row; the fast tiers carry the 2x rate.
+    expect(resolveMatchedPrice("kiro", "claude-opus-5.5")).toMatchObject({ cost4: COST4, jawcodeProvider: "anthropic" });
+    expect(resolveMatchedPrice("openrouter", "anthropic/claude-opus-5.5-fast")?.cost4)
+      .toEqual({ input: 8, output: 40, cacheRead: 0.4, cacheWrite: 10 });
   });
 
   test("17. model-level fallback: kiro's claude opus follows the anthropic price", () => {

@@ -15062,6 +15062,25 @@
 			"contextWindow": 1000000,
 			"maxTokens": 128000
 		},
+		"anthropic/claude-opus-5.5-fast": {
+			"id": "anthropic/claude-opus-5.5-fast",
+			"name": "Anthropic Opus 5.5 (Fast)",
+			"api": "openai-completions",
+			"provider": "kilo",
+			"baseUrl": "https://api.kilo.ai/api/gateway",
+			"reasoning": false,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 8,
+				"output": 40,
+				"cacheRead": 0.4,
+				"cacheWrite": 10
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000
+		},
 		"anthropic/claude-opus-5-fast": {
 			"id": "anthropic/claude-opus-5-fast",
 			"name": "Anthropic Opus 5 (Fast) ($$$$)",
@@ -61513,6 +61532,31 @@
 				"maxLevel": "max"
 			}
 		},
+		"claude-opus-5-5": {
+			"id": "claude-opus-5-5",
+			"name": "Anthropic Opus 5.5",
+			"api": "anthropic-messages",
+			"provider": "opencode-zen",
+			"baseUrl": "https://opencode.ai/zen",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4,
+				"output": 20,
+				"cacheRead": 0.2,
+				"cacheWrite": 5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "anthropic-adaptive",
+				"minLevel": "minimal",
+				"maxLevel": "max"
+			}
+		},
 		"claude-sonnet-4": {
 			"id": "claude-sonnet-4",
 			"name": "Anthropic Sonnet 4",
@@ -64151,6 +64195,31 @@
 				"output": 50,
 				"cacheRead": 1,
 				"cacheWrite": 12.5
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"anthropic/claude-opus-5.5-fast": {
+			"id": "anthropic/claude-opus-5.5-fast",
+			"name": "Anthropic Opus 5.5 (Fast)",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 8,
+				"output": 40,
+				"cacheRead": 0.4,
+				"cacheWrite": 10
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
@@ -72990,6 +73059,34 @@
 				"output": 24,
 				"cacheRead": 0.24,
 				"cacheWrite": 6
+			},
+			"contextWindow": 1000000,
+			"maxTokens": 128000,
+			"compat": {
+				"supportsUsageInStreaming": false
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"claude-opus-5-5-fast": {
+			"id": "claude-opus-5-5-fast",
+			"name": "Anthropic Opus 5.5 (Fast)",
+			"api": "openai-completions",
+			"provider": "venice",
+			"baseUrl": "https://api.venice.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 9.6,
+				"output": 48,
+				"cacheRead": 0.48,
+				"cacheWrite": 12
 			},
 			"contextWindow": 1000000,
 			"maxTokens": 128000,
