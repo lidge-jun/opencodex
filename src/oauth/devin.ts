@@ -19,7 +19,7 @@ import { DEFAULT_REGION, type WindsurfRegion } from "./devin/types";
 import { registerUser } from "./devin/register-user";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./devin/api-base";
 import { readDevinCliCredentialOutcome } from "./devin/cli-import";
-import { getCredential } from "./store";
+import { getCredential, listAccounts } from "./store";
 import { DEPRECATED_OAUTH_PROVIDER_ALIASES } from "./index";
 
 export { DEVIN_DEFAULT_API_SERVER } from "./devin/api-base";
@@ -50,46 +50,52 @@ function devinAliasCredentialSlots(providerId: string): string[] {
  * configured provider baseUrl is the fallback, and the US default is the last
  * resort; both are re-validated because neither is trusted more than the
  * network value.
+ *
+ * A stored tenant host is used only for the account that owns `apiKey`, the key
+ * this request will transmit. Devin keeps several accounts per provider id and
+ * the request path injects the admitted account's token, which need not be the
+ * active one, while a provider-configured key, a forwarded bearer, or a test
+ * token is not stored at all. Reading the active slot's host for any of those
+ * would send one account's key to another account's EU or FedStart tenant.
  */
-export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "devin"): string {
-  // Provider-scoped, keyed by the configured provider id verbatim and consulted
-  // FIRST. `devin-cli` is a deprecated alias for `devin`, but an unmigrated
-  // config row still owns its old credential slot until the startup migration
-  // rekeys the row and the slot together — normalizing the id here would read
-  // the wrong slot for that window. An EU or FedStart tenant is recorded on the
-  // credential rather than in the registry, so a fixed "devin" slot would send
-  // the key to the wrong host either way.
-  const literalCredential = getCredential(providerId);
-  const literal = validateDevinApiBaseUrl(literalCredential?.apiBaseUrl);
-  if (literal !== undefined) return literal;
+export function resolveDevinApiServer(configuredBaseUrl?: string, providerId = "devin", apiKey?: string): string {
+  const owner = apiKey ? findDevinCredentialOwner(providerId, apiKey) : undefined;
+  if (owner !== undefined) {
+    // The owning account decides. An owner whose recorded host is missing or
+    // off-allowlist falls through to the configured base URL rather than
+    // borrowing another slot's tenant: the same key stored twice is the rekey
+    // window, and a second slot's host is not more trustworthy than this one.
+    const host = validateDevinApiBaseUrl(owner.apiBaseUrl);
+    if (host !== undefined) return host;
+  }
+  return validateDevinApiBaseUrl(configuredBaseUrl) ?? DEVIN_DEFAULT_API_SERVER;
+}
 
-  // The startup merge saves providers["devin"] synchronously but fires the
-  // credential rekey detached — runDevinProviderMergeStartupMigration cannot
-  // await inside the synchronous startServer window — so the row can already
-  // say "devin" while the credential still sits in the "devin-cli" slot, and it
-  // stays that way for the whole process when the rekey fails or refuses on an
-  // occupied destination slot. Reading the alias-linked slots in both
-  // directions closes that window: "devin" finds the not-yet-rekeyed
-  // "devin-cli" credential, and a lingering "devin-cli" row finds a credential
-  // already rekeyed to "devin". Every candidate passes the same allowlist — an
-  // alias slot is not trusted more than the literal one.
-  // Only when this id owns no credential at all. A present credential whose
-  // apiBaseUrl is missing or off-allowlist is a different situation: the rekey
-  // refuses an occupied destination slot, so both ids can hold credentials that
-  // belong to two different accounts. Borrowing a tenant across that pair would
-  // send this account's key to the other account's EU or FedStart host, which
-  // is the exact misdirection the provider-scoped lookup exists to prevent. An
-  // unusable host on a credential that does exist falls through to the
-  // configured base URL and then the default, as it did before this window was
-  // closed.
-  if (literalCredential === null || literalCredential === undefined) {
-    for (const slot of devinAliasCredentialSlots(providerId)) {
-      const host = validateDevinApiBaseUrl(getCredential(slot)?.apiBaseUrl);
-      if (host !== undefined) return host;
+/**
+ * The stored credential whose access token is exactly `apiKey`.
+ *
+ * The configured provider id is searched first and verbatim: `devin-cli` is a
+ * deprecated alias for `devin`, but an unmigrated config row still owns its old
+ * slot until the startup migration rekeys the row and the slot together. The
+ * startup merge saves providers["devin"] synchronously but fires the credential
+ * rekey detached (runDevinProviderMergeStartupMigration cannot await inside the
+ * synchronous startServer window), so the alias-linked slots are searched next,
+ * in both directions. Within a slot the active account is read first, then the
+ * rest, because the admitted account can be any of them.
+ *
+ * A key refreshed between token resolution and this lookup would match nothing
+ * and use the configured host for that turn. Devin keys are long-lived
+ * RegisterUser API keys, so this window is not a routine refresh race.
+ */
+function findDevinCredentialOwner(providerId: string, apiKey: string): OAuthCredentials | undefined {
+  for (const slot of [providerId, ...devinAliasCredentialSlots(providerId)]) {
+    const active = getCredential(slot);
+    if (active?.access === apiKey) return active;
+    for (const account of listAccounts(slot)) {
+      if (account.credential.access === apiKey) return account.credential;
     }
   }
-
-  return validateDevinApiBaseUrl(configuredBaseUrl) ?? DEVIN_DEFAULT_API_SERVER;
+  return undefined;
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {

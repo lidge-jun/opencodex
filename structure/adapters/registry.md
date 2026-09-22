@@ -40,8 +40,8 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   does not. `devin-cli` survives only as a deprecated alias — `ocx login devin-cli` routes to
   `devin`, and a startup merge migration rewrites any saved row still keyed under the old
   provider id, so the registry carries one Devin provider, not two.
-  Its `GetChatMessage` inference POSTs, including the two bounded pre-output stated-reset
-  replays, pass through the request's provider executor and shared physical-send budget.
+  Its `GetChatMessage` inference POSTs pass through the provider executor and shared send budget.
+  The adapter allows no reset wait; the shared helper retains bounded replays for opted-in callers.
   Catalog and JWT RPCs remain adapter support traffic rather than inference sends.
   `AdapterFactoryContext.providerId` still tells the shared adapter which configured row it is
   serving: the Cognition tenant is recorded on the credential, not in the registry, so the
@@ -92,7 +92,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   hints, so `CompletionConfiguration` field #3 no longer serializes the encoder's
   128000 fallback. Smaller operator hints cap live evidence and never enlarge it;
   with no evidence the adapter hint is omitted and the encoder still serializes
-  its own 128000 fallback for field #3. Investigation and limits:
+  its own 128000 fallback for field #3. Connect trailer diagnostics expose only an
+  allowlisted error code, hexadecimal trace id and typed `retryAfterSeconds`, optionally rendered as
+  generated `retry after ~Ns` wording; raw text stays internal because it can reflect credentials. Investigation and limits:
   `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.

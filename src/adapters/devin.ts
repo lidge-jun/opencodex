@@ -612,7 +612,7 @@ export function createDevinAdapter(
       // The signed-in account's tenant decides the host, not the static registry
       // entry: an EU or FedStart account that used provider.baseUrl would send
       // every RPC to the US server it is not provisioned on.
-      const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId);
+      const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId, apiKey);
       // One catalog read per turn serves model-UID resolution, the input
       // ceiling, and the chat pre-flight inside streamChatEvents. Failures are
       // not cached, so a second read would only pay another fetch timeout on
@@ -642,10 +642,11 @@ export function createDevinAdapter(
         const maxOutputTokens = resolveDevinMaxOutputTokens(
           provider, modelUid, parsed.options.maxOutputTokens,
         );
-        // The reset-retry wrapper waits out a 429 that states its own recovery
-        // delay ("limit will reset in 35 seconds") and replays the identical
-        // request — but only while zero events have been yielded, so a
-        // post-output failure still takes the terminal path untouched.
+        // An admitted HTTP turn owns globally shared capacity until this call
+        // emits. Never retain that capacity while waiting out a provider 429:
+        // preserve the typed reset delay in generated diagnostic wording,
+        // never the raw trailer text that may reflect a credential. The
+        // refusal returns immediately so the caller can release its slot.
         for await (const event of streamChatEventsWithResetRetry({
           apiKey,
           apiServerUrl: host,
@@ -664,6 +665,7 @@ export function createDevinAdapter(
           },
           signal: incoming.abortSignal,
         }, {
+          maxWaitMs: 0,
           execution: {
             executor: incoming.providerFetch,
             sendBudget: incoming.sendBudget,
