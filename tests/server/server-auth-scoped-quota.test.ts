@@ -133,7 +133,9 @@ describe("server local API auth", () => {
       });
       const response = await harness.request();
       expect(response.status).toBe(502);
-      expect(harness.dispatches).not.toContain("acct-pool-b");
+      // Both credentials carry the same workspace header, so only the exact one-send sequence
+      // proves the suppressed alternate was never physically sent.
+      expect(harness.dispatches).toEqual(["acct-pool-a"]);
       const health = getCodexUpstreamHealth("pool-a");
       expect(health).toMatchObject({ cooldownSource: "default" });
       expect(health?.cooldownUntil).toBeGreaterThan(Date.now());
