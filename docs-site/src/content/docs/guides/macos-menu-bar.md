@@ -27,7 +27,7 @@ The tray headline refreshes every 60 seconds. While the native panel is open, it
 
 ## Widget
 
-On macOS 14 or later, open **Edit Widgets** from the desktop and add **OpenCodex**. Widget sizes show different combinations of proxy status, today's tokens and requests, estimated cost, quotas, and a usage chart. The extension reads a local snapshot written by the desktop app; that snapshot contains display data, not API keys or raw account data. The app refreshes the widget snapshot on every fifth 60-second tray tick, about every five minutes while the proxy is connected. WidgetKit also requests a new timeline after five minutes.
+On macOS 14 or later, open OpenCodex.app once, then Control-click an empty area of the desktop, choose **Edit Widgets**, search for **OpenCodex**, and add the size you want. Widget sizes show different combinations of proxy status, today's tokens and requests, estimated cost, quotas, and a usage chart. The extension reads a local snapshot written by the desktop app; that snapshot contains display data, not API keys or raw account data. The app refreshes the widget snapshot on every fifth 60-second tray tick, about every five minutes while the proxy is connected. WidgetKit also requests a new timeline after five minutes.
 
 ## Connecting to the proxy
 
@@ -49,7 +49,7 @@ bun run prepare-widget
 bun run build:local
 ```
 
-`build:local` produces the local app and DMG without requiring a Tauri updater signing key. A direct `bunx tauri build` requires `TAURI_SIGNING_PRIVATE_KEY` because it also produces an updater artifact. The widget build uses an ad-hoc signature unless `MACOS_SIGN_IDENTITY` is set; local desktop bundles are also ad-hoc signed.
+`build:local` produces the local app and DMG without requiring a Tauri updater signing key. A direct `bunx tauri build` requires `TAURI_SIGNING_PRIVATE_KEY` because it also produces an updater artifact. The widget build uses an ad-hoc signature unless `MACOS_SIGN_IDENTITY` is set, and local desktop bundles are also ad-hoc signed. The app runs, but macOS does not register an ad-hoc signed widget extension, so a local build usually shows no OpenCodex widget. `build:local` always ad-hoc signs the app, so setting `MACOS_SIGN_IDENTITY` alone does not help: the widget registers only when the app and the extension are both signed by the same Developer ID team, as the release build does. Use a release build when you need the widget.
 
 ## Uninstall
 
