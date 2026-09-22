@@ -114,3 +114,19 @@ failure while both other probes reported stale. A preload observer now delegates
 probe, records that same process's boolean on stderr, and returns it unchanged. The formatter
 assertion runs only when its own observed verdict is true; missing output still fails. Sol
 reviewed the observation and import ordering. Product status behavior is unchanged.
+
+## macOS control process boundary amendment
+The older b5529c5bb2 control again stalled in a different synchronous subprocess test after the
+structure case was isolated. It stopped after assert-mergeable-review/malformed_reviews, reported
+a killed dangling process at the per-test ceiling, then emitted no result for twenty minutes.
+Keeping one indefinitely growing Bun isolate pool was not yielding reliable completion evidence.
+
+The control now enumerates the entire 1/1 test list through the existing bounded batch runner:
+at most twelve files per fresh process, one worker, 300-second process bound, unchanged 60-second
+per-test ceiling and 75-minute job cap. Dedicated storage/API families and declared serial files
+remain singleton primary processes. Every selected file runs once; primary failures remain red
+even if diagnostic attribution is clean. This preserves assertions and file membership but no
+longer claims whole-suite shared-process contamination coverage. Behavioral fixtures check exact
+membership, argument shape, special-family ownership, invalid input and failure disposition.
+Sol architecture, behavioral and explicit workflow/dependency security reviews accepted the change.
+The new cases are unrun locally; hosted execution is still required.

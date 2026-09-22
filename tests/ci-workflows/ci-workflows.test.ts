@@ -292,7 +292,7 @@ describe("GitHub Actions hardening", () => {
       .toBe("github.event_name != 'pull_request' || needs.changes.outputs.ci == 'true'");
 
     // Whole-pool control lives on dispatch so every push does not pay the
-    // unsharded macOS critical path. Keep the unsharded bun test line and the
+    // unsharded macOS critical path. Keep the unsharded full-membership control and the
     // 30-minute budget; do not sneak a shard divisor into this job.
     const macosControlJob = ci.jobs?.["macos-control"] as {
       name?: string;
@@ -301,7 +301,7 @@ describe("GitHub Actions hardening", () => {
       "runs-on"?: string;
       "timeout-minutes"?: number;
       strategy?: unknown;
-      steps?: { run?: string }[];
+      steps?: { name?: string; env?: Record<string, string>; run?: string }[];
     } | undefined;
     expect(macosControlJob?.name).toBe("macos control");
     expect(macosControlJob?.needs).toBe("changes");
@@ -309,14 +309,15 @@ describe("GitHub Actions hardening", () => {
     expect(macosControlJob?.["runs-on"]).toBe("macos-latest");
     expect(macosControlJob?.strategy).toBeUndefined();
     const macosControlSteps = macosControlJob?.steps ?? [];
-    expect(macosControlSteps.some(step => step.run?.includes("bun run test --parallel=1 --timeout 60000"))).toBe(true);
+    const controlTest = macosControlSteps.find(step => step.name === "Test in unsharded fresh-process batches");
+    expect(controlTest?.run).toBe('bash scripts/ci/run-bun-test-batches.sh "$TEST_SHARD"');
+    expect(controlTest?.env).toMatchObject({
+      TEST_SHARD: "1/1", BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
+      BUN_TEST_PARALLEL: "1", BUN_TEST_BATCH_TIMEOUT_SECONDS: "300",
+      OCX_TEST_NO_QUEUE: "1", OCX_TEST_FULL_SUITE: "1",
+    });
     expect(macosControlSteps.some(step => step.run?.includes("--shard"))).toBe(false);
-    expect(macosControlSteps.find(step => step.name === "Test")?.env?.OCX_TEST_MAIN_TIMEOUT_MS).toBe("3600000");
-    const macosControlTestRun = macosControlSteps.find(step => step.run?.includes("bun run test --parallel=1 --timeout 60000"))?.run ?? "";
-    expect(hasExactShellCommand(macosControlTestRun, "set +e")).toBe(true);
-    expect(macosControlTestRun).not.toContain("for attempt in");
-    expect(macosControlTestRun).not.toContain("while true");
-    expect(macosControlTestRun).toContain("it fails this leg on the first occurrence");
+    expect(macosControlSteps.some(step => step.run?.includes("coreutils") && step.run.includes("GITHUB_PATH"))).toBe(true);
 
     // Windows is dispatch-only: it gates nothing, not even the shipping
     // boundary. The sharded promotion run surfaced ~207 Windows-only failures
@@ -364,7 +365,7 @@ describe("GitHub Actions hardening", () => {
     const batchRunner = await readText("scripts/ci/run-bun-test-batches.sh");
     expect(batchRunner).toContain('readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"');
     expect(batchRunner).toContain('readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"');
-    expect(batchRunner).toContain('"$BUN_BIN" test --isolate --timeout 60000 "${files[@]}"');
+    expect(batchRunner).toContain('"$BUN_BIN" test --isolate ${PARALLEL_ARG:+"$PARALLEL_ARG"} --timeout 60000 "${files[@]}"');
     expect(batchRunner).not.toContain("for attempt in");
     expect(batchRunner).not.toContain("while true");
     expect(batchRunner).toContain("fail this shard on their first occurrence");

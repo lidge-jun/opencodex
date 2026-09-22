@@ -166,7 +166,7 @@ type RunnerResult = { status: number | null; output: string; calls: string[] };
 function runBatches(
   mode: "green" | "crash" | "timeout" | "assert" | "isolated-assert",
   fileScope: "general" | "all" = "general",
-  options: { isolated?: string[]; manifestStatus?: number; shard?: string } = {},
+  options: { isolated?: string[]; manifestStatus?: number; shard?: string; parallel?: string; additionalFiles?: string[]; batchSize?: string } = {},
 ): RunnerResult {
   const directory = mkdtempSync(join(tmpdir(), "ocx-batch-disposition-"));
   try {
@@ -176,6 +176,7 @@ function runBatches(
     mkdirSync(join(directory, "tests"));
     for (const file of FIXTURE_FILES) writeFileSync(join(directory, "tests", file), "");
     writeFileSync(join(directory, "tests", DEDICATED_FILE), "");
+    for (const file of options.additionalFiles ?? []) writeFileSync(join(directory, "tests", file), "");
     writeFileSync(join(binDirectory, "timeout"), FAKE_TIMEOUT, { mode: 0o755 });
     writeFileSync(join(binDirectory, "bun"), FAKE_BUN, { mode: 0o755 });
     const calls = join(directory, "calls.log");
@@ -188,8 +189,9 @@ function runBatches(
         HOME: directory,
         TMPDIR: join(directory, "tmp"),
         CI: "true",
-        BUN_TEST_BATCH_SIZE: "3",
+        BUN_TEST_BATCH_SIZE: options.batchSize ?? "3",
         BUN_TEST_FILE_SCOPE: fileScope,
+        ...(options.parallel === undefined ? {} : { BUN_TEST_PARALLEL: options.parallel }),
         OCX_TEST_NO_QUEUE: "1",
         OPENCODEX_BUN_PATH: join(binDirectory, "bun"),
         FIXTURE_MODE: mode,
@@ -235,6 +237,45 @@ describe.skipIf(process.platform === "win32")("the hosted batch runner, executed
     expect(run.calls.map(call => Number(call.split("|", 1)[0]))).toEqual([1, 1, 3, 2]);
     expect(run.output).toContain("7 files in 4 primary Bun processes (scope all");
     expect(run.calls.some(call => call.includes(DEDICATED_FILE))).toBe(true);
+  }, SPAWN_BUDGET_MS);
+
+  test("unsharded single-worker control selects every file and dedicated family exactly once", () => {
+    const storage = ["api-storage-policy-already-running", "api-storage-policy-mutation-busy",
+      "api-storage-policy-put-race", "api-storage-policy-run", "api-storage-policy", "api-storage"]
+      .map(name => `${name}.test.ts`);
+    const run = runBatches("green", "all", {
+      shard: "1/1", parallel: "1", batchSize: "12", isolated: ["bravo.test.ts"], additionalFiles: storage,
+    });
+    expect(run.status, run.output).toBe(0);
+    const paths = (call: string) => call.split("|")[2]!.split(" ").filter(arg => arg.endsWith(".test.ts"));
+    const files = run.calls.flatMap(paths);
+    expect(files).toEqual([...FIXTURE_FILES, DEDICATED_FILE, ...storage].map(file => `tests/${file}`).sort());
+    for (const call of run.calls) {
+      expect(call).toContain("--parallel=1");
+      expect(call).toContain("--isolate");
+      expect(call).toContain("--timeout 60000");
+      expect(paths(call).length).toBeLessThanOrEqual(12);
+    }
+    for (const file of [DEDICATED_FILE, ...storage, "bravo.test.ts"]) {
+      const calls = run.calls.filter(call => paths(call).includes(`tests/${file}`));
+      expect(calls).toHaveLength(1);
+      expect(paths(calls[0]!)).toEqual([`tests/${file}`]);
+    }
+  }, SPAWN_BUDGET_MS);
+
+  test.each([["assert", 1], ["timeout", 124], ["crash", 139]] as const)("single-worker control keeps %s failures red", (mode, status) => {
+    const run = runBatches(mode, "all", { shard: "1/1", parallel: "1" });
+    expect(run.status, run.output).toBe(status);
+    // Sorted singleton api-usage splits alpha from the failing bravo/charlie/delta batch.
+    for (const file of ["echo.test.ts", "foxtrot.test.ts"]) expect(run.calls.some(call => call.includes(file))).toBe(false);
+    if (mode === "assert") expect(run.output).not.toContain("Attribution:");
+    else expect(run.output).toContain("every file passed alone");
+  }, SPAWN_BUDGET_MS);
+
+  test("invalid parallelism refuses before a primary process starts", () => {
+    const run = runBatches("green", "all", { parallel: "0" });
+    expect(run.status).toBe(64);
+    expect(run.calls).toEqual([]);
   }, SPAWN_BUDGET_MS);
 
   test("isolated entries run once alone without changing shard membership or order", () => {

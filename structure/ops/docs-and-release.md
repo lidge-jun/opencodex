@@ -169,13 +169,13 @@ it is promoted, so those files follow the promotion model rather than ordinary i
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
 alone with fresh process homes. Hosted batches preserve sorted round-robin shard membership
 and split only process boundaries; every selected file still runs once. The macOS control
-keeps its ordinary tests in one unsharded process with explicit isolated exceptions. The structure
-SSOT and injection-write-lock tests run in fresh processes to keep synchronous child spawning
-and reaping out of the long-lived isolate pool. Manifest
-errors, assertion failures, timeouts and crashes remain failures; attribution never turns a
-failed primary run green. The macOS control sets `OCX_TEST_MAIN_TIMEOUT_MS=3600000` for its
-measured long main process, within its 75-minute job budget; the wrapper validates that override
-between one minute and one hour, retains the local 15-minute default, and leaves singleton bounds unchanged.
+runs the complete 1/1 file list in sequential batches of at most 12 files with one worker.
+Storage-policy and API-usage families run as singletons, as do manifest-declared files.
+This preserves full test membership but does not claim cross-batch shared-process coverage.
+Every primary assertion failure, timeout or crash fails the run; diagnostic singleton
+attribution never turns a failed primary green. Each control batch has a 300-second process
+bound plus 15 seconds for forced reap, inside the unchanged 75-minute job cap. Other batch
+lanes keep their existing defaults; optional parallelism must be a positive integer.
 
 The Windows selector is an operational stability control, not a security boundary. A pull request
 controls the `pull_request` workflow body and can rewrite an event-name check, repository variable,
@@ -382,9 +382,11 @@ runs the full suite in nine shards only on manual `workflow_dispatch` with `lane
 empty lane). Pushes to `dev`, `main` and `preview` do not activate that Windows matrix, and an
 aggregate green `ci` check on those events legitimately includes a deliberate Windows skip.
 
-Nothing in the workflow retries. Linux and Windows use `scripts/ci/run-bun-test-batches.sh`, but
+No recovery retry can turn a failed workflow green. Linux, Windows and macOS control use
+`scripts/ci/run-bun-test-batches.sh`, but
 each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
-Windows uses six files and 480 seconds. Windows selects all test families, while Linux leaves the
+Windows uses six files and 480 seconds. macOS control uses twelve files, 300 seconds and one
+worker across an unsharded 1/1 selection. Windows and macOS control select all test families, while Linux leaves the
 storage-policy and api-usage families to its dedicated jobs. The Windows step disables the
 user-scoped test-run queue with `OCX_TEST_NO_QUEUE=1`: the batches already run sequentially in one
 dedicated job, and queueing a new batch behind a surviving process from the preceding batch spends

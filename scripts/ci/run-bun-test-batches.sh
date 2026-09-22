@@ -6,6 +6,8 @@ readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"
 readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"
 readonly BATCH_KILL_GRACE_SECONDS="${BUN_TEST_BATCH_KILL_GRACE_SECONDS:-15}"
 readonly TEST_FILE_SCOPE="${BUN_TEST_FILE_SCOPE:-general}"
+readonly TEST_PARALLEL="${BUN_TEST_PARALLEL:-}"
+readonly PARALLEL_ARG="${TEST_PARALLEL:+--parallel=$TEST_PARALLEL}"
 # Runtime under test. Defaults to whatever `bun` PATH resolves to; the Bun 1.4
 # qualification lane sets OPENCODEX_BUN_PATH so the batches actually execute on
 # the candidate binary. Without this the lane would export an override, run the
@@ -45,6 +47,10 @@ if [[ ! "$BATCH_KILL_GRACE_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ "$TEST_FILE_SCOPE" != "general" && "$TEST_FILE_SCOPE" != "all" ]]; then
   echo "BUN_TEST_FILE_SCOPE must be general or all, got: $TEST_FILE_SCOPE" >&2
+  exit 64
+fi
+if [[ -n "$TEST_PARALLEL" && ! "$TEST_PARALLEL" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUN_TEST_PARALLEL must be a positive integer" >&2
   exit 64
 fi
 if ! command -v timeout >/dev/null 2>&1; then
@@ -100,7 +106,7 @@ run_test_once() {
   set +e
   timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
     "${BATCH_TIMEOUT_SECONDS}s" \
-    "$BUN_BIN" test --isolate --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
+    "$BUN_BIN" test --isolate ${PARALLEL_ARG:+"$PARALLEL_ARG"} --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
   status="${PIPESTATUS[0]}"
   set -e
 
@@ -186,6 +192,11 @@ done <<< "$serial_manifest"
 
 is_serial_test_file() {
   local entry
+  # Dedicated worker-heavy families remain isolated when an unsharded platform
+  # control selects all files rather than delegating them to Linux-only jobs.
+  case "$1" in
+    */api-storage-policy*.test.ts|*/api-storage.test.ts|*/api-usage.test.ts) return 0 ;;
+  esac
   for entry in "${SERIAL_FILES[@]}"; do
     [[ "$1" != "tests/$entry" ]] || return 0
   done
