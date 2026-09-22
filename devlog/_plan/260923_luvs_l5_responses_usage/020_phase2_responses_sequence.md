@@ -40,3 +40,14 @@ Skip `35fb727ddf`, `940b318292` (on dev in `b7351ddef3`) and `67c4f579e4` (merge
 
 Cap checks after the phase: `src/server/responses/core.ts` 210,
 `tests/responses/responses-compaction-routing.test.ts` at most 2,776.
+
+## Outcome (wp3)
+
+All planned commits applied without conflict on `a077087b74`. Review follow-ups:
+`test(cursor): pin exact host-wrapper classification in continuation scope` (exact summary and
+ambient wrappers are classified by shape, matching the Codex client; documented in
+`structure/providers/cursor.md`) and `test(server): prove a suppressed same-workspace alternate is
+never sent` (exact one-send assertion; the transport contract now limits suppression to the
+in-request move). A later request can still select a same-workspace sibling that was not itself
+refused; that selection behavior predates this carry and is reported to the maintainer.
+Local checks: NOT RUN. Static gate passed; hosted CI verifies in wp5.
