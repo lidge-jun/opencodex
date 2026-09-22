@@ -30,6 +30,8 @@ const RESPONSES_ONLY = [
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-6-astra",
+  "gpt-6-sol",
+  "gpt-6-luna",
   "grok-4.5",
   "grok-4.6",
   "mai-code-1.1-flash",

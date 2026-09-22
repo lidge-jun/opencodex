@@ -4,6 +4,9 @@ export const KIRO_MODELS = [
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
+  // 260923 preemptive: GPT-6 Sol and Luna (OpenAI announced 2026-09-22) added ahead of this provider's own catalog; mirrors the GPT-5.6 Sol/Luna rows. Calls fail upstream until Kiro ships the models.
+  "gpt-6-sol",
+  "gpt-6-luna",
   "claude-sonnet-5",
   // 260923 preemptive: Claude Opus 5.5 added ahead of Kiro's catalog (kiro.dev did not list it on
   // 2026-09-23). Mirrors claude-opus-5; calls fail upstream until Kiro ships the model.
@@ -31,6 +34,8 @@ export const KIRO_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5.6-sol": 272_000,
   "gpt-5.6-terra": 272_000,
   "gpt-5.6-luna": 272_000,
+  "gpt-6-sol": 272_000,
+  "gpt-6-luna": 272_000,
   "claude-sonnet-5": 1_000_000,
   "claude-opus-5.5": 1_000_000,
   "claude-opus-5": 1_000_000,

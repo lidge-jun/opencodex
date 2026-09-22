@@ -23,6 +23,7 @@ import {
   ZAI_GLM_52_REASONING_EFFORTS,
   ZAI_GLM_53_REASONING_EFFORTS,
   OPENAI_GPT56_MODELS,
+  OPENAI_GPT6_MODELS,
   OPENAI_GPT56_PRO_MODELS,
   OPENAI_API_GPT56_CONTEXT_WINDOWS,
   OPENAI_API_GPT56_MAX_INPUT_TOKENS,
@@ -166,7 +167,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // (it is the current catalog, so its default ordering wins), then the ids
     // only the old devin entry carried. Degraded-mode seed only either way —
     // `liveModels` discovers the account's real roster.
-    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
     liveModels: true,
     defaultModel: "swe-2",
     modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
@@ -535,13 +536,19 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     featured: true,
     dashboardUrl: "https://platform.openai.com/api-keys",
     defaultModel: "gpt-5.5",
-    models: ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS, "gpt-6-astra"],
+    models: ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS, "gpt-6-astra", ...OPENAI_GPT6_MODELS],
     liveModels: true,
-    modelContextWindows: { ...OPENAI_API_GPT56_CONTEXT_WINDOWS, ...OPENAI_DAYBREAK_CONTEXT_WINDOWS, "gpt-6-astra": 1_050_000 },
-    modelMaxInputTokens: { ...OPENAI_API_GPT56_MAX_INPUT_TOKENS, ...OPENAI_DAYBREAK_MAX_INPUT_TOKENS, "gpt-6-astra": 922_000 },
-    modelMaxOutputTokens: { "gpt-6-astra": 128_000 },
+    modelContextWindows: {
+      ...OPENAI_API_GPT56_CONTEXT_WINDOWS, ...OPENAI_DAYBREAK_CONTEXT_WINDOWS, "gpt-6-astra": 1_050_000,
+      ...Object.fromEntries(OPENAI_GPT6_MODELS.map(id => [id, 1_050_000])),
+    },
+    modelMaxInputTokens: {
+      ...OPENAI_API_GPT56_MAX_INPUT_TOKENS, ...OPENAI_DAYBREAK_MAX_INPUT_TOKENS, "gpt-6-astra": 922_000,
+      ...Object.fromEntries(OPENAI_GPT6_MODELS.map(id => [id, 922_000])),
+    },
+    modelMaxOutputTokens: { "gpt-6-astra": 128_000, ...Object.fromEntries(OPENAI_GPT6_MODELS.map(id => [id, 128_000])) },
     modelInputModalities: Object.fromEntries(
-      ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS, "gpt-6-astra"]
+      ["gpt-5.5", ...OPENAI_GPT56_MODELS, ...OPENAI_GPT56_PRO_MODELS, ...OPENAI_DAYBREAK_MODELS, "gpt-6-astra", ...OPENAI_GPT6_MODELS]
         .map(id => [id, ["text", "image"]]),
     ),
     modelReasoningEfforts: {
@@ -550,6 +557,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       ),
       ...OPENAI_DAYBREAK_REASONING_EFFORTS,
       "gpt-6-astra": ["low", "medium", "high", "xhigh", "max"],
+      ...Object.fromEntries(OPENAI_GPT6_MODELS.map(id => [id, ["low", "medium", "high", "xhigh", "max"]])),
     },
     virtualModels: OPENAI_API_GPT56_VIRTUAL_MODELS,
   },
@@ -870,7 +878,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     featured: true,
     dashboardUrl: "https://openrouter.ai/keys",
     jawcodeBundle: "openrouter",
-    models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS],
+    models: ["anthropic/claude-sonnet-5", ...OPENROUTER_GPT56_MODELS, ...OPENAI_GPT6_MODELS.map(id => `openai/${id}`)],
     modelContextWindows: {
       "anthropic/claude-sonnet-5": 1_000_000,
       ...OPENROUTER_GPT56_CONTEXT_WINDOWS,
@@ -883,6 +891,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       "openai/gpt-5.6-sol": true,
       "openai/gpt-5.6-terra": true,
       "openai/gpt-5.6-luna": true,
+      // 260923 preemptive: GPT-6 Sol/Luna are OpenAI-backed routes like the GPT-5.6 rows above.
+      "openai/gpt-6-sol": true,
+      "openai/gpt-6-luna": true,
     },
     // Deliberately no OpenRouter route pin: it bills the endpoint actually used and reports the
     // actual service_tier. B0 confirmation therefore owns downgrade safety. Forcing `only` plus
@@ -985,7 +996,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     id: "bizrouter", label: "BizRouter", adapter: "openai-chat", baseUrl: "https://api.bizrouter.ai/v1",
     authKind: "key", dashboardUrl: "https://bizrouter.ai/settings/keys",
     defaultModel: "openai/gpt-5.6-sol",
-    models: ["openai/gpt-5.6-sol", "anthropic/claude-sonnet-5", "google/gemini-3.5-flash"],
+    models: ["openai/gpt-5.6-sol", "openai/gpt-6-sol", "openai/gpt-6-luna", "anthropic/claude-sonnet-5", "google/gemini-3.5-flash"],
     note: "Korean enterprise LLM gateway. Per-key allowed models are discovered live from /v1/models. Full catalog: https://bizrouter.ai/models",
   },
   { id: "groq", label: "Groq", adapter: "openai-chat", baseUrl: "https://api.groq.com/openai/v1", authKind: "key", featured: true, dashboardUrl: "https://console.groq.com/keys" },

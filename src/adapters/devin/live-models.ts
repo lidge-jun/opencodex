@@ -21,6 +21,9 @@ export const DEVIN_STATIC_MODELS = [
   "gpt-5-6-sol",
   "gpt-5-6-luna",
   "gpt-5-6-terra",
+  // 260923 preemptive: GPT-6 Sol and Luna (OpenAI announced 2026-09-22) added ahead of this provider's own catalog; mirrors the GPT-5.6 Sol/Luna rows.
+  "gpt-6-sol",
+  "gpt-6-luna",
   "claude-opus-4-8",
   "claude-fable-5-1",
   "claude-sonnet-5",
@@ -55,6 +58,8 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5-6-luna": 1_000_000,
   "gpt-5-6-terra": 1_000_000,
   "gpt-6-astra": 1_000_000,
+  "gpt-6-sol": 1_000_000,
+  "gpt-6-luna": 1_000_000,
   "claude-opus-4-8": 1_000_000,
   // 260923: read from the live catalog (devin/claude-opus-5-5 context_length 1_000_000).
   "claude-opus-5-5": 1_000_000,
