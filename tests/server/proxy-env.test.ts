@@ -326,10 +326,10 @@ describe("applyProxyEnv", () => {
     // Bun's native fetch consults a non-empty lowercase no_proxy before NO_PROXY, with suffix
     // matching, so it gains the loopback addresses but never a bare localhost.
     process.env.no_proxy = "internal.example";
-    applyProxyEnv(configWithProxy("http://proxy.invalid:3128"));
+    applyProxyEnv(configWithProxy("http://proxy.invalid:3128", "localhost,internal.corp"));
     // Windows environment names are case-insensitive: there no_proxy IS NO_PROXY.
     expect(process.env.no_proxy).toBe(process.platform === "win32"
-      ? "internal.example,localhost,127.0.0.1,::1,[::1]"
+      ? "internal.example,localhost,internal.corp,127.0.0.1,::1,[::1]"
       : "internal.example,127.0.0.1,::1,[::1]");
     const loopback = new URL("http://127.0.0.1:11434/v1/models");
     expect(noProxyMatches(loopback, { no_proxy: process.env.no_proxy })).toBe(true);
