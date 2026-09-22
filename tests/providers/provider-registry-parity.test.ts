@@ -310,7 +310,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-glm-5.2"]).toEqual(["text"]);
-    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro", "daybreak-red-latest", "daybreak-blue-latest", "gpt-6-astra"]);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro", "daybreak-red-latest", "daybreak-blue-latest", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-6-astra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelMaxInputTokens?.["gpt-6-astra"]).toBe(922_000);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelMaxOutputTokens?.["gpt-6-astra"]).toBe(128_000);
