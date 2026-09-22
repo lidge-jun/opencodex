@@ -170,6 +170,11 @@ let beforeHistoryArtifactCommitForTests: ((kind: string) => void) | undefined;
 export function setBeforeHistoryArtifactCommitForTests(hook: typeof beforeHistoryArtifactCommitForTests): void {
   beforeHistoryArtifactCommitForTests = hook;
 }
+let publishCurrentTxIdForTests: (() => string) | undefined;
+/** Test seam: supply a stale coordinator predecessor after the v1 toggle has run. */
+export function setInjectPublishCurrentTxIdForTests(hook: typeof publishCurrentTxIdForTests): void {
+  publishCurrentTxIdForTests = hook;
+}
 
 export async function injectCodexConfig(
   port: number,
@@ -525,10 +530,16 @@ async function injectCodexConfigImpl(
       : applyLegacy();
     if (skipped) return skipped;
   } else {
+    let coordinatedPreImages: ReturnType<typeof captureCodexPreImages> | undefined;
     const coordinated = await withCodexWriteLock(
       {
         timeoutMs: options.lockTimeoutMs ?? DEFAULT_INJECT_LOCK_TIMEOUT_MS,
         ...(eligibility.kind === "adopt" ? { adoption: { direction: "apply" as const } } : {}),
+        onPostCallbackFailure: () => {
+          if (!coordinatedPreImages) throw new Error("Codex injection preimages were not captured.");
+          const restored = restoreCodexPreImages(coordinatedPreImages);
+          if (!restored.complete) throw new CodexPartialWriteError(restored.unrestored);
+        },
         admitted: { authoritySnapshotId: witness.comparisonId },
         readAdmissionUnderLock: () => ({
           authoritySnapshotId: recomputeInjectWitness({
@@ -566,6 +577,7 @@ async function injectCodexConfigImpl(
          * files the commit replaced.
          */
         const preImages = captureCodexPreImages();
+        coordinatedPreImages = preImages;
         let resolved: { plan: CodexInjectionPlanOk; nativeInput: string };
         try {
           resolved = reconcileAndDerivePlan();
@@ -582,7 +594,7 @@ async function injectCodexConfigImpl(
           const published = ctx.coordinator.beginTransition(
             {
               nativeGeneration: ctx.expectation.nativeBefore,
-              currentTxId: ctx.currentTxId,
+              currentTxId: publishCurrentTxIdForTests?.() ?? ctx.currentTxId,
             },
             {
               txId: ctx.expectation.txId,

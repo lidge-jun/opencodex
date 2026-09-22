@@ -37,6 +37,58 @@ function runInject(
   };
 }
 
+function runV1CoordinatorFailure(
+  codexHome: string,
+  ocxHome: string,
+  failure: "commit" | "publish",
+): { threw: boolean; message: string; toggles: number; sawReconcile: boolean; sawArtifactsAtCommit: boolean } {
+  const script = `
+    const fs = require("node:fs");
+    const { join } = require("node:path");
+    const { injectCodexConfig, setHistoryArtifactStageForTests, setInjectPublishCurrentTxIdForTests } = require("./src/codex/inject");
+    const { setBeforeCoordinatorCommitForTests } = require("./src/codex/codex-write-lock");
+    const { setCodexMultiAgentV2ToggleForTests } = require("./src/codex/inject/multi-agent-v2");
+    const configPath = join(process.env.CODEX_HOME, "config.toml");
+    const profilePath = join(process.env.CODEX_HOME, "opencodex.config.toml");
+    const journalPath = join(process.env.CODEX_HOME, "opencodex-journal.json");
+    let toggles = 0;
+    let sawReconcile = false;
+    let sawArtifactsAtCommit = false;
+    setCodexMultiAgentV2ToggleForTests(enabled => {
+      toggles += 1;
+      const current = fs.readFileSync(configPath, "utf8");
+      fs.writeFileSync(configPath, current.replace("multi_agent_v2 = true", "multi_agent_v2 = " + enabled));
+    });
+    setHistoryArtifactStageForTests(stage => {
+      if (stage === "after-v1-reconcile") {
+        sawReconcile = fs.readFileSync(configPath, "utf8").includes("multi_agent_v2 = false");
+      }
+    });
+    if (process.env.TEST_FAILURE === "publish") {
+      setInjectPublishCurrentTxIdForTests(() => "stale-current-tx");
+    } else {
+      setBeforeCoordinatorCommitForTests(() => {
+        sawArtifactsAtCommit = fs.readFileSync(configPath, "utf8").includes("multi_agent_v2 = false")
+          && fs.existsSync(profilePath) && fs.existsSync(journalPath);
+        throw new Error("fixture coordinator commit failed");
+      });
+    }
+    let threw = false;
+    let message = "";
+    try { await injectCodexConfig(10100, { multiAgentMode: "v1" }); }
+    catch (error) { threw = true; message = String(error); }
+    console.log(JSON.stringify({ threw, message, toggles, sawReconcile, sawArtifactsAtCommit }));
+  `;
+  const child = spawnSync(process.execPath, ["--eval", script], {
+    cwd: repoRoot,
+    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome, TEST_FAILURE: failure },
+    encoding: "utf8",
+    timeout: SPAWN_BUDGET_MS - 5_000,
+  });
+  expect(child.status, child.stderr).toBe(0);
+  return JSON.parse(child.stdout);
+}
+
 describe("injectCodexConfig v1-surface reconcile", () => {
   let codexHome: string;
   let ocxHome: string;
@@ -228,6 +280,34 @@ describe("injectCodexConfig v1-surface reconcile", () => {
     // Byte-exact restoration: the flag flip was rolled back with everything else.
     expect(readFileSync(configPath, "utf8")).toBe(original);
     expect(existsSync(join(codexHome, "opencodex.config.toml"))).toBe(false);
+    expect(existsSync(join(codexHome, "opencodex-journal.json"))).toBe(false);
+  });
+
+  test("post-toggle coordinator commit failure restores preimages", () => {
+    const configPath = join(codexHome, "config.toml");
+    const profilePath = join(codexHome, "opencodex.config.toml");
+    const originalConfig = 'model = "gpt-5.5"\n\n[features]\nmulti_agent_v2 = true\n';
+    writeFileSync(configPath, originalConfig);
+
+    const out = runV1CoordinatorFailure(codexHome, ocxHome, "commit");
+    expect(out).toMatchObject({ threw: true, toggles: 1, sawReconcile: true, sawArtifactsAtCommit: true });
+    expect(out.message).toContain("fixture coordinator commit failed");
+    expect(readFileSync(configPath, "utf8")).toBe(originalConfig);
+    expect(existsSync(profilePath)).toBe(false);
+    expect(existsSync(join(codexHome, "opencodex-journal.json"))).toBe(false);
+  });
+
+  test("toggle ran, publish conflict restores preimages", () => {
+    const configPath = join(codexHome, "config.toml");
+    const profilePath = join(codexHome, "opencodex.config.toml");
+    const originalConfig = 'model = "gpt-5.5"\n\n[features]\nmulti_agent_v2 = true\n';
+    writeFileSync(configPath, originalConfig);
+
+    const out = runV1CoordinatorFailure(codexHome, ocxHome, "publish");
+    expect(out).toMatchObject({ threw: true, toggles: 1, sawReconcile: true, sawArtifactsAtCommit: false });
+    expect(out.message).toContain("could not be published: conflict");
+    expect(readFileSync(configPath, "utf8")).toBe(originalConfig);
+    expect(existsSync(profilePath)).toBe(false);
     expect(existsSync(join(codexHome, "opencodex-journal.json"))).toBe(false);
   });
 
