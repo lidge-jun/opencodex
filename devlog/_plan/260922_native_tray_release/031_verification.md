@@ -107,3 +107,10 @@ A passthrough-cancellation fixture left its second pull pending forever despite 
 then deleted its accounting home before late cancellation finalized. Its fetch-shaped helper
 now settles the pending pull on abort, and the case waits for the 499 cancellation log before
 teardown. Sol reviewed both corrections; ownership enforcement is unchanged. No local tests ran.
+
+At 6b919f8dea, a stale-status CLI fixture inferred the human process's health verdict from
+separate JSON invocations. The human process could legitimately see an intervening refusal
+failure while both other probes reported stale. A preload observer now delegates to the real
+probe, records that same process's boolean on stderr, and returns it unchanged. The formatter
+assertion runs only when its own observed verdict is true; missing output still fails. Sol
+reviewed the observation and import ordering. Product status behavior is unchanged.
