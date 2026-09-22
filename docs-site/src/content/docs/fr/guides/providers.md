@@ -622,12 +622,13 @@ Cursor est géré séparément comme adaptateur expérimental. `adapter: "cursor
 le sélecteur **Ajouter un fournisseur** du tableau de bord comme entrée expérimentale de la configuration locale,
 avec les métadonnées du catalogue statique de repli de Cursor. Lorsqu'un jeton d'accès Cursor est configuré,
 opencodex utilise le transport HTTP/2 direct de Cursor. Sa liste de repli intégrée comprend `gpt-5.6-sol` /
-`terra` / `luna` (contexte de 1M), les variantes ordinaires et Fast de Grok 4.5 et 4.6 (500K), ainsi que
-`kimi-k3` (262K) ; la découverte en direct détermine celles qui restent visibles pour le compte. Grok 4.6 expose
-`low` / `medium` / `high` / `xhigh` sous les deux formes, tandis que 4.5 s'arrête à `high`. Les requêtes Fast
-envoient le modèle Grok de base correspondant avec des paramètres `effort` et `fast=true` `requested_model`
-distincts ; les identifiants aplatis `cursor-grok-{version}-{effort}-fast` servent uniquement à la découverte et
-à la sélection. Cursor ne fournit Kimi K3 qu'avec des identifiants de protocole suffixés par l'effort ;
+`terra` / `luna` (contexte de 1M), les variantes ordinaires et Fast de Grok 4.5, 4.6 et 4.7 (500K), ainsi que
+`kimi-k3` (262K) ; la découverte en direct détermine celles qui restent visibles pour le compte. Grok 4.6 et 4.7 exposent
+`low` / `medium` / `high` / `xhigh` sous les deux formes, tandis que 4.5 s'arrête à `high`. Pour Grok 4.5 et 4.6,
+les requêtes Fast envoient le modèle de base avec des paramètres `effort` et `fast=true` distincts dans
+`requested_model` ; leurs identifiants aplatis `cursor-grok-{version}-{effort}-fast` servent uniquement à la découverte
+et à la sélection. Grok 4.7 figure sans préfixe `cursor-` et envoie directement `grok-4.7-{effort}-fast`.
+Cursor ne fournit Kimi K3 qu'avec des identifiants de protocole suffixés par l'effort ;
 `cursor/kimi-k3` expose donc une échelle `low` / `high` / `max` avec `max` par défaut, conformément à la valeur
 par défaut documentée de l'API du modèle. L'exécution native read/write/delete/ls/grep/shell/fetch pilotée par
 le serveur Cursor est désactivée par défaut, car elle contourne le parcours d'approbation et le bac à sable de

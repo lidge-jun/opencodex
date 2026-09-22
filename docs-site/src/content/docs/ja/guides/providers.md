@@ -443,11 +443,13 @@ Cursor は別の実験的アダプターとして追跡します。`adapter: "cu
 Provider ピッカーに実験的 local config 項目として表示され、Cursor の静的フォールバックモデルカタログ
 メタデータを保存します。Cursor アクセストークンを設定すると opencodex は Cursor ライブ HTTP/2 トランスポートを
 使います。バンドル済みフォールバックリストには 1M コンテキストの `gpt-5.6-sol` / `terra` / `luna`、500K コンテキストの
-Grok 4.5 / 4.6 の通常・Fast 行、262K コンテキストの `kimi-k3` が含まれ、ライブ探索結果に基づき現在の
-アカウントに表示するモデルを決定します。Grok 4.6 は両形式で `low` / `medium` / `high` / `xhigh` を公開し、
-4.5 は `high` までです。Fast リクエストは対応する Grok ベースモデルを、独立した `effort` と `fast=true` の
-`requested_model` パラメータとともに送信します。平坦化された `cursor-grok-{version}-{effort}-fast` id は
-探索と picker の識別子としてのみ使われます。Cursor は Kimi K3 を effort サフィックス付きの wire id
+Grok 4.5 / 4.6 / 4.7 の通常・Fast 行、262K コンテキストの `kimi-k3` が含まれ、ライブ探索結果に基づき現在の
+アカウントに表示するモデルを決定します。Grok 4.6 と 4.7 は両形式で `low` / `medium` / `high` / `xhigh` を公開し、
+4.5 は `high` までです。Grok 4.5 と 4.6 の Fast リクエストは、対応するベースモデルを独立した `effort` と
+`fast=true` の `requested_model` パラメータとともに送信します。これらの平坦化された
+`cursor-grok-{version}-{effort}-fast` id は探索と picker の識別子としてのみ使われます。Grok 4.7 は
+`cursor-` プレフィックスなしで一覧に表示され、`grok-4.7-{effort}-fast` を直接送信します。
+Cursor は Kimi K3 を effort サフィックス付きの wire id
 としてのみ提供するため、`cursor/kimi-k3` は `low` / `high` / `max` のラダーを公開し、既定値はモデル
 ドキュメントの API 既定値と同じ `max` です。Cursor サーバーが直接送るネイティブ read/write/delete/ls/grep/shell/fetch 実行は Codex
 承認とサンドボックス経路をバイパスするためデフォルトで無効です。信頼できるローカル実験でのみ

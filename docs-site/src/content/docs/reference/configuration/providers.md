@@ -210,7 +210,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | Set a model to `false` to stop advertising summaries and strip summary-delivery fields. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Per-model Responses delivery enum; rewrites an existing delivery field. |
 | `modelAdapters?` | `Record<string, string>` | Per-model `openai-chat` or `openai-responses` wire override for mixed-wire gateways. Explicit entries beat registry defaults. The OpenCode Go preset selects Responses for `gpt-5.6-luna` while leaving sibling models on their documented wires; DeepSeek can select native Responses for `deepseek-v4-flash`; Alibaba Token Plan (Beijing) serves `qwen3.8-flash`, `qwen3.7-plus`, and `glm-5.3` over its native Responses API on the same base, verified end to end on that gateway, so they can be opted in here while the wire default stays Chat; and GitHub Copilot declares Responses-only defaults for the following models (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) because those models reject `/chat/completions` for agent traffic. Models without a built-in default (for example `gpt-5.4-nano`) can be opted in here. Single-wire upstream pins and canonical ChatGPT forward reject overrides. |
-| xAI Chat Completions (dashboard / CLI) | switch | Grok 4.5/4.6 OAuth Responses requests default to Responses. Existing Chat overrides are migrated once on upgrade; later Chat choices are preserved. Turn on to select Chat for both models, off to select Responses. CLI: `ocx provider edit xai --xai-chat on` or `--xai-chat off` (running proxy required). Mixed means only one model currently uses Chat. Other overrides and tier policy stay unchanged. API-key and translated Chat/Anthropic defaults are unchanged. |
+| xAI Chat Completions (dashboard / CLI) | switch | Grok 4.5/4.6 OAuth Responses requests default to Responses. Existing Chat overrides are migrated once on upgrade; later Chat choices are preserved. Turn on to select Chat for both models, off to select Responses. CLI: `ocx provider edit xai --xai-chat on` or `--xai-chat off` (running proxy required). Mixed means only one model currently uses Chat. Other overrides and tier policy stay unchanged. API-key and translated Chat/Anthropic defaults are unchanged. Grok 4.7 defaults to Responses on OAuth through its registry wire default and can use Chat through an explicit `modelAdapters["grok-4.7"] = "openai-chat"` override. |
 | `xaiResponsesXSearch?` | `boolean` | Disabled by default. On an xAI Responses destination, append the provider-hosted `x_search` declaration only when a live `web_search` tool survives final request normalization. Existing declarations are not duplicated, caller `tool_choice`/`allowed_tools` selectors are never widened, and this is separate from the web-search sidecar's `search.xSearch` options. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Exact-model opt-in for non-forward Responses gateways that reserve a hosted-tool namespace. Currently accepts only `["image_generation"]`; a matching model must use the `openai-responses` wire and support that hosted tool. It removes colliding client `image_gen` declarations and rewrites their selectors to preserve caller tool choice. For OpenAI API virtual `-pro` models, the selected public ID is matched first and the resolved base wire-model ID is a fallback. `modelAdapters` resolves the public ID first, then the base ID; the second resolution determines the final wire. Other models retain normal alias behavior. |
 | `annotateEmptyToolOutputs?` | `boolean` | Replace a present-but-empty tool result with a short marker before it reaches the model, so a blank result is not read as a missing one. Applies to blank strings and text-only part arrays; image, file, and encrypted parts are never touched. Defaults to `true` for DeepSeek from the built-in registry and is otherwise unset. Set `false` to opt a provider out — an explicit `false` is preserved across later edits that omit the field. `PATCH /api/providers?name=<provider>` accepts `true`, `false`, or `null` to clear the override and return to registry-default behavior. |
@@ -503,12 +503,13 @@ Explicit capability `false` and Responses caller-tier forwarding retain their ex
 ### Cursor Fast (`cursor-variant`)
 
 Cursor has no `service_tier` field. Its fast product is a different **model variant** —
-`claude-opus-5-thinking-high-fast`, or a `{id:"fast",value:"true"}` request parameter for
-Grok — so the Cursor entry declares `fastWire.kind: "cursor-variant"` and the request
-builder resolves the variant instead of setting a request field.
+`claude-opus-5-thinking-high-fast`, a `{id:"fast",value:"true"}` request parameter for
+Grok 4.5/4.6, or a flattened `grok-4.7-{effort}-fast` wire id for Grok 4.7 — so the Cursor
+entry declares `fastWire.kind: "cursor-variant"` and the request builder resolves the variant
+instead of setting a request field.
 
 Only the bases that actually declare a fast variant advertise Fast: `claude-opus-4-7`,
-`claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `grok-4.5`, `grok-4.6`. Every other Cursor row publishes
+`claude-opus-4-8`, `claude-opus-5`, `claude-opus-5-5`, `grok-4.5`, `grok-4.6`, `grok-4.7`. Every other Cursor row publishes
 `supportsServiceTier: false`, so Codex shows no toggle rather than a dead one.
 
 A base whose umbrella row routes thinking upgrades to its **thinking-fast** variant, not to
@@ -537,7 +538,7 @@ API-key mode targets `https://api.x.ai/v1`; routes resolved to `openai-chat` sen
 select the `openai-responses` transport instead. `ocx login xai`
 instead stores OAuth credentials for the Grok subscription gateway
 (`https://cli-chat-proxy.grok.com/v1`; these credentials refresh automatically), where Fast
-is classified per model (live-probed 2026-09-13): grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-reasoning,
+is classified per model (live-probed 2026-09-13 and 2026-09-23): grok-4.7, grok-4.6, grok-4.5, grok-4.3, grok-4.20-0309-reasoning,
 grok-4.20-0309-non-reasoning, grok-build-0.1, and grok-composer-2.5-fast accept
 `service_tier: "priority"` over Grok OAuth and echo it, so those rows advertise Fast, accept
 `--fast` selectors, and forward a caller-sent tier on either wire. grok-4.20-multi-agent-0309
@@ -550,7 +551,7 @@ reasoning tokens; cache discounts are applied before the multiplier. Cost estima
 only when xAI's response confirms `service_tier: "priority"`. A missing or unparsed response tier is
 not confirmation, and an echoed `default` is a downgrade; all three stay at the standard price.
 
-For `grok-4.6`, the standard rate per 1M tokens is $2.00 input, $0.50 cached input, and $6.00
+For `grok-4.6` and `grok-4.7`, the standard rate per 1M tokens is $2.00 input, $0.50 cached input, and $6.00
 output. A prompt of at least 200,000 tokens reprices the whole request at $4.00 / $1.00 / $12.00.
 xAI has not published how that long-context band combines with Priority Processing. When a
 long-context response confirms `priority`, the dashboard therefore shows the published long-context

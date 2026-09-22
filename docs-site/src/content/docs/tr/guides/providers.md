@@ -668,9 +668,14 @@ init`'te ve kontrol paneli Sağlayıcı Ekle seçicisinde Cursor'ın statik geri
 dönüş model kataloğu meta verileriyle deneysel bir yerel yapılandırma girdisi
 olarak görünür. Bir Cursor erişim belirteci yapılandırıldığında opencodex
 Cursor'ın canlı HTTP/2 aktarımını kullanır. Paketlenmiş geri dönüş tohumu
-`gpt-5.6-sol` / `terra` / `luna` (1M bağlam), `grok-4.5` / `grok-4.5-fast`
+`gpt-5.6-sol` / `terra` / `luna` (1M bağlam), Grok 4.5, 4.6 ve 4.7 için normal/Fast satırları
 (500K) ve `kimi-k3` (262K) içerir; canlı keşif hesap için hangilerinin görünür
-kalacağına karar verir. Cursor, Kimi K3'ü yalnızca çaba sonekli hat kimlikleri
+kalacağına karar verir. Grok 4.6 ve 4.7, normal ve Fast biçimlerinde `low` /
+`medium` / `high` / `xhigh` sunarken 4.5 `high` ile sınırlıdır. Grok 4.5 ve 4.6'nın Fast istekleri,
+eşleşen temel modeli ayrı `effort` ve `fast=true` `requested_model` parametreleriyle gönderir; bunların
+düzleştirilmiş `cursor-grok-{version}-{effort}-fast` kimlikleri yalnızca keşif ve model seçimi içindir.
+Grok 4.7, `cursor-` öneki olmadan listelenir ve `grok-4.7-{effort}-fast` kimliğini doğrudan gönderir.
+Cursor, Kimi K3'ü yalnızca çaba sonekli hat kimlikleri
 olarak sunar, bu nedenle `cursor/kimi-k3` bir `low` / `high` / `max` merdiveni
 gösterir ve modelin belgelenmiş API varsayılanıyla eşleşecek şekilde varsayılan
 olarak `max` olur. Cursor sunucu güdümlü yerel

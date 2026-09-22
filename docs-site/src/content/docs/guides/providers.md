@@ -1026,11 +1026,13 @@ fallback model catalog metadata. When a Cursor access token is configured, openc
 live HTTP/2 transport. Set `upstreamHttpVersion: "http1.1"` when a proxy requires Cursor's HTTP/1.1
 compatibility path; the setting covers both inference and live model discovery and is exposed at
 **Providers → Cursor → Settings → Cursor transport**. Its bundled fallback seed includes `gpt-5.6-sol` / `terra` / `luna` (1M context),
-regular/Fast rows for Grok 4.5 and 4.6 (500K), and `kimi-k3` (262K); live discovery decides which
-remain visible for the account. Grok 4.6 exposes `low` / `medium` / `high` / `xhigh` in both forms,
-while 4.5 stops at `high`. Fast requests send the matching base Grok model with separate `effort`
-and `fast=true` `requested_model` parameters; flattened `cursor-grok-{version}-{effort}-fast` ids
-are discovery and picker identities only. Cursor serves Kimi K3 only as effort-suffixed wire ids, so
+regular/Fast rows for Grok 4.5, 4.6, and 4.7 (500K), and `kimi-k3` (262K); live discovery decides which
+remain visible for the account. Grok 4.6 and 4.7 expose `low` / `medium` / `high` / `xhigh` in both forms,
+while 4.5 stops at `high`. Grok 4.5 and 4.6 Fast requests send the matching base model with separate
+`effort` and `fast=true` `requested_model` parameters; their flattened
+`cursor-grok-{version}-{effort}-fast` ids are discovery and picker identities only. Grok 4.7 is listed
+without the `cursor-` prefix and sends `grok-4.7-{effort}-fast` directly. Cursor serves Kimi K3 only as
+effort-suffixed wire ids, so
 `cursor/kimi-k3` exposes a `low` / `high` / `max` ladder and defaults to `max`, matching the
 model's documented API default. Cursor server-driven native read/write/delete/ls/grep/shell/fetch execution
 is disabled by default because it bypasses Codex's approval and sandbox path; set

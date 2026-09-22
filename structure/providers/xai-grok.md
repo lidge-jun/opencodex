@@ -157,7 +157,8 @@ Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#r
 
 xAI's Priority Processing (`service_tier: "priority"` on Chat Completions and Responses,
 documented for the API-key product) is honored by the Grok OAuth subscription gateway on a
-probed model set (live probe 2026-09-13, `devlog/_fin/260913_xai_oauth_fast/`): grok-4.6,
+probed model set (live probes 2026-09-13 and 2026-09-23, `devlog/_fin/260913_xai_oauth_fast/`
+and `devlog/_plan/260923_grok47_parity/010_probe-evidence.md`): grok-4.7, grok-4.6,
 grok-4.5, grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast each echoed `priority` upstream. The registry entry classifies exactly
 that set in `modelSupportsServiceTier` and declares `chatServiceTier: true`, so the OAuth lane
