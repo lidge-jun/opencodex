@@ -27,3 +27,7 @@
 ## Delegation
 
 gpt-6-sol leaves: Helmholtz (Aside docs research), Nash (code map, reflection), Kant (independent audit, three rounds), Avicenna (log label + locales), Heisenberg (pricing), Nietzsche (docs), Cicero (new tests).
+
+## Rendered request-log label
+
+An isolated in-process proxy (throwaway OPENCODEX_HOME, local fake Anthropic upstream answering the fast send with the credits 429) served one request end to end: the fast send was refused, the standard resend answered, and the request detail shows the new recovery label. Capture: `evidence/logs-fast-downgrade.png`.
