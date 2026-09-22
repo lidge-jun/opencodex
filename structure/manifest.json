@@ -75,6 +75,7 @@
         "src/compatibility/",
         "src/config.ts",
         "src/config/",
+        "src/config/persisted-mutation.ts",
         "src/generated/",
         "src/github/",
         "src/grok/",
@@ -111,6 +112,7 @@
         "src/codex/",
         "src/config.ts",
         "src/config/",
+        "src/config/persisted-mutation.ts",
         "src/types.ts"
       ]
     },

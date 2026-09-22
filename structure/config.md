@@ -52,6 +52,11 @@ as the supported-location recovery path; uncertain publication and cleanup warni
 the CLI. The quickstart documents inspection before retry, private-permission requirements,
 and fresh-location examples. Diagnostics do not introduce a fallback or alter file I/O ordering.
 
+`src/config/persisted-mutation.ts` owns schema-valid on-disk mutations under the shared lock.
+It rechecks the file before committing, retries a changed snapshot up to three times, and
+returns unavailable for missing, invalid, or persistently conflicting config. Its one-shot
+test seam and the mutation types remain re-exported through `src/config.ts`.
+
 `src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
 the config directory and `config.json` path and retains the existing cache rule: a relative home is
 resolved once for each distinct raw environment value, so a later working-directory change cannot

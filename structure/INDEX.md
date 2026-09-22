@@ -111,6 +111,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/compatibility/` | [`runtime.md`](runtime.md)<br>[`adapters/compatibility-contracts.md`](adapters/compatibility-contracts.md) |
 | `src/config.ts` | [`overview.md`](overview.md)<br>[`runtime.md`](runtime.md)<br>[`config.md`](config.md)<br>[`providers/openai-tiers.md`](providers/openai-tiers.md) |
 | `src/config/` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md) |
+| `src/config/persisted-mutation.ts` | [`runtime.md`](runtime.md)<br>[`config.md`](config.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
 | `src/grok/` | [`runtime.md`](runtime.md) |
