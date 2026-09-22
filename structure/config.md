@@ -185,6 +185,17 @@ Native Codex sub-agent defaults are a separate, explicit opt-in. When
 overwritten. Disabling the option and fallback restore remove only marker-owned values; journal
 restore must preserve later user edits while stripping those managed values.
 
+An injection whose OpenCodex config explicitly selects the v1 multi-agent surface also
+reconciles Codex's higher-precedence global `features.multi_agent_v2` override to disabled before
+taking the journal baseline. It uses the same format-preserving feature transition as explicit
+mode selection, and it runs inside the injection's coordinated write boundary: the transition and
+the artifact commit share one preimage, so a later refusal restores the flag along with the files,
+and no competing writer can land between them. Validation-only injection and externally managed
+provider configs remain read-only.
+The write lock first compares the plan derived from the original input to reject stale work. After
+the v1 transition, the coordinator publishes a witness derived from the rederived plan and the
+post-transition input, so its recorded id describes the bytes committed by the injection.
+
 ### History backup manifest contract
 
 `src/codex/history-manifest.ts` is the pure schema-and-identity leaf for the versioned history
