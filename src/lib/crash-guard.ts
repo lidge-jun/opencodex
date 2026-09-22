@@ -198,13 +198,20 @@ function hasJsSourceFrame(stack: string): boolean {
   });
 }
 
-/** The JSC hidden throw site (`sourceURL:line:col`), when the error carries one. */
+/**
+ * The JSC hidden throw site (`sourceURL:line:col`), when the error carries one. Best-effort:
+ * this runs inside the process crash handler, so an accessor that throws yields no site.
+ */
 function hiddenThrowSite(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") return undefined;
-  const e = err as Record<string, unknown>;
-  if (typeof e.sourceURL !== "string" || !e.sourceURL) return undefined;
-  const site = `${e.sourceURL}:${String(e.line ?? e.originalLine ?? "")}:${String(e.column ?? e.originalColumn ?? "")}`;
-  return truncateRetainedUtf8(site, MAX_BENIGN_ORIGIN_BYTES);
+  try {
+    if (!err || typeof err !== "object") return undefined;
+    const e = err as Record<string, unknown>;
+    if (typeof e.sourceURL !== "string" || !e.sourceURL) return undefined;
+    const site = `${e.sourceURL}:${String(e.line ?? e.originalLine ?? "")}:${String(e.column ?? e.originalColumn ?? "")}`;
+    return truncateRetainedUtf8(site, MAX_BENIGN_ORIGIN_BYTES);
+  } catch {
+    return undefined;
+  }
 }
 
 function record(kind: string, err: unknown, promise?: unknown): void {

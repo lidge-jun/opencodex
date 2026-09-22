@@ -144,31 +144,53 @@ describe("benign abort-teardown classification", () => {
     expect(isBenignAbortTeardown(err)).toBe(true);
   });
 
-  test("a new hidden throw site is logged inside the fold window; repeats still fold", () => {
+  const withCrashHome = (run: (crashLog: () => string) => void) => {
     const home = mkdtempSync(join(tmpdir(), "ocx-crash-guard-"));
     const previousHome = process.env.OPENCODEX_HOME;
     process.env.OPENCODEX_HOME = home;
     resetBenignFoldForTests();
-    const teardown = (site: { sourceURL: string; line?: number; column?: number }) => {
-      const err = new TypeError("null is not an object");
-      err.stack = "TypeError: null is not an object\n    at <anonymous> (native:1:11)";
-      return Object.assign(err, site);
-    };
     try {
-      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "/abs/src/a.ts", line: 1, column: 2 }));
-      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "/abs/src/a.ts", line: 1, column: 2 }));
-      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "/abs/src/b.ts", line: 3, column: 4 }));
-      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "" }));
-      const log = readFileSync(join(home, "crash.log"), "utf8");
-      expect(log.match(/benign-abort-teardown/g)).toHaveLength(2);
-      expect(log).toContain("origin: /abs/src/a.ts:1:2");
-      expect(log).toContain("origin: /abs/src/b.ts:3:4");
+      run(() => readFileSync(join(home, "crash.log"), "utf8"));
     } finally {
       resetBenignFoldForTests();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       removeTreeWithRetry(home);
     }
+  };
+
+  test("a new hidden throw site is logged inside the fold window; repeats still fold", () => {
+    const teardown = (site: { sourceURL: string; line?: number; column?: number }) => {
+      const err = new TypeError("null is not an object");
+      err.stack = "TypeError: null is not an object\n    at <anonymous> (native:1:11)";
+      return Object.assign(err, site);
+    };
+    withCrashHome(crashLog => {
+      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "/abs/src/a.ts", line: 1, column: 2 }));
+      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "/abs/src/a.ts", line: 1, column: 2 }));
+      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "/abs/src/b.ts", line: 3, column: 4 }));
+      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "" }));
+      const log = crashLog();
+      expect(log.match(/benign-abort-teardown/g)).toHaveLength(2);
+      expect(log).toContain("origin: /abs/src/a.ts:1:2");
+      expect(log).toContain("origin: /abs/src/b.ts:3:4");
+    });
+  });
+
+  test("a throwing hidden-field accessor cannot escape the crash handler", () => {
+    const err = new TypeError("null is not an object");
+    err.stack = "TypeError: null is not an object\n    at <anonymous> (native:1:11)";
+    // A Proxy keeps instanceof TypeError while making the hidden field read throw.
+    const hostile = new Proxy(err, {
+      get(target, key) {
+        if (key === "sourceURL") throw new Error("accessor failure fixture");
+        return Reflect.get(target, key, target);
+      },
+    });
+    withCrashHome(crashLog => {
+      expect(() => recordCrashForTests("unhandledRejection", hostile)).not.toThrow();
+      expect(crashLog()).toContain("benign-abort-teardown");
+    });
   });
 
   test("does NOT flag a different message or the (evaluating …) form", () => {
