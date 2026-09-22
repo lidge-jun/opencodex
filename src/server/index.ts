@@ -201,12 +201,13 @@ import { detectInstall } from "../update/index";
 import { createServeOptions, type ServerIngress } from "./index/serve-options";
 import { createClaudeInterceptLifecycle } from "./index/claude-intercept-lifecycle";
 import { inspectStartupOwnership, resolveInboundBodyLimitWithWarning, setStartupCacheInvalidationWrite, warnAgentTaskRecoveryStartup, warnPlaintextV2AgentMessagesStartup, type StartServerDeps } from "./index/startup-warnings";
-import { acquireSpendLedgerServerLifecycle, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
+import { acquireSpendLedgerServerLifecycle, recordFailedStartRollback, type SpendLedgerServerLifecycle } from "./index/spend-ledger-lifecycle";
+export { waitForFailedStartRollback } from "./index/spend-ledger-lifecycle";
 
 export function startServer(port?: number, deps: StartServerDeps = {}): Server<WsData> {
   const spendLedgerLifecycle = acquireSpendLedgerServerLifecycle(getConfigDir());
   try { return startServerWithSpendLedgerOwner(port, deps, spendLedgerLifecycle); }
-  catch (error) { spendLedgerLifecycle.releaseAfterFailedStart(); throw error; }
+  catch (error) { recordFailedStartRollback(error, spendLedgerLifecycle.releaseAfterFailedStart()); throw error; }
 }
 
 function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartServerDeps, spendLedgerLifecycle: SpendLedgerServerLifecycle): Server<WsData> {
@@ -777,16 +778,16 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
             }
           },
         ],
-        async () => {
+        async listenersStopped => {
           try {
             await backgroundLifecycle.release();
             await releaseNativeMainStartupLifecycle(server);
           } finally {
             // icacls.exe from hardenConfigDir() holds the config dir open; a caller that
             // removes the dir right after stop() settles would hit EPERM/EBUSY on Windows
-            // otherwise. Runs even when an earlier release rejected — that rejection still
-            // propagates, but not before the child is drained.
-            try { spendLedgerLifecycle.release(); }
+            // otherwise. Config hardening still flushes when an earlier release rejects. The
+            // spend owner is retained when a listener stop failed because the socket may live.
+            try { if (listenersStopped) spendLedgerLifecycle.release(); }
             finally { await flushConfigDirHardening(startupConfigDir); }
           }
         },

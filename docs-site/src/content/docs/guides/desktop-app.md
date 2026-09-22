@@ -57,6 +57,28 @@ the bundled sidecar. The dashboard is then opened inside the app's webview.
 Use the tray's **Open dashboard** or **Open in browser** action to move between the
 embedded dashboard and your normal browser. The tray also provides update checks.
 
+## Usage in the tray
+
+On macOS and Windows, click the tray icon to open a compact usage window. The tray's
+**Show usage** action also opens it, including on Linux desktops whose tray does not
+forward click events. On Linux the dashboard opens at startup, including when the
+desktop environment does not expose a tray icon.
+
+The usage window shows Today and 30-day totals, the configured usage chart, a compact
+model list, and provider/account limits. Quota reset countdowns sit beside their bars;
+hover for the exact reset time. Existing **Menu bar & widget** settings control the
+visible sections and chart. Missing measurements are not presented as zero usage.
+
+The tray menu shows today's request count and tokens, with estimated cost when enabled.
+It uses the same local-day usage as the widget. Choose **Refresh now** to update immediately;
+the app also refreshes every 60 seconds. Display preferences remain in the dashboard's
+**Menu bar & widget** section. Turning off **Today** hides the summary, and turning off
+**Cost** removes the cost from it.
+
+Unavailable or explicitly unmeasured usage is shown as `—`, not as a measured zero.
+Choosing the icon-only headline clears the previous counter. Abbreviations preserve
+whole-number zeros: ten million tokens is `10M`, not `1M`.
+
 ## Updates
 
 Choose **Check for Updates…** in the tray menu to check immediately. Release builds also

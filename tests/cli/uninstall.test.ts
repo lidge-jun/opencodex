@@ -243,7 +243,7 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
   });
 });
   test("proof covers every distinct endpoint, not just the preferred one", async () => {
-    const { endpointsToProve, everyEndpointProvenDown } = await import("../../src/cli/uninstall-plan");
+    const { endpointsToProve, everyEndpointProvenDown, everyEndpointProvenDownAsync } = await import("../../src/cli/uninstall-plan");
 
     // A stale runtime record pointing at a closed port, and the live proxy on the
     // configured one. Probing only the runtime candidate reports "dead" for a port nobody
@@ -267,6 +267,8 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(endpointsToProve(null, {})).toEqual([{ hostname: "127.0.0.1", port: 10100 }]);
     // An empty set is not proof of anything.
     expect(everyEndpointProvenDown([], () => "dead")).toBe(false);
+    expect(await everyEndpointProvenDownAsync(endpoints, async () => "dead")).toBe(true);
+    expect(await everyEndpointProvenDownAsync([], async () => "dead")).toBe(false);
     // A nonsense runtime port is skipped rather than probed.
     expect(endpointsToProve({ port: 0 }, { port: 10100 })).toEqual([{ hostname: "127.0.0.1", port: 10100 }]);
   });
@@ -284,7 +286,7 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
       .toBeLessThan(windowStep.indexOf("observed.respawnWindowVerified = true;"));
     // And the proof itself asks every candidate.
     expect(fn).toContain("endpointsToProve(readRuntimePort(), loadConfig())");
-    expect(fn).toContain("everyEndpointProvenDown(endpoints, e => probeProxyLiveness(e.port, e.hostname))");
+    expect(fn).toContain("everyEndpointProvenDownAsync(endpoints, probeEndpointLiveness)");
   });
 
 const safeTeardown: UninstallObservation = {

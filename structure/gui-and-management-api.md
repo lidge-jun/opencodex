@@ -19,6 +19,15 @@ The [Orca importer](codex-home.md#orca-source-owned-account-import) is a local C
 no management route. Imported accounts use existing quota validation; deferred warmups reread
 linked sources after the quota await to reject revoked or rotated captures.
 
+## Compact desktop usage
+
+The standalone `/#/tray` GUI route presents local usage and account limits without the
+full dashboard navigation. It reuses the existing API session and fetch wrapper; it
+has no Tauri IPC capability. Companion settings control its sections and chart. Account
+limits use account-level management reads rather than attributing aggregate provider
+quotas to individual accounts. Missing usage is distinct from measured zero. The popup
+shares the existing timeline renderer with the companion settings preview.
+
 ## Dashboard serving
 
 Account refresh actions follow the [credential refresh-lock identity contract](catalog.md#accounts-namespaces-and-pool-rotation): a held unreadable lock is distinct from one this process may release, and path-probe errors preserve the callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction. The bundled React dashboard is built into `gui/dist` and served by the same Bun proxy. `ocx gui` starts
