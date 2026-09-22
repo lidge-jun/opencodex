@@ -495,6 +495,11 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   `gpt-5.6-sol` before dispatch; comparing against the route model alone never matched for the
   one wire-normalized account-gated model, which disabled both its alternate-account retry and its
   same-account ladder.
+  Refusal detection accepts the HTTP `detail` envelope and the WebSocket refused-create
+  projection's `error.message` envelope. Both require HTTP 400 and the complete model-specific
+  refusal sentence; malformed or competing envelopes, unrelated errors, and postcommit stream
+  errors authorize no replay. The same evidence feeds the bounded alternate attempt and later
+  automatic selection without changing a manual pin or the threshold-zero quota policy.
   `getEligiblePoolAccounts` is not the only door, so `preferModelEntitledAccount` applies the same
   evidence to an already-active shared cursor: the replacement is drawn from the eligible list, the
   active account is returned unchanged when no entitled alternative exists, and the correction is
