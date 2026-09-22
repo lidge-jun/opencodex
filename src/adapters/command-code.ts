@@ -15,6 +15,14 @@ import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
 import { createAdapterPhysicalSend } from "./physical-send";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./command-code-tool-text";
+
+function declaredTools(tools: OcxTool[]): CommandCodeDeclaredTools {
+  return new Map(tools.map(tool => [
+    namespacedToolName(tool.namespace, tool.name),
+    { freeform: tool.freeform === true, schema: tool.parameters },
+  ]));
+}
 
 // Retain the short ids emitted by the first local integration. New requests use the live catalog's
 // provider-native IDs directly; this map is compatibility-only and is not a model fallback list.
@@ -373,6 +381,10 @@ function isMissingToolResultError(value: unknown): boolean {
   return text.includes("tool result is missing") || text.includes("tool_result is missing");
 }
 
+function isToolCallFinishReason(reason: string | undefined): boolean {
+  return reason === "tool_calls" || reason === "tool-calls" || reason === "tool_use";
+}
+
 async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenerator<Record<string, unknown>> {
   if (!response.body) throw new Error("Command Code response body missing");
   const reader = response.body.getReader();
@@ -552,6 +564,10 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
 
 export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const executor = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  // The server builds one adapter per routed request and hands parseStream a guarded wrapper
+  // rather than the Response fetchResponse returned, so the stream reads the declared catalog of
+  // the request this instance last built. A parser with no built request restores nothing.
+  let lastDeclaredTools: CommandCodeDeclaredTools | undefined;
   return {
     name: "command-code",
     async buildRequest(parsed: OcxParsedRequest): Promise<AdapterRequest> {
@@ -593,6 +609,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         "x-session-id": commandCodeSessionId(parsed),
       };
       if (cwd) headers["x-project-slug"] = projectSlug(cwd);
+      lastDeclaredTools = declaredTools(tools);
       return {
         url: `${provider.baseUrl.replace(/\/$/, "")}/alpha/generate`, method: "POST",
         headers,
@@ -639,14 +656,20 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
     },
     async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       let sawFinish = false;
+      const toolText = new CommandCodeToolTextFilter(budget, lastDeclaredTools);
       for await (const event of ndjson(response, budget)) {
         switch (event.type) {
-          case "text-delta": if (typeof event.text === "string") yield { type: "text_delta", text: event.text }; break;
+          case "text-start": yield* toolText.textStart(event.id); break;
+          case "text-delta": if (typeof event.text === "string") yield* toolText.textDelta(event.id, event.text); break;
+          case "text-end": yield* toolText.textEnd(event.id); break;
+          case "tool-input-start": toolText.toolInputStart(event.id, event.toolName); break;
           case "reasoning-delta": if (typeof event.text === "string") yield { type: "thinking_delta", thinking: event.text }; break;
           case "tool-call": {
             const id = typeof event.toolCallId === "string" ? event.toolCallId : randomUUID();
             const name = typeof event.toolName === "string" ? event.toolName : "tool";
             const input = event.input ?? event.args ?? {};
+            // MiMo markup the gateway echoed as text for this same call must not reach the client.
+            yield* toolText.toolCall(id, name, input);
             const argumentsText = typeof input === "string" ? input : JSON.stringify(input);
             yield { type: "tool_call_start", id, name };
             budget.openCall(id);
@@ -668,13 +691,14 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             if (sawFinish) break;
             sawFinish = true;
             const usageValue = event.totalUsage ?? event.usage;
-            const stopReason = typeof event.rawFinishReason === "string" ? event.rawFinishReason : typeof event.finishReason === "string" ? event.finishReason : undefined;
+            let stopReason = typeof event.rawFinishReason === "string" ? event.rawFinishReason : typeof event.finishReason === "string" ? event.finishReason : undefined;
             // The AI SDK's `error` finish reason means the generation failed upstream, not that it
             // stopped. Reporting it as a `done` left the bridge to infer failure from a stop-reason
             // string, which either read as a clean completion or (once classified) mislabelled an
             // upstream error as a content filter and rejected it from the replay cache for the
             // wrong reason.
             if (stopReason === "error") {
+              yield* toolText.releaseAll();
               // Keep the usage: a failed turn still consumed tokens, and dropping it makes the
               // turn look free in accounting and reports zeros to the client.
               yield {
@@ -686,10 +710,16 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
               };
               break;
             }
+            const restored = toolText.finish();
+            yield* restored.events;
+            // Markup restored as a call ends the step on a tool call even when the model's own
+            // finish reason says it stopped, because the call is what it meant to send.
+            if (restored.salvaged && !isToolCallFinishReason(stopReason)) stopReason = "tool_calls";
             yield { type: "done", usage: usage(usageValue), stopReason };
             break;
           }
           case "error": {
+            yield* toolText.releaseAll();
             const message = eventError(event.error);
             if (isMissingToolResultError(message)) {
               // Provider-side tool-result validation: the request carried an assistant tool
@@ -705,7 +735,11 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       }
       // A stream that ends without a finish event still needs a terminal done so the
       // server does not wait on an adapter that silently stopped emitting.
-      if (!sawFinish) yield { type: "done", usage: undefined, stopReason: undefined };
+      if (!sawFinish) {
+        const restored = toolText.finish();
+        yield* restored.events;
+        yield { type: "done", usage: undefined, stopReason: restored.salvaged ? "tool_calls" : undefined };
+      }
     },
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const events: AdapterEvent[] = [];

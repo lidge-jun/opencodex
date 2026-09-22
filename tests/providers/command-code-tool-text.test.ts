@@ -1,0 +1,342 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createCommandCodeAdapter } from "../../src/adapters/command-code";
+import {
+  CommandCodeToolTextFilter,
+  MAX_HELD_TOOL_TEXT_BYTES,
+  markupMatchesInput,
+  parseToolCallMarkup,
+  salvagedArguments,
+} from "../../src/adapters/command-code-tool-text";
+import { saveCredential } from "../../src/oauth/store";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
+import { handleResponses } from "../../src/server/responses";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+const provider: OcxProviderConfig = {
+  adapter: "command-code",
+  baseUrl: "https://api.commandcode.ai",
+  authMode: "oauth",
+  apiKey: "secret-command-key",
+};
+
+// Trimmed from the /alpha/generate stream captured on 2026-09-23 while `codex exec` ran
+// xiaomi/mimo-v2.6-flash at high effort: the gateway echoes MiMo's markup as a text block inside
+// the tool-input stream, then sends the same call as an invalid native tool-call.
+const JS = "const r = await tools.exec_command({cmd:\"sed -n '1,40p' src/a.ts\"});\ntext(r.output);";
+const CAPTURED = [
+  { type: "start" },
+  { type: "start-step" },
+  { type: "reasoning-start", id: "reasoning-0" },
+  { type: "reasoning-delta", id: "reasoning-0", text: "Read the file." },
+  { type: "reasoning-end", id: "reasoning-0" },
+  { type: "tool-input-start", id: "call_c1", toolName: "exec", dynamic: false },
+  { type: "tool-input-delta", id: "call_c1", delta: JS },
+  { type: "text-start", id: "txt-0" },
+  { type: "text-delta", id: "txt-0", text: `<tool_call><function=exec>${JS}</parameter></function></tool_call>` },
+  { type: "text-end", id: "txt-0" },
+  { type: "tool-input-end", id: "call_c1" },
+  { type: "tool-call", toolCallId: "call_c1", toolName: "exec", input: JS, dynamic: true, invalid: true, error: { name: "AI_JSONParseError" } },
+  { type: "tool-error", toolCallId: "call_c1", toolName: "exec", input: JS, error: "Invalid input for tool exec: JSON parsing failed" },
+  { type: "finish-step", finishReason: "tool-calls", rawFinishReason: "tool_calls", usage: { inputTokens: 10, outputTokens: 5 } },
+  { type: "finish", finishReason: "tool-calls", rawFinishReason: "tool_calls", totalUsage: { inputTokens: 10, outputTokens: 5 } },
+];
+
+const EXEC_TOOL = { name: "exec", description: "Run JavaScript", freeform: true,
+  parameters: { type: "object", properties: { input: { type: "string", description: "Raw freeform input for this tool." } }, required: ["input"] } };
+const READ_TOOL = { name: "read_file", description: "Read a file",
+  parameters: { type: "object", properties: { path: { type: "string" }, limit: { type: "integer" }, opts: { type: "object" } }, required: ["path"] } };
+
+function ndjson(events: unknown[]): Response {
+  return new Response(events.map(event => JSON.stringify(event)).join("\n"));
+}
+
+function parsed(tools = [EXEC_TOOL, READ_TOOL]): OcxParsedRequest {
+  return {
+    modelId: "xiaomi/mimo-v2.6-flash",
+    stream: true,
+    context: { systemPrompt: ["system"], messages: [{ role: "user", content: "go", timestamp: 1 }], tools },
+    options: { maxOutputTokens: 100 },
+  };
+}
+
+/** Run events through one adapter instance the way the server does: buildRequest, fetchResponse, parseStream. */
+async function adapterEvents(events: unknown[], tools = [EXEC_TOOL, READ_TOOL]): Promise<AdapterEvent[]> {
+  const adapter = createCommandCodeAdapter({ ...provider, fetch: (async () => ndjson(events)) as typeof fetch } as OcxProviderConfig);
+  const request = await adapter.buildRequest(parsed(tools));
+  const response = await adapter.fetchResponse!(request);
+  const out: AdapterEvent[] = [];
+  for await (const event of adapter.parseStream(response, createTestTranslatorBudget())) out.push(event);
+  return out;
+}
+
+const texts = (events: AdapterEvent[]) => events.filter(event => event.type === "text_delta").map(event => (event as { text: string }).text).join("");
+const calls = (events: AdapterEvent[]) => {
+  const out: Array<{ id: string; name: string; args: string }> = [];
+  for (const event of events) {
+    if (event.type === "tool_call_start") out.push({ id: event.id, name: event.name, args: "" });
+    if (event.type === "tool_call_delta") out[out.length - 1]!.args += event.arguments;
+  }
+  return out;
+};
+const done = (events: AdapterEvent[]) => events.find(event => event.type === "done") as { stopReason?: string } | undefined;
+
+describe("MiMo tool-call markup parsing", () => {
+  test("reads parameters, freeform bodies and the gateway's stray closing tag", () => {
+    expect(parseToolCallMarkup("<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.ts\n</parameter>\n<parameter=limit>10</parameter>\n</function>\n</tool_call>"))
+      .toEqual({ name: "read_file", kind: "params", values: { path: "src/a.ts", limit: "10" } });
+    expect(parseToolCallMarkup("<tool_call><function=apply_patch>*** Begin Patch\n*** End Patch</function></tool_call>"))
+      .toEqual({ name: "apply_patch", kind: "raw", value: "*** Begin Patch\n*** End Patch" });
+    expect(parseToolCallMarkup(`<tool_call><function=exec>${JS}</parameter></function></tool_call>`))
+      .toEqual({ name: "exec", kind: "raw", value: JS });
+  });
+
+  test("rejects incomplete or mixed text", () => {
+    expect(parseToolCallMarkup("<tool_call><function=exec>abc")).toBeUndefined();
+    expect(parseToolCallMarkup("I will call <tool_call><function=exec>x</function></tool_call>")).toBeUndefined();
+    expect(parseToolCallMarkup("<tool_call><function=read_file>stray<parameter=path>a</parameter></function></tool_call>")).toBeUndefined();
+  });
+
+  test("matches native input exactly, never by substring or subset", () => {
+    const markup = parseToolCallMarkup("<tool_call><function=read_file><parameter=path>src/a.ts</parameter><parameter=limit>10</parameter></function></tool_call>")!;
+    expect(markupMatchesInput(markup, { path: "src/a.ts", limit: 10 })).toBe(true);
+    expect(markupMatchesInput(markup, '{"path":"src/a.ts","limit":10}')).toBe(true);
+    expect(markupMatchesInput(markup, { path: "src/a.ts" })).toBe(false);
+    expect(markupMatchesInput(markup, { path: "src/a.ts", limit: 10, extra: true })).toBe(false);
+    expect(markupMatchesInput(markup, { path: "src/a", limit: 10 })).toBe(false);
+    const raw = parseToolCallMarkup(`<tool_call><function=exec>${JS}</function></tool_call>`)!;
+    expect(markupMatchesInput(raw, JS)).toBe(true);
+    expect(markupMatchesInput(raw, JS.slice(0, 20))).toBe(false);
+    expect(markupMatchesInput(raw, { input: JS })).toBe(true);
+  });
+
+  test("salvaged arguments must fit the declared tool", () => {
+    const exec = { freeform: true, schema: EXEC_TOOL.parameters };
+    const read = { freeform: false, schema: READ_TOOL.parameters };
+    const markup = (body: string) => parseToolCallMarkup(`<tool_call><function=t>${body}</function></tool_call>`)!;
+    expect(salvagedArguments(markup(JS), exec)).toBe(JSON.stringify({ input: JS }));
+    expect(salvagedArguments(markup("<parameter=input>x</parameter>"), exec)).toBeUndefined();
+    expect(salvagedArguments(markup('<parameter=path>a.ts</parameter><parameter=limit>5</parameter><parameter=opts>{"x":1}</parameter>'), read))
+      .toBe(JSON.stringify({ path: "a.ts", limit: 5, opts: { x: 1 } }));
+    expect(salvagedArguments(markup("<parameter=limit>5</parameter>"), read)).toBeUndefined();
+    expect(salvagedArguments(markup("<parameter=path>a</parameter><parameter=other>1</parameter>"), read)).toBeUndefined();
+    expect(salvagedArguments(markup("<parameter=path>a</parameter><parameter=limit>five</parameter>"), read)).toBeUndefined();
+    expect(salvagedArguments(markup(JS), read)).toBeUndefined();
+  });
+});
+
+describe("Command Code MiMo tool-call text", () => {
+  test("drops the echoed markup when the native call carries the same input", async () => {
+    const events = await adapterEvents(CAPTURED);
+    expect(texts(events)).toBe("");
+    expect(calls(events)).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
+    expect(done(events)?.stopReason).toBe("tool_calls");
+  });
+
+  test("holds markup split across deltas", async () => {
+    const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    const events = await adapterEvents([
+      { type: "tool-input-start", id: "call_c1", toolName: "exec" },
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: "\n<tool" },
+      { type: "text-delta", id: "t", text: "_call>" },
+      { type: "text-delta", id: "t", text: markup.slice("<tool_call>".length) },
+      { type: "text-end", id: "t" },
+      { type: "tool-call", toolCallId: "call_c1", toolName: "exec", input: JS, invalid: true },
+      { type: "finish", rawFinishReason: "tool_calls" },
+    ]);
+    expect(texts(events)).toBe("");
+    expect(calls(events)).toHaveLength(1);
+  });
+
+  test("pairs each block with its own call when inputs interleave", async () => {
+    const other = "text('b');";
+    const events = await adapterEvents([
+      { type: "tool-input-start", id: "a", toolName: "exec" },
+      { type: "tool-input-start", id: "b", toolName: "exec" },
+      { type: "text-start", id: "t1" },
+      { type: "text-delta", id: "t1", text: `<tool_call><function=exec>${JS}</function></tool_call>` },
+      { type: "text-end", id: "t1" },
+      // Call b arrives first; block t1 duplicates call a, so it must stay held rather than leak.
+      { type: "tool-call", toolCallId: "b", toolName: "exec", input: other },
+      { type: "tool-call", toolCallId: "a", toolName: "exec", input: JS, invalid: true },
+      { type: "finish", rawFinishReason: "tool_calls" },
+    ]);
+    expect(texts(events)).toBe("");
+    expect(calls(events).map(call => call.id)).toEqual(["b", "a"]);
+  });
+
+  test("releases markup that does not match its call", async () => {
+    const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    const events = await adapterEvents([
+      { type: "tool-input-start", id: "a", toolName: "exec" },
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: markup },
+      { type: "text-end", id: "t" },
+      { type: "tool-call", toolCallId: "a", toolName: "exec", input: JS.slice(0, 20) },
+      { type: "finish", rawFinishReason: "tool_calls" },
+    ]);
+    expect(texts(events)).toBe(markup);
+    const order = events.map(event => event.type);
+    expect(order.indexOf("text_delta")).toBeLessThan(order.indexOf("tool_call_start"));
+  });
+
+  test("restores a text-only freeform call for a declared tool", async () => {
+    const events = await adapterEvents([
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: `<tool_call><function=exec>${JS}</function></tool_call>` },
+      { type: "text-end", id: "t" },
+      { type: "finish-step", rawFinishReason: "stop" },
+      { type: "finish", rawFinishReason: "stop" },
+    ]);
+    expect(texts(events)).toBe("");
+    const [call] = calls(events);
+    expect(call).toMatchObject({ name: "exec", args: JSON.stringify({ input: JS }) });
+    expect(call!.id).toMatch(/^call_ocx_[0-9a-f]{32}$/);
+    expect(done(events)?.stopReason).toBe("tool_calls");
+  });
+
+  test("restores a text-only function call with typed parameters", async () => {
+    const events = await adapterEvents([
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: "<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.ts\n</parameter>\n<parameter=limit>40</parameter>\n</function>\n</tool_call>" },
+      { type: "text-end", id: "t" },
+      { type: "finish", rawFinishReason: "stop" },
+    ]);
+    expect(texts(events)).toBe("");
+    expect(calls(events)).toMatchObject([{ name: "read_file", args: JSON.stringify({ path: "src/a.ts", limit: 40 }) }]);
+  });
+
+  test("leaves markup as text when it names an undeclared tool or does not fit", async () => {
+    for (const markup of [
+      "<tool_call><function=delete_everything><parameter=path>/</parameter></function></tool_call>",
+      "<tool_call><function=read_file><parameter=limit>40</parameter></function></tool_call>",
+      "<tool_call><function=read_file><parameter=path>a</parameter><parameter=limit>forty</parameter></function></tool_call>",
+    ]) {
+      const events = await adapterEvents([
+        { type: "text-start", id: "t" },
+        { type: "text-delta", id: "t", text: markup },
+        { type: "text-end", id: "t" },
+        { type: "finish", rawFinishReason: "stop" },
+      ]);
+      expect(texts(events)).toBe(markup);
+      expect(calls(events)).toEqual([]);
+      expect(done(events)?.stopReason).toBe("stop");
+    }
+  });
+
+  test("never restores a call when the adapter built no request", async () => {
+    const events: AdapterEvent[] = [];
+    const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    for await (const event of createCommandCodeAdapter(provider).parseStream(ndjson([
+      { type: "text-delta", text: markup }, { type: "finish", rawFinishReason: "stop" },
+    ]), createTestTranslatorBudget())) events.push(event);
+    expect(texts(events)).toBe(markup);
+    expect(calls(events)).toEqual([]);
+  });
+
+  test("streams ordinary text immediately, including text that only starts like markup", async () => {
+    const events = await adapterEvents([
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: "<" },
+      { type: "text-delta", id: "t", text: "div> hello" },
+      { type: "text-delta", id: "t", text: " world" },
+      { type: "text-end", id: "t" },
+      { type: "finish", rawFinishReason: "stop" },
+    ]);
+    expect(events.filter(event => event.type === "text_delta")).toEqual([
+      { type: "text_delta", text: "<div> hello" },
+      { type: "text_delta", text: " world" },
+    ]);
+  });
+
+  test("releases an oversized held block as text", async () => {
+    const big = "<tool_call><function=exec>" + "x".repeat(MAX_HELD_TOOL_TEXT_BYTES) + "</function></tool_call>";
+    const events = await adapterEvents([
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: big },
+      { type: "text-end", id: "t" },
+      { type: "finish", rawFinishReason: "stop" },
+    ]);
+    expect(texts(events)).toBe(big);
+    expect(calls(events)).toEqual([]);
+  });
+
+  test("releases held text when the turn fails", () => {
+    const filter = new CommandCodeToolTextFilter(createTestTranslatorBudget(), new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]]));
+    const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    expect(filter.textDelta("t", markup)).toEqual([]);
+    expect(filter.releaseAll()).toEqual([{ type: "text_delta", text: markup }]);
+    expect(filter.finish()).toEqual({ events: [], salvaged: false });
+  });
+
+  test("a restored call pairs with its tool result on the next request", async () => {
+    const events = await adapterEvents([
+      { type: "text-delta", id: "t", text: "<tool_call><function=read_file><parameter=path>a.ts</parameter></function></tool_call>" },
+      { type: "finish", rawFinishReason: "stop" },
+    ]);
+    const [call] = calls(events);
+    const next = await createCommandCodeAdapter(provider).buildRequest({
+      ...parsed(),
+      context: { ...parsed().context, messages: [
+        { role: "user", content: "go", timestamp: 1 },
+        { role: "assistant", content: [{ type: "toolCall", id: call!.id, name: "read_file", arguments: { path: "a.ts" } }], timestamp: 2 },
+        { role: "toolResult", toolCallId: call!.id, toolName: "read_file", content: "file body", isError: false, timestamp: 3 },
+      ] } as OcxParsedRequest["context"],
+    });
+    const messages = JSON.parse(next.body).params.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(messages.map(message => message.role)).toEqual(["user", "assistant", "tool"]);
+    expect(messages[2]!.content[0]).toMatchObject({ type: "tool-result", toolCallId: call!.id, output: { type: "text", value: "file body" } });
+  });
+
+  test("the Responses bridge relays the deduplicated call without the markup", async () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const fixtureHome = mkdtempSync(join(tmpdir(), "ocx-command-mimo-"));
+    process.env.OPENCODEX_HOME = fixtureHome;
+    const originalFetch = globalThis.fetch;
+    clearGenericFailoverHealth();
+    let releaseSpendHome: (() => void) | undefined;
+    try {
+      // Direct dispatch skips startServer, so the case holds the spend-ledger writer lease itself.
+      releaseSpendHome = acquireOwnedSpendHome();
+      await saveCredential("command-code", {
+        access: "synthetic-command", refresh: "synthetic-refresh", expires: Date.now() + 3_600_000, accountId: "fixture", source: "oauth",
+      });
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url !== "https://api.commandcode.ai/alpha/generate") throw new Error(`Unexpected fixture request: ${url}`);
+        return ndjson([
+          { type: "text-start", id: "t" },
+          { type: "text-delta", id: "t", text: "<tool_call><function=read_file><parameter=path>src/a.ts</parameter></function></tool_call>" },
+          { type: "text-end", id: "t" },
+          { type: "finish", rawFinishReason: "stop", totalUsage: { inputTokens: 5, outputTokens: 3 } },
+        ]);
+      }) as typeof fetch;
+      const cfg = { defaultProvider: "command-code", providers: {
+        "command-code": { adapter: "command-code", baseUrl: "https://api.commandcode.ai", authMode: "oauth", models: ["xiaomi/mimo-v2.6-flash"] },
+      } } as OcxConfig;
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "command-code/xiaomi/mimo-v2.6-flash", input: "read it", stream: false,
+          tools: [{ type: "function", name: "read_file", description: "Read a file", parameters: READ_TOOL.parameters }] }),
+      }), cfg, { model: "", provider: "" });
+      const body = await response.json() as { output: Array<Record<string, unknown>> };
+      expect(JSON.stringify(body.output)).not.toContain("<tool_call>");
+      expect(body.output.filter(item => item.type === "function_call")).toMatchObject([
+        { type: "function_call", name: "read_file", arguments: JSON.stringify({ path: "src/a.ts" }) },
+      ]);
+    } finally {
+      releaseSpendHome?.();
+      globalThis.fetch = originalFetch;
+      clearGenericFailoverHealth();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(fixtureHome);
+    }
+  }, 20_000);
+});
