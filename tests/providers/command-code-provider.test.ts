@@ -315,6 +315,7 @@ describe("Command Code provider", () => {
     }) as typeof globalThis.fetch;
     loginState.set("command-code", { done: false });
     const prompts: string[] = [];
+    let settled: Promise<void> = Promise.resolve();
     const promptCount = async (count: number) => {
       for (let i = 0; prompts.length < count && i < 400; i++) await Bun.sleep(5);
       expect(prompts.length).toBeGreaterThanOrEqual(count);
@@ -336,6 +337,9 @@ describe("Command Code provider", () => {
         },
         signal: controller.signal,
       }, { importLocal: "off" });
+      // Observe the login from the start so an early assertion failure cannot leave its
+      // rejection unhandled once finally aborts it.
+      settled = login.then(() => undefined, () => undefined);
       await promptCount(1);
       const state = prompts[0]!;
 
@@ -350,9 +354,43 @@ describe("Command Code provider", () => {
       expect(whoamiKeys).toEqual(["Bearer sk-key#segment"]);
     } finally {
       controller.abort(new Error("test complete"));
+      await settled;
       globalThis.fetch = originalFetch;
       loginState.delete("command-code");
       clearManualCodeSlot("command-code");
+    }
+  });
+
+  test("the direct prompt rejects a raw key whose #state suffix does not match", async () => {
+    const controller = new AbortController();
+    const originalFetch = globalThis.fetch;
+    let whoamiCalls = 0;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const href = String(input);
+      if (href.includes("whoami")) {
+        whoamiCalls += 1;
+        return new Response(JSON.stringify({ ok: true, user: { id: "u-1", userName: "tester" } }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${href}`);
+    }) as typeof globalThis.fetch;
+    let prompts = 0;
+    try {
+      const login = loginCommandCode({
+        onAuth: () => {},
+        onProgress: () => {},
+        onManualCodeInput: async state => {
+          prompts += 1;
+          if (prompts === 1) return `sk-direct#${state}-other`;
+          controller.abort(new Error("cancelled after re-prompt"));
+          return undefined;
+        },
+        signal: controller.signal,
+      }, { importLocal: "off" });
+      await expect(login).rejects.toThrow("cancelled after re-prompt");
+      expect(prompts).toBe(2);
+      expect(whoamiCalls).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 
