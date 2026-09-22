@@ -421,8 +421,9 @@ a timestamp, so one entry per invalid load would grow the uninstall manifest wit
 the manifest stops validating past its path ceiling. A manifest that stops validating makes
 uninstall refuse outright, which would leave credentials on disk. Sweeping those copies by name
 pattern at removal time is the shape that fits; it is not in this change. Registration is best-effort: an intentionally
-unowned legacy home or a metadata-write failure must not suppress the recovery copy. Existing
-OAuth downgrade copies are neither rewritten nor retroactively claimed. Both a `false` registration
+unowned legacy home or a metadata-write failure must not suppress the recovery copy. Migration
+leaves an existing OAuth downgrade copy unchanged and never retroactively claims it; only a
+destructive mutation rewrites it, to drop the removed provider. Both a `false` registration
 result and a thrown registration error emit the same fixed warning without error details. Unregistered copies
 remain subject to the existing partial/refused uninstall result.
 
