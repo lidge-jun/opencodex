@@ -13,7 +13,7 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 Service startup and restore use the [catalog retirement policy](../catalog.md#shared-catalog);
 retirement does not itself change service registration or user-selected model configuration.
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Background service command selection
 
@@ -35,6 +35,17 @@ targeted answer can require a full task listing with a 20-second ceiling; runnin
 enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds before listen.
 
 > Decision record: [ADR-0029](../decisions/ADR-0029-windows-startup-ownership-listing-reuse.md)
+
+## Service-manager probe
+
+`src/service-manager-probe.ts` (`inspectServiceManagerInstallation`) reports what the platform
+service manager has installed for opencodex, read-only and fail-closed. It reads the service
+definition itself and parses the `CODEX_HOME` and `OPENCODEX_HOME` values embedded in it, because
+installation writes the definition before the state file: an interrupted reinstall can leave the
+two naming different homes, and on macOS a logged-out user can have the plist on disk with no GUI
+domain to query. The probe returns what it saw and does not decide ownership; callers such as
+`src/integrations/native/ownership-preflight.ts` compare the homes. Every command it runs is
+read-only and time-bounded, so it is safe while the proxy runs under that same manager.
 
 ## Stable service launcher (launchd and systemd)
 
@@ -72,6 +83,14 @@ Anthropic from credentials alone.
 
 On the OpenAI path there is one deterministic `openai` sidecar candidate and its current account mode
 owns credential selection; API-key OpenAI is not a ChatGPT forward sidecar candidate.
+
+`src/sidecar/` holds what both sidecars share. `src/sidecar/auth.ts` decides whether ChatGPT or
+Anthropic auth is present for sidecar purposes, from config and stored account state and never from
+request headers; per-request usability stays with the executors. `src/sidecar/candidates.ts` builds
+the candidate set both sidecars start from: a model may be offered as a sidecar backend only when
+the management model picker would show it, except the fixed slot model of a logged-in side. Vision
+then removes provably text-only models, and web search keeps only models whose probed backend has an
+executor (`src/web-search/backends.ts`).
 
 Sidecar failures must degrade to text markers or skipped capability, not abort the main request.
 
@@ -149,9 +168,9 @@ so the flag does not identify the peer responsible for corruption. Existing diag
 not rewritten. Audio devices, WebRTC media negotiation, captions and spoken handoff delivery remain
 client responsibilities.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
@@ -161,9 +180,9 @@ Chat helper admission in `src/server/responses/core.ts` follows the
 claims stored main, after terminal vision, routed vision and search exclusions.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](../transports/responses.md).
@@ -175,7 +194,7 @@ privately to final dispatch; preliminary route selection does not inject Go-only
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -196,7 +215,7 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The service loads the optional `compactionRouting` block from persisted configuration.
-[Responses ingress](../transports/responses.md#compaction-routing-overrides) applies it to individual compaction
+[Responses ingress](../transports/responses-failover.md#compaction-routing-overrides) applies it to individual compaction
 requests whose trigger the block names.
 
 Standalone binaries use `src/lib/standalone.ts` to detect the Bun `$bunfs` runtime and

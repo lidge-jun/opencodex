@@ -514,21 +514,21 @@ The Remote Hub guide and affected CLI, server-config, management-API, and dashbo
 Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](../providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-The account CLI and translated Codex integration guides follow the [automatic plan exclusion contract](../providers/openai-tiers.md#automatic-pool-plan-exclusions), including all-excluded pools and explicit routes.
+The account CLI and translated Codex integration guides follow the [automatic plan exclusion contract](../providers/openai-accounts.md#automatic-pool-plan-exclusions), including all-excluded pools and explicit routes.
 
-Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.md#lifecycle); malformed optional listener blocks follow [config loading](../config.md#config-surface).
 The Combo guides describe the distinction between display quota and single-credential inference evidence used by routing. See [scoped provider quota](../runtime.md#scoped-provider-quota-for-combo-selection).
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
 
@@ -539,9 +539,9 @@ Provider configuration documents distinguish actual summaries from raw reasoning
 
 Paginated and migration-capable history follows the [authoritative writer contract](../codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
-Private pool credential metadata follows the [quota-history publication identity contract](../providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
+Private pool credential metadata follows the [quota-history publication identity contract](../providers/openai-accounts.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Hub/browser pairing instructions distinguish machine enrollment, session authentication, permission denial and network failure. The hosted dashboard preview is the render artifact used to review these states.
 The integrations guide documents Cline CLI as a two-file, loopback-only integration. Hosted CI validates its source-backed fixtures; the packaged dashboard exposes it through the existing client list.
@@ -549,9 +549,9 @@ The lightweight top-level CLI help counts Cline CLI among the fifteen registered
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
-The account history response can include a [low-confidence effective capacity estimate](../providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+The account history response can include a [low-confidence effective capacity estimate](../providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -574,7 +574,7 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 The public server configuration reference documents the optional
-[compaction routing override](../transports/responses.md#compaction-routing-overrides). Its regression file is registered in both test-layout inventories.
+[compaction routing override](../transports/responses-failover.md#compaction-routing-overrides). Its regression file is registered in both test-layout inventories.
 
 ## Bun updater ownership transaction
 

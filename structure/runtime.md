@@ -38,7 +38,7 @@ Chat request serialization owns
 and the developer wire role; it requires no runtime lifecycle change, and its one
 configuration option is a per-provider role opt-out.
 
-Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Anthropic streaming usage snapshots
 
@@ -374,7 +374,7 @@ Codex display-cache expiry, retained blocking main-policy evidence, and reset hi
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 Usage consumers preserve positive incomplete-history metadata as specified in
-[usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented
+[usage accounting](dashboard-and-usage.md#usage-accounting); readable totals are not represented
 as a complete ledger. The same contract owns `src/usage/log.ts` append-path permission rechecks and
 their bounded cache.
 
@@ -390,7 +390,7 @@ Chat helper admission in `src/server/responses/request-sidecar-auth.ts` follows 
 [deferred stored-main contract](providers/openai-tiers.md): only a needed Direct OpenAI helper
 claims stored main, after terminal vision, routed vision and search exclusions.
 
-Automatic Codex pool selection and account status share the [plan exclusion contract](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+Automatic Codex pool selection and account status share the [plan exclusion contract](providers/openai-accounts.md#automatic-pool-plan-exclusions).
 
 ### Empty forced search answers
 
@@ -413,7 +413,7 @@ the old binding; restoring the same configuration may reuse still-fresh evidence
 cooldowns and response-driven retry remain authoritative.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
 
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](transports/responses.md).
 
@@ -432,12 +432,12 @@ The relay is transparent in both directions, and that includes the close: a down
 
 Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Claude replay carries [Go conversation affinity](data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
 
-Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
+Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-accounts.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
 Cline CLI joins the existing export/client integration registries. Explicit CLI sync and POST /api/sync refresh its owned pair; unattended catalog refresh excludes it. See [Cline paired files](clients/integrations.md#cline-paired-files).
 Its paired-file writer uses the config atomic-write primitive that replaces the named entry without
@@ -451,9 +451,9 @@ The lightweight top-level CLI help counts Cline CLI among the fifteen registered
 Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes. The adapter takes a tenant host only from the stored account that owns the exact key being transmitted, in the literal slot or, during a detached rekey window, the alias slot, so separately configured or forwarded credentials and non-owning accounts cannot lend another account's destination.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
-Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
-The account history response can include a [low-confidence effective capacity estimate](providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -523,7 +523,7 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 `src/codex/account-label.ts` owns the provider/selection digest and `src/providers/label.ts`
 stamps the configured key selected for the physical request. `src/server/request-log.ts`
 retains per-key attempt usage, and `src/usage/log.ts` validates and persists labels. The
-[account attribution contract](gui-and-management-api.md#upstream-key-account-attribution)
+[account attribution contract](dashboard-and-usage.md#upstream-key-account-attribution)
 defines identity, unknown records, and aggregation boundaries.
 
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).
@@ -533,7 +533,7 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Unicode pattern normalization uses [copy-on-write traversal](transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
 Codex compaction uses a request-local model override for the configured triggers; the
-[Responses compaction contract](transports/responses.md#compaction-routing-overrides) owns its trigger and replay boundaries.
+[Responses compaction contract](transports/responses-failover.md#compaction-routing-overrides) owns its trigger and replay boundaries.
 
 ## Background-service runtime ownership
 

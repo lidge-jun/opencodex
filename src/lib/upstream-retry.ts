@@ -73,7 +73,7 @@ export const UPSTREAM_CLOSED_BEFORE_RESPONSE_CODE = "upstream_closed_before_resp
  * follows the send-budget precedent and answers 429: the Codex client is configured with
  * `retry_429: false` and `retry_5xx: true` over four attempts, so a 5xx here multiplies
  * the duplicate send the refusal exists to prevent. See
- * structure/transports/responses.md#ambiguous-connection-reset-replay-boundary.
+ * structure/transports/responses-failover.md#ambiguous-connection-reset-replay-boundary.
  */
 export const UPSTREAM_RESET_REPLAY_REFUSED_CODE = "upstream_reset_replay_refused";
 const NON_REPLAYABLE_UPSTREAM_CODES: ReadonlySet<string> = new Set([

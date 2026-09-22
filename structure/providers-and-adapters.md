@@ -252,3 +252,14 @@ and `ocx config import` all reach `configSchema` only and never call
 this field in the tree, so a value that survives file load still cannot be spent. It refuses
 silently by design; config-time is where the operator is told why. The planner requires the
 provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
+
+## Shared type declarations
+
+`src/types/` holds the declarations every layer imports: config types (`src/types/config.ts`),
+provider and account types (`src/types/provider.ts`, `src/types/accounts.ts`), and the internal
+request shape (`src/types/request.ts`). Two files also own small resolvers that must agree at every
+boundary. `src/types/tools.ts` owns tool-name identity: namespaced and dotted names, declared-name
+normalization, and `tool_choice` alias resolution, so every adapter matches a declared tool the
+same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream
+HTTP-version pin, shared by the config load schema, the management write boundary, and the fetch
+runtime, so no boundary accepts a value another rejects.

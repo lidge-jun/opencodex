@@ -217,33 +217,33 @@ would pass while the rule was violated.
 - **INV-HOME-01** — `CODEX_HOME` wins over `~/.codex` when present and valid.
 - **INV-SLUG-01** — Routed model slugs use `provider/model`.
 
-Codex plan exclusions constrain automatic pool selection without deleting credentials; [account-policy reasons](providers/openai-tiers.md#automatic-pool-plan-exclusions) remain distinct from health and pause.
+Codex plan exclusions constrain automatic pool selection without deleting credentials; [account-policy reasons](providers/openai-accounts.md#automatic-pool-plan-exclusions) remain distinct from health and pause.
 
-Connected CLI usage follows the [client-scoped hub usage contract](gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](remote-workspace.md).
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger.
 
 Listener startup diagnostics follow [the runtime lifecycle contract](runtime.md#lifecycle); malformed optional listener blocks follow [config loading](config.md#config-surface).
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](transports/responses.md).
 
 Raw reasoning content and provider-authored summaries remain distinct on the Responses wire. See [reasoning presentation](providers/chat-compat.md).
 
-Connected-browser pairing and dashboard failure meanings follow the [management UI contract](gui-and-management-api.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
+Connected-browser pairing and dashboard failure meanings follow the [management UI contract](dashboard-and-usage.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
 
-Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](gui-and-management-api.md#dashboard-surfaces) defines terminal release and completion notification.
+Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](dashboard-and-usage.md#dashboard-surfaces) defines terminal release and completion notification.
 
 Cline CLI is a managed file integration: its provider settings and catalog share one recoverable journal operation. The [paired-file contract](clients/integrations.md#cline-paired-files) defines its stop/restart requirement.
-Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -260,5 +260,5 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
 
 Codex compaction can select a request-local model through the
-[existing Responses handlers](transports/responses.md#compaction-routing-overrides) for the configured
+[existing Responses handlers](transports/responses-failover.md#compaction-routing-overrides) for the configured
 manual and automatic triggers, while subsequent turns keep their conversation settings.
