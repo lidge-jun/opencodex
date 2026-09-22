@@ -278,7 +278,8 @@ a deliberate user choice:
   `ocx status`.
 - Project-level Codex config that bypasses managed routing
   (`src/codex/project-config-warnings.ts`), surfaced by `ocx doctor` as a warning rather than an
-  override.
+  override. Project candidates and opened handles must be regular files of at most 1 MiB;
+  nonblocking descriptor reads reject changed size or timestamps. Global config reads are unchanged.
 
 Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
