@@ -380,7 +380,21 @@ function normalizeMoonshotSchemaNode(
         }
         merged[key] = normalized;
       }
-      return normalizeMoonshotSchemaNode(merged, root, state, depth + 1);
+
+      // Re-normalize only composed properties that retain a $ref alongside sibling keywords
+      if (isXaiObjectSchema(merged.properties)) {
+        for (const [propName, propVal] of Object.entries(merged.properties as Record<string, unknown>)) {
+          if (isXaiObjectSchema(propVal) && typeof propVal.$ref === "string" && moonshotRefTargetKeys(propVal).length > 0) {
+            (merged.properties as Record<string, unknown>)[propName] = normalizeMoonshotSchemaNode(
+              propVal,
+              root,
+              state,
+              depth + 1,
+            );
+          }
+        }
+      }
+      return merged;
     }
 
     // Unresolvable pointer: a remote ref, a malformed path, or a non-object target. Dropping
@@ -399,11 +413,18 @@ function normalizeMoonshotSchemaNode(
   }
 
   // Moonshot MFJS requirements:
-  // 1. Stamp "object" if properties or allOf are present without type, so Moonshot's validator
-  //    recognizes the schema as a valid termination condition for recursive refs.
+  // 1. Stamp "object" if properties are present, or if allOf defines object properties/variants,
+  //    so Moonshot's validator recognizes the schema as a valid termination condition.
   // 2. Infer scalar types for bare const and enum keywords.
   if (out.type === undefined) {
-    if (out.properties !== undefined || Array.isArray(out.allOf)) {
+    const isObjectAllOf = Array.isArray(out.allOf) && out.allOf.some(
+      variant => isXaiObjectSchema(variant) && (
+        variant.type === "object" ||
+        variant.properties !== undefined ||
+        variant.additionalProperties !== undefined
+      ),
+    );
+    if (out.properties !== undefined || out.additionalProperties !== undefined || isObjectAllOf) {
       out.type = "object";
     } else if (out.const !== undefined) {
       const t = typeof out.const;
@@ -415,6 +436,8 @@ function normalizeMoonshotSchemaNode(
         out.type = "string";
       } else if (out.enum.every(x => typeof x === "number")) {
         out.type = "number";
+      } else if (out.enum.every(x => typeof x === "boolean")) {
+        out.type = "boolean";
       }
     }
   }

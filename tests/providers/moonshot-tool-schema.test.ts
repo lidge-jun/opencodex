@@ -461,6 +461,8 @@ describe("Moonshot tool schema normalization (issue #2673)", () => {
           count: { const: 42 },
           flag: { const: true },
           color: { enum: ["red", "blue"] },
+          toggle: { enum: [true, false] },
+          stringAllOf: { allOf: [{ type: "string" }, { minLength: 1 }] },
         },
       },
     });
@@ -471,6 +473,8 @@ describe("Moonshot tool schema normalization (issue #2673)", () => {
     expect(props.count.type).toBe("number");
     expect(props.flag.type).toBe("boolean");
     expect(props.color.type).toBe("string");
+    expect(props.toggle.type).toBe("boolean");
+    expect(props.stringAllOf.type).toBeUndefined();
   });
 
   test("re-normalizes composed properties when sibling narrows a referenced property", async () => {
