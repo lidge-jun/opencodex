@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   createSpendReservationLedger,
   DEFAULT_SPEND_RESERVATION_POLICY,
@@ -6,6 +9,9 @@ import {
 } from "../../src/lib/spend-reservation-ledger";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { SpendLedgerOwnerError, type SpendLedgerOwnerErrorCode } from "../../src/lib/spend-ledger-owner";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
  * The durable spend ledger had no production caller (#4707).
@@ -210,5 +216,66 @@ describe("the request path books every physical send on the durable ledger", () 
       createRequestSpendTracker(logContext(), "root-h", createSpendReservationLedger({ journal: unwritableJournal() })),
     );
     expect(observing.reserveDispatch({ sendClass: "initial", targetKey: "p|m" }).allowed).toBe(true);
+  });
+
+  test("settlement after the reserved send's owner lease ends is dropped", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-spend-wiring-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = dir;
+    const release = acquireOwnedSpendHome();
+    try {
+      const tracker = createRequestSpendTracker(logContext(), "root-released");
+      const budget = createRequestExecutionBudget(undefined, "lr-released", tracker);
+      expect(budget.reserveDispatch({ sendClass: "initial", targetKey: "p|m" }).allowed).toBe(true);
+
+      release();
+      expect(() => tracker.settle({ inputTokens: 10, outputTokens: 5 })).not.toThrow();
+      expect(() => tracker.settle(undefined)).not.toThrow();
+    } finally {
+      release();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("other owner and storage failures propagate without losing pending sends", () => {
+    const failures: Array<SpendLedgerOwnerErrorCode | "storage"> = [
+      "SPEND_LEDGER_OWNER_BUSY",
+      "SPEND_LEDGER_OWNER_UNAVAILABLE",
+      "SPEND_LEDGER_OWNER_HOME_CONFLICT",
+      "storage",
+    ];
+    for (const failure of failures) {
+      const ledger = createSpendReservationLedger({ journal: memoryJournal() });
+      const originalMarkLost = ledger.markLost;
+      const expected = failure === "storage"
+        ? new Error("storage failure")
+        : new SpendLedgerOwnerError(failure, "owner failure");
+      let failOnce = true;
+      const tracker = createRequestSpendTracker(logContext(), `root-${failure}`, {
+        ...ledger,
+        markLost(sendId) {
+          if (failOnce) {
+            failOnce = false;
+            throw expected;
+          }
+          return originalMarkLost(sendId);
+        },
+      });
+      const budget = createRequestExecutionBudget(undefined, `lr-${failure}`, tracker);
+      budget.used += 1;
+      budget.used += 1;
+
+      expect(() => tracker.settle({ inputTokens: 120, outputTokens: 30 })).toThrow(expected);
+      const pending = ledger.snapshot("root", `root-${failure}`);
+      expect(pending?.reserved).toBe(500);
+      expect(pending?.settled).toBe(150);
+      tracker.settle({ inputTokens: 120, outputTokens: 30 });
+      const complete = ledger.snapshot("root", `root-${failure}`);
+      expect(complete?.reserved).toBe(0);
+      expect(complete?.settled).toBe(150);
+      expect(complete?.unresolved).toBe(500);
+    }
   });
 });
