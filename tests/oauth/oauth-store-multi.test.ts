@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { INTERNAL_DEADLINE_MS, STORE_BUDGET_MS } from "../helpers/test-budget";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as atomicWrite from "../../src/config/atomic-write";
 import * as oauthStore from "../../src/oauth/store";
@@ -306,10 +306,45 @@ describe("multi-account auth store", () => {
     try {
       expect(await removeCredential("xai")).toBe("removed");
       expect(getAccountSet("xai")).toBeUndefined();
-      expect(warning.mock.calls.some(call => String(call[0]).includes("could not remove legacy credential backup"))).toBe(true);
+      expect(warning.mock.calls.some(call => String(call[0]).includes("could not remove deleted credentials from the legacy credential backup"))).toBe(true);
     } finally {
       warning.mockRestore();
     }
+  });
+
+  test("logout keeps other providers' downgrade recovery in a legacy backup", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    const backup = `${authPath}.pre-multiauth`;
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    writeFileSync(authPath, JSON.stringify({
+      xai: { access: "xai-access", refresh: "xai-refresh", expires: Date.now() + 1000 },
+      anthropic: { access: "anthropic-access", refresh: "anthropic-refresh", expires: Date.now() + 1000 },
+    }));
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    // An older loader cannot read the migrated auth.json, so the backup must still hold the
+    // provider the user kept, and must no longer hold the one the user removed.
+    const kept = JSON.parse(readFileSync(backup, "utf-8")) as Record<string, { refresh?: string }>;
+    expect(Object.keys(kept)).toEqual(["anthropic"]);
+    expect(kept.anthropic?.refresh).toBe("anthropic-refresh");
+    expect(readFileSync(backup, "utf-8")).not.toContain("xai-refresh");
+  });
+
+  test.skipIf(process.platform === "win32")("a symlinked backup is removed without touching its target", async () => {
+    const authPath = join(TEST_DIR, "auth.json");
+    const backup = `${authPath}.pre-multiauth`;
+    const target = join(TEST_DIR, "elsewhere.json");
+    mkdirSync(TEST_DIR, { recursive: true, mode: 0o700 });
+    await saveCredential("xai", cred({ email: "a@example.test" }));
+    const outside = JSON.stringify({ xai: { access: "x", refresh: "x", expires: 1 }, other: { access: "o", refresh: "o", expires: 1 } });
+    writeFileSync(target, outside);
+    symlinkSync(target, backup);
+
+    expect(await removeCredential("xai")).toBe("removed");
+
+    expect(() => lstatSync(backup)).toThrow();
+    expect(readFileSync(target, "utf-8")).toBe(outside);
   });
 
   test("legacy credential WITHOUT identity gets a deterministic account id across loads", async () => {
