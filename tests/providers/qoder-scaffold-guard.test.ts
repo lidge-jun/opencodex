@@ -152,6 +152,25 @@ describe("QoderScaffoldFilter", () => {
     expect(result.fail).toContain("<invoke>");
   });
 
+  test("folds a Kelvin-sign spelling of invoke the way lowercasing did", () => {
+    // U+212A lowercases to an ASCII k in one code unit, so the old lowercased scan caught it.
+    const kelvin = "\u212A";
+    const filter = new QoderScaffoldFilter();
+    const result = filter.push(`Checking.\n<invo${kelvin}e>\ncd /srv/private && git status\n</invo${kelvin}e>`);
+    expect(result.text).toBe("Checking.\n");
+    expect(result.text).not.toContain("git status");
+    expect(result.fail).not.toBeNull();
+  });
+
+  test("holds a Kelvin-sign invoke prefix split across deltas", () => {
+    const kelvin = "\u212A";
+    const filter = new QoderScaffoldFilter();
+    const first = filter.push("Checking.\n<invo");
+    const second = filter.push(`${kelvin}e>\ncd /srv/private && git status`);
+    expect(first.text + second.text).toBe("Checking.\n");
+    expect(second.fail).not.toBeNull();
+  });
+
   test("does not open a block on a word that merely starts with the tag name", () => {
     // The opener is matched without its ">", so it needs a token boundary of its own.
     const filter = new QoderScaffoldFilter();

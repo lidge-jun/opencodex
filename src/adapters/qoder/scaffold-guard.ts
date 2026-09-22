@@ -60,19 +60,32 @@ function reminderOpensHere(text: string, at: number): boolean {
 }
 
 /**
- * Find an ASCII marker without transforming `text`.
+ * Fold one UTF-16 code unit the way `toLowerCase()` does, when that yields one code unit.
+ *
+ * This keeps every match the lowercased scan used to make. U+212A KELVIN SIGN lowercases to an
+ * ASCII `k`, so `<invo\u212Ae>` was treated as tool markup; an ASCII-only fold would release it.
+ * A character whose lowercase form is longer (such as U+0130) is left as-is.
+ */
+function foldCodeUnit(code: number): number {
+  if (code >= 65 && code <= 90) return code + 32;
+  if (code < 128) return code;
+  const lowered = String.fromCharCode(code).toLowerCase();
+  return lowered.length === 1 ? lowered.charCodeAt(0) : code;
+}
+
+/**
+ * Find a lowercase ASCII marker without transforming `text`.
  *
  * Marker offsets must remain offsets into the original string. Unicode lowercasing can expand
  * one code unit into several (for example, `İ` becomes `i` plus a combining dot), so an index
- * obtained from `text.toLowerCase()` is unsafe to reuse with `text.slice()`.
+ * obtained from `text.toLowerCase()` is unsafe to reuse with `text.slice()`. Folding one code
+ * unit at a time keeps the offsets and the matches.
  */
 function indexOfMarker(text: string, marker: string, from = 0): number {
   const last = text.length - marker.length;
   outer: for (let at = Math.max(0, from); at <= last; at++) {
     for (let offset = 0; offset < marker.length; offset++) {
-      const code = text.charCodeAt(at + offset);
-      const folded = code >= 65 && code <= 90 ? code + 32 : code;
-      if (folded !== marker.charCodeAt(offset)) continue outer;
+      if (foldCodeUnit(text.charCodeAt(at + offset)) !== marker.charCodeAt(offset)) continue outer;
     }
     return at;
   }
