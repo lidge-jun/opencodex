@@ -56,6 +56,7 @@ import { cursorLiveRosterScope, recordLiveCursorClaudeModels, recordLiveCursorMa
 import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
+import { resolveDevinApiBaseUrl } from "../../oauth/devin/api-base";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -293,10 +294,10 @@ export async function fetchProviderModelsWithAuth(
   }
   if (prov.adapter === "devin") {
     if (!apiKey) return observed(configured, "degraded");
-    // Devin's usable-model list is entitlement-specific. Bind cache reads/writes to an
-    // irreversible credential fingerprint so a credential switch cannot observe another
-    // account's roster or stale fallback (the Qoder precedent above).
-    const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
+    // Both the credential and its validated tenant destination own this roster.
+    const destination = resolveDevinApiBaseUrl(auth.oauthApiBaseUrl ?? prov.baseUrl);
+    const authorityIdentity = createHash("sha256")
+      .update(JSON.stringify([apiKey, destination])).digest("hex");
     const cachedDevin = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (cachedDevin) {
       return observed(
@@ -317,7 +318,7 @@ export async function fetchProviderModelsWithAuth(
     // key with the registry's default host or another account's tenant host.
     const liveResult = await fetchDevinUsableModels({
       apiKey,
-      baseUrl: auth.oauthApiBaseUrl ?? prov.baseUrl,
+      baseUrl: destination,
     });
     if (liveResult.ok) {
       // Live catalog is the source of truth — use the discovered base models

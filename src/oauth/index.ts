@@ -532,7 +532,9 @@ export function observeActiveOAuthAccessToken(
   if (account.credential.expires <= now) return { kind: "expired" };
   if (account.credential.expires <= now + REFRESH_SKEW_MS) return { kind: "near-expiry" };
 
-  const apiBaseUrl = validateCopilotApiBaseUrl(account.credential.apiBaseUrl);
+  const apiBaseUrl = provider === "github-copilot"
+    ? validateCopilotApiBaseUrl(account.credential.apiBaseUrl)
+    : undefined;
   return {
     kind: "available",
     snapshot: {

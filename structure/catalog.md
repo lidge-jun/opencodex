@@ -176,7 +176,8 @@ Account-scoped discovery transports remain bound to the credential snapshot that
 token. In particular, Devin discovery uses the allowlisted tenant API base URL from that same
 snapshot rather than pairing a durable account key with the provider registry's default host.
 Entitlement-specific rosters (Qoder, Devin, Cursor) additionally bind their cache entry to an
-irreversible credential fingerprint: a credential switch observes neither the fresh nor the stale
+irreversible credential fingerprint (for Devin, of the credential plus its validated tenant
+destination URL): a credential or destination switch observes neither the fresh nor the stale
 roster recorded under the previous credential, and a failed discovery's cooldown neither supplies
 the previous credential's stale roster nor suppresses the next credential's first discovery.
 Selector decoding uses the same authority boundary through `getRoutingCached`: it resolves a
