@@ -520,3 +520,5 @@ Malformed or unreadable records remain unknown. Recovery requires the same compl
 identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.
 Direct recovery retains the lease until readiness or its bounded deadline. The normal successful
 manual-runtime update still prints the existing restart hint.
+
+Linux release bundling enables Tauri verbosity on the primary attempt so linuxdeploy diagnostics remain visible. macOS signing verbosity and publication/signature gates are unchanged.
