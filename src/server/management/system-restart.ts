@@ -75,6 +75,13 @@ export interface SystemRestartIo {
   now?: () => number;
 }
 
+export interface SystemRestartAdmission {
+  /** Only the caller that created this pending restart receives its veto. */
+  onAccepted?: (veto: () => void) => void;
+  /** Recheck external authority before draining or handing off. */
+  beforeScheduledDrain?: () => boolean;
+}
+
 let restartIo: SystemRestartIo = {};
 /** Prevents double-scheduling in the 200ms window before drainAndShutdown sets draining. */
 let restartAccepted = false;
@@ -297,7 +304,9 @@ async function completeDeferredParentExitHandoff(
   exitProcess: (code: number) => void,
   port: number | undefined,
   phase: "deadline" | "listener-stop fallback",
+  canHandoff: () => boolean = () => true,
 ): Promise<void> {
+  if (!canHandoff()) return;
   try {
     await (io.spawnStart ?? spawnDetachedStart)(port, false);
   } catch (err) {
@@ -317,10 +326,13 @@ async function completeDeadlineRestartHandoff(
   exitProcess: (code: number) => void,
   port: number | undefined,
   scheduleDeadline: NonNullable<SystemRestartIo["scheduleDeadline"]>,
+  canHandoff: () => boolean = () => true,
 ): Promise<void> {
+  if (!canHandoff()) return;
   const supervised = (io.isSupervisedServiceChild ?? (() => isSupervisedServiceChild(io)))();
   if (supervised) {
     // Failure-only supervisors ignore exit(0); intentional non-zero triggers respawn.
+    if (!canHandoff()) return;
     exitProcess(1);
     return;
   }
@@ -340,7 +352,7 @@ async function completeDeadlineRestartHandoff(
   }
   // The ordinary child must survive parent exit: a failed/pending socket close
   // or overdue cleanup is completed by process teardown, without a hidden mode.
-  await completeDeferredParentExitHandoff(io, exitProcess, port, "deadline");
+  await completeDeferredParentExitHandoff(io, exitProcess, port, "deadline", canHandoff);
 }
 
 /**
@@ -348,7 +360,7 @@ async function completeDeadlineRestartHandoff(
  * respawn runs on a short timer so the HTTP response can flush first.
  * Idempotent while already draining: returns the accepted shape again.
  */
-export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
+export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: SystemRestartAdmission = {}): {
   accepted: true;
   alreadyDraining: boolean;
   activeTurnCount: number;
@@ -363,6 +375,14 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
 
   if (!alreadyDraining) {
     restartAccepted = true;
+    let pending = true;
+    let vetoed = false;
+    admission.onAccepted?.(() => {
+      if (!pending) return;
+      pending = false;
+      vetoed = true;
+      restartAccepted = false;
+    });
     const now = io.now ?? Date.now;
     const restartDeadlineMs = now() + MEMORY_DRAIN_RESTART_MS;
     // Reject new data-plane traffic immediately (503), before the 200ms response-flush delay.
@@ -370,6 +390,13 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
     else if (io.setDraining) io.setDraining(true);
     else beginShutdownDrain();
     schedule(async () => {
+      if (vetoed) return;
+      pending = false;
+      const canHandoff = () => {
+        try { return admission.beforeScheduledDrain?.() ?? true; }
+        catch { return false; } // Unknown ownership is not authority to restart.
+      };
+      if (!canHandoff()) return;
       // Preserve the live binding before drainAndShutdown (or its deadline race)
       // closes the listener and makes both the server ref and runtime metadata stale.
       const restartPort = (io.listenPort ?? resolveListenPort)();
@@ -381,10 +408,11 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
         return () => clearTimeout(timer);
       });
       const drainOutcome = await waitForRestartDrain(drainPromise, restartDeadlineMs, now, scheduleDeadline);
+      if (!canHandoff()) return;
       const exitProcess = io.exitProcess ?? ((code: number) => { process.exit(code); });
       if (drainOutcome === "deadline") {
         console.warn("Drain-and-restart deadline expired; forcing terminal restart handoff");
-        await completeDeadlineRestartHandoff(io, exitProcess, restartPort, scheduleDeadline);
+        await completeDeadlineRestartHandoff(io, exitProcess, restartPort, scheduleDeadline, canHandoff);
         return;
       }
       if (drainOutcome === "failed" || drainOutcome === "rejected") {
@@ -395,6 +423,7 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
       const supervised = (io.isSupervisedServiceChild ?? (() => isSupervisedServiceChild(io)))();
       if (supervised) {
         // Failure-only supervisors ignore exit(0); intentional non-zero triggers respawn.
+        if (!canHandoff()) return;
         (io.exitProcess ?? ((code: number) => { process.exit(code); }))(1);
         return;
       }
@@ -407,10 +436,12 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo): {
           exitProcess,
           restartPort,
           "listener-stop fallback",
+          canHandoff,
         );
         return;
       }
       try {
+        if (!canHandoff()) return;
         // A rejected drain has uncertain cleanup ownership, so it uses the same
         // parent-exit handoff as a deadline. Only a fully completed drain waits
         // for replacement health in the old process.
