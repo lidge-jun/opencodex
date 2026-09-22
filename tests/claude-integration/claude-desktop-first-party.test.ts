@@ -341,3 +341,43 @@ test("a completed standard pivot keeps first-party active when credential cleanu
   expect(after.claudeCode?.desktopMode).toBe("first-party");
   expect(after.claudeCode?.desktopProfile?.appliedFingerprint).toBeUndefined();
 });
+
+for (const surface of ["api", "native", "cli"] as const) {
+  test(`${surface}: committed gateway state survives unreadable first-party cleanup`, async () => {
+    expect(applyDesktopFirstParty(config()).ok).toBe(true);
+    const initial = surface === "native"
+      ? config({ claudeCode: { intercept: { enabled: false } } })
+      : config({ claudeCode: { desktopMode: "first-party" } });
+    writeFileSync(join(root, "config.json"), JSON.stringify(initial));
+    writeFileSync(join(claudeDir, "settings.json"), "{ malformed first-party settings");
+    if (surface === "cli") {
+      const result = await applyDesktop(undefined, { kind: "gateway", mode: "static" }, {
+        findLiveProxyImpl: async () => null,
+      });
+      expect(result).toMatchObject({ ok: false, reason: "first_party_settings_unreadable" });
+      expect(result.warning).toContain("gateway applied");
+    } else {
+      const result = surface === "api"
+        ? await dispatch("/api/claude-desktop/apply", { method: "POST", body: JSON.stringify({ mode: "gateway" }) }, initial)
+        : await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, initial);
+      expect(result.status).toBe(500);
+      if (surface === "api") expect(result.body).toMatchObject({ applied: true, saved: true, mode: "gateway" });
+      else expect(result.body.message).toContain("Gateway applied");
+    }
+    const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+    const fingerprint = saved.claudeCode?.desktopProfile?.appliedFingerprint;
+    expect(saved.claudeCode?.desktopMode).toBe("gateway");
+    if (surface !== "cli") {
+      expect(initial.claudeCode?.desktopMode).toBe("gateway");
+      expect(initial.claudeCode?.desktopProfile?.appliedFingerprint).toBe(fingerprint);
+    }
+    expect(fingerprint).toBeTruthy();
+    expect(inspectDesktop3pConfigLibrary({ appliedFingerprint: fingerprint })).toMatchObject({ kind: "gateway_ours", fingerprint });
+    expect(saved.claudeCode?.desktopProfile?.appliedAt).toEqual(expect.any(String));
+    expect(resolveClaudeDesktopApplyMode({ ...saved, claudeCode: { ...saved.claudeCode, intercept: { enabled: true } } })).toBe("gateway");
+    expect(readFileSync(join(claudeDir, "settings.json"), "utf8")).toBe("{ malformed first-party settings");
+    const status = await dispatch("/api/claude-desktop/status", {}, saved);
+    expect(status.body.mode).toBe("gateway");
+    expect(status.body.observedKind).toBe("gateway_ours");
+  });
+}

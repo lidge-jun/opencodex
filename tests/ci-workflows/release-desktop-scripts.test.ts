@@ -1,3 +1,4 @@
+import { windowsInstallerConfig, windowsInstallerVersion } from "../../desktop/scripts/windows-installer-config";
 import { describe, expect, test } from "bun:test";
 import { createHash, generateKeyPairSync, sign as ed25519Sign } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -27,6 +28,17 @@ function temporaryDirectory(): string {
 }
 
 describe("desktop release scripts", () => {
+  test("MSI uses numeric core while public SemVer metadata remains external", () => {
+    for (const version of ["2.61.0", "2.61.0-preview.20260922", "2.61.0-preview.20260922.1+build.7"]) {
+      expect(windowsInstallerVersion(version)).toBe("2.61.0");
+      expect(windowsInstallerConfig(version)).toEqual({ bundle: { windows: { wix: { version: "2.61.0" } } } });
+    }
+    expect(windowsInstallerVersion("255.255.65535")).toBe("255.255.65535");
+    for (const version of ["256.1.0", "1.256.0", "1.1.65536", "2.01.0", "2.1.0-01", "v2.1.0", "2.1", "2.1.0;evil", "999999999999999999.0.0"]) {
+      expect(() => windowsInstallerVersion(version)).toThrow();
+    }
+  });
+
   test("renames macOS DMG and updater archive and copies signatures", () => {
     const root = temporaryDirectory();
     try {
@@ -405,7 +417,7 @@ describe("widget extension signing", () => {
   ) as {
     jobs?: Record<string, {
       env?: Record<string, string>;
-      steps?: Array<{ name?: string; if?: string; run?: string; env?: Record<string, string> }>;
+      steps?: Array<{ name?: string; if?: string; run?: string; env?: Record<string, string>; with?: Record<string, string> }>;
     }>;
   };
   const steps = workflow.jobs?.["package-desktop"]?.steps ?? [];
@@ -416,6 +428,37 @@ describe("widget extension signing", () => {
   // was still correct.
   const indexOfStepRunning = (fragment: string) =>
     steps.findIndex(step => typeof step.run === "string" && step.run.includes(fragment));
+
+  test("release prepares both Mac architectures and wires only the MSI metadata override", () => {
+    const rust = steps.find(step => step.name === "Setup Rust");
+    expect(rust?.with?.targets).toContain("aarch64-apple-darwin,x86_64-apple-darwin");
+    expect(rust?.with?.targets).toContain("runner.os == 'macOS'");
+    const sidecars = steps.find(step => step.name === "Prepare macOS sidecars");
+    expect(sidecars?.run).toContain("lipo -create desktop/src-tauri/binaries/ocx-aarch64-apple-darwin");
+    expect(sidecars?.run).toContain("-output desktop/src-tauri/binaries/ocx-universal-apple-darwin");
+    expect(sidecars?.run).toContain("lipo desktop/src-tauri/binaries/ocx-universal-apple-darwin -verify_arch arm64 x86_64");
+    const prepare = steps.find(step => step.name === "Prepare Windows installer version");
+    expect(prepare?.if).toBe("runner.os == 'Windows'");
+    expect(prepare?.env?.RELEASE_VERSION).toBe("${{ inputs.version }}");
+    expect(prepare?.run).toContain('windows-installer-config.ts "$RELEASE_VERSION" "$RUNNER_TEMP/opencodex-msi.json"');
+    const build = steps.find(step => step.name === "Build desktop bundles");
+    expect(build?.run).toContain("--config");
+    expect(build?.run).toContain("format('{0}/opencodex-msi.json', runner.temp)");
+    expect(build?.run).toContain("runner.os == 'Windows'");
+    expect(indexOfStep("Prepare Windows installer version")).toBeLessThan(indexOfStep("Build desktop bundles"));
+  });
+
+  test("Linux verifies the packaged CLI before collecting release assets", () => {
+    const preserve = steps.find(step => step.name === "Preserve the compiled Linux sidecar");
+    const verify = steps.find(step => step.name === "Verify the packaged Linux sidecar");
+    expect(preserve?.if).toBe("runner.os == 'Linux'");
+    expect(preserve?.run).toContain("PATCHELF=$GITHUB_WORKSPACE/desktop/scripts/appimage-patchelf.py");
+    expect(verify?.if).toBe("runner.os == 'Linux'");
+    expect(verify?.run).toBe("bash desktop/scripts/verify-linux-sidecar.sh");
+    expect(indexOfStep(preserve!.name!)).toBeLessThan(indexOfStep("Build desktop bundles"));
+    expect(indexOfStep(verify!.name!)).toBeGreaterThan(indexOfStep("Build desktop bundles"));
+    expect(indexOfStep(verify!.name!)).toBeLessThan(indexOfStep("Rename release assets"));
+  });
 
   test("the release build hands the widget a signing identity and forbids an ad-hoc fallback", () => {
     const build = steps.find(step => step.name === "Build WidgetKit extension");
@@ -487,16 +530,43 @@ describe("release asset verification", () => {
   function makeMinisignKeypair(keyIdHex: string): {
     pubkeyText: string;
     keyId: Buffer;
-    signPayload: (payload: Buffer) => string;
+    signPayload: (payload: Buffer, rawBytes?: boolean) => string;
   } {
     const { publicKey, privateKey } = generateKeyPairSync("ed25519");
     const raw = Buffer.from(publicKey.export({ format: "der", type: "spki" })).subarray(-32);
     const keyId = Buffer.from(keyIdHex, "hex");
     const pubkeyText = `untrusted comment: test public key\n${Buffer.concat([Buffer.from("Ed"), keyId, raw]).toString("base64")}\n`;
-    const signPayload = (payload: Buffer): string =>
-      `untrusted comment: test signature\n${Buffer.concat([Buffer.from("Ed"), keyId, ed25519Sign(null, payload, privateKey)]).toString("base64")}\n`;
+    const signPayload = (payload: Buffer, rawBytes = false): string => {
+      const signed = rawBytes ? payload : createHash("blake2b512").update(payload).digest();
+      const signature = ed25519Sign(null, signed, privateKey);
+      const trusted = "timestamp:1\tfile:original-before-collection.msi";
+      const packet = Buffer.concat([Buffer.from("ED"), keyId, signature]).toString("base64");
+      const global = ed25519Sign(null, Buffer.concat([signature, Buffer.from(trusted)]), privateKey).toString("base64");
+      return Buffer.from(`untrusted comment: test signature\n${packet}\ntrusted comment: ${trusted}\n${global}\n`).toString("base64");
+    };
     return { pubkeyText, keyId, signPayload };
   }
+
+  test("accepts the upstream minisign 0.7.3 prehashed vector in Tauri encoding", () => {
+    const fixture = JSON.parse(readFileSync(repoPath("tests/fixtures/minisign/prehashed-vector.json"), "utf8")) as {
+      payload: string; publicKeyBase64: string; signatureBox: string;
+    };
+    const dir = temporaryDirectory();
+    try {
+      const asset = join(dir, "renamed-release.bin");
+      const key = parseMinisignPublicKey(`untrusted comment: upstream key\n${fixture.publicKeyBase64}\n`);
+      writeFileSync(asset, fixture.payload);
+      writeFileSync(`${asset}.sig`, Buffer.from(fixture.signatureBox).toString("base64"));
+      expect(() => verifyUpdaterSignature(asset, key)).not.toThrow();
+      writeFileSync(asset, "tampered");
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Signature verification failed/);
+      writeFileSync(asset, fixture.payload);
+      writeFileSync(`${asset}.sig`, Buffer.from(fixture.signatureBox.replace("file:test", "file:changed")).toString("base64"));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Comment signature verification failed/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   test("derives the expected set from the real release matrices and producer tables", () => {
     const workflow = readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8");
@@ -548,6 +618,35 @@ describe("release asset verification", () => {
     }
   });
 
+  test("verifies Windows binary checksum records without weakening payload binding", () => {
+    const dir = temporaryDirectory();
+    const name = "ocx-1.0.0-bun-windows-x64.zip";
+    const asset = join(dir, name);
+    const checksum = `${asset}.sha256`;
+    // Standard sha256sum binary marker observed in release run 35728908862.
+    const digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    try {
+      writeFileSync(asset, "");
+      for (const newline of ["\n", "\r\n"]) {
+        writeFileSync(checksum, `${digest} *${name}${newline}`);
+        expect(verifyChecksums(dir)).toBe(1);
+      }
+      writeFileSync(checksum, `${digest} *different.zip\n`);
+      expect(() => verifyChecksums(dir)).toThrow(/must record its own payload/);
+      for (const record of [`${digest} ?${name}\n`, `${digest}*${name}\n`, `${digest} *${name}\nextra\n`]) {
+        writeFileSync(checksum, record);
+        expect(() => verifyChecksums(dir)).toThrow(/Malformed checksum record/);
+      }
+      writeFileSync(checksum, `${digest} *${name}\n`);
+      writeFileSync(asset, "changed");
+      expect(() => verifyChecksums(dir)).toThrow(/Checksum mismatch/);
+      rmSync(asset);
+      expect(() => verifyChecksums(dir)).toThrow(/which is missing/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("rejects a tampered payload and a missing payload", () => {
     const dir = temporaryDirectory();
     try {
@@ -581,9 +680,43 @@ describe("release asset verification", () => {
       writeFileSync(`${asset}.sig`, other.signPayload(payload));
       expect(() => verifyUpdaterSignature(asset, key)).toThrow(/not the pinned updater key/);
 
-      const hashed = `untrusted comment: test\n${Buffer.concat([Buffer.from("ED"), other.keyId, Buffer.alloc(64)]).toString("base64")}\n`;
-      writeFileSync(`${asset}.sig`, hashed);
+      const valid = signPayload(payload);
+      writeFileSync(`${asset}.sig`, signPayload(payload, true));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Signature verification failed/);
+      const lines = Buffer.from(valid, "base64").toString("utf8").trimEnd().split("\n");
+      const encode = (box: string[]) => Buffer.from(`${box.join("\n")}\n`).toString("base64");
+      const packet = Buffer.from(lines[1]!, "base64");
+      packet[10] = packet[10]! ^ 1;
+      writeFileSync(`${asset}.sig`, encode([lines[0]!, packet.toString("base64"), lines[2]!, lines[3]!]));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Signature verification failed/);
+      packet[10] = packet[10]! ^ 1;
+      packet.write("Ed", 0);
+      writeFileSync(`${asset}.sig`, encode([lines[0]!, packet.toString("base64"), lines[2]!, lines[3]!]));
       expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Unsupported signature algorithm/);
+
+      writeFileSync(`${asset}.sig`, encode([lines[0]!, lines[1]!, "trusted comment: changed", lines[3]!]));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Comment signature verification failed/);
+      writeFileSync(`${asset}.sig`, encode([lines[0]!, lines[1]!, lines[2]!, Buffer.alloc(64).toString("base64")]));
+      expect(() => verifyUpdaterSignature(asset, key)).toThrow(/Comment signature verification failed/);
+      const sameIdOtherKey = parseMinisignPublicKey(makeMinisignKeypair("0123456789abcdef").pubkeyText);
+      writeFileSync(`${asset}.sig`, valid);
+      expect(() => verifyUpdaterSignature(asset, sameIdOtherKey)).toThrow(/Signature verification failed/);
+
+      for (const malformed of [valid + "!", encode(lines.slice(0, 3)), encode([...lines, "extra"]),
+        encode([lines[0]!, Buffer.alloc(73).toString("base64"), lines[2]!, lines[3]!]),
+        encode([lines[0]!, lines[1]!, lines[2]!, Buffer.alloc(65).toString("base64")]),
+        Buffer.from([0xff]).toString("base64"),
+        Buffer.from(`\uFEFF${lines.join("\n")}`).toString("base64"),
+        lines.slice(0, 2).join("\n")]) {
+        writeFileSync(`${asset}.sig`, malformed);
+        expect(() => verifyUpdaterSignature(asset, key)).toThrow();
+      }
+      writeFileSync(`${asset}.sig`, encode(["untrusted comment: changed", ...lines.slice(1)]));
+      expect(() => verifyUpdaterSignature(asset, key)).not.toThrow();
+      writeFileSync(`${asset}.sig`, Buffer.from(`${lines.join("\r\n")}\r\n`).toString("base64"));
+      expect(() => verifyUpdaterSignature(asset, key)).not.toThrow();
+      writeFileSync(`${asset}.sig`, ` \n${valid}\n`);
+      expect(() => verifyUpdaterSignature(asset, key)).not.toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

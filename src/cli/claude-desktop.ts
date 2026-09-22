@@ -1,3 +1,4 @@
+import { recordCommittedDesktopGateway } from "../claude/desktop-gateway-state";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadConfig, mutatePersistedConfig, withConfigMutationLockSync } from "../config";
@@ -71,6 +72,7 @@ function saveLocalDesktopProfile(
   expectedProfile: DesktopProfile | undefined,
   expectedConnection: ClientConnectionState,
   deps: ApplyProfileDeps,
+  gatewayWrite?: { fingerprint?: string },
 ): void {
   withClientLifecycleSync(() => {
     const outcome = mutatePersistedConfig(current => {
@@ -87,6 +89,10 @@ function saveLocalDesktopProfile(
       }
       if (JSON.stringify(current.claudeCode?.desktopProfile) !== JSON.stringify(expectedProfile)) {
         throw new Error("desktop_profile_changed");
+      }
+      if (gatewayWrite) {
+        recordCommittedDesktopGateway(current, profile, gatewayWrite.fingerprint, new Date().toISOString());
+        return { changed: true, value: undefined };
       }
       const changed = JSON.stringify(current.claudeCode?.desktopProfile) !== JSON.stringify(profile);
       if (changed) current.claudeCode = { ...(current.claudeCode ?? {}), desktopProfile: structuredClone(profile) };
@@ -285,12 +291,13 @@ export async function applyDesktop(
   if (target.kind === "first-party") return applyFirstPartyDesktop(deps);
   const result = await applyProfile(profile, target.mode, deps);
   if (!result.ok) return result;
-  // Keep the current first-party connection until gateway application succeeds.
+  const modeSaved = saveDesktopMode("gateway", deps);
+  const warning = [result.warning, modeSaved ? "" : "desktop mode marker was not saved"].filter(Boolean).join(" ");
+  // The gateway mode is committed before retiring first-party settings.
   const removed = removeDesktopFirstParty();
-  if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable", warning: "gateway applied; first-party cleanup remains incomplete" };
-  if (result.ok && !saveDesktopMode("gateway", deps)) {
-    return { ...result, warning: [result.warning, "desktop mode marker was not saved"].filter(Boolean).join(" ") };
-  }
+  if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable",
+    warning: ["gateway applied; first-party cleanup remains incomplete", warning].filter(Boolean).join(" ") };
+  if (warning) return { ...result, warning };
   return result;
 }
 
@@ -364,8 +371,13 @@ export async function applyProfile(
     nativeContextLimits(config),
     deps.lifecycleLockDeps,
   );
+  let stateWarning: string | undefined;
+  if (result.written) {
+    try { saveLocalDesktopProfile(state.profile, state.profile, connection, deps, { fingerprint: result.fingerprint }); }
+    catch { stateWarning = "gateway applied but its committed mode/profile state was not saved"; }
+  }
   const policyState = (deps.probeClaudeDesktopPolicy ?? probeClaudeDesktopPolicy)();
-  const warning = result.written ? claudeDesktopPolicyWarning(policyState) : undefined;
+  const warning = [result.written ? claudeDesktopPolicyWarning(policyState) : undefined, stateWarning].filter(Boolean).join(" ");
   return {
     ok: result.written,
     path: result.path,
@@ -393,6 +405,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
       const result = await applyDesktop(undefined, target, deps);
       if (!result.ok) {
         console.error(`설정 적용 실패: ${result.reason ?? "unknown error"}`);
+        if (result.warning) console.warn(result.warning);
         if (result.reason?.startsWith("gateway_")) {
           console.error("The gateway profile could not be removed safely, so first-party mode was not applied. Turn the integration off (dashboard toggle) and retry, or keep gateway with `ocx claude desktop apply --gateway`.");
         } else if (result.reason === "foreign_env") {

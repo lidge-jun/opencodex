@@ -1,3 +1,4 @@
+import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
@@ -1155,51 +1156,26 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         nativeContextLimits(latest),
       );
       if (!result.written) return jsonResponse({ error: result.reason ?? "Claude Desktop apply failed", saved: true, path: result.path }, 500);
-      // The new gateway is committed; retire the previous first-party env now.
+      const committed = persistCommittedDesktopGateway(config, state.profile, result.fingerprint);
+      const modeWarning = committed.ok ? undefined : `Gateway applied, but its mode/profile state was not saved (${committed.reason}).`;
+      // The durable marker describes the committed gateway even if old-mode cleanup fails.
       const firstPartyRemoved = removeDesktopFirstParty();
       if (!firstPartyRemoved.ok) {
         return jsonResponse({
-          error: `Claude Code settings could not be parsed (${firstPartyRemoved.path}); the first-party proxy env could not be removed after applying gateway mode.`,
-          code: "claude_desktop_first_party_refused",
-          reason: firstPartyRemoved.reason,
+          error: `Claude Code settings could not be parsed (${firstPartyRemoved.path}); first-party cleanup remains incomplete after gateway apply.`,
+          code: "claude_desktop_first_party_refused", reason: firstPartyRemoved.reason,
+          applied: true, saved: committed.ok, mode: "gateway", path: result.path,
+          ...(modeWarning ? { warning: modeWarning } : {}),
         }, 500);
       }
-      const modeSaved = await persistDesktopModeField(config, "gateway");
-      const modeWarning = modeSaved.ok ? undefined : `Claude Desktop was applied, but the gateway mode marker was not saved (${modeSaved.reason}).`;
       const { claudeDesktopPolicyWarning, probeClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
-      const policyState = (deps.probeClaudeDesktopPolicy ?? probeClaudeDesktopPolicy)({
-        platform: deps.platform ?? process.platform,
-      });
+      const policyState = (deps.probeClaudeDesktopPolicy ?? probeClaudeDesktopPolicy)({ platform: deps.platform ?? process.platform });
       const policyWarning = claudeDesktopPolicyWarning(policyState);
-      // Persist applied fingerprint + timestamp so GUI can show saved-vs-applied state.
-      if (result.fingerprint) {
-        // The Desktop write already landed, so a failed bookkeeping save is not
-        // an apply failure: report the miss instead of claiming a clean apply.
-        const marked = persistDesktopProfileField(config, {
-          ...state.profile,
-          appliedFingerprint: result.fingerprint,
-          appliedAt: new Date().toISOString(),
-        });
-        if (!marked.ok) {
-          return jsonResponse({
-            ok: true,
-            applied: true,
-            saved: false,
-            path: result.path,
-            fingerprint: result.fingerprint,
-            warning: [
-              `Claude Desktop was applied, but the applied marker was not saved (${marked.reason}).`,
-              modeWarning,
-              policyWarning,
-            ].filter(Boolean).join(" "),
-          });
-        }
-      }
       const warning = [modeWarning, policyWarning].filter(Boolean).join(" ");
       return jsonResponse({
         ok: true,
         mode: "gateway",
-        saved: modeSaved.ok,
+        saved: committed.ok,
         applied: true,
         path: result.path,
         fingerprint: result.fingerprint,
