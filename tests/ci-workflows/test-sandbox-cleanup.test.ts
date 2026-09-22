@@ -128,3 +128,19 @@ test("case ownership preserves ordinary assertion failures", async () => {
   await expect(lifecycle.run(async () => { throw failure; })).rejects.toBe(failure);
   await lifecycle.close();
 });
+
+test("case teardown absorbs only its own abort reason", async () => {
+  const lifecycle = createTestCaseLifecycle();
+  const foreign = new DOMException("foreign cancellation", "AbortError");
+  const entered = Promise.withResolvers<void>();
+  const work = lifecycle.run(async () => {
+    await new Promise<void>((_resolve, reject) => {
+      // Same name as the teardown abort, but not the lifecycle's reason.
+      lifecycle.abort.signal.addEventListener("abort", () => reject(foreign), { once: true });
+      entered.resolve();
+    });
+  });
+  await entered.promise;
+  await lifecycle.close();
+  await expect(work).rejects.toBe(foreign);
+});

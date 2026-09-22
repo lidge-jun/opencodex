@@ -453,7 +453,8 @@ undrained root for ownership-checked stale recovery instead of blocking child cl
 retries. `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
 `tests/helpers/test-sandbox-cleanup.ts` also exposes case-scoped lifecycle ownership: cancellation
 starts listener stops while owned asynchronous work settles, and repeated close/stop calls share
-one promise. Expected teardown aborts are observed without hiding ordinary assertion failures.
+one promise. After teardown starts only the lifecycle's own abort reason is absorbed; any other
+error, including a foreign AbortError, still fails its case.
 Callers settle that lifecycle before draining producers/reaps and restoring or removing a home;
 the helper does not replace fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
 A test

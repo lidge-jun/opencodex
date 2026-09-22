@@ -60,7 +60,9 @@ export function createTestCaseLifecycle() {
       const operation = Promise.resolve().then(work).catch(error => {
         // Teardown cancellation is already owned by close(); a timed-out test must not
         // throw its expected abort later as an unrelated error in the following case.
-        if (closing && abort.signal.aborted && error instanceof Error && error.name === "AbortError") return;
+        // Only this lifecycle's own reason is absorbed: fetch and signal listeners reject
+        // with it, while any other AbortError is a real failure of the case.
+        if (closing && abort.signal.aborted && error === abort.signal.reason) return;
         throw error;
       });
       pending.add(operation);
