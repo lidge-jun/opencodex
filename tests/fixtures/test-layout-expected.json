@@ -765,6 +765,7 @@
   "management-provider-proto-override.test.ts": "server",
   "management-provider-synthetic-max.test.ts": "server",
   "management-provider-validation.test.ts": "server",
+  "management-provider-verbosity.test.ts": "server",
   "management-route-registry.test.ts": "server",
   "management-workflow-budget-routes.test.ts": "server",
   "memory-watchdog.test.ts": "server",
