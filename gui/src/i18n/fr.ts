@@ -974,7 +974,7 @@ export const fr: Record<TKey, string> = {
   "logs.modelTooltip.resolvedModel": "modèle résolu",
   "logs.modelTooltip.servedModel": "modèle servi",
   "logs.modelTooltip.wireModel": "modèle wire",
-  "logs.modelRerouteTitle": "Le modèle servi en amont diffère du modèle demandé",
+  "logs.modelRerouteTitle": "Le modèle servi en amont diffère du modèle envoyé",
   "logs.modelTooltip.requestedTier": "niveau demandé",
   "logs.modelTooltip.configuredTier": "niveau configuré",
   "logs.modelTooltip.responseTier": "niveau de réponse",

@@ -980,7 +980,7 @@ export const tr: Record<TKey, string> = {
   "logs.modelTooltip.resolvedModel": "çözümlenen model",
   "logs.modelTooltip.servedModel": "sunulan model",
   "logs.modelTooltip.wireModel": "wire model",
-  "logs.modelRerouteTitle": "Yukarı akış, istenenden farklı bir model sundu",
+  "logs.modelRerouteTitle": "Yukarı akış, gönderilenden farklı bir model sundu",
   "logs.modelTooltip.requestedTier": "istenen katman",
   "logs.modelTooltip.configuredTier": "yapılandırılan katman",
   "logs.modelTooltip.responseTier": "yanıt katmanı",

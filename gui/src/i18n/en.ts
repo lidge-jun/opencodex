@@ -993,7 +993,7 @@ export const en = {
   "logs.modelTooltip.resolvedModel": "resolved model",
   "logs.modelTooltip.servedModel": "served model",
   "logs.modelTooltip.wireModel": "wire model",
-  "logs.modelRerouteTitle": "Upstream served a different model than requested",
+  "logs.modelRerouteTitle": "Upstream served a different model than sent",
   "logs.modelTooltip.requestedTier": "requested tier",
   "logs.modelTooltip.configuredTier": "configured tier",
   "logs.modelTooltip.responseTier": "response tier",

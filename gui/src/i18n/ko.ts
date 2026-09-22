@@ -975,7 +975,7 @@ export const ko: Record<TKey, string> = {
   "logs.modelTooltip.resolvedModel": "해석된 모델",
   "logs.modelTooltip.servedModel": "제공된 모델",
   "logs.modelTooltip.wireModel": "와이어 모델",
-  "logs.modelRerouteTitle": "업스트림이 요청한 모델과 다른 모델을 제공했습니다",
+  "logs.modelRerouteTitle": "업스트림이 보낸 모델과 다른 모델을 제공했습니다",
   "logs.modelTooltip.requestedTier": "요청 티어",
   "logs.modelTooltip.configuredTier": "설정 티어",
   "logs.modelTooltip.responseTier": "응답 티어",

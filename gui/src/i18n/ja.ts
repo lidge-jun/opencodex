@@ -904,7 +904,7 @@ export const ja: Record<TKey, string> = {
   "logs.modelTooltip.resolvedModel": "解決後モデル",
   "logs.modelTooltip.servedModel": "提供モデル",
   "logs.modelTooltip.wireModel": "ワイヤーモデル",
-  "logs.modelRerouteTitle": "アップストリームが要求されたモデルと異なるモデルを提供しました",
+  "logs.modelRerouteTitle": "アップストリームが送信したモデルと異なるモデルを提供しました",
   "logs.modelTooltip.requestedTier": "要求ティア",
   "logs.modelTooltip.configuredTier": "設定ティア",
   "logs.modelTooltip.responseTier": "応答ティア",

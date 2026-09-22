@@ -944,7 +944,7 @@ export const de: Record<TKey, string> = {
   "logs.modelTooltip.resolvedModel": "aufgelöstes Modell",
   "logs.modelTooltip.servedModel": "bereitgestelltes Modell",
   "logs.modelTooltip.wireModel": "Wire-Modell",
-  "logs.modelRerouteTitle": "Upstream hat ein anderes Modell bereitgestellt als angefordert",
+  "logs.modelRerouteTitle": "Upstream hat ein anderes Modell bereitgestellt als gesendet",
   "logs.modelTooltip.requestedTier": "angeforderte Stufe",
   "logs.modelTooltip.configuredTier": "konfigurierte Stufe",
   "logs.modelTooltip.responseTier": "Antwortstufe",

@@ -967,7 +967,7 @@ export const vi: Record<TKey, string> = {
   "logs.modelTooltip.resolvedModel": "model đã giải quyết (resolved model)",
   "logs.modelTooltip.servedModel": "model được phục vụ",
   "logs.modelTooltip.wireModel": "model wire",
-  "logs.modelRerouteTitle": "Upstream đã phục vụ một model khác với model được yêu cầu",
+  "logs.modelRerouteTitle": "Upstream đã phục vụ một model khác với model đã gửi",
   "logs.modelTooltip.requestedTier": "bậc (tier) được yêu cầu",
   "logs.modelTooltip.configuredTier": "bậc (tier) cấu hình",
   "logs.modelTooltip.responseTier": "bậc (tier) phản hồi",
