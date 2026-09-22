@@ -33,3 +33,22 @@ helper twice; it is dropped from this lane and reported to the maintainer for a 
    (screenshot asset only; the PR description links the existing capture).
 
 Cap check: `gui/src/pages/Models.tsx` at most 2,792.
+
+## Amendments after review (wp4 P)
+
+- #5562 `3f3fdf17f4`: drop its early combo intersection hunk in
+  `src/server/responses/request-prepare.ts`. It sampled a combo target with `routeModel` before
+  dispatch, so the decision could follow a different pick than the one sent and could advance
+  round-robin or random state. Dev's #4129 rule stays: a shadow call rewritten to a combo enters
+  the combo and carries `shadowCallIntercepted`. The test
+  `a combo whose first target intersects the source still routes as a combo` keeps dev's
+  assertions. The combo-child isolation marker and its tests remain.
+- #5562 `bb49c9f582` follow-up: the bridge replay test configures an inbound API key, derives the
+  principal with `resolveContextPrincipal`, passes the full loopback admission, and adds a keyless
+  miss control.
+- #5556 `138069331f` follow-up: accept `attributionSince` only in canonical
+  `toISOString()` form; positive fixtures use `.000Z`; malformed cases include `"0"`.
+- #5556 selector encoding: `encodePersistedRequestedModel` must stay idempotent because rows are
+  normalized again on read, so a literal selector equal to another selector's encoded form
+  aliases it. Document the limitation in the code comment and pin it with a test; a digest column
+  would remove it and is reported to the maintainer.
