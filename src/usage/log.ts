@@ -5,7 +5,7 @@ import { getConfigDir } from "../config";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { sanitizeLogMetadataString } from "../lib/redact";
+import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
 import { normalizeAttemptDeliverySummary } from "./attempt-delivery";
 import {
@@ -811,11 +811,16 @@ function capMetadataString(s: string): string {
 }
 
 const MAX_SERVED_MODEL_LENGTH = 200;
-/** An upstream model is an identifier, never free-form text to truncate into one. */
+/**
+ * An upstream model is an identifier, never free-form text to truncate into one. A value the
+ * secret redactor would change is dropped rather than logged, because credential-shaped text can
+ * fit the identifier alphabet.
+ */
 export function sanitizeServedModel(value: unknown): string | undefined {
   return typeof value === "string"
     && value.length <= MAX_SERVED_MODEL_LENGTH
     && /^[A-Za-z0-9._:/@+-]+$/.test(value)
+    && redactSecretString(value) === value
     ? value
     : undefined;
 }
