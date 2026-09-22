@@ -428,6 +428,7 @@ can still fail when a recorded session has no surviving rollout file.
 | `GET /api/client-config?client=...` | Build a read-only client config for any supported file integration | 400 unsupported client; 503 catalog unavailable |
 | `PUT /api/disabled-models` | Replace the shared disabled-model list | 400 invalid JSON |
 | `PUT /api/model-visibility` | Atomically change provider- or model-level visibility | 400 invalid provider, scope, target, or body; 409 `initial_model_selection_pending` (refresh the model list and retry) |
+| `GET, PUT /api/global-model-visibility` | Read global hidden model IDs or set one exact ID with `{ "id": "model-id", "enabled": false }` | 400 invalid ID, enabled flag, or body |
 | `GET, POST /api/custom-models` | List custom models or add one | 400 invalid fields; 404 provider missing; 409 duplicate model |
 | `PUT, DELETE /api/custom-models/{id}` | Edit or delete one custom model | 400 invalid id/fields; 404 not found; 409 duplicate model |
 | `GET, PUT /api/selected-models` | Read provider allowlists and availability, or replace one allowlist | 400 missing provider/body; 404 unknown provider; PUT 409 `initial_model_selection_pending` |
@@ -442,7 +443,7 @@ manual model.
 
 Valid PUT requests to `/api/selected-models` and `/api/model-presets` return HTTP 409 with code `initial_model_selection_pending` until a reliable initial model list is available. Refresh model discovery (for example, `GET /api/models`) and retry after it succeeds.
 
-Successful visibility/selection writes to `/api/disabled-models`, `/api/model-visibility`,
+Successful visibility/selection writes to `/api/disabled-models`, `/api/model-visibility`, `/api/global-model-visibility`,
 `/api/selected-models`, and `/api/model-presets` report follow-up outcomes in `catalogRefresh`
 and `clientIntegrations` when that refresh path runs. HTTP 200 and `ok: true` confirm the
 selection save; they do not guarantee every client catalog updated. Inspect

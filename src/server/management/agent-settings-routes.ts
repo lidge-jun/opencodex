@@ -2,7 +2,7 @@ import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-sta
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
-import { catalogModelSlug, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
+import { catalogModelSlug, effectiveDisabledModels, filterCatalogVisibleModels, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import { mergeModelPinnedEfforts, modelPinnedEffortsConfigError } from "../../config/provider-validation";
 import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolveMultiAgentMode } from "../../config/multi-agent-surface";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
@@ -530,7 +530,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // picks + available models/efforts; PUT sets or clears them.
   if (url.pathname === "/api/injection-model" && req.method === "GET") {
     const models = await fetchAllModels(config);
-    const disabled = new Set(config.disabledModels ?? []);
+    const disabled = effectiveDisabledModels(config);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { CODEX_REASONING_LEVELS } = await import("../../reasoning-effort");
     const nativeModels = listCatalogNativeSlugs()
@@ -711,7 +711,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // the first five eligible visible rows by display priority; OCX guidance uses natural ranks.
   if (url.pathname === "/api/subagent-models" && req.method === "GET") {
     const models = await (deps.fetchAllModels ?? fetchAllModels)(config);
-    const disabled = new Set(config.disabledModels ?? []);
+    const disabled = effectiveDisabledModels(config);
     // Native gpt (passthrough) are also valid subagent picks — they're picker-visible models in the
     // catalog, just buried by priority. List them first so the user can feature them over routed.
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
@@ -846,7 +846,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
   // Priority-ordered subagent model fallback chain for quota-aware spawn routing.
   if (url.pathname === "/api/subagent-model-fallback" && req.method === "GET") {
     const models = await fetchAllModels(config);
-    const disabled = new Set(config.disabledModels ?? []);
+    const disabled = effectiveDisabledModels(config);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const visibleRouted = [...new Set(models
       .filter(m => ![...disabled].some(stored =>
@@ -1283,7 +1283,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
     const { buildClaudeContextWindows, effectiveModelEnv } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
-    const disabled = new Set(config.disabledModels ?? []);
+    const disabled = effectiveDisabledModels(config);
     const isDisabled = (provider: string, id: string) =>
       [...disabled].some(stored => slugEquals(stored, provider, id));
     const available = [

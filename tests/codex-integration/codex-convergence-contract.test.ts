@@ -374,10 +374,10 @@ test("a failure cause never carries message text, paths or identifiers (#1784)",
   expect(body).not.toContain("failed writing");
 });
 
-test("the route inventory contains exactly the specified 8 + 14 + 2 + 2 convergence paths", () => {
+test("the route inventory contains exactly the specified 8 + 15 + 2 + 2 convergence paths", () => {
   const counts = Object.fromEntries([
     ["provider-routes.ts", 8],
-    ["model-routes.ts", 14],
+    ["model-routes.ts", 15],
     ["combo-routes.ts", 2],
     ["agent-settings-routes.ts", 2],
   ].map(([file, expected]) => {
@@ -387,7 +387,8 @@ test("the route inventory contains exactly the specified 8 + 14 + 2 + 2 converge
     if (file === "model-routes.ts") {
       const helper = source.slice(source.indexOf("const convergeVisibleCatalogs ="), source.indexOf('if (url.pathname ==='));
       expect(helper.match(/await convergeCodexCatalog\(\)/g)?.length).toBe(1);
-      expect(shared).toBe(5);
+      // The sixth shared caller is PUT /api/global-model-visibility.
+      expect(shared).toBe(6);
     }
     const count = file === "model-routes.ts" ? direct - 1 + shared : direct;
     expect(count).toBe(expected);
@@ -396,7 +397,7 @@ test("the route inventory contains exactly the specified 8 + 14 + 2 + 2 converge
   }));
   expect(counts).toEqual({
     "provider-routes.ts": 8,
-    "model-routes.ts": 14,
+    "model-routes.ts": 15,
     "combo-routes.ts": 2,
     "agent-settings-routes.ts": 2,
   });

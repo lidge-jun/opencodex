@@ -21,6 +21,16 @@ export function modelsTabHash(tab: ModelsTab): string {
   return tab === "catalog" ? "models" : `models/${tab}`;
 }
 
+export function modelsProviderHash(provider: string): string {
+  return `models/provider/${encodeURIComponent(provider)}`;
+}
+
+export function readModelsProvider(hash = window.location.hash): string | null {
+  const match = /^models\/provider\/([^/]+)$/.exec(normalizeHashPath(hash));
+  if (!match) return null;
+  try { return decodeURIComponent(match[1]); } catch { return null; }
+}
+
 /**
  * Legacy top-level hashes resolve here too, and that is not redundancy with the
  * resolver's redirect.

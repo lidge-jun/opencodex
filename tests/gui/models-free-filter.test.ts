@@ -101,8 +101,8 @@ describe("free-only runs before the page slice (#3666)", () => {
 
   test("the group header counts the scoped set, not the whole provider", () => {
     // With Free only on, a header reading `rows.length` claims more models than the list under
-    // it shows. The bulk actions read the same set, so "All on" cannot reach rows the header is
-    // not counting.
+    // it shows. Provider-scoped bulk actions moved to Providers → Models, so no bulk write may
+    // come back into this group and reach rows the header is not counting.
     //
     // Scoped to the renderGroup body on purpose. The provider rail further down the file renders
     // the same models.active label from its own locally computed activeCount, and it SHOULD keep
@@ -114,7 +114,7 @@ describe("free-only runs before the page slice (#3666)", () => {
     const group = modelsPage.slice(start, end);
     expect(group).toContain('t("models.active", { active: activeCount, total: scoped.length })');
     expect(group).toContain("const activeCount = scoped.filter(isVisible).length");
-    expect(group).toContain("scoped.map(m => ({ id: m.id, native: m.native === true }))");
+    expect(group).not.toContain("models.allOn");
     expect(group).not.toContain('total: rows.length })');
   });
 

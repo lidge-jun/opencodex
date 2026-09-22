@@ -48,6 +48,8 @@ export type ManagementModelRow = Partial<CatalogModel> & {
   id: string;
   namespaced: string;
   disabled: boolean;
+  localDisabled?: boolean;
+  globalDisabled?: boolean;
   initialSelectionPending?: boolean;
   native?: boolean;
   custom?: boolean;
@@ -107,6 +109,7 @@ export async function listManagementModelRows(
     ]))[0]
     : [...options.models];
   const disabled = new Set(config.disabledModels ?? []);
+  const globalDisabled = new Set(Array.isArray(config.globalDisabledModelIds) ? config.globalDisabledModelIds : []);
   // Native GPT passthrough rows lead (provider "openai", bare-slug namespaced ids): sourced
   // from the static supported set so a disabled model stays listed and re-enableable.
   const nativeRows = nativeModelRows(config).map(row => ({ ...row, metadataSlug: row.slug }));
@@ -130,7 +133,9 @@ export async function listManagementModelRows(
       provider: "openai",
       id: row.slug,
       namespaced: row.slug,
-      disabled: row.disabled,
+      disabled: row.disabled || globalDisabled.has(row.metadataSlug),
+      localDisabled: row.disabled,
+      globalDisabled: globalDisabled.has(row.metadataSlug),
       native: true,
       reasoningEfforts,
       ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
@@ -147,11 +152,14 @@ export async function listManagementModelRows(
   });
   const customModels: ManagementModelRow[] = (config.customModels ?? []).map(cm => {
     const namespaced = routedSlug(cm.provider, cm.modelId);
+    const localDisabled = [...disabled].some(stored => slugEquals(stored, cm.provider, cm.modelId));
     return {
       provider: cm.provider,
       id: cm.modelId,
       namespaced,
-      disabled: [...disabled].some(stored => slugEquals(stored, cm.provider, cm.modelId)),
+      disabled: localDisabled || globalDisabled.has(cm.modelId),
+      localDisabled,
+      globalDisabled: globalDisabled.has(cm.modelId),
       custom: true,
       customId: cm.id,
       displayName: cm.displayName,
@@ -197,13 +205,16 @@ export async function listManagementModelRows(
     const contextCap = providerContextCap(config, m.provider);
     const nativeAlias = m.provider === "combo" && m.nativeAlias === true;
     const displayName = effectiveManagementDisplayName(config, m);
+    const localDisabled = [...disabled].some(stored => (
+      (!nativeAlias && stored === namespaced) || slugEquals(stored, m.provider, m.id)
+    ));
     return {
       ...m,
       ...displayName,
       namespaced,
-      disabled: [...disabled].some(stored => (
-        (!nativeAlias && stored === namespaced) || slugEquals(stored, m.provider, m.id)
-      )),
+      disabled: localDisabled || globalDisabled.has(m.id),
+      localDisabled,
+      globalDisabled: globalDisabled.has(m.id),
       ...(contextCap !== undefined ? { contextCap, contextCapped: m.contextCapped === true } : {}),
     };
   }).filter((row): row is ManagementModelRow => row !== null);

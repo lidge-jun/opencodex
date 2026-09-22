@@ -93,7 +93,10 @@ async function api(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     for (const entry of target.targets) {
       const found = rows.find(value => value.provider === target.provider && value.id === entry.id && (value.native === true) === (entry.native === true));
       if (!found || found.custom) return Response.json({ error: "invalid target" }, { status: 400 });
-      found.disabled = !target.enabled;
+      if (found.localDisabled !== undefined || found.globalDisabled !== undefined) {
+        found.localDisabled = !target.enabled;
+        found.disabled = found.localDisabled || found.globalDisabled === true;
+      } else found.disabled = !target.enabled;
     }
     return Response.json({ ok: true, scope: target.scope, provider: target.provider, enabled: target.enabled,
       disabled: rows.filter(value => value.disabled).map(value => value.namespaced), catalogRefresh: committed });
@@ -220,6 +223,37 @@ for (const counterpart of ["native", "discovered", "none"] as const) {
     await refreshCurrent(); expect(ids()).toEqual(counterpart === "none" ? [] : ["same"]);
   });
 }
+
+test("provider restore keeps a global hide and a local hide stays scoped", async () => {
+  rows = [row("shared", { disabled: true, localDisabled: true, globalDisabled: true }),
+    row("shared", { provider: "other", namespaced: "other/shared", disabled: true, globalDisabled: true, localDisabled: false })];
+  await mount(); await current();
+  const restore = host.querySelector<HTMLButtonElement>(".pws-hidden-models button")!;
+  expect(restore.textContent).toBe("Show for this provider");
+  await click(restore);
+  await waitFor(() => requests.some(request => request.path === "/api/model-visibility"));
+  await current();
+  expect(requests.at(-1)?.body).toMatchObject({ provider: "vendor", enabled: true });
+  expect(rows[0]).toMatchObject({ disabled: true, localDisabled: false, globalDisabled: true });
+  expect(rows[1]).toMatchObject({ disabled: true, localDisabled: false, globalDisabled: true });
+  expect(host.textContent).toContain("Hidden across providers");
+});
+
+test("provider bulk All off / All on writes one provider-scoped rule and leaves global hides alone", async () => {
+  rows = [row("a"), row("b"), row("shared", { disabled: true, localDisabled: false, globalDisabled: true })];
+  await mount(); await current();
+  const bulk = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === label)!;
+  expect(bulk("All on").disabled).toBe(true);
+  await click(bulk("All off"));
+  await waitFor(() => requests.length === 1); await current();
+  expect(requests[0]).toMatchObject({ path: "/api/model-visibility", method: "PUT",
+    body: { scope: "provider", provider: "vendor", enabled: false, targets: [{ id: "a" }, { id: "b" }, { id: "shared" }] } });
+  expect(host.querySelectorAll(".pws-hidden-models code")).toHaveLength(3);
+  await click(bulk("All on"));
+  await waitFor(() => requests.length === 2); await current();
+  expect(requests[1]).toMatchObject({ body: { scope: "provider", provider: "vendor", enabled: true } });
+  expect(rows.find(value => value.id === "shared")).toMatchObject({ localDisabled: false, globalDisabled: true, disabled: true });
+});
 
 test("same-label custom and account-native rows keep disjoint Delete/Hide identities", async () => {
   const id = "account-work/gpt-5.5";
@@ -373,6 +407,8 @@ test("rail counts inventory before search/cap and routed selection does not badg
   rows.push(row("hidden", { disabled: true })); selected = { vendor: ["model-304"] };
   available = { vendor: rows.map(value => value.id) };
   await mount(); await waitFor(() => ids().length === 300);
+  expect(host.textContent).toContain("305 of 306 listed");
+  expect(host.textContent).toContain("Models controls the same model ID across all providers");
   const vendorOptions = host.querySelectorAll('[role="option"][title="Vendor"]');
   expect(vendorOptions).toHaveLength(1);
   const rail = vendorOptions[0]!;

@@ -618,6 +618,7 @@ proxy to be running (`ocx start`, or an installed service).
 | `list-custom` | `--json` | Show all custom models with the `custom-id` the other subcommands take. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Make one model visible to Codex. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Hide one model from Codex. |
+| `<enable\|disable> <model-id> --global` | `--json` | Show or hide one exact model ID across every provider that offers it, including providers added later. The ID is taken verbatim, so a slash is part of it. |
 | `provider <name> <on\|off>` | `--json` | Enable or disable every model of one provider in a single write. |
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Read or replace the provider model allowlist. `--clear` removes the allowlist so every model is offered. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Read or set the context-window cap, globally or per provider. `value <tokens> --set-all` also re-points every routed provider (like the dashboard toggle); without it the value only becomes the default. `provider ... on --value <tokens>` sets an explicit cap for that provider only (`--value` is valid with `on` only). |
@@ -627,6 +628,7 @@ proxy to be running (`ocx start`, or an installed service).
 ocx models live --json                                  # what Codex can actually see right now
 ocx models disable anthropic/claude-haiku-4             # hide one routed model
 ocx models enable gpt-5.6-sol                           # no slash, so it is treated as native
+ocx models disable glm-5 --global                        # hide glm-5 on every provider
 ocx models provider zenmux off                          # hide a noisy provider wholesale
 ocx models selected anthropic --set claude-opus-5,claude-fable-5
 ocx models selected anthropic --clear                   # drop the allowlist again

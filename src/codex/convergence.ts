@@ -8,6 +8,7 @@ import { getAuthStorePath } from "../oauth/store";
 import type { OcxConfig } from "../types";
 import { captureCatalogAdmissionSnapshot } from "./catalog-admission";
 import { legacyCustomModelCatalogSlugs } from "./custom-model-catalog-migration";
+import { effectiveDisabledModels } from "./catalog/model-visibility";
 import {
   type CatalogGatherPathKind,
   type CatalogSourceForGather,
@@ -300,7 +301,8 @@ function prepareCatalog(
   // Unknown account-native ids have no safe bare/global identity. They are only projected through
   // selector-qualified rows when a live selector is configured.
   const observedNativeSlugs: string[] = [];
-  const disabledNative = disabledNativeSlugs(config);
+  const effectiveDisabled = effectiveDisabledModels(config);
+  const disabledNative = disabledNativeSlugs({ disabledModels: [...effectiveDisabled] });
   const openaiContextCap = nativeContextLimits(config);
   const nativeCatalogModels = mergeCatalogModelsWithNativeRecovery(
     active?.models ?? catalog.models ?? [],
@@ -360,7 +362,7 @@ function prepareCatalog(
     featured,
     wsEnabled: websocketsEnabled(config),
     template,
-    disabledModels: new Set(config.disabledModels ?? []),
+    disabledModels: effectiveDisabled,
     selectedModelsByProvider,
     gatheredProviderNames,
     pendingProviderNames: pendingModelSelectionProviders(config),

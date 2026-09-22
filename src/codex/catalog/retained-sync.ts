@@ -53,6 +53,7 @@ import { isMultiAgentV2Enabled } from "../features";
 import { clampCatalogModelsToCodexSupport } from "./effort";
 import { suppressedSyntheticMaxCatalogSlugs } from "./model-hints";
 import { filterCatalogVisibleModels, gatherRoutedModels, type CatalogGatherProviderModelOutcome } from "./provider-fetch";
+import { effectiveDisabledModels } from "./model-visibility";
 import { dedupeCatalogEntriesBySlug, enforceCatalogSlugUniqueness, exactComboCatalogSlugs, type ComboCatalogOmission } from "./aggregation";
 import {
   withCatalogWriteSerialization,
@@ -469,6 +470,7 @@ function writeRetainedCatalogSync({
   // #636: when the user only configured non-OpenAI providers (e.g. kimi), do not advertise
   // bare gpt-* rows that hard-404 via NoEnabledOpenAiProviderError. Keep natives when no
   // providers are configured yet (fresh install / catalog bootstrap tests).
+  const effectiveDisabled = effectiveDisabledModels(config);
   const accountBoundEntries = includeAccountBoundNativeOpenAi && accountSelectors.length > 0
     ? buildCatalogEntriesFromObservedState({
       template: template ? JSON.parse(JSON.stringify(template)) : null,
@@ -480,7 +482,7 @@ function writeRetainedCatalogSync({
       exactComboSlugs,
       accountSelectors,
       suppressedBareNativeSlugs,
-      disabledNativeAccountSlugs: new Set([...disabledNativeSlugs(config)].filter(slug => suppressedBareNativeSlugs.has(slug))),
+      disabledNativeAccountSlugs: new Set([...disabledNativeSlugs({ disabledModels: [...effectiveDisabled] })].filter(slug => suppressedBareNativeSlugs.has(slug))),
       multiAgentV2Enabled,
       keepNativeChatGptOnV1: config.keepNativeChatGptOnV1 === true,
       openaiContextCap,
@@ -499,7 +501,7 @@ function writeRetainedCatalogSync({
     featured,
     wsEnabled,
     template,
-    disabledModels: new Set(config.disabledModels ?? []),
+    disabledModels: effectiveDisabled,
     selectedModelsByProvider,
     gatheredProviderNames,
     pendingProviderNames: pendingModelSelectionProviders(config),

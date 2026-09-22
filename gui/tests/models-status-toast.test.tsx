@@ -62,7 +62,7 @@ beforeEach(() => {
     if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
     if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: false, model: "" });
     if (url.endsWith("/api/v2")) return Response.json({ enabled: false, agentsMaxThreadsConflict: false, multiAgentMode: "default" });
-    if (url.endsWith("/api/model-visibility") && init?.method === "PUT") return Response.json({ ok: true });
+    if (url.endsWith("/api/global-model-visibility") && init?.method === "PUT") return Response.json({ ok: true });
     return new Response(null, { status: 404 });
   }) as typeof fetch;
   container = testWindow.document.createElement("div");
@@ -121,9 +121,9 @@ test("apply feedback renders as a fixed toast, not an inline notice before the w
     await Promise.resolve();
   });
 
-  // Hide the whole provider group, the same action that used to pop the inline notice.
+  // Hide one model globally, which reports the same catalog apply feedback.
   await act(async () => {
-    const off = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "All off")!;
+    const off = container.querySelector<HTMLButtonElement>('[aria-label="Show claude-sonnet-5 across providers"]')!;
     off.click();
     await new Promise(resolve => testWindow.setTimeout(resolve, 0));
     await Promise.resolve();
@@ -155,7 +155,7 @@ test("success toast expires after 6s and a repeated action re-arms it", async ()
     await Promise.resolve();
   });
 
-  const offButton = () => [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent === "All off")!;
+  const offButton = () => container.querySelector<HTMLButtonElement>('[aria-label="Show claude-sonnet-5 across providers"]')!;
   const clickOff = async () => {
     await act(async () => {
       offButton().click();
@@ -275,8 +275,8 @@ async function waitForModelsFeedback(predicate: () => boolean): Promise<void> {
 }
 
 function allOffButton(): HTMLButtonElement {
-  const button = [...container.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent === "All off");
-  if (!button) throw new Error("All off button not found");
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="Show claude-sonnet-5 across providers"]');
+  if (!button) throw new Error("Global model switch not found");
   return button;
 }
 
@@ -290,14 +290,14 @@ async function mountModelsForRefreshWarning(): Promise<void> {
     root.render(<LanguageProvider><Models apiBase="http://localhost" /></LanguageProvider>);
   });
   await waitForModelsFeedback(() => [...container.querySelectorAll<HTMLButtonElement>("button")]
-    .some(button => button.textContent === "All off" && !button.disabled));
+    .some(button => button.getAttribute("aria-label") === "Show claude-sonnet-5 across providers" && !button.disabled));
 }
 
 test("a saved selection keeps its success toast and separate catalog warning until the next successful refresh", async () => {
   const fallback = globalThis.fetch;
   let mutations = 0;
   globalThis.fetch = (async (input, init) => {
-    if (String(input).endsWith("/api/model-visibility") && init?.method === "PUT") {
+    if (String(input).endsWith("/api/global-model-visibility") && init?.method === "PUT") {
       mutations += 1;
       return Response.json({ ok: true, clientIntegrations: mutations === 1 ? catalogRefreshFailures : [
         { client: "pi", ok: true, changed: true },
@@ -337,7 +337,7 @@ test.each([false, true])("HTTP save failure does not publish a new saved-selecti
   let rejectSave = !priorWarning;
   let mutations = 0;
   globalThis.fetch = (async (input, init) => {
-    if (String(input).endsWith("/api/model-visibility") && init?.method === "PUT") {
+    if (String(input).endsWith("/api/global-model-visibility") && init?.method === "PUT") {
       mutations += 1;
       return rejectSave
         ? Response.json({ error: "Selection could not be saved", clientIntegrations: [
@@ -390,7 +390,7 @@ for (const reportsRefresh of [false, true]) {
           ...(reportsRefresh ? { clientIntegrations: [{ client: "pi", ok: true }, { client: "aside", profileId: 2, ok: true }] } : {}),
         });
       }
-      if (String(input).endsWith("/api/model-visibility") && init?.method === "PUT") {
+      if (String(input).endsWith("/api/global-model-visibility") && init?.method === "PUT") {
         return Response.json({ ok: true, clientIntegrations: catalogRefreshFailures });
       }
       return fallback(input, init);
@@ -421,7 +421,7 @@ test.each(["preset", "visibility"] as const)("an in-flight %s mutation blocks th
   globalThis.fetch = (async (input, init) => {
     const path = new URL(String(input)).pathname;
     if (path === "/api/model-presets" && init?.method !== "PUT") return Response.json(providerPresetPreview);
-    if ((path === "/api/model-presets" || path === "/api/model-visibility") && init?.method === "PUT") {
+    if ((path === "/api/model-presets" || path === "/api/global-model-visibility") && init?.method === "PUT") {
       writes.push(path);
       return gateMutations ? responseGate : Response.json({ ok: true, clientIntegrations: catalogRefreshFailures });
     }
@@ -434,7 +434,7 @@ test.each(["preset", "visibility"] as const)("an in-flight %s mutation blocks th
   const warningBefore = container.querySelector(".models-integration-warning")?.textContent;
   expect(warningBefore).toContain(integrationWarningCopy);
   gateMutations = true;
-  const expectedWrites = ["/api/model-visibility", first === "preset" ? "/api/model-presets" : "/api/model-visibility"];
+  const expectedWrites = ["/api/global-model-visibility", first === "preset" ? "/api/model-presets" : "/api/global-model-visibility"];
   try {
     // Both clicks occur before React can paint disabled controls: the shared flight guard owns this race.
     await act(async () => {

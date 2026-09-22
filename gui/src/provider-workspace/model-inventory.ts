@@ -23,6 +23,9 @@ export function parseModelInventory(value: unknown): ModelRow[] {
     const id = identity(row.id);
     const namespaced = identity(row.namespaced);
     if (typeof row.disabled !== "boolean") throw new Error("Invalid model visibility");
+    for (const flag of ["localDisabled", "globalDisabled"]) {
+      if (row[flag] !== undefined && typeof row[flag] !== "boolean") throw new Error("Invalid model visibility");
+    }
     for (const flag of ["native", "custom", "initialSelectionPending", "contextCapped"]) {
       if (row[flag] !== undefined && typeof row[flag] !== "boolean") throw new Error("Invalid model flag");
     }
@@ -41,6 +44,7 @@ export function parseModelInventory(value: unknown): ModelRow[] {
     const group = groups.get(provider) ?? new Map<string, ModelRow>();
     const previous = group.get(namespaced);
     if (previous && (previous.id !== id || previous.disabled !== parsed.disabled
+      || previous.localDisabled !== parsed.localDisabled || previous.globalDisabled !== parsed.globalDisabled
       || !!previous.native !== !!parsed.native || !!previous.custom !== !!parsed.custom
       || previous.customId !== parsed.customId || !!previous.initialSelectionPending !== !!parsed.initialSelectionPending)) {
       throw new Error("Conflicting model selector");

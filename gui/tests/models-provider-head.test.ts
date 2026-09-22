@@ -13,8 +13,11 @@ test("Models provider headers use wrap-safe classes and a sibling toggle boundar
   // Both Classic and Workspace share renderGroup — no duplicate unclassed group-head for providers.
   const providerHeads = src.match(/models-provider-head/g) ?? [];
   expect(providerHeads.length).toBeGreaterThanOrEqual(1);
-  expect(src).toContain("models.allOn");
-  expect(src).toContain("models.allOff");
+  // Provider-scoped bulk visibility moved to Providers → Models; Models switches are cross-provider.
+  expect(src).not.toContain("models.allOn");
+  const providerModels = await Bun.file(new URL("../src/components/provider-workspace/ProviderModels.tsx", import.meta.url)).text();
+  expect(providerModels).toContain("models.allOn");
+  expect(providerModels).toContain("models.allOff");
 });
 
 test("Models workspace stacks via content-width container query before mobile drawer", async () => {

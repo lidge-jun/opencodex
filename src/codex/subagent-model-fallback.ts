@@ -39,6 +39,7 @@ import { routeModel, type RouteResult } from "../router";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { codexAccountNamespaceForModel } from "./account-namespace-match";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_MAIN_DRAIN_SENTINEL_MODELS } from "./catalog/native-models";
+import { effectiveDisabledModels } from "./catalog/metadata";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import {
   getUpstreamHostHealth,
@@ -91,7 +92,7 @@ function healthKey(model: string, accountId: string | null, poolScoped: boolean)
 }
 
 function isDisabledFallbackModel(model: string, config: OcxConfig): boolean {
-  const disabled = config.disabledModels ?? [];
+  const disabled = [...effectiveDisabledModels(config)];
   if (disabled.length === 0) return false;
   if (!model.includes("/")) {
     return disabled.some(stored => stored === model || slugEquals(stored, "openai", model));

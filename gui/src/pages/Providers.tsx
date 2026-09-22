@@ -22,6 +22,7 @@ import { ProvidersPageModals } from "./providers-page-modals";
 import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-page-utils";
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 import { useProviderModelsNotice } from "./use-provider-models-notice";
+import { modelsProviderHash } from "./models-tab";
 import { navigateHash } from "../hash-routing";
 
 /** The page's real refresh tickets: only the captured report epoch and account read can settle them. */
@@ -609,7 +610,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             modelRows={data.modelRows}
             modelRevision={data.modelRevision}
             modelRowsReady={data.modelRowsReady}
-            onOpenModels={() => navigateHash("models")}
+            onOpenModels={() => navigateHash(modelsProviderHash(item.name))}
             modelsLoading={data.modelsLoading}
             modelsLoadFailed={data.modelsLoadFailed}
             onRetryModels={data.onRetryModels}

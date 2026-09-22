@@ -25,6 +25,7 @@ export default function ProviderModelChip({ row, disambiguate, copied, isDefault
       </button>
       {isDefault && <span className="badge badge-muted pws-model-flag">{t("prov.defaultBadge")}</span>}
       {selected && <span className="badge badge-accent pws-model-flag">{t("pws.selected")}</span>}
+      {row.globalDisabled && <span className="badge badge-muted pws-model-flag">{t("pws.globallyHidden")}</span>}
       {action && <button type="button" className="btn btn-ghost btn-sm btn-icon-only"
         onClick={(event: MouseEvent<HTMLButtonElement>) => onRemove(event.currentTarget)}
         disabled={disabled} aria-label={`${label}: ${row.namespaced}`} title={`${label}: ${row.namespaced}`}>

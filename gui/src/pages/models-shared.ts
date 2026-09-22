@@ -30,6 +30,8 @@ export interface ModelRow {
   id: string;
   namespaced: string;
   disabled: boolean;
+  localDisabled?: boolean;
+  globalDisabled?: boolean;
   initialSelectionPending?: boolean;
   native?: boolean;
   custom?: boolean;

@@ -80,6 +80,7 @@ Routing and catalog visibility are separate controls:
 - `disabledModels` hides namespaced routed ids from the Codex catalog and `/v1/models`; a bare native
   GPT slug is kept in the catalog with `visibility: "hide"`. It does **not** reject a direct request
   for that model.
+- `globalDisabledModelIds` hides an exact upstream model ID across every provider that offers it, including providers configured later. The dashboard Models page edits this global list; Providers → Models edits provider-specific visibility. Either hide takes precedence over a visible setting at the other level.
 - A provider's non-empty `selectedModels` is another catalog allowlist. Live discovery and direct
   routing still work; only catalog and `/v1/models` emission are narrowed.
 - Fresh installs set `modelDiscovery.newModelPolicy` to `"off"`. After the first successful live

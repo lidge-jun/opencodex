@@ -127,6 +127,9 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   let selected = ["gemini-pro", "gemini-flash"];
   const disabled = new Set(["gpt-oss"]);
   const visibilityBodies: Array<{ scope: string; targets: Array<{ id: string }>; enabled: boolean }> = [];
+  // Models-page switches write one exact model ID for every provider, never a provider-scoped rule.
+  const globalDisabled = new Set<string>();
+  const globalBodies: Array<{ id: string; enabled: boolean }> = [];
   const contextBodies: Array<{
     contextWindow: number | null;
     modelContextWindows: Record<string, number | null>;
@@ -145,7 +148,7 @@ test("Models page combines final visibility, atomic actions, discovery status, a
   let modelFetches = 0;
   let resolveModels!: (response: Response) => void;
   const firstModels = new Promise<Response>(resolve => { resolveModels = resolve; });
-  const rows = () => ids.map(id => ({ provider, id, namespaced: `${provider}/${id}`, disabled: initialSelectionPending || disabled.has(id), ...(initialSelectionPending ? { initialSelectionPending: true } : {}) }));
+  const rows = () => ids.map(id => ({ provider, id, namespaced: `${provider}/${id}`, disabled: initialSelectionPending || disabled.has(id) || globalDisabled.has(id), localDisabled: disabled.has(id), globalDisabled: globalDisabled.has(id), ...(initialSelectionPending ? { initialSelectionPending: true } : {}) }));
   testWindow.sessionStorage.setItem("ocx.models.catalog.v1:http://localhost", JSON.stringify({
     models: rows(),
     providers: [{ name: provider, liveModels: true, models: ids }],
@@ -186,6 +189,14 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
     if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
     if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: true, model: `${provider}/gemini-pro` });
+    if (url.endsWith("/api/global-model-visibility") && init?.method === "PUT") {
+      const body = JSON.parse(String(init.body)) as (typeof globalBodies)[number];
+      globalBodies.push(body);
+      if (failNext) { failNext = false; return Response.json({ error: "failed" }, { status: 500 }); }
+      if (body.enabled) globalDisabled.delete(body.id);
+      else globalDisabled.add(body.id);
+      return Response.json({ ok: true, disabled: [...globalDisabled] });
+    }
     if (url.endsWith("/api/model-visibility") && init?.method === "PUT") {
       const body = JSON.parse(String(init.body)) as (typeof visibilityBodies)[number];
       visibilityBodies.push(body);
@@ -225,11 +236,12 @@ test("Models page combines final visibility, atomic actions, discovery status, a
       await Promise.resolve();
     });
 
-    const switchFor = (id: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="${provider}/${id}"]`)!;
+    const switchFor = (id: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="Show ${id} across providers"]`)!;
     const buttonText = (text: string) => [...container.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === text)!;
     expect(container.textContent).toContain("2/8 visible");
     expect(switchFor("gemini-pro").getAttribute("aria-pressed")).toBe("true");
-    expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("false");
+    // Hidden only by this provider's allowlist: the cross-provider switch stays on.
+    expect(switchFor("claude-sonnet").getAttribute("aria-pressed")).toBe("true");
     expect(container.querySelector(".badge.badge-amber")?.textContent).toContain("Discovery failed");
     expect(container.textContent).not.toContain("Not selected");
 
@@ -505,21 +517,23 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     expect(shadowOptions).toContain(`${provider}/gemini-pro`);
     expect(shadowOptions).not.toContain(`${provider}/claude-opus`);
 
-    await act(async () => { switchFor("claude-sonnet").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
-    expect(visibilityBodies.at(-1)).toMatchObject({ scope: "models", targets: [{ id: "claude-sonnet" }], enabled: true });
-    expect(container.textContent).toContain("3/8 visible");
+    await act(async () => { switchFor("gemini-pro").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(globalBodies.at(-1)).toEqual({ id: "gemini-pro", enabled: false });
+    expect(switchFor("gemini-pro").getAttribute("aria-pressed")).toBe("false");
+    expect(container.textContent).toContain("1/8 visible");
+    await act(async () => { switchFor("gemini-pro").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(globalBodies.at(-1)).toEqual({ id: "gemini-pro", enabled: true });
+    expect(container.textContent).toContain("2/8 visible");
 
     failNext = true;
-    await act(async () => { switchFor("claude-opus").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
-    expect(switchFor("claude-opus").getAttribute("aria-pressed")).toBe("false");
+    await act(async () => { switchFor("gemini-flash").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
+    expect(switchFor("gemini-flash").getAttribute("aria-pressed")).toBe("true");
     expect(container.textContent).toContain("Save failed");
 
-    await act(async () => { buttonText("All on").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
-    expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: true });
-    expect(container.textContent).toContain("8/8 visible");
-    await act(async () => { buttonText("All off").click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
-    expect(visibilityBodies.at(-1)).toMatchObject({ scope: "provider", enabled: false });
-    expect(container.textContent).toContain("0/8 visible");
+    // Provider-scoped bulk visibility lives on Providers → Models; this page never writes it.
+    expect(buttonText("All on")).toBeUndefined();
+    expect(buttonText("All off")).toBeUndefined();
+    expect(visibilityBodies).toEqual([]);
 
     // A failed poll must keep the catalog on screen but make the stale state visible.
     failCatalog = true;
@@ -531,7 +545,6 @@ test("Models page combines final visibility, atomic actions, discovery status, a
     await act(async () => { poll(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(container.textContent).toContain("Initial discovery pending");
     expect(switchFor("gemini-pro").disabled).toBe(true);
-    expect(buttonText("All on").disabled).toBe(true);
   } finally {
     if (root) {
       await act(async () => root?.unmount());
@@ -884,7 +897,7 @@ test("a poll that resolves after a forced refresh cannot overwrite newer models"
     if (url.endsWith("/api/provider-context-caps")) return Response.json({ caps: {} });
     if (url.endsWith("/api/combos")) return Response.json({ combos: [] });
     if (url.endsWith("/api/shadow-call-settings")) return Response.json({ enabled: false, model: "" });
-    if (url.endsWith("/api/model-visibility") && init?.method === "PUT") return Response.json({ ok: true });
+    if (url.endsWith("/api/global-model-visibility") && init?.method === "PUT") return Response.json({ ok: true });
     return new Response(null, { status: 404 });
   }) as typeof fetch;
 
@@ -906,7 +919,7 @@ test("a poll that resolves after a forced refresh cannot overwrite newer models"
     expect(modelFetches).toBe(2);
 
     // A forced refresh finishes while that poll is still in flight and brings the newer catalog.
-    const toggle = container.querySelector<HTMLButtonElement>(`button[aria-label="${provider}/stale-a"]`);
+    const toggle = container.querySelector<HTMLButtonElement>('button[aria-label="Show stale-a across providers"]');
     await act(async () => { toggle?.click(); await new Promise(resolve => testWindow.setTimeout(resolve, 0)); });
     expect(container.textContent).toContain("fresh-a");
 

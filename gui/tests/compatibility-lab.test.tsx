@@ -25,7 +25,8 @@ import {
   fetchVerdictDetail,
   LabDataContractError,
 } from "../src/pages/compatibility-matrix-api";
-import { modelsTabHash, readModelsTab } from "../src/pages/models-tab";
+import { modelsProviderHash, modelsTabHash, readModelsProvider, readModelsTab } from "../src/pages/models-tab";
+import { useModelsProviderSelection } from "../src/pages/use-models-provider-selection";
 import { resolveAppHashChange } from "../src/app-routing";
 
 const originalFetch = globalThis.fetch;
@@ -297,6 +298,38 @@ test("2. #models/compatibility resolves", () => {
   expect(readModelsTab("#models/compatibility")).toBe("compatibility");
   expect(modelsTabHash("compatibility")).toBe("models/compatibility");
   expect(resolveAppHashChange("models/compatibility").replaceTo).toBeNull();
+});
+
+test("Models provider links retain the selected provider across refresh and navigation", () => {
+  const hash = modelsProviderHash("open/code go");
+  expect(readModelsProvider(`#${hash}`)).toBe("open/code go");
+  expect(readModelsTab(`#${hash}`)).toBe("catalog");
+  expect(resolveAppHashChange(hash).replaceTo).toBeNull();
+  expect(readModelsProvider("#models")).toBeNull();
+});
+
+test("Models provider selection follows the URL and clears it for all providers", async () => {
+  testWindow.location.hash = modelsProviderHash("open/code go");
+  const { createRoot } = await import("react-dom/client");
+  const container = testWindow.document.createElement("div");
+  testWindow.document.body.appendChild(container);
+  const root = createRoot(container);
+  function Selection() {
+    const { selectedProvider, selectProvider } = useModelsProviderSelection();
+    return <button type="button" onClick={() => selectProvider(null)}>{selectedProvider ?? "all"}</button>;
+  }
+  try {
+    await act(async () => root.render(<Selection />));
+    expect(container.textContent).toBe("open/code go");
+    await act(async () => (container.querySelector("button") as HTMLButtonElement).click());
+    expect(testWindow.location.hash).toBe("#models");
+    expect(container.textContent).toBe("all");
+    await act(async () => {
+      testWindow.location.hash = modelsProviderHash("another");
+      testWindow.dispatchEvent(new testWindow.Event("hashchange"));
+    });
+    expect(container.textContent).toBe("another");
+  } finally { await act(async () => root.unmount()); }
 });
 
 test("3. refresh/bookmark behavior via models-tab roundtrip", () => {

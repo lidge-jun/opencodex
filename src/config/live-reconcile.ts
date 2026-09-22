@@ -285,7 +285,7 @@ function reconcileConfigRecord(
       : key === "customModels"
         ? reconcileCustomModels(baselineValue, liveValue, persistedValue)
           ?? reconcileConfigValue(baselineValue, liveValue, persistedValue)
-        : key === "disabledModels"
+        : key === "disabledModels" || key === "globalDisabledModelIds"
           ? reconcileDisabledModels(baselineValue, liveValue, persistedValue)
             ?? reconcileConfigValue(baselineValue, liveValue, persistedValue)
           : reconcileConfigValue(baselineValue, liveValue, persistedValue, key === "providers");

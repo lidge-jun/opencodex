@@ -82,10 +82,7 @@ dépense réelle ; un abonnement ou des crédits du fournisseur peuvent s'appliq
 
 ## Visibilité des modèles
 
-Les commutateurs de la page **Modèles** reflètent la visibilité Codex finale : un modèle routé est actif
-uniquement si la liste d'autorisation de son fournisseur l'inclut — ou si aucune liste n'est définie — et
-s'il n'est pas désactivé. Activer un modèle réconcilie atomiquement les deux filtres ; **Tout activer** efface
-la liste d'autorisation du fournisseur afin que les modèles découverts ultérieurement soient eux aussi actifs.
+Chaque commutateur de la page **Modèles** contrôle un identifiant de modèle exact chez tous les fournisseurs qui le proposent, y compris ceux ajoutés plus tard : le désactiver masque cet identifiant partout. Un masquage propre à un fournisseur reste signalé par une puce distincte sur la ligne. La visibilité par fournisseur se règle dans **Fournisseurs → Modèles**, où **Tout désactiver** masque tous les modèles du fournisseur et **Tout activer** les rétablit et supprime l'allowlist du fournisseur, de sorte que les modèles découverts ensuite sont aussi actifs. Chaque masquage prévaut ; rétablir un niveau n'annule pas l'autre.
 
 ### Gérer les modèles dans l’espace fournisseur
 

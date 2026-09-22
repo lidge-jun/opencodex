@@ -66,6 +66,41 @@ async function put(body: unknown): Promise<Response> {
   return putWithConfig(body);
 }
 
+async function globalVisibility(method: "GET" | "PUT", body?: unknown): Promise<Response> {
+  const url = new URL("http://localhost/api/global-model-visibility");
+  const response = await handleManagementAPI(new Request(url, {
+    method,
+    ...(method === "PUT" ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}),
+  }), url, loadConfig(), { createManagementConvergeCodex: catalogConvergenceFactory(() => { refreshes += 1; }) });
+  if (!response) throw new Error("global visibility route was not handled");
+  return response;
+}
+
+test("global model visibility persists exact IDs without changing provider rules", async () => {
+  const before = loadConfig().disabledModels;
+  expect((await globalVisibility("PUT", { id: "gemini-3.1-pro", enabled: false })).status).toBe(200);
+  expect(loadConfig().globalDisabledModelIds).toEqual(["gemini-3.1-pro"]);
+  expect(loadConfig().disabledModels).toEqual(before);
+  expect(await (await globalVisibility("GET")).json()).toEqual({ disabled: ["gemini-3.1-pro"] });
+  expect(refreshes).toBe(1);
+  const rows = await listManagementModelRows(loadConfig(), { entitlementWaitMs: 0 });
+  expect(rows.find(row => row.provider === "google-antigravity" && row.id === "gemini-3.1-pro"))
+    .toMatchObject({ disabled: true, localDisabled: false, globalDisabled: true });
+  expect((await globalVisibility("PUT", { id: "gemini-3.1-pro", enabled: true })).status).toBe(200);
+  expect(loadConfig().globalDisabledModelIds).toEqual([]);
+  expect(loadConfig().disabledModels).toEqual(before);
+  expect(refreshes).toBe(2);
+});
+
+test("global visibility rejects invalid IDs without writing config", async () => {
+  const before = loadConfig();
+  for (const id of ["", " shared", "a\nname", "x".repeat(513)]) {
+    expect((await globalVisibility("PUT", { id, enabled: false })).status).toBe(400);
+  }
+  expect(loadConfig()).toEqual(before);
+  expect(refreshes).toBe(0);
+});
+
 describe("atomic model visibility management", () => {
   test("catalog busy maps management and v1 models to 503 startup to warn-skip and system-env to skip", async () => {
     const management = await Bun.file(new URL("../../src/server/management-api.ts", import.meta.url)).text();

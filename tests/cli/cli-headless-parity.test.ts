@@ -339,6 +339,15 @@ function sourceFiles(root: string): string[] {
 }
 
 describe("headless GUI parity CLI", () => {
+  test("models disable --global writes the exact ID to the global visibility endpoint", async () => {
+    const { requests, deps } = fakeRuntime();
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleModelsRuntimeCommand("disable", ["moonshotai/kimi-k3", "--global", "--json"], deps)).toBe(0);
+    } finally { log.mockRestore(); }
+    expect(requests).toEqual([{ path: "/api/global-model-visibility", method: "PUT", body: { id: "moonshotai/kimi-k3", enabled: false } }]);
+  });
+
   test("every GUI management endpoint belongs to a documented CLI resource", () => {
     const guiRoot = repoPath("gui", "src");
     const endpoints = new Set<string>();
@@ -372,6 +381,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/selected-models", "ocx models"],
       ["/api/custom-models", "ocx models"],
       ["/api/model", "ocx models"],
+      ["/api/global-model-visibility", "ocx models <enable|disable> --global"],
       ["/api/combos", "ocx combo"],
       ["/api/client-config", "ocx export"],
       ["/api/client-integrations", "ocx integration client"],

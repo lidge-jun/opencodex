@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { filterCatalogVisibleModels, type CatalogModel } from "../../src/codex/catalog";
+import { filterCatalogVisibleModels, nativeModelRows, nativeOpenAiSlugs, visibleNativeSlugs, type CatalogModel } from "../../src/codex/catalog";
+import { effectiveDisabledModels } from "../../src/codex/catalog/model-visibility";
+import { gatherFlightKey } from "../../src/codex/catalog/gather-capture";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 function m(provider: string, id: string): CatalogModel {
@@ -46,6 +48,30 @@ describe("filterCatalogVisibleModels — per-provider allowlist", () => {
     const out = filterCatalogVisibleModels(big, cfg({ proxy: { selectedModels: ["model-7", "model-1999"] } }));
     expect(out.map(x => x.id).sort()).toEqual(["model-1999", "model-7"]);
   });
+});
+
+test("global model ID visibility covers every provider while local visibility stays scoped", () => {
+  const providers = cfg({ alpha: {}, beta: {}, gamma: {} }).providers;
+  const models = [m("alpha", "shared"), m("beta", "shared"), m("gamma", "shared"), m("beta", "other")];
+  const config = { providers, disabledModels: ["beta/other"], globalDisabledModelIds: ["shared"] };
+  expect(filterCatalogVisibleModels(models, config)).toEqual([]);
+  expect(effectiveDisabledModels(config)).toEqual(new Set(["beta/other", "shared", "alpha/shared", "beta/shared", "gamma/shared"]));
+  config.globalDisabledModelIds = [];
+  expect(filterCatalogVisibleModels(models, config)).toEqual(models.slice(0, 3));
+});
+
+test("a global model ID also hides the matching native GPT row on every native surface", () => {
+  const native = nativeOpenAiSlugs()[0]!;
+  const config = { ...cfg({ alpha: {} }), combos: {}, globalDisabledModelIds: [native] };
+  expect(visibleNativeSlugs({ combos: {} })).toContain(native);
+  expect(visibleNativeSlugs(config)).not.toContain(native);
+  // The provider-scoped native row keeps reporting only its own flag; model-rows adds the global one.
+  expect(nativeModelRows(config).find(row => row.slug === native)?.disabled).toBe(false);
+});
+
+test("the gather flight key changes with the global model ID list", () => {
+  const base = { ...cfg({ alpha: {} }), globalDisabledModelIds: [] as string[] } as OcxConfig;
+  expect(gatherFlightKey({ ...base, globalDisabledModelIds: ["shared"] })).not.toBe(gatherFlightKey(base));
 });
 
 describe("filterCatalogVisibleModels — slash-bearing ids", () => {

@@ -112,6 +112,7 @@ export function hashBelongsToPage(rawHash: string, page: Page): boolean {
     || (page === "logs" && rawHash === "logs/debug")
     || (page === "codex-set" && rawHash === "codex-set/prompt")
     || (page === "models" && (MODELS_TAB_HASHES as readonly string[]).includes(rawHash))
+    || (page === "models" && /^models\/provider\/[^/]+$/.test(rawHash))
     || (page === "dashboard"
       && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)))
     || (page === "integrations"

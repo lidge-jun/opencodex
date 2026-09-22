@@ -86,11 +86,7 @@ kredileri geçerli olabilir.
 
 ## Model görünürlüğü
 
-**Modeller** anahtarları nihai Codex görünürlüğünü gösterir: yönlendirilen bir
-model yalnızca sağlayıcı izin listesi onu içerdiğinde (veya hiçbir izin listesi
-ayarlanmadığında) ve devre dışı bırakılmadığında açıktır. Bir modeli açmak her
-iki filtreyi de atomik olarak uzlaştırır; **Tümünü aç (All on)** sağlayıcı izin
-listesini temizler, böylece yeni keşfedilen modeller de açık olur.
+**Modeller** sayfasındaki her anahtar, tam eşleşen bir model kimliğini onu sunan tüm sağlayıcılarda (sonradan eklenenler dahil) birlikte denetler: kapatmak bu kimliği her yerde gizler. Sağlayıcıya özel gizleme satırda ayrı bir etiketle gösterilir. Sağlayıcıya özel görünürlük **Sağlayıcılar → Modeller** bölümündedir; **Tümünü kapat** o sağlayıcının tüm modellerini gizler, **Tümünü aç** onları geri getirir ve allowlist'i kaldırarak yeni keşfedilen modelleri de açar. Her iki gizleme de önceliklidir; bir düzeyi geri almak diğerini kaldırmaz.
 
 ### Sağlayıcı çalışma alanında modelleri yönetme
 

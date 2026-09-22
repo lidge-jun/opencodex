@@ -263,9 +263,10 @@ export function mergeConfiguredModelsIntoLiveCatalog(opts: {
 
 export function filterCatalogVisibleModels(
   models: CatalogModel[],
-  config: Pick<OcxConfig, "disabledModels" | "providers">,
+  config: Pick<OcxConfig, "disabledModels" | "globalDisabledModelIds" | "providers">,
 ): CatalogModel[] {
   const disabled = new Set(config.disabledModels ?? []);
+  const globalDisabled = new Set(Array.isArray(config.globalDisabledModelIds) ? config.globalDisabledModelIds : []);
   const allowByProvider = new Map<string, Set<string>>();
   for (const [name, prov] of Object.entries(config.providers)) {
     const sel = prov.selectedModels;
@@ -289,6 +290,7 @@ export function filterCatalogVisibleModels(
     }
   }
   return models.filter(m => {
+    if (globalDisabled.has(m.id)) return false;
     if (initialModelSelectionPending(config.providers[m.provider])) return false;
     if (config.providers[m.provider]?.disabled === true) return false;
     const nativeAlias = m.provider === COMBO_NAMESPACE && m.nativeAlias === true;
@@ -303,3 +305,5 @@ export function filterCatalogVisibleModels(
     return !allow || allow.has(slugEquivalenceKey(routedSlug(m.provider, m.id)));
   });
 }
+
+export { effectiveDisabledModels } from "./metadata";

@@ -538,6 +538,7 @@ export function gatherFlightKey(config: OcxConfig): string {
   const assembly = stableJson({
     providers,
     disabledModels: [...(config.disabledModels ?? [])].sort(),
+    globalDisabledModelIds: [...(config.globalDisabledModelIds ?? [])].sort(),
     combos: config.combos ?? {},
     customModels: (config.customModels ?? []).map((cm) => ({
       p: cm.provider,

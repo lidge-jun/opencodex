@@ -39,6 +39,7 @@ import {
   selectModelsTab,
   type ModelsTab,
 } from "./models-tab";
+import { useModelsProviderSelection } from "./use-models-provider-selection";
 import {
   buildProviderModelGroups,
   type ConfiguredProviderSummary,
@@ -47,13 +48,10 @@ import {
 import {
   fetchSelectedModels,
   modelVisible,
-  putModelVisibility,
   clientCatalogRefreshFailures,
   type ClientCatalogRefreshFailure,
   shouldApplyLoadGeneration,
   type ProviderModelMap,
-  type ModelVisibilityScope,
-  type ModelVisibilityTarget,
 } from "../model-visibility";
 import {
   activeModelOptions,
@@ -439,7 +437,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
 
   // App owns the in-session view mode; fallback to persisted mode for isolated renders/tests.
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const { selectedProvider, setSelectedProvider, selectProvider } = useModelsProviderSelection();
 
   useEffect(() => () => {
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -900,12 +898,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     compatibility: compatibilityCount === null ? undefined : String(compatibilityCount),
   }), [catalogCountReady, comboCount, compatibilityCount, effectiveVisibleCount, models.length, routingCount, t]);
 
-  const applyVisibility = async (
-    scope: ModelVisibilityScope,
-    provider: string,
-    targets: ModelVisibilityTarget[],
-    enabled: boolean,
-  ) => {
+  const applyGlobalVisibility = async (id: string, enabled: boolean) => {
     if (catalogMutationRef.current) return;
     catalogMutationRef.current = true;
     ++loadGenerationRef.current;
@@ -914,23 +907,21 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     setStatus("");
     let errorKey: "models.saveFailed" | "models.networkError" | null = null;
     try {
-      const response = await putModelVisibility(apiBase, scope, provider, targets, enabled);
+      const response = await fetch(`${apiBase}/api/global-model-visibility`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, enabled }),
+      });
       if (!response.ok) errorKey = "models.saveFailed";
       else {
         const failures = clientCatalogRefreshFailures(await response.json());
         if (failures !== undefined) setIntegrationFailures(failures);
       }
-    } catch {
-      errorKey = "models.networkError";
-    } finally {
+    } catch { errorKey = "models.networkError"; }
+    finally {
       const refreshed = await load(true);
-      if (errorKey) {
-        setOk(false);
-        setStatus(t(errorKey));
-      } else if (refreshed) {
-        setOk(true);
-        setStatus(t("models.applied"));
-      }
+      if (errorKey) { setOk(false); setStatus(t(errorKey)); }
+      else if (refreshed) { setOk(true); setStatus(t("models.applied")); }
       setBusy(false);
       busyRef.current = false;
       catalogMutationRef.current = false;
@@ -1416,7 +1407,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     // slice below. Filtering after the slice would leave free models stranded behind Show more
     // on a 200-row OpenRouter list, which is the exact case the issue reports.
     //
-    // `scoped` is the set every count and bulk action reads. Search is deliberately NOT part of
+    // `scoped` is the set every count reads. Search is deliberately NOT part of
     // it: the search box has always been a transient find-as-you-type that leaves the counts
     // alone, while Free only is a narrowing the user holds on, so a header still reading the
     // whole provider would claim more models than the list under it shows.
@@ -1447,25 +1438,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
     const shown = limit[provider] ?? PAGE;
     const visible = sorted.slice(0, shown);
     const remaining = filtered.length - visible.length;
-     // An empty provider has nothing to send: keep both bulk buttons inert so we never PUT an
-     // empty target list (the management API rejects it with 400).
-     // Bulk follows the same scoped set as the counts it sits beside: with Free only on, an
-     // "All on" that enabled the 197 paid rows the header is not counting would be the exact
-     // surprise the header fix exists to prevent. Pending stays keyed to the whole provider,
-     // because initial discovery is a provider state that no display filter can clear.
-     const hasRows = scoped.length > 0;
-     const selectionPending = rows.some(model => model.initialSelectionPending);
-     const allOn = !hasRows || scoped.every(isVisible);
-     const allOff = !hasRows || scoped.every(m => !isVisible(m));
-     const bulkToggle = (enable: boolean) => {
-       if (!hasRows || selectionPending) return;
-       void applyVisibility(
-         "provider",
-         provider,
-         scoped.map(m => ({ id: m.id, native: m.native === true })),
-         enable,
-       );
-     };
+    // Pending stays keyed to the whole provider because a display filter cannot clear discovery state.
+    const selectionPending = rows.some(model => model.initialSelectionPending);
     return (
       <div key={provider} className="card models-provider-card">
        <div className={`row group-head models-provider-head${isCollapsed ? "" : " open"}`}>
@@ -1585,8 +1559,6 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                  </>
                );
              })()}
-             <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOn || selectionPending} onClick={() => bulkToggle(true)}>{t("models.allOn")}</button>
-            <button type="button" className="btn btn-ghost btn-sm text-caption" disabled={busy || allOff || selectionPending} onClick={() => bulkToggle(false)}>{t("models.allOff")}</button>
             <div className="models-cap-cluster">
               {/* The label names the FUNCTION. It used to be `models.capValue` -
                   "기본 128k" - which is a value masquerading as a name: even a
@@ -1724,7 +1696,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                    }}
                  >
                    <div className="row models-model-row">
-                     <Switch on={!off} onClick={() => void applyVisibility("models", provider, [{ id: m.id, native: m.native === true }], off)} disabled={busy || m.initialSelectionPending} label={m.native ? m.id : m.namespaced} />
+                     <Switch on={m.globalDisabled !== true} onClick={() => void applyGlobalVisibility(m.id, m.globalDisabled === true)} disabled={busy || m.initialSelectionPending} label={t("models.globalVisibilityLabel", { model: m.id })} />
+                    {m.localDisabled && <span className="models-chip muted text-caption">{t("models.providerHidden")}</span>}
                     {m.initialSelectionPending && <span className="models-chip muted" role="status">{t("models.initialSelectionPending")}</span>}
                     {/* #1711: listed and selectable, but every usable target is out of credit.
                         Not a visibility change and not the operator's disable flag — the row is
@@ -2565,7 +2538,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             <button
               type="button"
               className={`models-workspace-rail-row${selectedProvider === null ? " models-workspace-rail-row--selected" : ""}`}
-              onClick={() => setSelectedProvider(null)}
+              onClick={() => selectProvider(null)}
               aria-current={selectedProvider === null ? "true" : undefined}
             >
               <span className="models-workspace-rail-name">{t("models.workspace.allProviders")}</span>
@@ -2586,7 +2559,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                   key={provider}
                   type="button"
                   className={`models-workspace-rail-row${selectedProvider === provider ? " models-workspace-rail-row--selected" : ""}`}
-                  onClick={() => setSelectedProvider(provider)}
+                  onClick={() => selectProvider(provider)}
                   aria-current={selectedProvider === provider ? "true" : undefined}
                 >
                   <span className="models-workspace-rail-name">{formatProviderDisplayName(provider, t)}</span>

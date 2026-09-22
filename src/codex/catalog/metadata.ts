@@ -444,8 +444,30 @@ export function disabledNativeSlugs(config: Pick<OcxConfig, "disabledModels">): 
   return new Set((config.disabledModels ?? []).filter(id => !id.includes("/")));
 }
 
-export function visibleNativeSlugs(config: Pick<OcxConfig, "disabledModels" | "combos">): string[] {
-  const disabled = disabledNativeSlugs(config);
+/** Exact upstream model IDs the Models page hides across every provider. */
+export function globalDisabledModelIds(config: Pick<OcxConfig, "globalDisabledModelIds">): Set<string> {
+  const ids = Array.isArray(config.globalDisabledModelIds) ? config.globalDisabledModelIds : [];
+  return new Set(ids.filter((id): id is string => typeof id === "string" && id.trim() !== ""));
+}
+
+/**
+ * Provider-scoped `disabledModels` plus every global ID expanded into each configured provider
+ * namespace. Consumers that list models must read this, not `disabledModels`, or a model hidden
+ * on the Models page reappears on that surface.
+ */
+export function effectiveDisabledModels(config: Pick<OcxConfig, "disabledModels" | "globalDisabledModelIds" | "providers">): Set<string> {
+  const disabled = new Set(config.disabledModels ?? []);
+  for (const id of globalDisabledModelIds(config)) {
+    // Bare native GPT ids have no slash. A slash-bearing upstream id must never be
+    // mistaken for a provider-qualified selector here.
+    if (!id.includes("/")) disabled.add(id);
+    for (const provider of Object.keys(config.providers ?? {})) disabled.add(routedSlug(provider, id));
+  }
+  return disabled;
+}
+
+export function visibleNativeSlugs(config: Pick<OcxConfig, "disabledModels" | "globalDisabledModelIds" | "combos">): string[] {
+  const disabled = new Set([...disabledNativeSlugs(config), ...globalDisabledModelIds(config)]);
   const shadowed = configuredNativeAliasSlugs(config);
   return nativeOpenAiSlugs().filter(slug => !disabled.has(slug) && !shadowed.has(slug));
 }
@@ -485,7 +507,7 @@ function mainAccountSelectors(config: AccountSelectorConfig): string[] {
 
 /** Native slugs exposed to Claude Desktop show/export/apply (opt-out via claudeCode.desktopNativeModels). */
 export function desktopVisibleNativeSlugs(
-  config: Pick<OcxConfig, "claudeCode" | "disabledModels" | "combos" | "providers"
+  config: Pick<OcxConfig, "claudeCode" | "disabledModels" | "globalDisabledModelIds" | "combos" | "providers"
     | "codexAccounts" | "codexAccountNamespaces" | "codexAccountPickerEnabled">,
 ): string[] {
   if (config.claudeCode?.desktopNativeModels === false) return [];
@@ -496,7 +518,7 @@ export function desktopVisibleNativeSlugs(
       .filter(slug => !SUPPORTED_NATIVE_OPENAI_SLUGS.has(slug))
       .map(slug => `${selector}/${slug}`),
   );
-  const disabled = new Set(config.disabledModels ?? []);
+  const disabled = effectiveDisabledModels(config);
   return unique([
     ...visible,
     ...qualified.filter(slug => !disabled.has(slug) && !disabled.has(slug.slice(slug.indexOf("/") + 1))),

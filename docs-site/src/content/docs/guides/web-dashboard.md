@@ -171,7 +171,7 @@ new or that every upstream measurement was refreshed.
 
 ## Model visibility
 
-The **Models** switches show final Codex visibility: a routed model is on only when its provider allowlist includes it (or no allowlist is set) and it is not disabled. Turning a model on reconciles both filters atomically; **All on** clears the provider allowlist so newly discovered models are also on.
+Each **Models** switch controls one exact model ID across every provider that offers it, including providers added later: turning it off hides that ID everywhere. A row still shows a provider-specific hide as a separate chip. Provider-specific visibility lives in **Providers → Models**, where **All off** hides every model of that provider and **All on** restores them and clears the provider allowlist so newly discovered models are also on. Either hide takes precedence; restoring one level does not undo the other.
 
 ### Managing models in a provider workspace
 

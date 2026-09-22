@@ -604,6 +604,27 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     return jsonResponse({ ok: true, disabled, ...await convergeVisibleCatalogs() });
   }
 
+  if (url.pathname === "/api/global-model-visibility" && req.method === "GET") {
+    return jsonResponse({ disabled: Array.isArray(config.globalDisabledModelIds) ? config.globalDisabledModelIds : [] });
+  }
+
+  if (url.pathname === "/api/global-model-visibility" && req.method === "PUT") {
+    let parsedBody: unknown;
+    try { parsedBody = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(parsedBody)) return jsonResponse({ error: "invalid global model visibility request" }, 400);
+    const { id, enabled } = parsedBody;
+    if (typeof id !== "string" || !id || id !== id.trim() || id.length > 512 || /[\u0000-\u001f\u007f]/u.test(id) || typeof enabled !== "boolean") {
+      return jsonResponse({ error: "invalid global model visibility request" }, 400);
+    }
+    const disabled = new Set(Array.isArray(config.globalDisabledModelIds) ? config.globalDisabledModelIds : []);
+    if (enabled) disabled.delete(id);
+    else disabled.add(id);
+    if (disabled.size > 2_000) return jsonResponse({ error: "too many global model visibility rules" }, 400);
+    config.globalDisabledModelIds = [...disabled];
+    persistConfig(config);
+    return jsonResponse({ ok: true, id, enabled, disabled: config.globalDisabledModelIds, ...await convergeVisibleCatalogs() });
+  }
+
   // One user-facing visibility switch spans two persisted filters: a provider allowlist and the
   // shared blocklist. Keep the update atomic so an interrupted request cannot expose a half-applied
   // state. Native rows only use the blocklist; routed/custom rows also join a non-empty allowlist.

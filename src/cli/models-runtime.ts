@@ -31,6 +31,7 @@ const USAGE = `Usage:
       [--reasoning-efforts <none,minimal,low,medium,high,xhigh,max,ultra|->]
       [--default-reasoning-effort <level|->] [--json]
   ocx models <enable|disable> <provider/model|native-model> [--native] [--json]
+  ocx models <enable|disable> <model-id> --global [--json]
   ocx models provider <name> <on|off> [--json]
   ocx models selected <provider> [--set <id,id...>|--clear] [--json]
   ocx models preset show [--provider <name>] [--json]
@@ -254,8 +255,19 @@ async function visibility(enabled: boolean, argv: string[], deps: RuntimeApiDeps
   const selector = args.shift()?.trim();
   const wantsJson = takeFlag(args, "--json");
   const native = takeFlag(args, "--native");
+  const global = takeFlag(args, "--global");
   if (!selector) throw new CliUsageError("model selector is required", USAGE);
+  if (global && native) throw new CliUsageError("--global and --native cannot be combined", USAGE);
   rejectArgs(args, USAGE);
+  if (global) {
+    // The exact upstream ID, never provider-qualified: a slash is part of the ID here.
+    const result = await runtimeRequest("/api/global-model-visibility", {
+      method: "PUT",
+      body: JSON.stringify({ id: selector, enabled }),
+    }, deps);
+    printData(result, wantsJson, [`${enabled ? "Enabled" : "Disabled"} ${selector} across providers.`]);
+    return;
+  }
   const target = parseSelector(selector, native);
   const result = await runtimeRequest("/api/model-visibility", {
     method: "PUT",
