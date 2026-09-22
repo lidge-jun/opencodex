@@ -72,6 +72,12 @@ in `src/server/management/agent-settings-routes.ts`; the native toggle in
 Windows policy health only applies in gateway mode, because first-party never touches Desktop's own
 configuration. Ordinary Chat-tab traffic is out of scope for both modes.
 
+Production apply and status routes use the asynchronous, read-only policy probe in
+`src/claude/desktop-policy.ts`. Concurrent requests share one in-flight probe, and its
+settled state is cached for 30 seconds. Each registry query is bounded to two seconds;
+timeouts and unreadable results report unknown policy state without blocking the server
+event loop. The injected synchronous probe remains available to isolated callers and tests.
+
 ## Connected Claude Desktop profiles
 
 The connection's local Codex readiness check follows the [selected-runtime probe contract](../runtime.md#remote-hub-hardening-ownership); general status hands its resolved command to this check instead of probing the version twice.
