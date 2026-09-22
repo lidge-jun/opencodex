@@ -1001,6 +1001,7 @@
   "provider-outbound-private-network.test.ts": "providers",
   "provider-outbound.test.ts": "providers",
   "provider-payload.test.ts": "gui",
+  "provider-quota-label-sanitize.test.ts": "providers",
   "provider-quota-observed-marker.test.ts": "providers",
   "provider-quota.test.ts": "providers",
   "provider-registry-parity.test.ts": "providers",

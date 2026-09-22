@@ -397,6 +397,10 @@ An observed identity or digest describes those files during this observation. It
 Inspect and safely modify validated OpenCodex configuration. `show` and `get` mask secrets. Import
 validates before writing and requires `--yes`.
 
+Display and mutation output strip credentials from proxy URLs while retaining the host and port.
+`direct` and credential-free proxy values stay readable. `export` preserves credentials so the
+backup can restore the configuration; store exported files as secrets.
+
 ### Usage from a connected client
 
 `ocx usage` reads the connected hub with this client's enrolled data key. Human output identifies the hub source and client-key scope; `--json` returns the same scoped data. Range, surface, provider/model filters and custom `--since`/`--until` bounds remain available. Account breakdowns and other clients' records are not shared. An old or unavailable hub produces an explicit error instead of substituting local usage; upgrade the hub if it does not support this read.

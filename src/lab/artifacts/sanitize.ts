@@ -156,8 +156,9 @@ const HOSTNAME_RE = /(?<![\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.){1,8}(
 // `ETIMEDOUT after 30 seconds` into `ETIMEDOUT [host] 30 seconds`: a redaction
 // that destroys the diagnostic and hides nothing.
 // Markers differ in confidence, and treating them alike cost accuracy both
-// ways. STRONG markers are resolver/socket errors and `host=`: whatever
-// follows is a host by construction, so a bare `redis` or `localhost` counts.
+// ways. STRONG markers are resolver/socket errors and `host=`: the argument
+// position is a host by construction, so a bare `redis` or `localhost` counts
+// there while the prose that can follow a marker survives.
 // WEAK markers appear in ordinary prose (`upstream provider.metric.p95
 // exceeded`), so they only redact a candidate that is already host-shaped.
 const STRONG_HOST_CONTEXT_RE =
@@ -166,11 +167,12 @@ const WEAK_HOST_CONTEXT_RE =
   /\b(?:upstream)["']?\s*[\s=:]\s*["']?([A-Za-z0-9_.-]{1,255})/gi;
 
 /**
- * A dotted run of plain alphabetic words with no digits or hyphens in any
- * label — `provider.metric.p95` reads as a namespace, not a host. Under a
- * WEAK marker this is left alone; under a STRONG one the marker decides.
+ * A dotted run of plain alphabetic words, or the conventional
+ * `<name>.metric.p<digits>` shape, reads as a namespace rather than a host.
+ * Other digit-suffixed labels are host-shaped and must not receive this weak
+ * marker exemption. Under a STRONG marker the marker always decides.
  */
-const DOTTED_NAMESPACE_RE = /^[a-z]+(?:\.[a-z]+)*\.[a-z]+[0-9]*$/i;
+const DOTTED_NAMESPACE_RE = /^(?:[a-z]+(?:\.[a-z]+)+|[a-z]+(?:\.[a-z]+)*\.metric\.p[0-9]+)$/i;
 
 /**
  * Does this token look like a host rather than an English word?
@@ -184,8 +186,10 @@ const DOTTED_NAMESPACE_RE = /^[a-z]+(?:\.[a-z]+)*\.[a-z]+[0-9]*$/i;
  * A stopword list would repeat the delimiter-enumeration mistake, so the
  * candidate is validated instead. A token qualifies when it carries host
  * punctuation (dot, hyphen, underscore, digit) or is a reserved name; a bare
- * English word does not — EXCEPT directly after a resolver marker, where the
- * argument is a name by construction and `ENOTFOUND redis` must still redact.
+ * English word does not — EXCEPT in a grammar position proven to hold the
+ * destination of a resolver or socket-state marker, where the argument is a
+ * name by construction and `ENOTFOUND redis` and `ECONNREFUSED redis` must
+ * still redact.
  */
 const RESERVED_HOST_NAMES = new Set(["localhost", "broadcasthost"]);
 const PROSE_AFTER_MARKER = new Set([
@@ -198,8 +202,8 @@ function isHostCandidate(value: string, bareWordAllowed = false): boolean {
   if (/[.\-_0-9]/.test(value)) {
     return AMBIGUOUS_HOST_RE.test(value) || CONTEXTUAL_HOST_TOKEN_RE.test(value);
   }
-  // A bare word: only a resolver marker makes it a host, and only when it is
-  // not one of the connective words those messages actually use.
+  // A bare word: only a destination-bearing marker makes it a host, and only
+  // when it is not one of the connective words those messages actually use.
   return bareWordAllowed && !PROSE_AFTER_MARKER.has(lower);
 }
 
@@ -499,8 +503,13 @@ function scrubString(value: string): string {
   s = s.replace(STRONG_HOST_CONTEXT_RE, (m, tail: string) => {
     // Scan the few tokens after the marker for the first host-shaped one:
     // Go writes `dial tcp: lookup <host>: no such host`, so the destination
-    // is not always adjacent to the marker. A resolver marker also licenses a
-    // bare name (`ENOTFOUND redis`), which a socket-state marker does not.
+    // is not always adjacent to the marker. The destination sits inside
+    // `tail`, so the rewrite is spliced at an offset in it — replacing
+    // against the whole match lets a marker word that repeats the
+    // destination (`connect to connect failed`) take the `[host]` instead.
+    const head = m.slice(0, m.length - tail.length);
+    const redact = (at: number, token: string) =>
+      head + tail.slice(0, at) + "[host]" + tail.slice(at + token.length);
     // A name paired with a port is a destination whatever else is true:
     // `dial tcp redis:6379` needs no other evidence. Both notations count —
     // adjacent `host:443` and spelled-out `gateway on port 443` — because the
@@ -509,13 +518,45 @@ function scrubString(value: string): string {
       tail.match(/(?<![\w.-])([A-Za-z0-9_.-]{1,255}):\d{1,5}(?![\w.])/) ??
       tail.match(/(?<![\w.-])([A-Za-z0-9_.-]{1,255})\s+(?:on\s+)?port\s+\d{1,5}\b/i);
     if (ported?.[1] && !PROSE_AFTER_MARKER.has(ported[1].toLowerCase())) {
-      return m.replace(ported[1], "[host]");
+      return redact(ported.index ?? 0, ported[1]);
     }
-    // Otherwise only a resolver marker licenses a bare name. Natural-language
-    // `connect to` does not: `Unable to connect to your account` is prose.
-    const resolver = /ENOTFOUND|EAI_AGAIN|lookup|host/i.test(m);
-    for (const token of tail.split(/[\s:]+/)) {
-      if (token && isHostCandidate(token, resolver)) return m.replace(token, "[host]");
+    // A failure immediately following an unported connect-to target supplies
+    // the missing network context without making ordinary connective prose
+    // (`connect to your account`) host-bearing.
+    const failedConnectTarget = /\bconnect(?:ing)?\s+to\b/i.test(m)
+      ? tail.match(/^([A-Za-z][A-Za-z0-9]{0,254})\s+(?:failed|refused|unreachable|reset|timed\s+out)\b/i)
+      : null;
+    if (failedConnectTarget?.[1]) {
+      return redact(failedConnectTarget.index ?? 0, failedConnectTarget[1]);
+    }
+    // A bare destination name is licensed only where the grammar proves the
+    // position is the destination: directly after a resolver or explicit host
+    // marker, as a socket marker's sole argument
+    // (`ECONNREFUSED redis`, `dial tcp redis`) or as the argument of `lookup`
+    // (`dial tcp: lookup redis`). Past an open-ended connective chain nothing
+    // proves the next word is a destination — `ETIMEDOUT while waiting for
+    // response` is prose. Natural-language `connect to` licenses nothing:
+    // `Unable to connect to your account` is prose.
+    const destinationContext =
+      /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|dial\s+(?:tcp|udp)|lookup|\bhost\b/i.test(m);
+    // Direct resolver and explicit host markers name their first argument even
+    // when explanatory prose follows; socket-state prose remains ambiguous.
+    const directHostArgument = /^(?:ENOTFOUND|EAI_AGAIN|host)\b/i.test(head);
+    const tokens = tail.split(/[\s:]+/).filter(Boolean);
+    let cursor = 0;
+    for (let i = 0; i < tokens.length; i += 1) {
+      const token = tokens[i]!;
+      const at = tail.indexOf(token, cursor);
+      cursor = at + token.length;
+      // A sentence-final period travels with the token (`ECONNREFUSED redis.`):
+      // classify the name without it, and leave it outside the mask so the
+      // message still reads as a sentence.
+      const core = token.replace(/\.+$/, "");
+      if (!core) continue;
+      if (isHostCandidate(core)) return redact(at, core);
+      const bareLicensed =
+        destinationContext && (tokens.length === 1 || tokens[i - 1]?.toLowerCase() === "lookup" || (i === 0 && directHostArgument));
+      if (bareLicensed && isHostCandidate(core, true)) return redact(at, core);
     }
     return m;
   });
