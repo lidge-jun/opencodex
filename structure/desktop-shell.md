@@ -225,6 +225,11 @@ The Tauri updater public key and endpoint are checked in to
 provided only as release secrets. Windows certificate signing is not wired yet, so MSI
 users may see a SmartScreen warning.
 
+The app's own version comes from `desktop/src-tauri/tauri.conf.json` and `Cargo.toml` (mirrored
+in `Cargo.lock`), not from `package.json`, and the release workflow injects none. Those files move
+together with `package.json` through `scripts/release-version-sources.ts`, and the release refuses
+to build when they disagree with the requested version; see `ops/docs-and-release.md`.
+
 ## Widget snapshot
 
 The macOS desktop shell writes the WidgetKit snapshot to

@@ -1225,6 +1225,7 @@
     "resolved-model-policy-consumers.test.ts": "routing",
     "resolved-model-policy.test.ts": "providers",
     "release-version-line.test.ts": "ci-workflows",
+    "release-version-sources.test.ts": "ci-workflows",
     "remote-catalog.test.ts": "clients",
     "remote-workspace-activation.test.ts": "clients",
     "remote-workspace-management.test.ts": "clients",

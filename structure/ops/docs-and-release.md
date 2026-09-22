@@ -310,6 +310,19 @@ typecheck and GUI build. `scripts/release.ts` accepts either an explicit version
 `bun run privacy:scan` before the version bump, commit/push, Cross-platform CI wait, and GitHub
 Release workflow dispatch. Docs publishing is separate from npm release publishing.
 
+The version lives in four files, and every path that moves it moves all four:
+`package.json`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, and the
+`opencodex-desktop` entry of `desktop/src-tauri/Cargo.lock`. The desktop build reads its version
+from the Tauri and Cargo files (the widget plist inherits it) while the updater manifest is derived
+from the dispatch input, so a `package.json`-only move ships an app that reports the previous
+version under a manifest naming the new one, and the updater re-offers that release forever.
+`scripts/release-version-sources.ts` owns the list and the one-line rewrite of each file.
+`scripts/release.ts` and `scripts/bump-dev-version.ts` rewrite through it, `release.yml` runs its
+`check` in `package-desktop` before anything is built and again in `publish`, and
+`dev-version-bump.yml` stages exactly those four paths and refuses a reused bump branch that
+touches anything else. `tests/ci-workflows/release-version-sources.test.ts` fails on drift in the
+working tree and pins that wiring.
+
 The `package-standalone` job in `.github/workflows/release.yml` also builds Bun compiled
 `ocx` archives for Linux, macOS, and Windows, bundles `gui/dist`, smoke-tests `/healthz`, and
 publishes SHA-256 sidecars for the attach job.
@@ -365,7 +378,7 @@ Every npm release version must map cleanly across four surfaces:
 
 | Surface | Required state |
 | --- | --- |
-| `package.json` | `version` equals the release workflow `version` input. |
+| `package.json` and the desktop version sources | `version` in `package.json`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/Cargo.toml`, and the `opencodex-desktop` entry of `desktop/src-tauri/Cargo.lock` equals the release workflow `version` input. |
 | npm registry | `@bitkyc08/opencodex@<version>` does not exist before publish, then exists after publish with the requested dist-tag. |
 | Git tag | `v<version>` does not exist before publish, then points at the exact release commit. |
 | GitHub Release | `v<version>` does not exist before publish, then is created from the exact release commit. |

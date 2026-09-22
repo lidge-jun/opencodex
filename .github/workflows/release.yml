@@ -218,6 +218,18 @@ jobs:
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
 
+      # The desktop build takes its version from tauri.conf.json and Cargo.toml (the widget
+      # plist inherits it), not from package.json or this input, while the updater manifest is
+      # derived from the input. A mismatch ships an app that reports the previous version under a
+      # manifest naming this one, so the updater re-offers the same release forever. Refuse
+      # before anything is built. Bash on every runner: Windows would otherwise run PowerShell,
+      # where "$RELEASE_VERSION" is not the environment variable.
+      - name: Verify every version source matches the release
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bun scripts/release-version-sources.ts check "$RELEASE_VERSION"
+
       - name: Install project dependencies
         run: bun install --frozen-lockfile
 
@@ -652,14 +664,15 @@ jobs:
       - name: Dependency audit (high severity)
         run: bun run audit:high
 
-      - name: Verify version matches package.json
+      - name: Verify every version source matches the requested version
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          PKG=$(node -p "require('./package.json').version")
-          echo "package.json=$PKG  input=${RELEASE_VERSION}"
-          test "$PKG" = "$RELEASE_VERSION" || {
-            echo "::error::package.json ($PKG) != requested (${RELEASE_VERSION}) — bump package.json on main first";
+          # package.json plus the desktop sources (tauri.conf.json, Cargo.toml and the
+          # opencodex-desktop Cargo.lock entry). package-desktop already refused to build on a
+          # mismatch; this re-proves it on the commit that is about to publish.
+          bun scripts/release-version-sources.ts check "$RELEASE_VERSION" || {
+            echo "::error::a version source != requested (${RELEASE_VERSION}) — run scripts/release.ts, which moves all of them, on main first";
             exit 1;
           }
 
