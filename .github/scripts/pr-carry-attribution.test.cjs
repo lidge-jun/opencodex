@@ -165,6 +165,53 @@ describe("assessCarryAttribution", () => {
     );
   });
 
+  it("strips a fence whose closing run is shorter than its opening run", () => {
+    // The backreferenced regex gave back opener delimiters until a close
+    // matched: a pure ``` line still closes a ```` opener. An exact-length
+    // lookup would leave "Reimplements #2797" readable as a declaration.
+    assert.deepEqual(
+      assessCarryAttribution(
+        base({
+          body: [
+            "\u0060\u0060\u0060\u0060",
+            "Reimplements #2797",
+            "\u0060\u0060\u0060",
+          ].join("\n"),
+        }),
+      ),
+      [],
+    );
+  });
+
+  it("prefers the longest closing run, the way the backreference backtracked", () => {
+    // Greedy capture tries the full opener run first: a pure ```` line
+    // farther down outranks a nearer ``` line, so the whole span is removed.
+    assert.deepEqual(
+      assessCarryAttribution(
+        base({
+          body: [
+            "\u0060\u0060\u0060\u0060",
+            "\u0060\u0060\u0060",
+            "Reimplements #2797",
+            "\u0060\u0060\u0060\u0060",
+          ].join("\n"),
+        }),
+      ),
+      [],
+    );
+  });
+
+  it("strips a fenced block written with CRLF line endings", () => {
+    assert.deepEqual(
+      assessCarryAttribution(
+        base({
+          body: "\u0060\u0060\u0060\r\nReimplements #2797\r\n\u0060\u0060\u0060\r\n",
+        }),
+      ),
+      [],
+    );
+  });
+
   it("still reads carry language around an unmatched opener", () => {
     // Falling back to ordinary text is not a license to hide a real claim:
     // the unmatched opener line itself remains in the scanned text.
