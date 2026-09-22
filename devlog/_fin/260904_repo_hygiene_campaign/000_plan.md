@@ -17,7 +17,9 @@ every contributor whose work is carried.
 
 ## Classification of local branches
 
-Every branch was scored on four independent axes rather than by name:
+Every branch was scored on four independent axes rather than by name. Axis 3 is
+shown in its corrected form; the campaign itself ran it without `--no-renames`
+(see the 2026-09-21 correction in 010_method.md):
 
 1. `git merge-base --is-ancestor <br> origin/dev` — plain ancestry.
 2. `git cherry origin/dev <br>` — patch-equivalence, which catches rebases.
