@@ -134,8 +134,14 @@ describe("the one-port hub recipe", () => {
       expect(source, locale).toContain(sharedHost);
       expect(source, locale).toContain(dedicated);
       expect(source, locale).toContain(doNotEnable);
-      // The warning must render as a danger box, not flow past as ordinary prose.
-      expect(source, locale).toContain(":::danger");
+      // The warning must render inside the danger box, not flow past as ordinary prose.
+      const opened = source.indexOf(":::danger");
+      expect(opened, locale).toBeGreaterThan(-1);
+      const closing = /\r?\n:::\r?\n/.exec(source.slice(opened));
+      expect(closing, locale).not.toBeNull();
+      const callout = source.slice(opened, opened + (closing?.index ?? 0));
+      expect(callout, locale).toContain(dedicated);
+      expect(callout, locale).toContain(sharedHost);
       // The same unauthenticated surface is offered again by the ported form; the warning
       // must reach that command too, or a reader following only that section misses it.
       const ported = source.indexOf('"port":10104');

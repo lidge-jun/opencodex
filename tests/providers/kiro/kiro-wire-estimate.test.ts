@@ -27,4 +27,17 @@ describe("kiro wire token estimate", () => {
   test("empty text estimates to zero", () => {
     expect(estimateKiroWireTokens("", model)).toBe(0);
   });
+
+  test("pure-CJK text and an empty model id keep the replacement-string results", () => {
+    const korean = "요청을 보내고 응답을 파싱한다".repeat(30);
+    const cjk = kiroCjkCount(korean);
+    const latin = korean.length - cjk;
+    const expectedFor = (prefixed: string) => Math.ceil(
+      estimateTokens("x".repeat(latin), prefixed) * KIRO_LATIN_WIRE_EXPANSION
+      + estimateTokens("\uac00".repeat(cjk), prefixed),
+    );
+    expect(estimateKiroWireTokens(korean, model)).toBe(expectedFor(`kiro/${model}`));
+    // The old path fell back to the bare "kiro" id for an empty model; both select the Kiro ratio.
+    expect(estimateKiroWireTokens(korean, "")).toBe(expectedFor("kiro"));
+  });
 });

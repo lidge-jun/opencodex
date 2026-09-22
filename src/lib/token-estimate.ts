@@ -146,7 +146,10 @@ export function estimateTokens(text: string, modelId?: string, contextWindow?: n
   return estimateTokensFromCharacterCounts(len - cjk, cjk, modelId, contextWindow);
 }
 
-/** Estimate tokens from already-counted script buckets without materializing replacement text. */
+/**
+ * Estimate tokens from already-counted script buckets without materializing replacement text.
+ * `latin` and `cjk` are non-negative integer character counts, as produced from a string.
+ */
 export function estimateTokensFromCharacterCounts(
   latin: number,
   cjk: number,
