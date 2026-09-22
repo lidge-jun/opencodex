@@ -48,4 +48,3 @@ models.dev `xai/grok-4.7`: output limit 500,000 (same as grok-4.6), released 202
 
 Side finding, not changed in this unit: command-code `xai/grok-4.6` read the same grids 9/9 (user message) and 8/9
 (tool result), although model-seeds.ts records that route as verified-negative for images.
-

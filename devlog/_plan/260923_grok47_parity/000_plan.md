@@ -120,4 +120,3 @@ Consequences: blocker 1 (xai-transport.test.ts:85, management-provider-validatio
 (gui/src/i18n copy, ProviderAuthPanel mixed state) no longer arise; plan step 4 is removed, and so is acceptance A3.
 Non-blocking note folded: DEVIN_STATIC_MODELS (src/adapters/devin/live-models.ts:18) gains "grok-4-7" beside
 "grok-4-6".
-
