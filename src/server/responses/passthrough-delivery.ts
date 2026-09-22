@@ -207,7 +207,10 @@ export async function deliverPassthroughResponse(
 
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
     const resolvedModel = headers.get("openai-model")?.trim();
-    if (resolvedModel && !logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
+    if (resolvedModel) {
+      logCtx.servedModel = resolvedModel;
+      if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
+    }
     if (isUsageDebugEnabled()) {
       const upstreamContentType = upstreamResponse.headers.get("content-type");
       if (upstreamContentType) logCtx.usageDebugContentType = upstreamContentType;

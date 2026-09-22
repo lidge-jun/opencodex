@@ -444,6 +444,7 @@ export function applyCodexAccountGatedWireNormalization(parsed: OcxParsedRequest
   if (logCtx) {
     logCtx.preserveResolvedModelFromRoute = true;
     delete logCtx.resolvedModel;
+    logCtx.wireModel = wireModel;
   }
   parsed.modelId = wireModel;
   if (!parsed._rawBody || typeof parsed._rawBody !== "object") return;
