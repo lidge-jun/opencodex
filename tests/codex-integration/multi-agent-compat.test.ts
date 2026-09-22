@@ -1478,6 +1478,21 @@ describe("sanitizeEncryptedContentInPlace", () => {
     const parts = (input[0] as { content: Array<Record<string, unknown>> }).content;
     expect(parts[0]).toEqual({ type: "encrypted_content", encrypted_content: fernet });
   });
+
+  test("mixed slots cap Fernet expansion", () => {
+    const payload = Array.from({ length: 1_000 }, () => fernetFixture()).join(".");
+    const input = [
+      { type: "message", role: "user", content: [
+        { type: "encrypted_content", encrypted_content: `preamble.${payload}` },
+      ] },
+    ];
+
+    expect(sanitizeEncryptedContentInPlace(input)).toBe(1);
+    const parts = (input[0] as { content: Array<Record<string, unknown>> }).content;
+    expect(parts.length).toBeLessThanOrEqual(129);
+    expect(parts.filter(part => part.type === "encrypted_content")).toHaveLength(64);
+    expect(parts.at(-1)?.type).toBe("input_text");
+  });
 });
 
 describe("spawn-message delivery (agent_message + encrypted slot)", () => {

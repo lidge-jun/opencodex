@@ -19,6 +19,7 @@ import { noteKiroTransientThrottle } from "../kiro-retry";
 import { InlineThinkTagParser } from "../inline-think-tags";
 import { isCompleteKiroToolInput, kiroTruncationErrorMessage } from "../kiro-truncation";
 import { isValidKiroConversationId } from "../kiro-wire";
+import { readDisplaySafeErrorPayloadText } from "../upstream-http-error";
 import { tagKiroReasoningBlob } from "./reasoning";
 import { estimateKiroTokens, kiroUpstreamContextWindow } from "./usage";
 
@@ -74,6 +75,7 @@ function createKiroAttemptRetention(budget: TranslatorBudget): KiroAttemptRetent
 
 interface KiroFallbackAttempt {
   response: Response;
+  abortSignal?: AbortSignal;
   inputTokens: number;
   contextInputEstimate: number;
   nameMap: Map<string, string>;
@@ -1092,7 +1094,7 @@ export async function* parseKiroStream(
     firstResult.releaseRetained();
     fallback.releaseRequestBody?.();
     if (!fallback.response.ok) {
-      const payload = await fallback.response.text().catch(() => "");
+      const payload = await readDisplaySafeErrorPayloadText(fallback.response, fallback.abortSignal);
       const failure = classifyKiroHttpError(fallback.response.status, fallback.response.headers, payload);
       yield {
         type: "error",

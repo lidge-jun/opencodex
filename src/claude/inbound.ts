@@ -118,6 +118,7 @@ export function effectiveBlockedSkillNames(cc?: Pick<OcxClaudeCodeConfig, "block
 /** Injected-skill payloads below this size are never stubbed (not worth it). */
 const SKILL_ELISION_MIN_CHARS = 10_000;
 const SKILL_TEXT_MARKER = "Base directory for this skill: ";
+const SKILL_TEXT_PATH_MAX_CHARS = 4_096;
 
 interface SkillElisionContext {
   /** Skill-tool call ids whose input names a blocked skill (result-body carrier). */
@@ -138,11 +139,15 @@ const NO_ELISION: SkillElisionContext = { callIds: new Set(), names: [] };
 function maybeElideSkillText(text: string, names: readonly string[]): string {
   if (names.length === 0 || text.length < SKILL_ELISION_MIN_CHARS) return text;
   if (!text.startsWith(SKILL_TEXT_MARKER)) return text;
-  const firstLineEnd = text.indexOf("\n");
-  const dir = text.slice(SKILL_TEXT_MARKER.length, firstLineEnd === -1 ? text.length : firstLineEnd).trim();
+  const pathStart = SKILL_TEXT_MARKER.length;
+  const pathPrefix = text.slice(pathStart, pathStart + SKILL_TEXT_PATH_MAX_CHARS + 1);
+  const firstLineEnd = pathPrefix.indexOf("\n");
+  if (firstLineEnd === -1 && pathPrefix.length > SKILL_TEXT_PATH_MAX_CHARS) return text;
+  const dir = pathPrefix.slice(0, firstLineEnd === -1 ? pathPrefix.length : firstLineEnd).trim();
   // Windows clients send `C:\Users\...\claude-api`; normalize separators before
   // basenaming (repo precedent: src/codex/inject.ts isOpencodexCatalogPath).
-  const base = dir.replace(/\\/g, "/").split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
+  const normalizedDir = dir.replace(/\\/g, "/").replace(/\/+$/, "");
+  const base = normalizedDir.slice(normalizedDir.lastIndexOf("/") + 1).toLowerCase();
   if (!names.includes(base)) return text;
   return `[opencodex] '${base}' skill document bundle (${text.length} chars) elided for routed models `
     + "(claudeCode.blockedSkills). The skill is loaded; answer from general knowledge instead of citing the bundle.";
