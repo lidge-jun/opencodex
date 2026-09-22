@@ -150,7 +150,9 @@ function safeStringify(value: unknown): string {
 
 let benignSuppressed = 0;
 let benignLastLoggedAt = 0;
+let benignLastOrigin: string | undefined;
 const BENIGN_LOG_INTERVAL_MS = 5 * 60_000;
+const MAX_BENIGN_ORIGIN_BYTES = 1024;
 
 /**
  * Bun raises an off-path `unhandledRejection: TypeError: null is not an object` (native-only stack)
@@ -196,12 +198,26 @@ function hasJsSourceFrame(stack: string): boolean {
   });
 }
 
+/** The JSC hidden throw site (`sourceURL:line:col`), when the error carries one. */
+function hiddenThrowSite(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") return undefined;
+  const e = err as Record<string, unknown>;
+  if (typeof e.sourceURL !== "string" || !e.sourceURL) return undefined;
+  const site = `${e.sourceURL}:${String(e.line ?? e.originalLine ?? "")}:${String(e.column ?? e.originalColumn ?? "")}`;
+  return truncateRetainedUtf8(site, MAX_BENIGN_ORIGIN_BYTES);
+}
+
 function record(kind: string, err: unknown, promise?: unknown): void {
   if (kind === "unhandledRejection" && isBenignAbortTeardown(err)) {
     benignSuppressed++;
     const now = Date.now();
-    if (now - benignLastLoggedAt < BENIGN_LOG_INTERVAL_MS) return; // fold repeats silently
+    // A throw site JSC recorded on hidden fields is new information when it differs from
+    // the last one logged, so it is written even inside the fold window; repeats still fold.
+    const origin = hiddenThrowSite(err);
+    const novelOrigin = origin !== undefined && origin !== benignLastOrigin;
+    if (!novelOrigin && now - benignLastLoggedAt < BENIGN_LOG_INTERVAL_MS) return; // fold repeats silently
     benignLastLoggedAt = now;
+    if (origin !== undefined) benignLastOrigin = origin;
     const summary = `\n[${new Date(now).toISOString()}] benign-abort-teardown x${benignSuppressed}`
       + ` (Bun fetch-body abort; proxy unaffected)${diagnose(err)}${diagnosePromise(promise)}${breadcrumb()}\n`;
     benignSuppressed = 0;
@@ -319,6 +335,16 @@ export function crashRingEntriesForTests(): readonly Readonly<FetchTrace>[] {
 export function resetCrashRingForTests(): void {
   fetchRing.length = 0;
   fetchRingBytes = 0;
+}
+
+export function recordCrashForTests(kind: string, err: unknown): void {
+  record(kind, err);
+}
+
+export function resetBenignFoldForTests(): void {
+  benignSuppressed = 0;
+  benignLastLoggedAt = 0;
+  benignLastOrigin = undefined;
 }
 
 /** Render the recent fetch ring (pending first) for the crash breadcrumb. */

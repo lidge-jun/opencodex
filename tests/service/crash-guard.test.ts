@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { appendCrashTraceForTests, crashRingEntriesForTests, formatCrashEntry, installCrashGuards, isBenignAbortTeardown, resetCrashRingForTests } from "../../src/lib/crash-guard";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { appendCrashTraceForTests, crashRingEntriesForTests, formatCrashEntry, installCrashGuards, isBenignAbortTeardown, recordCrashForTests, resetBenignFoldForTests, resetCrashRingForTests } from "../../src/lib/crash-guard";
 import { RETAINED_TRUNCATION_MARKER, retainedUtf8Bytes } from "../../src/lib/admission";
 import { sidecarEnter } from "../../src/lib/sidecar-tracker";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 describe("crash-guard diagnostics", () => {
   test("the 13th fetch trace evicts the oldest and 8 KiB values truncate on UTF-8 boundaries", () => {
@@ -138,6 +142,33 @@ describe("benign abort-teardown classification", () => {
     err.stack = "TypeError: null is not an object\n    at <anonymous> (native:1:11)\n    at native:7:39";
     Object.assign(err, { sourceURL: "/abs/src/server.ts", line: 1216, column: 24 });
     expect(isBenignAbortTeardown(err)).toBe(true);
+  });
+
+  test("a new hidden throw site is logged inside the fold window; repeats still fold", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-crash-guard-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = home;
+    resetBenignFoldForTests();
+    const teardown = (site: { sourceURL: string; line?: number; column?: number }) => {
+      const err = new TypeError("null is not an object");
+      err.stack = "TypeError: null is not an object\n    at <anonymous> (native:1:11)";
+      return Object.assign(err, site);
+    };
+    try {
+      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "/abs/src/a.ts", line: 1, column: 2 }));
+      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "/abs/src/a.ts", line: 1, column: 2 }));
+      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "/abs/src/b.ts", line: 3, column: 4 }));
+      recordCrashForTests("unhandledRejection", teardown({ sourceURL: "" }));
+      const log = readFileSync(join(home, "crash.log"), "utf8");
+      expect(log.match(/benign-abort-teardown/g)).toHaveLength(2);
+      expect(log).toContain("origin: /abs/src/a.ts:1:2");
+      expect(log).toContain("origin: /abs/src/b.ts:3:4");
+    } finally {
+      resetBenignFoldForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
   });
 
   test("does NOT flag a different message or the (evaluating …) form", () => {
