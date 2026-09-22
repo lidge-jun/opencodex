@@ -735,6 +735,7 @@
     "desktop-start-at-login-default.test.ts": "clients",
     "destination-policy-resolved.test.ts": "routing",
     "devin-adapter.test.ts": "providers",
+    "devin-adapter-reset-wait.test.ts": "providers",
     "devin-cli-authmode-migration.test.ts": "providers",
     "devin-effort-ladder.test.ts": "providers",
     "devin-live-models.test.ts": "providers",

@@ -566,6 +566,7 @@
   "desktop-start-at-login-default.test.ts": "clients",
   "destination-policy-resolved.test.ts": "routing",
   "devin-adapter.test.ts": "providers",
+  "devin-adapter-reset-wait.test.ts": "providers",
   "devin-effort-ladder.test.ts": "providers",
   "devin-hardening.test.ts": "providers",
   "devin-image-passthrough.test.ts": "providers",

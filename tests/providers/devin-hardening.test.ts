@@ -5,7 +5,8 @@ import { parseDevinAuthPaste, refreshDevinToken } from "../../src/oauth/devin";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "../../src/oauth/devin/api-base";
 import { registerUser } from "../../src/oauth/devin/register-user";
 import { anySignal } from "../../src/lib/abort";
-import { buildGetChatMessageRequestForTests } from "../../src/adapters/devin/cloud-direct/chat";
+import { buildGetChatMessageRequestForTests, streamChatEvents } from "../../src/adapters/devin/cloud-direct/chat";
+import { clearCachedCatalog } from "../../src/adapters/devin/cloud-direct/catalog";
 import { decodeModelUsageStats } from "../../src/adapters/devin/cloud-direct/chat";
 import { CloudChatError, decodeChatFrame } from "../../src/adapters/devin/cloud-direct/chat";
 import { connectTrailerHttpStatus } from "../../src/adapters/devin/cloud-direct/chat";
@@ -640,5 +641,89 @@ describe("devin reasoning replay", () => {
     const frame = lenDelim(10, Buffer.from("sig-from-cloud", "utf8"));
     const events = [...decodeChatFrame(frame)];
     expect(events).toEqual([{ kind: "reasoning_signature", signature: "sig-from-cloud" }]);
+  });
+});
+
+describe("devin cloud trailer errors", () => {
+  test("never exposes an upstream message or unrecognized code", async () => {
+    const credential = "devin-session-token$header.payload.signature";
+    const trailer = Buffer.from(JSON.stringify({
+      error: { code: credential, message: `reflected request credential: ${credential}` },
+    }));
+    const envelope = Buffer.alloc(5 + trailer.length);
+    envelope[0] = 0x02;
+    envelope.writeUInt32BE(trailer.length, 1);
+    trailer.copy(envelope, 5);
+
+    const originalFetch = globalThis.fetch;
+    clearCachedCatalog();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response("catalog unavailable", { status: 503 })
+        : new Response(envelope, { status: 200 });
+    }) as typeof fetch;
+    try {
+      let caught: unknown;
+      try {
+        for await (const _event of streamChatEvents({
+          apiKey: credential,
+          modelUid: "swe-2-high",
+          messages: [{ role: "user", content: "hi" }],
+        })) { /* no data frames */ }
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe("Cognition chat failed (cloud trace ID: n/a)");
+      expect((caught as Error).message).not.toContain(credential);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearCachedCatalog();
+    }
+  });
+
+  test("carries our own retry-seconds wording without the raw trailer text", async () => {
+    const credential = "devin-session-token$header.payload.signature";
+    const trailer = Buffer.from(JSON.stringify({
+      error: {
+        code: "resource_exhausted",
+        message: `Your limit will reset in 35 seconds. ${credential}`,
+      },
+    }));
+    const envelope = Buffer.alloc(5 + trailer.length);
+    envelope[0] = 0x02;
+    envelope.writeUInt32BE(trailer.length, 1);
+    trailer.copy(envelope, 5);
+
+    const originalFetch = globalThis.fetch;
+    clearCachedCatalog();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response("catalog unavailable", { status: 503 })
+        : new Response(envelope, { status: 200 });
+    }) as typeof fetch;
+    try {
+      let caught: unknown;
+      try {
+        for await (const _event of streamChatEvents({
+          apiKey: credential,
+          modelUid: "swe-2-high",
+          messages: [{ role: "user", content: "hi" }],
+        })) { /* no data frames */ }
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toContain("retry after ~35s");
+      expect((caught as Error).message).not.toContain(credential);
+      expect((caught as Error).message).not.toContain("Your limit will reset");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearCachedCatalog();
+    }
   });
 });
