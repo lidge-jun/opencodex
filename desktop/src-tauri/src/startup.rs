@@ -758,7 +758,7 @@ async fn run(app: &AppHandle, started: Instant) {
                     .await;
                     return;
                 }
-                AttachPlan::Ask(_) => {
+                AttachPlan::Ask => {
                     // The prompt has to be visible even when this launch started hidden.
                     if let Some(window) = app.get_webview_window("main") {
                         crate::window::show(&window);
@@ -946,12 +946,12 @@ async fn run(app: &AppHandle, started: Instant) {
 }
 
 /// What an attach turns into once the recorded owner and the CLI's compatibility answer are
-/// laid next to each other. `Ask` carries the token the claim has to be made against.
+/// laid next to each other. The approved resolve answer carries the claim token.
 enum AttachPlan {
     /// Stay a guest on what answered; the string is the detail the phase reports.
     Guest(String),
     /// Offer the takeover and wait on the user.
-    Ask(String),
+    Ask,
 }
 
 fn attach_plan(consent: ownership::Consent, takeover: &resolve::Takeover) -> AttachPlan {
@@ -966,7 +966,7 @@ fn attach_plan(consent: ownership::Consent, takeover: &resolve::Takeover) -> Att
             resolve::Takeover::Blocked { reason, detail } => AttachPlan::Guest(format!(
                 "a runtime was already listening, but taking it over is not available ({reason}: {detail}), so this app is a guest on it"
             )),
-            resolve::Takeover::Supported { token, .. } => AttachPlan::Ask(token.clone()),
+            resolve::Takeover::Supported { .. } => AttachPlan::Ask,
         },
     }
 }
@@ -1066,7 +1066,7 @@ async fn take_over(
             Phase::TakingOver,
             Some("stopping the runtime that was already listening".to_owned()),
         );
-        runtime_stop::run(app, *deadline, approved).await
+        runtime_stop::run_approved(app, *deadline, approved).await
     })
     .await;
     let Some(stopped) = stopped else {
@@ -1522,7 +1522,10 @@ mod tests {
             schema: "ocx-resolve/1".to_owned(),
             cli_version: "2.61.0".to_owned(),
             config_home: "/sandbox/a".to_owned(),
-            port: Port { effective: 10100, configured: 10100 },
+            port: Port {
+                effective: 10100,
+                configured: 10100,
+            },
             liveness: Liveness {
                 status: Status::Live,
                 pid: Some(42),
@@ -1552,41 +1555,73 @@ mod tests {
         let refused = stop_after_approval(
             &approved,
             &Resolution::Answered(Box::new(changed)),
-            || async { called.set(true); StopResult::Failed("called".to_owned()) },
-        ).await;
+            || async {
+                called.set(true);
+                StopResult::Failed("called".to_owned())
+            },
+        )
+        .await;
         assert!(refused.is_none());
         assert!(!called.get());
         let accepted = stop_after_approval(
             &approved,
             &Resolution::Answered(Box::new(approved.clone())),
-            || async { called.set(true); StopResult::Failed("called".to_owned()) },
-        ).await;
+            || async {
+                called.set(true);
+                StopResult::Failed("called".to_owned())
+            },
+        )
+        .await;
         assert!(accepted.is_some());
         assert!(called.get());
         let mut moved = approved.clone();
         moved.liveness.pid = Some(43);
-        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        assert!(!approval_still_current(
+            &approved,
+            &Resolution::Answered(Box::new(moved))
+        ));
         let mut moved = approved.clone();
         moved.port.effective = 10101;
-        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        assert!(!approval_still_current(
+            &approved,
+            &Resolution::Answered(Box::new(moved))
+        ));
         let mut moved = approved.clone();
         moved.config_home = "/sandbox/b".to_owned();
-        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        assert!(!approval_still_current(
+            &approved,
+            &Resolution::Answered(Box::new(moved))
+        ));
         let mut moved = approved.clone();
         moved.cli_version = "2.62.0".to_owned();
-        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        assert!(!approval_still_current(
+            &approved,
+            &Resolution::Answered(Box::new(moved))
+        ));
         let mut moved = approved.clone();
         moved.liveness.hostname = Some("localhost".to_owned());
-        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        assert!(!approval_still_current(
+            &approved,
+            &Resolution::Answered(Box::new(moved))
+        ));
         let mut moved = approved.clone();
         if let Takeover::Supported { token, .. } = &mut moved.takeover {
             *token = "changed".to_owned();
         }
-        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
+        assert!(!approval_still_current(
+            &approved,
+            &Resolution::Answered(Box::new(moved))
+        ));
         let mut moved = approved.clone();
         moved.takeover = blocked();
-        assert!(!approval_still_current(&approved, &Resolution::Answered(Box::new(moved))));
-        assert!(!approval_still_current(&approved, &Resolution::Unknown("unreadable".to_owned())));
+        assert!(!approval_still_current(
+            &approved,
+            &Resolution::Answered(Box::new(moved))
+        ));
+        assert!(!approval_still_current(
+            &approved,
+            &Resolution::Unknown("unreadable".to_owned())
+        ));
     }
 
     #[tokio::test]
@@ -1601,12 +1636,14 @@ mod tests {
             StopResult::Failed("the bundled CLI timed out".to_owned()),
         ] {
             let stopped = stop_after_approval(&approved, &answer, || async { result })
-                .await.expect("matching answer");
+                .await
+                .expect("matching answer");
             assert!(!stopped.may_check_silence());
             let claimed = claim_after_silence(&stopped, true, || async {
                 called.set(true);
                 ClaimResult::Failed("called".to_owned())
-            }).await;
+            })
+            .await;
             assert!(claimed.is_none());
             assert!(!called.get());
         }
@@ -1614,7 +1651,8 @@ mod tests {
         let claimed = claim_after_silence(&history, true, || async {
             called.set(true);
             ClaimResult::Failed("called".to_owned())
-        }).await;
+        })
+        .await;
         assert!(matches!(claimed, Some(ClaimResult::Failed(_))));
         assert!(called.get());
     }
@@ -1643,15 +1681,15 @@ mod tests {
             attach_plan(Consent::Refuse, &supported()),
             AttachPlan::Guest(_)
         ));
-        match attach_plan(Consent::AskFirstTime, &supported()) {
-            AttachPlan::Ask(token) => assert_eq!(token, "tok"),
-            AttachPlan::Guest(detail) => panic!("{detail}"),
-        }
+        assert!(matches!(
+            attach_plan(Consent::AskFirstTime, &supported()),
+            AttachPlan::Ask
+        ));
         match attach_plan(Consent::AskAgain, &blocked()) {
             AttachPlan::Guest(detail) => {
                 assert!(detail.contains("managing-cli-unsupported: path uses 2.59.0"))
             }
-            AttachPlan::Ask(_) => panic!("a blocked takeover is not an offer"),
+            AttachPlan::Ask => panic!("a blocked takeover is not an offer"),
         }
     }
 

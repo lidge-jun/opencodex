@@ -123,13 +123,13 @@ describe("desktop CLI contracts", () => {
     expect(reader).toContain("(Outcome::Stopped, Proxy::Stopped)");
     expect(reader).toContain("(Outcome::NotRunning, Proxy::NotRunning)");
     expect(reader).toContain("StopResult::Failed");
-    const stopped = reader.indexOf("StopResult::Stopped(summary)");
+    const stopped = reader.indexOf("StopResult::Stopped(Box::new(summary))");
     expect(stopped).toBeGreaterThan(reader.indexOf("if exit_code != Some(0)"));
   });
 
   test("the outcomes the shell can be handed are the outcomes the CLI can emit", () => {
     expect(stopTs).toContain(
-      'outcome: "stopped" | "not-running" | "history-incomplete" | "history-deferred" | "failed"',
+      'outcome: "stopped" | "not-running" | "history-incomplete" | "history-deferred" | "failed" | "approval-changed" | "manager-still-active"',
     );
     // The shell does not re-derive the outcome; it carries the CLI's own words into its diagnostic.
     expect(stopRs).toContain("summary.outcome");

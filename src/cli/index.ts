@@ -1500,10 +1500,12 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     historyDeferred: historyDeferredNonces !== null,
     exitCode: Number(process.exitCode ?? 0),
   };
-  const finish = () => ({ ok: !stopFailed, summary: summarizeStopRun(record, signals) });
-  return snapshot && !stopFailed
-    ? await guardFinalStopSummary(record, () => observeGuardedManagerStopped(snapshot.manager), finish)
-    : finish();
+  const summary = summarizeStopRun(record, signals);
+  if (snapshot && !stopFailed) {
+    return guardFinalStopSummary(record, () => observeGuardedManagerStopped(snapshot.manager),
+      () => ({ ok: !stopFailed, summary }));
+  }
+  return { ok: !stopFailed, summary };
 }
 
 async function handleUninstall() {

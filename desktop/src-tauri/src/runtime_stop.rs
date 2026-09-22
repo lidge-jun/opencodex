@@ -223,8 +223,13 @@ pub fn read(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> StopResult 
     StopResult::Stopped(Box::new(summary))
 }
 
+/// Run the ordinary bundled stop used when this app exits its own runtime.
+pub async fn run(app: &AppHandle, deadline: Instant) -> StopResult {
+    run_with_args(app, deadline, vec!["stop".to_owned(), "--json".to_owned()]).await
+}
+
 /// Run the bundled stop bound to the approved runtime, under the caller's deadline.
-pub async fn run(
+pub async fn run_approved(
     app: &AppHandle,
     deadline: Instant,
     approved: &crate::resolve::Resolved,
@@ -255,6 +260,10 @@ pub async fn run(
         "--expect-compatibility-token".to_owned(),
         token.clone(),
     ];
+    run_with_args(app, deadline, argv).await
+}
+
+async fn run_with_args(app: &AppHandle, deadline: Instant, argv: Vec<String>) -> StopResult {
     let command = match app.shell().sidecar("ocx") {
         Ok(command) => command.args(argv),
         Err(error) => {
@@ -388,8 +397,7 @@ mod tests {
             assert!(!result.may_check_silence());
             match result {
                 StopResult::ApprovalChanged(_) if expected == Outcome::ApprovalChanged => {}
-                StopResult::ManagerStillActive(_)
-                    if expected == Outcome::ManagerStillActive => {}
+                StopResult::ManagerStillActive(_) if expected == Outcome::ManagerStillActive => {}
                 other => panic!("unexpected result: {other:?}"),
             }
             assert_eq!(expected.as_str(), outcome);
