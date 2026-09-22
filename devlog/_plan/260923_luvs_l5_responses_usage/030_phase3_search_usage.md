@@ -52,3 +52,13 @@ Cap check: `gui/src/pages/Models.tsx` at most 2,792.
   normalized again on read, so a literal selector equal to another selector's encoded form
   aliases it. Document the limitation in the code comment and pin it with a test; a digest column
   would remove it and is reported to the maintainer.
+
+## Outcome (wp4)
+
+#5562: seven commits carried; follow-ups `fix(responses): keep combo shadow interception on the
+dispatch pick` and `test(web-search): bind repaired-leg replay to a keyed caller principal`.
+`421ba780ae`, `6b122cd2f0` and `6ea3a95c21` stay with #5549.
+#5556: ten commits carried; follow-ups `fix(cli): accept only an ISO-8601 UTC attributionSince`
+and `docs(usage): state the aliasing limit of the idempotent selector encoding`. The screenshot
+commit is not carried; the PR links the existing capture.
+Local checks: NOT RUN. Static gate passed; hosted CI verifies in wp5.
