@@ -84,7 +84,7 @@ import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningMod
 import { SUBAGENT_SURFACE_GUIDE_URL, readSubagentSurfaceAdvisory } from "../subagent-surface";
 import { shadowCallModelOptions } from "./dashboard-shared";
 import { shadowSourceModelBadge, shadowSourceModelLabel } from "./shadow-call-source";
-import { ModelCatalogStateSummary } from "./models-catalog-state";
+import { ModelCatalogDelivery } from "./models-catalog-state";
 
 type CachedModelsPage = {
   models: ModelRow[];
@@ -142,7 +142,7 @@ interface AliasView {
   defaults: { global: boolean; providers: Record<string, boolean> };
 }
 
-export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt, reportRestart }: { apiBase: string; restartEpoch?: number; catalogSyncedAt?: string; reportRestart: (message: string, tone: NoticeTone) => void }) {
+export default function Models({ apiBase, restartEpoch = 0, connected = false, catalogSyncedAt, reportRestart }: { apiBase: string; restartEpoch?: number; connected?: boolean; catalogSyncedAt?: string; reportRestart: (message: string, tone: NoticeTone) => void }) {
   // Codex app-server staleness (devlog/_fin/260815_gui_codex_restart). Named
   // appServerState, not catalogState: this file already binds that name to the
   // model-catalog resource state, which is an unrelated concept. (Spelling the
@@ -2645,10 +2645,11 @@ export default function Models({ apiBase, restartEpoch = 0, catalogSyncedAt, rep
       />
       <ModelsTabStrip tab={tab} onSelect={selectTab} meta={tabMeta} />
       {/*
-        One summary for the active tab. The catalog also names its delivery states;
-        other tabs keep the compact subtitle so their workspaces stay in view.
+        One subtitle for the active tab. The catalog adds its delivery process folded to one
+        line, rendered here rather than in the panel because hidden panels stay mounted.
       */}
-      <ModelCatalogStateSummary subtitleKey={SUBTITLE_TKEY[tab]} catalogSyncedAt={catalogSyncedAt} />
+      <p className="page-sub">{t(SUBTITLE_TKEY[tab])}</p>
+      {tab === "catalog" && <ModelCatalogDelivery connected={connected} catalogSyncedAt={catalogSyncedAt} />}
 
       {/*
         Panels mount lazily and then stay mounted, hidden — a half-typed combo draft

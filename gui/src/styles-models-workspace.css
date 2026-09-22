@@ -655,3 +655,22 @@
 .picker-order-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .picker-order-actions { display: inline-flex; flex-shrink: 0; gap: 2px; }
 .picker-order-row .cwi-target-grip:disabled { cursor: default; opacity: 0.5; }
+
+/*
+  Catalog delivery process, folded to one line under the Models subtitle.
+  Summary marker follows .startup-recovery-details; focus uses the global :focus-visible rule.
+*/
+.models-delivery { margin: -14px 0 18px; max-width: var(--prose-measure); font-size: var(--text-control); color: var(--muted); }
+.models-delivery > summary { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 0; cursor: pointer; list-style: none; }
+.models-delivery > summary::-webkit-details-marker { display: none; }
+.models-delivery > summary::before { content: ""; flex: 0 0 auto; width: 0; height: 0; border-left: 5px solid var(--muted); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform var(--motion-fast); }
+.models-delivery[open] > summary::before { transform: rotate(90deg); }
+.models-delivery-title { flex: 0 0 auto; color: var(--text); font-weight: var(--weight-semibold); }
+.models-delivery-flow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.models-delivery-steps { margin: 8px 0 0; padding: 0 0 0 26px; display: flex; flex-direction: column; gap: 10px; line-height: var(--leading-body); }
+.models-delivery-steps > li { padding-left: 2px; }
+.models-delivery-steps > li::marker { color: var(--muted); font-weight: var(--weight-semibold); }
+.models-delivery-steps strong { display: block; color: var(--text); font-weight: var(--weight-semibold); }
+.models-delivery-steps p { margin: 2px 0 0; }
+.models-delivery-hint { margin: 10px 0 0 13px; padding: 8px 12px; border-left: 2px solid var(--border); line-height: var(--leading-body); }
+:lang(ko) .models-delivery { word-break: keep-all; overflow-wrap: anywhere; }
