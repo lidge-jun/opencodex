@@ -10,8 +10,9 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { diagnoseService } from "./diagnostics";
 import type { ServiceDiagnostic } from "./diagnostics";
-import { currentCodexHome, currentOpenCodexHome, normalizePathForCompare, readServiceInstallState, serviceCodexHomeMatchesInstall } from "./state";
+import { currentCodexHome, currentOpenCodexHome, normalizePathForCompare, resolveServiceState, serviceCodexHomeMatchesInstall } from "./state";
 import { resolveCodexSqliteHome } from "../codex/paths";
+import type { CodexHomeDeps } from "../codex/home";
 import { isLoopbackHostname } from "../codex/loopback-target";
 import { win32 } from "node:path";
 
@@ -44,14 +45,17 @@ export function serviceEnvironmentOwnedHere(): boolean {
   }
 }
 
-export function assertServiceEnvironmentMatchesInstall(): void {
-  const state = readServiceInstallState();
-  if (!state) return;
-  const actualCodexHome = currentCodexHome();
-  if (!serviceCodexHomeMatchesInstall(state.codexHome)) {
+export function assertServiceEnvironmentMatchesInstall(deps: CodexHomeDeps = {}): void {
+  const resolution = resolveServiceState();
+  // Unreadable state keeps its existing interactive semantics (see assertNativeTeardownOwned);
+  // unattended writes use the tri-state inspector, which reports it as unknown.
+  if (resolution.kind !== "state") return;
+  const state = resolution.state;
+  const actualCodexHome = currentCodexHome(deps);
+  if (!serviceCodexHomeMatchesInstall(state.codexHome, deps)) {
     throw new ServiceOwnershipError(
       `Service was installed with CODEX_HOME=${state.codexHome}, but current CODEX_HOME=${actualCodexHome}. ` +
-        "Run the service command from the same Codex home so native Codex restore updates the correct config.",
+        `Rerun with CODEX_HOME=${state.codexHome} so native Codex restore updates the recorded home.`,
     );
   }
   const expectedOpenCodexHome = normalizePathForCompare(state.opencodexHome);

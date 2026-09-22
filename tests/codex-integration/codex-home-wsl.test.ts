@@ -64,7 +64,7 @@ describe("wsl.conf automount root", () => {
     expect(homes.codexHome).not.toBe("/home/example/.codex");
   });
 
-  test("service ownership accepts the legacy Linux fallback when WSL now discovers Windows Codex", () => {
+  test("service ownership rejects a legacy Linux home when WSL now discovers Windows Codex", () => {
     const usersRoot = ["/mnt/c", "Users"].join("/");
     const windowsCodexHome = [usersRoot, "windows-user", ".codex"].join("/");
     const deps = {
@@ -79,7 +79,8 @@ describe("wsl.conf automount root", () => {
       realpathSync: (path: string) => path,
     };
 
-    expect(serviceCodexHomeMatchesInstall("/home/example/.codex", deps)).toBe(true);
+    expect(serviceCodexHomeMatchesInstall("/home/example/.codex", deps)).toBe(false);
+    expect(serviceCodexHomeMatchesInstall(windowsCodexHome, deps)).toBe(true);
     expect(serviceCodexHomeMatchesInstall("/home/other/.codex", deps)).toBe(false);
     expect(serviceCodexHomeMatchesInstall("/home/example/.codex", {
       ...deps,
