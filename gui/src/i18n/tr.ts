@@ -5,6 +5,13 @@ import type { TKey } from "./en";
  * Turkish i18n catalog. Must match the `TKey` set (compile-checked).
  */
 export const tr: Record<TKey, string> = {
+  "tray.updated": "Güncellendi {time} · her 60 sn",
+  "tray.today": "Bugün",
+  "tray.input": "Girdi",
+  "tray.output": "Çıktı",
+  "tray.cost": "Tahmini ücret",
+  "tray.cached": "{percent} önbellek",
+
   "usage.incomplete": "Bazı kullanım kayıtları dahil edilemedi. Sayılar, tarihler ve sıralamalar yalnızca okunabilir kayıtlara dayanır.",
   "models.pickerOrder.usageIncomplete": "Kullanım geçmişi eksik olduğundan en çok kullanılan sıralaması kaydedilemiyor. Başka bir sıralama seçin veya önce geçmişi onarın.",
   "api.attribution.noRecordedUse": "Okunabilir kayıtlarda kullanım yok",
