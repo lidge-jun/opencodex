@@ -668,10 +668,13 @@ describe("legacy pool contract goldens (#wp5)", () => {
         expect(await codex({ stickyLimit })).toBe(200);
       }
     } finally {
-      await server?.stop(true);
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      removeTreeWithRetry(testDir);
+      try {
+        await server?.stop(true);
+      } finally {
+        if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = previousHome;
+        removeTreeWithRetry(testDir);
+      }
     }
   });
 
