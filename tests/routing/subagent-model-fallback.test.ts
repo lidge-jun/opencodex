@@ -273,7 +273,7 @@ test("the native-main drain sentinel covers the flagships without widening to gp
     const draining = { nativeMainSelectionOnly: true } as const;
     const noPoolCandidate = () => undefined;
 
-    for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-daybreak-blue-latest"]) {
+    for (const slug of ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-daybreak-blue-latest", "gpt-6-astra-minor"]) {
       expect(NATIVE_MAIN_DRAIN_SENTINEL_MODELS.has(slug)).toBe(true);
       expect(isSubagentModelUnavailable(slug, config, null, now, draining, noPoolCandidate))
         .toBe(false);

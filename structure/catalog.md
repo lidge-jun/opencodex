@@ -46,6 +46,12 @@ provider-wide fallback. Exact model output limits precede the provider default o
 - preserves native OpenAI entries from the live catalog or static fallback, and emits
   gpt-5.6 natives from the pinned upstream models.json snapshot
   (`src/codex/data/upstream-models.json` — exact per-slug ladders: luna has no ultra);
+- reads pinned native rows only through `pinnedNativeModelRows()`
+  (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
+  `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds
+  verbatim authenticated-roster rows for models codex-rs has not bundled yet (`gpt-6-sol`,
+  `gpt-6-luna`, captured 2026-09-23 at `client_version=0.155.0`), so a wholesale snapshot re-pin
+  never erases them and a snapshot row for the same slug always wins;
 - excludes retired `gpt-5.3-codex-spark` from native fallback, observed/cache rows, and
   account-selector projections, including retained sync and native restore;
 - upgrades either an observed selector-qualified `*/gpt-daybreak-blue-latest` account row or an
@@ -270,6 +276,15 @@ fallback passes the same configured limits to context, max input and compaction.
 templates clear the native multi-agent effort; canonical Astra-forward custom rows retain it and
 the pinned Fast speed description. Sync repairs only the exact old built-in Astra Fast description,
 preserving custom descriptions and other stored row fields.
+
+GPT-6 Sol and Luna (announced 2026-09-22) are self-described the same way, from their roster-pinned
+rows: labels `GPT-6-Sol` / `GPT-6-Luna`, 272,000 default context and 872,000 opt-in ceiling,
+`medium` default. Sol ships low-through-ultra; Luna stops at `max`, and no path may add `ultra` to
+it: `nativeLadderIncludesUltra` answers from the self-described row (or an alias's source row), so
+`ensureGpt56ReasoningLevels` restores `max` everywhere but adds `ultra` only where the pinned row
+ships it. Both are ungated flagships. `gpt-6-astra-minor` is an account-gated capability alias of
+Astra with its own presentation (`GPT-6-Astra-Minor`); it has no pinned row of its own and stays
+hidden and request-refused until an authenticated roster lists it.
 
 The API registry separately owns Astra's 1,050,000 context / 922,000 input / 128,000 output and
 five API effort levels. Trusted discovery snapshots carry the output ceiling as well as input

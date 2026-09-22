@@ -458,6 +458,17 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   exact rejection and fresh grant before each later send; otherwise ordinary eligible-account
   failover applies.
 
+- The account-gated set is `gpt-daybreak-blue-latest` and `gpt-6-astra-minor`. Neither has a
+  shipped catalog row, so roster absence is the only evidence available for either. Astra Minor
+  borrows `gpt-6-astra` capability metadata for catalog rows only; it has no wire normalization, so
+  a request goes upstream as `gpt-6-astra-minor`.
+
+- The flagship roster that lists unconditionally is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
+  `gpt-6-astra`, `gpt-6-sol` and `gpt-6-luna` (Sol and Luna added 2026-09-23 from a live roster
+  probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/). None of them is gated, and all
+  six are native-main drain sentinels. The confirmed-denial ordering below is still scoped to the
+  first four (`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS`); Sol and Luna do not feed it yet.
+
 - The always-visible flagships (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`)
   use the same rosters with the opposite polarity, and are never gated on them. Only a CONFIRMED
   DENIAL counts: `cachedDeniedCodexAccountIdsForModel` reads rosters discovery already gathered,
@@ -482,7 +493,7 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   Detection reads the model upstream actually named rather than rebuilding the sentence from
   `route.modelId`, because `applyCodexAccountGatedWireNormalization` rewrites Daybreak to
   `gpt-5.6-sol` before dispatch; comparing against the route model alone never matched for the
-  one model that is still account-gated, which disabled both its alternate-account retry and its
+  one wire-normalized account-gated model, which disabled both its alternate-account retry and its
   same-account ladder.
   `getEligiblePoolAccounts` is not the only door, so `preferModelEntitledAccount` applies the same
   evidence to an already-active shared cursor: the replacement is drawn from the eligible list, the

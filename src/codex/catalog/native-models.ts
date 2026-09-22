@@ -23,6 +23,32 @@ export const NATIVE_DAYBREAK_BLUE_MODEL = "gpt-daybreak-blue-latest";
 export const NATIVE_GPT6_ASTRA_MODEL = "gpt-6-astra";
 
 /**
+ * GPT-6 Sol and Luna, announced 2026-09-22 (https://openai.com/index/introducing-gpt-6-sol-and-luna/).
+ *
+ * SELF-DESCRIBED: the authenticated roster probe on 2026-09-23
+ * (`/backend-api/codex/models?client_version=0.155.0`, main account) returned a full row for each,
+ * pinned verbatim in `src/codex/data/roster-pinned-models.json` because codex-rs has not bundled
+ * them yet. Sol ships low..ultra; Luna ships low..max and must not be widened to ultra.
+ *
+ * Not account-gated, for the same owner decision that ungated `gpt-6-astra`: the rows list 24
+ * plans, and hiding a flagship until a roster confirms it reads as opencodex losing the model.
+ * Listing them means the request dispatches and the user sees the real upstream status.
+ */
+export const NATIVE_GPT6_SOL_MODEL = "gpt-6-sol";
+export const NATIVE_GPT6_LUNA_MODEL = "gpt-6-luna";
+
+/**
+ * Unreleased GPT-6 Astra variant. No public row exists anywhere — neither the codex-rs bundle nor
+ * the 2026-09-23 main-account roster probe carries it — so it is ACCOUNT-GATED: hidden and
+ * request-refused until an authenticated `/models` roster lists it for that account. Absence is
+ * the only signal that exists for it, which is exactly the Daybreak Blue situation.
+ *
+ * Capability metadata is borrowed from `gpt-6-astra` (a capability alias); presentation is its
+ * own. No minimum client version is recorded for it: none has been measured.
+ */
+export const NATIVE_GPT6_ASTRA_MINOR_MODEL = "gpt-6-astra-minor";
+
+/**
  * Native ChatGPT/Codex ids whose availability is proven per authenticated account.
  *
  * Membership is expensive: it hides the row from the catalog, `/v1/models`, the dashboard and
@@ -49,6 +75,8 @@ export const NATIVE_GPT6_ASTRA_MODEL = "gpt-6-astra";
  */
 export const ACCOUNT_GATED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
   NATIVE_DAYBREAK_BLUE_MODEL,
+  // Same footing as Daybreak: no shipped row, so absence is the only evidence available.
+  NATIVE_GPT6_ASTRA_MINOR_MODEL,
 ]);
 
 /**
@@ -65,6 +93,7 @@ export const ACCOUNT_GATED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
  */
 const NATIVE_OPENAI_CAPABILITY_SOURCES: Readonly<Record<string, string>> = Object.freeze({
   [NATIVE_DAYBREAK_BLUE_MODEL]: "gpt-5.6-sol",
+  [NATIVE_GPT6_ASTRA_MINOR_MODEL]: NATIVE_GPT6_ASTRA_MODEL,
 });
 
 /**
@@ -80,6 +109,9 @@ const NATIVE_OPENAI_CAPABILITY_SOURCES: Readonly<Record<string, string>> = Objec
  */
 export const SELF_DESCRIBED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = new Set([
   NATIVE_GPT6_ASTRA_MODEL,
+  // Rows come from roster-pinned-models.json via pinnedNativeModelRows(), not the codex-rs pin.
+  NATIVE_GPT6_SOL_MODEL,
+  NATIVE_GPT6_LUNA_MODEL,
 ]);
 
 /**
@@ -132,6 +164,10 @@ export const NATIVE_OPENAI_ALIAS_PRESENTATION: Readonly<Record<string, { display
     displayName: "Daybreak Blue",
     description: "Frontier general-purpose model with safeguards for defensive cybersecurity work.",
   },
+  [NATIVE_GPT6_ASTRA_MINOR_MODEL]: {
+    displayName: "GPT-6-Astra-Minor",
+    description: "Unreleased GPT-6 Astra variant; shown only when your account's Codex roster lists it.",
+  },
 });
 
 export function nativeOpenAiAliasPresentation(slug: string): { displayName: string; description: string } | undefined {
@@ -159,6 +195,8 @@ export const NATIVE_OPENAI_MODELS = [
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
+  NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL,
+  NATIVE_GPT6_ASTRA_MINOR_MODEL,
 ];
 
 export const SUPPORTED_NATIVE_OPENAI_SLUGS = new Set(NATIVE_OPENAI_MODELS);
@@ -204,4 +242,7 @@ export const NATIVE_MAIN_DRAIN_SENTINEL_MODELS: ReadonlySet<string> = new Set([
   "gpt-5.6-terra",
   "gpt-5.6-luna",
   NATIVE_GPT6_ASTRA_MODEL,
+  // Astra Minor arrives through the gated spread above; Sol and Luna are ungated flagships.
+  NATIVE_GPT6_SOL_MODEL,
+  NATIVE_GPT6_LUNA_MODEL,
 ]);

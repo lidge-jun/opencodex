@@ -24,6 +24,9 @@ function runScript(
       ...extraEnv,
     },
     encoding: "utf8",
+    // Scripts print whole catalogs; with the GPT-6 roster rows (full instructions) a
+    // three-catalog dump passes spawnSync's 1 MiB default and gets truncated (ENOBUFS).
+    maxBuffer: 64 * 1024 * 1024,
   });
   const diagnostics = [result.stderr ?? ""];
   if (result.error) {

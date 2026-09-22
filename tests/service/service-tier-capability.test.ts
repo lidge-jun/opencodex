@@ -62,7 +62,7 @@ describe("registry capability reaches saved configs without overriding them", ()
     expect(optedIn.supportsServiceTier).toBe(true);
   });
 
-  test("OpenRouter stays provider-unclassified and declares only its three OpenAI-backed slugs", () => {
+  test("OpenRouter stays provider-unclassified and declares only its OpenAI-backed slugs", () => {
     const entry = getProviderRegistryEntry("openrouter")!;
     expect(entry.supportsServiceTier).toBeUndefined();
     expect(entry.chatServiceTier).toBeUndefined();
@@ -70,6 +70,8 @@ describe("registry capability reaches saved configs without overriding them", ()
       "openai/gpt-5.6-sol": true,
       "openai/gpt-5.6-terra": true,
       "openai/gpt-5.6-luna": true,
+      "openai/gpt-6-sol": true,
+      "openai/gpt-6-luna": true,
     });
     expect(entry.modelSupportsServiceTier).not.toHaveProperty("anthropic/claude-sonnet-5");
     expect(providerConfigSeed(entry).modelSupportsServiceTier).toBeUndefined();
