@@ -1701,6 +1701,7 @@ export const vi: Record<TKey, string> = {
   "codexSet.custom.composedTooLarge": "Gộp chung, các layer được kích hoạt sẽ chiếm {bytes} byte, vượt quá giới hạn.",
   "codexSet.custom.invalidCharacter": "Một ký tự điều khiển tại vị trí {position} không thể được lưu.",
   "codexSet.custom.discardPrompt": "Huỷ bỏ các thay đổi của bạn?",
+  "codexSet.custom.discardOthersAndSave": "Huỷ các thay đổi chưa lưu ở lớp khác và lưu lớp này?",
   "codexSet.custom.keepEditing": "Tiếp tục chỉnh sửa",
   "codexSet.custom.delete": "Xoá {title}",
   "codexSet.custom.layerGone": "Layer đó đã bị xoá ở nơi khác, nên trình chỉnh sửa đã đóng.",

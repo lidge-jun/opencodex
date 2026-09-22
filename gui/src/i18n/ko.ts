@@ -1238,6 +1238,7 @@ export const ko: Record<TKey, string> = {
   "codexSet.custom.composedTooLarge": "활성 레이어를 합치면 {bytes}바이트로 제한을 초과합니다.",
   "codexSet.custom.invalidCharacter": "{position} 위치의 제어 문자는 저장할 수 없습니다.",
   "codexSet.custom.discardPrompt": "변경 내용을 버리시겠습니까?",
+  "codexSet.custom.discardOthersAndSave": "다른 레이어의 저장하지 않은 변경을 버리고 이 레이어를 저장하시겠습니까?",
   "codexSet.custom.keepEditing": "계속 편집",
   "codexSet.custom.delete": "{title} 삭제",
 "codexSet.custom.deleteConfirm": "이 레이어를 삭제하시겠습니까? 되돌릴 수 없습니다.",

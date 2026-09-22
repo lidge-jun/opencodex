@@ -1643,6 +1643,7 @@ export const ja: Record<TKey, string> = {
   "codexSet.custom.composedTooLarge": "有効なレイヤーを合わせると {bytes} バイトとなり、上限を超えます。",
   "codexSet.custom.invalidCharacter": "位置 {position} の制御文字は保存できません。",
   "codexSet.custom.discardPrompt": "変更を破棄しますか？",
+  "codexSet.custom.discardOthersAndSave": "他のレイヤーの未保存の変更を破棄して、このレイヤーを保存しますか？",
   "codexSet.custom.keepEditing": "編集を続ける",
   "codexSet.custom.delete": "{title} を削除",
 "codexSet.custom.deleteConfirm": "このレイヤーを削除しますか？元に戻せません。",

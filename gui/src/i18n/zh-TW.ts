@@ -1451,6 +1451,7 @@ export const zhTW: Record<TKey, string> = {
   "codexSet.custom.composedTooLarge": "啟用的層合計將達到 {bytes} 位元組，超過上限。",
   "codexSet.custom.invalidCharacter": "無法儲存位置 {position} 的控制字元。",
   "codexSet.custom.discardPrompt": "要捨棄變更嗎？",
+  "codexSet.custom.discardOthersAndSave": "要捨棄其他層尚未儲存的變更並儲存此層嗎？",
   "codexSet.custom.keepEditing": "繼續編輯",
   "codexSet.custom.delete": "刪除 {title}",
 "codexSet.custom.deleteConfirm": "要刪除此層嗎？此操作無法復原。",

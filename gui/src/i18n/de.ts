@@ -1200,6 +1200,7 @@ export const de: Record<TKey, string> = {
   "codexSet.custom.composedTooLarge": "Die aktivierten Ebenen würden zusammen {bytes} Byte umfassen und das Limit überschreiten.",
   "codexSet.custom.invalidCharacter": "Ein Steuerzeichen an Position {position} kann nicht gespeichert werden.",
   "codexSet.custom.discardPrompt": "Änderungen verwerfen?",
+  "codexSet.custom.discardOthersAndSave": "Ungespeicherte Änderungen an anderen Ebenen verwerfen und diese Ebene speichern?",
   "codexSet.custom.keepEditing": "Weiter bearbeiten",
   "codexSet.custom.delete": "{title} löschen",
 "codexSet.custom.deleteConfirm": "Diese Ebene löschen? Dies kann nicht rückgängig gemacht werden.",

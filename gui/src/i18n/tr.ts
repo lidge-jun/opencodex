@@ -1734,6 +1734,7 @@ export const tr: Record<TKey, string> = {
   "codexSet.custom.composedTooLarge": "Etkin katmanların toplamı {bytes} bayt olacak ve sınırı aşacak.",
   "codexSet.custom.invalidCharacter": "{position} konumundaki denetim karakteri kaydedilemez.",
   "codexSet.custom.discardPrompt": "Değişiklikler silinsin mi?",
+  "codexSet.custom.discardOthersAndSave": "Diğer katmanlardaki kaydedilmemiş değişiklikler silinip bu katman kaydedilsin mi?",
   "codexSet.custom.keepEditing": "Düzenlemeye devam et",
   "codexSet.custom.delete": "{title} katmanını sil",
 "codexSet.custom.deleteConfirm": "Bu katman silinsin mi? Bu işlem geri alınamaz.",

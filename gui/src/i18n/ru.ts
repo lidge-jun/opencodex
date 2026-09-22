@@ -1715,6 +1715,7 @@ export const ru: Record<TKey, string> = {
   "codexSet.custom.composedTooLarge": "Общий размер включённых слоёв составит {bytes} байт и превысит предел.",
   "codexSet.custom.invalidCharacter": "Управляющий символ в позиции {position} невозможно сохранить.",
   "codexSet.custom.discardPrompt": "Отменить изменения?",
+  "codexSet.custom.discardOthersAndSave": "Отменить несохранённые изменения других слоёв и сохранить этот слой?",
   "codexSet.custom.keepEditing": "Продолжить редактирование",
   "codexSet.custom.delete": "Удалить {title}",
 "codexSet.custom.deleteConfirm": "Удалить этот слой? Это действие нельзя отменить.",

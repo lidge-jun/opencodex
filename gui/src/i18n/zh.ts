@@ -1219,6 +1219,7 @@ export const zh: Record<TKey, string> = {
   "codexSet.custom.composedTooLarge": "启用的层合计将达到 {bytes} 字节，超过上限。",
   "codexSet.custom.invalidCharacter": "无法保存位置 {position} 的控制字符。",
   "codexSet.custom.discardPrompt": "要放弃更改吗？",
+  "codexSet.custom.discardOthersAndSave": "放弃其他层未保存的更改并保存此层吗？",
   "codexSet.custom.keepEditing": "继续编辑",
   "codexSet.custom.delete": "删除 {title}",
 "codexSet.custom.deleteConfirm": "要删除此层吗？此操作无法撤销。",

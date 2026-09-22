@@ -1720,6 +1720,7 @@ export const fr: Record<TKey, string> = {
   "codexSet.custom.composedTooLarge": "Les couches actives totaliseraient {bytes} octets, au-delà de la limite.",
   "codexSet.custom.invalidCharacter": "Un caractère de contrôle à la position {position} ne peut pas être enregistré.",
   "codexSet.custom.discardPrompt": "Abandonner vos modifications ?",
+  "codexSet.custom.discardOthersAndSave": "Abandonner les modifications non enregistrées des autres couches et enregistrer cette couche ?",
   "codexSet.custom.keepEditing": "Continuer la modification",
   "codexSet.custom.delete": "Supprimer {title}",
 "codexSet.custom.deleteConfirm": "Supprimer cette couche ? Cette action est irréversible.",

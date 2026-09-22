@@ -1747,6 +1747,7 @@ export const en = {
   "codexSet.custom.composedTooLarge": "Together the enabled layers would be {bytes} bytes, over the limit.",
   "codexSet.custom.invalidCharacter": "A control character at position {position} cannot be saved.",
   "codexSet.custom.discardPrompt": "Discard your changes?",
+  "codexSet.custom.discardOthersAndSave": "Discard unsaved edits to other layers and save this layer?",
   "codexSet.custom.keepEditing": "Keep editing",
   "codexSet.custom.delete": "Delete {title}",
 "codexSet.custom.deleteConfirm": "Delete this layer? There is no undo.",
