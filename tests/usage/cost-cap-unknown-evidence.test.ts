@@ -64,8 +64,9 @@ afterEach(async () => {
   } finally {
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousHome;
+    // Remove the home even when a flush above rejects, so no stale or locked state survives the case.
+    if (testDir) removeTreeWithRetry(testDir);
   }
-  if (testDir) removeTreeWithRetry(testDir);
 });
 
 /** Mirrors the live routing path: a cap is configured, usage is NOT available. */

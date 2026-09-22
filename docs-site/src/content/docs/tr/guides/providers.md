@@ -107,8 +107,8 @@ GPT-5.6 Sol/Terra/Luna slug'larını (`gpt-5.6-sol`, `gpt-5.6-terra`,
 
 ## 2. Hesap girişi (OAuth)
 
-Sekiz sağlayıcı önayarı OAuth girişini kullanır — artı deneysel resmi olmayan
-bir cihaz akışı köprüsü aracılığıyla GitHub Copilot. opencodex bunların kimlik
+Sağlayıcı önayarları hesap girişini kullanabilir — deneysel resmi olmayan bir cihaz
+akışı köprüsü aracılığıyla GitHub Copilot da buna dahildir. opencodex bunların kimlik
 bilgilerini `~/.opencodex/auth.json` içinde saklar ve otomatik olarak yeniler.
 Oturum açma CLI'sı `ocx login codex` komutunu da kabul eder; bu yukarıdaki sağlayıcılardan biri
 değildir: komut Codex hesap havuzu girişine yönlendirilir (`ocx account login codex` ile aynı akış).

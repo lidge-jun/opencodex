@@ -83,8 +83,8 @@ ChatGPT 패스스루 카탈로그에는 GPT-5.6 Sol/Terra/Luna의 네임스페�
 
 ## 2. 계정 로그인 (OAuth)
 
-OAuth 로그인을 사용하는 프로바이더 프리셋은 여덟 개이며, 여기에 실험적 비공식 디바이스 플로우
-브리지를 쓰는 GitHub Copilot이 추가됩니다. 자격 증명은 `~/.opencodex/auth.json`에 저장되고
+프로바이더 프리셋은 계정 로그인을 쓸 수 있으며, 실험적 비공식 디바이스 플로우
+브리지를 쓰는 GitHub Copilot도 여기에 들어갑니다. 자격 증명은 `~/.opencodex/auth.json`에 저장되고
 자동으로 갱신됩니다. `ocx login codex`도 받지만 이건 위 프로바이더가 아닙니다. Codex 계정 풀
 로그인(`ocx account login codex`와 같은 흐름)으로 연결되고, 이 풀은 자체 계정 원장을 쓰기 때문에
 프록시가 실행 중이어야 합니다. `chatgpt`와 `openai`는 같은 경로의 별칭입니다.

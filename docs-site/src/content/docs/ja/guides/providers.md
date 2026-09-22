@@ -84,8 +84,8 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 
 ## 2. アカウントログイン(OAuth)
 
-OAuth ログインを使うプロバイダープリセットは 8 つで、これに実験的な非公式デバイスフロー
-ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存され、
+プロバイダープリセットはアカウントログインを使えます。実験的な非公式デバイスフロー
+ブリッジ経由の GitHub Copilot もその一つです。認証情報は `~/.opencodex/auth.json` に保存され、
 自動更新されます。`ocx login codex` も受け付けますが、これは上記のプロバイダーではありません。
 Codex アカウントプールのログイン (`ocx account login codex` と同じフロー) に転送されます。
 プールは独自の台帳を持ち、この経路はプロキシの起動を必要とします。`chatgpt` と `openai` は

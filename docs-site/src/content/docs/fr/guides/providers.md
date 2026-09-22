@@ -94,7 +94,7 @@ Le catalogue du transfert ChatGPT ajoute également les identifiants non qualifi
 
 ## 2. Connexion au compte (OAuth)
 
-Huit préréglages de fournisseurs utilisent une connexion OAuth. GitHub Copilot s'y ajoute au moyen d'un pont
+Des préréglages de fournisseurs peuvent utiliser une connexion au compte, y compris GitHub Copilot au moyen d'un pont
 expérimental et non officiel reposant sur un flux d'autorisation d'appareil. opencodex enregistre leurs identifiants dans
 `~/.opencodex/auth.json` et les actualise automatiquement. La CLI de connexion accepte également
 `ocx login codex`, qui n'est pas l'un des fournisseurs ci-dessus : la commande est routée vers la
