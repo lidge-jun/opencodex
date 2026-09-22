@@ -51,15 +51,13 @@ directly.
 
 ### Meta Muse Code
 
-On macOS, OpenCodex imports the API key the Muse Code CLI already stored after
-`muse login`, so you are not asked to provision a second one.
-
-Elsewhere it asks you to paste the key instead. Meta ships no native Windows
-CLI, and on Linux the CLI exists but where it keeps its credential has not been
-verified, so OpenCodex declines to guess at a credential store. The same key is
-visible in [Meta's developer console](https://dev.meta.ai), and a pasted key
-faces the same format check and the same live validation against the Model API
-as an imported one.
+On macOS, a plain login first tries the API key already stored by `muse login`.
+If none is available, or on another platform, OpenCodex starts device approval
+without launching the Muse CLI. Add-account and reauthentication skip import.
+A failed, uncancelled device login can fall back to a manual key when the caller
+offers an input surface. Pasted keys use the same format and Model API validation
+as imported ones. Management login requires a dashboard session before either
+credential-acquisition path; see the [provider guide](/guides/providers/).
 
 ## Windows notes
 
@@ -78,4 +76,3 @@ OpenCodex states the actual reason rather than disabling a control silently. If
 a capability is unavailable on your platform, the error or the dashboard says
 which mechanism is missing and what the supported alternative is. If you hit one
 that does not, that is a bug worth reporting.
-
