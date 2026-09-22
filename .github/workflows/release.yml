@@ -578,7 +578,19 @@ jobs:
           # run: source. tests/ci-workflows.test.ts enforces this repo-wide.
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          gh release upload "v${RELEASE_VERSION}" dist/release/* --clobber
+          set -euo pipefail
+          release_tag="v${RELEASE_VERSION}"
+          gh release upload "$release_tag" dist/release/* --clobber
+
+          # A published release is immutable: GitHub rejects every later asset upload
+          # with HTTP 422, which is why v2.55.0 through v2.60.0 shipped with zero
+          # assets and left the desktop updater without anything to download. The
+          # release is therefore created as a draft and becomes public here, once the
+          # verified bundle is attached. The only edit permitted is this flip — the
+          # notes still come from the validated notes file written at creation.
+          if [ "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit "$release_tag" --draft=false
+          fi
 
   publish:
     needs: [validate-dispatch, verify-release]
@@ -981,6 +993,9 @@ jobs:
               exit 1
             fi
           else
-            gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" \
+            # Draft first. Publication freezes a release under GitHub's immutable
+            # releases, so attach-release attaches the verified bundle to the draft
+            # and publishes it afterwards.
+            gh release create "$release_tag" --draft --target "$GITHUB_SHA" --title "$release_tag" \
               --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
           fi
