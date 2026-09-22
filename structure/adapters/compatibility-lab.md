@@ -63,7 +63,8 @@ Otherwise, **strong** markers (`ENOTFOUND`, `EAI_AGAIN`, `ECONNREFUSED`,
 destination. The destination is not assumed adjacent — Go writes
 `dial tcp: lookup <host>: no such host` — so the following few tokens are
 scanned and the first host-shaped one is replaced. A bare name counts only in
-a position the grammar proves is the destination — the marker's sole argument
+a position the grammar proves is the destination — directly after `ENOTFOUND`,
+`EAI_AGAIN`, or `host=`/`host:` even when explanatory prose follows, the marker's sole argument
 (`ECONNREFUSED redis`, `dial tcp redis`) or the argument of `lookup`
 (`dial tcp: lookup redis`). Connective prose after a marker survives:
 `ETIMEDOUT request after 30 seconds` and `ETIMEDOUT while waiting for

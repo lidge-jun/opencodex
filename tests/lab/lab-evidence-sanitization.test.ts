@@ -328,6 +328,19 @@ describe("SEC-02 sanitizer boundary", () => {
       .toBe("ECONNREFUSED connection refused");
   });
 
+  test("direct resolver destinations stay masked before explanatory prose", () => {
+    expect(sanitizeDiagnostic("getaddrinfo ENOTFOUND redis: no such host"))
+      .toBe("getaddrinfo ENOTFOUND [host]: no such host");
+    expect(sanitizeDiagnostic("ENOTFOUND redis failed"))
+      .toBe("ENOTFOUND [host] failed");
+    expect(sanitizeDiagnostic("EAI_AGAIN redis temporary failure"))
+      .toBe("EAI_AGAIN [host] temporary failure");
+    expect(sanitizeDiagnostic("host=redis unavailable"))
+      .toBe("host=[host] unavailable");
+    expect(sanitizeDiagnostic("ENOTFOUND while waiting for response"))
+      .toBe("ENOTFOUND while waiting for response");
+  });
+
   test("connect-to prose survives while real failures still redact", () => {
     // `connect to` reads as English far more often than as a destination, so
     // it no longer licenses a bare word. The cost is that `connect to gateway`

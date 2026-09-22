@@ -530,7 +530,8 @@ function scrubString(value: string): string {
       return redact(failedConnectTarget.index ?? 0, failedConnectTarget[1]);
     }
     // A bare destination name is licensed only where the grammar proves the
-    // position is the destination: as the marker's sole argument
+    // position is the destination: directly after a resolver or explicit host
+    // marker, as a socket marker's sole argument
     // (`ECONNREFUSED redis`, `dial tcp redis`) or as the argument of `lookup`
     // (`dial tcp: lookup redis`). Past an open-ended connective chain nothing
     // proves the next word is a destination — `ETIMEDOUT while waiting for
@@ -538,6 +539,9 @@ function scrubString(value: string): string {
     // `Unable to connect to your account` is prose.
     const destinationContext =
       /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|dial\s+(?:tcp|udp)|lookup|\bhost\b/i.test(m);
+    // Direct resolver and explicit host markers name their first argument even
+    // when explanatory prose follows; socket-state prose remains ambiguous.
+    const directHostArgument = /^(?:ENOTFOUND|EAI_AGAIN|host)\b/i.test(head);
     const tokens = tail.split(/[\s:]+/).filter(Boolean);
     let cursor = 0;
     for (let i = 0; i < tokens.length; i += 1) {
@@ -551,7 +555,7 @@ function scrubString(value: string): string {
       if (!core) continue;
       if (isHostCandidate(core)) return redact(at, core);
       const bareLicensed =
-        destinationContext && (tokens.length === 1 || tokens[i - 1]?.toLowerCase() === "lookup");
+        destinationContext && (tokens.length === 1 || tokens[i - 1]?.toLowerCase() === "lookup" || (i === 0 && directHostArgument));
       if (bareLicensed && isHostCandidate(core, true)) return redact(at, core);
     }
     return m;

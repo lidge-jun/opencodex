@@ -51,6 +51,11 @@ this wire projection does not change the usage ledger.
 
 ## CLI readiness diagnostics
 
+Config display uses the [credential masking contract](config.md): proxy userinfo is removed
+using the normalized config key, while exports preserve credentials for restoration. Lab
+diagnostic text uses the [shared sanitization boundary](adapters/compatibility-lab.md);
+direct resolver destinations remain masked when explanatory prose follows.
+
 Catalog-derived reasoning-level diagnostics are escaped only at the human-output boundary, which `src/cli/runtime-api.ts` owns alongside the human/JSON print split. Every CLI path that prints a hub-supplied catalog value renders it there: the first-time refusal in `src/cli/connect.ts` and the connected `ocx sync` refusal in `src/cli/dispatch.ts`. C0/C1 controls, DEL, and Unicode line/paragraph separators print as visible hexadecimal escapes; structured status retains the exact reason, and a rendered failure keeps the domain error as its `cause`. The ready/unverified/incompatible classification and exit policy are unchanged.
 
 ## CLI resolve and stop contracts for embedding shells

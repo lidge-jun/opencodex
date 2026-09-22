@@ -55,6 +55,32 @@ function freshConfig() {
 }
 
 describe("ocx config display redaction", () => {
+  test.each([
+    "providers.openai.proxy ",
+    "providers.openai.proxy.",
+    "providers..openai. proxy .",
+  ])("normalized proxy path %s keeps get and set output masked", (path) => {
+    const dir = freshConfig();
+    try {
+      const get = runCli(["config", "get", path, "--json"], { OPENCODEX_HOME: dir });
+      expect(get.status).toBe(0);
+      expect(JSON.parse(get.stdout)).toBe("http://egress.test:3128/");
+      expect(get.stdout + get.stderr).not.toContain("route_user");
+      expect(get.stdout + get.stderr).not.toContain("route_password");
+
+      const set = runCli([
+        "config", "set", path,
+        "http://next_user:next_password@egress.test:8080", "--json",
+      ], { OPENCODEX_HOME: dir });
+      expect(set.status).toBe(0);
+      expect(JSON.parse(set.stdout).value).toBe("http://egress.test:8080/");
+      expect(set.stdout + set.stderr).not.toContain("next_user");
+      expect(set.stdout + set.stderr).not.toContain("next_password");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("provider proxy credentials stay masked in show, get, and set output", () => {
     const dir = freshConfig();
     const secret = "route_password";

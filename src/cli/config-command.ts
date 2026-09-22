@@ -226,7 +226,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const path = args.shift();
       if (!path) throw new CliUsageError("config path is required", USAGE);
       rejectArgs(args, USAGE);
-      const value = redact(getPath(readConfigDiagnostics().config, path), path.split(".").at(-1));
+      const value = redact(getPath(readConfigDiagnostics().config, path), pathSegments(path).at(-1));
       if (wantsJson || typeof value === "object") console.log(JSON.stringify(value, null, 2));
       else console.log(String(value));
       return;
@@ -272,7 +272,7 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
           ? "config changed while applying this update; retry"
           : `config is ${outcome.reason}`);
       }
-      printData({ ok: true, path, value: redact(savedValue, path.split(".").at(-1)) }, wantsJson,
+      printData({ ok: true, path, value: redact(savedValue, pathSegments(path).at(-1)) }, wantsJson,
         [`${action === "unset" ? "Unset" : "Set"} ${path}.`]);
       return;
     }
