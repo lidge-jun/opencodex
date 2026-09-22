@@ -40,3 +40,11 @@ Out of scope: `grace.unboundInvariants` (needs new tests), decision-record prose
 - `bun run structure:check` and `bun test tests/ci-workflows/structure-ssot.test.ts`.
 - No test reads the split docs by path (`rg 'structure/' tests`).
 
+## Review
+
+Two read-only `gpt-6-sol` verifiers. Split fidelity found five decision records (ADR-0040..0044)
+still naming the old owner section and `responses-wire-shapes.md` missing `src/bridge/` and
+`src/codex/` in its manifest mapping; fixed. Records whose owner doc did not move stay untouched.
+Prose accuracy found two overstatements (the quota poller arms one dormant unref'd interval even when
+disabled; the bridge code allowlist covers `formatErrorResponse` only) and one nit (the seen-store
+suppresses repeat attempts rather than guaranteeing delivery); fixed. Both re-verified PASS.
