@@ -609,6 +609,30 @@ describe("Responses parser", () => {
     expect(toolCall?.arguments).toEqual({ code: "let log = [];", timeout_ms: 90000 });
   });
 
+  test("repairs the same missing opening brace for a non-CodeBuddy model", () => {
+    const parsed = parseRequest({
+      model: "test-model",
+      input: [{ type: "function_call", call_id: "call_other", name: "lookup", arguments: 'query":"status"}' }],
+    });
+    const assistant = parsed.context.messages.find(m => m.role === "assistant");
+    const toolCall = assistant?.content.find(part => part.type === "toolCall") as
+      | { arguments: Record<string, unknown> }
+      | undefined;
+    expect(toolCall?.arguments).toEqual({ query: "status" });
+  });
+
+  test.each(["freeform}", '{"query":"status"', "[1,2]"])("keeps {} for a different malformed argument shape: %s", argumentsText => {
+    const parsed = parseRequest({
+      model: "test-model",
+      input: [{ type: "function_call", call_id: "call_malformed", name: "lookup", arguments: argumentsText }],
+    });
+    const assistant = parsed.context.messages.find(m => m.role === "assistant");
+    const toolCall = assistant?.content.find(part => part.type === "toolCall") as
+      | { arguments: Record<string, unknown> }
+      | undefined;
+    expect(toolCall?.arguments).toEqual({});
+  });
+
   test("keeps the tolerated-{} fallback for arguments that are not a repairable envelope", () => {
     const parsed = parseRequest({
       model: "codebuddy-cn/glm-5.3",

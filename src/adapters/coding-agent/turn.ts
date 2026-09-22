@@ -214,7 +214,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       toolBridgeDir = await mkdtemp(join(tmpdir(), "ocx-coding-agent-tools-"));
       const catalogPath = join(toolBridgeDir, "catalog.json");
       toolBridgeMcpConfigPath = join(toolBridgeDir, "mcp.json");
-      await writeToolBridgeFile(catalogPath, JSON.stringify(toolBridge.tools), { encoding: "utf8", mode: 0o600 });
+      await writeToolBridgeFile(catalogPath, JSON.stringify(toolBridge.tools), { encoding: "utf8", mode: 0o600, flag: "wx" });
       await writeToolBridgeFile(
         toolBridgeMcpConfigPath,
         JSON.stringify({
@@ -228,7 +228,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             },
           },
         }),
-        { encoding: "utf8", mode: 0o600 },
+        { encoding: "utf8", mode: 0o600, flag: "wx" },
       );
     } catch {
       emit({
@@ -366,6 +366,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     sawPartialThinking: false,
     sawTerminalResult: false,
     openToolCallId: undefined,
+    partialToolCallIds: toolBridge ? new Set<string>() : undefined,
   };
 
   try {
@@ -407,7 +408,33 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           }
           if (message.type === "system" && message.subtype === "init") initValidated = true;
         }
-        for (const event of mapStreamMessageToEvents(message, state)) {
+        const mappedEvents = mapStreamMessageToEvents(message, state);
+        if (toolBridge && state.uncapturedToolUse) {
+          emitOnce({
+            type: "error",
+            message: "Coding-agent CLI returned a tool call without a partial tool capture.",
+            status: 502,
+            errorType: "upstream_error",
+            code: "protocol_error",
+            retryable: false,
+          });
+          kill();
+          break;
+        }
+        for (const event of mappedEvents) {
+          if (toolBridge && !initValidated && event.type === "done") {
+            emitOnce({
+              type: "error",
+              message: "Coding-agent CLI ended before the tool bridge init handshake completed.",
+              status: 502,
+              errorType: "upstream_error",
+              code: "tool_bridge_init_missing",
+              retryable: false,
+            });
+            failClosed = true;
+            kill();
+            break;
+          }
           if (toolBridge && event.type === "tool_call_start") {
             // The catalog is only advertised once the CLI has acknowledged the bridge server in
             // its init handshake. A tool call that arrives before that acknowledgement means the

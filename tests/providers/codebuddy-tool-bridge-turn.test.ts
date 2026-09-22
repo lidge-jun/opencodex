@@ -132,6 +132,54 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(existsSync(promptDirs[0]!)).toBe(false);
   });
 
+  test.each(["catalog.json", "mcp.json"])("pre-existing %s fails exclusive bridge staging before spawn", async occupiedFile => {
+    const before = new Set(readdirSync(tmpdir()));
+    const promptDirs: string[] = [];
+    let bridgeDir: string | undefined;
+    let spawns = 0;
+    let writeErrorCode: string | undefined;
+    const writeOptions: unknown[] = [];
+    const adapter = createCodeBuddyAdapter(provider(), {
+      which: () => "/usr/bin/codebuddy",
+      spawn: () => { spawns++; throw new Error("must not spawn"); },
+      writeToolBridgeFile: async (path, data, options) => {
+        const target = String(path);
+        bridgeDir = dirname(target);
+        writeOptions.push(options);
+        if (basename(target) === occupiedFile) {
+          promptDirs.push(...readdirSync(tmpdir())
+            .filter(name => name.startsWith("ocx-codebuddy-prompt-") && !before.has(name))
+            .map(name => join(tmpdir(), name)));
+          await writeFile(path, "occupied", { flag: "wx", mode: 0o600 });
+        }
+        try {
+          await writeFile(path, data, options);
+        } catch (error) {
+          writeErrorCode = (error as NodeJS.ErrnoException).code;
+          throw error;
+        }
+      },
+    });
+    const events = await run(adapter, parsed([tool("exec")]));
+    expect(writeOptions).toEqual(Array.from({ length: occupiedFile === "catalog.json" ? 1 : 2 }, () =>
+      expect.objectContaining({ flag: "wx", mode: 0o600 }),
+    ));
+    expect(writeErrorCode).toBe("EEXIST");
+    expect(events).toEqual([{
+      type: "error",
+      message: "Coding-agent tool bridge could not be staged securely.",
+      status: 500,
+      errorType: "server_error",
+      code: "tool_bridge_setup_failed",
+      retryable: false,
+    }]);
+    expect(spawns).toBe(0);
+    expect(bridgeDir).toBeDefined();
+    expect(existsSync(bridgeDir!)).toBe(false);
+    expect(promptDirs).toHaveLength(1);
+    expect(existsSync(promptDirs[0]!)).toBe(false);
+  });
+
   test("advertises the catalog, captures the call, renames it, and ends the leg at message_stop", async () => {
     const p = parsed([tool("exec")]);
     const bridge = buildCodeBuddyToolBridge(p);
@@ -379,7 +427,7 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     p.options = { toolChoice: "required" } as OcxParsedRequest["options"];
     let child: FakeChild | undefined;
     const spawn: SpawnFn = (_cmd, _args) => {
-      child = fakeChild([enc.encode('{"type":"result","subtype":"success"}\n')]);
+      child = fakeChild(frameLines([INIT_OK, { type: "result", subtype: "success" }]));
       return child as unknown as ChildProcess;
     };
     const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
@@ -395,10 +443,78 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
 
   test("tool_choice auto keeps a text-only result as a normal done", async () => {
     const p = parsed([tool("exec")]);
-    const spawn: SpawnFn = () => fakeChild([enc.encode('{"type":"result","subtype":"success"}\n')]) as unknown as ChildProcess;
+    const spawn: SpawnFn = () => fakeChild(frameLines([INIT_OK, { type: "result", subtype: "success" }])) as unknown as ChildProcess;
     const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
     const events = await run(adapter, p);
     expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "stop" });
+  });
+
+  test("tool_choice auto refuses a successful result without bridge init", async () => {
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([{ type: "result", subtype: "success" }])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events = await run(adapter, parsed([tool("exec")]));
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "tool_bridge_init_missing", status: 502, retryable: false });
+    expect(events.some(e => e.type === "done")).toBe(false);
+  });
+
+  test("a complete assistant tool block without partial capture fails closed", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([
+        INIT_OK,
+        { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "tu_1", name: cliName, input: { a: 1 } }] } },
+        MESSAGE_STOP,
+        { type: "result", subtype: "success" },
+      ])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "protocol_error", status: 502, retryable: false });
+    expect(events.some(e => e.type === "done" || e.type === "tool_call_start")).toBe(false);
+  });
+
+  test("a complete assistant repeat of a captured partial tool does not duplicate it", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([
+        INIT_OK,
+        toolUseStart(cliName),
+        inputJsonDelta('{"a":1}'),
+        BLOCK_STOP,
+        { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "tu_1", name: cliName, input: { a: 1 } }] } },
+        MESSAGE_STOP,
+      ])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events = await run(adapter, p);
+    expect(events.map(e => e.type)).toEqual(["tool_call_start", "tool_call_delta", "tool_call_end", "done"]);
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use" });
+  });
+
+  test("a mixed assistant fallback with an additional uncaptured tool fails closed", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([
+        INIT_OK,
+        toolUseStart(cliName),
+        inputJsonDelta('{}'),
+        BLOCK_STOP,
+        { type: "assistant", message: { role: "assistant", content: [
+          { type: "tool_use", id: "tu_1", name: cliName, input: {} },
+          { type: "tool_use", id: "tu_2", name: cliName, input: {} },
+        ] } },
+        MESSAGE_STOP,
+      ])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "protocol_error", retryable: false });
+    expect(events.some(e => e.type === "done")).toBe(false);
   });
 
   test("a synchronous spawn throw still removes the private temp dir", async () => {

@@ -217,6 +217,10 @@ export interface StreamParseState {
   sawMessageStop?: boolean;
   /** Completed tool_use content blocks observed in this stream. */
   completedToolCalls?: number;
+  /** Tool IDs already captured through partial events, for complete-assistant deduplication. */
+  partialToolCallIds?: Set<string>;
+  /** A complete assistant tool block had no matching partial capture. */
+  uncapturedToolUse?: boolean;
   /** Highest-seen usage snapshot from `message_delta`/assistant frames before a terminal result. */
   partialUsage?: OcxUsage;
 }
@@ -254,6 +258,9 @@ export function mapStreamMessageToEvents(message: StreamMessage, state: StreamPa
         } else if (blockType === "thinking" && !state.sawPartialThinking) {
           const thinking = asString(part.thinking);
           if (thinking) events.push({ type: "thinking_delta", thinking });
+        } else if (blockType === "tool_use") {
+          const id = asString(part.id);
+          if (!id || !state.partialToolCallIds?.has(id)) state.uncapturedToolUse = true;
         }
       }
     }
@@ -352,6 +359,7 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
       const name = asString(block?.name) ?? "tool";
       if (id) {
         state.openToolCallId = id;
+        state.partialToolCallIds?.add(id);
         events.push({ type: "tool_call_start", id, name });
       }
     }
