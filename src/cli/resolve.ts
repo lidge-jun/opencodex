@@ -37,9 +37,14 @@ import { readConfigDiagnostics, type ConfigDiagnostics } from "../config";
 import { getConfigDir } from "../config/paths";
 import { readRuntimePort } from "../config/process-state";
 import { packageVersion } from "../lib/package-version";
-import { findLiveProxy, START_OWNERSHIP_LIVENESS, type LiveProxy } from "../server/proxy-liveness";
-import { endpointsToProve, everyEndpointProvenDown, type ProbeEndpoint } from "./uninstall-plan";
-import { probeProxyLiveness } from "../update/proxy-liveness-probe.mjs";
+import {
+  findLiveProxy,
+  probeEndpointLiveness,
+  START_OWNERSHIP_LIVENESS,
+  type EndpointLiveness,
+  type LiveProxy,
+} from "../server/proxy-liveness";
+import { endpointsToProve, everyEndpointProvenDownAsync, type ProbeEndpoint } from "./uninstall-plan";
 
 /** Wire version of the resolve document. Bump only on an incompatible shape change. */
 export const RESOLVE_SCHEMA = "ocx-resolve/1";
@@ -103,8 +108,8 @@ export interface ResolveIo {
   findLive?: () => Promise<LiveProxy | null>;
   /** Runtime-port record reader; production default is readRuntimePort. */
   readRuntime?: () => { port?: number; hostname?: string } | null;
-  /** Tri-state endpoint probe; production default is the updater's probeProxyLiveness. */
-  probeEndpoint?: (endpoint: ProbeEndpoint) => "live" | "dead" | "unknown";
+  /** Tri-state endpoint probe; production default runs in-process for compiled standalone binaries. */
+  probeEndpoint?: (endpoint: ProbeEndpoint) => EndpointLiveness | Promise<EndpointLiveness>;
   cliVersion?: () => string;
   stdout?: { log: (s: string) => void };
   stderr?: { error: (s: string) => void };
@@ -174,11 +179,7 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
   const readDiagnostics = io.readDiagnostics ?? readConfigDiagnostics;
   const findLive = io.findLive ?? (() => findLiveProxy(START_OWNERSHIP_LIVENESS));
   const readRuntime = io.readRuntime ?? readRuntimePort;
-  // The updater's tri-state probe takes (port, hostname) and is plain .mjs (untyped);
-  // adapt it to the endpoint-shaped seam here. Its own return vocabulary is the
-  // closed "live" | "dead" | "unknown" set.
-  const probeEndpoint = io.probeEndpoint
-    ?? ((endpoint: ProbeEndpoint) => probeProxyLiveness(endpoint.port, endpoint.hostname) as "live" | "dead" | "unknown");
+  const probeEndpoint = io.probeEndpoint ?? probeEndpointLiveness;
   const cliVersion = io.cliVersion ?? packageVersion;
   const configHome = configDir();
   let diagnostics: ConfigDiagnostics;
@@ -212,7 +213,7 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
     // authorise starting a second runtime.
     let provenDown = false;
     try {
-      provenDown = everyEndpointProvenDown(endpointsToProve(readRuntime(), diagnostics.config), probeEndpoint);
+      provenDown = await everyEndpointProvenDownAsync(endpointsToProve(readRuntime(), diagnostics.config), probeEndpoint);
     } catch {
       // A probe that cannot run is not evidence of absence.
       provenDown = false;

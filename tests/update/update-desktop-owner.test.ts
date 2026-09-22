@@ -11,7 +11,11 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
-import { planUpdateRuntimeHandling } from "../../src/update/runtime-ownership.mjs";
+import {
+  inspectPackageRuntimeLiveness,
+  planStoppedRuntimeRecovery,
+  planUpdateRuntimeHandling,
+} from "../../src/update/runtime-ownership.mjs";
 import { parseInstallStateRecord, selectAuthoritativeServiceState } from "../../src/service/install-state-contract.mjs";
 
 describe("the runtime-ownership veto", () => {
@@ -44,6 +48,81 @@ describe("the runtime-ownership veto", () => {
     });
     expect(plan.mayReplacePackage).toBe(false);
     expect(plan.mayStopRuntime).toBe(false);
+  });
+});
+
+describe("stopped runtime recovery authority", () => {
+  const base = {
+    stopAttempted: true,
+    ownership: null,
+    ownershipUnknown: false,
+    sameOwner: true,
+    liveness: "dead" as const,
+    serviceInstalled: false,
+    launcherUsable: true,
+    hadRuntimeState: true,
+  };
+
+  test("only the same readable CLI owner with dead endpoints can restart", () => {
+    expect(planStoppedRuntimeRecovery(base)).toEqual({ action: "direct", reason: "same-cli-owner" });
+    expect(planStoppedRuntimeRecovery({ ...base, serviceInstalled: true })).toEqual({
+      action: "service", reason: "same-cli-owner",
+    });
+  });
+
+  test("foreign, unknown and live outcomes never revive the stopped runtime", () => {
+    expect(planStoppedRuntimeRecovery({ ...base, sameOwner: false })).toEqual({
+      action: "none", reason: "ownership-transferred",
+    });
+    expect(planStoppedRuntimeRecovery({ ...base, ownershipUnknown: true })).toEqual({
+      action: "manual", reason: "ownership-unknown",
+    });
+    for (const liveness of ["live", "unknown"] as const) {
+      expect(planStoppedRuntimeRecovery({ ...base, liveness })).toEqual({
+        action: "manual", reason: `runtime-${liveness}`,
+      });
+    }
+  });
+});
+
+describe("replacement runtime inspection", () => {
+  const capturedTarget = { hostname: "127.0.0.1", port: 10100 };
+
+  test("the fresh runtime record is read and probed before the captured stop target", () => {
+    const currentTarget = { hostname: "127.0.0.1", port: 10200 };
+    const events: string[] = [];
+    const result = inspectPackageRuntimeLiveness({
+      capturedTarget,
+      readCurrentTarget: () => { events.push("read-current"); return { kind: "target", target: currentTarget }; },
+      probe: target => {
+        events.push(`probe:${target.port}`);
+        return target === currentTarget ? "live" : "dead";
+      },
+    });
+    expect(events).toEqual(["read-current", `probe:${currentTarget.port}`, `probe:${capturedTarget.port}`]);
+    expect(result).toEqual({ current: "live", captured: "dead", overall: "live" });
+  });
+
+  test("an absent current record stays distinct from a dead captured endpoint", () => {
+    const events: string[] = [];
+    const result = inspectPackageRuntimeLiveness({
+      capturedTarget,
+      readCurrentTarget: () => { events.push("read-current"); return { kind: "absent" }; },
+      probe: target => { events.push(`probe:${target.port}`); return "dead"; },
+    });
+    expect(events).toEqual(["read-current", `probe:${capturedTarget.port}`]);
+    expect(result).toEqual({ current: "absent", captured: "dead", overall: "dead" });
+  });
+
+  test("an unreadable current record fails closed even when the captured endpoint is dead", () => {
+    const events: string[] = [];
+    const result = inspectPackageRuntimeLiveness({
+      capturedTarget,
+      readCurrentTarget: () => { events.push("read-current"); return { kind: "unknown" }; },
+      probe: target => { events.push(`probe:${target.port}`); return "dead"; },
+    });
+    expect(events).toEqual(["read-current", `probe:${capturedTarget.port}`]);
+    expect(result).toEqual({ current: "unknown", captured: "dead", overall: "unknown" });
   });
 });
 
@@ -99,11 +178,11 @@ describe("both updaters consult the shared rule", () => {
 
   test("the npm launcher gates its stop, its refresh and its failure recovery", () => {
     expect(launcher).toContain("from \"../src/update/runtime-ownership.mjs\"");
-    expect(launcher).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || hasRuntimeState || hasPendingTeardown))");
+    expect(launcher).toContain("if (stopNeeded && !runtimePlan.mayStopRuntime)");
+    expect(launcher).toContain("if (stopNeeded) {");
     expect(launcher).toContain("if (!runtimePlan.mayReplacePackage)");
-    // Nothing was stopped, so nothing is recovered: starting a proxy here would put a
-    // second one beside the runtime the app is managing.
-    expect(launcher).toContain("if (!recoveryPlan.mayStopRuntime) return;");
+    expect(launcher).toContain("planStoppedRuntimeRecovery({");
+    expect(launcher).toContain("if (postInstallPlan.mayRestoreService) {");
   });
 
   test("neither updater reimplements the decision", () => {
@@ -123,7 +202,8 @@ describe("both updaters consult the shared rule", () => {
     expect(launcher).toContain("selectAuthoritativeServiceState(");
     expect(launcher).toContain("serviceStateFilesFor(");
     expect(launcher).not.toContain("parsed.ownership");
-    expect(launcher).not.toContain("consentGeneration");
+    const reader = launcher.slice(launcher.indexOf("const readOwnership = () =>"), launcher.indexOf("const ownershipIdentity ="));
+    expect(reader).not.toContain("consentGeneration");
     // The authoritative reader delegates to the same module rather than keeping a twin.
     const state = readFileSync(repoPath("src", "service", "state.ts"), "utf8");
     expect(state).toContain('from "./install-state-contract.mjs"');
