@@ -53,14 +53,19 @@ MODIFY `README.md`:
   > snapshot model it renders lives in [`app/`](./app) (`MenuBarCore`).
   >
   > Download it from the [latest release](https://github.com/lidge-jun/opencodex/releases), or build
-  > it locally from `desktop/` with `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`.
+  > it locally: run `bun install && bun run build:gui` at the repository root, then
+  > `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` in `desktop/`
+  > (`prepare-sidecar` bundles `gui/dist`, `desktop/scripts/prepare-sidecar.ts:58`).
   >
-  > The [Desktop App guide](https://opencodex.me/guides/desktop-app/) and the
+  > Install locations, service files and everything else written to disk are listed in
+  > [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed). The
+  > [Desktop App guide](https://opencodex.me/guides/desktop-app/) and the
   > [macOS Menu Bar App guide](https://opencodex.me/guides/macos-menu-bar/) cover per-platform
   > installation and first launch.
 
-  The Windows sentence is kept only if B confirms the v2.61.0 MSI carries no Authenticode signature
-  (it ships only a Tauri updater `.sig`); otherwise the current SmartScreen wording stays.
+  Windows evidence (wp3 P, 2026-09-23): the v2.61.0 MSI has no `DigitalSignature` or
+  `MsiDigitalSignatureEx` stream, and neither `release.yml` nor the Tauri config configures Windows code
+  signing; it ships only a Tauri updater `.sig`. The "not code-signed yet" sentence is accurate.
 - Source install (README.md:207-226): both clone commands become
   `git clone -b dev https://github.com/lidge-jun/opencodex.git`; after `bun install` add
   `bun run build:gui` (macOS/Linux: `~/.bun/bin/bun run build:gui`) so `GET /` serves the dashboard

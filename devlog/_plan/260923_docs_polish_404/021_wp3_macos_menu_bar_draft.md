@@ -143,7 +143,7 @@ Before:
 ## Widget
 
 The macOS app includes the OpenCodex WidgetKit extension. See the
-[macOS Menu Bar App guide](/opencodex/guides/macos-menu-bar/) for widget setup and the
+[macOS Menu Bar App guide](/guides/macos-menu-bar/) for widget setup and the
 privacy-safe snapshot details.
 ```
 
