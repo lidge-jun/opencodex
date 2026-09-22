@@ -38,7 +38,7 @@ describe("detectRaycast", () => {
     const spawnSync = ((command: string[], options: { timeout?: number }) => {
       invocation = { command, timeout: options.timeout };
       return { exitCode: 0, stdout: Buffer.from("1") };
-    }) as typeof Bun.spawnSync;
+    }) as unknown as typeof Bun.spawnSync;
 
     const deps = realRaycastDetectDeps({ platform: "darwin", spawnSync });
     expect(deps.readDefault("com.raycast.macos.v1", "subscriptions_active")).toBe("1");
@@ -75,11 +75,14 @@ describe("detectRaycast", () => {
   });
 
   test("darwin: a timed-out or killed defaults probe is unknown, not a false positive", () => {
-    // Bun reports exitCode === null when the 2s timeout kills the process.
-    const spawnSync = (() => ({ exitCode: null, stdout: Buffer.from("") })) as typeof Bun.spawnSync;
-    const deps = realRaycastDetectDeps({ platform: "darwin", spawnSync });
-    expect(deps.readDefault("com.raycast.macos.v1", "subscriptions_active")).toBeNull();
-    expect(detectRaycast(deps).plan).toBe("unknown");
+    // A probe the 2s timeout kills reports a null or non-zero exit code; neither reads the
+    // preference. stdout carries "1" so a probe that ignored the exit code would report Pro.
+    for (const exitCode of [null, 143]) {
+      const spawnSync = (() => ({ exitCode, exitedDueToTimeout: true, stdout: Buffer.from("1") })) as unknown as typeof Bun.spawnSync;
+      const deps = realRaycastDetectDeps({ platform: "darwin", spawnSync });
+      expect(deps.readDefault("com.raycast.macos.v1", "subscriptions_active")).toBeNull();
+      expect(detectRaycast(deps).plan).toBe("unknown");
+    }
   });
 
   test("win32: LOCALAPPDATA\\Programs\\Raycast is the install path and the plan is unknown", () => {
