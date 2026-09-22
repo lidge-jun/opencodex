@@ -562,6 +562,12 @@ Native steering generation overrides, explicit public-API eligibility and the co
 The public server configuration reference documents the optional
 [compaction routing override](../transports/responses.md#compaction-routing-overrides). Its regression file is registered in both test-layout inventories.
 
+Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the optional
+`src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
+gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with
+the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
+`src/reasoning-effort.ts` do not initiate network work.
+
 ## Bun updater ownership transaction
 
 `src/update/ownership-transaction.ts` holds one mutation lease across the Bun updater's awaited

@@ -1,6 +1,6 @@
 import type { OcxProviderConfig } from "./types";
 import { modelInList } from "./types";
-import { dropLearnedUnsupportedReasoningEfforts, ensureReasoningMetadataSnapshot, reasoningEffortsFromMetadata } from "./providers/reasoning-metadata";
+import { dropLearnedUnsupportedReasoningEfforts, reasoningEffortsFromMetadata } from "./providers/reasoning-metadata";
 
 // Descriptions mirror the upstream bundled models.json canonical wording (openai/codex PR #31684).
 export const CODEX_REASONING_LEVELS: { effort: string; description: string }[] = [
@@ -168,18 +168,10 @@ export function configuredReasoningEfforts(provider: OcxProviderConfig, modelId:
   }
   // models.dev publishes the per-model ladder that routed providers never expose on /models.
   // (OpenCode Zen Go answers ids only). Only consulted when nothing was configured for this
-  // model, so every hand-written contract stays authoritative. The snapshot refreshes itself in
-  // the background; no snapshot means the previous behaviour.
-  // The refresh is asked for only once a snapshot has already answered, which means it only ever
-  // refreshes a STALE snapshot. Review asked for the opposite — refresh when the snapshot is
-  // missing or corrupt, since that is the case this lookup cannot serve. That is declined here:
-  // a missing snapshot is the default state of every fresh install and every test process, so
-  // requesting the fetch here puts a models.dev request on the request path of the first routed
-  // turn to a gated destination. Refreshing a snapshot that does not exist is catalog-sync work,
-  // not request work.
+  // model, so every hand-written contract stays authoritative. Catalog sync owns snapshot
+  // refresh; no snapshot means the previous behaviour.
   const fromMetadata = reasoningEffortsFromMetadata(provider, modelId);
   if (fromMetadata !== undefined) {
-    ensureReasoningMetadataSnapshot();
     return dropLearnedUnsupportedReasoningEfforts(provider, modelId, healMappedTiers(provider, modelId, fromMetadata));
   }
   return undefined;

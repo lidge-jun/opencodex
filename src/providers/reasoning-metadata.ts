@@ -12,7 +12,7 @@
  * fallback ladder, so the Codex catalog AND the wire clamp agree with the model instead of a
  * hand-written guess.
  *
- * Failure policy: the network is never on the critical path. A missing, stale or corrupt
+ * Failure policy: the network is never on the routed-request path. A missing, stale or corrupt
  * snapshot yields undefined, which leaves every hand-written contract untouched. The second
  * cache records rungs the upstream actually rejected (400/403 naming reasoning_effort), so an
  * entitlement gap (muse-spark max needs an active Muse Code subscription) costs one rejected
@@ -135,6 +135,11 @@ function metadataProviderKey(provider: OcxProviderConfig): string | undefined {
     if (normalizeDestinationUrl(destination) === normalized) return key;
   }
   return undefined;
+}
+
+/** Whether catalog sync should bootstrap metadata for this destination. */
+export function providerUsesReasoningMetadata(provider: OcxProviderConfig): boolean {
+  return metadataProviderKey(provider) !== undefined;
 }
 
 /**
@@ -487,19 +492,36 @@ export function planReasoningEffortDowngrade(args: {
  * kept so the gate can be checked against real data and widened without another format change.
  * Non-reasoning models carry no ladder and are dropped.
  */
-export async function refreshReasoningMetadata(options: { force?: boolean } = {}): Promise<{
+type RefreshOutcome = {
   ok: boolean;
   reason: string;
   providers?: number;
   models?: number;
-}> {
+};
+
+/** Bound a caller's wait without cancelling the shared refresh job. */
+function waitForRefresh(work: Promise<RefreshOutcome>, waitMs: number | undefined): Promise<RefreshOutcome> {
+  if (waitMs === undefined) return work;
+  if (!Number.isSafeInteger(waitMs) || waitMs < 0) {
+    return Promise.resolve({ ok: false, reason: "invalid wait budget" });
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<RefreshOutcome>(resolve => {
+    timer = setTimeout(() => resolve({ ok: false, reason: "wait budget exceeded" }), waitMs);
+    timer.unref?.();
+  });
+  return Promise.race([work, deadline]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+export async function refreshReasoningMetadata(options: { force?: boolean; waitMs?: number } = {}): Promise<RefreshOutcome> {
   const snapshot = loadSnapshot();
   if (!options.force && snapshot && Date.now() - snapshot.fetchedAt <= CACHE_TTL_MS) {
     return { ok: true, reason: "fresh" };
   }
   if (refreshInFlight) {
-    await refreshInFlight;
-    return { ok: true, reason: "coalesced" };
+    return waitForRefresh(refreshInFlight.then(() => ({ ok: true, reason: "coalesced" })), options.waitMs);
   }
   const job = (async () => {
     const response = await fetch(SOURCE_URL, {
@@ -548,17 +570,17 @@ export async function refreshReasoningMetadata(options: { force?: boolean } = {}
     return { ok: true, reason: "refreshed", providers: Object.keys(providers).length, models };
   })();
   refreshInFlight = job.catch(() => undefined).finally(() => { refreshInFlight = null; });
-  try {
-    return await job;
-  } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-  }
+  const settled = job.catch((error): RefreshOutcome => ({
+    ok: false,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+  return waitForRefresh(settled, options.waitMs);
 }
 
 /**
- * Kick a background refresh when the snapshot is missing or stale. Called from the ladder read
- * path so both the long-lived proxy and short-lived ocx sync self-heal without a new CLI
- * surface. One refresh per process at a time; failures are ignored on purpose.
+ * Optional background refresh for callers that do not wait for a snapshot. Catalog sync uses
+ * refreshReasoningMetadata with a bounded wait; request-time ladder reads do no network work.
+ * One refresh per process at a time; failures are ignored on purpose.
  */
 export function ensureReasoningMetadataSnapshot(): void {
   const snapshot = loadSnapshot();

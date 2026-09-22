@@ -78,6 +78,28 @@ afterEach(() => {
 });
 
 describe("models.dev reasoning metadata", () => {
+  test("a hung fetch cannot hold either a new or coalesced bounded refresh", async () => {
+    const { metadata } = await load();
+    const previousFetch = globalThis.fetch;
+    let releaseFetch: (() => void) | undefined;
+    try {
+      globalThis.fetch = (() => new Promise((_resolve, reject) => {
+        releaseFetch = () => reject(new Error("fixture released"));
+      })) as typeof fetch;
+      const fresh = metadata.refreshReasoningMetadata({ force: true, waitMs: 25 });
+      const coalesced = metadata.refreshReasoningMetadata({ force: true, waitMs: 25 });
+      expect(await Promise.all([fresh, coalesced])).toEqual([
+        { ok: false, reason: "wait budget exceeded" },
+        { ok: false, reason: "wait budget exceeded" },
+      ]);
+    } finally {
+      releaseFetch?.();
+      globalThis.fetch = previousFetch;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      metadata.resetReasoningMetadataCachesForTests();
+    }
+  });
+
   test("advertises the published effort rungs and strips the none/minimal sentinels", async () => {
     const { effort } = await load(metadataFile({
       "opencode-go": {

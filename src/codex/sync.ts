@@ -14,6 +14,7 @@ import {
 import { admitCodexWrite, type CodexAdmission } from "./admission";
 import type { CodexCatalogSyncOptions } from "./catalog/sync";
 import { resetCodexAppServerCatalogStateCache } from "./app-server-processes";
+import { providerUsesReasoningMetadata, refreshReasoningMetadata } from "../providers/reasoning-metadata";
 
 export interface CodexSyncResult {
   /**
@@ -67,12 +68,20 @@ interface CodexSyncDeps {
   admitCodexWrite?: () => CodexSyncAdmission;
   currentExternalCodexModelProvider?: typeof currentExternalCodexModelProvider;
   collectCodexHomeDiagnostic?: typeof collectOrcaCodexHomeDiagnostic;
+  refreshReasoningMetadata?: typeof refreshReasoningMetadata;
 }
 
 const defaultDeps: CodexSyncDeps = {
   refreshCodexModelCatalog,
   injectCodexConfig,
+  refreshReasoningMetadata,
 };
+
+async function refreshReasoningMetadataForSync(config: OcxConfig, deps: CodexSyncDeps): Promise<void> {
+  if (Object.values(config.providers).some(providerUsesReasoningMetadata)) {
+    await deps.refreshReasoningMetadata?.({ waitMs: 2_000 });
+  }
+}
 
 function reportCodexHomeTarget(
   log: Pick<Console, "log" | "error"> | null,
@@ -234,6 +243,7 @@ export async function syncModelsToCodex(
   }
 
   applyProxyEnv(config); // `ocx ensure`/`ocx sync` fetch provider models outside the server process
+  await refreshReasoningMetadataForSync(config, deps);
   let added = 0;
   let catalogPath: string | null = null;
   let catalogPathForInjection: string | null | undefined;
@@ -339,6 +349,7 @@ async function refreshCatalogForSync(
   let refreshOutcome: "committed" | "refused" | undefined;
   let comboOmissions: ComboCatalogOmission[] = [];
   try {
+    await refreshReasoningMetadataForSync(config, deps);
     const cat = await deps.refreshCodexModelCatalog(config, undefined, catalogOptions);
     refreshOutcome = cat.refreshOutcome;
     added = cat.added;
