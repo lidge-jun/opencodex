@@ -3,15 +3,15 @@ import { createHash, generateKeyPairSync, sign as ed25519Sign } from "node:crypt
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { collectReleaseAssets } from "../../desktop/scripts/collect-release-assets";
+import { bundlesByTarget, collectReleaseAssets } from "../../desktop/scripts/collect-release-assets";
 import {
   runBuildLocal,
   summarizeAttempts,
   type ArtifactEntry,
   type BuildLocalDeps,
 } from "../../desktop/scripts/build-local";
-import { buildUpdaterManifest, writeUpdaterManifest } from "../../desktop/scripts/updater-manifest";
-import { standaloneTargets } from "../../scripts/standalone-targets";
+import { buildUpdaterManifest, platformFiles, writeUpdaterManifest } from "../../desktop/scripts/updater-manifest";
+import { standaloneArchiveName, standaloneTargets } from "../../scripts/standalone-targets";
 import {
   expectedReleaseAssets,
   parseMinisignPublicKey,
@@ -504,9 +504,15 @@ describe("release asset verification", () => {
     ]) {
       expect(expected).toContain(name);
     }
-    // Only the updater targets carry signatures; the DMG and the deb never do.
-    expect(expected).not.toContain(`OpenCodex-${VERSION}-macos.dmg.sig`);
-    expect(expected).not.toContain(`OpenCodex-${VERSION}-linux-amd64.deb.sig`);
+    // Signature presence follows the updater table exactly: a bundle is signed
+    // precisely when platformFiles names it as an updater target, so a new updater
+    // target changes this contract by itself rather than needing a hand edit here.
+    const updaterSuffixes = new Set(Object.values(platformFiles));
+    for (const bundle of desktopTargets.flatMap(target => bundlesByTarget[target]!)) {
+      expect(expected).toContain(`OpenCodex-${VERSION}-${bundle.name}`);
+      expect(expected.includes(`OpenCodex-${VERSION}-${bundle.name}.sig`))
+        .toBe(updaterSuffixes.has(bundle.name));
+    }
     expect(expected.some(name => name.includes("/"))).toBe(false);
   });
 
@@ -584,27 +590,25 @@ describe("release asset verification", () => {
 
       const dir = join(root, "dist", "release");
       mkdirSync(dir, { recursive: true });
-      // The fixture is an independent producer oracle, written out by hand: five
-      // standalone archives, five desktop bundles, and signatures on exactly the
-      // three updater targets. Building it with the function under test would hide
-      // an omission in the expected set.
+      // The fixture derives from the producer tables — the standalone target module,
+      // the bundle table, and the updater platform table — assembled independently
+      // of the function under test. Building it with expectedReleaseAssets would
+      // hide an omission in the expected set; hand-writing it would go stale the
+      // next time a target is added (which is exactly the union failure this test
+      // once carried: the deb became an updater target and this oracle missed its
+      // signature).
+      const desktopTargets = releaseMatrixTargets(
+        readFileSync(join(root, ".github", "workflows", "release.yml"), "utf8"),
+      ).desktopTargets;
       const produced = [
-        `ocx-${VERSION}-bun-darwin-arm64.tar.gz`,
-        `ocx-${VERSION}-bun-darwin-x64.tar.gz`,
-        `ocx-${VERSION}-bun-windows-x64.zip`,
-        `ocx-${VERSION}-bun-linux-x64.tar.gz`,
-        `ocx-${VERSION}-bun-linux-arm64.tar.gz`,
-        `OpenCodex-${VERSION}-macos.dmg`,
-        `OpenCodex-${VERSION}-macos.app.tar.gz`,
-        `OpenCodex-${VERSION}-windows-x64.msi`,
-        `OpenCodex-${VERSION}-linux-x86_64.AppImage`,
-        `OpenCodex-${VERSION}-linux-amd64.deb`,
+        ...standaloneTargets.map(target => standaloneArchiveName(VERSION, target)),
+        ...desktopTargets.flatMap(target =>
+          bundlesByTarget[target]!.map(bundle => `OpenCodex-${VERSION}-${bundle.name}`)),
       ];
-      const signed = new Set([
-        `OpenCodex-${VERSION}-macos.app.tar.gz`,
-        `OpenCodex-${VERSION}-windows-x64.msi`,
-        `OpenCodex-${VERSION}-linux-x86_64.AppImage`,
-      ]);
+      const updaterSuffixes = new Set(Object.values(platformFiles));
+      const signed = new Set(
+        produced.filter(name => updaterSuffixes.has(name.slice(`OpenCodex-${VERSION}-`.length))),
+      );
       for (const name of produced) {
         writeAsset(dir, name, Buffer.from(`payload:${name}`));
         if (signed.has(name)) {
@@ -616,9 +620,7 @@ describe("release asset verification", () => {
       // must be exactly the produced payloads plus their companions.
       const expected = expectedReleaseAssets({
         version: VERSION,
-        desktopTargets: releaseMatrixTargets(
-          readFileSync(join(root, ".github", "workflows", "release.yml"), "utf8"),
-        ).desktopTargets,
+        desktopTargets,
         requireSignatures: true,
       });
       const oracle = produced.flatMap(name =>
@@ -642,9 +644,9 @@ describe("release asset verification", () => {
       expect(receipt.checksumsVerified)
         .toBe(produced.length);
       expect(receipt.signaturesVerified).toBe(signed.size);
-      expect(receipt.manifestPlatforms).toEqual([
-        "darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64",
-      ]);
+      // Same rule as the signed set: the platform list is the updater table's keys,
+      // not a copy of them.
+      expect(receipt.manifestPlatforms).toEqual(Object.keys(platformFiles).sort());
       expect(JSON.parse(readFileSync(receiptPath, "utf8"))).toEqual(receipt);
 
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {

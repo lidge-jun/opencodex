@@ -47,11 +47,12 @@ fn abbreviate_float(value: f64, integer: bool) -> String {
                 2
             };
             let rendered = format!("{scaled:.decimals$}");
-            return format!(
-                "{}{}",
-                rendered.trim_end_matches('0').trim_end_matches('.'),
-                suffix
-            );
+            let rendered = if rendered.contains('.') {
+                rendered.trim_end_matches('0').trim_end_matches('.')
+            } else {
+                &rendered
+            };
+            return format!("{rendered}{suffix}");
         }
     }
     format!("{value:.0}")
@@ -75,5 +76,34 @@ mod tests {
         assert_eq!(count(Some(12_345)), "12.3K");
         assert_eq!(cost(Some(12.345)), "$12.35");
         assert_eq!(cost(Some(1_234.0)), "$1.23K");
+    }
+
+    #[test]
+    fn abbreviations_preserve_integer_trailing_zeros() {
+        for (unit, suffix) in [
+            (1_000, "K"),
+            (1_000_000, "M"),
+            (1_000_000_000, "B"),
+            (1_000_000_000_000, "T"),
+        ] {
+            for multiple in [10, 100, 110] {
+                let value = unit * multiple;
+                let expected = format!("{multiple}{suffix}");
+                assert_eq!(tokens(Some(value)), expected);
+                assert_eq!(count(Some(value)), expected);
+                assert_eq!(cost(Some(value as f64)), format!("${expected}"));
+            }
+        }
+        assert_eq!(tokens(Some(9_600_000)), "10M");
+        assert_eq!(count(Some(99_960_000)), "100M");
+    }
+
+    #[test]
+    fn fractional_trailing_zeros_are_still_trimmed() {
+        assert_eq!(count(Some(1_000_000)), "1M");
+        assert_eq!(count(Some(1_200_000)), "1.2M");
+        assert_eq!(count(Some(1_234_000)), "1.23M");
+        assert_eq!(count(Some(12_340_000)), "12.3M");
+        assert_eq!(cost(Some(1_200.0)), "$1.2K");
     }
 }
