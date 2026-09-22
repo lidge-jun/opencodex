@@ -735,6 +735,31 @@ describe("Design B openai_base_url injection", () => {
     expect(appendOcxProviderTableBlock(captured, captured)).toBe(captured);
   });
 
+  test("provider-table retention accepts a table that differs only in blank-line count", () => {
+    // The comparison is intentionally on the extracted table string, not raw bytes:
+    // extractOcxProviderTableBlock collapses blank-line runs and trims the block tail,
+    // so a cosmetic blank-line edit keeps the user's own bytes instead of refusing.
+    const captured = [
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const current = [
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+      "",
+      "",
+    ].join("\n");
+
+    expect(extractOcxProviderTableBlock(current)).toBe(captured);
+    expect(appendOcxProviderTableBlock(current, captured)).toBe(current);
+  });
+
   test("legacy marker directly before the provider table survives the root strip order (removeOcxSection keeps its anchor)", () => {
     // No Design B form present — stripInjectedOpenaiBaseUrl must not eat the legacy EOF marker
     // in a way that leaves the [model_providers.opencodex] table behind.
