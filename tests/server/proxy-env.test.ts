@@ -223,12 +223,26 @@ describe("applyProxyEnv", () => {
     }
   });
 
-  test("keeps mandatory loopback exclusions when config.proxy is unset", () => {
+  test("keeps mandatory loopback exclusions for an inherited SOCKS proxy when config.proxy is unset", () => {
+    process.env.ALL_PROXY = "socks5://untrusted-proxy.invalid:1080";
     process.env.NO_PROXY = "operator-owned.example";
     applyProxyEnv(configWithProxy(undefined, "internal.example"));
     expect(process.env.HTTP_PROXY).toBeUndefined();
     expect(process.env.HTTPS_PROXY).toBeUndefined();
     expect(process.env.NO_PROXY).toBe("operator-owned.example,localhost,127.0.0.1,::1,[::1]");
+  });
+
+  test.each([
+    ["an inherited HTTP proxy", { HTTP_PROXY: "http://proxy.invalid:3128" }],
+    ["SOCKS beside an inherited HTTPS proxy", { ALL_PROXY: "socks5://proxy.invalid:1080", https_proxy: "http://proxy.invalid:3128" }],
+    ["only NO_PROXY", {}],
+  ] as const)("leaves NO_PROXY untouched with %s and no config.proxy", (_label, inherited) => {
+    // Bun applies an inherited HTTP(S) proxy itself and matches NO_PROXY entries as domain
+    // suffixes, so adding "localhost" there would also send any *.localhost name direct.
+    Object.assign(process.env, inherited);
+    process.env.NO_PROXY = "operator-owned.example";
+    applyProxyEnv(configWithProxy());
+    expect(process.env.NO_PROXY).toBe("operator-owned.example");
   });
 
   test.each(["ALL_PROXY", "all_proxy"])("inherited SOCKS %s cannot intercept loopback fetches", async key => {
@@ -270,14 +284,51 @@ describe("applyProxyEnv", () => {
     }
   });
 
-  test("an inherited lowercase no_proxy also receives the loopback entries", () => {
-    // Bun's native fetch consults a non-empty lowercase no_proxy before NO_PROXY.
-    process.env.HTTP_PROXY = "http://proxy.invalid:3128";
-    process.env.no_proxy = "internal.example";
+  test("an inherited SOCKS proxy keeps *.localhost names on the proxy", async () => {
+    const refusing = createTcpServer(socket => socket.destroy());
+    await new Promise<void>((resolve, reject) => {
+      refusing.once("error", reject);
+      refusing.listen(0, "127.0.0.1", resolve);
+    });
+    const address = refusing.address();
+    if (!address || typeof address === "string") throw new Error("proxy fixture did not bind a TCP port");
+    // socks5h: the proxy resolves the name, so the fixture fails the request without local DNS.
+    process.env.ALL_PROXY = `socks5h://127.0.0.1:${address.port}`;
     applyProxyEnv(configWithProxy());
+    let directCalls = 0;
+    const direct = async () => {
+      directCalls += 1;
+      return new Response("direct");
+    };
+    try {
+      expect(await (await configuredOutboundFetch("http://localhost:11434/v1/models", undefined, direct)).text()).toBe("direct");
+      expect(directCalls).toBe(1);
+      await expect(configuredOutboundFetch("http://app.localhost:11434/v1/models", undefined, direct)).rejects.toThrow();
+      expect(directCalls).toBe(1);
+    } finally {
+      await new Promise<void>(resolve => refusing.close(() => resolve()));
+    }
+  });
+
+  test("a configured proxy also merges loopback into an inherited lowercase no_proxy", () => {
+    // Bun's native fetch consults a non-empty lowercase no_proxy before NO_PROXY.
+    process.env.no_proxy = "internal.example";
+    applyProxyEnv(configWithProxy("http://proxy.invalid:3128"));
     expect(process.env.no_proxy).toBe("internal.example,localhost,127.0.0.1,::1,[::1]");
     const loopback = new URL("http://127.0.0.1:11434/v1/models");
     expect(noProxyMatches(loopback, { no_proxy: process.env.no_proxy })).toBe(true);
+  });
+
+  test("loopback names and IP literals match exactly; a leading dot still means subdomains", () => {
+    const env = { NO_PROXY: "localhost,127.0.0.1,::1,[::1],example.com,.localtest" };
+    const matches = (url: string) => noProxyMatches(new URL(url), env);
+    expect(matches("http://localhost:11434/")).toBe(true);
+    expect(matches("http://127.0.0.1:11434/")).toBe(true);
+    expect(matches("http://[::1]:11434/")).toBe(true);
+    expect(matches("http://app.localhost/")).toBe(false);
+    expect(matches("https://api.example.com/")).toBe(true);
+    expect(matches("http://app.localtest/")).toBe(true);
+    expect(noProxyMatches(new URL("http://app.localhost/"), { NO_PROXY: ".localhost" })).toBe(true);
   });
 
   test("merges configured comma-separated noProxy entries", () => {

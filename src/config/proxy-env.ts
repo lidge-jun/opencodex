@@ -1,4 +1,4 @@
-import { configureSocks5Fetch } from "../lib/proxy-env";
+import { configureSocks5Fetch, socks5ProxyFromEnv } from "../lib/proxy-env";
 import { redactUrlForLog } from "../lib/redact";
 import { join } from "node:path";
 import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./subagent-models";
@@ -98,21 +98,15 @@ function warnProxyConfigDiscardOnce(kind: "proxy" | "noProxy" | "noProxyElements
   }
 }
 
-// Loopback only has a proxy to bypass when the environment already carries proxy state.
-// Writing NO_PROXY into a proxy-free process is itself a proxy-env mutation that callers
-// observe (the lab sandbox rejects any of these keys as a forbidden leak), so the
-// early-return merge runs only when one is already present.
-const PROXY_STATE_ENV_KEYS = [
-  "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
-  "http_proxy", "https_proxy", "all_proxy", "no_proxy",
-] as const;
-
-function ambientProxyStateExists(): boolean {
-  for (const key of PROXY_STATE_ENV_KEYS) {
-    const value = process.env[key];
-    if (value !== undefined && value !== "") return true;
-  }
-  return false;
+// With no config.proxy, loopback bypasses are written only for an inherited SOCKS proxy that
+// owns HTTP(S) traffic: that proxy is applied by the in-process matcher, where the loopback
+// entries match exactly. An inherited HTTP(S) proxy is Bun's own, and Bun matches NO_PROXY
+// entries as domain suffixes, so adding "localhost" there would also send any *.localhost name
+// direct. A proxy-free process is left untouched: writing NO_PROXY into it is itself a
+// proxy-env mutation callers observe (the lab sandbox rejects these keys as a forbidden leak).
+function inheritedSocksProxyOwnsTraffic(): boolean {
+  if (socks5ProxyFromEnv() === undefined) return false;
+  return !["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].some(key => process.env[key]?.trim());
 }
 
 function withNoProxyEntries(existing: string, configured: readonly string[]): string {
@@ -170,11 +164,11 @@ export function applyProxyEnvWith(
   let proxy = typeof rawProxy === "string" ? resolveEnvValue(rawProxy) : undefined;
   if (!proxy) {
     if (rawProxy !== undefined) warnProxyConfigDiscardOnce("proxy");
-    // Ambient-proxy path: only loopback bypasses are appended. A configured noProxy is
+    // Inherited-SOCKS path: only loopback bypasses are appended. A configured noProxy is
     // deliberately NOT merged here — with no config.proxy the operator's bypass list has
     // no declared proxy to apply against, and merging it would silently widen direct
     // egress beyond the loopback fix this branch exists for.
-    if (ambientProxyStateExists()) mergeNoProxyEntries();
+    if (inheritedSocksProxyOwnsTraffic()) mergeNoProxyEntries();
     configureSocks5Fetch();
     return;
   }
