@@ -149,7 +149,7 @@ export type { Ownership } from "./prompt-layers/toml-read";
 
 import { activeConfigPath, activeStorePath, activeBaseVariantDir, journalPathFor, lockPathFor, type Paths } from "./prompt-layers/paths";
 import { readFileOrNull, computeRevision, updateFingerprintField } from "./prompt-layers/revision";
-import { normalizeBody, findInvalidCharacter, decodeBasicString } from "./prompt-layers/encoding";
+import { normalizeBody, findInvalidCharacter, decodeBasicString, decodeTomlBasicString } from "./prompt-layers/encoding";
 import { rootArrayEntries, hasRootKey, rootLines, rootValue, tableLines, boolInLines, inspectOwnership } from "./prompt-layers/toml-read";
 import { setRootBool, setRootString, setTableBool, setProjection, removeUnownedProjection } from "./prompt-layers/toml-edit";
 
@@ -376,12 +376,10 @@ function readModelInstructionsFile(configBytes: string | null): string | null {
     // `encodeBasicString`, which escapes backslashes, so on Windows the stored
     // literal is "C:\\Users\\..." while the path is "C:\Users\...".
     //
-    // Prefer Bun's TOML decoder above so externally-authored standard escapes
-    // remain present and external. This restricted scan is only a fallback for
-    // documents Bun cannot parse. If its narrow decoder refuses a literal,
-    // preserve that literal rather than treating the setting as absent.
-    const m = /^\s*model_instructions_file\s*=\s*("[^"]*")\s*(?:#.*)?$/.exec(line);
-    if (m) return decodeBasicString(m[1]!) ?? m[1]!;
+    // Bun may reject an unrelated safe-for-Codex integer. Decode the standard
+    // TOML escapes here, and never mistake an undecodable literal for a path.
+    const m = /^\s*model_instructions_file\s*=\s*("(?:[^"\\]|\\.)*")\s*(?:#.*)?$/.exec(line);
+    if (m) return decodeTomlBasicString(m[1]!) ?? "<unreadable model_instructions_file>";
   }
   // A present non-string value or unrecognised spelling fails closed. Only
   // `undefined` above proves that the setting is absent.
