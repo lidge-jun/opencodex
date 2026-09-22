@@ -583,6 +583,16 @@ estimated` split exists for, and why coverage is reported alongside totals. The 
 main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
 200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
 
+Fast observations follow the [response-tier authority contract](transports/responses.md#response-tier-observation-authority).
+The provider editor classifies `responseTierAuthoritative` as an operator-owned boolean; its
+existing redaction and authenticated write boundaries remain in force.
+`src/usage/log.ts` retains the optional boolean on both the final outcome and individual attempts;
+old records without it keep their legacy interpretation. `src/usage/cost.ts` ignores a raw echo
+marked non-authoritative when projecting price provenance, retaining requested-tier estimation
+without satisfying pricing rules that require response confirmation. The existing model tooltip displays
+the request, raw response and `assumed` confirmation separately; no successful scheduling claim
+is inferred from serialization or a non-authoritative echo.
+
 A row also records the upstream cost of its logical request. `logicalRequestId` names the turn
 that a retry leg, a repair refetch and a combo child all belong to, and `spend` aggregates their
 physical sends: `sends` totals every attempt on the row, `settled` counts the sends whose attempt

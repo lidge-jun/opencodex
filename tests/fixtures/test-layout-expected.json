@@ -610,6 +610,7 @@
   "fastwire-characterization-routing.test.ts": "routing",
   "fastwire-characterization-wire.test.ts": "routing",
   "fastwire-observability.test.ts": "routing",
+  "fastwire-response-authority.test.ts": "routing",
   "fastwire-policy.test.ts": "routing",
   "featherless-provider.test.ts": "providers",
   "fetch-header-timeout.test.ts": "server",

@@ -17,6 +17,7 @@ import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transpor
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
 import { shouldPreparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { responseTierAuthorityForProvider } from "../../providers/openai-tiers-destination";
 import { applyOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import {
   fastPolicyForModel,
@@ -209,14 +210,12 @@ export async function applyFinalRouteRequestNormalization(args: {
   );
   const modelServiceTierSupport = serviceTierSupportFromPolicy(fastPolicy);
   const callerTier = parsed.options.serviceTier;
-  // The ChatGPT-internal Codex backend echoes `service_tier: "default"` even on turns it
-  // scheduled as priority, so its echo cannot confirm OR deny Fast. Believing it reported every
-  // Fast request as `response-declined` (#2558). The public API's echo stays authoritative.
+  // Capture destination evidence policy separately from the unchanged outbound Fast decision.
   parsed.options.tierObservation = tierObservationContext(
     fastPolicy,
     config.fastMode,
     callerTier,
-    isCanonicalOpenAiForwardProvider(route.provider) ? false : undefined,
+    responseTierAuthorityForProvider(route.provider),
   );
   parsed.options.tierDecision = decideTier(fastPolicy, config.fastMode, callerTier);
   parsed.options.serviceTier = tierValueAfterDecision(parsed.options.tierDecision, callerTier);

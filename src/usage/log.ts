@@ -607,6 +607,7 @@ function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
   if ("callerFastSuppressedByConfig" in outcome
     && typeof outcome.callerFastSuppressedByConfig !== "boolean") return null;
   if ("responseServiceTier" in outcome && typeof outcome.responseServiceTier !== "string") return null;
+  if ("responseTierAuthoritative" in outcome && typeof outcome.responseTierAuthoritative !== "boolean") return null;
   const wireValue = sanitizeLogMetadataString(outcome.wireValue);
   const responseServiceTier = sanitizeLogMetadataString(outcome.responseServiceTier);
   return {
@@ -629,6 +630,9 @@ function normalizeAttemptTierOutcome(raw: unknown): AttemptTierOutcome | null {
       ? { callerFastSuppressedByConfig: outcome.callerFastSuppressedByConfig }
       : {}),
     confirmation: outcome.confirmation as AttemptTierOutcome["confirmation"],
+    ...(typeof outcome.responseTierAuthoritative === "boolean"
+      ? { responseTierAuthoritative: outcome.responseTierAuthoritative }
+      : {}),
     ...(responseServiceTier ? { responseServiceTier } : {}),
   };
 }

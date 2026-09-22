@@ -82,6 +82,7 @@ selector，而不是分配一个新名称。
 | `chatCompletionsPath?` | `string` | 用于 `openai-chat` 请求的相对资源路径，是 `responsesPath` 的对应项，适用相同的路径规则。当同一上游以不同前缀提供 Chat Completions 和 Responses 时需要此配置：按模型的 wire override 只更换适配器而不改动 `baseUrl`，否则已启用的 Chat 请求会被发送到 Responses base。随附示例为 Z.AI。 |
 | `upstreamWebsocket?` | `boolean` | 为 `openai-responses` 请求选择性启用上游 Responses WebSocket 传输（默认 `false`）。当上游支持该协议时，流式 POST 请求会使用配置的 Responses 路径（默认 `/v1/responses`），通过 HTTPS 基础 URL 以 WSS 连接，并重新编码为常规流程使用的 SSE。forward 提供者使用 `{baseUrl}/responses`；key-auth 提供者使用 `responsesPath`，未设置时回退到传统的 `/v1/responses`。普通 HTTP 仍使用 SSE；非 Responses 路径和 `openai-chat` 请求仍使用 HTTP。 |
 | `supportsServiceTier?` | `boolean` | `service_tier` 能力的三态。`true`：fast 模式可以注入，调用方提供的值也会被保留。`false`：剥离该字段且绝不注入（已明确不支持的上游不会收到它）。未设置：未分类——调用方提供的值原样保留，fast 模式绝不注入。注册表已对官方 OpenAI（`true`）、DeepSeek 和 Volcengine Ark（`false`）分类；仅对真正支持分层的自定义网关显式设置。 |
+| `responseTierAuthoritative?` | `boolean` | 响应等级是否足以确认或否定 Fast。对响应元数据不具权威性的链路显式设为 `false`；未设置时保持原有行为。不会启用 Fast 或修改出站参数。详见[响应服务等级的可信度](#响应服务等级的可信度)。 |
 | `preserveResponsesReasoningContent?` | `boolean` | 在重放的 Responses reasoning 项中保留明文 reasoning 内容，而不是清空（清空是 ChatGPT 后端的规则）。对接受 reasoning 重放的上游（如 DeepSeek）启用。代理生成的 `ocxr1` 信封始终会被剥离。 |
 | `disabled?` | `boolean` | 将提供者保留在磁盘上，但从路由和模型/目录列表中排除。 |
 | `apiKey?` | `string` | API key，或在请求时解析的 `${ENV_VAR}` / `$ENV_VAR` 引用。 |
@@ -153,6 +154,37 @@ selector，而不是分配一个新名称。
 注册或替换提供商（`POST /api/providers`）时，会先验证 `responsesPath` 和 `chatCompletionsPath`，再修改内存或磁盘中的配置。`PATCH /api/providers?name=<provider>` 会将请求体与已保存的提供商合并；除仅更新 `requestPacing` 的请求外，凡是修改 `disabled` 以外字段的更新，都会在保存前以同样方式验证合并后提供商的路径，若保留的既有路径无效则返回 `400`，且不更改配置。加载配置文件时也适用同样的路径规则。
 
 API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/reference/configuration/server/#claude-code) 下配置。
+
+### 响应服务等级的可信度
+
+当提供者响应中的 `service_tier` 无法确定 Fast 是否生效时，在 `config.json` 中将
+`providers.<name>.responseTierAuthoritative` 设为 `false`。这是运营者对整个提供者链路的声明，
+独立于 `supportsServiceTier` 和 `fastWire`；它不会启用 Fast，也不会改变出站 `service_tier`。
+
+例如，对于已知 Codex 后端响应元数据不具权威性的网关，在现有 provider 对象中加入：
+
+```json
+{ "responseTierAuthoritative": false }
+```
+
+**网关需要显式配置。** 仅升级 OpenCodex 不会为现有 provider 自动添加该声明。未配置时，
+符合 Fast 条件且已发送 priority 的请求收到 `service_tier: "default"`，仍会按原逻辑记录为 `response-declined`。
+仅对已知响应元数据无法确认实际等级的链路设置 `false`。
+
+对于符合 Fast 条件且已发送 `priority` 的请求，`default` 和 `priority` 响应都只作为观察值。
+日志保留 `responseServiceTier`，并记录 `tierOutcome.responseTierAuthoritative: false`、
+`fastOutcome: "applied"` 和 `confirmation: "assumed"`，不会仅凭响应回显判为 `response-declined`。
+这里 **applied 表示请求参数已发出**，**assumed 表示 Fast 的实际效果尚未确认**。
+模型提示会分别显示请求等级、原始响应等级和确认状态。这些记录不能证明实际加速或计费等级。
+
+费用估算沿用请求等级的回退逻辑，不将原始回显当成已确认的价格等级；要求响应确认的定价规则
+不能使用该回显作为证据。没有可信度标记的历史记录保留原解释。
+
+该字段只接受布尔值。对于官方 API、未声明的网关等其他目的地，省略或显式设为 `true`
+都保留基于响应的判定。标准 `https://chatgpt.com/backend-api/codex` 地址配合
+`authMode: "forward"` 始终自动按非权威处理，即使配置为 `true` 也不例外。
+OpenCodex 不会依据网关名称或 URL 猜测可信度。如果同一网关混合不同的响应契约，
+应拆成独立 provider 条目，只为相关条目配置此声明。
 
 ## 提供者诊断出站安全性
 

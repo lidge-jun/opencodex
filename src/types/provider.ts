@@ -216,6 +216,8 @@ export interface AttemptTierOutcome {
   callerFastSuppressedByConfig?: boolean;
   confirmation: "confirmed" | "assumed" | "downgraded" | "unknown";
   responseServiceTier?: string;
+  /** False retains the raw echo as evidence only, including during cost estimation. */
+  responseTierAuthoritative?: boolean;
 }
 
 /**
@@ -299,6 +301,13 @@ export interface OcxProviderConfig {
    * absence derives from the final model adapter.
    */
   fastWire?: FastWire | null;
+  /**
+   * Whether echoed service_tier can confirm or deny Fast. Set false for a relay whose
+   * response metadata cannot establish the granted tier. Absence keeps legacy authority;
+   * canonical ChatGPT Codex forwarding always treats the echo as non-authoritative.
+   * Observation only: this does not enable Fast or change request serialization.
+   */
+  responseTierAuthoritative?: boolean;
   baseUrl: string;
   /**
    * Optional relative resource path for key-auth openai-responses requests. Must start with `/`

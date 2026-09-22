@@ -16,6 +16,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   mcpMaxResultBytes: "none",
   modelAdapters: "record",
   fastWire: "none",
+  responseTierAuthoritative: "none",
   baseUrl: "none",
   responsesPath: "none",
   chatCompletionsPath: "none",

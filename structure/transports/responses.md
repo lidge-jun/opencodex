@@ -289,6 +289,24 @@ narrows provider defaults, and provider-level `supportsServiceTier: false` canno
 Capability is namespaced by the selected provider and model; model-name similarity and adapter type
 alone never opt a gateway in.
 
+### Response-tier observation authority
+
+`src/providers/openai-tiers-destination.ts` resolves response evidence separately from capability:
+canonical ChatGPT Codex forwarding is non-authoritative (#2558); other destinations honor the
+optional provider boolean `responseTierAuthoritative`. Omission retains the authoritative legacy
+default. No gateway name or address infers this declaration. The final route captures it in
+`TierObservationContext` through `src/server/responses/core-normalize.ts`, without changing
+`TierDecision`, capability publication, or serialized request parameters.
+
+`src/providers/fastwire.ts` copies a resolved declaration into `AttemptTierOutcome` for audit.
+When false, an eligible serialized priority request stays `fastOutcome: applied` and
+`confirmation: assumed`: applied describes the wire action, not verified scheduling. Neither
+`default` nor `priority` response metadata can confirm or deny Fast. The sanitized raw echo remains
+in `responseServiceTier`, and genuine local capability/wire failures remain downgrades.
+Logs and persisted attempts retain the flag; cost projection ignores a non-authoritative echo and
+uses existing requested-tier estimates, never promoting it to server-confirmed pricing evidence.
+Official API and undeclared destinations retain their existing response-based verdicts.
+
 `POST /v1/responses/compact` handles remote compaction v1 before the generic `/v1/responses` branch
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.

@@ -327,6 +327,11 @@ When opencodex owns routing, it also writes `$CODEX_HOME/opencodex.config.toml` 
 target. Codex config uses `service_tier = "fast"` and `[features].fast_mode = true`;
 catalog/request tier metadata may use `priority`. Do not collapse these spellings into one value.
 
+Provider `responseTierAuthoritative` is an optional, strictly boolean response-evidence declaration,
+validated by `src/config/schema/leaf-validators.ts`. It does not declare Fast capability or alter
+outbound parameters. The [response-tier observation contract](transports/responses.md#response-tier-observation-authority)
+defines its default, the built-in Codex exception, and the meaning of an unconfirmed request.
+
 ## Provider output defaults
 
 `OcxProviderConfig.defaultMaxOutputTokens` and `modelMaxOutputTokens` are OpenAI Chat wire defaults,
