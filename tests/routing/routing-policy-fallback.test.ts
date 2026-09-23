@@ -8,6 +8,7 @@ import type { OcxConfig } from "../../src/types";
 import { beginRequestAttempt, type RequestLogContext } from "../../src/server/request-log";
 import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
+import { parseSyntheticRowId } from "../../src/server/fast-row";
 import {
   handleResponsesWithPolicyFallback,
   rankPolicyFallbackCandidates,
@@ -174,6 +175,43 @@ describe("policy candidate fallback", () => {
       },
     });
     expect(response.status).toBe(204);
+  });
+
+  test.each(["ocx/primary--fast", "ocx/primary--high"])("decorated policy selector %s keeps an immutable candidate-retry body", async selector => {
+    const config = {
+      port: 0, defaultProvider: "provider-a", cursorEffortRows: true,
+      providers: {
+        "provider-a": { adapter: "openai-chat", baseUrl: "https://a.example/v1", apiKey: "a", models: ["model-a"] },
+        "provider-b": { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "b", models: ["model-b"] },
+      },
+      routingProfiles: { daily: { alias: "ocx/primary", candidates: [{ provider: "provider-a", model: "model-a" }] } },
+    } as OcxConfig;
+    const parsed = parseSyntheticRowId(selector, config);
+    expect(parsed.fastRow?.baseId ?? parsed.effortRow?.baseId).toBe("ocx/primary");
+    const trace = policyTrace();
+    const seen: Array<{ model: string; input: unknown }> = [];
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: selector, input: [{ role: "user", content: "original" }] }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, { routeDecision: trace } as RequestLogContext, {}, {
+      runCore: async (attempt, _config, context, options) => {
+        const body = await attempt.json() as { model: string; input: Array<{ role: string; content: string }> };
+        options.onRequestBodyParsed?.(body);
+        seen.push({ model: body.model, input: structuredClone(body.input) });
+        context.routeDecision = trace;
+        if (seen.length === 1) {
+          body.input[0]!.content = "mutated by recovery";
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        return Response.json({ status: "completed" });
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(seen).toEqual([
+      { model: selector, input: [{ role: "user", content: "original" }] },
+      { model: "provider-b/model-b", input: [{ role: "user", content: "original" }] },
+    ]);
   });
 
   test("the retry snapshot survives mutation inside the input array", async () => {
