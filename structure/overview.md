@@ -33,6 +33,14 @@ native Anthropic passthrough branch that forwards without translation. The Live/
 different in kind — it resolves an OpenAI/ChatGPT relay and forwards to it directly, without the
 adapter bridge.
 
+`app/` contains the native macOS WidgetKit extension bundled into the Tauri desktop app.
+`MenuBarCore` is its snapshot model/formatting layer; the desktop shell writes the
+privacy-safe snapshot that the widget reads without network access. It is a client of
+the management API, not part of the proxy — it adds no endpoint and changes no routing.
+Treat it the way you treat `gui/`: it may consume what `src/` already exposes,
+and a change that requires a new endpoint is a change to the proxy first.
+Its persisted display contract is owned by `src/companion/`.
+
 The default install keeps native OpenAI/ChatGPT passthrough working through one option-aware
 `openai` provider. Pool is the default and selects across main plus added accounts; Direct uses only
 the current caller/main login. `openai-apikey` explicitly selects API-key transport, and the two
@@ -66,7 +74,7 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 | Path | Owner | Notes |
 | --- | --- | --- |
 | `~/.opencodex/config.json` | opencodex | Init creates via private temp plus no-replace hard link; dashboard and explicit updates use atomic replacement. |
-| `~/.opencodex/auth.json` | opencodex | OAuth tokens; not committed. Multiauth shape: `provider -> { activeAccountId, accounts[] }` (legacy single-credential values normalize on load; a one-time `auth.json.pre-multiauth` backup guards downgrades). ChatGPT scratch OAuth stays separate from the Codex account store. For multi-slot providers, credentials without `accountId`/email replace the active slot on a normal login; an explicit add-account login preserves the prior slot and appends a distinct one. Single-slot providers such as ChatGPT remain replacement-only. |
+| `~/.opencodex/auth.json` | opencodex | OAuth tokens; not committed. Multiauth shape: `provider -> { activeAccountId, accounts[] }` (legacy single-credential values normalize on load; a one-time `auth.json.pre-multiauth` backup guards downgrades). ChatGPT scratch OAuth stays separate from the Codex account store. Logout, account deletion and provider deletion remove that provider from it and delete the file once empty; failed updates warn without becoming fatal. For multi-slot providers, credentials without `accountId`/email replace the active slot on a normal login; an explicit add-account login preserves the prior slot and appends a distinct one. Single-slot providers such as ChatGPT remain replacement-only. |
 | `~/.opencodex/codex-accounts.json` | opencodex | Hardened main-plus-added credential store used by `openai` in Pool mode. |
 | `~/.opencodex/catalog-backup.json` | opencodex | One-time pristine Codex catalog backup for restore; per-catalog copies are hashed variants (see [`catalog.md`](catalog.md)). |
 | `~/.opencodex/usage.jsonl` | opencodex | Append-only request usage log (0o600); request metadata + token counts only, never prompts or auth. |
@@ -88,6 +96,15 @@ validation. The shared reader's cancellation contract and the login-specific byt
 are defined in [bounded response ingestion](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 ## Non-negotiable invariants
+
+- **INV-COMPANION-01** — Timeline model rows and available ids merge historical pool providers
+  under their base provider, while account grouping keeps separate labels. A legacy
+  account-qualified model filter selects the entire merged row; hiding a base provider removes
+  all its accounts, and hiding a raw provider removes that account's attributions.
+  Enforced by `tests/usage/usage-timeline.test.ts`.
+- **INV-COMPANION-02** — Loaded and updated companion model selections normalize older
+  account-qualified ids to canonical timeline ids and deduplicate them.
+  Enforced by `tests/server/companion-settings.test.ts`.
 
 Each invariant carries a stable id. A bound invariant names one test, and that test names the id
 back, so deleting or renaming the test fails `bun run structure:check` instead of quietly unbinding the
@@ -130,15 +147,76 @@ still cover the rule, which is a judgement only review makes.
   there, reported as an unidentified holder otherwise. A configured `port: 0` still asks the OS for a
   port, and an explicit `--port` still waits for its pin instead of hopping.
   Enforced by `tests/cli/cli-dispatch.test.ts`.
+- **INV-FENCE-01** — A proxy fenced by the package-tree guard stays discoverable by attested identity:
+  `/healthz` keeps answering the local attestation challenge, and liveness accepts the fenced 503
+  only for opted-in callers and only with a proof from the pid and port this home's runtime record
+  names. An unattested fenced body is never identity.
+  Enforced by `tests/server/proxy-liveness-package-tree-fence.test.ts`.
+- **INV-RESEND-01** — One vocabulary states how far a failed request got, why it failed, and whether
+  it may be sent again. The rosters are declared in the import-free `src/usage/telemetry-contract.ts`
+  so the dashboard can name their members, and `src/lib/request-failure-model.ts` re-exports them and
+  owns the decision. Once the caller has observed output or an externally visible effect, no cause
+  automatically permits a resend, and a cause whose upstream execution state is unknown is not made
+  replayable by having budget left. A refusal names which of the three refusals it is. The decision is
+  derived from per-stage and per-cause facts rather than written out as a stage-by-cause matrix, so a
+  new member cannot leave a stale cell.
+  Enforced by `tests/lib/failure-stage-model.test.ts`.
+- **INV-ATTRIBUTION-01** — `src/lib/request-failure-attribution.ts` derives the persisted failure
+  stage and cause from closed recorder facts only, never from `errorCode` or `upstreamError`, which
+  are assembled partly from upstream text. An unknown upstream execution state is attributed to a
+  cause that refuses an automatic resend rather than to one that permits it, and the resend verdict
+  the pair implies is computed at read time and never persisted.
+  Enforced by `tests/lib/failure-attribution.test.ts`.
+- **INV-RESEND-02** — One logical request holds one operator-granted replacement for an ambiguous
+  failure, however many stages ask for it. `src/lib/request-resend-gate.ts` is the only place
+  that override is applied, it claims the grant at the moment it authorises rather than earlier,
+  and a stage the caller observed something at refuses without spending it. The grant never
+  widens a send budget: an authorised replacement still has to fit the allowance the leg already
+  had. The ceiling is the request's, not the asking leg's: a leg reads its number from the
+  provider row it is currently running against, rotation, refresh, transport resolution and each
+  combo target reassign that row, so the request keeps the smallest ceiling any leg presented and
+  a more permissive row arriving later buys nothing.
+  Enforced by `tests/lib/ambiguous-resend-gate.test.ts`.
+- **INV-CHAT-01** — One developer-role policy governs the translated Chat wire and every document
+  that describes it. `foldDeveloperRoleToSystem` unset and `true` send `system`, `false` sends
+  `developer`, and the message never leaves the slot it arrived in. The documented sentence is
+  built from the role the adapter serializes rather than written out again, and the translated
+  pages are compared against their English source, so a changed default fails a check instead of
+  leaving two documents to disagree; see [`chat-compat.md`](providers/chat-compat.md).
+  Enforced by `tests/ci-workflows/docs-developer-role-policy.test.ts`.
+- **INV-DESKTOP-01** — Where the desktop app has a usable tray, only the tray's Quit ends it:
+  closing the window and the platform's quit gesture hide, which on macOS needs the default menu's
+  predefined Quit replaced because it raises no cancellable event. Every ending drains first — the
+  tray's Quit, an update's coordinated restart, and a window close on a session with no tray all
+  hold the exit, stop the app-owned runtime through the management stop, and treat only an observed
+  child exit or a refused connection as proof it stopped. The stop is the bundled `ocx stop --json`,
+  accepted only on exit 0 with the runtime reported down. Ownership is re-established from the pid
+  the endpoint reports rather than carried in a flag, a drain that does not complete is recorded as
+  failed rather than drained — which a quit tolerates and a coordinated restart refuses — and an
+  update installs only after the runtime it is replacing is confirmed stopped. No shell file kills
+  the child, a runtime this app did not start is never stopped, and a quit that lands while one is
+  being started or stopped is deferred rather than lost;
+  see [`desktop-shell.md`](desktop-shell.md).
+  Enforced by `tests/clients/desktop-exit-ownership.test.ts`.
+- **INV-DESKTOP-02** — Tray availability is an answer from the session, not the tray backend's
+  construction result and not the watcher's mere existence: the shell asks whether
+  `org.kde.StatusNotifierWatcher` reports a host registered, and reads an unanswerable probe the
+  same way as an unregistered one. Linux assumes no tray until the probe answers, and the verdict is
+  published only once an icon exists, so a tray that fails to build is a session without one. Where
+  there is none, no icon is claimed, the window is shown on launch whatever the launch origin, and
+  closing it quits through the same drain; see [`desktop-shell.md`](desktop-shell.md).
+  Enforced by `tests/clients/desktop-tray-availability.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage
 jobs out of the general shards. The manual Windows matrix selects all-file scope and overrides the
 process shape to six files and 480 seconds, so batching changes process size without changing the
-platform suite's file set. Its dedicated batch step sets `OCX_TEST_NO_QUEUE=1`: those sequential
+platform suite's file set. macOS shards select 1/2 and 2/2; control selects 1/1, all in twelve-file, one-worker
+batches bounded to 300 seconds, with dedicated worker-heavy families kept singleton. These
+dedicated batch steps set `OCX_TEST_NO_QUEUE=1`: their sequential
 processes are one logical runner, while each process still installs its own isolated home and test
 guards. The workflow contract and process bounds live in
-[`ops/docs-and-release.md`](ops/docs-and-release.md#cross-platform-ci).
+[`ops/cross-platform-ci.md`](ops/cross-platform-ci.md).
 
 `structure/manifest.json` declares both source-review coverage and cross-cutting contract authority.
 `scripts/structure-ssot.ts` validates that topology, and generated `structure/INDEX.md` publishes it.
@@ -153,37 +231,37 @@ would pass while the rule was violated.
 - **INV-HOME-01** — `CODEX_HOME` wins over `~/.codex` when present and valid.
 - **INV-SLUG-01** — Routed model slugs use `provider/model`.
 
-Codex plan exclusions constrain automatic pool selection without deleting credentials; [account-policy reasons](providers/openai-tiers.md#automatic-pool-plan-exclusions) remain distinct from health and pause.
+Codex plan exclusions constrain automatic pool selection without deleting credentials; [account-policy reasons](providers/openai-accounts.md#automatic-pool-plan-exclusions) remain distinct from health and pause.
 
-Connected CLI usage follows the [client-scoped hub usage contract](gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](remote-workspace.md).
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger.
 
 Listener startup diagnostics follow [the runtime lifecycle contract](runtime.md#lifecycle); malformed optional listener blocks follow [config loading](config.md#config-surface).
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](transports/responses.md).
 
 Raw reasoning content and provider-authored summaries remain distinct on the Responses wire. See [reasoning presentation](providers/chat-compat.md).
 
-Connected-browser pairing and dashboard failure meanings follow the [management UI contract](gui-and-management-api.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
+Connected-browser pairing and dashboard failure meanings follow the [management UI contract](dashboard-and-usage.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
 
-Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](gui-and-management-api.md#dashboard-surfaces) defines terminal release and completion notification.
+Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](dashboard-and-usage.md#dashboard-surfaces) defines terminal release and completion notification.
 
 Cline CLI is a managed file integration: its provider settings and catalog share one recoverable journal operation. The [paired-file contract](clients/integrations.md#cline-paired-files) defines its stop/restart requirement.
-Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Translated Chat request construction uses the [inline-image budget](transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+Translated Chat request construction uses the [inline-image budget](transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 
 The [explicit model-capability contract](config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
@@ -194,3 +272,7 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
+
+Codex compaction can select a request-local model through the
+[existing Responses handlers](transports/responses-failover.md#compaction-routing-overrides) for the configured
+manual and automatic triggers, while subsequent turns keep their conversation settings. The optional [ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary.

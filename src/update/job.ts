@@ -24,8 +24,15 @@ import {
 import { stopWinswService } from "../lib/winsw";
 import { listListenPids, reclaimListenPort, scanListenPids, type ListenPidScan } from "../server/port-reclaim";
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
-import { isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity } from "../server/proxy-liveness";
+import {
+  isHealthzVersion,
+  isOpencodexHealthz,
+  probeHostname,
+  proxyIdentityAt,
+  type HealthzIdentity,
+} from "../server/proxy-liveness";
 import { isServiceInstalled, isServiceViable, readServiceBackend, stopWindows } from "../service";
+import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from "./restart-ownership";
 import {
   type Channel,
   type Installer,
@@ -44,6 +51,7 @@ import type { PnpmGlobalOwner } from "./pnpm-global-install.mjs";
 import { isNewer } from "./notify";
 import { isRealBunBinary } from "../lib/bun-binary-validator.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
+import { GUI_UPDATE_FAILURE_NEXT_STEP } from "./update-failure-guidance.mjs";
 import {
   npmCachePreflightFailureMessage,
   runNpmCachePreflight,
@@ -267,19 +275,6 @@ function ensureJobDir(): void {
  * TYPE and size — enough to tell a reader what class of failure occurred — and never its text,
  * which is where the paths and account names live.
  */
-/**
- * A version string we are willing to repeat in a persisted field.
- *
- * Semver plus an optional prerelease/build tail, capped in length. Anything else is dropped
- * rather than logged: `/healthz` is answered by whatever holds the port, so its `version` is
- * external input on the same footing as an error message.
- */
-function isVersionLike(value: unknown): value is string {
-  return typeof value === "string"
-    && value.length <= 64
-    && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value);
-}
-
 function withheldSummary(error: unknown): string {
   // `error.name` is writable, so it is external text like the message. A fixed classification
   // is the only part of an unknown error we can state without repeating something we were
@@ -1588,7 +1583,7 @@ async function defaultProbeProxyIdentity(
       // `/healthz` is answered by whatever is listening on that port, so a hostile or confused
       // responder can return any string here — and the restart-evidence reasons below
       // interpolate it into a persisted field. A version is a version or it is nothing.
-      ...(isVersionLike(body?.version) ? { version: body.version } : {}),
+      ...(isHealthzVersion(body?.version) ? { version: body.version } : {}),
     };
   } catch {
     return null;
@@ -1804,6 +1799,8 @@ export interface GuiUpdateWorkerIo {
   resolvePnpmActiveLauncherFn?: (owner: PnpmGlobalOwner) => string | null;
   /** Restart seams used by focused worker tests; the verified launcher is always injected. */
   restartIo?: RestartIo;
+  /** Resolves who owns the runtime; defaults to the shared service install state. */
+  resolveOwnershipFn?: () => ServiceOwnershipResolution;
   runCommandFn?: (
     job: UpdateJobState,
     bin: string,
@@ -1946,7 +1943,7 @@ export async function runGuiUpdateWorker(
         status: "failed",
         exitCode: result.status,
         signal: result.signal,
-        error: `update command failed (${result.status ?? "?"})`,
+        error: `update command failed (${result.status ?? "?"}). ${GUI_UPDATE_FAILURE_NEXT_STEP}`,
       });
       return;
     }
@@ -1967,11 +1964,12 @@ export async function runGuiUpdateWorker(
     }
 
     if (restart) {
-      job = updateJob(job, { status: "restarting" }, "Update installed. Restarting proxy...");
-      if (!(await finishGuiUpdateRestart(job, captured, check.installer, {
-        ...io.restartIo,
-        packageLauncherPathFn: () => activeLauncher,
-      }))) return;
+      const outcome = await runUpdateRestartWithOwnershipLease(io.resolveOwnershipFn, async () => {
+        job = updateJob(job!, { status: "restarting" }, "Update installed. Restarting proxy...");
+        return finishGuiUpdateRestart(job!, captured, check.installer, { ...io.restartIo, packageLauncherPathFn: () => activeLauncher });
+      });
+      if (outcome.kind === "veto") { updateJob(job, { status: "succeeded", restarted: false }, outcome.notice); return; }
+      if (!outcome.value) return;
       updateJob(job, { status: "succeeded", restarted: true }, "Restart requested and proxy is healthy.");
       return;
     }

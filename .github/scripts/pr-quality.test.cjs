@@ -16,6 +16,8 @@ const {
   buildReviewReadinessSection,
   extractReviewReadiness,
   appendReviewReadinessSection,
+  reviewReadinessMigrationRequired,
+  reviewReadinessUsesCurrentPolicy,
   stripReviewReadinessSection,
   uncheckReviewReadinessBoxes,
   REVIEW_READINESS_CLAIM_INDEX,
@@ -409,7 +411,7 @@ describe("review readiness checklist", () => {
 
   it("treats a reworded but complete section as complete", () => {
     const reworded = SECTION
-      .replace("All CI tests are green on my local testing.", "Local suite green.")
+      .replace("Required local validation passed; commands, results, and any full-suite exception are documented.", "Local suite green.")
       .replaceAll("- [ ] ", "- [x] ");
     const result = extractReviewReadiness(reworded);
     assert.equal(result.present, true);
@@ -585,7 +587,7 @@ describe("uncheckReviewReadinessBoxes", () => {
     "<!-- pr-quality-readiness-checklist:start -->",
     "## Review readiness checklist",
     "",
-    "- [x] All CI tests are green on my local testing.",
+    "- [x] Required local validation passed; commands, results, and any full-suite exception are documented.",
     "- [x] I pushed my PR to the latest dev commit.",
     "- [x] I resolved all correct Codex and CodeRabbit findings.",
     "- [x] My PR is ready for review.",
@@ -596,7 +598,7 @@ describe("uncheckReviewReadinessBoxes", () => {
     const body = uncheckReviewReadinessBoxes(checkedBody, [
       REVIEW_READINESS_CLAIM_INDEX.latest_dev,
     ]);
-    assert.ok(body.includes("- [x] All CI tests are green on my local testing."));
+    assert.ok(body.includes("- [x] Required local validation passed; commands, results, and any full-suite exception are documented."));
     assert.ok(body.includes("- [ ] I pushed my PR to the latest dev commit."));
     assert.ok(body.includes("- [x] My PR is ready for review."));
   });
@@ -606,7 +608,7 @@ describe("uncheckReviewReadinessBoxes", () => {
       0,
       REVIEW_READINESS_CLAIM_INDEX.latest_dev,
     ]);
-    assert.ok(body.includes("- [ ] All CI tests are green on my local testing."));
+    assert.ok(body.includes("- [ ] Required local validation passed; commands, results, and any full-suite exception are documented."));
     assert.ok(body.includes("- [ ] I pushed my PR to the latest dev commit."));
     assert.ok(body.includes("- [x] I resolved all correct Codex and CodeRabbit findings."));
     assert.ok(body.includes("- [x] My PR is ready for review."));
@@ -1099,5 +1101,30 @@ describe("comment stripping respects fenced code (regression)", () => {
   it("still ignores a screenshot inside a real HTML comment", () => {
     const body = ["<!--", "![hidden](https://example.invalid/hidden.png)", "-->"].join("\n");
     assert.equal(hasScreenshotEvidence(body), false);
+  });
+});
+
+
+describe("managed checklist wording classification", () => {
+  const oldItem = "All CI tests are green on my local testing.";
+  const legacy = buildReviewReadinessSection().replace(REVIEW_READINESS_ITEMS[0], oldItem);
+  for (const mark of [" ", "x", "X"]) {
+    for (const ending of ["\n", "\r\n"]) {
+      it(`recognizes old first item with ${JSON.stringify(mark)} and ${JSON.stringify(ending)}`, () => {
+        const body = legacy.replace(`- [ ] ${oldItem}`, ` * [${mark}] ${oldItem}  `).replaceAll("\n", ending);
+        assert.equal(reviewReadinessMigrationRequired(body), true);
+        assert.equal(reviewReadinessUsesCurrentPolicy(body), false);
+      });
+    }
+  }
+  it("preserves custom later labels and refuses malformed or displaced first items", () => {
+    assert.equal(reviewReadinessMigrationRequired(legacy.replace(REVIEW_READINESS_ITEMS[1], "Author's branch attestation.")), true);
+    for (const body of [null, "", oldItem, legacy + legacy,
+      legacy.replace("<!-- pr-quality-readiness-checklist:end -->", ""),
+      legacy.replace(oldItem, oldItem + " Extra"),
+      legacy.replace(oldItem, "Custom").replace(REVIEW_READINESS_ITEMS[1], oldItem),
+      legacy.replace(`- [ ] ${REVIEW_READINESS_ITEMS[3]}`, ""),
+    ]) assert.equal(reviewReadinessMigrationRequired(body), false);
+    assert.equal(reviewReadinessUsesCurrentPolicy(buildReviewReadinessSection()), true);
   });
 });

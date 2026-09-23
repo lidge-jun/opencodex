@@ -28,6 +28,11 @@ deduplication and credential storage separately from Codex config injection.
 
 ## Config surface
 
+Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject-lossy`.
+`ocx provider add --google-tool-schema-policy` is one authoring path and is accepted only when the
+effective adapter is `google`. Omission remains absent in `config.json`; the adapter resolves it to
+`compatible` in memory.
+
 ### OpenCodex home and live process state
 
 `initializePersistedConfigIfMissing` in `src/config.ts` is the create-only path consumed by
@@ -47,6 +52,11 @@ as the supported-location recovery path; uncertain publication and cleanup warni
 the CLI. The quickstart documents inspection before retry, private-permission requirements,
 and fresh-location examples. Diagnostics do not introduce a fallback or alter file I/O ordering.
 
+`src/config/persisted-mutation.ts` owns schema-valid on-disk mutations under the shared lock.
+It rechecks the file before committing, retries a changed snapshot up to three times, and
+returns unavailable for missing, invalid, or persistently conflicting config. Its one-shot
+test seam and the mutation types remain re-exported through `src/config.ts`.
+
 `src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
 the config directory and `config.json` path and retains the existing cache rule: a relative home is
 resolved once for each distinct raw environment value, so a later working-directory change cannot
@@ -59,7 +69,8 @@ owner-only state and is validated before a record is returned. `src/config.ts` r
 symbols for compatibility, but new lifecycle-only callers import the process-state leaf directly.
 
 Replacing config and process-state writes use `src/config/atomic-write.ts`. The leaf preserves the shared
-process-wide temp sequence, symlink target resolution, real-home test guard, owner manifest,
+process-wide temp sequence, symlink target resolution, no-follow directory-entry replacement for
+externally writable integration directories, real-home test guard, owner manifest,
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
 must not replace it with a local temp-and-rename shortcut.
 
@@ -75,19 +86,33 @@ one that cannot be observed, retires the memo and the pre-rename call performs t
 `src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What
 matters for maintainers is which groups exist and who resolves them:
 
+A schema-invalid top-level JSON value is repairable only when it is a non-array object.
+`loadConfig` backs up arrays, primitives, and null before using defaults, so the repair
+merge cannot turn them into a valid config while discarding the original bytes.
+
+`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-accounts.md#ongoing-priority-failback) requires quota strategy and a positive threshold.
+
 | Group | Keys | Resolution rule |
 | --- | --- | --- |
 | Listener | `port`, `hostname` | The listener owns the port; `runtime-port.json` reports where it actually landed. |
 | Routing | `defaultProvider`, `providers`, per-provider `selectedModels`, `combos` | Explicit `provider/model` wins over `defaultProvider`; combo dispatch uses the selected target's existing capability ladder and does not create a second catalog authority. |
+| Compaction routing | `compactionRouting.model`, optional `compactionRouting.reasoningEffort`, optional `compactionRouting.triggers` | Explicit Codex compaction metadata whose `compaction.trigger` is one the block names activates a request-local override; `triggers` defaults to `["manual"]`. See [Responses compaction](transports/responses-failover.md#compaction-routing-overrides). Invalid hand edits disable the block with a load warning without discarding providers; candidate writes reject invalid blocks. |
 | Catalog | `disabledModels`, `customModels`, `modelCacheTtlMs`, `providerContextCaps`, `contextCapValue`, per-provider `modelDisplayNames`, `codexAccountNamespaces`, `codexAccountPickerEnabled` | Catalog state is derived; config only records intent. Exact provider model display names are durable display only overlays. The picker flag is an explicit visibility override, while selector mappings remain the durable exact-routing contract. |
 | Retained state | `appOwnedMemoryBudgetMb` | Process-wide eviction target for app-owned logs, caches, blobs, and continuation payloads. Default 256 MiB, valid 64..4096; pinned state may temporarily exceed the target, but every pin-capable store has a finite local cap and their documented aggregate stays below `APP_OWNED_WORST_CASE_PINNED_BYTES` (512 MiB). Neither value caps RSS or native runtime memory. |
-| Spend | `spend.root`, `spend.identity`, `spend.pool`, `spend.retentionDays` | Durable token ceilings for the spend-reservation ledger. Absent is the default and means observe-only accounting: spend is journaled and nothing is refused. There is no default figure for any scope — the ledger is on by default, so a shipped ceiling would refuse real traffic on upgrade against a number nobody chose. Strictly validated and positive-integer only, because 0 would read as a budget and refuse everything; a malformed section degrades to no ceiling, which is why the write path rejects it and load diagnostics report it. Resolution and application live in `src/lib/spend-reservation-ledger.ts`; see [`transports/responses.md`](transports/responses.md). |
+| Spend | `spend.root`, `spend.identity`, `spend.pool`, `spend.retentionDays` | Durable token ceilings for the spend-reservation ledger. Absent is the default and means observe-only accounting: spend is still journaled and nothing is refused, so observe-only and enforced servers take the same state-directory writer lease. One live process may write one directory; explicit sibling instances need separate `OPENCODEX_HOME` directories. There is no default figure for any scope — the ledger is on by default, so a shipped ceiling would refuse real traffic on upgrade against a number nobody chose. Strictly validated and positive-integer only, because 0 would read as a budget and refuse everything; a malformed section degrades to no ceiling, which is why the write path rejects it and load diagnostics report it. Resolution and application live in `src/lib/spend-reservation-ledger.ts`; see [`transports/responses.md`](transports/responses.md). |
 | Transport | stream mode, timeouts, proxy settings, `websockets`, `emptyCompletionRetry` | `streamMode` persists in config.json; Windows services need a persisted input, and macOS uses it for explicit eager-relay opt-in. Empty-completion replay is an explicit top-level opt-in because its second upstream request may be billable. |
+| Provider egress | `providers.<name>.proxy`, `providers.<name>.noProxy` | An absent `proxy` inherits global egress; `"direct"` or `null` forces direct egress; HTTP(S) and SOCKS5(H) URLs select a provider-owned proxy. `noProxy` uses NO_PROXY syntax and sends a matching destination direct across either a provider-owned or inherited global proxy. `src/lib/provider-egress.ts` owns parsing and request-local resolution. |
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
 | Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`gui-and-management-api.md`](gui-and-management-api.md). |
 
 Env values are resolved through `src/config/proxy-env.ts`, so a config value naming an env var never persists
 the secret itself.
+
+`ocx doctor` reports proxy state on three separate surfaces: its own process environment, the
+effective `config.proxy`, and the running proxy process environment (read from
+`/proc/<pid>/environ` on Linux and WSL, reported as unavailable elsewhere). Each proxy key is shown
+as present or absent only; `src/cli/doctor.ts` never prints or persists a proxy value, because proxy
+URLs can carry credentials.
 
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
 
@@ -177,6 +202,18 @@ Native Codex sub-agent defaults are a separate, explicit opt-in. When
 overwritten. Disabling the option and fallback restore remove only marker-owned values; journal
 restore must preserve later user edits while stripping those managed values.
 
+An injection whose OpenCodex config explicitly selects the v1 multi-agent surface also
+reconciles Codex's higher-precedence global `features.multi_agent_v2` override to disabled before
+taking the journal baseline. It uses the same format-preserving feature transition as explicit
+mode selection, and it runs inside the injection's coordinated write boundary: the transition and
+the artifact commit share one preimage. A publication conflict after the toggle, or final
+coordinator validation or commit failure after the artifact writes, restores the flag, config,
+profile and journal while the native and config locks are held. No competing writer can land
+between them. Validation-only injection and externally managed provider configs remain read-only.
+The write lock first compares the plan derived from the original input to reject stale work. After
+the v1 transition, the coordinator publishes a witness derived from the rederived plan and the
+post-transition input, so its recorded id describes the bytes committed by the injection.
+
 ### History backup manifest contract
 
 `src/codex/history-manifest.ts` is the pure schema-and-identity leaf for the versioned history
@@ -191,7 +228,7 @@ that prefix hashed to a different backup filename before the normalization, so t
 (`history-provider.ts` for mutation, `native-residue.ts` for observation) fall back to the
 legacy filename when no canonical manifest exists. When both names exist the canonical manifest
 wins and the legacy file is left in place; a conflict is never resolved by silently replacing
-either file.
+either file. History Worker job targets use that same canonical-first lookup rather than passing a canonical-only filename that would bypass the provider's legacy fallback.
 
 `history-provider.ts` remains the strict mutation owner and maps shared validation failures to its
 restore/no-op integrity states. `native-residue.ts` remains a read-only observer and maps the same
@@ -220,6 +257,27 @@ unreadable state database, a rollout whose identity changed, a preflight that co
 describes a store that may be relabelable on the next attempt, so those keep the hard refusal
 and the compensating rollback. Recording them as a stand-down would mark the transition
 converged and suppress the relabel permanently.
+
+That stand-down applies only when the provider tags left in place still resolve through the
+resulting configuration. A provider-table transition that finds a paginated `openai` row returns
+`history_paginated_openai_requires_native_writer`, because removing the root `openai_base_url`
+without relabeling that row would route a resumed conversation through Codex's built-in OpenAI
+provider instead of this proxy. That reason selects a third state rather than a refusal:
+`src/codex/inject/paginated-openai-compat.ts` keeps the marker-owned root override beside the
+provider table, exactly as the client-compaction form already does, and the transition completes
+with the relabel standing down. Codex merges the override onto its built-in `openai` entry when
+it builds the provider map, so the row keeps reaching this proxy while never being rewritten, and
+the retained value is journaled as OpenCodex's own so restore can still take it out.
+
+Two cases cannot reach that state. An admission-token form cannot use the root key at all —
+Codex's built-in entry carries no `x-opencodex-api-key` header — so it keeps the refusal, and the
+message names the two configuration keys that resolve it (`unauthenticatedLoopbackListener`,
+`syncResumeHistory`) instead of saying only "do not retry". A root line the user owns is left
+alone and the conversation follows the destination they chose, which is the same guarantee the
+injector makes everywhere else about a line it does not own. Refusing the whole transition with
+no named way forward was the 2.60.0 regression in #5321: nothing was written, the integration
+stayed disabled, and the only exits a reporter could find were deleting the affected
+conversations or downgrading.
 
 Rows this home tagged `opencodex` resolve through a `[model_providers.opencodex]` table.
 Apply retains that existing definition before building the candidate witness, even when
@@ -309,6 +367,42 @@ Both fields must stay positive finite integers at disk-config and management val
 Registry entries may seed them through `providerConfigSeed`, key-login derivation, OAuth reconcile,
 and `routeModel`, but user config overrides registry defaults per field/key.
 
+`src/providers/resolved-model-policy.ts` is the detached static-policy authority for this merge
+contract. It preserves each field's existing rule rather than assigning one global priority:
+operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key with a case-varied operator key claiming the registry row,
+restriction lists form a stable union, and hard wire pins precede valid operator overrides and
+registry wire defaults. Exact OpenCode Go pins and the Command Code API-key preset's case-insensitive
+`claude-` prefix pin both select Anthropic Messages; the latter applies only at
+`https://api.commandcode.ai/provider/v1` and leaves MiMo and `command-code` OAuth unchanged.
+Only the canonical `openai-apikey` provider merges
+`modelContextWindows` and `modelMaxInputTokens` by taking the lower positive value across
+case-equal keys, retaining the operator's row spelling and provenance even when registry-clamped;
+other providers use ordinary operator-per-key fill. Its output is recursively
+frozen and carries field/model provenance. It never persists resolved policy and excludes API keys,
+account selection, quota, health, cooldowns, discovered availability, and request-owned evidence.
+Observed context/input/output values are combined only in a call-local projection that can narrow a
+captured static cap but cannot write observations into the static result.
+The resolver's model id is the post-alias, post-virtual-rewrite wire identity. An exact nonempty
+`modelCapabilities[model].inputModalities` declaration outranks the legacy per-model modality map;
+an empty declaration is non-authoritative and falls through. OAuth/key override admission remains a
+live caller decision: the resolver accepts only its credential-free effective auth mode and records
+that provenance, never the key, reference, or usability evidence that produced it.
+Canonical static catalogs force live discovery off, narrowly recognized generated reasoning shapes
+are repaired before freezing only for a matched registry transport, and same-named custom
+destinations keep their operator-owned values. Key-auth service-tier defaults apply only to a
+captured key authority; exact-model provenance comes from the merged key/registry map, then falls
+back to the resolved provider capability provenance. A model max-input value is bounded by its
+resolved context window.
+Legacy model maps resolve exact id, then the base before a colon suffix, then case-folded exact id;
+the separately captured explicit capability row remains exact-only. Per-model provenance is assigned
+from the key that wins that same merged lookup, not from an independent source search.
+Provider seed/enrichment and request routing consume the same field-level resolver. Persisted config
+still stores operator intent rather than the frozen result; registry-only policy is applied at
+capture/route time and explicit false or empty declarations retain their field-specific meaning.
+
+
+
+
 ## Provider validation ownership
 
 `src/config/provider-validation.ts` owns the pure provider payload checks shared by persisted config,
@@ -316,6 +410,9 @@ CLI writes, and management DTO validation. `src/config.ts` imports those checks 
 and re-exports them as a compatibility facade; it must not grow a second copy. Validation error text,
 ordering, and cross-field rules are part of the write/load contract because management requests and
 hand-edited `config.json` must accept and reject the same provider shapes.
+
+The Google tool-schema policy uses a closed enum at this boundary. Unknown values fail config load,
+management admission, and command-line creation rather than silently degrading to compatible mode.
 
 > Decision record: [ADR-0020](decisions/ADR-0020-provider-validation-ownership.md)
 
@@ -350,13 +447,16 @@ traversing their targets. Unknown files remain in place and make the command rep
 uninstall with their exact paths.
 
 The newly created OAuth downgrade copy is registered after copying, so owned uninstall
-includes it. Invalid-config recovery copies are deliberately NOT registered: their names carry
+includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the
+no-follow writer variant that leaves the owner manifest untouched, so a copy an earlier install
+left unregistered stays unclaimed. Invalid-config recovery copies are deliberately NOT registered: their names carry
 a timestamp, so one entry per invalid load would grow the uninstall manifest without bound, and
 the manifest stops validating past its path ceiling. A manifest that stops validating makes
 uninstall refuse outright, which would leave credentials on disk. Sweeping those copies by name
 pattern at removal time is the shape that fits; it is not in this change. Registration is best-effort: an intentionally
-unowned legacy home or a metadata-write failure must not suppress the recovery copy. Existing
-OAuth downgrade copies are neither rewritten nor retroactively claimed. Both a `false` registration
+unowned legacy home or a metadata-write failure must not suppress the recovery copy. Migration
+leaves an existing OAuth downgrade copy unchanged and never retroactively claims it; only a
+destructive mutation rewrites it, to drop the removed provider. Both a `false` registration
 result and a thrown registration error emit the same fixed warning without error details. Unregistered copies
 remain subject to the existing partial/refused uninstall result.
 
@@ -377,15 +477,15 @@ Client connection metadata stores a stable `apiKeyId` and a non-secret rotation 
 Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-`codexPool.excludedPlans` is interpreted only by automatic selection; its all-excluded and explicit-route behavior follows the [plan exclusion contract](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+`codexPool.excludedPlans` is interpreted only by automatic selection; its all-excluded and explicit-route behavior follows the [plan exclusion contract](providers/openai-accounts.md#automatic-pool-plan-exclusions).
 
-Connected CLI usage follows the [client-scoped hub usage contract](gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 The unregistered executor CLI module stores Remote Workspace state separately from client configuration; see [Remote Workspace](remote-workspace.md).
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 `dropCodexSafetyBuffering` is an optional boolean, default false. Invalid API candidates reject;
 malformed persisted values stay disabled. It controls only the allowlisted client-output hints
@@ -410,9 +510,9 @@ management handler's own unknown-id answer, and it names the id and `ocx models 
 
 Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
-Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
+Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-accounts.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 The Cline client keeps connection settings and models in a separate native file pair; client path overrides and reversible writes follow [Cline paired files](clients/integrations.md#cline-paired-files).
 
@@ -421,9 +521,9 @@ The Cline client keeps connection settings and models in a separate native file 
 Config JSON preserves the boolean; only literal true activates the role-changing transform.
 
 The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
-Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
-The account history response can include a [low-confidence effective capacity estimate](providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -439,25 +539,37 @@ Display-name validation retains prototype-shaped model IDs as data; reviewer-tar
 
 The text-only consumer reads exact inputModalities declarations before legacy hints. CLI add/edit `--text-only` targets one model and preserves sibling declarations; `src/vision/eligibility.ts` routes declared text-only models into existing image-description or explicit-omission handling. Positive routed image declarations override stale candidate metadata, while native catalog authority retains its existing legacy policy.
 
+An explicit custom row is the operator's own definition of one routed model, so its
+`customModels[].inputModalities` outranks the provider-level vision hints
+(`noVisionModels`, `modelInputModalities`) for that exact `provider`/`modelId` identity.
+`modelCapabilities` keeps the top slot as the dedicated capability axis, including for the
+`ocx provider edit --text-only` write. The catalog overlay in
+`src/codex/catalog/routed-gather.ts` copies that declaration onto the advertised row directly,
+and the request-path predicates in `src/vision/eligibility.ts` and `src/vision/plan.ts` read the
+same field through `customRowInputModalities`, so an advertised row and the dispatch decision can
+no longer disagree about one model. A custom row that declares no modalities stays silent rather
+than becoming a text-only claim.
+
+Every consumer that answers "can this model take an image" applies one rule to the declaration:
+image is absent from the list. A row declaring only `audio` or `video` therefore counts as
+image-incapable in both `requiresVisionPreprocessing` and `modelAcceptsImageInput`, rather than
+being treated as a text model by one and an image target by the other.
+
 ## Catalog auto-refresh
 
-`catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config/feature-flags.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
+`catalogAutoRefresh` on `src/types/config.ts` stores an optional `enabled` / `intervalMinutes` section that defaults off: an absent key, an explicit false, and a malformed value all leave the scheduler dormant. `src/config/feature-flags.ts` resolves the cadence; an explicit `intervalMinutes: 0` keeps the unref'd timer idle, and any other value is clamped up to 15 minutes because upstream `/models` caches have not moved below that and a shorter tick only multiplies rate-limit exposure. `src/codex/catalog-auto-refresh.ts` is the module-singleton interval `src/server/background-lifecycle.ts` starts beside the quota reset poller; a tick that is enabled and non-dormant drives the same catalog-only converge funnel management mutations drive. Each tick arms its independently loaded config snapshot as a detached baseline before provider work, so the discovery save rebases every field — the listener binding and sections absent from the snapshot included — against the disk state at save time and concurrent hand edits survive the tick — `disabledModels` merges by member, so an overlapping visibility edit survives alongside the discovery additions. Detached saves capture explicit persisted top-level deletion intent before reconciliation, so a changed discovery snapshot cannot erase a current disk tombstone by temporarily restoring its key. A defined value reintroduced on disk removes stale deletion authority; ordinary live-config conflict precedence remains unchanged. The last-outcome record lives in `src/codex/catalog-refresh-status.ts` (when the tick finished, the normalized `CatalogDisposition`, whether the served model set changed, consecutive failures) and carries no provider or account detail.
 
-Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
+## Aggregate request metrics export
 
-## SOCKS5 activation owner
+`metricsExport` on `src/types/config.ts` is an optional strict object with one optional boolean,
+`enabled`. `src/config/feature-flags.ts` treats only literal `true` as enabled; absence, false, or a
+malformed persisted value is off. `src/config/schema/config-schema.ts` degrades a malformed hand edit
+to absence so an optional monitoring typo cannot discard providers or credentials. The live-write
+boundary runs `metricsExportConfigError` in `src/config/diagnostics.ts` before the degrading schema,
+so wrong types and unknown nested fields are rejected rather than silently saved. Activation is read
+when the server process creates its serve options and therefore requires restart; it adds no setting
+to the live `/api/settings` mutation surface.
 
-`src/config/proxy-env.ts` remains the single application owner for global proxy
-configuration. An explicit SOCKS5 or SOCKS5h URL selects ALL_PROXY and removes
-stale scheme-proxy variables; HTTP(S) settings retain their existing environment
-precedence. Activation keeps the existing Windows auto-discovery path and loopback
-NO_PROXY entries. When the environment no longer selects SOCKS, activation
-restores the native fetch; removing a saved field alone does not erase inherited
-process environment variables.
-SOCKS4 is rejected instead of being advertised as a working transport.
+Stored Direct substitution follows the [credential identity contract](providers/openai-accounts.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
 
-`src/cli/start-args.ts` parses `ocx start --socks5 [host:port]` and the mutually
-exclusive `--socks5-off`. The start owner persists only an explicitly requested
-change; the off flag refuses to erase a non-SOCKS proxy. Invalid-address errors
-never echo user-supplied credentials, and status messages redact proxy URLs.
-The parser regression cases live in `tests/cli/start-args.test.ts`.
+Proxy activation and credential-safe CLI output follow [Proxy Configuration](config-proxy.md).

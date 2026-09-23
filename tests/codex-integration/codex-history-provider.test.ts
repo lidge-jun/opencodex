@@ -196,6 +196,19 @@ describe("Codex history provider sync", () => {
     expect(preflightCodexHistoryInjection(true, false, fixture.dbPath)).toBeNull();
     expect(existsSync(fixture.backupPath)).toBe(false);
   });
+  test("injection preflight refuses a paginated openai row that scans after a paginated opencodex row", () => {
+    const fixture = makeFixture({ includeLegacy: true });
+    noopSnapshotArtifacts.add(join(fixture.dbPath, ".."));
+    const db = new Database(fixture.dbPath);
+    db.run("ALTER TABLE threads ADD COLUMN history_mode TEXT DEFAULT 'legacy'");
+    // The provider-table target set has no ORDER BY: the paginated opencodex row scans
+    // first and must not stand the check down before the paginated openai row is seen.
+    db.run("UPDATE threads SET model_provider='opencodex', history_mode='paginated' WHERE id='thread-1'");
+    db.run("UPDATE threads SET model_provider='openai', history_mode='paginated' WHERE id='thread-3'");
+    db.close();
+    expect(preflightCodexHistoryInjection(true, true, fixture.dbPath)).toBe("history_paginated_openai_requires_native_writer");
+    expect(existsSync(fixture.backupPath)).toBe(false);
+  });
 
   for (const marker of ["ordinal", "history_mode"] as const) {
     test(`refuses paginated ${marker} before routing any row or writing a manifest`, () => {

@@ -19,6 +19,12 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   if (command === "uninstall" || command === "remove") return true;
   // `lab` is read-only inspection; it must not trigger shim side effects.
   if (command === "lab") return true;
+  // `resolve` is read-only inspection for embedding shells: a lookup made to populate
+  // a consent surface must not trigger a shim repair side effect first.
+  if (command === "resolve") return true;
+  // The desktop's approval-bound stop must validate its snapshot before any unrelated
+  // CLI repair changes the installation it was approved against.
+  if (command === "stop" && args.some(arg => arg.startsWith("--expect-"))) return true;
   // The entire updater-inspection namespace is zero-effect, including malformed
   // or future actions. A later `apply` implementation must own its preflight.
   if (command === "system" && args[1] === "codex-cli-update") return true;

@@ -71,7 +71,7 @@ Grok Build 透過 Responses API 與 opencodex 通訊。當路由宣告推理階�
 
 即使在 loopback 上，Grok Build 也要求自訂模型有非空的 API 金鑰。注入的項目會帶上占位值（`opencodex-loopback`）——opencodex 會忽略 loopback 連線的 admission key，因此不涉及真實金鑰。
 
-**自動註冊僅限 loopback。** 當 opencodex 綁定非 loopback 主機時——包含會暴露所有介面的萬用字元 `0.0.0.0` 與 `::`——請求需要你的真實 admission token，而受管理區塊無法安全地承載它。把字面 token 寫進去會把你的金鑰放進 `~/.grok/config.toml`，並在下一次 `ocx start`/`ensure`/`restart` 時覆寫你在那裡設定的任何內容。因此在這種情況下 opencodex 完全不寫入（並會移除先前 loopback 綁定留下的任何區塊），而你要在受管理標記之外自行設定模型，opencodex 就無法覆寫它們。精確的表格請見[手動配方](#manual-recipe-without-auto-registration)，並同時設定 `base_url`（你執行 `grok` 之處實際可達的主機）與 `api_key`（你的 `OPENCODEX_API_AUTH_TOKEN`）。
+**自動註冊僅限 loopback。** 當 opencodex 綁定非 loopback 主機時——包含會暴露所有介面的萬用字元 `0.0.0.0` 與 `::`——請求需要你的真實 admission token，而受管理區塊無法安全地承載它。把字面 token 寫進去會把你的金鑰放進 `~/.grok/config.toml`，並在下一次 `ocx start`/`ensure`/`restart` 時覆寫你在那裡設定的任何內容。因此在這種情況下 opencodex 完全不寫入（並會移除先前 loopback 綁定留下的任何區塊），而你要在受管理標記之外自行設定模型，opencodex 就無法覆寫它們。精確的表格請見[手動配方](#手動配方不使用自動註冊-manual-recipe-without-auto-registration)，並同時設定 `base_url`（你執行 `grok` 之處實際可達的主機）與 `api_key`（你的 `OPENCODEX_API_AUTH_TOKEN`）。
 
 此處不要用 `env_key` 取代 `api_key`。無法解析的 `env_key` 不會中止請求——Grok 會回退到你的 xAI 工作階段 token，並把它送到該項目所命名的任何 `base_url`；對 LAN 部署而言，那是一個並非 xAI 的明文 HTTP 端點。
 

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 import { applyProxyEnv } from "../../src/config";
-import { resolveProxyRoute, configureSocks5Fetch } from "../../src/lib/proxy-env";
+import { configuredOutboundFetch, noProxyMatches, resolveProxyRoute, configureSocks5Fetch, type ProxyCapableRequestInit } from "../../src/lib/proxy-env";
 import type { OcxConfig } from "../../src/types";
 
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "OCX_TEST_PROXY_REF", "OCX_TEST_NO_PROXY_REF"] as const;
@@ -215,12 +216,156 @@ describe("applyProxyEnv with values the schema does not constrain", () => {
 });
 
 describe("applyProxyEnv", () => {
-  test("no-op when config.proxy is unset", () => {
+  test("writes no proxy state into an environment that has none", () => {
+    applyProxyEnv(configWithProxy());
+    for (const key of PROXY_ENV_KEYS) {
+      expect(process.env[key]).toBeUndefined();
+    }
+  });
+
+  test("keeps mandatory loopback exclusions for an inherited SOCKS proxy when config.proxy is unset", () => {
+    process.env.ALL_PROXY = "socks5://untrusted-proxy.invalid:1080";
     process.env.NO_PROXY = "operator-owned.example";
     applyProxyEnv(configWithProxy(undefined, "internal.example"));
     expect(process.env.HTTP_PROXY).toBeUndefined();
     expect(process.env.HTTPS_PROXY).toBeUndefined();
+    expect(process.env.NO_PROXY).toBe("operator-owned.example,localhost,127.0.0.1,::1,[::1]");
+  });
+
+  test.each([
+    ["an inherited HTTP proxy", { HTTP_PROXY: "http://proxy.invalid:3128" }],
+    ["an inherited HTTPS proxy", { https_proxy: "http://proxy.invalid:3128" }],
+    ["an inherited HTTP ALL_PROXY", { ALL_PROXY: "http://proxy.invalid:3128" }],
+    ["an inherited lowercase HTTPS all_proxy", { all_proxy: "https://proxy.invalid:3128" }],
+  ] as const)("adds only loopback addresses for %s and no config.proxy", (_label, inherited) => {
+    // Bun applies an inherited HTTP(S) proxy itself and matches NO_PROXY entries as domain
+    // suffixes, so adding "localhost" there would also send any *.localhost name direct.
+    // Loopback addresses cannot widen that way and keep local 127.0.0.1 calls off the proxy.
+    Object.assign(process.env, inherited);
+    process.env.NO_PROXY = "operator-owned.example";
+    applyProxyEnv(configWithProxy());
+    expect(process.env.NO_PROXY).toBe("operator-owned.example,127.0.0.1,::1,[::1]");
+  });
+
+  test("leaves an inherited NO_PROXY untouched when no proxy is inherited", () => {
+    process.env.NO_PROXY = "operator-owned.example";
+    applyProxyEnv(configWithProxy());
     expect(process.env.NO_PROXY).toBe("operator-owned.example");
+  });
+
+  test.each(["ALL_PROXY", "all_proxy"])("inherited SOCKS %s cannot intercept loopback fetches", async key => {
+    process.env[key] = "socks5://untrusted-proxy.invalid:1080";
+    applyProxyEnv(configWithProxy());
+    let directCalls = 0;
+    const response = await configuredOutboundFetch("http://127.0.0.1:11434/v1/chat/completions", undefined, async () => {
+      directCalls += 1;
+      return new Response("direct");
+    });
+    expect(await response.text()).toBe("direct");
+    expect(directCalls).toBe(1);
+  });
+
+  test.each(["ALL_PROXY", "all_proxy"])("inherited SOCKS %s still owns non-loopback fetches", async key => {
+    // A local proxy that drops every connection: the SOCKS handshake fails at once, with no
+    // DNS lookup for the proxy or the IP-literal target, on every runner.
+    const refusing = createTcpServer(socket => socket.destroy());
+    await new Promise<void>((resolve, reject) => {
+      refusing.once("error", reject);
+      refusing.listen(0, "127.0.0.1", resolve);
+    });
+    const address = refusing.address();
+    if (!address || typeof address === "string") throw new Error("proxy fixture did not bind a TCP port");
+    process.env[key] = `socks5://127.0.0.1:${address.port}`;
+    applyProxyEnv(configWithProxy());
+    // The bypass must be scoped to loopback only: a non-loopback URL still routes through
+    // the inherited SOCKS proxy, which fails here. The direct fallback must NOT be
+    // consulted — if it were, the bypass leaked.
+    let directCalls = 0;
+    try {
+      await expect(configuredOutboundFetch("http://203.0.113.10/v1/chat/completions", undefined, async () => {
+        directCalls += 1;
+        return new Response("direct");
+      })).rejects.toThrow();
+      expect(directCalls).toBe(0);
+    } finally {
+      await new Promise<void>(resolve => refusing.close(() => resolve()));
+    }
+  });
+
+  test.each([
+    ["alone", "ALL_PROXY", {}, "http://localhost:11434/v1/models", "localhost,127.0.0.1,::1,[::1]", false],
+    ["beside an inherited HTTP proxy", "ALL_PROXY", { HTTP_PROXY: "http://proxy.invalid:3128" }, "http://127.0.0.1:11434/v1/models", "127.0.0.1,::1,[::1]", false],
+    ["with lowercase HTTP all_proxy", "ALL_PROXY", { all_proxy: "http://proxy.invalid:3128" }, "http://localhost:11434/v1/models", "127.0.0.1,::1,[::1]", true],
+    ["with uppercase HTTP ALL_PROXY", "all_proxy", { ALL_PROXY: "http://proxy.invalid:3128" }, "http://localhost:11434/v1/models", "127.0.0.1,::1,[::1]", true],
+  ] as const)("an inherited SOCKS proxy %s: loopback goes direct, *.localhost stays on SOCKS", async (_label, socksKey, inherited, loopbackUrl, expectedNoProxy, forcedDirect) => {
+    const refusing = createTcpServer(socket => socket.destroy());
+    await new Promise<void>((resolve, reject) => {
+      refusing.once("error", reject);
+      refusing.listen(0, "127.0.0.1", resolve);
+    });
+    const address = refusing.address();
+    if (!address || typeof address === "string") throw new Error("proxy fixture did not bind a TCP port");
+    // socks5h: the proxy resolves the name, so the fixture fails the request without local DNS.
+    process.env[socksKey] = `socks5h://127.0.0.1:${address.port}`;
+    Object.assign(process.env, inherited);
+    // Windows environment names are case-insensitive: ALL_PROXY and all_proxy are one variable,
+    // so the opposite-case HTTP value replaces the SOCKS one and no SOCKS proxy is left.
+    const collapsed = process.platform === "win32"
+      && Object.keys(inherited).some(key => key !== socksKey && key.toLowerCase() === socksKey.toLowerCase());
+    applyProxyEnv(configWithProxy());
+    // Beside an HTTP(S) proxy Bun reads NO_PROXY too, with suffix matching, so no bare localhost.
+    expect(process.env.NO_PROXY).toBe(expectedNoProxy);
+    let directCalls = 0;
+    let directProxy: string | false | undefined;
+    const direct = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      directCalls += 1;
+      directProxy = (init as ProxyCapableRequestInit | undefined)?.proxy;
+      return new Response("direct");
+    };
+    try {
+      expect(await (await configuredOutboundFetch(loopbackUrl, undefined, direct)).text()).toBe("direct");
+      expect(directCalls).toBe(1);
+      if (collapsed) {
+        // Only the HTTP proxy remains, so nothing forces direct egress and Bun's own proxy
+        // environment (with the loopback NO_PROXY above) decides for both hosts.
+        expect(process.env[socksKey]).toBe("http://proxy.invalid:3128");
+        expect(directProxy).toBeUndefined();
+        expect(await (await configuredOutboundFetch("http://app.localhost:11434/v1/models", undefined, direct)).text()).toBe("direct");
+        expect(directCalls).toBe(2);
+        expect(directProxy).toBeUndefined();
+        return;
+      }
+      if (forcedDirect) expect(directProxy).toBe(false);
+      await expect(configuredOutboundFetch("http://app.localhost:11434/v1/models", undefined, direct)).rejects.toThrow();
+      expect(directCalls).toBe(1);
+    } finally {
+      await new Promise<void>(resolve => refusing.close(() => resolve()));
+    }
+  });
+
+  test("a configured proxy also merges loopback into an inherited lowercase no_proxy", () => {
+    // Bun's native fetch consults a non-empty lowercase no_proxy before NO_PROXY, with suffix
+    // matching, so it gains the loopback addresses but never a bare localhost.
+    process.env.no_proxy = "internal.example";
+    applyProxyEnv(configWithProxy("http://proxy.invalid:3128", "localhost,internal.corp"));
+    // Windows environment names are case-insensitive: there no_proxy IS NO_PROXY.
+    expect(process.env.no_proxy).toBe(process.platform === "win32"
+      ? "internal.example,localhost,internal.corp,127.0.0.1,::1,[::1]"
+      : "internal.example,127.0.0.1,::1,[::1]");
+    const loopback = new URL("http://127.0.0.1:11434/v1/models");
+    expect(noProxyMatches(loopback, { no_proxy: process.env.no_proxy })).toBe(true);
+  });
+
+  test("loopback names and IP literals match exactly; a leading dot still means subdomains", () => {
+    const env = { NO_PROXY: "localhost,127.0.0.1,::1,[::1],example.com,.localtest" };
+    const matches = (url: string) => noProxyMatches(new URL(url), env);
+    expect(matches("http://localhost:11434/")).toBe(true);
+    expect(matches("http://127.0.0.1:11434/")).toBe(true);
+    expect(matches("http://[::1]:11434/")).toBe(true);
+    expect(matches("http://app.localhost/")).toBe(false);
+    expect(matches("https://api.example.com/")).toBe(true);
+    expect(matches("http://app.localtest/")).toBe(true);
+    expect(noProxyMatches(new URL("http://app.localhost/"), { NO_PROXY: ".localhost" })).toBe(true);
   });
 
   test("merges configured comma-separated noProxy entries", () => {
@@ -315,16 +460,17 @@ describe("applyProxyEnv with proxy: \"auto\" (#1525)", () => {
   }
 
   test("parses bare, per-scheme, and socks-only ProxyServer values", () => {
-    expect(parseWindowsProxyServer("127.0.0.1:7890")).toEqual({ kind: "proxy", url: "http://127.0.0.1:7890" });
-    expect(parseWindowsProxyServer("http=10.0.0.5:3128;https=10.0.0.6:3129;ftp=x:1")).toEqual({ kind: "proxy", url: "http://10.0.0.6:3129" });
-    expect(parseWindowsProxyServer("http=10.0.0.5:3128")).toEqual({ kind: "proxy", url: "http://10.0.0.5:3128" });
+    expect(parseWindowsProxyServer("127.0.0.1:7890")).toEqual({ kind: "proxy", httpUrl: "http://127.0.0.1:7890", httpsUrl: "http://127.0.0.1:7890" });
+    expect(parseWindowsProxyServer("http=10.0.0.5:3128;https=10.0.0.6:3129;ftp=x:1")).toEqual({ kind: "proxy", httpUrl: "http://10.0.0.5:3128", httpsUrl: "http://10.0.0.6:3129" });
+    expect(parseWindowsProxyServer("http=10.0.0.5:3128")).toEqual({ kind: "proxy", httpUrl: "http://10.0.0.5:3128" });
+    expect(parseWindowsProxyServer("https=10.0.0.6:3129")).toEqual({ kind: "proxy", httpsUrl: "http://10.0.0.6:3129" });
     expect(parseWindowsProxyServer("socks=127.0.0.1:1080")).toEqual({ kind: "socks-only" });
     expect(parseWindowsProxyServer("")).toEqual({ kind: "disabled" });
   });
 
   test("readWindowsSystemProxy honors ProxyEnable and platform", () => {
     const on = () => ({ proxyEnable: "0x1", proxyServer: "127.0.0.1:7893" });
-    expect(readWindowsSystemProxy(on, "win32")).toEqual({ kind: "proxy", url: "http://127.0.0.1:7893" });
+    expect(readWindowsSystemProxy(on, "win32")).toEqual({ kind: "proxy", httpUrl: "http://127.0.0.1:7893", httpsUrl: "http://127.0.0.1:7893" });
     expect(readWindowsSystemProxy(() => ({ proxyEnable: "0x0", proxyServer: "127.0.0.1:7893" }), "win32")).toEqual({ kind: "disabled" });
     expect(readWindowsSystemProxy(() => null, "win32")).toEqual({ kind: "unreadable" });
     expect(readWindowsSystemProxy(on, "darwin")).toEqual({ kind: "unsupported" });
@@ -340,6 +486,27 @@ describe("applyProxyEnv with proxy: \"auto\" (#1525)", () => {
     expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1,[::1]");
     expect(lines.join("\n")).toContain("http://127.0.0.1:7893");
     expect(lines.join("\n")).not.toContain("secret-pass-91");
+  });
+
+  test("auto preserves per-scheme Windows proxy scope", () => {
+    const lines = capture(() => applyProxyEnvWith(configWithProxy("auto"), {
+      platform: "win32",
+      reader: () => ({ proxyEnable: "0x1", proxyServer: "http=proxy-a:8080;https=user:secret-pass-92@proxy-b:8443" }),
+    }));
+    expect(process.env.HTTP_PROXY).toBe("http://proxy-a:8080");
+    expect(process.env.HTTPS_PROXY).toBe("http://user:secret-pass-92@proxy-b:8443");
+    expect(process.env.ALL_PROXY).toBeUndefined();
+    expect(lines.join("\n")).toContain("HTTP http://proxy-a:8080");
+    expect(lines.join("\n")).toContain("HTTPS http://proxy-b:8443");
+    expect(lines.join("\n")).not.toContain("secret-pass-92");
+
+    delete process.env.HTTP_PROXY; delete process.env.HTTPS_PROXY;
+    capture(() => applyProxyEnvWith(configWithProxy("auto"), {
+      platform: "win32",
+      reader: () => ({ proxyEnable: "0x1", proxyServer: "https=proxy-b:8443" }),
+    }));
+    expect(process.env.HTTP_PROXY).toBeUndefined();
+    expect(process.env.HTTPS_PROXY).toBe("http://proxy-b:8443");
   });
 
   test("auto never leaks the literal into HTTP_PROXY when discovery yields nothing", () => {

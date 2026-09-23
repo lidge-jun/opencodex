@@ -75,11 +75,15 @@ describe("xAI Responses web-search compatibility", () => {
       },
     });
 
-    expect(body.tools).toBeUndefined();
     expect(body.input).toEqual([
       { type: "message", role: "user", content: [{ type: "input_text", text: "hello" }] },
     ]);
-    expect(body.tool_choice).toBe("none");
+    // The selector is omitted because xAI rejects one that selects from a catalog this
+    // normalization emptied, and the deny-all it stated is restated as the explicit empty
+    // catalog. Both spellings forbid every client call this turn; only the second one survives
+    // the wire, and the reconstruction path reads the request's boundary from exactly this body.
+    expect(body).not.toHaveProperty("tool_choice");
+    expect(body.tools).toEqual([]);
   });
 
   test("keeps public xAI search declarations live when the private access flag is absent", () => {

@@ -315,6 +315,17 @@ for (const failure of ["network", "http", "nonterminal"] as const) {
   });
 }
 
+test("unknown flow status stops polling after a failed cancellation", async () => {
+  await mount();
+  await beginFlow("A");
+  await invoke(() => hook.cancel());
+  await reply(take("DELETE", "A"), { code: "unavailable" }, 503);
+  await act(async () => { for (const wake of sleepers.splice(0)) wake(); });
+  await reply(take("GET", "A"), { code: "unknown_flow" }, 404);
+  expect(hook.state).toEqual({ phase: "failed", code: "request_failed" });
+  expect(sleepers).toHaveLength(0);
+});
+
 test("two successful cancellation replies complete the same flow only once", async () => {
   await mount();
   await beginFlow("A");

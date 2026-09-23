@@ -24,11 +24,10 @@
  * released. Minting a new root id mints no new budget because the identity and pool scopes
  * still hold the spend.
  *
- * SUPPORTED TOPOLOGY: this guarantees a single proxy process against its own journal. The
- * file is append-friendly, but nothing here serializes two live processes writing it, so a
- * second proxy sharing the same OPENCODEX_HOME is explicitly outside the guarantee -- that
- * needs a shared store with cross-process atomicity and is declared out of scope rather
- * than implied.
+ * SUPPORTED TOPOLOGY: one live writer owns one OPENCODEX_HOME journal. Every server and
+ * direct shared-ledger caller must hold the state-directory SQLite lease before replay,
+ * append or compaction. Independent homes remain independent; multi-host shared storage
+ * still needs a distributed transaction boundary and is outside this local lease.
  *
  * Five properties this file owes its callers. Each one was absent in the first draft, and a
  * budget that can be bypassed is worse than no budget because it looks like protection:
@@ -54,7 +53,7 @@
  *    that are re-applied to an EXISTING file rather than trusted from its creation.
  */
 
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 // Definition-site import, not the ../config barrel -- same reasoning as
@@ -66,6 +65,12 @@ import type { OcxSpendConfig, OcxSpendScopeConfig } from "../types/config";
 import { assertNotRealHomeUnderTest } from "./test-home-guard";
 // Windows chmod does not remove inherited ACEs; this is the repository's icacls path.
 import { hardenSecretPath } from "./windows-secret-acl";
+import { assertSpendLedgerOwnerHeld, assertStorageOwned, bindSpendLedgerOwnerHome, mintSpendLedgerStorage, onSpendLedgerOwnerReleased, resetSpendLedgerOwnerBindingForTest, SpendLedgerOwnerError, spendLedgerOwnerSnapshot, spendLedgerStoragePath, type SpendLedgerStorage } from "./spend-ledger-owner";
+
+// The singleton belongs to the state directory it was built for. Releasing ownership hands that
+// directory to whoever comes next, so the in-memory copy goes with it and the next construction
+// replays the journal.
+onSpendLedgerOwnerReleased(() => { sharedLedger = undefined; });
 
 export const SPEND_LEDGER_JOURNAL_FILENAME = "spend-ledger.jsonl";
 /**
@@ -391,7 +396,70 @@ function hardenLedgerFile(path: string, options: { readonly force?: boolean } = 
   } catch { /* best-effort: a non-owner cannot chmod */ }
 }
 
-export function createFileSpendJournal(path: string): SpendJournal {
+/**
+ * Fault injection for the journal's own filesystem steps. Internal test contract, not config.
+ *
+ * The compaction cleanup only runs when a step after the exclusive create fails, and there is no
+ * portable way to make a validate, harden or rename fail on demand. Without a seam the cleanup
+ * would ship asserted by reading alone, which is how a failure path stays broken.
+ */
+export type SpendJournalFaultStep = "stat" | "create" | "write" | "validate" | "harden" | "rename";
+
+let journalFaultForTests: ((step: SpendJournalFaultStep, temp: string) => void) | undefined;
+
+export function setSpendJournalFaultForTests(
+  fault: ((step: SpendJournalFaultStep, temp: string) => void) | undefined,
+): void {
+  journalFaultForTests = fault;
+}
+
+/**
+ * Does a directory entry exist here, whatever it points at?
+ *
+ * `existsSync` follows the link, so a symlink whose target is absent reads as "no file" and an
+ * append then creates that target somewhere else entirely. The entry itself is what decides
+ * whether the safety check runs.
+ */
+function ledgerEntryExists(path: string): boolean {
+  try {
+    journalFaultForTests?.("stat", path);
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    // Only a genuinely absent entry is absent. Treating every failure as "no file" meant a
+    // permission denial or an I/O error skipped assertSafeLedgerFile entirely and let the
+    // append proceed against whatever is actually there, which is the case that check exists
+    // for. An entry we cannot inspect is a refusal, not an empty slot.
+    //
+    // Raised as the module's typed error rather than the raw fs error: the path and errno of a
+    // state file are not something a client should be handed.
+    if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return false;
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_UNAVAILABLE",
+      "Spend-ledger storage could not be inspected safely.",
+      { cause: error },
+    );
+  }
+}
+
+function assertSafeLedgerFile(path: string): void {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
+    || (process.platform !== "win32" && stat.uid !== process.getuid!())) {
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_UNAVAILABLE",
+      "Spend-ledger storage could not be opened safely.",
+    );
+  }
+}
+
+/**
+ * The production journal. Its location comes from the owned state directory and every touch
+ * proves that ownership, so there is no entrypoint here that writes a caller-chosen path.
+ */
+export function createOwnedFileSpendJournal(storage: SpendLedgerStorage): SpendJournal {
+  assertStorageOwned(storage);
+  const path = spendLedgerStoragePath(storage);
   const ensureDir = (): string => {
     const dir = dirname(path);
     // The guard runs before any mutation so a rejected write leaves nothing behind.
@@ -401,26 +469,66 @@ export function createFileSpendJournal(path: string): SpendJournal {
   };
   return {
     read(): string[] {
-      if (!existsSync(path)) return [];
+      assertStorageOwned(storage);
+      if (!ledgerEntryExists(path)) return [];
+      assertSafeLedgerFile(path);
       // Replay is once per process and is the moment a journal inherited from an older build
       // or a restored backup first passes through here.
       hardenLedgerFile(path, { force: true });
       return readFileSync(path, "utf8").split("\n").filter((line) => line.length > 0);
     },
     append(line: string): void {
+      assertStorageOwned(storage);
       ensureDir();
-      const created = !existsSync(path);
+      const created = !ledgerEntryExists(path);
+      if (!created) assertSafeLedgerFile(path);
       appendFileSync(path, line + "\n", { encoding: "utf8", mode: 0o600 });
+      assertSafeLedgerFile(path);
       hardenLedgerFile(path, { force: created });
     },
     rewrite(lines: string[]): void {
+      assertStorageOwned(storage);
       ensureDir();
       // Same directory, so the rename is atomic on the same filesystem: a crash mid-compaction
       // leaves either the old journal or the new one, never a half-written ledger.
-      const temp = `${path}.compact-${process.pid}`;
-      writeFileSync(temp, lines.map((line) => line + "\n").join(""), { encoding: "utf8", mode: 0o600 });
-      hardenLedgerFile(temp, { force: true });
-      renameSync(temp, path);
+      if (ledgerEntryExists(path)) assertSafeLedgerFile(path);
+      const temp = `${path}.compact-${process.pid}-${randomBytes(6).toString("hex")}`;
+      // The creation is INSIDE the cleanup, not before it. The name carries random bytes, so a
+      // failure anywhere after the entry exists used to leave a uniquely named file and the next
+      // attempt made another: repeated failures accumulated instead of overwriting one fixed
+      // name. Only an entry this call created is removed, so a name that turned out to belong to
+      // something else is left alone, and the original journal and the primary error survive.
+      let fd: number | undefined;
+      let created = false;
+      let renamed = false;
+      try {
+        // Exclusive create FIRST, so "this entry is ours" is a fact rather than a guess about
+        // which error a combined write threw. EEXIST leaves created false and the name is left
+        // alone; every failure after this point is cleaned because the entry is provably ours,
+        // including a write that stopped partway through.
+        journalFaultForTests?.("create", temp);
+        fd = openSync(temp, "wx", 0o600);
+        created = true;
+        journalFaultForTests?.("write", temp);
+        writeFileSync(fd, lines.map((line) => line + "\n").join(""), { encoding: "utf8" });
+        closeSync(fd);
+        fd = undefined;
+        journalFaultForTests?.("validate", temp);
+        assertSafeLedgerFile(temp);
+        journalFaultForTests?.("harden", temp);
+        hardenLedgerFile(temp, { force: true });
+        journalFaultForTests?.("rename", temp);
+        renameSync(temp, path);
+        renamed = true;
+      } finally {
+        if (fd !== undefined) {
+          try { closeSync(fd); } catch { /* the compaction failure is the one to report */ }
+        }
+        if (created && !renamed) {
+          try { unlinkSync(temp); } catch { /* same */ }
+        }
+      }
+      assertSafeLedgerFile(path);
       hardenLedgerFile(path, { force: true });
     },
   };
@@ -433,17 +541,26 @@ export function createFileSpendJournal(path: string): SpendJournal {
  * recorded spend, which would hand every scope a fresh allowance -- so it is a file, not a
  * per-process value.
  */
-export function loadOrCreateSpendLedgerSalt(path: string): string {
-  if (existsSync(path)) {
+export function loadOrCreateSpendLedgerSalt(storage: SpendLedgerStorage): string {
+  assertStorageOwned(storage);
+  const path = spendLedgerStoragePath(storage);
+  if (ledgerEntryExists(path)) {
+    assertSafeLedgerFile(path);
     hardenLedgerFile(path, { force: true });
     const existing = readFileSync(path, "utf8").trim();
     if (/^[0-9a-f]{32,}$/.test(existing)) return existing;
+    throw new SpendLedgerOwnerError(
+      "SPEND_LEDGER_OWNER_UNAVAILABLE",
+      "Spend-ledger storage could not be opened safely.",
+    );
   }
   const dir = dirname(path);
+  assertStorageOwned(storage);
   assertNotRealHomeUnderTest(dir);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const salt = randomBytes(32).toString("hex");
-  writeFileSync(path, salt + "\n", { encoding: "utf8", mode: 0o600 });
+  writeFileSync(path, salt + "\n", { encoding: "utf8", mode: 0o600, flag: "wx" });
+  assertSafeLedgerFile(path);
   hardenLedgerFile(path, { force: true });
   return salt;
 }
@@ -529,6 +646,12 @@ export function createSpendReservationLedger(options: {
    * no file anyone could correlate.
    */
   readonly salt?: string;
+  /**
+   * Shared production ledgers prove their exact ownership before reading or changing
+   * accounting. Identity, not just the directory name: a handle kept across a release and a
+   * reacquire describes a journal another writer may have changed in between.
+   */
+  readonly assertOwnedAccounting?: () => void;
 } = {}): SpendReservationLedger {
   // Mutable because the ceilings are operator configuration, and configuration is reloadable.
   // The three bounds below are read through functions for the same reason: a value captured
@@ -538,6 +661,7 @@ export function createSpendReservationLedger(options: {
   const journal = options.journal;
   const now = options.now ?? (() => Date.now());
   const salt = options.salt ?? "";
+  const assertOwnedAccounting = options.assertOwnedAccounting;
   const maxTrackedScopes = (): number => policy.maxTrackedScopes ?? DEFAULT_MAX_TRACKED_SCOPES;
   const maxTrackedSends = (): number => policy.maxTrackedSends ?? DEFAULT_MAX_TRACKED_SENDS;
   const compactAfterRecords = (): number => policy.compactAfterRecords ?? DEFAULT_COMPACT_AFTER_RECORDS;
@@ -592,7 +716,8 @@ export function createSpendReservationLedger(options: {
       journal.append(JSON.stringify(record));
       recordsOnDisk += 1;
       return true;
-    } catch {
+    } catch (error) {
+      if (error instanceof SpendLedgerOwnerError) throw error;
       // In-memory state still bounds this process; the counter is how a caller learns the
       // restart guarantee degraded instead of discovering it after the fact.
       persistFailures += 1;
@@ -819,7 +944,8 @@ export function createSpendReservationLedger(options: {
     try {
       rewrite.call(journal, [JSON.stringify(checkpoint)]);
       recordsOnDisk = 1;
-    } catch {
+    } catch (error) {
+      if (error instanceof SpendLedgerOwnerError) throw error;
       // Compaction is maintenance, not accounting: a failed rewrite leaves the previous
       // journal intact and every figure in it still replayable.
       persistFailures += 1;
@@ -844,12 +970,15 @@ export function createSpendReservationLedger(options: {
   };
 
   return {
-    get persistFailures() { return persistFailures; },
-    get corruptRecords() { return corruptRecords; },
-    get degraded() { return persistFailures > 0 || corruptRecords > 0; },
-    get policy() { return policy; },
+    // Every figure this ledger reports describes a journal it must still own. Reporting one
+    // after ownership ended is the same error as writing then, with a quieter symptom.
+    get persistFailures() { assertOwnedAccounting?.(); return persistFailures; },
+    get corruptRecords() { assertOwnedAccounting?.(); return corruptRecords; },
+    get degraded() { assertOwnedAccounting?.(); return persistFailures > 0 || corruptRecords > 0; },
+    get policy() { assertOwnedAccounting?.(); return policy; },
 
     reserve(request: SpendReservationRequest): SpendReservationDecision {
+      assertOwnedAccounting?.();
       const tokens = sanitizeTokens(request.inputTokens) + sanitizeTokens(request.outputCeilingTokens);
       const at = request.at ?? now();
       const send = aliasFor("send", request.sendId);
@@ -904,6 +1033,7 @@ export function createSpendReservationLedger(options: {
     },
 
     markDispatched(sendId: string): boolean {
+      assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || reservation.status !== "open") return false;
@@ -914,6 +1044,7 @@ export function createSpendReservationLedger(options: {
     },
 
     abandon(sendId: string): boolean {
+      assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       // Only an UNDISPATCHED reservation may be released for free. Once bytes have left for
@@ -926,6 +1057,7 @@ export function createSpendReservationLedger(options: {
     },
 
     settle(sendId: string, usage: SpendUsage): boolean {
+      assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
@@ -937,6 +1069,7 @@ export function createSpendReservationLedger(options: {
     },
 
     markLost(sendId: string): boolean {
+      assertOwnedAccounting?.();
       const send = aliasFor("send", sendId);
       const reservation = reservations.get(send);
       if (!reservation || !isLive(reservation.status)) return false;
@@ -947,10 +1080,14 @@ export function createSpendReservationLedger(options: {
     },
 
     knows(sendId: string): boolean {
+      assertOwnedAccounting?.();
       return reservations.has(aliasFor("send", sendId));
     },
 
     snapshot(scope: SpendScope, scopeId: string): ScopeSpendSnapshot | undefined {
+      // Reading accounting from a handle whose ownership has ended is as wrong as writing it:
+      // the figures describe a journal this process no longer owns.
+      assertOwnedAccounting?.();
       const state = scopes.get(scopeKey(scope, aliasFor(scope, scopeId)));
       if (!state) return undefined;
       return {
@@ -962,11 +1099,13 @@ export function createSpendReservationLedger(options: {
     },
 
     exhausted(scope: SpendScope, scopeId: string): boolean {
+      assertOwnedAccounting?.();
       const state = scopes.get(scopeKey(scope, aliasFor(scope, scopeId)));
       return state !== undefined && isExhausted(scope, state);
     },
 
     prune(at: number = now()): void {
+      assertOwnedAccounting?.();
       // Removal requires BOTH inactive and not exhausted inside the window. An
       // exhausted-but-idle scope that was dropped would be recreated fresh under the
       // same id -- the exact laundering the ceiling exists to stop.
@@ -975,6 +1114,7 @@ export function createSpendReservationLedger(options: {
     },
 
     reconfigure(next: SpendReservationPolicy): void {
+      assertOwnedAccounting?.();
       policy = next;
     },
   };
@@ -1036,6 +1176,12 @@ export function spendPolicyFromConfig(spend: OcxSpendConfig | undefined): SpendR
  * configures no ceiling must not open a journal merely because the server started.
  */
 export function configureSharedSpendLedger(policy: SpendReservationPolicy): void {
+  // Recording a policy value touches no journal, so it needs no ownership. Changing a ledger
+  // that already exists does, because that ledger is a live view of an owned directory.
+  if (sharedLedger) {
+    assertSpendLedgerOwnerHeld();
+    bindSpendLedgerOwnerHome();
+  }
   sharedPolicy = policy;
   sharedLedger?.reconfigure(policy);
 }
@@ -1043,22 +1189,67 @@ export function configureSharedSpendLedger(policy: SpendReservationPolicy): void
 /**
  * Process-wide ledger backed by the journal under OPENCODEX_HOME. Created lazily so
  * importing the module -- or running a request path that never reserves -- touches no
- * disk.
+ * disk. One directory at a time, not one directory for the life of the process: the singleton
+ * is discarded when its ownership ends, so a later directory replays its own journal rather
+ * than inheriting figures from the previous one.
  */
 export function sharedSpendLedger(): SpendReservationLedger {
+  assertSpendLedgerOwnerHeld();
+  bindSpendLedgerOwnerHome();
   if (!sharedLedger) {
-    const home = getConfigDir();
+    // Minted by the owner module from the directory it actually owns, and carrying the exact
+    // ownership they were minted under. Nothing here chooses a path or supplies its own guard.
+    const journalStorage = mintSpendLedgerStorage(SPEND_LEDGER_JOURNAL_FILENAME);
+    const saltStorage = mintSpendLedgerStorage(SPEND_LEDGER_SALT_FILENAME);
+    const journalPath = spendLedgerStoragePath(journalStorage);
+    const saltPath = spendLedgerStoragePath(saltStorage);
+    const assertOwnedAccounting = (): void => {
+      assertStorageOwned(journalStorage);
+      if (ledgerEntryExists(journalPath)) assertSafeLedgerFile(journalPath);
+      if (ledgerEntryExists(saltPath)) assertSafeLedgerFile(saltPath);
+    };
     sharedLedger = createSpendReservationLedger({
-      journal: createFileSpendJournal(join(home, SPEND_LEDGER_JOURNAL_FILENAME)),
-      salt: loadOrCreateSpendLedgerSalt(join(home, SPEND_LEDGER_SALT_FILENAME)),
+      journal: createOwnedFileSpendJournal(journalStorage),
+      salt: loadOrCreateSpendLedgerSalt(saltStorage),
       policy: sharedPolicy,
+      assertOwnedAccounting,
     });
   }
   return sharedLedger;
 }
 
-/** Test seam. Production never discards the ledger: that would reset a spent budget. */
+const MAX_DIAGNOSTIC_ERROR_COUNT = 1_000_000;
+
+/** Scalar-only and side-effect-free: reading diagnostics never constructs or replays. */
+export function spendLedgerDiagnosticsSnapshot(): {
+  readonly ownership: "held" | "unheld";
+  readonly initialized: boolean;
+  readonly configured: boolean;
+  readonly degraded: boolean;
+  readonly persistFailures: number;
+  readonly corruptRecords: number;
+} {
+  const ledger = sharedLedger;
+  const bounded = (value: number): number => Math.min(MAX_DIAGNOSTIC_ERROR_COUNT, Math.max(0, value));
+  return {
+    ...spendLedgerOwnerSnapshot(),
+    initialized: ledger !== undefined,
+    configured: spendCeilingsConfigured(sharedPolicy),
+    degraded: ledger?.degraded ?? false,
+    persistFailures: bounded(ledger?.persistFailures ?? 0),
+    corruptRecords: bounded(ledger?.corruptRecords ?? 0),
+  };
+}
+
+/**
+ * Test seam for discarding the singleton outright.
+ *
+ * Production discards it too, but only with the ownership it belongs to, which is what
+ * `onSpendLedgerOwnerReleased` does. Neither path resets a spent budget: the journal is the
+ * durable record and the next construction replays it.
+ */
 export function resetSharedSpendLedgerForTest(): void {
   sharedLedger = undefined;
   sharedPolicy = DEFAULT_SPEND_RESERVATION_POLICY;
+  resetSpendLedgerOwnerBindingForTest();
 }

@@ -16,9 +16,10 @@ const provider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://
 const media = [
   { type: "input_audio", input_audio: { data: "YWJj", format: "wav" } },
   { type: "input_audio", audio_url: "data:audio/wav;base64,YWJj" },
-  { type: "file", file: { filename: "private.pdf", file_data: "data:application/pdf;base64,JVBERi0=" } },
   { type: "input_file", file_id: "file-private" },
 ];
+// An inline document is carried in user content and still has no carrier anywhere else (#5212).
+const INLINE_FILE = { type: "file", file: { filename: "private.pdf", file_data: "data:application/pdf;base64,JVBERi0=" } };
 
 function chat(part: unknown, role = "user") {
   return { model: "model", messages: [{ role, tool_call_id: "call1", content: [{ type: "text", text: "read this" }, part] }] };
@@ -34,9 +35,24 @@ describe("Chat media stays native or fails explicitly at translation", () => {
     }
   });
 
+  test("an inline document is carried in user content and refused where nothing carries it", () => {
+    const translated = chatCompletionsToResponsesBody(chat(INLINE_FILE));
+    expect(translated.input).toEqual([{
+      type: "message",
+      role: "user",
+      content: [
+        { type: "input_text", text: "read this" },
+        { type: "input_file", file_data: "data:application/pdf;base64,JVBERi0=", filename: "private.pdf" },
+      ],
+    }]);
+    for (const role of ["tool", "system", "assistant"]) {
+      expect(() => chatCompletionsToResponsesBody(chat(INLINE_FILE, role))).toThrow("OpenCodex cannot translate");
+    }
+  });
+
   test("the native Chat route retains the caller's exact media blocks", () => {
     const route = { provider, providerName: "gateway", modelId: "model" } as RouteResult;
-    for (const part of media) {
+    for (const part of [...media, INLINE_FILE]) {
       const raw = chat(part);
       expect(isNativeChatRouteEligible(route, raw)).toBe(true);
       const wire = JSON.parse(buildOpenAIChatPassthroughRequest(provider, raw, "model", false).body);
@@ -59,8 +75,9 @@ describe("Chat media stays native or fails explicitly at translation", () => {
   });
 
   test("plain text mentioning an attachment is not treated as one", () => {
-    const out = chatCompletionsToResponsesBody({ model: "model", messages: [{ role: "user", content: JSON.stringify(media) }] });
-    expect(out.input).toEqual([{ type: "message", role: "user", content: [{ type: "input_text", text: JSON.stringify(media) }] }]);
+    const text = JSON.stringify([...media, INLINE_FILE]);
+    const out = chatCompletionsToResponsesBody({ model: "model", messages: [{ role: "user", content: text }] });
+    expect(out.input).toEqual([{ type: "message", role: "user", content: [{ type: "input_text", text }] }]);
   });
 });
 
@@ -93,7 +110,7 @@ test("real HTTP translation refuses media before sending to the selected upstrea
     server = startServer(0);
     for (const part of [
       { type: "input_audio", audio_url: "data:audio/wav;base64,YWJj" },
-      { type: "input_file", filename: "private.pdf", file_data: "data:application/pdf;base64,JVBERi0=" },
+      { type: "input_file", filename: "private.pdf", file_id: "file-private" },
     ]) {
       const response = await fetch(new URL("/v1/responses", server.url), {
         method: "POST", headers: { "Content-Type": "application/json" },

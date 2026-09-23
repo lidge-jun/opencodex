@@ -15,7 +15,7 @@ removing support for non-default WebSocket quota families.
 Key-auth hosted-search continuations validate account selection after pacing and report a failed
 terminal on drift; see [continuation binding contract](../providers-and-adapters.md#hosted-search-continuation-binding).
 
-Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Heartbeat and stall deadline
 
@@ -248,13 +248,21 @@ as `response.incomplete`, never synthetic success. The repair shares the per-tur
 budget, preserves backpressure, and composes ahead of item-id/snapshot rewrites so HTTP/SSE and
 WebSocket clients observe the same canonical lifecycle.
 
+When the hosted-search bridge is also armed, repair wraps the raw first leg BEFORE the bridge:
+the bridge suppresses an intercepted `web_search` lifecycle, so a complete call whose leg never
+closes would otherwise leave the grace timer unarmed and the turn stalled. The same wrap applies
+to every continuation leg the bridge's `send` returns — each leg gets its own grace window on the
+shared abort controller — so a terminal-less continuation cannot stall the bridged turn either.
+`tests/web-search/web-search-passthrough-bridge.test.ts` drives both legs through `handleResponses`
+with an injected scheduler and proves search execution, continuation dispatch, and final terminal.
+
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a
 `response.failed` frame is sent; otherwise `response.completed` carries through the original status.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
@@ -264,9 +272,9 @@ Chat helper admission in `src/server/responses/core.ts` follows the
 claims stored main, after terminal vision, routed vision and search exclusions.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](../transports/responses.md).
@@ -278,7 +286,7 @@ privately to final dispatch; preliminary route selection does not inject Go-only
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -288,7 +296,7 @@ Live sideband admission and its bounded upstream handshake follow the [runtime c
 
 ## Translated Chat inline-image budget
 
-`src/adapters/openai-chat-images.ts` reuses the shared image normalization ladder for translated Chat bodies above a 3.5 MiB base64-image budget. This is best effort, not a whole-request ceiling. Remote URLs are not fetched; unprocessable and terminal images remain attached, and retained bytes continue to count during demotion. Under-budget construction stays synchronous; delegating MiMo awaits conditional asynchronous construction. Native Chat passthrough and Anthropic-only 413 retry policy retain their existing behavior.
+`src/adapters/openai-chat-images.ts` reuses the shared image normalization ladder for translated Chat bodies above a 3.5 MiB base64-image budget. This is best effort, not a whole-request ceiling. Remote URLs are not fetched; unprocessable and terminal images remain attached, and retained bytes continue to count during demotion. Under-budget construction stays synchronous; delegating MiMo awaits conditional asynchronous construction. Native decoding is admitted through a process-wide four-operation gate, guarded by a 16-million-pixel ceiling confirmed from codec metadata, and request cancellation stops queued and subsequent normalization work. Native Chat passthrough and Anthropic-only 413 retry policy retain their existing behavior.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
@@ -297,9 +305,9 @@ Provider-scoped approval reviewer settings are projected by the [catalog owner](
 ## Experimental native mid-turn steering
 
 `codexNativeSteering: true` is an independent, default-off opt-in for the client-facing
-Responses WebSocket endpoint. It requires `websockets: true`, a canonical ChatGPT forward
-route or explicitly opted-in canonical OpenAI API route, an eligible Bun runtime, and a
-supporting model/execution mode. HTTP fallback and translated/sidecar/Combo paths do not gain steering. Plaintext V2
+Responses WebSocket endpoint. It requires `websockets: true`, the canonical ChatGPT forward
+route, an eligible Bun runtime, and a supporting model/execution mode. HTTP fallback and
+translated/sidecar/Combo paths do not gain steering. Plaintext V2
 restoration is excluded because it is not a transparent native event stream.
 
 `src/server/responses/native-steering.ts` owns one downstream turn and one private physical
@@ -338,7 +346,9 @@ control events are preserved. A single bounded reader owns delivery; client canc
 account invalidation and shutdown abort its upstream. Numeric usage is summed once per
 response; steering control frames (which can contain returned user input) are not log samples.
 
-Bounds: 32 outstanding submissions, 128 response IDs per chain, 32 MiB replay journal,
+Bounds: 32 outstanding submissions, 128 response IDs per chain, 32 MiB replay journal
+with a 128 MiB aggregate pinned-journal ceiling independent of the configured budget,
+the configured inbound and upstream body ceilings, and the shared application-owned memory budget,
 256 KiB / 1,024 required-input stubs, existing WS frame/queue byte limits, a 90-second control
 wait, and a 30-minute saved-tool-result wait. Ordinary active-response silence uses the
 configured stall deadline. Unsupported routes return explicit errors rather than discarding
@@ -372,8 +382,13 @@ and private socket. `src/server/responses/native-injection-protocol.ts` validate
 only string-valued developer `function_call_output` items for completed calls
 advertised by that response and lane. IDs are never global lookup keys. One physical
 injection awaits acknowledgement at a time because success carries a response ID,
-not an injection ID; further submissions remain in a bounded FIFO. Repeated call
-results, mismatched/repeated acknowledgements and unsupported shapes fail closed.
+not an injection ID; further submissions remain in a bounded FIFO.
+The configured upstream body limit is checked before a result reserves calls or
+enters the queue, including while another result awaits acknowledgement. A size
+refusal leaves the original socket and outstanding result usable for a corrected submission.
+Repeated call results, mismatched/repeated acknowledgements and unsupported shapes fail closed. On
+non-forward routes, native events also enforce the current request's explicit tool
+catalog before advertising or relaying a client-executed call.
 
 A response terminal is relayed immediately, but pending acknowledgements and
 unreturned advertised calls retain the socket. Late tool results still reach that
@@ -475,7 +490,7 @@ Injection retains its existing helper export names and comparison semantics.
 
 `native-steering-settings.ts` validates a bounded allowlist for explicit saved-result
 continuations: `reasoning`, `text` (including structured-output format),
-`stream_options` and public-API `max_output_tokens`. Unknown/malformed overrides
+`stream_options` and a validated `max_output_tokens` field. Unknown/malformed overrides
 fail before result reservation. Null resets the supplied setting; omission keeps
 the current authorized wire value. Models, tools, instructions, account, lane,
 service tier, execution mode and other settings remain pinned. The schema uses
@@ -489,10 +504,10 @@ current wire base, retaining new values across later explicit continuations.
 Normal pacing and captured account/dispatch guards still run before physical send.
 No tool results are transformed by generation normalization or rerun on rejection.
 
-Public API steering requires `openai-responses`, key-mode authentication,
-`upstreamWebsocket: true` and exactly `https://api.openai.com/v1`. It uses its own
-configured API key; subscription traffic is never migrated there. Injection-only
-beta metadata is not attached to steering. Initial mode selection explains disabled,
+Steering is restricted to the canonical ChatGPT forward route. In particular, an
+API-key Responses WebSocket cannot retain a steering channel because its successor
+generations do not pass through ordinary per-request send and spend admission. Public
+API WebSockets remain available for multi-agent injection. Initial mode selection explains disabled,
 multi-agent, conversation-bound and automatic-compaction exclusions without breaking
 ordinary creates or inventing model entitlement. HTTP fallback remains non-steerable.
 
@@ -513,3 +528,5 @@ cover effective wire settings, immutable-route refusals, policy preservation,
 independent API credentials, unavailable-mode diagnostics and safe probe outcomes.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+WebSocket [compaction routing selection](responses-failover.md#compaction-routing-overrides) uses per-frame metadata; handshake metadata cannot supply a later frame's trigger.

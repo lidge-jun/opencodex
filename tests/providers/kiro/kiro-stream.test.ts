@@ -2231,8 +2231,8 @@ describe("kiro adapter — non-streaming parseResponse", () => {
 
 describe("surrogate safety at kiro boundaries", () => {
   test("the reasoning carry never emits a delta ending on a lone high surrogate", async () => {
-    const { KiroThinkingParser } = await import("../../../src/adapters/kiro-thinking");
-    const parser = new KiroThinkingParser();
+    const { InlineThinkTagParser } = await import("../../../src/adapters/inline-think-tags");
+    const parser = new InlineThinkTagParser();
     // An astral char exactly at the carry/send boundary.
     const events = parser.feed("<thinking>🎆aaaaaaaaaaa");
     const emitted = JSON.stringify(events);

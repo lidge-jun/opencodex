@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   copyFileSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   renameSync,
@@ -21,6 +22,7 @@ import {
   readWindowsTrayRunValueWithAsyncRunner,
   readWindowsTrayRunValueWithRunner,
   replaceWindowsTrayOwnedFile,
+  windowsPowerShellPath,
   windowsTrayProcessArgs,
   windowsTrayRunValue,
   windowsTrayStatePathsOwned,
@@ -379,6 +381,184 @@ describe("Windows tray packaging and command safety", () => {
     expect(source).not.toContain("taskkill");
     expect(source).not.toContain("Stop-Process");
   });
+
+  test("tray reads restart safety through the CLI instead of the admin-gated /api endpoint", () => {
+    const source = readFileSync(repoPath("src", "tray", "windows-tray.ps1"), "utf8");
+    // The management API is admin-token gated, and the tray runs without that token,
+    // so a plain GET /api/startup-health always 401s and leaves the tray stuck on the
+    // yellow warning icon. The tray must collect the same local diagnostic through the
+    // CLI's __startup-health internal command instead.
+    expect(source).toContain('@($CliPath, "__startup-health")');
+    expect(source).not.toContain('Read-JsonUrl "$origin/api/startup-health"');
+    // The local diagnostic does not re-run the Windows service-manager probe on every
+    // 3s tick, so its refresh cadence must stay throttled...
+    expect(source).toContain("$script:startupRefreshMs");
+    expect(source).toContain("$script:startupHealthCheckedAt -gt $script:startupRefreshMs");
+    // ...and it must not block the Windows Forms UI thread. The probe is a detached
+    // child whose stdout pipe is drained asynchronously; the 3s tick only touches the
+    // completed read task, so a slow or hung diagnostic can never freeze the tray menu.
+    expect(source).toContain("ReadToEndAsync()");
+    expect(source).toContain("$script:startupProbeProcess");
+    // A timed-out diagnostic must be terminated, not left to become an orphaned
+    // Bun process on the next refresh.
+    expect(source).toContain("startupProbeProcess.Kill()");
+    // A launch failure or invalid result must not start a new probe on the very next
+    // 3s tick: the refresh decides by the throttled attempt timestamp, never by a null
+    // cached health, and records the attempt before spawning the child.
+    expect(source).toContain("$script:startupHealthCheckedAt -eq 0 -or");
+    expect(source).toContain("# Record the attempt so launch failures and invalid results remain throttled.");
+    // A probe still in flight when the tray shuts down must not outlive it: the
+    // finally block kills the active probe, waits briefly, then completes it.
+    expect(source).toContain("terminating active startup-health probe on tray shutdown");
+    expect(source).toContain("startupProbeProcess.WaitForExit(3000)");
+    // Placement proof that runs on every platform: the behavioral test below is
+    // win32-only and the Windows CI leg runs on dispatch rather than on PRs,
+    // so merge-time coverage needs a lightweight check here too. The timeout
+    // maintenance must sit BEFORE the online-only UI branch: moving it inside
+    // flips the order and deleting it removes the anchor, and a plain
+    // substring could not tell inside from outside. The branch anchor is a
+    // line-anchored regex (not a substring) because the `$script:proxyPid`
+    // assignment a few lines above contains the same `if ($script:online) {`
+    // text inline.
+    const timeoutAnchorIdx = source.search(
+      /^\s*} elseif \(\$probeTimedOut\) \{$/m,
+    );
+    const onlineBranchIdx = source.search(/^\s*if \(\$script:online\) \{$/m);
+    expect(timeoutAnchorIdx).toBeGreaterThanOrEqual(0);
+    expect(onlineBranchIdx).toBeGreaterThanOrEqual(0);
+    expect(timeoutAnchorIdx).toBeLessThan(onlineBranchIdx);
+    // Hung-child termination itself is proven behaviorally by "terminates a hung
+    // startup-health probe without stacking a replacement" below.
+    // The malformed-payload guard requires a real boolean, matching the shared
+    // server-side parser instead of accepting any non-null rebootSafe value.
+    expect(source).toContain("($parsed.rebootSafe -is [bool])");
+    // If the async pipe setup fails after the child started, the child must be
+    // terminated, not merely disposed and lost. That catch block logs a
+    // distinct string, which breaks if the branch is deleted.
+    expect(source).toContain("startup-health probe launch cleanup failed");
+  });
+
+  // Behavioral proof for the probe lifecycle: the driver loads the REAL probe
+  // functions out of windows-tray.ps1 (via the PowerShell AST, so comment and
+  // whitespace edits cannot fake it), stages a REAL hung child through the
+  // real Start-StartupHealthProbe, backdates its start past the real 30s
+  // timeout (elapsed time is an input to the maintenance branch, not the logic
+  // under test), then invokes the real Update-TrayState ticks and reports
+  // observable process facts. Offline proves the maintenance branch runs
+  // outside the online-only UI gate; Online proves the refresh throttle stacks
+  // no replacement. Either scenario fails if the Kill() is deleted (the child
+  // survives) or if maintenance moves inside the online branch (the offline
+  // child survives).
+  test("terminates a hung startup-health probe without stacking a replacement", async () => {
+    if (process.platform !== "win32") return;
+    const psExe = windowsPowerShellPath();
+    const driver = helperPath("windows-tray-probe-lifecycle-driver.ps1");
+    const trayScript = repoPath("src", "tray", "windows-tray.ps1");
+    for (const scenario of ["Offline", "Online"] as const) {
+      const directory = mkdtempSync(join(tmpdir(), "ocx-tray-probe-"));
+      const codexHome = join(directory, "codex");
+      const openCodexHome = join(directory, "ohome");
+      mkdirSync(codexHome, { recursive: true });
+      mkdirSync(openCodexHome, { recursive: true });
+      // The fake CLI name stays simple ASCII on purpose: the child engine here
+      // is powershell.exe (not bun), and its -Command parsing mangles paths
+      // with spaces or `&` even when quoted.
+      const hangChild = join(directory, "hangchild.ps1");
+      writeFileSync(hangChild, [
+        "$pidFile = $env:OCX_PROBE_TEST_PID_FILE",
+        "if ($pidFile) { Add-Content -LiteralPath $pidFile -Value $PID }",
+        "Start-Sleep -Seconds 120",
+      ].join("\r\n"));
+      const pidFile = join(directory, "pids.txt");
+      const resultPath = join(directory, "verdict.json");
+      let server: ReturnType<typeof Bun.serve> | undefined;
+      try {
+        if (scenario === "Online") {
+          server = Bun.serve({
+            hostname: "127.0.0.1",
+            port: 0,
+            fetch: request => {
+              if (new URL(request.url).pathname === "/healthz") {
+                return Response.json({ status: "ok", service: "opencodex", port: server!.port, pid: 424242 });
+              }
+              return new Response("not found", { status: 404 });
+            },
+          });
+          writeFileSync(
+            join(openCodexHome, "runtime-port.json"),
+            JSON.stringify({ port: server.port, hostname: "127.0.0.1" }),
+          );
+        } else {
+          // Port 1 refuses immediately, so the offline premise holds even on a
+          // dev machine already running the proxy on 10100.
+          writeFileSync(
+            join(openCodexHome, "runtime-port.json"),
+            JSON.stringify({ port: 1, hostname: "127.0.0.1" }),
+          );
+        }
+        const child = Bun.spawn([psExe,
+          "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", driver,
+          "-TrayScriptPath", trayScript,
+          "-ChildEnginePath", psExe,
+          "-HangChildPath", hangChild,
+          "-CodexHome", codexHome,
+          "-OpenCodexHome", openCodexHome,
+          "-ResultPath", resultPath,
+          "-Scenario", scenario,
+        ], {
+          stdout: "pipe",
+          stderr: "pipe",
+          env: { ...process.env, OCX_PROBE_TEST_PID_FILE: pidFile },
+        });
+        const stdoutPromise = new Response(child.stdout).text();
+        const stderrPromise = new Response(child.stderr).text();
+        const finished = await Promise.race([
+          Promise.all([stdoutPromise, stderrPromise, child.exited])
+            .then(([stdout, stderr, exitCode]) => ({ stdout, stderr, exitCode })),
+          Bun.sleep(30_000).then(() => null),
+        ]);
+        if (!finished) {
+          try { child.kill(); } catch { /* already exited */ }
+          await Bun.sleep(500);
+          expect(false, `${scenario}: probe driver hung for 30s (a blocked tick would wait out the 120s sleeper)`).toBe(true);
+          return;
+        }
+        const { stdout, stderr, exitCode } = finished;
+        expect(exitCode, `${scenario}: driver exit=${exitCode} stdout=${stdout.slice(0, 500)} stderr=${stderr.slice(0, 500)}`).toBe(0);
+        expect(existsSync(resultPath), `${scenario}: driver exited 0 without writing ${resultPath}`).toBe(true);
+        const verdict = JSON.parse(readFileSync(resultPath, "utf8")) as {
+          scenario: string;
+          onlineObserved: boolean;
+          maintenanceMs: number;
+          totalMs: number;
+          childPid: number;
+          childTerminated: boolean;
+          probeCleared: boolean;
+          launches: number;
+        };
+        expect(verdict.scenario).toBe(scenario);
+        expect(verdict.onlineObserved, `${scenario}: online=${verdict.onlineObserved}; the premise of this scenario did not hold`).toBe(scenario === "Online");
+        expect(verdict.childTerminated, `${scenario}: hung probe child ${verdict.childPid} survived the timeout`).toBe(true);
+        expect(verdict.probeCleared, `${scenario}: probe reference was not released after the kill`).toBe(true);
+        expect(verdict.launches, `${scenario}: expected exactly 1 probe launch, saw ${verdict.launches}`).toBe(1);
+        expect(verdict.totalMs, `${scenario}: two ticks took ${verdict.totalMs}ms; a UI-thread block would hang until the 120s sleeper exits`).toBeLessThan(20_000);
+      } finally {
+        try {
+          if (existsSync(pidFile)) {
+            for (const line of readFileSync(pidFile, "utf8").split(/\r?\n/)) {
+              const pid = Number(line.trim());
+              if (Number.isSafeInteger(pid) && pid > 0) {
+                try { process.kill(pid); } catch { /* already reaped */ }
+              }
+            }
+          }
+        } catch { /* cleanup best-effort */ }
+        if (server) await server.stop(true);
+        removeTreeWithRetry(directory);
+      }
+    }
+  }, { timeout: SPAWN_BUDGET_MS });
 
   // This test really does launch PowerShell, which really does launch a Bun child, and
   // then rebinds the port to prove the child did not inherit the listen socket. Those

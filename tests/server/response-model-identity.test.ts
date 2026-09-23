@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { handleResponses } from "../../src/server/responses/core";
-import type { RequestLogContext } from "../../src/server/request-log";
+import {
+  inspectResponseLogJson, inspectResponseLogSsePayload, type RequestLogContext,
+} from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
+let releaseSpendHome: (() => void) | undefined;
 
 afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
 });
 
@@ -85,6 +92,8 @@ async function post(args: {
   }) as typeof fetch;
 
   const logCtx = { model: "", provider: "" } as RequestLogContext;
+  // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+  releaseSpendHome = acquireOwnedSpendHome();
   const response = await handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
@@ -111,10 +120,15 @@ function responseModelsFromSse(text: string): string[] {
 describe("Anthropic response model identity", () => {
   test("preserves a provider-qualified selector in bridged JSON", async () => {
     const result = await post({ model: "fixture-anthropic/claude-sonnet-5" });
+    const body = await result.response.text();
 
     expect(result.upstreamModel).toBe("claude-sonnet-5");
-    expect((await result.response.json() as Record<string, unknown>).model)
-      .toBe("fixture-anthropic/claude-sonnet-5");
+    expect((JSON.parse(body) as Record<string, unknown>).model).toBe("fixture-anthropic/claude-sonnet-5");
+    expect(result.logCtx.resolvedModel).toBe("claude-sonnet-5");
+    // The server's deferred logger reads this client-facing body; the selector in it is
+    // ocx's own echo, so it must not become the served model (a false reroute in Logs).
+    inspectResponseLogJson(result.logCtx, body);
+    expect(result.logCtx.servedModel).toBeUndefined();
     expect(result.logCtx.resolvedModel).toBe("claude-sonnet-5");
   });
 
@@ -127,11 +141,16 @@ describe("Anthropic response model identity", () => {
 
   test("preserves a provider-qualified selector in bridged SSE", async () => {
     const result = await post({ model: "fixture-anthropic/claude-sonnet-5", stream: true });
-    const models = responseModelsFromSse(await result.response.text());
+    const body = await result.response.text();
+    const models = responseModelsFromSse(body);
 
     expect(result.upstreamModel).toBe("claude-sonnet-5");
     expect(models.length).toBeGreaterThan(0);
     expect(new Set(models)).toEqual(new Set(["fixture-anthropic/claude-sonnet-5"]));
+    for (const block of body.split(/\r?\n\r?\n/)) {
+      inspectResponseLogSsePayload(result.logCtx, block.split(/\r?\n/).find(line => line.startsWith("data: "))?.slice(6) ?? null);
+    }
+    expect(result.logCtx.servedModel).toBeUndefined();
   });
 
   test("rewrites Responses passthrough JSON while logging the physical model", async () => {
@@ -158,6 +177,8 @@ describe("Anthropic response model identity", () => {
       "fixture-anthropic/claude-sonnet-5",
     ]);
     expect(result.logCtx.resolvedModel).toBe("claude-sonnet-5");
+    // Passthrough inspects the upstream bytes before the rewrite, so the real model survives.
+    expect(result.logCtx.servedModel).toBe("claude-sonnet-5");
   });
 
   test("non-Anthropic qualified selectors retain their pre-fix response model", async () => {

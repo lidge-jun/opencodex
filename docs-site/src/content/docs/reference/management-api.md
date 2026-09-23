@@ -80,6 +80,8 @@ route-specific results rather than repeating this table.
 | `POST /api/grok/apply` | Apply persisted Grok configuration through the managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
 | `GET /api/grok/reset-coupons?accountId=...` | Read remaining Grok billing reset tokens and validity windows for the active or specified xAI account | 400 missing account; 401 unauthenticated; 502 upstream gRPC-Web error |
 | `POST /api/grok/reset-coupons/consume` | Redeem an eligible reset coupon. Body `{ accountId?, tokenId?, operationId? }`. Optional `operationId` (UUIDv4) makes redemption idempotent: repeating the same ID replays the durable result without double-redemption. | 400 invalid JSON/UUID; 401 unauthenticated; 409 `identity_mismatch`; 502 upstream error; 503 ledger capacity |
+| `GET /api/anthropic/reset-grants?accountId=...` | Read the Claude usage-limit reset grants of one Anthropic OAuth account: eligibility, each grant's resets left, validity window, and the windows it clears, plus any unconfirmed attempt still retryable | 400 no matching account; 401 re-authentication needed; 502 upstream unavailable |
+| `POST /api/anthropic/reset-grants/consume` | Spend one reset grant. Body `{ accountId, grantId, operationId }`; `operationId` is a UUIDv4 sent upstream as the request ID, so repeating it retries the same claim. Requires a dashboard session. | 400 invalid body; 401 re-authentication needed; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 journal busy, unavailable, or full |
 | `GET, PUT /api/claude-desktop` | Read or persist the Claude Desktop routed/native profile | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Write the saved profile to Claude Desktop's managed config | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Inspect saved-versus-applied profile and Desktop health | 400 status read failure |
@@ -91,6 +93,14 @@ badge opens a dialog that lists validity windows and redeems the coupon closest 
 expiry. The dialog sends a client-minted `operationId`, and it stops sending after a
 timeout instead of retrying, because a redemption whose journal record is still open
 would execute again. `ocx account grok-reset-coupons` remains the terminal equivalent.
+
+Claude usage resets work the same way from **Providers > Anthropic > Accounts**. Each
+signed-in account row carries a ticket badge with its remaining resets, and the dialog
+spends one after a second confirmation. A reset refills the 5-hour and weekly limits
+without moving the weekly reset day. When a claim does not answer, the dialog keeps its
+`operationId` and offers a retry with that same ID for ten minutes, which is how the
+Claude Code client itself recovers; a new operation for the same grant is refused
+until then. Spending is dashboard-only: the admin token alone gets `403 session_required`.
 
 For the concepts behind the model roster and encrypted worker-task behavior, see
 [Sub-agent Surface](/guides/sub-agent-surface/).
@@ -124,6 +134,51 @@ nonnegative integer account ID returned by the profile list; it is not a browser
 | `POST /api/client-integrations/aside/profiles/{profileId}/restore` | Undo an operation using `{ "opId": "..." }`; optional `confirmDrift: true` permits replacing later edits | 404 missing operation/profile; 409 busy, mismatch, or required drift confirmation; 410 expired snapshot; 500 save/write failure |
 | `POST /api/client-integrations/aside/sync` | Refresh enabled profiles through the server's mutation owner; body `{}` | 400 nonempty body/profile selector; 409 busy; 207 per-profile refusals |
 
+## Previewing an integration change
+
+A preview reports what a change would do without doing it. These routes write nothing: no
+snapshot, no ownership record, no journal row, no lock, and no maintenance or recovery.
+
+| Route | Purpose | Notable responses |
+| --- | --- | --- |
+| `POST /api/client-integrations/preview` | Plan `apply`, `overwrite` or `disable` for one client; body `{ "clientId": "...", "operation": "..." }` | 400 invalid client or operation; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | Plan an undo; body `{ "opId": "...", "confirmDrift": false }` | 404 unknown operation; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Plan one Aside profile's change, including `restore` with an `opId` | 400 invalid body or unscoped request; 404 unknown profile or operation, 409 `integration_preview_unavailable` |
+
+A plan carries `version`, `clientId`, `operation`, `state`, `foreignEdit`, a `changes` list of
+`kind` and `path` pairs, an opaque `fingerprint`, `canApply`, `willChange`, and an optional
+`refusalReason` and `profileId`. Paths are managed schema paths or the fixed `$snapshot`,
+`$ownership` and `$journal` markers; a position chosen at runtime appears as `*`. No
+configuration value, file location or selected member identity is returned.
+
+`canApply: true` with `willChange: false` means the operation succeeds and changes nothing in
+the managed client document, such as applying what is already applied.
+
+An Aside profile change still saves one thing in that case. Confirming it records the desired sync
+preference for that profile before any client document is touched, so disabling a profile whose
+managed block is already absent stores the preference and leaves the document and its history
+untouched.
+
+`integration_preview_unavailable` means no usable model roster is currently retained. A freshly
+started proxy is one way to be in that state; a roster retired because the configuration or the
+provider cache moved is another. Reading `GET /api/client-integrations` establishes one when
+discovery succeeds and the configuration can be identified, so it is the usual remedy rather than
+a guarantee.
+
+## Confirming a previewed change
+
+Mutation routes accept `operation` and `planFingerprint` alongside their existing body. Send both
+or neither: a request carrying one is rejected, as is one whose `operation` disagrees with the
+change being requested. Aside bindings apply to a single profile, because one fingerprint cannot
+describe several independently changing files.
+
+The server re-plans before writing anything and returns `409 integration_preview_stale` with a
+freshly computed `plan` when the confirmation no longer describes what would happen. Decide again
+against the new plan; the request is not retried automatically.
+
+A fingerprint is an optimistic check, never authorization. Management authentication and every
+ownership rule still decide whether a change may happen at all.
+
 Bulk PUT returns `{ ok, clientId, changed, state, message, results }`; each result identifies
 its `profileId` and reports the writer outcome. Sync returns `{ ok, clientId, results }`, with
 per-profile refresh outcomes. Both return HTTP 200 when all returned attempts succeed and
@@ -153,12 +208,12 @@ readable; mutations refuse without initializing workspace services.
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/remote-workspace` | Read paired computers, current capabilities, Hub runtimes, and session snapshots | Disabled status when Hub role or explicit opt-in is absent |
-| `POST /api/remote-workspace/pairing` | Create a ten-minute one-use Executor enrollment code | GUI session only; 429 pairing capacity |
+| `POST /api/remote-workspace/pairing` | Create a ten-minute one-use Executor enrollment code | Operator-paired GUI session only; 429 pairing capacity |
 | `GET /api/remote-workspace/runtimes` | Read Codex, Claude Code, and Pi availability on the Hub | — |
-| `GET, POST /api/remote-workspace/sessions` | List sessions or start one bound to a device, root, runtime, and access mode | POST is GUI session only; 409 offline/unavailable/invalid target |
-| `POST /api/remote-workspace/sessions/{id}/prompt` | Continue the bound model session | GUI session only; 409 active turn, offline Executor, or resume failure |
-| `DELETE /api/remote-workspace/sessions/{id}` | Stop the model runtime and encrypted Executor session | GUI session only; 404 unknown session |
-| `DELETE /api/remote-workspace/devices/{id}` | Revoke one computer and stop its sessions | GUI session only; 404 unknown device |
+| `GET, POST /api/remote-workspace/sessions` | List sessions or start one bound to a device, root, runtime, and access mode | POST requires an operator-paired GUI session; 409 offline/unavailable/invalid target |
+| `POST /api/remote-workspace/sessions/{id}/prompt` | Continue the bound model session | Operator-paired GUI session only; 409 active turn, offline Executor, or resume failure |
+| `DELETE /api/remote-workspace/sessions/{id}` | Stop the model runtime and encrypted Executor session | Operator-paired GUI session only; 404 unknown session |
+| `DELETE /api/remote-workspace/devices/{id}` | Revoke one computer and stop its sessions | Operator-paired GUI session only; 404 unknown device |
 
 Executor enrollment exchanges a one-use code at `POST /remote-workspace/pair` and then opens
 `/remote-workspace/agent` as a bearer-authenticated outbound WebSocket. Those two machine endpoints
@@ -183,6 +238,21 @@ completes.
 
 See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and routing failures.
 
+### Codex prompt layers
+
+| Method and path | Purpose | Notable errors |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | Read the prompt-layer snapshot: layers, base variants, selection, and drift state | — |
+| `GET /api/codex-prompt/text` | Probe the model-visible prompt text via `codex debug prompt-input` | Fail-soft: an unavailable probe degrades to a status in the body, not an HTTP error |
+| `PUT /api/codex-prompt/toggle` | Enable or disable one toggleable layer | 400 invalid body or unknown layer; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | Replace the custom-layer set | 400 invalid body, `invalid_characters`, `body_too_large` when a normalized UTF-8 layer exceeds 65,536 bytes, `composed_too_large` over 131,072 bytes; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | Select the default base prompt or one stored variant | 400 invalid body, `unknown_layer` for an id matching no stored variant; 409 `stale_revision`, `developer_instructions_not_owned` when the current base is external |
+| `PUT /api/codex-prompt/base` | Create (`id` omitted or `id: null`), edit, or delete (`delete: true`) one base variant. A supplied `id` is edit-only and must reference a stored variant. `body` is normalized (tabs expanded, CR/CRLF folded to LF) before it is measured or stored | 400 invalid body, `unknown_layer` for the `default` id or an id that matches no stored variant, `body_too_large` when the normalized UTF-8 body exceeds 65,536 bytes; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | Import `developer_instructions` from `config.toml` as a custom layer | 400 invalid body, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | Repair drift between `config.toml` and the owned projection | 400 invalid body; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+See [Codex prompt layers](/guides/codex-prompt/) for the layer model and the keys each layer writes.
+
 ### Configuration, startup, sync, and updates
 
 | Method and path | Purpose | Notable errors |
@@ -203,6 +273,11 @@ See [Combos](/guides/combos/) for target strategies, cooldowns, aliases, and rou
 
 ### Logs, usage, and storage
 
+Request logs retain `servedModel` when the upstream identifies the model that answered, and
+`wireModel` when the model sent upstream differs from the client-facing model. The dashboard
+shows `wire → served` when those identities differ; its tooltip preserves both values. Missing
+upstream model evidence remains absent rather than being inferred from the requested model.
+
 `GET /api/logs` accepts an optional opaque `cursor` from its previous response. The envelope preserves
 `logs`, `total`, `generatedAt` and `timeZone`, and adds `cursor` and `reset`. Without a cursor it returns
 the full filtered window. A valid unchanged prefix returns only appended rows; `reset: true` replaces
@@ -220,6 +295,8 @@ by the current window size.
 | `GET /api/debug/injection-logs` | Read bounded guidance-injection debug entries | — |
 | `GET /api/claude/inbound-debug` | Read Claude inbound debug state and entries | — |
 | `GET /api/usage` | Scan the usage ledger into compact aggregates of readable rows, then incrementally fold verified appends; summarize by preset or inclusive custom window and client surface, with a Codex `accounts` breakdown keyed by stable non-PII log labels | 400 invalid custom bounds; returns an `error: "read_failed"` summary if storage cannot be read |
+| `GET /api/usage/timeline` | Bucketed usage by model/account; accepts `hours`, `bucketMinutes`, `metric`, `aggregation`, `grouping`, comma-separated `models` and repeated `hiddenProvider` filters | 400 invalid query or limits |
+| `GET /api/metrics` | Return process-local Prometheus text metrics for logical requests, physical sends, recovery kinds, duration, and TTFT. Labels are closed to protocol, result, and recovery class; request and credential identifiers are never exported. | 404 when `metricsExport.enabled` was not true at startup; ordinary management authentication is required and data-plane credentials grant no access |
 | `GET /api/storage` | Scan Codex storage usage by bucket | Returns an `error: "scan_failed"` payload on scan failure |
 | `POST /api/storage/cleanup/preview` | Preview archived-session cleanup and return a binding digest | 400 `invalid_json` or `invalid_percent` |
 | `POST /api/storage/cleanup` | Quarantine or permanently remove the previewed archived set | 400 invalid input; 409 stale/busy/referenced state; 500 filesystem/database failure |
@@ -229,6 +306,36 @@ by the current window size.
 | `GET, PUT /api/storage/cleanup-policy` | Read or update scheduled cleanup policy and job state | 400 invalid policy |
 | `POST /api/storage/cleanup-policy/run` | Start a manual cleanup-policy run | 409 `already_running`; 500 `cleanup_failed` |
 | `GET /api/storage/cleanup-policy/test-stream` | Test-only policy stream hook | 404 `not_found` when unavailable |
+
+Timeline model identifiers split at the first slash, so nested native ids such as
+`github-models/openai/gpt-4.1` are supported. Provider exclusions apply before excess series are
+folded into `other`; the additive `appliedFilters` object echoes the normalized model/provider
+filters. The final bucket includes the current partial interval. Companion settings are not
+applied implicitly to general API calls.
+
+`GET /api/metrics` returns `Content-Type: text/plain;version=0.0.4`. Counters and histograms
+reset when the process restarts; `opencodex_metrics_process_start_time_seconds` identifies that
+boundary. Histogram buckets are cumulative and end with `le="+Inf"`, equal to the family count.
+
+| Metric family | Labels | Meaning |
+| --- | --- | --- |
+| `opencodex_logical_requests_total` | `protocol`, `result` | One observation per finalized logical request. |
+| `opencodex_physical_sends_total` | `protocol` | Actual upstream sends summed from finalized attempts. |
+| `opencodex_recoveries_total` | `protocol`, `recovery` | Distinct recovery kinds observed per attempt, projected to a closed class. |
+| `opencodex_request_failures_total` | `protocol`, `cause` | Finalized requests that did not deliver an answer, by the cause the recorder derived. Counter only; no histogram carries a cause. |
+| `opencodex_request_duration_seconds` | `protocol`, `result` | Fixed-bucket duration histogram for finalized requests. |
+| `opencodex_ttft_seconds` | `protocol`, `result` | Fixed-bucket TTFT histogram for requests with observed first output. |
+| `opencodex_ttft_missing_total` | `protocol`, `result` | Complementary count for requests without observed TTFT. |
+| `opencodex_metrics_process_start_time_seconds` | none | Process-local reset boundary. |
+
+The `recovery` label takes one of a fixed set of classes: `transient`, `connection`, `credential`,
+`rate_limit`, `quota`, `policy`, `ciphertext`, `payload`, `empty_completion`, `effort_downgrade`,
+`fast_downgrade` and `other`. The set is closed, so no model, account, user or request identifier
+can ever appear in a series. `fast_downgrade` records an Anthropic Fast refusal repaired at standard
+speed; it is distinct from the reasoning-effort `effort_downgrade` class. `rate_limit`, `quota`,
+`policy` and `ciphertext` are separate because the operator response
+differs: wait out the limit, move to another account, change the prompt, or drop stale encrypted
+state. A rejected opaque reasoning blob counts as `ciphertext` rather than `payload`.
 
 If a scanned row exceeds the existing parser size limit, `GET /api/usage` and `GET /api/keys`
 keep the readable-row aggregates and add `usageIncomplete: true` with
@@ -478,7 +585,7 @@ manager. Its routes are:
 | `PUT /api/settings` with `codexQuotaAutoRefresh: { id, window, enabled }` | Enable or disable 5-hour or weekly automatic window activation for one account | 400 invalid id/window/state; 404 missing account; 409 unavailable window |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Clear runtime cooldown for one account or all accounts | 400 invalid id |
 | `GET, PUT /api/codex-auth/active` | Read or select the active account | 400 invalid or missing account; 409 paused/legacy-row conflict |
-| `PUT /api/codex-auth/auto-switch` | Set the quota threshold for automatic account switching | 400 invalid threshold |
+| `PUT /api/codex-auth/auto-switch` | Set the global quota threshold with `{ threshold }`, or an account override with `{ id, threshold }`; `null` restores global inheritance, and `__main__` selects the Desktop login | 400 invalid id/threshold; 404 missing account |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Update Codex account-pool selection strategy | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Set the account failover threshold | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Read cached quota state by account | — |
@@ -486,7 +593,7 @@ manager. Its routes are:
 | `POST /api/codex-auth/reset-credits/consume` | Consume an eligible reset credit. Optional `operationId` (UUIDv4) makes the redemption idempotent: the same id replays one durable outcome instead of spending a second credit. | 400 missing account id or invalid `operationId`; 409 `identity_mismatch` when the id belongs to another account; upstream status passthrough; 503 `server_busy`, `capacity`, or `unavailable`; 500 consume failure |
 | `POST /api/codex-auth/login` | Start Codex login or reauthentication | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Submit a manual code for a Codex login flow | 400 invalid flow/code |
-| `POST /api/codex-auth/login/cancel` | Cancel a Codex login flow | — |
+| `POST /api/codex-auth/login/cancel` | Cancel only the pending Codex login identified by `{ "flowId": "..." }` | 400 missing, unknown, or non-pending flow ID |
 | `GET /api/codex-auth/login-status` | Poll a flow or account login state. A completed new-account flow includes `catalogRefreshPending: true` only when recovery is needed. | Unknown flows report `expired`; no active flow reports `idle` |
 
 For reset-credit consumption, a different `operationId` supplied while the same physical

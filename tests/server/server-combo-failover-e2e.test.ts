@@ -1,4 +1,5 @@
 import { registerComboForcedEffortCases } from "../helpers/combo-forced-effort-cases";
+import { registerComboToolRoutingCases } from "../helpers/combo-tool-routing-cases";
 import { comboProviderFactory } from "../helpers/combo-provider";
 import { registerComboContextOverflowCases } from "../helpers/combo-context-overflow-cases";
 import { registerComboContextHeadroomCases } from "../helpers/combo-context-headroom-cases";
@@ -38,6 +39,8 @@ import { startServer } from "../../src/server";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { chatErrorStream, chatStream, chatSuccess, chatTruncatedZeroOutputStream, responsesSuccess } from "../helpers/combo-failover-upstream";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { heldResponse } from "../helpers/held-response";
 import {
   clearResponseStateForTests,
@@ -142,6 +145,17 @@ let originalFetch: typeof fetch;
 let originalNow: () => number;
 const servers: Array<ReturnType<typeof Bun.serve>> = [];
 
+// A case that calls a handler directly never takes the writer lease startServer takes, so its
+// dispatch is refused. Taken at the dispatch helpers rather than file-wide: the cases that do
+// start a real server already own it, and this only ever adds a reference on the same home.
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+// Every turn these helpers hand back. A row that asserts only on a status leaves a
+// transformed body unread, and cancelling those before the listeners stop is what keeps a
+// reader from settling against the journal after its lease is gone.
+const pendingTurns: Response[] = [];
+function trackTurn(response: Response): Response { pendingTurns.push(response); return response; }
+
 beforeEach(() => {
   originalFetch = globalThis.fetch;
   originalNow = Date.now;
@@ -168,11 +182,25 @@ beforeEach(() => {
 
 afterEach(async () => {
   let responseStatePending = true;
+  let cancelFailure: unknown;
   try {
+    // Rows that assert only on a status leave a transformed body unread. Cancelling those first
+    // means no reader is still attached when the listeners stop and the lease is given back. A
+    // cancel that throws fails the case rather than being swallowed, but not before every other
+    // turn and the listeners below have had their chance to close.
+    for (const turn of pendingTurns.splice(0)) {
+      if (turn.bodyUsed || !turn.body || turn.body.locked) continue;
+      try { await turn.body.cancel(); }
+      catch (error) { cancelFailure ??= error; }
+    }
     for (const server of servers.splice(0)) await server.stop(true);
     await flushResponseState();
     responseStatePending = responseStatePersistPendingForTests();
   } finally {
+    // After the listeners are stopped and the response state is flushed, both of which can
+    // still account against the journal, and before the home below is removed.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     clearResponseStateForTests();
     clearCursorThreadContinuityForTests();
     globalThis.fetch = originalFetch;
@@ -191,6 +219,7 @@ afterEach(async () => {
     clearCodexUpstreamHealth();
     clearRequestLogsForTests();
   }
+  if (cancelFailure !== undefined) throw cancelFailure;
   expect(responseStatePending).toBe(false);
 });
 
@@ -202,60 +231,6 @@ function serve(handler: (request: Request) => Response | Promise<Response>) {
 
 function baseUrl(server: ReturnType<typeof Bun.serve>): string {
   return `${server.url.toString().replace(/\/$/, "")}/v1`;
-}
-
-function chatSuccess(text: string, model = "model"): Response {
-  return Response.json({
-    id: `chatcmpl-${model}`,
-    object: "chat.completion",
-    model,
-    choices: [{ index: 0, message: { role: "assistant", content: text }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
-  });
-}
-
-function chatStream(text: string): Response {
-  const frames = [
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`,
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } })}\n\n`,
-    "data: [DONE]\n\n",
-  ].join("");
-  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
-}
-
-function chatTruncatedZeroOutputStream(): Response {
-  const frames = [
-    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: null }] })}\n\n`,
-  ].join("");
-  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
-}
-
-function chatErrorStream(message: string, prefix?: string): Response {
-  const frames = [
-    ...(prefix
-      ? [`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: prefix }, finish_reason: null }] })}\n\n`]
-      : []),
-    `data: ${JSON.stringify({ error: { type: "server_error", code: "upstream_server_error", message } })}\n\n`,
-    "data: [DONE]\n\n",
-  ].join("");
-  return new Response(frames, { headers: { "content-type": "text/event-stream" } });
-}
-
-function responsesSuccess(text: string, model = "responses-model"): Record<string, unknown> {
-  return {
-    id: `resp-${model}`,
-    object: "response",
-    status: "completed",
-    model,
-    output: [{
-      id: "msg_backup",
-      type: "message",
-      role: "assistant",
-      status: "completed",
-      content: [{ type: "output_text", text, annotations: [] }],
-    }],
-    usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 },
-  };
 }
 
 function comboConfig(
@@ -277,11 +252,12 @@ async function post(
   options: HandleOptions = {},
   headers: Record<string, string> = {},
 ): Promise<Response> {
-  return handleResponses(new Request("http://localhost/v1/responses", {
+  takeSpendHome();
+  return trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
-  }), config, { model: "", provider: "" }, options);
+  }), config, { model: "", provider: "" }, options));
 }
 
 let loggedRequestSequence = 0;
@@ -294,18 +270,19 @@ async function postLogged(
 ): Promise<Response> {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
+  takeSpendHome();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
   }), config, logCtx, options);
   loggedRequestSequence += 1;
-  return responseWithDeferredRequestLog(
+  return trackTurn(responseWithDeferredRequestLog(
     response,
     `combo-test-${loggedRequestSequence}`,
     start,
     logCtx,
-  );
+  ));
 }
 
 async function postModelLogged(
@@ -317,18 +294,19 @@ async function postModelLogged(
 ): Promise<Response> {
   const logCtx: RequestLogContext = { model: "", provider: "" };
   const start = Date.now();
+  takeSpendHome();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify({ model, input: "hello", stream: false, ...raw }),
   }), config, logCtx, options);
   loggedRequestSequence += 1;
-  return responseWithDeferredRequestLog(
+  return trackTurn(responseWithDeferredRequestLog(
     response,
     `direct-test-${loggedRequestSequence}`,
     start,
     logCtx,
-  );
+  ));
 }
 
 async function latestAttemptReceipts(config: OcxConfig) {
@@ -2063,6 +2041,7 @@ describe("server combo failover 030 activation matrix", () => {
       "chatgpt-account-id": authKind === "mismatched-account" ? "other-account"
         : authKind === "org-only-jwt" ? "org-foreign" : "acct-scoped-sidecar",
     };
+    takeSpendHome();
     const response = authKind === "chat-valid"
       ? await (await import("../../src/server/chat-completions")).handleChatCompletions(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { "content-type": "application/json", ...headers },
@@ -3383,7 +3362,8 @@ describe("server combo failover 030 activation matrix", () => {
     let cancels = 0;
     const parent: RequestLogContext = { model: "", provider: "" };
     const snapshots: RequestLogContext[] = [];
-    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    const response = trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST", headers: { "content-type": "application/json", session_id: "hop-recall" },
       body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
     }), config, parent, {
@@ -3394,7 +3374,7 @@ describe("server combo failover 030 activation matrix", () => {
         finalized.resolve();
       },
       onNativePassthroughCancel: () => { cancels += 1; },
-    });
+    }));
     expect(response.status).toBe(200);
     await response.text();
     await within(finalized.promise);
@@ -3426,6 +3406,7 @@ describe("server combo failover 030 activation matrix", () => {
     const finalized = deferred();
     const observed: Array<{ status: number; log: RequestLogContext }> = [];
     try {
+      takeSpendHome();
       const response = await within(handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "combo/free", input: "hello", stream: true }),
@@ -3688,11 +3669,12 @@ describe("cursor conversation continuity across store:false chains", () => {
   }
 
   async function postCursor(config: OcxConfig, raw: Record<string, unknown>): Promise<Response> {
-    return handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    return trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ stream: false, store: false, ...raw }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
   }
 
   function cursorConfig(): OcxConfig {
@@ -3784,7 +3766,8 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
-    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    const postThreadTurn = async (input: unknown) => trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -3797,7 +3780,7 @@ describe("cursor conversation continuity across store:false chains", () => {
         store: false,
         prompt_cache_key: "shared-cache-key",
       }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
 
     expect((await postThreadTurn("start")).status).toBe(200);
     expect((await postThreadTurn([
@@ -3814,7 +3797,8 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
-    const postDesktopTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    const postDesktopTurn = async (input: unknown) => trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -3827,7 +3811,7 @@ describe("cursor conversation continuity across store:false chains", () => {
         stream: false,
         store: false,
       }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
 
     expect((await postDesktopTurn("start")).status).toBe(200);
     expect((await postDesktopTurn([
@@ -3844,7 +3828,8 @@ describe("cursor conversation continuity across store:false chains", () => {
     const seen: string[] = [];
     customCursorTransportFactory = fakeCursorTransportFactory(seen);
     const config = cursorConfig();
-    const postThreadTurn = (input: unknown) => handleResponses(new Request("http://localhost/v1/responses", {
+    takeSpendHome();
+    const postThreadTurn = async (input: unknown) => trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -3857,7 +3842,7 @@ describe("cursor conversation continuity across store:false chains", () => {
         store: false,
         prompt_cache_key: "shared-cache-key",
       }),
-    }), config, { model: "", provider: "" }, {});
+    }), config, { model: "", provider: "" }, {}));
 
     expect((await postThreadTurn("hello")).status).toBe(200);
     expect((await postThreadTurn([
@@ -3883,13 +3868,14 @@ describe("combo compact failover", () => {
   async function postCompactLogged(config: OcxConfig): Promise<Response> {
     const logCtx: RequestLogContext = { model: "", provider: "" };
     const start = Date.now();
+    takeSpendHome();
     const response = await handleResponsesCompact(compactRequest({
       model: "combo/free",
       stream: false,
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "earlier turn" }] }],
     }), config, logCtx);
     loggedRequestSequence += 1;
-    return responseWithDeferredRequestLog(response, `combo-compact-${loggedRequestSequence}`, start, logCtx);
+    return trackTurn(responseWithDeferredRequestLog(response, `combo-compact-${loggedRequestSequence}`, start, logCtx));
   }
 
   function canonicalPoolConfig(
@@ -4124,6 +4110,8 @@ describe("optional-control rejection failover regression", () => {
       expect(isComboTargetInCooldown("free", { provider: "b", model: "m2" })).toBe(false);
     });
   }
+
+  registerComboToolRoutingCases({ serve, baseUrl, provider, comboConfig, post });
 });
 
 describe("image-capability rejection failover regression", () => {

@@ -11,6 +11,24 @@ import { parseTomlString } from "./paths";
 
 export const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
 
+/**
+ * The marker line actually written above ROUTING keys, carrying the command that undoes them.
+ *
+ * #5261: a Windows user whose proxy had stopped was locked out of Codex sign-in, because the
+ * root `openai_base_url` we write keeps pointing Codex's built-in openai provider at a port
+ * nothing is listening on. The only surface such a user can still read is `config.toml` itself,
+ * and it said nothing but "Auto-injected by opencodex" — so the recovery they found was to
+ * hand-delete lines and the catalog file, which is strictly worse than `ocx restore`.
+ *
+ * Every ownership predicate below matches on {@link OCX_SECTION_MARKER} as a SUBSTRING, never by
+ * equality, so this longer line is recognized by them and by any opencodex old enough to predate
+ * it. That is the whole reason the hint is appended to the marker instead of occupying a line of
+ * its own: a separate comment line would survive removal as orphaned text.
+ *
+ * Scope is routing only. Prompt layers keep the bare marker: `ocx restore` is not their undo.
+ */
+export const OCX_ROUTING_MARKER_LINE = `${OCX_SECTION_MARKER} (undo: ocx restore)`;
+
 export function isRootOpenaiBaseUrlLine(line: string): boolean {
   return /^\s*openai_base_url\s*=/.test(line);
 }

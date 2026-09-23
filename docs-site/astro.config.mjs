@@ -1,6 +1,7 @@
 // @ts-check
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
+import internalLinks from "./src/integrations/internal-links.mjs";
 
 // Canonical GitHub Pages custom domain. The site is served at the domain root,
 // so Starlight must not emit the former /opencodex project-site prefix.
@@ -86,15 +87,18 @@ export default defineConfig({
           translations: { fr: "Guides", ko: "가이드", "zh-CN": "指南", "zh-TW": "指南", ru: "Руководства", ja: "ガイド", tr: "Kılavuzlar" },
           items: [
             { label: "Remote Hub Deployment", translations: { fr: "Déploiement Remote Hub", ko: "Remote Hub 배포", "zh-CN": "Remote Hub 部署", "zh-TW": "Remote Hub 部署", ru: "Развёртывание Remote Hub", ja: "Remote Hub のデプロイ", tr: "Remote Hub Dağıtımı" }, slug: "guides/remote-hub" },
-            { label: "Response Inspection", slug: "guides/response-inspection" },
+            { label: "Response Inspection", translations: { fr: "Inspection des réponses et réponses volumineuses", ko: "응답 검사와 대용량 응답", "zh-CN": "响应检查与大型响应", "zh-TW": "回應檢查與大型回應", ru: "Проверка ответов и большие ответы", ja: "レスポンスの検査と大きなレスポンス", tr: "Yanıt incelemesi ve büyük yanıtlar" }, slug: "guides/response-inspection" },
             { label: "Remote Workspace", translations: { fr: "Espace de travail distant", ko: "원격 워크스페이스", "zh-CN": "远程工作区", "zh-TW": "遠端工作區", ru: "Удалённая рабочая область", ja: "リモートワークスペース", tr: "Uzak Çalışma Alanı" }, slug: "guides/remote-workspace" },
             { label: "Providers", translations: { fr: "Fournisseurs", ko: "프로바이더", "zh-CN": "提供商", "zh-TW": "供應商", ru: "Провайдеры", ja: "プロバイダー", tr: "Sağlayıcılar" }, slug: "guides/providers" },
-            { label: "Factory Droid Bridge", translations: { fr: "Pont Factory Droid", ko: "Factory Droid 브리지" }, slug: "guides/factory-droid" },
-            { label: "Cursor Private Inference", translations: { ko: "Cursor Private Inference" }, slug: "guides/cursor-private-inference" },
+            { label: "Factory Droid Bridge", translations: { fr: "Pont Factory Droid", ko: "Factory Droid 브리지", "zh-CN": "Factory Droid 桥接", "zh-TW": "Factory Droid 橋接", ru: "Мост Factory Droid", ja: "Factory Droid ブリッジ", tr: "Factory Droid köprüsü" }, slug: "guides/factory-droid" },
+            { label: "Cursor Private Inference", translations: { ko: "Cursor Private Inference", fr: "Cursor Private Inference", "zh-CN": "Cursor Private Inference", "zh-TW": "Cursor Private Inference", ru: "Cursor Private Inference", ja: "Cursor Private Inference", tr: "Cursor Private Inference" }, slug: "guides/cursor-private-inference" },
             { label: "Model Routing", translations: { fr: "Routage des modèles", ko: "모델 라우팅", "zh-CN": "模型路由", "zh-TW": "模型路由", ru: "Маршрутизация моделей", ja: "モデルルーティング", tr: "Model Yönlendirme" }, slug: "guides/model-routing" },
             { label: "Codex Integration", translations: { fr: "Intégration de Codex", ko: "Codex 통합", "zh-CN": "Codex 集成", "zh-TW": "Codex 整合", ru: "Интеграция с Codex", ja: "Codex 連携", tr: "Codex Entegrasyonu" }, slug: "guides/codex-integration" },
             { label: "Codex App Model Picker", translations: { fr: "Sélecteur de modèles de Codex App", ko: "Codex App 모델 선택기", "zh-CN": "Codex App 模型选择器", "zh-TW": "Codex App 模型選擇器", ru: "Выбор модели в Codex App", ja: "Codex App モデルピッカー", tr: "Codex App Model Seçici" }, slug: "guides/codex-app-models" },
             { label: "Codex Prompt Layers", translations: { fr: "Couches d'invite Codex", ko: "Codex 프롬프트 레이어", "zh-CN": "Codex 提示词层", "zh-TW": "Codex 提示詞層", ru: "Слои промпта Codex", ja: "Codex プロンプトレイヤー", tr: "Codex İstem Katmanları" }, slug: "guides/codex-prompt" },
+            { label: "Native Context Compatibility", translations: { ko: "네이티브 컨텍스트 호환성", fr: "Compatibilité du contexte natif", "zh-CN": "原生上下文兼容性", "zh-TW": "原生脈絡相容性", ru: "Совместимость с нативным контекстом", ja: "ネイティブコンテキストの互換性", tr: "Yerel bağlam uyumluluğu" }, slug: "guides/codex-native-context" },
+            { label: "macOS Menu Bar App", translations: { fr: "Application barre de menus macOS", ko: "macOS 메뉴바 앱", "zh-CN": "macOS 菜单栏应用", "zh-TW": "macOS 選單列 App", ru: "Приложение в строке меню macOS", ja: "macOS メニューバーアプリ", tr: "macOS Menü Çubuğu Uygulaması" }, slug: "guides/macos-menu-bar" },
+            { label: "Desktop App", translations: { fr: "Application de bureau", ko: "데스크톱 앱", "zh-CN": "桌面应用", "zh-TW": "桌面 App", ru: "Настольное приложение", ja: "デスクトップアプリ", tr: "Masaüstü Uygulaması" }, slug: "guides/desktop-app" },
             { label: "Model Ordering", translations: { fr: "Ordre des modèles", ko: "모델 정렬에 관하여", "zh-CN": "模型排序", "zh-TW": "模型排序", ru: "Сортировка моделей", ja: "モデルの並び順", tr: "Model Sıralaması" }, slug: "guides/model-ordering" },
             { label: "Combos", translations: { fr: "Combinaisons", ko: "콤보", "zh-CN": "组合", "zh-TW": "組合", ru: "Комбо", ja: "コンボ", tr: "Kombolar" }, slug: "guides/combos" },
             { label: "Claude Code", translations: { fr: "Claude Code", ko: "Claude Code", "zh-CN": "Claude Code", "zh-TW": "Claude Code", ru: "Claude Code", ja: "Claude Code", tr: "Claude Code" }, slug: "guides/claude-code" },
@@ -163,10 +167,14 @@ export default defineConfig({
           items: [
             { label: "Windows Memory Growth", translations: { fr: "Augmentation de la mémoire sous Windows", ko: "Windows 메모리 증가", "zh-CN": "Windows 内存增长", "zh-TW": "Windows 記憶體增長", ru: "Рост памяти в Windows", ja: "Windows メモリ増加", tr: "Windows Bellek Artışı" }, slug: "troubleshooting/windows-memory" },
             { label: "Disk Usage from Temp Files", translations: { fr: "Espace disque et fichiers temporaires", ko: "임시 파일 디스크 사용량", "zh-CN": "临时文件磁盘占用", "zh-TW": "暫存檔磁碟用量", ru: "Использование диска временными файлами", ja: "一時ファイルのディスク使用量", tr: "Geçici Dosya Disk Kullanımı" }, slug: "troubleshooting/disk-usage-temp-files" },
+            { label: "Codex Cannot Sign In or Load", translations: { fr: "Codex ne peut pas se connecter", ko: "Codex 로그인 불가", "zh-CN": "Codex 无法登录", "zh-TW": "Codex 無法登入", ru: "Codex не может войти", ja: "Codex にサインインできない", tr: "Codex Oturum Açamıyor" }, slug: "troubleshooting/codex-cannot-sign-in" },
+            { label: "Update Failed on Windows", translations: { fr: "Échec de la mise à jour sous Windows", ko: "Windows에서 업데이트 실패", "zh-CN": "Windows 上更新失败", "zh-TW": "Windows 上更新失敗", ru: "Сбой обновления в Windows", ja: "Windows で更新に失敗する", tr: "Windows'ta Güncelleme Başarısız" }, slug: "troubleshooting/update-failed" },
           ],
         },
         { label: "Contributing", translations: { fr: "Contribuer", ko: "기여하기", "zh-CN": "贡献", "zh-TW": "貢獻", ru: "Как внести вклад", ja: "コントリビュート", tr: "Katkıda Bulunma" }, slug: "contributing" },
       ],
     }),
+    // Runs after Starlight has written the site: refuses a build with a broken internal link.
+    internalLinks(),
   ],
 });

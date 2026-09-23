@@ -22,6 +22,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `apiKeys?` | `OcxApiKey[]` | `[]` | 비루프백 바인드에서 데이터 플레인 요청만 허용하는 생성된 `ocx_…` 자격 증명입니다. 관리 API는 허가하지 않으며, 관리 접근에는 [관리 API 레퍼런스](/ko/reference/management-api/)에 설명된 별도의 자격 증명을 사용합니다. 대시보드에서 관리합니다. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 선택적으로 활성화하는 보관 세션 정리 정책입니다. 절대 암묵적으로 활성화되지 않습니다. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 제거 가능한 앱 소유 로그, 캐시, blob, continuation payload에 대한 MiB 단위 상한입니다. 범위는 64–4096이며 RSS 상한은 아닙니다. |
+| `metricsExport.enabled?` | `boolean` | `false` | 인증된 `GET /api/metrics`에서 프로세스 로컬 집계 요청 메트릭을 활성화합니다. 재시작이 필요하며, 비활성화 상태에서는 404를 반환하고 exporter 동작을 시작하지 않습니다. |
 | `codexAutoStart?` | `boolean` | `true` | Codex shim이 Codex를 실행하기 전에 `ocx ensure`를 돌리도록 허용합니다. `false`이면 ensure는 아무 작업도 하지 않습니다. |
 | `codexShimAutoRestore?` | `boolean` | `true` | 완료된 외부 Codex 업데이트가 설치된 shim을 교체한 뒤 복원합니다. 환경 변수로 끌 수 있습니다: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | 되돌릴 수 있는 Codex App history 호환성입니다. 원래 메타데이터는 `ocx stop` / `ocx restore`가 백업하고 복원합니다. |
@@ -170,6 +171,12 @@ Codex는 제목과 커밋 메시지 같은 작업에 작은 보조 모델을 사
   }
 }
 ```
+
+### 대상을 쓸 수 없을 때
+
+대체 대상은 운영자가 고른 단 하나의 목적지이므로, 더 이상 해석되지 않는 대상은 다른 곳으로 보내지 않고 보조 호출을 실패시킵니다. 대상의 프로바이더가 비활성화되거나 삭제되었거나 콤보가 사라졌다면, 가로챈 요청은 업스트림에 아무것도 보내기 전에 `409`와 오류 코드 `intercept_target_unavailable`을 반환합니다. 요청 로그에도 같은 코드가 남습니다. 요청은 네이티브 보조 모델로 그대로 넘어가지 않고 기본 프로바이더로 폴백하지도 않습니다. 둘 다 사용자가 고르지 않은 목적지, 자격 증명, 비용으로 바꾸기 때문입니다. 콤보나 라우팅 프로필 대상은 계속 자기 멤버 사이에서 페일오버합니다. `provider/model`처럼 한정된 대상인데 프로바이더 부분이 설정된 어떤 것도 가리키지 않으면 같은 방식으로 처리하고, 설정 API는 이를 저장하지 않습니다. 기본 프로바이더를 통해 해석되는 한정되지 않은 모델 ID는 그대로 유효합니다.
+
+대상이 해석되는 프로바이더를 비활성화(`disabled: true`를 담은 `PATCH /api/providers?name=<provider>`)하거나 삭제해도 작업은 성공하며, 응답에 `dependentShadowIntercept: { model, enabled }`가 추가되고 대시보드에 경고가 표시됩니다. 프로바이더를 다시 켜거나 다른 대상을 고르면 가로채기가 다시 동작합니다.
 
 ## Sidecars
 

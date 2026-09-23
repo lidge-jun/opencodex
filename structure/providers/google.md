@@ -73,6 +73,47 @@ configuration contradicts JSON-constrained text; and a `json_schema` format carr
 no schema, which would otherwise downgrade to bare JSON mode. An image-capable model
 with no structured-output request keeps its existing `responseModalities` behavior.
 
+## Google tool-schema loss reporting
+
+`src/adapters/google-tool-schema.ts` compiles tool declarations against an explicit `ai-studio`,
+`vertex`, or `cloud-code-assist` endpoint profile. All three profiles currently use the same
+conservative documented subset. Compilation returns the compatible parameters plus a versioned
+loss report with exactly six fields: `version`, `endpointClass`, `lossy`, `truncated`,
+`uncertainComparisons`, and `categories`. Category values and the content-free uncertainty count
+saturate at 255; saturation beyond either cap sets `truncated`. Bounded structural comparisons that
+exhaust their 24-level or 1,024-node allowance increment `uncertainComparisons` rather than
+`lossy` or a proven-loss category. The report never retains tool or property names, paths, descriptions,
+schema or enum values, references, hashes, request ids, project ids, or account ids.
+Every sanitizer branch that widens or drops an accepted-value constraint has a closed category,
+including type unions and unsupported types, conditional and tuple constraints, reference-overlay
+replacement, and root object coercion. Lossless normalization does not set `lossy`: accepted type
+case folding, duplicate enum/required removal, nullable-union collapse, and string-const conversion
+preserve the accepted value set. Annotation-only fields such as title, default, examples, comments,
+deprecated, read-only/write-only, external documentation and examples are omitted without loss.
+Local-reference siblings use 2020-12-style conjunctive semantics for loss accounting, while the
+wire transform retains its implemented overlay-wins merge; enum reports compare that intersection
+with the post-filter set actually emitted.
+
+This layer observes loss and does not reject it. The emitted request body remains the same as
+before reporting. The existing limits remain 24 schema levels, 16 local-reference dereferences,
+and 1,024 visited nodes; reporting stops with those limits and does not inspect omitted content.
+`src/adapters/google-wire-compiler.ts` aggregates reports across declarations, and
+`src/adapters/google.ts` emits a `google-tool-schema-loss` provider diagnostic only when provider
+debug is enabled. `generationConfig.responseMimeType` and `generationConfig.responseJsonSchema`
+are output-schema fields and never enter tool-schema sanitation or loss accounting.
+
+`googleToolSchemaPolicy` is provider-scoped. Omission and `compatible` retain the report-only body
+and existing repair replay. `reject-lossy` refuses an initially lossy or comparison-indeterminate
+compilation before `buildRequest` returns, so no physical send exists. Vertex and Cloud Code Assist carry the same
+resolved policy into their 400 compatibility repair: indexed repair reports one opened declaration,
+unindexed repair reports every declaration it would open, and strict policy returns the original
+400 without a changed repair send. The `google-tool-schema-repair` diagnostic inherits the complete
+bounded report shape — version, endpoint class, `lossy`, `uncertainComparisons`, truncation flag,
+and saturating fixed category counts — and adds only the `repair` phase, the declaration count, and whether the changed
+send was allowed.
+AI Studio direct mode continues to disable 400 repair entirely. Output schemas remain outside both
+initial and repair policy.
+
 ## Google wire-shape projection
 
 `src/adapters/google-wire-shape.ts` describes a compiled Google request without carrying any of

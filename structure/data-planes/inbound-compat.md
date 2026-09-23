@@ -28,6 +28,20 @@ keep credentials and audio content out of redirects, request logs and durable st
 `tests/server/audio-transcriptions.test.ts` exercises the real ingress and synthetic upstream;
 `tests/server/api-key-attribution.test.ts` uses multipart fixtures for the HTTP auth matrix.
 
+`src/server/audio-upstream.ts` is also where a configured key's model and provider scope is
+applied, once for every audio surface that resolves through it: the model it is handed is the one
+the upstream will run — the transcription model, the live session model, the model a standalone
+socket names in its own query, or the model a bound call settled on when the same key created it —
+and a refused forward request releases its probe lease. `LiveCallBinding` records that model for
+exactly this reason, so a reconnect is judged on the call it rejoins rather than on a default.
+
+The native voice path in `src/server/live.ts` applies the same predicate but can name less. It
+records nothing about the calls it relays, so a join, and a call-create that sends no session
+model, name no destination at all; a key carrying a model list is refused there rather than
+admitted against an assumed default, while a provider-only scope and an unscoped key are
+unchanged. Coverage lives in `tests/server/api-key-scope-audio.test.ts` and
+`tests/server/api-key-scope-live.test.ts`.
+
 ## Streaming audio
 
 `src/server/audio-client.ts` recognizes explicit audio keys before local legacy admission.
@@ -51,11 +65,13 @@ separate. Coverage lives in `tests/server/audio-client.test.ts`,
 `tests/server/audio-dictation.test.ts` and `tests/server/live-call-bindings.test.ts`.
 
 Translated Claude timeline reminders use the Chat adapter's
-[OpenCode Go instruction ordering](../providers/chat-compat.md#opencode-go-chronological-instructions)
-on its exact supported route. This is separate from trailing-notice stabilization
-and from native Chat message passthrough.
+[chronological instruction ordering](../providers/chat-compat.md#chronological-in-conversation-instructions)
+on every destination. This is separate from trailing-notice stabilization and from
+native Chat message passthrough.
+On native Chat, a spend ceiling checked before any physical send remains a local 429 refusal
+when a transient upstream response causes a later retry leg to reach that ceiling.
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Chat Completions inbound native path
 
@@ -80,7 +96,10 @@ take the Chat -> Responses -> Chat bridge below. `parallel_tool_calls` is emitte
 parallel tools (or pinned false by the existing provider opt-out contract).
 The native passthrough still applies the existing model capability authority to reasoning: an
 explicit empty ladder removes caller `reasoning_effort`, while an unknown ladder remains
-unclassified. This guard does not alter the separate raw service-tier contract.
+unclassified. The two Chat builders share the explicit wire policy after provider resolution:
+`reasoningWireFormat: "gateway-object"` projects the configured object shape, and a listed
+tool-bearing model omits reasoning effort on both paths. With neither declaration, native raw
+reasoning forwarding stays unchanged. This guard does not alter the separate raw service-tier contract.
 
 On the response side, the upstream `service_tier` echo (xAI Priority Processing, OpenAI fast
 tier) relays to the Chat Completions caller on every delivery shape: the non-streaming body
@@ -95,6 +114,21 @@ Combo/policy routes and requests that need Responses-only hosted tools, continua
 or storage semantics retain the existing Chat -> Responses -> Chat bridge.
 Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
 aliasing as native Responses; see [`responses.md`](../transports/responses.md).
+
+On that bridge, `src/chat/inbound.ts` decides where a `system` or `developer` message lands by
+where the caller wrote it. A leading block, before any conversational item exists, becomes
+`instructions`. One that arrives after the conversation has started becomes a chronological
+`role:"developer"` input item instead, the same representation `src/claude/inbound.ts` mints for a
+mid-conversation instruction, so the slot the caller chose survives to the adapter that preserves
+it. The role is `developer` rather than `system` because the native ChatGPT backend refuses a
+`system` item inside `input` and canonical forwarding folds a message-shaped `system` item back
+onto `instructions`. An instruction that arrives between a tool call and its result is held until
+the batch drains, or until the next user or assistant turn, so the pair the Kiro, Anthropic and
+Google mappers require to stay adjacent is never split. Placement on the wire is then owned by
+[chronological in-conversation instructions](../providers/chat-compat.md#chronological-in-conversation-instructions),
+which also decides which role that slot carries. Regression coverage is in
+`tests/responses/chat-inbound-developer-position.test.ts`, which compares the final upstream body
+on the native Chat route, a combo route and the Responses endpoint.
 
 The direct SSE relay accepts CRLF and arbitrary transport chunk boundaries while retaining at most
 one bounded event. EOF with an unterminated event and an event above the translator limit are typed
@@ -188,9 +222,9 @@ reasoning ladder into `thinking.effortOptions`. Missing capabilities stay absent
 falling back to OpenCodex guesses, and the integration does not write the removed
 `thinking.effort` / `defaultEffort` fields because MCode owns the active effort per session.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
@@ -200,9 +234,9 @@ Chat helper admission in `src/server/responses/core.ts` follows the
 claims stored main, after terminal vision, routed vision and search exclusions.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
 
@@ -243,14 +277,21 @@ Instruction notice extraction scans fence ranges once and walks original lines b
 a decreasing cursor. It accepts exactly one ASCII space inside the token notice, preserves
 unmatched prefix bytes, and does not repeatedly scan or copy shrinking prompt prefixes.
 
+## Claude skill marker path bound
+
+`src/claude/inbound.ts` examines at most 4,097 characters after the skill base-directory
+marker when deciding whether to elide a large blocked skill bundle. A marker path longer
+than 4,096 characters passes through unchanged; a recognized bounded path retains the
+existing elision behavior. This bound applies to translated Claude Messages ingress.
+
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
-Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
-Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached.
+Translated Chat request construction uses the [inline-image budget](../transports/streaming-health.md#translated-chat-inline-image-budget); the shared normalizer counts retained bytes even when a wire-specific drop callback keeps the image attached, rejects inputs above the safe decoded-pixel ceiling, caps native decode work process-wide, and stops queued work when the request is cancelled.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
@@ -292,6 +333,10 @@ never fetched.
 
 ## Translated Chat control fidelity
 
+Translated Chat ingress does not reshape schemas for Google's
+[endpoint-scoped loss report](../providers/google.md#google-tool-schema-loss-reporting). The report
+is produced only at the final Google adapter boundary and does not alter the ingress body.
+
 A translated Chat turn keeps the controls the caller sent. The Chat ingress pins
 `store:false` for every `openai-responses` route and strips nothing else: the
 sampling and output-cap restrictions that the canonical ChatGPT backend requires are
@@ -330,7 +375,14 @@ default and require an explicit `thinking:{type:"disabled"}` to stop.
 
 The native Chat path retains provider-native file/audio blocks. When a request instead needs
 Chat-to-Responses projection, `src/chat/inbound.ts` rejects recognized audio/file content
-before it can become empty text, regardless of message role. Legacy `function`-role images
+before it can become empty text. The one exception is a `file` part carrying inline base64
+bytes in a `user` message: that projection builds an `input_file` block and the bytes survive
+to any wire with a counterpart. `src/responses/inline-document.ts` checks the base64 alphabet
+and quantum/padding lengths without decoding the payload; valid unpadded bytes remain valid,
+while malformed one-character or incomplete padded encodings follow the explicit refusal.
+The same part in a `system`, `developer`, `assistant` or
+`tool` message is still refused, because those branches flatten their content to a string.
+Legacy `function`-role images
 also return an explicit error; their call/result pairing is not implemented by this projection.
 Modern `tool` images continue through the existing following-user carrier. These errors state
 an OpenCodex conversion limit, not a provider capability claim. Final Responses-to-adapter
@@ -346,3 +398,5 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+The [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) requires original Responses ingress; translated Chat and Messages calls retain their own routing.

@@ -40,6 +40,7 @@ type FixtureOptions = {
   target?: "main" | string;
   outcomes?: Array<"assert" | "crash">;
   crashSignature?: string;
+  crashStatus?: number;
 };
 
 function shellQuote(value: string): string {
@@ -54,15 +55,15 @@ function macosTestBlock(shard: number): string {
   const workflow = Bun.YAML.parse(readFileSync(repoPath(".github/workflows/ci.yml"), "utf8")) as {
     jobs: Record<string, { steps: Array<{ name?: string; run?: string }> }>;
   };
-  const run = workflow.jobs["platform-macos"]?.steps.find(step => step.name === "Test")?.run;
-  if (!run) throw new Error("platform-macos must contain the executable Test step");
+  const run = workflow.jobs["platform-macos"]?.steps.find(step => step.name === "Test in fresh-process batches")?.run;
+  if (!run) throw new Error("platform-macos must contain its executable batch step");
   // Render the existing Actions expression too, so the old workflow reaches
   // the ownership assertions instead of failing with Bash's 'bad substitution'.
   return run.replace(/\$\{\{\s*matrix\.shard\s*\}\}/g, String(shard));
 }
 
-// Only the Bun CLI is replaced. Bash, arrays, find, pipes, PIPESTATUS, and
-// filesystem validation all execute unchanged from the actual YAML run block.
+// Bun and the outer timeout executable are fixture shims. The actual workflow
+// command, batch runner, Bash selection, pipes and filesystem validation execute unchanged.
 const FAKE_BUN = String.raw`
 import { appendFileSync, readFileSync } from "node:fs";
 const config = JSON.parse(readFileSync(process.env.MACOS_FIXTURE_CONFIG, "utf8"));
@@ -79,7 +80,7 @@ if (argv[0] !== "test") {
   process.exit(97);
 }
 record("test");
-const matches = args => config.target === "main" ? args.includes("tests")
+const matches = args => config.target === "main" ? args.some(arg => arg.includes("tests/general/"))
   : args.some(arg => arg.replace(/^\.\//, "") === "tests/" + config.target);
 if (!matches(argv)) process.exit(0);
 const attempts = readFileSync(log, "utf8").trim().split("\n").map(line => JSON.parse(line))
@@ -106,8 +107,13 @@ function createFixture(directory: string, options: FixtureOptions): void {
   // block, so a copy here would let the block and the classifier drift apart unnoticed, which is
   // the exact failure mode that collapsing four inline signature lists into one file removed.
   mkdirSync(join(directory, "scripts", "ci"), { recursive: true });
+  copyFileSync(repoPath("scripts", "ci", "sample-macos-stall.sh"),
+    join(directory, "scripts", "ci", "sample-macos-stall.sh"));
   copyFileSync(repoPath("scripts", "ci", "bun-crash-signatures.sh"),
     join(directory, "scripts", "ci", "bun-crash-signatures.sh"));
+  copyFileSync(repoPath("scripts", "ci", "run-bun-test-batches.sh"),
+    join(directory, "scripts", "ci", "run-bun-test-batches.sh"));
+  writeFileSync(join(directory, "bin/timeout"), '#!/bin/sh\nwhile [ "${1#--}" != "$1" ]; do shift; done\nshift\nexec "$@"\n', { mode: 0o755 });
   for (const file of [...SERIAL_FILES, ...GENERAL_FILES]) {
     if (file === options.missing) continue;
     mkdirSync(dirname(join(directory, "tests", file)), { recursive: true });
@@ -133,9 +139,9 @@ function spawnErrorCode(error: unknown): string {
   return typeof code === "string" && /^[A-Z0-9_]{1,64}$/.test(code) ? code : "SPAWN_ERROR";
 }
 
-function runShell(directory: string, shard: number): Promise<{ status: number | null; output: string }> {
+function runShell(directory: string, shard: number, scriptOverride?: string): Promise<{ status: number | null; output: string }> {
   // Use the runner's native /bin/bash (Bash 3 on macOS), never a shell mock.
-  const command = macosTestBlock(shard);
+  const command = scriptOverride ?? macosTestBlock(shard);
   return new Promise((resolve, reject) => {
     let child: ChildProcessByStdio<null, Readable, Readable>;
     try {
@@ -144,7 +150,8 @@ function runShell(directory: string, shard: number): Promise<{ status: number | 
         env: {
           PATH: `${join(directory, "bin")}:/usr/bin:/bin`, HOME: directory,
           TMPDIR: join(directory, "tmp"), RUNNER_TEMP: join(directory, "tmp"), CI: "true",
-          MACOS_TEST_SHARD: String(shard),
+          TEST_SHARD: `${shard}/2`, BUN_TEST_FILE_SCOPE: "all", BUN_TEST_BATCH_SIZE: "12",
+          BUN_TEST_PARALLEL: "1", BUN_TEST_BATCH_TIMEOUT_SECONDS: "300", OCX_TEST_NO_QUEUE: "1",
           MACOS_FIXTURE_CONFIG: join(directory, "config.json"),
           MACOS_FIXTURE_LOG: join(directory, "invocations.jsonl"),
         },
@@ -247,7 +254,7 @@ function testPaths(call: Invocation): string[] {
 }
 
 function targets(call: Invocation, target: string): boolean {
-  return testPaths(call).includes(target === "main" ? "tests" : `tests/${target}`);
+  return target === "main" ? testPaths(call).some(path => path.startsWith("tests/general/")) : testPaths(call).includes(`tests/${target}`);
 }
 
 function optionValues(argv: string[], option: string): string[] {
@@ -255,107 +262,91 @@ function optionValues(argv: string[], option: string): string[] {
     : arg.startsWith(`${option}=`) ? [arg.slice(option.length + 1)] : []);
 }
 
-function expectGeneralCall(call: Invocation, shard: number): void {
-  const ignores = optionValues(call.argv, "--path-ignore-patterns");
-  expect(ignores.toSorted()).toEqual(SERIAL_FILES.map(file => `**/${basename(file)}`).toSorted());
-  expect(optionValues(call.argv, "--shard")).toEqual([`${shard}/2`]);
-  expect(optionValues(call.argv, "--timeout")).toEqual(["60000"]);
-  expect(call.argv).toContain("--isolate");
-  expect(testPaths(call)).toEqual(["tests"]);
-  // Account for every CLI argument: a name filter or extra exclusion could
-  // silently drop ordinary files even while the serial ownership oracle passes.
-  expect(call.argv.toSorted()).toEqual([
-    "test", "--isolate", "--timeout", "60000", "tests", `--shard=${shard}/2`,
-    ...SERIAL_FILES.flatMap(file => ["--path-ignore-patterns", `**/${basename(file)}`]),
-  ].toSorted());
-  // Exact exclusions above plus the unrestricted tests root leave these files
-  // in the main pool. Similar basenames must not become accidental exclusions.
-  for (const file of GENERAL_FILES) expect(ignores).not.toContain(`**/${basename(file)}`);
+function selectedFiles(shard: number, collision = false): string[] {
+  return [...SERIAL_FILES, ...GENERAL_FILES, ...(collision ? [`collision/${basename(SERIAL_FILES[0]!)}`] : [])]
+    .map(file => `tests/${file}`).sort().filter((_, index) => index % 2 === shard - 1);
 }
 
-// These are explicitly Unix Bash integration tests; Windows still runs the
-// existing cross-platform workflow source/layout contracts unchanged.
-describe.skipIf(process.platform === "win32")("macOS serial lane shell ownership", () => {
-  test("both shards own each canonical file exactly once in a fresh isolated process", async () => {
+function expectBatchArguments(call: Invocation): void {
+  expect(optionValues(call.argv, "--parallel")).toEqual(["1"]);
+  expect(optionValues(call.argv, "--timeout")).toEqual(["60000"]);
+  expect(call.argv).toContain("--isolate");
+  expect(optionValues(call.argv, "--shard")).toEqual([]);
+  expect(optionValues(call.argv, "--path-ignore-patterns")).toEqual([]);
+  expect(testPaths(call).length).toBeLessThanOrEqual(12);
+}
+
+describe.skipIf(process.platform === "win32")("macOS bounded shard shell ownership", () => {
+  test("stall observer samples only an identified silent suite without signaling it", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "ocx macos' observer-"));
+    try {
+      createFixture(directory, {});
+      const fixture = repoPath("tests", "fixtures", "macos-stall-observer.sh");
+      const result = await runShell(directory, 1,
+        `bash ${shellQuote(fixture)} "$PWD/probe" "$PWD/scripts/ci/sample-macos-stall.sh"`);
+      expect(result.status, result.output).toBe(0);
+      for (const scenario of ["silent", "absent", "ambiguous", "progress", "stop"]) {
+        expect(result.output).toContain(`PASS ${scenario}`);
+      }
+    } finally { removeTreeWithRetry(directory); }
+  }, SPAWN_BUDGET_MS);
+
+  test("both actual workflow shards own every file exactly once", async () => {
     const runs = [await runShard(1), await runShard(2)];
     for (const [index, run] of runs.entries()) {
       expect(run.status, run.output).toBe(0);
       const calls = testCalls(run);
-      const serial = calls.filter(call => !call.argv.includes("tests"));
-      const owned = SERIAL_FILES.filter((_, fileIndex) => fileIndex % 2 === index);
-      // First oracle deliberately fails old CI for missing isolated ownership.
-      expect(serial.length, "missing isolated ownership of canonical serial files").toBe(owned.length);
-      expect(calls.filter(call => call.argv.includes("tests"))).toHaveLength(1);
-      expectGeneralCall(calls[0]!, index + 1);
-      expect(serial.map(testPaths)).toEqual(owned.map(file => [`tests/${file}`]));
-      for (const call of serial) {
-        expect(call.argv).toContain("--parallel=1");
-        expect(call.argv).toContain("--isolate");
-        expect(optionValues(call.argv, "--timeout")).toEqual(["60000"]);
-        expect(optionValues(call.argv, "--shard")).toEqual([]);
-        expect(optionValues(call.argv, "--path-ignore-patterns")).toEqual([]);
+      expect(calls.flatMap(testPaths)).toEqual(selectedFiles(index + 1));
+      for (const call of calls) {
+        expectBatchArguments(call);
+        if (testPaths(call).some(path => SERIAL_FILES.some(file => path === `tests/${file}`))) expect(testPaths(call)).toHaveLength(1);
       }
-      const manifests = run.invocations.filter(call => call.kind === "manifest");
-      expect(manifests).toHaveLength(1);
-      expect(manifests[0]!.argv[1]).toContain("SERIAL_FULL_SUITE_FILES");
+      expect(run.invocations.filter(call => call.kind === "manifest")).toHaveLength(1);
+      expect(new Set(calls.map(call => call.pid)).size).toBe(calls.length);
     }
-    const calls = runs.flatMap(testCalls);
-    expect(new Set(calls.map(call => call.pid)).size).toBe(calls.length);
+    const all = runs.flatMap(testCalls).flatMap(testPaths);
+    expect(all.toSorted()).toEqual([...SERIAL_FILES, ...GENERAL_FILES].map(file => `tests/${file}`).sort());
+    expect(new Set(all).size).toBe(all.length);
   }, SPAWN_BUDGET_MS);
 
-  for (const target of ["main", SERIAL_FILES[0]!] as const) {
-    test(`${target}: assertion failure propagates without retry or later files`, async () => {
+  test("same basenames at distinct exact paths are not silently excluded", async () => {
+    const runs = [await runShard(1, { collision: true }), await runShard(2, { collision: true })];
+    for (const [index, run] of runs.entries()) {
+      expect(run.status, run.output).toBe(0);
+      expect(testCalls(run).flatMap(testPaths)).toEqual(selectedFiles(index + 1, true));
+    }
+  }, SPAWN_BUDGET_MS);
+
+  for (const target of ["main", SERIAL_FILES[1]!] as const) {
+    const targetPath = target === "main" ? selectedFiles(1)[0]! : `tests/${target}`;
+    const primaryCount = selectedFiles(1).indexOf(targetPath) + 1;
+    test(`${target}: assertion failure stops all later primary files`, async () => {
       const run = await runShard(1, { target, outcomes: ["assert"] });
       expect(run.status, run.output).toBe(ASSERTION_STATUS);
       const calls = testCalls(run);
-      expect(calls).toHaveLength(target === "main" ? 1 : 2);
+      expect(calls).toHaveLength(primaryCount);
       expect(targets(calls.at(-1)!, target)).toBe(true);
+      expect(run.output).toContain("not retrying assertion/test failures");
+      expect(run.output).not.toContain("Attribution:");
     }, SPAWN_BUDGET_MS);
 
     for (const [caseIndex, signature] of CRASH_SIGNATURES.entries()) {
-      test(`${target}: fails on the first runtime crash (case ${caseIndex + 1})`, async () => {
-        // Exit 3, not 139, so the SIGNATURE arm of the shared classifier is what is under test.
-        // With 139 the status arm matches first and this case would pass even if the signature
-        // list were empty -- which is how a lane can carry a broken list and look covered (#2152).
-        // Exit 3 is also the real Windows shape: Bun prints the panic banner and returns 3,
-        // and a bare 3 must NOT be treated as a crash, so the banner is doing the work here.
-        const run = await runShard(1, {
-          target, outcomes: ["crash"], crashSignature: signature, crashStatus: SIGNATURE_ONLY_CRASH_STATUS,
-        });
-        // This case returned 0 until 2026-09-17: the leg ran the identical command a second
-        // time and reported the crash as recovered. The classifier still runs -- it decides
-        // the message -- but it no longer decides the outcome.
+      test(`${target}: signature crash stays red after clean diagnostic attribution (${caseIndex})`, async () => {
+        const run = await runShard(1, { target, outcomes: ["crash"], crashSignature: signature, crashStatus: SIGNATURE_ONLY_CRASH_STATUS });
         expect(run.status, run.output).toBe(SIGNATURE_ONLY_CRASH_STATUS);
         const calls = testCalls(run);
-        const attempts = calls.filter(call => targets(call, target));
-        expect(attempts).toHaveLength(1);
-        expect(new Set(calls.map(call => call.pid)).size).toBe(calls.length);
-        // The leg stops where it crashed: the main pool alone, or the main pool plus the
-        // first owned serial file. The second owned serial file never starts.
-        expect(calls).toHaveLength(target === "main" ? 1 : 2);
-        expect(calls.some(call => targets(call, SERIAL_FILES[2]!))).toBe(false);
-        expect(run.output).toContain("it fails this leg on the first occurrence");
+        expect(calls).toHaveLength(primaryCount + 1);
+        expect(calls.filter(call => targets(call, target))).toHaveLength(2);
+        expect(calls.slice(primaryCount).flatMap(testPaths)).toEqual([targetPath]);
+        expect(run.output).toContain("has already failed this shard");
       }, SPAWN_BUDGET_MS);
     }
 
-    test(`${target}: a crash the classifier reads from the status alone is not retried either`, async () => {
-      // 139 takes the status arm rather than the signature arm. The fixture is armed to
-      // crash twice; a surviving retry would show up as a second attempt here.
+    test(`${target}: status-only crash cannot recover after repeated failure`, async () => {
       const run = await runShard(1, { target, outcomes: ["crash", "crash"] });
       expect(run.status, run.output).toBe(CRASH_STATUS);
-      const calls = testCalls(run);
-      expect(calls).toHaveLength(target === "main" ? 1 : 2);
-      expect(calls.filter(call => targets(call, target))).toHaveLength(1);
-    }, SPAWN_BUDGET_MS);
-
-    test(`${target}: an assertion failure is still distinguished from a crash`, async () => {
-      // Both fail the leg now, so the only thing separating them is what the log says. A
-      // classifier that matched everything would report every assertion failure as a crash
-      // and send the next reader hunting an interpreter bug that is not there.
-      const run = await runShard(1, { target, outcomes: ["assert"] });
-      expect(run.status, run.output).toBe(ASSERTION_STATUS);
-      expect(run.output).toContain(`macOS suite failed (exit ${ASSERTION_STATUS})`);
-      expect(run.output).not.toContain("Bun runtime crash");
+      expect(testCalls(run)).toHaveLength(primaryCount + 1);
+      expect(run.output).toContain("reproduces alone");
     }, SPAWN_BUDGET_MS);
   }
 
@@ -364,16 +355,15 @@ describe.skipIf(process.platform === "win32")("macOS serial lane shell ownership
     ["empty manifest", { manifest: [] }],
     ["duplicate entry", { manifest: [...SERIAL_FILES, SERIAL_FILES[0]!] }],
     ["missing file", { missing: SERIAL_FILES[3] }],
-    ["basename collision", { collision: true }],
     ["basename without its full relative path", { manifest: [basename(SERIAL_FILES[0]!)] }],
     ["absolute path", { manifest: [`/${SERIAL_FILES[0]}`] }],
     ["parent traversal", { manifest: ["serial/../serial/falcon.test.ts"] }],
   ];
-  test.each(invalidManifests)("rejects %s before any tests start", async (_name, options) => {
+  test.each(invalidManifests)("rejects %s before any test starts", async (_name, options) => {
     for (const shard of [1, 2]) {
       const run = await runShard(shard, options);
       expect(run.status, run.output).not.toBe(0);
-      expect(testCalls(run), run.output).toEqual([]);
+      expect(testCalls(run)).toEqual([]);
       expect(run.invocations.filter(call => call.kind === "manifest")).toHaveLength(1);
     }
   }, SPAWN_BUDGET_MS);

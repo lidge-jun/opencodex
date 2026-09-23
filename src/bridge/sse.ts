@@ -16,6 +16,7 @@ import {
   type OcxErrorPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
+import { attemptDeliveryRecorder, classifyRelayedResponseEvent } from "../usage/attempt-delivery";
 import {
   mayBecomePatchEnvelope,
   repairFreeformToolInput,
@@ -23,6 +24,7 @@ import {
 import { progressiveFreeformInput } from "../responses/progressive-freeform-input";
 import { encodeCompactionSummary } from "../responses/compaction";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
+import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
 import { isTruncatedStopReason, truncationReasonFor } from "../responses/truncated-stop-reason";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "../responses/reasoning-envelope";
 import { rememberReasoningForCall } from "../responses/reasoning-replay-cache";
@@ -46,7 +48,7 @@ import {
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "../lib/translator-budget";
-import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
+import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 
 function sseEvent(name: string, data: Record<string, unknown>): string {
@@ -162,6 +164,10 @@ export function bridgeToResponsesSSE(
   // at terminal/cancel below.
   const ownsBudget = !options?.translatorBudget;
   const budget = options?.translatorBudget ?? createTranslatorBudget();
+  // Resolved from the CALLER's budget only. A bridge that owns its budget is not serving a
+  // logged request -- there is no attempt to count against, and a locally created scope would
+  // never have had a recorder bound to it.
+  const delivery = attemptDeliveryRecorder(options?.translatorBudget);
   // Idempotent: safe to call at every stream-death path; disposal must come
   // AFTER the final charges (emitDone), never inside reportTerminal.
   const disposeOwnedBudget = () => { if (ownsBudget) budget.dispose(); };
@@ -278,6 +284,11 @@ export function bridgeToResponsesSSE(
           controller.enqueue(frame);
           budget?.releaseRetained(frameBytes, { kind: "live_transient" });
           emittedFrames++;
+          // After a SUCCESSFUL enqueue, never before it. A frame that threw on the way to the
+          // transport did not reach the caller, and counting it here would make the relayed
+          // total equal the adapter total by construction -- erasing the one discrepancy these
+          // counters exist to expose (#3983).
+          delivery?.noteRelayedEvent(classifyRelayedResponseEvent(name, data));
         } catch (error) {
           if (isTranslatorBudgetExceededError(error)) {
             terminateForTranslatorOverflow?.(error);
@@ -1045,10 +1056,17 @@ export function bridgeToResponsesSSE(
                   currentToolCall.callId,
                 ));
                 if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
-                  emit("response.function_call_arguments.delta", {
-                    item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
-                    delta: event.arguments,
-                  });
+                  // Hold fragments whose accumulated buffer can never parse as JSON. Fragments
+                  // already streamed are retained by the client as history even when the item
+                  // fails at completion (the poisoned-replay loop behind inbound "non-JSON
+                  // arguments" warnings); holding costs nothing for healthy streams because the
+                  // completed item still carries the full arguments.
+                  if (toolCallArgumentsCouldBeJson(currentToolCall.args)) {
+                    emit("response.function_call_arguments.delta", {
+                      item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
+                      delta: event.arguments,
+                    });
+                  }
                 }
                 if (currentToolCall.freeform && !currentToolCall.codeModeHelperName) {
                   // `progressiveFreeformInput` holds while the buffer is still an ambiguous prefix
@@ -1079,6 +1097,7 @@ export function bridgeToResponsesSSE(
                     // replaced by the normalized ones.
                     const mayNormalize = ownsFreeformGrammar && currentToolCall.name === "apply_patch";
                     if (!((mayCompile || mayNormalize) && mayBecomePatchEnvelope(full))
+                      && !(mayCompile && mayBecomeCodeModeShellInput(currentToolCall.args, full))
                       && full.startsWith(emitted) && full.length > emitted.length) {
                       emit("response.custom_tool_call_input.delta", {
                         item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,

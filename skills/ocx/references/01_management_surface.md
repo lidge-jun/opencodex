@@ -72,6 +72,21 @@ JSON mode: `envelope`.
 
 - Reads /healthz plus local config; drives no management API route.
 
+### `ocx resolve`
+
+One JSON document naming the config home, the effective port, and the identity-checked proxy liveness verdict.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the resolve document as JSON (the shell contract). |
+
+JSON mode: `envelope`.
+
+- Exit 0 carries a trustworthy verdict (live or proven absent); exit 1 means the CLI could not resolve and a caller must refuse to guess — unknown liveness never reads as absent.
+- Built for embedding shells (desktop app): the liveness budgets stay owned by src/server/proxy-liveness.ts.
+
 ### `ocx capabilities`
 
 List the declared CLI capabilities and the management routes they drive.
@@ -537,6 +552,25 @@ JSON mode: `payload`.
 - `store` verifies every keychain write by read-back before config.json is rewritten with keychain: references; an unavailable keychain refuses with 503 and leaves the file untouched.
 - Headless services usually have no unlocked keychain session; prefer ${ENV_VAR} references there.
 
+### `ocx companion`
+
+Inspect and configure menu-bar and widget companion usage settings.
+
+| Method | Route |
+|---|---|
+| GET | `/api/companion/settings` |
+| GET | `/api/usage/timeline` |
+| PUT | `/api/companion/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit companion settings as JSON. |
+
+JSON mode: `payload`.
+
+- `show` (the default) reads settings; `set key=value ...` updates selected settings; `reset` restores defaults.
+- Values accepted by `set` are parsed as JSON when valid, so booleans, numbers, arrays, objects, and null can be passed directly.
+
 ### `ocx account main reauth`
 
 Reauthenticate the native main Codex login with a device code (#3898); headless hubs need no Codex App or keyring.
@@ -896,6 +930,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 48
-- of those, state-changing: 24
+- declared capabilities: 50
+- of those, state-changing: 25
 - head-resolved invocations: 2

@@ -52,6 +52,7 @@ import {
   clientConnectionSchema,
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
+  codexAccountAutoSwitchThresholdsSchema,
   codexPoolSchema,
   codexQuotaAutoRefreshSchema,
   credentialGroupsSchema,
@@ -60,6 +61,7 @@ import {
   remoteGuiConfigSchema,
   runtimeRoleSchema,
   spendSchema,
+  compactionRoutingSchema,
 } from "./schema/leaf-validators";
 
 export type ConfigDiagnostics = {
@@ -346,6 +348,13 @@ function codexAccountPrioritiesError(value: unknown): string | null {
       return schemaDiagnosticsError(parsed.error).replace("schema_invalid: ", "schema_invalid: codexAccountPriorities.");
     }
   }
+  if (raw.codexAccountAutoSwitchThresholds !== undefined) {
+    const parsed = codexAccountAutoSwitchThresholdsSchema.safeParse(raw.codexAccountAutoSwitchThresholds);
+    if (!parsed.success) {
+      return schemaDiagnosticsError(parsed.error)
+        .replace("schema_invalid: ", "schema_invalid: codexAccountAutoSwitchThresholds.");
+    }
+  }
   // Tested as a string rather than coerced: `String(123)` matches the id pattern, so a
   // coercing guard waves a non-string pin through to the schema, where `.catch(undefined)`
   // drops it and reports the write as a success — the exact silent-degrade this guards.
@@ -354,6 +363,14 @@ function codexAccountPrioritiesError(value: unknown): string | null {
     return "schema_invalid: activeCodexAccountPinned: must be an account id";
   }
   return null;
+}
+
+function codexAccountPriorityFailbackError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "codexAccountPriorityFailback")) return null;
+  const enabled = raw.codexAccountPriorityFailback;
+  if (enabled === undefined || typeof enabled === "boolean") return null;
+  return "schema_invalid: codexAccountPriorityFailback: must be a boolean or omitted";
 }
 
 /**
@@ -561,7 +578,26 @@ function managementIngressConfigError(value: unknown): string | null {
   return null;
 }
 
+/** Load degrades malformed metrics export config to off; live writes reject the same shape. */
+export function metricsExportConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "metricsExport") || raw.metricsExport === undefined) return null;
+  const metricsExport = rawConfigRecord(raw.metricsExport);
+  if (!metricsExport) return "schema_invalid: metricsExport: must be an object or omitted";
+  if (Object.keys(metricsExport).some(key => key !== "enabled")) {
+    return "schema_invalid: metricsExport: contains an unsupported field";
+  }
+  if (metricsExport.enabled !== undefined && typeof metricsExport.enabled !== "boolean") {
+    return "schema_invalid: metricsExport.enabled: must be a boolean";
+  }
+  return null;
+}
+
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
+  const compactionRouting = rawConfigRecord(value)?.compactionRouting;
+  if (compactionRouting !== undefined && !compactionRoutingSchema.safeParse(compactionRouting).success) {
+    return { ok: false, error: "schema_invalid: compactionRouting: requires a nonblank model, an optional valid reasoningEffort, and optional non-repeating triggers drawn from \"manual\" and \"auto\"" };
+  }
   const boundaryError = configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
     ?? claudeSubagentEffortError(value)
@@ -575,6 +611,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
+    ?? codexAccountPriorityFailbackError(value)
     ?? poolCredentialGroupsError(value)
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)
@@ -586,7 +623,8 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? clientConnectionConfigError(value)
     ?? clientRolePairError(value)
     ?? loopbackListenerPortError(value)
-    ?? managementIngressConfigError(value);
+    ?? managementIngressConfigError(value)
+    ?? metricsExportConfigError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
   if (result.success) {

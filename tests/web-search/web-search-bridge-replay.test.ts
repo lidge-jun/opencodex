@@ -20,13 +20,28 @@ import {
 } from "../../src/responses/bridge-search-replay-cache";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
-import type { OcxProviderConfig } from "../../src/types";
+import type { OcxProviderConfig, OcxReasoningReplayScopeRef } from "../../src/types";
 
 const createResponsesPassthroughAdapter = (...args: Parameters<typeof createResponsesPassthroughAdapterProduction>) =>
   withTestTranslatorBudget(createResponsesPassthroughAdapterProduction(...args));
 
 const GATEWAY_BASE_URL = "https://gateway.internal/v1";
 const OTHER_BASE_URL = "https://other-gateway.internal/v1";
+
+function replayScope(overrides: Partial<OcxReasoningReplayScopeRef["current"]> = {}): OcxReasoningReplayScopeRef {
+  return {
+    clientPrincipalId: "principal-a",
+    clientThreadId: "thread-a",
+    current: {
+      providerName: "bridge-a",
+      providerDestinationIdentity: overrides.providerDestinationIdentity ?? GATEWAY_BASE_URL,
+      adapterName: "openai-responses",
+      modelId: "glm-4.7",
+      credentialIdentity: "key-a",
+      ...overrides,
+    },
+  };
+}
 
 function frame(type: string, payload: Record<string, unknown>): string {
   return "event: " + type + "\ndata: " + JSON.stringify({ type, ...payload });
@@ -115,7 +130,7 @@ async function runBridgedMixedLeg(baseUrl: string, result = "opencodex 2.50.0 sh
       throw new Error("a mixed leg must not send a continuation");
     },
     execute: async () => ({ text: result, sources: [{ url: "https://example.test/rel", title: "Releases" }] }),
-    destinationScope: bridgeSearchReplayScope(baseUrl),
+    destinationScope: bridgeSearchReplayScope(replayScope({ providerDestinationIdentity: baseUrl })),
   });
   const body = await new Response(stream).text();
   const added = clientEvents(body).find(event =>
@@ -154,7 +169,7 @@ describe("bridged web_search replay to the destination", () => {
 
     const restored = restoreBridgedWebSearchCalls(
       nextTurnBody(cellId),
-      bridgeSearchReplayScope(GATEWAY_BASE_URL),
+      bridgeSearchReplayScope(replayScope()),
     ) as { input: Record<string, unknown>[] };
 
     // The item type the destination never produced is gone, replaced in place by the exchange
@@ -188,7 +203,7 @@ describe("bridged web_search replay to the destination", () => {
         throw new Error("a mixed leg must not send a continuation");
       },
       execute: async () => ({ text: "", sources: [], error: "backend refused" }),
-      destinationScope: bridgeSearchReplayScope(GATEWAY_BASE_URL),
+      destinationScope: bridgeSearchReplayScope(replayScope()),
     });
     const body = await new Response(stream).text();
     const added = clientEvents(body).find(event =>
@@ -198,7 +213,7 @@ describe("bridged web_search replay to the destination", () => {
 
     const restored = restoreBridgedWebSearchCalls(
       nextTurnBody(cellId),
-      bridgeSearchReplayScope(GATEWAY_BASE_URL),
+      bridgeSearchReplayScope(replayScope()),
     ) as { input: Record<string, unknown>[] };
     expect(restored.input[2]).toEqual({
       type: "function_call_output",
@@ -209,7 +224,7 @@ describe("bridged web_search replay to the destination", () => {
 
   test("a cell this proxy never executed is left exactly as the caller sent it", () => {
     const body = nextTurnBody("ws_never-recorded");
-    const restored = restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(GATEWAY_BASE_URL));
+    const restored = restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(replayScope()));
     // Same reference: a miss allocates nothing and invents nothing.
     expect(restored).toBe(body);
   });
@@ -217,7 +232,31 @@ describe("bridged web_search replay to the destination", () => {
   test("a search recorded for one destination is not replayed into another", async () => {
     const cellId = await runBridgedMixedLeg(GATEWAY_BASE_URL);
     const body = nextTurnBody(cellId);
-    expect(restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(OTHER_BASE_URL))).toBe(body);
+    expect(restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(replayScope({ providerDestinationIdentity: OTHER_BASE_URL })))).toBe(body);
+  });
+
+  test("a cell cannot cross any conversation or serving-identity boundary", async () => {
+    const cellId = await runBridgedMixedLeg(GATEWAY_BASE_URL);
+    const body = nextTurnBody(cellId);
+    const mismatchedScopes: OcxReasoningReplayScopeRef[] = [
+      { ...replayScope(), clientPrincipalId: "principal-b" },
+      { ...replayScope(), clientThreadId: "thread-b" },
+      replayScope({ providerName: "bridge-b" }),
+      replayScope({ adapterName: "other-adapter" }),
+      replayScope({ modelId: "other-model" }),
+      replayScope({ credentialIdentity: "key-b" }),
+    ];
+    for (const scope of mismatchedScopes) {
+      expect(restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(scope))).toBe(body);
+    }
+    expect(bridgeSearchReplayScope(undefined)).toBeUndefined();
+    expect(bridgeSearchReplayScope({ clientThreadId: "thread-a" })).toBeUndefined();
+    expect(bridgeSearchReplayScope({ clientPrincipalId: "principal-a", clientThreadId: "thread-a" })).toBeUndefined();
+    // A bound serving identity is not enough on its own: without a caller principal there is no
+    // owner, so the recorded cell above must stay unreachable and no new cell can be recorded.
+    const unowned: OcxReasoningReplayScopeRef = { clientThreadId: "thread-a", current: replayScope().current };
+    expect(bridgeSearchReplayScope(unowned)).toBeUndefined();
+    expect(restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(unowned))).toBe(body);
   });
 
   test("an expired entry behaves exactly like a miss", async () => {
@@ -226,13 +265,13 @@ describe("bridged web_search replay to the destination", () => {
     const cellId = await runBridgedMixedLeg(GATEWAY_BASE_URL);
     const body = nextTurnBody(cellId);
     // Still inside the TTL.
-    expect(restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(GATEWAY_BASE_URL))).not.toBe(body);
+    expect(restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(replayScope()))).not.toBe(body);
     clockMs += 61 * 60 * 1000;
-    expect(restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(GATEWAY_BASE_URL))).toBe(body);
+    expect(restoreBridgedWebSearchCalls(body, bridgeSearchReplayScope(replayScope()))).toBe(body);
   });
 
   test("a call id the body already carries is never duplicated", () => {
-    const scope = bridgeSearchReplayScope(GATEWAY_BASE_URL);
+    const scope = bridgeSearchReplayScope(replayScope());
     rememberBridgeSearchReplay(scope, "ws_dup", {
       callId: "call_2",
       name: "web_search",
@@ -244,7 +283,7 @@ describe("bridged web_search replay to the destination", () => {
   });
 
   test("an unbridged provider is never given a scope to restore from", () => {
-    const scope = bridgeSearchReplayScope(GATEWAY_BASE_URL);
+    const scope = bridgeSearchReplayScope(replayScope());
     rememberBridgeSearchReplay(scope, "ws_unbridged", {
       callId: "call_1",
       name: "web_search",
@@ -274,6 +313,7 @@ describe("the Responses passthrough adapter", () => {
       stream: true,
       options: {},
       _rawBody: nextTurnBody(cellId),
+      _reasoningReplayScope: replayScope(),
     }, { headers: new Headers() });
     return (JSON.parse(request.body) as { input: Record<string, unknown>[] }).input;
   }

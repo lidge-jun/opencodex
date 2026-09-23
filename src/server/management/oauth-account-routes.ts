@@ -147,8 +147,16 @@ function validateKeyName(
   return { value };
 }
 
+function metaMuseConsentRequired(provider: string, principal: ManagementContext["principal"]): Response | null {
+  if (provider !== "meta-muse" || principal === "gui-session") return null;
+  return jsonResponse({
+    error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
+    code: "oauth_consent_required",
+  }, 403);
+}
+
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, principal, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/accounts/events" && req.method === "GET") {
     const { accountSelectionStream } = await import("./account-selection-stream");
@@ -172,6 +180,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    // Muse may import a local Keychain credential or start a device grant; add-account
+    // and reauth skip the import. All management login paths require the dashboard
+    // principal before credential acquisition. A raw token proves administration,
+    // not acknowledgement; caller-supplied headers are not consent evidence.
+    const consentRequired = metaMuseConsentRequired(provider, principal);
+    if (consentRequired) return consentRequired;
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
     if (namespaceCollision) return jsonResponse({ error: namespaceCollision }, 409);
     const accountId = body.accountId?.trim();
@@ -210,7 +224,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
       if (authUrl && !deviceCode && shouldOpenBrowserForLogin(body.openBrowser, config)) {
         const { openUrl } = await import("../../lib/open-url");
-        openUrl(authUrl);
+        void openUrl(authUrl);
       }
       return jsonResponse({ url: authUrl, instructions, deviceCode });
     } catch (err) {
@@ -242,6 +256,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const consentRequired = metaMuseConsentRequired(provider, principal);
+    if (consentRequired) return consentRequired;
     const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
     // Authorization responses are measured in hundreds of bytes; never accept the
     // generic management-body allowance here.
@@ -869,6 +885,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         name: k.name,
         prefix: k.key.slice(0, 17) + "...",
         createdAt: k.createdAt,
+        // Scope is metadata, not secret: an operator has to be able to read
+        // what a key may reach without minting a replacement to find out.
+        ...(k.allowedProviders ? { allowedProviders: [...k.allowedProviders] } : {}),
+        ...(k.allowedModels ? { allowedModels: [...k.allowedModels] } : {}),
         ...(k.pendingRotation ? { pendingRotation: {
           id: k.pendingRotation.id,
           createdAt: k.pendingRotation.createdAt,
@@ -952,15 +972,49 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readJsonBody(req);
     if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
     if (typeof body.id !== "string" || !body.id) return jsonResponse({ error: "id required" }, 400, req, config);
-    const nameField = validateKeyName(body.name, { required: true });
-    if ("error" in nameField) return jsonResponse({ error: nameField.error }, 400, req, config);
-    const entry = (config.apiKeys ?? []).find(k => k.id === body.id);
-    if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
-    entry.name = nameField.value;
+    const existing = (config.apiKeys ?? []).find(k => k.id === body.id);
+    if (!existing) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const entry = { ...existing };
+    // Rename and scope are independent edits. A scope-only PATCH must not have
+    // to restate the name, and a rename must not silently widen a scope, so
+    // each field is applied only when the caller actually sent it.
+    const renaming = body.name !== undefined;
+    const scopingProviders = body.allowedProviders !== undefined;
+    const scopingModels = body.allowedModels !== undefined;
+    if (!renaming && !scopingProviders && !scopingModels) {
+      return jsonResponse({ error: "name, allowedProviders or allowedModels required" }, 400, req, config);
+    }
+    if (renaming) {
+      const nameField = validateKeyName(body.name, { required: true });
+      if ("error" in nameField) return jsonResponse({ error: nameField.error }, 400, req, config);
+      entry.name = nameField.value;
+    }
+    for (const [field, sent] of [["allowedProviders", scopingProviders], ["allowedModels", scopingModels]] as const) {
+      if (!sent) continue;
+      const value = body[field];
+      // `null` and `[]` both clear the list back to unrestricted; anything else
+      // must be a list of non-empty strings, because a silently ignored malformed
+      // scope would read as "allowed everything" to whoever set it.
+      if (value === null) { delete entry[field]; continue; }
+      if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim() || item.length > 256)) {
+        return jsonResponse({ error: `${field} must be a list of non-empty names` }, 400, req, config);
+      }
+      const normalized = [...new Set((value as string[]).map(item => item.trim()))];
+      if (normalized.length === 0) delete entry[field];
+      else entry[field] = normalized;
+    }
+    // Publish the validated replacement only after every field is accepted.
+    config.apiKeys = config.apiKeys!.map(key => key === existing ? entry : key);
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     // Never echo key material from a rename.
-    return jsonResponse({ id: entry.id, name: entry.name, createdAt: entry.createdAt }, 200, req, config);
+    return jsonResponse({
+      id: entry.id,
+      name: entry.name,
+      createdAt: entry.createdAt,
+      ...(entry.allowedProviders ? { allowedProviders: [...entry.allowedProviders] } : {}),
+      ...(entry.allowedModels ? { allowedModels: [...entry.allowedModels] } : {}),
+    }, 200, req, config);
   }
 
   if (url.pathname === "/api/keys" && req.method === "DELETE") {

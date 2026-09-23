@@ -10,16 +10,20 @@
  */
 import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./help";
 import { parseReadyArgs, type ReadyArgs } from "./ready";
+import { parseResolveArgs, type ResolveArgs } from "./resolve";
+import { parseStopApproval } from "./stop-approval";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 
 export interface CliHead {
-  kind: "version" | "help" | "ready" | "command";
+  kind: "version" | "help" | "ready" | "resolve" | "command";
   command: string | undefined;
   args: string[];
   /** For kind "help": the subcommand whose usage should print, if any. */
   helpTarget?: string;
   /** Present only for `ready`; undefined when the ready args failed to parse. */
   readyArgs?: ReadyArgs;
+  /** Present only for `resolve`; undefined when the resolve args failed to parse. */
+  resolveArgs?: ResolveArgs;
 }
 
 export function parseCliHead(argv: string[]): CliHead {
@@ -51,6 +55,13 @@ export function parseCliHead(argv: string[]): CliHead {
     if (!parsed.ok) return { kind: "ready", command, args, readyArgs: undefined };
     return { kind: "ready", command, args, readyArgs: parsed.args };
   }
+  // Same ordering contract as `ready`: `ocx resolve` rejects any argument with exit
+  // 64 BEFORE maybeAutoRestoreCodexShim (or any other preflight with side effects) runs.
+  if (command === "resolve") {
+    const parsed = parseResolveArgs(args.slice(1));
+    if (!parsed.ok) return { kind: "resolve", command, args, resolveArgs: undefined };
+    return { kind: "resolve", command, args, resolveArgs: parsed.args };
+  }
   return { kind: "command", command, args };
 }
 
@@ -79,7 +90,24 @@ export async function runCli(argv: string[]): Promise<CliHead> {
       maybeAutoRestoreCodexShim(head.command, head.args);
       return head;
     }
+    case "resolve": {
+      // Fail-closed impossible-state guard, mirroring ready: the pre-parse above already
+      // rejected invalid arguments before any preflight, so a missing resolveArgs means
+      // dispatch diverged. Refuse with code 64 and perform NO I/O.
+      if (!head.resolveArgs) {
+        console.error("Usage: ocx resolve [--json]");
+        console.error("  --json prints one JSON document: the config home, the effective port,");
+        console.error("  and the identity-checked liveness verdict.");
+        process.exit(64);
+      }
+      maybeAutoRestoreCodexShim(head.command, head.args);
+      return head;
+    }
     case "command":
+      if (head.command === "stop" && !parseStopApproval(head.args.slice(1)).ok) {
+        console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
+        process.exit(64);
+      }
       maybeAutoRestoreCodexShim(head.command, head.args);
       return head;
   }

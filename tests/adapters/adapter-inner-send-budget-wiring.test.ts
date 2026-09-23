@@ -13,6 +13,7 @@ import { createDevinAdapter, DEVIN_API_SERVER } from "../../src/adapters/devin";
 import { setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { resetKiroThrottleStateForTests } from "../../src/adapters/kiro-retry";
 import type { AdapterFetchContext } from "../../src/adapters/base";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { encodeMessage } from "../../src/lib/eventstream-decoder";
 import { createRequestExecutionBudget, type RequestExecutionBudgetPolicy } from "../../src/lib/request-execution-budget";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
@@ -206,6 +207,7 @@ describe("Devin runTurn execution wiring", () => {
       adapter: "devin", baseUrl: DEVIN_API_SERVER, apiKey,
     } as unknown as OcxProviderConfig);
 
+    let refusal: unknown;
     try {
       await adapter.runTurn?.(
         {
@@ -223,7 +225,7 @@ describe("Devin runTurn execution wiring", () => {
           onPhysicalSend: send => { observed.push(send); },
         },
         event => events.push(event),
-      ).catch(() => { /* the refusal escapes the adapter for the caller to map */ });
+      ).catch((error: unknown) => { refusal = error; });
     } finally {
       setCachedCatalogForTests(null);
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -233,6 +235,11 @@ describe("Devin runTurn execution wiring", () => {
       removeTreeWithRetry(home);
     }
 
+    // The refusal escapes the adapter for the caller to map, and WHICH error escapes is the
+    // contract: a bare catch here passed even when the adapter threw something else entirely,
+    // which would have left the turn reported as an ordinary upstream failure instead of a
+    // budget refusal.
+    expect(refusal).toBeInstanceOf(SendBudgetExhaustedError);
     expect(urls.filter(url => url.includes("GetChatMessage"))).toHaveLength(0);
     expect(observed).toEqual([]);
     expect(budget.used).toBe(0);

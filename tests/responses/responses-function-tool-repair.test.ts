@@ -1,6 +1,6 @@
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   collectFunctionCallRepairSchemas,
   repairFunctionCalls,
@@ -10,6 +10,18 @@ import { createResponsesFunctionToolRepairBlockRewrite } from "../../src/server/
 import { createTranslatorBudget, TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 import { sseDataPayload } from "../../src/server/sse-payload-rewrite";
 import { currentTurnWireToolCatalogBody } from "../../src/server/responses-undeclared-tool-guard";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
+
+// Direct physical dispatch needs the writer lease to prevent spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
+
+afterEach(() => {
+  // Release first so a failed dispatch cannot leak ownership into the next case.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 const parameters = { type: "object", properties: {
   cell_id: { type: "string" }, yield_time_ms: { type: "integer" },
@@ -199,6 +211,77 @@ describe("pure function completion repair", () => {
     expect(repairFunctionCalls(missing, schemas).value).toBe(missing);
   });
 
+  test("repairs the exact flat exec_command input wrapper into its required cmd", () => {
+    const shell = {
+      type: "function",
+      name: "exec_command",
+      parameters: {
+        type: "object",
+        properties: { cmd: { type: "string" } },
+        required: ["cmd"],
+        additionalProperties: false,
+      },
+    };
+    const map = collectFunctionCallRepairSchemas({ tools: [shell] });
+    const call = item('{"input":"printf hello"}', { name: "exec_command" });
+    expect(repairFunctionCalls(call, map).value)
+      .toEqual({ ...call, arguments: '{"cmd":"printf hello"}' });
+
+    const reserved = item('{"input":"printf hello"}', {
+      name: "exec_command",
+      namespace: "functions",
+    });
+    expect(repairFunctionCalls(reserved, map).value)
+      .toEqual({ ...reserved, arguments: '{"cmd":"printf hello"}' });
+  });
+
+  test("exec_command input repair stays fail-closed outside the exact schema and payload", () => {
+    const declaration = (parameters: Record<string, unknown>, namespace?: string) => ({
+      type: "function",
+      name: "exec_command",
+      ...(namespace ? { namespace } : {}),
+      parameters,
+    });
+    const canonical = {
+      type: "object",
+      properties: { cmd: { type: "string" } },
+      required: ["cmd"],
+    };
+    const cases: Array<{ payload: string; tool?: ReturnType<typeof declaration> }> = [
+      { payload: '{"cmd":"already canonical"}' },
+      { payload: '{"input":"one","cwd":"/tmp"}' },
+      { payload: '{"input":7}' },
+      { payload: '{"input":"one","cmd":"two"}' },
+      { payload: '{"input":"one"', },
+      { payload: '{"input":"one"}', tool: declaration({ ...canonical, required: [] }) },
+      { payload: '{"input":"one"}', tool: declaration({ ...canonical, properties: { cmd: { type: "number" } } }) },
+    ];
+    for (const entry of cases) {
+      const tool = entry.tool ?? declaration(canonical);
+      const map = collectFunctionCallRepairSchemas({ tools: [tool] });
+      const namespace = tool.namespace;
+      const call = item(entry.payload, {
+        name: namespace ? `${namespace}__exec_command` : "exec_command",
+        ...(namespace ? { namespace } : {}),
+      });
+      expect(repairFunctionCalls(call, map).value).toBe(call);
+    }
+
+    // A namespace is declared by its group, not by a `namespace` property on a
+    // top-level function. Exercise the actual remote identity so this proves the
+    // bare-only repair guard rather than passing because schema lookup missed.
+    const remoteMap = collectFunctionCallRepairSchemas({ tools: [{
+      type: "namespace",
+      name: "remote",
+      tools: [declaration(canonical)],
+    }] });
+    const remoteCall = item('{"input":"one"}', {
+      name: "exec_command",
+      namespace: "remote",
+    });
+    expect(repairFunctionCalls(remoteCall, remoteMap).value).toBe(remoteCall);
+  });
+
   test.each([" ", "{", '{"cell_id":4.5}', '{"yield_time_ms":1.5}', '{"union":4.0}',
     '{"cell_id":9007199254740993}', '{"cell_id":4,"unknown":9007199254740993}', '{"cell_id":4,"unknown":1e400}'])
   ("preserves invalid/disagreeing/unsafe payload %s", argumentsText => {
@@ -255,6 +338,36 @@ describe("native function completion SSE", () => {
       expect(payload(terminal[0]!).response).toEqual({ status: "completed", output: [item(canonical)] });
       expect(budget.snapshot().currentBytes).toBe(0);
     } finally { rewrite.dispose?.(); budget.dispose(); }
+  });
+
+  test("repairs exec_command input only at authoritative SSE completion boundaries", () => {
+    const map = collectFunctionCallRepairSchemas({ tools: [{
+      type: "function",
+      name: "exec_command",
+      parameters: {
+        type: "object",
+        properties: { cmd: { type: "string" } },
+        required: ["cmd"],
+      },
+    }] });
+    const rewrite = createResponsesFunctionToolRepairBlockRewrite(map);
+    const shellItem = item("", { name: "exec_command", status: "in_progress" });
+    try {
+      const added = frame("response.output_item.added", { output_index: 0, item: shellItem });
+      const delta = frame("response.function_call_arguments.delta", {
+        item_id: "fc_one",
+        delta: '{"input":"printf hello"}',
+      });
+      expect(rewrite(added)).toEqual([added]);
+      expect(rewrite(delta)).toEqual([delta]);
+      const done = rewrite(frame("response.function_call_arguments.done", {
+        item_id: "fc_one",
+        arguments: '{"input":"printf hello"}',
+      }));
+      expect(payload(done[0]!)).toMatchObject({ arguments: '{"cmd":"printf hello"}' });
+    } finally {
+      rewrite.dispose?.();
+    }
   });
 
   test.each(["response.output_item.done", "response.completed"])("no-arg %s works without arguments.done", type => {
@@ -391,6 +504,7 @@ test("native Responses JSON/SSE and replay share the original function schema re
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "fixture/grok-probe", stream, input: [{ role: "user", content: "synthetic" }], tools, ...extra }),
       });
+      takeSpendHome();
       const response = await handleResponses(request(), config, { model: "", provider: "" });
       expect(response.status).toBe(200);
       const raw = await response.text();

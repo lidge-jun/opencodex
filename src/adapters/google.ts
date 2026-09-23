@@ -15,6 +15,7 @@ import type {
   OcxUsage,
 } from "../types";
 import { isAllowedToolChoice, namespacedToolName, resolveToolChoiceWireName, toolChoiceToolPredicate } from "../types";
+import type { OcxTool } from "../types";
 import { contentPartsToText, parseDataUrl } from "./image";
 import { getVertexAccessToken } from "../lib/gcp-adc";
 import { fetchAntigravityWithRetry, fetchVertexWithRetry } from "./google-http";
@@ -23,6 +24,7 @@ import { isVertexTruncatedTurn, vertexTruncationErrorMessage } from "./google-tr
 import { ANTIGRAVITY_REQUEST_UA, antigravitySessionAnchor, antigravitySessionId, isLikelyRealThoughtSignature, sanitizeAntigravityClaudeSignatures } from "./google-antigravity-wire";
 import { summarizeGoogleWireShape } from "./google-wire-shape";
 import { compileGoogleWireBody } from "./google-wire-compiler";
+import type { GoogleToolSchemaLossReport, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { identifyRoutedModel } from "./identity";
 import {
   antigravityUsesReplayCache,
@@ -345,6 +347,13 @@ function messagesToGeminiFormat(
               parts.push(data ? { inline_data: { mime_type: data.mediaType, data: data.base64 } } : { text: `[video: ${p.videoUrl}]` });
               continue;
             }
+            if (p.type === "document") {
+              // Gemini takes document bytes through the same inline_data part as images and
+              // video. The marker on the part is the fallback for wires without one, not this
+              // wire's best effort (#5212).
+              parts.push({ inline_data: { mime_type: p.mediaType, data: p.data } });
+              continue;
+            }
             // Drop empty/malformed text instead of emitting `{ text: "" }` or a bare `{}` part.
             const textPart = geminiTextPart(p.text);
             if (textPart) parts.push(textPart);
@@ -464,9 +473,7 @@ function messagesToGeminiFormat(
 
 function toolsToGeminiFormat(parsed: OcxParsedRequest): unknown[] | undefined {
   if (!parsed.context.tools?.length) return undefined;
-  const tools = isAllowedToolChoice(parsed.options.toolChoice)
-    ? parsed.context.tools.filter(toolChoiceToolPredicate(parsed.options.toolChoice, parsed.context.tools))
-    : parsed.context.tools;
+  const tools = advertisedGeminiTools(parsed);
   if (tools.length === 0) return undefined;
   return [{
     functionDeclarations: tools.map(t => ({
@@ -477,19 +484,37 @@ function toolsToGeminiFormat(parsed: OcxParsedRequest): unknown[] | undefined {
   }];
 }
 
+/** The declarations this request actually advertises, after any allowed-tools filter. */
+function advertisedGeminiTools(parsed: OcxParsedRequest): readonly OcxTool[] {
+  const declared = parsed.context.tools ?? [];
+  return isAllowedToolChoice(parsed.options.toolChoice)
+    ? declared.filter(toolChoiceToolPredicate(parsed.options.toolChoice, declared))
+    : declared;
+}
+
 /**
  * Client tool_choice enforcement on the wire. The catalog nudge states the same contract in
  * prose, but without functionCallingConfig the model is free to ignore it. "auto" stays absent
  * so the common case is byte-identical. The allowedTools variant already filters the
  * declarations in toolsToGeminiFormat; only its "required" half needs a wire mode.
+ *
+ * A caller that declares strict tools is asking for its argument schemas to be enforced, and
+ * Gemini expresses that as VALIDATED. The mode existed and was plumbed end to end, but was only
+ * ever reachable by matching a model name, so a strict declaration arrived as an ordinary
+ * unvalidated AUTO turn and the response looked the same either way (#5210). VALIDATED replaces
+ * AUTO only: ANY and NONE are stronger constraints the caller asked for explicitly, and
+ * overwriting either of them would lose the choice this function exists to enforce.
  */
 function toolChoiceToGeminiToolConfig(parsed: OcxParsedRequest): Record<string, unknown> | undefined {
   const choice = parsed.options.toolChoice;
-  if (!choice || choice === "auto") return undefined;
+  const validated = advertisedGeminiTools(parsed).some(t => t.strict === true)
+    ? { functionCallingConfig: { mode: "VALIDATED" } }
+    : undefined;
+  if (!choice || choice === "auto") return validated;
   if (choice === "none") return { functionCallingConfig: { mode: "NONE" } };
   if (choice === "required") return { functionCallingConfig: { mode: "ANY" } };
   if (isAllowedToolChoice(choice)) {
-    return choice.mode === "required" ? { functionCallingConfig: { mode: "ANY" } } : undefined;
+    return choice.mode === "required" ? { functionCallingConfig: { mode: "ANY" } } : validated;
   }
   return {
     functionCallingConfig: {
@@ -738,6 +763,14 @@ function invalidGoogleShapeEvent(
 }
 
 export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapter {
+  const toolSchemaPolicy = provider.googleToolSchemaPolicy ?? "compatible";
+  const toolSchemaProfile = {
+    endpointClass: provider.googleMode ?? "ai-studio",
+  } satisfies GoogleToolSchemaProfile;
+  const reportToolSchemaLoss = (report: GoogleToolSchemaLossReport): void => {
+    if (!report.lossy && report.uncertainComparisons === 0) return;
+    debugProviderDiagnosticLazy("google", "google-tool-schema-loss", () => ({ ...report }));
+  };
   // Per-request closure: resolveAdapter builds a fresh adapter per request (server.ts), so buildRequest
   // can stash the CCA model/session for parseStream's reasoning-replay observation.
   let antigravityModel: string | undefined;
@@ -800,7 +833,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
     ...(provider.googleMode === "vertex" || provider.googleMode === "cloud-code-assist"
       ? {
           fetchResponse: (request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> =>
-            (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(request, ctx),
+            (provider.googleMode === "cloud-code-assist" ? fetchAntigravityWithRetry : fetchVertexWithRetry)(
+              request,
+              ctx,
+              { toolSchemaProfile, toolSchemaPolicy },
+            ),
           formatErrorBody: (status: number, _headers: Headers, payloadText: string): string =>
             (provider.googleMode === "cloud-code-assist" ? safeAntigravityHttpErrorMessage : safeVertexHttpErrorMessage)(status, payloadText),
         }
@@ -971,7 +1008,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
           const fcc = (existing.functionCallingConfig ?? {}) as Record<string, unknown>;
           draftRequest.toolConfig = { ...existing, functionCallingConfig: { ...fcc, mode: "VALIDATED" } };
         }
-        const compiled = compileGoogleWireBody(draftRequest);
+        const compiled = compileGoogleWireBody(draftRequest, toolSchemaProfile, toolSchemaPolicy);
+        reportToolSchemaLoss(compiled.toolSchemaLossReport);
         const request = compiled.body;
         restoreGoogleToolName = compiled.restoreToolName;
         // Compile names before replay: signatures are keyed by the exact provider-visible name.
@@ -1021,7 +1059,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       }
 
       if (provider.googleMode === "vertex") {
-        const compiled = compileGoogleWireBody(body);
+        const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
+        reportToolSchemaLoss(compiled.toolSchemaLossReport);
         restoreGoogleToolName = compiled.restoreToolName;
         const vertexProject = provider.project || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || "api-key";
         const vertexLocation = provider.location || process.env.GOOGLE_CLOUD_LOCATION || "global";
@@ -1067,7 +1106,8 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       if (!apiKey) throw new Error("google (AI Studio) requires a non-empty API key");
       headers["x-goog-api-key"] = apiKey;
 
-      const compiled = compileGoogleWireBody(body);
+      const compiled = compileGoogleWireBody(body, toolSchemaProfile, toolSchemaPolicy);
+      reportToolSchemaLoss(compiled.toolSchemaLossReport);
       restoreGoogleToolName = compiled.restoreToolName;
       return { url, method: "POST", headers, body: JSON.stringify(compiled.body) };
     },

@@ -72,7 +72,7 @@ export interface WinswEntry {
   bun: string;
   /** Provenance of `bun`, resolved together with it so the two can never disagree. */
   bunRuntimeSource: BunRuntimeSource;
-  cli: string;
+  cli: string | null;
 }
 
 /**
@@ -118,7 +118,7 @@ export function buildWinswXml(entry: WinswEntry, env: NodeJS.ProcessEnv = proces
   <name>OpenCodex Proxy (native)</name>
   <description>OpenCodex proxy running as a native Windows service (windowless, starts at boot).</description>
   <executable>${xmlEscape(entry.bun)}</executable>
-  <arguments>${xmlEscape(`"${entry.cli}" start --port ${safeListenPort}`)}</arguments>
+  <arguments>${xmlEscape(`${entry.cli ? `"${entry.cli}" ` : ""}start --port ${safeListenPort}`)}</arguments>
 ${envLines.join("\n")}
   <logpath>${xmlEscape(winswLogDir())}</logpath>
   <log mode="roll-by-size">

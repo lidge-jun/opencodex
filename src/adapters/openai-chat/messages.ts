@@ -1,13 +1,14 @@
 import { isNativeOpenAIChatTarget, stripBracketedModelSuffix } from "./wire";
 import { reasoningDetailSegmentForWire } from "./response-events";
+import { translatedChatDeveloperWireRole } from "./developer-role";
 import { isVolcengineArkPaygChatTarget } from "./tool-schema";
 import { contentPartsToText } from "../image";
 import { EMPTY_TOOL_OUTPUT_ANNOTATION, isWhitespaceOnlyTextPartArray } from "../empty-tool-output-annotation";
 import { identifyRoutedModel } from "../identity";
 import { buildNonOpenAIToolCatalogNudgeForTools, shouldInjectNonOpenAIToolCatalogNudge } from "../tool-catalog-nudge";
-import { registryEntryForProviderDestination } from "../../providers/registry";
 import { peekReasoningForCall } from "../../responses/reasoning-replay-cache";
-import type { OcxAssistantMessage, OcxContentPart, OcxMessage, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall } from "../../types";
+import { inlineDocumentDataUrl } from "../../responses/inline-document";
+import type { OcxAssistantMessage, OcxContentPart, OcxParsedRequest, OcxProviderConfig, OcxTextContent, OcxThinkingContent, OcxToolCall } from "../../types";
 import { modelInList, namespacedToolName } from "../../types";
 
 /**
@@ -20,13 +21,6 @@ import { modelInList, namespacedToolName } from "../../types";
  * Chat passthrough and Google inline video are unaffected by this route.
  */
 const VIDEO_UNSUPPORTED_MARKER = "[video omitted: the translated Chat route has no video mapping]";
-
-export function developerSystemText(message: OcxMessage): string | undefined {
-  if (message.role !== "developer") return undefined;
-  if (typeof message.content === "string") return message.content;
-  if (message.content.some(part => part.type === "image")) return undefined;
-  return message.content.map(part => (part as OcxTextContent).text).join("");
-}
 
 /**
  * Chat-completions image_url parts for images carried inside a tool result (issue #888). role:"tool"
@@ -121,21 +115,26 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
   };
 
   const nativeOpenAI = isNativeOpenAIChatTarget(provider);
-  // Hoisting a newly appended reminder rewrites the reusable prompt prefix.
-  // Keep this compatibility exception on the destination/model tested with OCG.
-  const chronologicalSystem = parsed.modelId === "deepseek-v4.1-flash"
-    && registryEntryForProviderDestination(provider)?.id === "opencode-go";
+  // Which role a developer message carries, and why the unrecorded state folds, is stated once
+  // in ./developer-role.ts and read from there by the native passthrough as well. Either way the
+  // message keeps the slot it arrived in — only the role changes, never the position.
+  const developerWireRole = translatedChatDeveloperWireRole(provider);
+  // A developer message keeps the slot it arrived in. Hoisting its text into the leading
+  // system block moved a mid-conversation instruction ahead of every turn it was written to
+  // follow, and the caller saw an ordinary answer either way (#5213). The Claude inbound mints
+  // chronological developer items for exactly this reason (#4161), so the two halves of the
+  // route were working against each other on every host but api.openai.com. Placement is now
+  // uniform; which ROLE that slot carries is decided separately below.
+  //
+  // One destination already had the chronological behaviour, keyed to a model and a registry
+  // id, because hoisting a newly appended reminder rewrites the reusable prompt prefix. That is
+  // a property of prompt-prefix caching rather than of that destination, and it is now what
+  // every destination gets.
   const toolCatalogNudge = shouldInjectNonOpenAIToolCatalogNudge(provider)
     ? buildNonOpenAIToolCatalogNudgeForTools(context.tools, options.toolChoice)
     : undefined;
-  const developerSystemParts = nativeOpenAI || chronologicalSystem
-    ? []
-    : context.messages
-      .map(developerSystemText)
-      .filter((part): part is string => part !== undefined && part.length > 0);
   const systemParts = [
     ...(context.systemPrompt ?? []),
-    ...developerSystemParts,
     ...(toolCatalogNudge ? [toolCatalogNudge] : []),
   ];
   if (systemParts.length > 0) {
@@ -152,20 +151,23 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
       case "developer": {
         const parts = typeof msg.content === "string" ? undefined : msg.content as OcxContentPart[];
         const hasImages = parts?.some(p => p.type === "image") ?? false;
+        // A document has a structured counterpart on this wire, so it needs the parts array for
+        // the same reason an image does: flattening it to a string would drop the bytes.
+        const hasStructured = hasImages || (parts?.some(p => p.type === "document") ?? false);
         let chatMsg: Record<string, unknown>;
-        if (msg.role === "developer" && !hasImages) {
-          if (!nativeOpenAI && !chronologicalSystem) break;
+        if (msg.role === "developer" && !hasStructured) {
           const text = typeof msg.content === "string"
             ? msg.content
             : parts!.map(p => (p as OcxTextContent).text).join("");
-          // A non-text timeline part (video, for example) serializes to nothing here.
-          // The generic path drops such a message; the chronological exception must not
-          // turn it into an empty system message that some upstreams reject.
+          // A non-text timeline part (video, for example) serializes to nothing here. The
+          // generic user path drops such a message, and emitting a content-free system
+          // message instead is rejected by some upstreams. Native OpenAI keeps its existing
+          // empty-developer wire, which is a separate question from placement.
           if (!nativeOpenAI && text.length === 0) break;
-          chatMsg = { role: nativeOpenAI ? "developer" : "system", content: text };
+          chatMsg = { role: developerWireRole, content: text };
         } else if (typeof msg.content === "string") {
           chatMsg = { role: "user", content: msg.content };
-        } else if (!hasImages) {
+        } else if (!hasStructured) {
           // A video part has no `text`, so joining it produced "" and the whole message
           // was dropped: a video-only or text-plus-video turn vanished silently. OpenAI's
           // Chat Completions wire has no video content part, so state the omission
@@ -183,13 +185,30 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
             if (p.type === "image") {
               return { type: "image_url", image_url: { url: p.imageUrl, ...(p.detail ? { detail: p.detail } : {}) } };
             }
+            // Chat Completions carries an attached document as a file part with inline bytes,
+            // the direct counterpart of the Anthropic document block the caller sent.
+            if (p.type === "document") {
+              return {
+                type: "file",
+                file: {
+                  file_data: inlineDocumentDataUrl(p),
+                  ...(p.filename !== undefined ? { filename: p.filename } : {}),
+                },
+              };
+            }
             // Previously this produced { type: "text", text: undefined } for a video
             // part — a malformed part, worse than a drop because it can fail upstream
             // schema validation.
             if (p.type === "video") return { type: "text", text: VIDEO_UNSUPPORTED_MARKER };
             return { type: "text", text: (p as OcxTextContent).text };
           });
-          chatMsg = { role: "user", content: chatParts };
+          // A developer message with images keeps the user-compatible shape it has always had on
+          // this wire. One carrying only a document has no such precedent, and demoting it would
+          // undo the role this adapter just finished preserving.
+          chatMsg = {
+            role: msg.role === "developer" && !hasImages ? developerWireRole : "user",
+            content: chatParts,
+          };
         }
         if (pendingToolCalls.length > 0) deferredBarrierMessages.push(chatMsg);
         else out.push(chatMsg);
@@ -205,7 +224,7 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
         let reasoningContent = thinkingParts.map(p => p.thinking).join("");
         if (
           reasoningContent.length === 0
-          && toolCalls.length > 0
+          && (toolCalls.length > 0 || thinkingParts.length > 0)
           && modelInList(provider.preserveReasoningContentModels, parsed.modelId)
         ) {
           const cached = toolCalls
@@ -216,11 +235,11 @@ export function messagesToChatFormat(parsed: OcxParsedRequest, provider: OcxProv
           if (cached.length > 0) {
             reasoningContent = [...new Set(cached)].join("\n");
           } else if (modelInList(provider.requiresReasoningPlaceholderModels ?? provider.preserveReasoningContentModels, parsed.modelId)) {
-            // Fallback (extends #950, closes #1193): the replay cache is
+            // Fallback (extends #950 and #1193; fixes #5421): the replay cache is
             // bounded (64 entries / 256 KiB / 1 h TTL) and always misses on
-            // long sessions, and some tool rounds carry no recorded reasoning
-            // at all. DeepSeek thinking mode rejects ANY tool_call assistant
-            // message missing reasoning_content with HTTP 400, so inject a
+            // long sessions, and some thinking/tool rounds carry no recorded
+            // reasoning at all. DeepSeek thinking mode rejects replay without
+            // reasoning_content with HTTP 400, so inject a
             // minimal placeholder rather than emit a bare continuation the
             // upstream will reject. Scoped to requiresReasoningPlaceholderModels
             // (defaulting to the preserve list): preserve-listed providers with

@@ -12,14 +12,12 @@
  * key: the `devin-cli` registry entry is gone, so the PROVIDER_REGISTRY lookup
  * that gated the rewrite here could never fire again.
  *
- * The adapter repair must keep working for CUSTOM-NAMED rows. The ACP adapter
- * was removed, so `"devin-cli"` is not a constructible adapter id and
- * `createRegisteredAdapter` would throw `Unknown adapter: devin-cli`. The
- * canonical `devin` row gets its adapter pinned from the registry by
- * `routedProviderConfig`, but a row named e.g. `"devin-acp"` has nothing
- * pinning it and would fail every request. So every row naming the retired
- * adapter is rewritten to `devin`, whatever the row is called, and each
- * rewrite is reported.
+ * Custom-named rows fail closed. The retired ACP transport used the installed
+ * CLI's identity and ignored both configured and caller credentials, so
+ * silently changing one of those rows into a cloud provider could send a
+ * credential with different provenance to Cognition. The warning tells the
+ * operator to reconfigure it explicitly; retaining the unknown adapter id
+ * prevents requests from reaching any upstream in the meantime.
  *
  * A row carrying the retired ACP identity URL is repointed at the api-server
  * in the same pass. That URL was never a destination — it existed only so
@@ -55,10 +53,16 @@ export function projectDevinCliAuthMode(config: OcxConfig): DevinCliAuthModeProj
   const warnings: string[] = [];
   let changed = false;
 
-  // Every row, not only the registry id: a custom-named row had no registry pin,
-  // so after the ACP removal it is the one that cannot construct an adapter.
   for (const [name, row] of Object.entries(config.providers ?? {})) {
     if (!row || row.adapter !== RETIRED_ACP_ADAPTER) continue;
+    if (name !== RETIRED_ACP_ADAPTER) {
+      warnings.push(
+        `left custom provider "${name}" unchanged because adapter ${RETIRED_ACP_ADAPTER} was removed: `
+        + "the row was not migrated; switch its adapter to devin and configure Devin authentication "
+        + "explicitly before using this provider.",
+      );
+      continue;
+    }
     row.adapter = "devin";
     changed = true;
     let detail = "";

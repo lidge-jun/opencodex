@@ -572,7 +572,6 @@ export function claudeLaunchPreflight(
  */
 const NATIVE_STRIPPED_LEVERS = [
   "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
-  "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST",
   "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
   "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
@@ -632,6 +631,9 @@ export function buildNativeClaudeEnv(
   }
 
   for (const name of NATIVE_STRIPPED_LEVERS) delete env[name];
+  // An explicit caller-owned guard must follow a caller-owned gateway and credential;
+  // otherwise settings.env can replace the destination while retaining the credential.
+  if (hasOwnedAdmission) delete env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST;
   const providerNames = Object.keys(config.providers);
   for (const name of MODEL_ENV_SLOT_NAMES) {
     const value = env[name];

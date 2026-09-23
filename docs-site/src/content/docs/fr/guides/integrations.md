@@ -134,6 +134,24 @@ Kimi Code, gjc, MiniMax Code et Raycast — documents YAML, JSON5 et TOML rééc
 d'opencodex ont été modifiées, le commutateur se verrouille et la désactivation est refusée plutôt que de
 deviner quelles modifications vous appartiennent.
 
+## Prévisualiser et confirmer les modifications
+
+Appliquer, Remplacer, Désactiver et Restaurer commencent désormais par un aperçu. La boîte de dialogue
+indique exactement quels réglages gérés vont changer, avec les chemins concernés dans les limites prévues
+et la nature de chaque modification : ajout, mise à jour ou suppression. Examinez ce plan avant de confirmer.
+
+Lorsqu’un plan n’indique aucune modification, cela signifie que le document client géré est déjà dans l’état
+demandé. Pour un profil Aside sélectionné, la confirmation peut tout de même enregistrer sa préférence de
+synchronisation, même si le document géré ne change pas.
+
+Si le fichier change après votre examen, l'écriture est refusée car le plan est devenu obsolète. La boîte de
+dialogue remplace l'ancien plan par le nouveau et vous demande de confirmer à nouveau ; elle ne relance jamais
+l'écriture automatiquement. Si l'aperçu est temporairement indisponible, rechargez normalement la page et
+recommencez l'action.
+
+Aside utilise le même flux d'aperçu et de confirmation pour un seul profil sélectionné à la fois. **Synchroniser
+tous les profils** reste une action groupée distincte et n'est pas liée à un aperçu combiné unique.
+
 ## À quoi s'attendre, en toute transparence
 
 **Le formatage n'est généralement pas préservé.** L'application analyse une configuration avant de la
@@ -235,6 +253,36 @@ commande refuse et vous l'indique : remplacer vos modifications plus récentes r
 Les détails des clients ont été vérifiés par rapport au format de configuration propre à chaque projet ;
 consultez les notes de recherche dans
 `devlog/_fin/260802_client_toggle_api/002_client_toggle_matrix.md` pour savoir ce qui a été contrôlé et quand.
+
+## ZCode 3.14 et versions ultérieures
+
+ZCode 3.14 a déplacé ses fournisseurs personnalisés vers `~/.zcode/v2/provider_config.json` et ne
+lit plus `~/.zcode/v2/config.json` qu'au travers d'un import unique, exécuté seulement quand le
+nouveau fichier est absent. ZCode crée ce nouveau fichier au premier lancement : sur toute
+installation déjà démarrée une fois, l'import a donc déjà eu lieu et une écriture dans
+`config.json` n'atteint plus rien.
+
+opencodex écrit désormais `provider_config.json` directement quand il le peut. Activer
+l'intégration ajoute la règle de fournisseur `opencodex` dans ce fichier, une actualisation du
+catalogue la met à jour, et la désactivation retire exactement ce qu'opencodex y a mis. Toutes les
+autres règles du fichier restent intactes, y compris celle qu'un autre fournisseur conserve pour un
+identifiant de modèle qui figure aussi chez nous. Une règle portant l'identifiant `opencodex`
+qu'opencodex n'a pas écrite est un conflit et non quelque chose à reprendre : réglez-la dans ZCode,
+ou utilisez l'écrasement explicite.
+
+Deux situations refusent encore au lieu d'écrire. Un bloc écrit par opencodex avant le déplacement
+du stockage maintient l'intégration sur `config.json` : désactivez-la d'abord à cet endroit, puis
+réactivez-la pour écrire le nouveau stockage. Et un `provider_config.json` dont le
+`schemaVersion` n'est pas un de ceux qu'opencodex a observés est signalé plutôt que fusionné :
+ce fichier contient tous les fournisseurs de ZCode, et y affirmer une forme échangerait une
+absence d'effet silencieuse contre une perte silencieuse. L'état nomme le fichier que ZCode lit dès
+que l'intégration ne l'écrit pas.
+
+Dans ce second cas, ajoutez le fournisseur dans les réglages de ZCode : URL de base
+`http://127.0.0.1:10100/v1` (ajustez le port à votre écoute), une clé non vide quelconque, et les
+identifiants de modèle donnés par `ocx export --client zcode`. Supprimer
+`provider_config.json` pour relancer l'import de ZCode n'est pas pris en charge : cela détruit
+tous les fournisseurs que ZCode y conserve.
 
 ## Cline CLI
 

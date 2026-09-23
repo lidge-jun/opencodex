@@ -24,6 +24,11 @@ on:
         required: false
         type: boolean
         default: true
+      resume-after-npm-publish:
+        description: "Operator attestation: a previous run of this workflow acknowledged npm publication for this exact commit; skip npm publish and complete the GitHub side"
+        required: false
+        type: boolean
+        default: false
       expected-sha:
         description: "Immutable release commit this dispatch must publish (fail if the branch moved)"
         required: true
@@ -69,8 +74,538 @@ jobs:
             process.exit(1);
           }
           NODE
-  publish:
+  package-standalone:
     needs: validate-dispatch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: bun-linux-x64
+            smoke: true
+          - os: macos-latest
+            target: bun-darwin-arm64
+            smoke: true
+          - os: macos-latest
+            target: bun-darwin-x64
+            smoke: false
+          - os: windows-latest
+            target: bun-windows-x64
+            smoke: true
+          - os: ubuntu-latest
+            target: bun-linux-arm64
+            smoke: false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build dashboard
+        run: bun run build:gui
+
+      - name: Build standalone binary
+        run: bun run build:standalone --target ${{ matrix.target }}
+
+      - name: Smoke test standalone binary
+        if: matrix.smoke && runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="dist/standalone/${{ matrix.target }}/ocx"
+          "$binary" --version
+          OPENCODEX_HOME="$RUNNER_TEMP/ocx-home" "$binary" start --port 10177 >"$RUNNER_TEMP/ocx.log" 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do curl -fsS http://127.0.0.1:10177/healthz && break || sleep 1; done
+          curl -fsS http://127.0.0.1:10177/healthz
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:10177/)" = 200
+
+      - name: Smoke test standalone binary (Windows)
+        if: matrix.smoke && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = "dist/standalone/${{ matrix.target }}/ocx.exe"
+          & $binary --version
+          $env:OPENCODEX_HOME = Join-Path $env:RUNNER_TEMP "ocx-home"
+          $process = Start-Process -FilePath $binary -ArgumentList "start", "--port", "10177" -PassThru
+          try {
+            for ($i = 0; $i -lt 30; $i++) {
+              try { Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10177/healthz | Out-Null; break } catch { Start-Sleep -Seconds 1 }
+            }
+            Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10177/healthz | Select-Object -ExpandProperty Content
+            Invoke-WebRequest -UseBasicParsing http://127.0.0.1:10177/ | Out-Null
+          } finally { Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }
+
+      - name: Archive standalone release
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          STANDALONE_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          cd "dist/standalone/$STANDALONE_TARGET"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell -NoProfile -Command 'Compress-Archive -Path ocx.exe,gui -DestinationPath ("../../ocx-{0}-{1}.zip" -f $env:RELEASE_VERSION,$env:STANDALONE_TARGET) -Force'
+          else
+            tar -czf "../../ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" ocx gui
+          fi
+          cd ../..
+          # The pre-publication verifier resolves every recorded checksum from
+          # dist/release, where the artifact download lands these files flat; the
+          # checksum therefore records the bare file name, which sha256sum takes
+          # verbatim from its argument.
+          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip.sha256"
+          else sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz.sha256"
+          fi
+
+      - name: Upload standalone release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: standalone-${{ matrix.target }}
+          path: |
+            dist/ocx-*.tar.gz
+            dist/ocx-*.zip
+            dist/ocx-*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  package-desktop:
+    needs: validate-dispatch
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: universal-apple-darwin
+            bundles: app,dmg
+            sidecar-targets: macos
+            artifact-suffixes: macos.dmg,macos.app.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: msi
+            sidecar-targets: x86_64-pc-windows-msvc
+            artifact-suffixes: windows-x64.msi
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+            sidecar-targets: x86_64-unknown-linux-gnu
+            artifact-suffixes: linux-x86_64.AppImage,linux-amd64.deb
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      # Whether this run holds the Developer ID material at all. A run without it still builds
+      # locally useful bundles; a run with it must not silently downgrade any part of the app.
+      DESKTOP_SIGNING_CONFIGURED: ${{ secrets.APPLE_CERTIFICATE != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      # The desktop build takes its version from tauri.conf.json and Cargo.toml (the widget
+      # plist inherits it), not from package.json or this input, while the updater manifest is
+      # derived from the input. A mismatch ships an app that reports the previous version under a
+      # manifest naming this one, so the updater re-offers the same release forever. Refuse
+      # before anything is built. Bash on every runner: Windows would otherwise run PowerShell,
+      # where "$RELEASE_VERSION" is not the environment variable.
+      - name: Verify every version source matches the release
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bun scripts/release-version-sources.ts check "$RELEASE_VERSION"
+
+      - name: Install project dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build dashboard
+        run: bun run build:gui
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Prepare macOS sidecars
+        if: runner.os == 'macOS'
+        run: |
+          bun desktop/scripts/prepare-sidecar.ts --target aarch64-apple-darwin
+          bun desktop/scripts/prepare-sidecar.ts --target x86_64-apple-darwin
+          lipo -create desktop/src-tauri/binaries/ocx-aarch64-apple-darwin \
+            desktop/src-tauri/binaries/ocx-x86_64-apple-darwin \
+            -output desktop/src-tauri/binaries/ocx-universal-apple-darwin
+          lipo desktop/src-tauri/binaries/ocx-universal-apple-darwin -verify_arch arm64 x86_64
+
+      - name: Prepare sidecar
+        if: runner.os != 'macOS'
+        run: bun desktop/scripts/prepare-sidecar.ts --target ${{ matrix.sidecar-targets }}
+
+      # The signing certificate has to be in a keychain before the widget is signed, and the
+      # Tauri build step creates its own keychain only when it runs — which is after this. Until
+      # this step existed, build-widget.sh saw no MACOS_SIGN_IDENTITY and took its unsigned
+      # branch, and the bundler does not re-sign anything under PlugIns, so the extension would
+      # have gone out ad-hoc inside a Developer ID host. No release has published a macOS
+      # application yet, so this is a defect that had not reached anyone rather than one that had.
+      - name: Import the release signing certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          # Checked as a set, because a partial set is the dangerous case: the Tauri CLI skips
+          # notarization without failing when the notary credentials are missing, and the
+          # unnotarized artifact is uploaded and attached exactly as a good one would be.
+          missing=""
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            eval "value=\${$name:-}"
+            [ -n "$value" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            if [ "${DRY_RUN}" != "true" ]; then
+              echo "::error::A real release needs the full signing and notarization credential set."
+              echo "::error::Missing:$missing"
+              exit 1
+            fi
+            echo "Signing credentials are incomplete, so this build stays ad-hoc signed:$missing"
+            echo "It is usable for local validation and is not a release asset."
+            exit 0
+          fi
+          keychain="$RUNNER_TEMP/opencodex-signing.keychain-db"
+          # Recorded before anything is created, so the cleanup step can still find a keychain
+          # that a failure left half-built.
+          echo "OPENCODEX_SIGNING_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          keychain_password="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          certificate="$RUNNER_TEMP/opencodex-signing.p12"
+          # The decoded certificate must not outlive this step even when a later command fails.
+          trap 'shred -u "$certificate" 2>/dev/null || rm -Pf "$certificate" 2>/dev/null || true' EXIT
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain" > /dev/null
+          # shellcheck disable=SC2046 # the keychain list is intentionally word-split into arguments
+          security list-keychain -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+
+      - name: Build WidgetKit extension
+        if: runner.os == 'macOS'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # A run holding Developer ID material must not produce an ad-hoc widget. Without this
+          # the script's ad-hoc branch is the silent default, which is how a signed, notarized
+          # app shipped with an extension macOS will not register.
+          WIDGET_SIGN_REQUIRED: ${{ env.DESKTOP_SIGNING_CONFIGURED == 'true' && '1' || '0' }}
+        run: bash desktop/scripts/build-widget.sh
+
+      - name: Verify the extension carries the release signature
+        if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          appex=desktop/src-tauri/widget/OpenCodexWidget.appex
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            if [ "${DRY_RUN}" != "true" ]; then
+              echo "::error::A real release cannot assert its own signature without APPLE_TEAM_ID."
+              exit 1
+            fi
+            echo "No team configured; skipping the signature assertion for this non-release build."
+            exit 0
+          fi
+          codesign --verify --strict --deep "$appex"
+          description="$(codesign -dvvv "$appex" 2>&1)"
+          echo "$description"
+          echo "$description" | grep -q "TeamIdentifier=$APPLE_TEAM_ID"
+          echo "$description" | grep -q "flags=.*runtime"
+          echo "$description" | grep -q "Timestamp="
+
+      - name: Prepare Windows installer version
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bun desktop/scripts/windows-installer-config.ts "$RELEASE_VERSION" "$RUNNER_TEMP/opencodex-msi.json"
+
+      - name: Preserve the compiled Linux sidecar
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x desktop/scripts/appimage-patchelf.py
+          echo "PATCHELF=$GITHUB_WORKSPACE/desktop/scripts/appimage-patchelf.py" >> "$GITHUB_ENV"
+
+      # Release signing is intentionally secret-gated. Developer ID, notarization,
+      # and updater signatures require maintainer-owned credentials; builds without
+      # those secrets remain useful for local validation but are not release assets.
+      - name: Build desktop bundles
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        # linuxdeploy suppresses its own stderr at the default verbosity. Keep
+        # diagnostics on the first attempt; Apple signing commands stay non-verbose.
+        run: bunx tauri ${{ runner.os == 'Linux' && '--verbose' || '' }} build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config "${{ runner.os == 'Windows' && format('{0}/opencodex-msi.json', runner.temp) || '{}' }}"
+
+      - name: Verify the packaged Linux sidecar
+        if: runner.os == 'Linux'
+        run: bash desktop/scripts/verify-linux-sidecar.sh
+
+      - name: Rename release assets
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          DESKTOP_TARGET: ${{ matrix.target }}
+        run: |
+          bun desktop/scripts/collect-release-assets.ts \
+            --version "$RELEASE_VERSION" \
+            --target "$DESKTOP_TARGET" \
+            --out dist/release
+
+      # After the bundle exists, not before: a sweep that runs first passes by finding nothing.
+      - name: Verify every Mach-O in the bundle carries the release identity
+        if: runner.os == 'macOS'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_TEAM_ID}" ]; then
+            if [ "${DRY_RUN}" != "true" ]; then
+              echo "::error::A real release cannot verify its bundle without APPLE_TEAM_ID."
+              exit 1
+            fi
+            echo "No team configured; skipping the bundle-wide assertion for this local build."
+            exit 0
+          fi
+          # Executables are found by their magic bytes rather than by path or extension. A bundler
+          # signs what it placed; anything copied in afterwards is invisible to it, and the
+          # binaries that get missed are the ones with no extension to filter on.
+          apps=0
+          machos=0
+          bad=0
+          while IFS= read -r app; do
+            apps=$((apps + 1))
+            echo "checking $app"
+            while IFS= read -r -d '' file; do
+              # All eight Mach-O leading words: thin and fat, 32- and 64-bit, both byte orders.
+              # A list that covers only the common ones skips the rest in silence while the
+              # non-zero counter below still reports a healthy sweep.
+              case "$(head -c 4 "$file" | xxd -p)" in
+                cefaedfe|cffaedfe|feedface|feedfacf) ;;
+                cafebabe|bebafeca|cafebabf|bfbafeca) ;;
+                *) continue ;;
+              esac
+              machos=$((machos + 1))
+              if ! codesign -dvvv "$file" 2>&1 | grep -q "TeamIdentifier=$APPLE_TEAM_ID"; then
+                echo "::error::$file is not signed with the release identity"
+                bad=1
+              fi
+            done < <(find "$app" -type f -print0)
+          done < <(find desktop/src-tauri/target -maxdepth 6 -type d -name '*.app')
+          echo "inspected $machos Mach-O files across $apps app bundles"
+          # A sweep that inspected nothing is the failure mode this step exists to prevent.
+          if [ "$apps" -eq 0 ] || [ "$machos" -eq 0 ]; then
+            echo "::error::found $apps app bundles and $machos Mach-O files; the sweep inspected nothing"
+            exit 1
+          fi
+          exit "$bad"
+
+      - name: Upload desktop release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-${{ matrix.target }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 7
+
+      # always(), because a keychain holding the release identity must not survive a failed job
+      # on a runner image that could be reused.
+      - name: Remove the signing keychain
+        if: always() && runner.os == 'macOS'
+        run: |
+          if [ -n "${OPENCODEX_SIGNING_KEYCHAIN:-}" ] && [ -f "${OPENCODEX_SIGNING_KEYCHAIN}" ]; then
+            security delete-keychain "${OPENCODEX_SIGNING_KEYCHAIN}"
+          fi
+
+  # Pre-publication verification. Everything that will be published is checked
+  # here — expected platform set, every checksum, the updater signatures, and the
+  # manifest parse-back — and publication consumes this result rather than
+  # verifying after the fact. Runs on dry-run too: a dry run must prove the same
+  # chain a real release will rely on.
+  verify-release:
+    runs-on: ubuntu-latest
+    needs: [validate-dispatch, package-standalone, package-desktop]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      UPDATER_SIGNING_CONFIGURED: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Download standalone packaged assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: standalone-*
+          merge-multiple: true
+          path: dist/release
+
+      - name: Download desktop packaged assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: dist/release
+
+      - name: Verify release assets
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          args=(
+            --version "$RELEASE_VERSION"
+            --dir dist/release
+            --repo "$GITHUB_REPOSITORY"
+            --sha "$GITHUB_SHA"
+            --receipt-out verification/receipt.json
+          )
+          # Signatures are verified whenever they exist; the manifest is only
+          # generated when this run holds the updater key, exactly as before.
+          if [ "$UPDATER_SIGNING_CONFIGURED" = "true" ]; then
+            args+=(--manifest-out dist/release/latest.json --require-signatures)
+          fi
+          bun desktop/scripts/verify-release-assets.ts "${args[@]}"
+
+      - name: Upload verified release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-release
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload verification receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-verification-receipt
+          path: verification/receipt.json
+          if-no-files-found: error
+          retention-days: 7
+
+  attach-release:
+    runs-on: ubuntu-latest
+    needs: [publish, verify-release]
+    if: ${{ inputs.dry-run != true }}
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Download the verified release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-release
+          path: dist/release
+
+      - name: Download the verification receipt
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-verification-receipt
+          path: verification
+
+      # The bundle is attached exactly as verified: the receipt must name this
+      # run's version and commit, or nothing uploads.
+      - name: Require the verification receipt for this commit
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          receipt_version="$(bun -e 'console.log(JSON.parse(await Bun.file("verification/receipt.json").text()).version)')"
+          receipt_sha="$(bun -e 'console.log(JSON.parse(await Bun.file("verification/receipt.json").text()).sha)')"
+          test "$receipt_version" = "$RELEASE_VERSION" || {
+            echo "::error::verification receipt names version $receipt_version, not $RELEASE_VERSION"
+            exit 1
+          }
+          test "$receipt_sha" = "$GITHUB_SHA" || {
+            echo "::error::verification receipt names commit $receipt_sha, not $GITHUB_SHA"
+            exit 1
+          }
+
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Workflow inputs reach shell code through env, never by interpolation into
+          # run: source. tests/ci-workflows.test.ts enforces this repo-wide.
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          release_tag="v${RELEASE_VERSION}"
+          gh release upload "$release_tag" dist/release/* --clobber
+
+          # A published release is immutable: GitHub rejects every later asset upload
+          # with HTTP 422, which is why v2.55.0 through v2.60.0 shipped with zero
+          # assets and left the desktop updater without anything to download. The
+          # release is therefore created as a draft and becomes public here, once the
+          # verified bundle is attached. The only edit permitted is this flip — the
+          # notes still come from the validated notes file written at creation.
+          if [ "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit "$release_tag" --draft=false
+          fi
+
+  publish:
+    needs: [validate-dispatch, verify-release]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -129,14 +664,15 @@ jobs:
       - name: Dependency audit (high severity)
         run: bun run audit:high
 
-      - name: Verify version matches package.json
+      - name: Verify every version source matches the requested version
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          PKG=$(node -p "require('./package.json').version")
-          echo "package.json=$PKG  input=${RELEASE_VERSION}"
-          test "$PKG" = "$RELEASE_VERSION" || {
-            echo "::error::package.json ($PKG) != requested (${RELEASE_VERSION}) — bump package.json on main first";
+          # package.json plus the desktop sources (tauri.conf.json, Cargo.toml and the
+          # opencodex-desktop Cargo.lock entry). package-desktop already refused to build on a
+          # mismatch; this re-proves it on the commit that is about to publish.
+          bun scripts/release-version-sources.ts check "$RELEASE_VERSION" || {
+            echo "::error::a version source != requested (${RELEASE_VERSION}) — run scripts/release.ts, which moves all of them, on main first";
             exit 1;
           }
 
@@ -221,8 +757,10 @@ jobs:
           fi
 
           # Keep in sync with the service-lifecycle.yml trigger paths. src/cli.ts is
-          # the pre-restructure compat stub that durable launchers still execute.
-          if printf '%s\n' "$changed_files" | grep -Eq '^(src/service\.ts|src/cli\.ts|src/cli/index\.ts|src/lib/bun-runtime\.ts|package\.json|bun\.lock|\.github/workflows/service-lifecycle\.yml|\.github/workflows/release\.yml)$'; then
+          # the pre-restructure compat stub that durable launchers still execute; the
+          # service implementation itself is the src/service/ directory, and the desktop
+          # shell packages and launches it.
+          if printf '%s\n' "$changed_files" | grep -Eq '^(src/service\.ts|src/service/.*|desktop/.*|src/cli\.ts|src/cli/index\.ts|src/lib/bun-runtime\.ts|package\.json|bun\.lock|\.github/workflows/service-lifecycle\.yml|\.github/workflows/release\.yml)$'; then
             service_url="$(
               gh run list \
                 --workflow service-lifecycle.yml \
@@ -255,10 +793,12 @@ jobs:
       # PREREQUISITE: configure the Trusted Publisher for this repo + workflow on npmjs.com — possible
       # only AFTER the package's first version exists (do the first publish locally, see the runbook).
       - name: Preflight release metadata
+        id: metadata
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry-run }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
         run: |
           set -euo pipefail
 
@@ -275,7 +815,9 @@ jobs:
           fi
 
           if [ -n "$existing_tag_sha" ]; then
-            if [ "$dry_run" = "true" ]; then
+            if [ "$RESUME" = "true" ]; then
+              echo "::notice::${release_tag} already exists at this commit; resuming"
+            elif [ "$dry_run" = "true" ]; then
               echo "::notice::${release_tag} already exists at this commit; dry-run only"
             else
               echo "::error::${release_tag} already exists. Refusing to publish a version with pre-existing Git metadata."
@@ -284,7 +826,9 @@ jobs:
           fi
 
           if gh release view "$release_tag" >/dev/null 2>&1; then
-            if [ "$dry_run" = "true" ]; then
+            if [ "$RESUME" = "true" ]; then
+              echo "::notice::GitHub Release ${release_tag} already exists; resuming to complete the attachment"
+            elif [ "$dry_run" = "true" ]; then
               echo "::notice::GitHub Release ${release_tag} already exists; dry-run only"
             else
               echo "::error::GitHub Release ${release_tag} already exists. Choose the next unused patch version."
@@ -292,24 +836,42 @@ jobs:
             fi
           fi
 
+          if [ "$RESUME" = "true" ] && [ "$dry_run" = "true" ]; then
+            echo "::error::resume-after-npm-publish is a real-publication recovery path and cannot combine with dry-run"
+            exit 1
+          fi
           if npm view "${pkg_name}@${RELEASE_VERSION}" version >/dev/null 2>&1; then
-            if [ "$dry_run" = "true" ]; then
+            if [ "$RESUME" = "true" ]; then
+              resume_git_head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+                echo "::error::Cannot verify the existing npm package source; resume refused"
+                exit 1
+              }
+              bun scripts/verify-release-resume.ts "$GITHUB_SHA" "$resume_git_head"
+              echo "resume_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+              echo "::notice::${pkg_name}@${RELEASE_VERSION} is acknowledged on npm; resuming after the recorded partial publication"
+            elif [ "$dry_run" = "true" ]; then
               echo "::notice::${pkg_name}@${RELEASE_VERSION} already exists on npm; dry-run only"
             else
-              echo "::error::${pkg_name}@${RELEASE_VERSION} already exists on npm. Choose the next unused patch version."
+              echo "::error::${pkg_name}@${RELEASE_VERSION} already exists on npm. If a previous run acknowledged this publication and failed afterwards, re-dispatch with resume-after-npm-publish: true; otherwise choose the next unused patch version."
               exit 1
             fi
+          elif [ "$RESUME" = "true" ]; then
+            echo "::error::resume-after-npm-publish is set, but ${pkg_name}@${RELEASE_VERSION} is not on npm — there is no acknowledged publication to resume from"
+            exit 1
           fi
 
       - name: Refuse a release the current tag set already outranks
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           DRY_RUN: ${{ inputs.dry-run }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
         run: |
           set -euo pipefail
           allow=""
           existing_tag_sha="$(git rev-parse -q --verify "refs/tags/v${RELEASE_VERSION}^{commit}" || true)"
-          if [ "$DRY_RUN" = "true" ] && [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" = "$GITHUB_SHA" ]; then
+          # Dry-run re-dispatches and the resume path both legitimately find the tag
+          # already at this commit; a moved tag is still refused above.
+          if { [ "$DRY_RUN" = "true" ] || [ "$RESUME" = "true" ]; } && [ -n "$existing_tag_sha" ] && [ "$existing_tag_sha" = "$GITHUB_SHA" ]; then
             allow="--allow-existing-tag-at-head"
           fi
           git tag --list 'v*' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION" $allow
@@ -338,15 +900,30 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry-run }}
           NPM_DIST_TAG: ${{ inputs.tag }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          VERIFIED_RESUME_SHA: ${{ steps.metadata.outputs.resume_sha }}
         run: |
           set -euo pipefail
-          if [ "$DRY_RUN" = "true" ]; then
+          pkg_name="$(node -p "require('./package.json').name")"
+          if [ "$RESUME" = "true" ]; then
+            if [ -z "$VERIFIED_RESUME_SHA" ] || [ "$VERIFIED_RESUME_SHA" != "$GITHUB_SHA" ]; then
+              echo "::error::Resume has no matching registry source verification; publication remains unacknowledged"
+              exit 1
+            fi
+            # npm publication was acknowledged by the earlier run and confirmed by the
+            # preflight above; completing the GitHub side must never republish.
+            echo "::notice::RESUME — npm publish skipped; publication already acknowledged"
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "Publication resumed for ${pkg_name}@${RELEASE_VERSION} at ${GITHUB_SHA} (npm publish skipped; acknowledged by the earlier run)." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$DRY_RUN" = "true" ]; then
             echo "::notice::DRY RUN — building + packing, not publishing"
             npm run prepublishOnly
             npm pack --dry-run
           else
             npm publish --tag "$NPM_DIST_TAG" --access public
             echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "Publication acknowledged for ${pkg_name}@${RELEASE_VERSION} at ${GITHUB_SHA}. If any later step in this run fails, re-dispatch with the same version and expected-sha plus resume-after-npm-publish: true — never republish this version." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       # Publication is acknowledged before registry reads, which can lag or fail.
@@ -388,6 +965,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
         run: |
           set -euo pipefail
 
@@ -416,5 +994,21 @@ jobs:
             git push origin "refs/tags/${release_tag}"
           fi
 
-          gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" \
-            --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
+          # Idempotent only for the resume path: a previous run may already have
+          # created the release and then failed before the assets were attached.
+          # Outside resume, finding a release here means the preflight was bypassed
+          # or the release appeared mid-run, and that stays a hard failure.
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            if [ "$RESUME" = "true" ]; then
+              echo "::notice::GitHub Release ${release_tag} already exists; reusing it for attachment"
+            else
+              echo "::error::GitHub Release ${release_tag} already exists; refusing to reuse it outside the resume path"
+              exit 1
+            fi
+          else
+            # Draft first. Publication freezes a release under GitHub's immutable
+            # releases, so attach-release attaches the verified bundle to the draft
+            # and publishes it afterwards.
+            gh release create "$release_tag" --draft --target "$GITHUB_SHA" --title "$release_tag" \
+              --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
+          fi

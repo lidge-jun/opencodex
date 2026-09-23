@@ -2,8 +2,10 @@ import type { AdapterFetchContext, AdapterRequest } from "./base";
 import { createAdapterPhysicalSend } from "./physical-send";
 import type { SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../usage/log";
+import { debugProviderDiagnosticLazy } from "../lib/debug";
 import { isQuotaExhaustedBody, retryableGoogleStatus, safeGoogleHttpErrorMessage } from "./google-errors";
-import { repairGoogleInvalidRequestBody } from "./google-wire-compiler";
+import { repairGoogleInvalidRequestBodyWithReport } from "./google-wire-compiler";
+import type { GoogleToolSchemaPolicy, GoogleToolSchemaProfile } from "./google-tool-schema";
 import { normalizeUpstreamHttpErrorResponse, readDisplaySafeErrorPayloadText } from "./upstream-http-error";
 import {
   abortError,
@@ -22,6 +24,8 @@ const GOOGLE_RETRY_MAX_MS = 2_000;
 export interface GoogleRetryOptions {
   /** Repair-and-replay structurally invalid 400 bodies (Vertex/Antigravity behavior). */
   repairInvalid400?: boolean;
+  toolSchemaProfile?: GoogleToolSchemaProfile;
+  toolSchemaPolicy?: GoogleToolSchemaPolicy;
 }
 
 async function normalizeFinalGoogleError(label: string, res: Response, signal?: AbortSignal): Promise<Response> {
@@ -45,6 +49,8 @@ export async function fetchGoogleWithRetry(
   opts: GoogleRetryOptions = {},
 ): Promise<Response> {
   const repairInvalid400 = opts.repairInvalid400 ?? true;
+  const toolSchemaProfile = opts.toolSchemaProfile ?? { endpointClass: "vertex" };
+  const toolSchemaPolicy = opts.toolSchemaPolicy ?? "compatible";
   const timeoutMs = ctx.timeoutMs ?? 200_000;
   const send = createAdapterPhysicalSend(ctx);
   let lastError: unknown;
@@ -77,10 +83,22 @@ export async function fetchGoogleWithRetry(
         } catch (error) {
           if (ctx.abortSignal?.aborted) throw error;
         }
-        const repairedBody = repairGoogleInvalidRequestBody(activeRequest.body, payloadText);
-        if (repairedBody !== undefined) {
+        const repair = repairGoogleInvalidRequestBodyWithReport(activeRequest.body, payloadText, toolSchemaProfile);
+        if (repair !== undefined) {
+          if (repair.toolSchemaLoss) {
+            const changedSendAllowed = toolSchemaPolicy !== "reject-lossy";
+            debugProviderDiagnosticLazy("google", "google-tool-schema-repair", () => ({
+              ...repair.toolSchemaLoss,
+              phase: "repair",
+              declarationCount: repair.toolSchemaDeclarationCount ?? 0,
+              changedSendAllowed,
+            }));
+            if (!changedSendAllowed) {
+              return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
+            }
+          }
           compatibilityReplayUsed = true;
-          activeRequest = { ...activeRequest, body: repairedBody };
+          activeRequest = { ...activeRequest, body: repair.body };
           pendingResponse = res;
           sendClass = "repair";
           attempt--; // The changed-request replay is separate from transient retry accounting.
@@ -145,16 +163,37 @@ export async function fetchGoogleWithRetry(
  * demand" spikes, plus plain rate-limit 429s, both of which previously failed immediately
  * because the default server fetch path only retries connection resets.
  */
-export function fetchDirectGeminiWithRetry(request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
-  return fetchGoogleWithRetry("Gemini", request, { ...ctx, returnRawErrors: true }, { repairInvalid400: false });
+export function fetchDirectGeminiWithRetry(
+  request: AdapterRequest,
+  ctx: AdapterFetchContext = {},
+  schemaPolicy: Pick<GoogleRetryOptions, "toolSchemaProfile" | "toolSchemaPolicy"> = {},
+): Promise<Response> {
+  return fetchGoogleWithRetry("Gemini", request, { ...ctx, returnRawErrors: true }, {
+    ...schemaPolicy,
+    repairInvalid400: false,
+  });
 }
 
 /** Vertex AI retry wrapper. */
-export function fetchVertexWithRetry(request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
-  return fetchGoogleWithRetry("Vertex AI", request, ctx);
+export function fetchVertexWithRetry(
+  request: AdapterRequest,
+  ctx: AdapterFetchContext = {},
+  schemaPolicy: Pick<GoogleRetryOptions, "toolSchemaProfile" | "toolSchemaPolicy"> = {},
+): Promise<Response> {
+  return fetchGoogleWithRetry("Vertex AI", request, ctx, {
+    toolSchemaProfile: { endpointClass: "vertex" },
+    ...schemaPolicy,
+  });
 }
 
 /** Antigravity (Cloud Code Assist) retry wrapper. */
-export function fetchAntigravityWithRetry(request: AdapterRequest, ctx: AdapterFetchContext = {}): Promise<Response> {
-  return fetchGoogleWithRetry("Antigravity", request, ctx);
+export function fetchAntigravityWithRetry(
+  request: AdapterRequest,
+  ctx: AdapterFetchContext = {},
+  schemaPolicy: Pick<GoogleRetryOptions, "toolSchemaProfile" | "toolSchemaPolicy"> = {},
+): Promise<Response> {
+  return fetchGoogleWithRetry("Antigravity", request, ctx, {
+    toolSchemaProfile: { endpointClass: "cloud-code-assist" },
+    ...schemaPolicy,
+  });
 }

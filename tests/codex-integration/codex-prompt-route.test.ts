@@ -21,9 +21,13 @@ import {
 import type { ManagementPrincipal } from "../../src/server/management-auth";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { OCX_SECTION_MARKER } from "../../src/codex/injected-marker";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
 
-const MARKER = "# Auto-injected by opencodex";
+// Prompt layers deliberately keep the BARE ownership marker: 'ocx restore' is not their undo,
+// so the recovery hint that routing keys carry (#5261) does not belong here. Derived from the
+// constant rather than restated, so the two scopes cannot drift apart silently.
+const MARKER = OCX_SECTION_MARKER;
 const config = { port: 10100, defaultProvider: "openai", providers: {} } as OcxConfig;
 const roots: string[] = [];
 
@@ -692,6 +696,20 @@ describe("020 coverage completions", () => {
     });
     expect(editDefault.status).toBe(400);
     expect(editDefault.body.code).toBe("unknown_layer");
+
+    // A string id is edit-only. It cannot bypass the creation cap by naming a
+    // syntactically valid file that the server did not generate.
+    const editMissing = await call("PUT", "/api/codex-prompt/base", fx, {
+      id: "aaaaaa", title: "Missing", body: "b", revision: rev0,
+    });
+    expect(editMissing.status).toBe(400);
+    expect(editMissing.body.code).toBe("unknown_layer");
+
+    const oversized = await call("PUT", "/api/codex-prompt/base", fx, {
+      id: null, title: "Too large", body: "x".repeat(64 * 1024 + 1), revision: rev0,
+    });
+    expect(oversized.status).toBe(400);
+    expect(oversized.body.code).toBe("body_too_large");
 
     // An unknown variant would leave the key naming a file Codex cannot read.
     const unknown = await call("PUT", "/api/codex-prompt/base/select", fx, {
@@ -1518,6 +1536,49 @@ describe("020 coverage completions", () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("invalid_body");
+  });
+
+  test("41. unmapped and unrendered layers stay distinct from the unprintable base prompt", async () => {
+    // "not-exposed" is the base prompt's contract: it is confirmed to travel
+    // outside the printable message list, and the GUI renders a
+    // base-prompt-specific explanation for it. Reusing that reason for layers
+    // whose tag the extractor has not verified showed that explanation on
+    // unrelated layers.
+    const fx = fixture("");
+    // The probe reads the base prompt from CODEX_HOME - the decoy here, whose
+    // sentinel config selects model "sentinel". A catalog row that publishes
+    // only an instructions_template makes the base confirmed unprintable, so
+    // base-instructions must report "not-exposed" while the tag-less layers
+    // report "unmapped".
+    writeFileSync(join(fx.decoyHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [{ slug: "sentinel", model_messages: { instructions_template: "template {{unprintable}}" } }],
+    }), "utf8");
+    const probeOutput = JSON.stringify([{
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "<skills_instructions>Skill text.</skills_instructions>" }],
+    }]);
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(probeOutput)});`],
+    });
+
+    const res = await call("GET", "/api/codex-prompt/text", fx);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.base.representation).toBe("template");
+    expect(res.body.layers["base-instructions"].reason).toBe("not-exposed");
+    // Mirrors UNMAPPED_LAYER_IDS in prompt-text-probe.ts.
+    for (const id of [
+      "model-switch", "context-window-guidance", "environments-instructions",
+      "tools", "multi-agent-mode", "personality", "realtime",
+      "git-attribution",
+    ]) {
+      expect(res.body.layers[id]?.reason).toBe("unmapped");
+    }
+    // The collaboration tag is known, but this fixture does not render it.
+    expect(res.body.layers.collaboration.reason).toBe("not-rendered");
+    expectDecoyUntouched(fx);
   });
 
 

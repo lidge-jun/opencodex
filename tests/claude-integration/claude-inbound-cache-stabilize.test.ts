@@ -7,6 +7,7 @@ import { handleClaudeMessages } from "../../src/server/claude-messages";
 import type { OcxConfig, OcxClaudeCodeConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { beforeEach, afterEach, describe, expect, test } from "bun:test";
 import { stabilizeClaudeInstructionsForPromptCache } from "../../src/claude/inbound-cache-stabilize";
 import { anthropicToResponsesTranslation } from "../../src/claude/inbound";
@@ -404,14 +405,22 @@ describe("Messages operator opt-in at the outbound boundary", () => {
   let isolatedHome: IsolatedCodexHome | undefined;
   let previousHome: string | undefined;
   let configHome: string | undefined;
+  let releaseSpendHome: (() => void) | undefined;
 
   beforeEach(() => {
     previousHome = process.env.OPENCODEX_HOME;
     isolatedHome = installIsolatedCodexHome("ocx-prefix-contract-");
     configHome = mkdtempSync(join(tmpdir(), "ocx-prefix-config-"));
     process.env.OPENCODEX_HOME = configHome;
+    // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
+    // last because the lease binds the home in effect at the moment it is taken.
+    releaseSpendHome = acquireOwnedSpendHome();
   });
   afterEach(() => {
+    // Released before this case's home is removed: an open lease inside a directory being
+    // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
     isolatedHome?.restore();
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;

@@ -187,6 +187,8 @@ GPT-5.6 系列使用 `additionalModelRequestFields.reasoning.effort`，`claude-o
 - 把請求建置交給 Responses passthrough，驗證 `baseUrl` 不含未解析的 template placeholder，
   再用 `api-key` 替換 `Authorization`。設定的 URL 直接指向 Azure v1 Responses API，因此 adapter
   不會追加 `api-version`。
+- 與 Responses 共用針對其他 provider 所產生推理狀態的復原：收到 `400 invalid_encrypted_content`
+  後，去掉該狀態（加密內容與推理項的 `rs_…` id）並只重送一次。
 
 ## 圖像工具（`image.ts`）
 

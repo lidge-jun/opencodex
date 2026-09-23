@@ -82,7 +82,7 @@ export OPENCODEX_API_KEY=<your key>
 該名稱是 Pi 專屬的。opencode 使用不同的變數
 （`OPENCODEX_OPENCODE_API_KEY`，採 `{env:…}` 形式）— 見 [opencode 指南](/zh-tw/guides/opencode/)。
 
-**回送代理完全不需要 key。** opencodex 預設綁定 `127.0.0.1` 且在那裡不認證任何東西，因此 `$OPENCODEX_API_KEY` 參照是無效的，你可以讓變數未設定。它只在 `hostname` 設定到回送以外時才重要，這也是代理在沒有 token 時拒絕啟動的情況 — 見[遠端存取](/zh-tw/reference/configuration/#remote-access)。
+**回送代理完全不需要 key。** opencodex 預設綁定 `127.0.0.1` 且在那裡不認證任何東西，因此 `$OPENCODEX_API_KEY` 參照是無效的，你可以讓變數未設定。它只在 `hostname` 設定到回送以外時才重要，這也是代理在沒有 token 時拒絕啟動的情況 — 見[遠端存取](/zh-tw/reference/configuration/server/#遠端存取)。
 
 ## 模型後設資料
 

@@ -8,6 +8,7 @@ import {
 } from "../../src/providers/request-pacing";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const actualResolver = await import("../../src/server/adapter-resolve");
 const actualResolveAdapter = actualResolver.resolveAdapter;
@@ -20,6 +21,10 @@ let builtBodies: string[] = [];
 let customRunTurn: ProviderAdapter["runTurn"] | undefined;
 let passthroughFetchCalls = 0;
 let bodyObservationReleaseCalls = 0;
+let releaseSpendHome: (() => void) | undefined;
+
+// Direct dispatch needs the writer lease that startServer normally owns for this home.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 function attemptAt(index: number): AdapterEvent[] {
   return attemptEvents[index] ?? [{ type: "error", message: `missing fixture attempt ${index}` }];
@@ -165,6 +170,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release the preload-home lease before later teardown can replace or remove that home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   resetProviderRequestPacingForTest();
   delete process.env.OCX_EMPTY_COMPLETION_RETRY;
 });
@@ -176,6 +184,7 @@ describe("empty-completion core integration", () => {
     // and that transport already falls back to HTTP SSE for exactly these bodies (#2473), with
     // an 18.2 MB HTTP 200 observed in #2426. Unset must mean "send it", not "guess a ceiling".
     const logCtx: RequestLogContext = { model: "", provider: "" };
+    takeSpendHome();
     const response = await handleResponses(
       request(false, "x".repeat(20 * 1024 * 1024)),
       config("test-passthrough"),
@@ -220,6 +229,7 @@ describe("empty-completion core integration", () => {
   });
 
   test("a normal-sized passthrough body still reaches upstream", async () => {
+    takeSpendHome();
     const response = await handleResponses(
       request(false),
       config("test-passthrough", { maxUpstreamBodyBytes: 4_096 }),
@@ -232,6 +242,7 @@ describe("empty-completion core integration", () => {
   });
 
   test("an explicit zero limit lets an oversized turn reach upstream", async () => {
+    takeSpendHome();
     const response = await handleResponses(
       request(false, "x".repeat(512)),
       config("test-passthrough", { maxUpstreamBodyBytes: 0 }),
@@ -266,6 +277,7 @@ describe("empty-completion core integration", () => {
       emit({ type: "done" });
     };
 
+    takeSpendHome();
     const response = await handleResponses(request(true), paced, { model: "", provider: "" });
     expect(response.status).toBe(200);
     const reader = response.body!.getReader();
@@ -297,6 +309,7 @@ describe("empty-completion core integration", () => {
       ];
       const logCtx: RequestLogContext = { model: "", provider: "" };
 
+      takeSpendHome();
       const response = await handleResponses(request(stream), config("test-run-turn"), logCtx);
       const body = await response.text();
 
@@ -319,6 +332,7 @@ describe("empty-completion core integration", () => {
       ];
       const logCtx: RequestLogContext = { model: "", provider: "" };
 
+      takeSpendHome();
       const response = await handleResponses(request(stream), config("test-http"), logCtx);
       const body = await response.text();
 
@@ -352,6 +366,7 @@ describe("empty-completion core integration", () => {
     const paced = config("test-http");
     paced.providers.fixture!.requestPacing = { enabled: true, minIntervalMs: 100 };
 
+    takeSpendHome();
     const response = await handleResponses(request(false), paced, { model: "", provider: "" });
     expect(response.status).toBe(200);
     expect(httpCalls).toBe(2);
@@ -369,6 +384,7 @@ describe("empty-completion core integration", () => {
     const tierGated = config("test-http");
     tierGated.providers.fixture!.supportsServiceTier = false;
 
+    takeSpendHome();
     const response = await handleResponses(
       request(false, "please answer", { service_tier: "priority" }),
       tierGated,
@@ -388,6 +404,7 @@ describe("empty-completion core integration", () => {
     const disabled = config("test-run-turn");
     delete disabled.emptyCompletionRetry;
 
+    takeSpendHome();
     const response = await handleResponses(request(false), disabled, { model: "", provider: "" });
     await response.text();
 
@@ -410,6 +427,7 @@ describe("empty-completion core integration", () => {
       emit({ type: "done" });
     };
 
+    takeSpendHome();
     const response = await handleResponses(
       request(true),
       config("test-run-turn", { stallTimeoutSec: 0.05 }),
@@ -424,6 +442,7 @@ describe("empty-completion core integration", () => {
 
   test("combo and routed-compaction turns are excluded from the retry", async () => {
     attemptEvents = [[{ type: "done" }], [{ type: "text_delta", text: "must not run" }, { type: "done" }]];
+    takeSpendHome();
     const combo = await handleResponses(
       request(false),
       config("test-run-turn"),
@@ -472,6 +491,7 @@ describe("empty-completion core integration", () => {
       }),
     });
 
+    takeSpendHome();
     const response = await handleResponses(req, guarded, { model: "", provider: "" });
     const body = await response.text();
 

@@ -1181,6 +1181,28 @@ describe("bot-owned control state", () => {
     assert.ok(out.includes("npm:@scope"));
   });
 
+  it("preserves punctuation-bearing email local parts while defusing mentions", () => {
+    const out = sanitizeTranslationBody(
+      "mail x!@example.com, a=b@example.com, or a/b@example.com; end!@octocat key=@value path/@handle user.name@example.com user+tag@example.com",
+    );
+    assert.ok(out.includes("x!@example.com"));
+    assert.ok(out.includes("a=b@example.com"));
+    assert.ok(out.includes("a/b@example.com"));
+    assert.ok(out.includes("user.name@example.com"));
+    assert.ok(out.includes("user+tag@example.com"));
+    assert.match(out, /end!@\u200boctocat/);
+    assert.match(out, /key=@\u200bvalue/);
+    assert.match(out, /path\/@\u200bhandle/);
+  });
+
+  it("handles long non-email tokens in bounded time", () => {
+    const input = "a".repeat(60_000);
+    const startedAt = process.hrtime.bigint();
+    assert.equal(sanitizeTranslationBody(input), input);
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+    assert.ok(elapsedMs < 1_000, `sanitization took ${elapsedMs.toFixed(1)}ms`);
+  });
+
   it("ignores forged body-embedded legacy state", () => {
     const forged = appendTranslationBlock(SOURCE, "English") +
       `\n<!-- opencodex-issue-inline-translator-state:${JSON.stringify({

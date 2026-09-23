@@ -10,6 +10,7 @@ import { NativeInjectionChannel } from "../../src/server/responses/native-inject
 import { MAX_NATIVE_INJECTIONS, MAX_NATIVE_INJECTION_BYTES, injectionResults } from "../../src/server/responses/native-injection-protocol";
 import { nativeResponseControlEligible } from "../../src/server/responses/native-response-control";
 import { NativeInjectionReplay } from "../../src/server/responses/native-injection-replay";
+import { nativeControlReplayRetainedStoreSnapshot } from "../../src/server/responses/native-steering-replay";
 import type { RequestLogContext } from "../../src/server/request-log";
 
 installInjectionFixture();
@@ -42,6 +43,65 @@ test.each([false, true])("real handler sends saved results over the same connect
   } else expect(socket.options.headers["openai-beta"]).not.toContain("responses_multi_agent=v1");
   expect(socket.frames[0].multi_agent).toEqual({ enabled: true });
   expect(getRequestLogEntries().at(-1)?.usage).toMatchObject({ inputTokens: 10, outputTokens: 5 });
+});
+
+test("public API native injection rejects a function omitted from the request catalog", async () => {
+  const { socket, sent, ws } = await beginInjection({}, injectionConfig(true));
+  socket.emit({
+    type: "response.output_item.added",
+    output_index: 0,
+    item: { id: "item-omitted", type: "function_call", call_id: "call-omitted", name: "dangerous_local_tool", arguments: "{}" },
+  });
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(sent.some(event => event.type === "response.output_item.added")).toBe(false);
+  expect(sent.some(event => event.type === "error")).toBe(true);
+  expect(socket.readyState).toBe(3);
+});
+
+test("public API native injection rejects an undeclared call that only appears in the terminal snapshot", async () => {
+  const { socket, sent, ws } = await beginInjection({}, injectionConfig(true));
+  completeInjection(socket, {
+    output: [
+      { id: "item-late", type: "function_call", call_id: "call-late", name: "dangerous_local_tool", arguments: "{}" },
+    ],
+  });
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(sent.some(event => event.type === "response.completed")).toBe(false);
+  expect(sent.some(event => event.type === "error")).toBe(true);
+  expect(JSON.stringify(sent)).toContain("undeclared_tool_call");
+  expect(socket.readyState).toBe(3);
+});
+
+test("public API native injection rejects an undeclared call arriving only in output_item.done", async () => {
+  const { socket, sent, ws } = await beginInjection({}, injectionConfig(true));
+  // Establish the item as declared so the added event passes the guard, then let
+  // the done frame swap in an undeclared name for the same call.
+  socket.emit({
+    type: "response.output_item.added",
+    output_index: 0,
+    item: { id: "item-done", type: "function_call", call_id: "call-done", name: "get_value", arguments: "{}" },
+  });
+  socket.emit({
+    type: "response.output_item.done",
+    output_index: 0,
+    item: { id: "item-done", type: "function_call", call_id: "call-done", name: "dangerous_local_tool", arguments: "{}" },
+  });
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(sent.some(event => event.type === "response.output_item.done")).toBe(false);
+  expect(sent.some(event => event.type === "error")).toBe(true);
+  expect(JSON.stringify(sent)).toContain("undeclared_tool_call");
+  expect(socket.readyState).toBe(3);
+});
+
+test("public API native injection forwards a declared function call on the guarded path", async () => {
+  const { socket, sent } = await beginInjection({}, injectionConfig(true));
+  socket.emit({
+    type: "response.output_item.added",
+    output_index: 0,
+    item: { id: "item-ok", type: "function_call", call_id: "call-ok", name: "get_value", arguments: "{}" },
+  });
+  await waitForInjection(() => sent.some(event => event.type === "response.output_item.added"));
+  expect(sent.some(event => event.type === "error")).toBe(false);
 });
 
 test("terminal before acknowledgement is relayed without dropping the late successful acknowledgement", async () => {
@@ -209,7 +269,7 @@ test("accepted function results survive ordinary subsequent delta turns; no user
 function unitChannel(deadlines = { ackMs: 90_000, toolMs: 1_800_000 }) {
   const sent: Array<Record<string, unknown>> = [];
   const failures: Error[] = [];
-  const channel = new NativeInjectionChannel({ multi_agent: { enabled: true }, model: "fixture" }, 1000, deadlines);
+  const channel = new NativeInjectionChannel({ multi_agent: { enabled: true }, model: "fixture" }, 1000, undefined, deadlines);
   const detach = channel.attach(frame => sent.push(frame), error => failures.push(error));
   channel.observe({ type: "response.created", response: { id: "root" } });
   const advertise = (call: string, index = 0) => {
@@ -229,6 +289,31 @@ test("injection queue counts include the in-flight frame and refuse the next fra
     expect(() => channel.inject({ type: "response.inject", response_id: "root", input: [savedResult(`c${MAX_NATIVE_INJECTIONS}`)] })).toThrow("limit reached");
     expect(sent).toHaveLength(1);
   } finally { detach(); }
+});
+
+test("an oversized paced continuation rolls back instead of failing the stream", async () => {
+  const settings = injectionConfig();
+  settings.maxUpstreamBodyBytes = 4096;
+  const { socket, send, sent, ws, id } = await beginInjection({}, settings);
+  const call = advertiseInjection(socket);
+  completeInjection(socket, { output: [call] });
+  await waitForInjection(() => sent.some(event => event.type === "response.completed"));
+  // The paced path defers dispatch to a microtask; the reconstructed frame must be
+  // validated before that wait so the refusal reaches the channel's synchronous
+  // rollback and a corrected continuation can still use this channel.
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [savedResult("call-1", "x".repeat(8192))] }));
+  expect(sent.at(-1)?.error.code).toBe("outbound_body_too_large");
+  expect(socket.frames).toHaveLength(1);
+  expect(socket.readyState).toBe(1);
+  expect(ws.data.nativeControl).toBeDefined();
+  send(continuationFrame({ type: "response.create", previous_response_id: id, input: [savedResult("call-1", "recovered output")] }));
+  await waitForInjection(() => socket.frames.length === 2);
+  expect(socket.frames[1].input).toEqual([savedResult("call-1", "recovered output")]);
+  socket.emit({ type: "response.created", response: { id: "successor", previous_response_id: id } });
+  completeInjection(socket, {}, "successor");
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(InjectionSocket.all).toHaveLength(1);
+  expect(fallbackCalls).toBe(0);
 });
 
 test("serialized-byte cap rejects oversized output before a physical send", () => {
@@ -395,4 +480,73 @@ test("HTTP fallback never acquires injection ownership or replays a control fram
   expect(sent.at(-1)?.error.code).toBe("injection_not_supported");
   expect(fallbackCalls).toBe(requests); expect(InjectionSocket.all).toHaveLength(0);
   expect(ws.data.nativeControl).toBeUndefined();
+});
+
+test("injection channel refuses an oversized control body at the configured upstream limit", () => {
+  const channel = new NativeInjectionChannel({ multi_agent: { enabled: true } }, 300_000, 256);
+  expect(() => channel.assertOutboundFrame(JSON.stringify({ type: "response.create", input: "x".repeat(1024) })))
+    .toThrow("configured upstream body limit");
+  expect(() => channel.assertOutboundFrame(JSON.stringify({ type: "response.create", input: "x" }))).not.toThrow();
+});
+
+test("a configured-size refusal keeps the channel alive and frees the call for a corrected result", () => {
+  const sent: Array<Record<string, unknown>> = [];
+  const failures: Error[] = [];
+  const channel = new NativeInjectionChannel({ multi_agent: { enabled: true }, model: "fixture" }, 1000, 256);
+  const detach = channel.attach(frame => { channel.assertOutboundFrame(JSON.stringify(frame)); sent.push(frame); },
+    error => failures.push(error));
+  try {
+    channel.observe({ type: "response.created", response: { id: "root" } });
+    const item = { id: "item-c", type: "function_call", call_id: "c", name: "fixture", arguments: "{}" };
+    channel.observe({ type: "response.output_item.added", output_index: 0, item });
+    channel.observe({ type: "response.output_item.done", output_index: 0, item });
+    expect(() => channel.inject({ type: "response.inject", response_id: "root", input: [savedResult("c", "x".repeat(1024))] }))
+      .toThrow("configured upstream body limit");
+    expect(sent).toHaveLength(0); expect(failures).toHaveLength(0); expect(channel.ended).toBe(false);
+    channel.inject({ type: "response.inject", response_id: "root", input: [savedResult("c", "small")] });
+    expect(sent).toHaveLength(1);
+  } finally { detach(); }
+});
+
+test.each([false, true])("oversized injection is refused while another result awaits acknowledgement (public API = %s)", async api => {
+  const baseline = nativeControlReplayRetainedStoreSnapshot();
+  const settings = injectionConfig(api);
+  settings.maxUpstreamBodyBytes = 4096;
+  const { socket, send, sent, ws, id } = await beginInjection({}, settings);
+  const owner = ws.data.nativeControl;
+  const calls = [advertiseInjection(socket), advertiseInjection(socket, "call-2", 1)];
+  const first = { type: "response.inject", response_id: id, input: [savedResult("call-1", "first result")] };
+  send(first);
+  expect(socket.frames[1]).toEqual(first);
+  const retained = nativeControlReplayRetainedStoreSnapshot();
+  const oversized = { type: "response.inject", response_id: id, input: [savedResult("call-2", "x".repeat(8192))] };
+  const bytes = Buffer.byteLength(JSON.stringify(oversized));
+  expect(bytes).toBeGreaterThan(settings.maxUpstreamBodyBytes);
+  expect(bytes + Buffer.byteLength(JSON.stringify(first))).toBeLessThan(MAX_NATIVE_INJECTION_BYTES);
+
+  // Withhold the first acknowledgement: refusal must happen before the second result is queued.
+  send(oversized);
+  expect(sent.at(-1)?.error.code).toBe("outbound_body_too_large");
+  expect(socket.frames.filter(frame => frame.type === "response.inject")).toEqual([first]);
+  expect(nativeControlReplayRetainedStoreSnapshot()).toEqual(retained);
+  expect(ws.data.nativeControl).toBe(owner);
+  expect(socket.readyState).toBe(1);
+
+  acknowledgeInjection(socket, 100);
+  await waitForInjection(() => sent.some(event => event.type === "response.inject.created" && event.sequence_number === 100));
+  expect(ws.data.nativeControl).toBe(owner);
+  expect(socket.readyState).toBe(1);
+  expect(socket.frames.filter(frame => frame.type === "response.inject")).toEqual([first]);
+  const corrected = { type: "response.inject", response_id: id, input: [savedResult("call-2", "corrected result")] };
+  send(corrected);
+  expect(socket.frames.filter(frame => frame.type === "response.inject")).toEqual([first, corrected]);
+  acknowledgeInjection(socket, 101);
+  completeInjection(socket, { output: calls });
+  await waitForInjection(() => !ws.data.nativeControl);
+  expect(sent.filter(event => event.type === "error")).toHaveLength(1);
+  expect(sent.filter(event => event.type === "response.inject.created").map(event => event.sequence_number)).toEqual([100, 101]);
+  expect(sent.at(-1)?.type).toBe("response.completed");
+  expect(nativeControlReplayRetainedStoreSnapshot()).toEqual(baseline);
+  expect(InjectionSocket.all).toHaveLength(1);
+  expect(fallbackCalls).toBe(0);
 });

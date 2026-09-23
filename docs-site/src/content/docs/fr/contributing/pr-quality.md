@@ -44,8 +44,8 @@ Trois contrôles déterministes précèdent la revue humaine. Chaque message d�
   déclenchent plus le contrôle privilégié. Un contributeur ne peut pas lever lui-même cette exigence.
 
   Les PR de contributeurs sans droit de push sur le dépôt s’ouvrent en brouillon et le restent jusqu’à ce que
-  les quatre cases de préparation à la revue soient cochées dans la description : CI locale verte, branche sur
-  le dernier commit de `dev`, tous les constats valides de Codex et CodeRabbit corrigés, et confirmation de
+  les quatre cases de préparation à la revue soient cochées dans la description : validation locale requise réussie
+  (commandes, résultats et toute exception à la suite complète documentés), branche sur le dernier commit de `dev`, tous les constats valides de Codex et CodeRabbit corrigés, et confirmation de
   disponibilité pour la revue. Lorsque les quatre cases sont cochées, le contrôle marque la PR comme prête et
   avertit les responsables répertoriés dans `MAINTAINERS.md`, à l’exclusion de l’auteur. L’état du contrôle et
   les actions attendues figurent dans un unique commentaire consolidé, réécrit à chaque exécution.
@@ -58,7 +58,7 @@ Trois contrôles déterministes précèdent la revue humaine. Chaque message d�
   Avant d’accepter la liste, le contrôle vérifie les affirmations qu’il peut lui-même confirmer : la branche
   doit être sur le dernier commit de `dev`, ou au plus 10 commits derrière, et tous les fils de revue Codex et
   CodeRabbit créés par un robot sur la tête actuelle doivent être résolus. Les fils non résolus d’autres auteurs
-  ne bloquent pas. La case de CI locale est uniquement une attestation de l’auteur : les contributeurs depuis un
+  ne bloquent pas. La case de validation locale requise est uniquement une attestation de l’auteur : les contributeurs depuis un
   fork ne peuvent pas démarrer la CI du dépôt, seul un responsable le peut. Le contrôle ne contredit donc jamais
   cette case, mais tout nouveau push réinitialise toutes les cases.
 
@@ -76,7 +76,8 @@ Trois contrôles déterministes précèdent la revue humaine. Chaque message d�
 - **Hygiène.** Les changements de comportement exigent un test. Les nouvelles suppressions de règles de lint ou
   de types, les tests ciblés ou ignorés, les blocs catch vides, la modification de sorties générées et celle
   d’un lockfile sans son manifeste nécessitent chacun un label d’approbation explicite. Une modification limitée
-  à un commentaire dans un fichier source ne change pas le comportement et n’exige aucun test.
+  à un commentaire dans un fichier source ne change pas le comportement et n’exige aucun nouveau test
+  de régression. La [politique de test locale](/fr/contributing/) reste applicable.
 
 - **CI multiplateforme.** Pour les changements concernés, la suite est fragmentée sous Linux et exécutée
   intégralement sous macOS pour chaque pull request. La voie Windows principale ne s’exécute actuellement que
@@ -117,3 +118,15 @@ seules surfaces soumises à cette règle. Toutes les autres restent ouvertes.
 Une PR bloquée par des remarques de revue non résolues peut être fermée, avec une raison clairement indiquée.
 La fermeture n’est pas un jugement sur le contributeur : rouvrez la PR lorsque la raison donnée est résolue,
 ou remplacez-la par une nouvelle PR propre. Demandez des précisions si la raison n’est pas claire.
+
+## Mettre à jour une ancienne liste de préparation
+
+Si le contrôle signale l’ancienne formulation sur la CI locale, il conserve votre description.
+Remplacez le premier élément par le texte indiqué dans le commentaire du bot, décochez les
+quatre cases et enregistrez. Attendez que le bot confirme cette étape, validez le commit
+indiqué, puis cochez les quatre cases et enregistrez de nouveau. Modifier uniquement le
+texte en conservant les quatre coches ne renouvelle pas l’attestation. Un push ou un
+changement de branche cible invalide cette étape. Le contrôle reste en échec et la PR en
+brouillon jusqu’à la fin de cette procédure et des contrôles habituels. Si l’enregistrement
+partage l’horodatage de l’étape, modifiez de nouveau le corps et enregistrez plus tard ;
+modifier seulement le titre ne suffit pas.

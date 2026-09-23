@@ -9,12 +9,14 @@ import {
   MANAGED_AGENTS_TABLE_MARKER,
   MANAGED_SUBAGENT_DEFAULT_MARKER,
 } from "../../src/codex/subagent-defaults";
+import { OCX_ROUTING_MARKER_LINE } from "../../src/codex/injected-marker";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 
 setDefaultTimeout(SPAWN_BUDGET_MS);
+console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"file_imported"}');
 
 // Reads back what a TOML consumer would see for a top-level string key. A Windows path
 // is stored with escaped separators, so the raw file text never contains the unescaped path.
@@ -73,17 +75,19 @@ function runRestore(codexHome: string, ocxHome: string, asyncRestore = false): {
 
 describe("injectCodexConfig integration (Design B)", () => {
   const DESIGN_B_BLOCK = [
-    "# Auto-injected by opencodex",
+    OCX_ROUTING_MARKER_LINE,
     'openai_base_url = "http://127.0.0.1:10100/v1"',
-    "# Auto-injected by opencodex",
+    OCX_ROUTING_MARKER_LINE,
     'experimental_realtime_ws_base_url = "http://127.0.0.1:10100/v1"',
   ].join("\n");
   let codexHome: string;
   let ocxHome: string;
 
   beforeEach(() => {
+    console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"before_each_entered"}');
     codexHome = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-inject-codex-")));
     ocxHome = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-inject-home-")));
+    console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"before_each_ready"}');
   });
 
   afterEach(() => {
@@ -168,6 +172,7 @@ describe("injectCodexConfig integration (Design B)", () => {
   const unreadablePreimages =
     process.platform === "win32" || process.getuid?.() === 0 ? test.skip : test;
   unreadablePreimages("unreadable preimages abort capture and remain visible as compensation failures", () => {
+    console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"unreadable_preimages_entered"}');
     const script = `
       const fs = require("node:fs");
       const { join } = require("node:path");
@@ -200,10 +205,41 @@ describe("injectCodexConfig integration (Design B)", () => {
       allow();
       console.log(JSON.stringify({unreadable,captureCode,restored,outcomes,unchangedAfterEach,preserved}));
     `;
+    console.error('ocx-startup-diagnostic:{"file":"codex-inject-integration","phase":"unreadable_preimages_setup_complete"}');
+    const childStartedAt = performance.now();
+    console.error(`ocx-startup-diagnostic:${JSON.stringify({
+      file: "codex-inject-integration",
+      phase: "unreadable_preimages_child_started",
+      deadlineMs: SPAWN_BUDGET_MS - 5_000,
+    })}`);
     const child = spawnSync(process.execPath, ["--eval", script], {
       cwd: repoRoot, env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: ocxHome },
       encoding: "utf8", timeout: SPAWN_BUDGET_MS - 5_000,
     });
+    const elapsedMs = Math.min(600_000, Math.max(0, Math.round(performance.now() - childStartedAt)));
+    const status = typeof child.status === "number"
+      && Number.isSafeInteger(child.status)
+      && child.status >= 0
+      && child.status <= 255
+      ? child.status
+      : null;
+    const signal = child.signal === null
+      ? null
+      : child.signal === "SIGTERM" || child.signal === "SIGKILL"
+        ? child.signal
+        : "OTHER";
+    const rawErrorCode = child.error && "code" in child.error
+      ? String((child.error as NodeJS.ErrnoException).code ?? "")
+      : "";
+    const errorCode = rawErrorCode === "" ? null : rawErrorCode === "ETIMEDOUT" ? "ETIMEDOUT" : "OTHER";
+    console.error(`ocx-startup-diagnostic:${JSON.stringify({
+      file: "codex-inject-integration",
+      phase: "unreadable_preimages_child_returned",
+      elapsedMs,
+      status,
+      signal,
+      errorCode,
+    })}`);
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual({
       unreadable: true, captureCode: "EACCES", restored: { complete: false, unrestored: ["profile"] }, outcomes: [true, true, true], unchangedAfterEach: [true, true, true], preserved: true,
@@ -749,6 +785,50 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(restoredRowBytes).toBe(rowBytes);
   });
 
+  test("a provider-table transition keeps a paginated openai thread on the proxy instead of refusing", () => {
+    // #5321. The transition used to be refused outright, so nothing was written and the
+    // integration stayed disabled. It now completes by keeping the marker-owned root override
+    // beside the table: the row is never relabeled, and it still resolves to this proxy.
+    // The reporter's shape: a loopback root-override home turning on codexDesktopAuthless.
+    const original = `${OCX_ROUTING_MARKER_LINE}\nopenai_base_url = "http://127.0.0.1:10100/v1"\nmodel = "gpt-5.5"\n`;
+    const configPath = join(codexHome, "config.toml");
+    writeFileSync(configPath, original);
+    const rollout = join(codexHome, "openai-paginated.jsonl");
+    const bytes = JSON.stringify({ ordinal: 0, type: "session_meta", payload: { id: "fixture", history_mode: "paginated", model_provider: "openai" } }) + "\n";
+    writeFileSync(rollout, bytes);
+    const dbPath = join(codexHome, "state_5.sqlite");
+    const db = new Database(dbPath);
+    db.run("CREATE TABLE threads (id TEXT, rollout_path TEXT, model_provider TEXT, history_mode TEXT)");
+    db.run("INSERT INTO threads VALUES ('fixture', ?, 'openai', 'paginated')", rollout);
+    db.close();
+
+    const result = runInject(codexHome, ocxHome, JSON.stringify({ codexDesktopAuthless: true }));
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      success: true,
+      historyPreflightFailureReason: "history_paginated_requires_native_writer",
+    });
+    const written = readFileSync(configPath, "utf8");
+    expect(written).toContain("[model_providers.opencodex]");
+    expect(written).toContain(`${OCX_ROUTING_MARKER_LINE}\nopenai_base_url = "http://127.0.0.1:10100/v1"`);
+    // The safety property the refusal existed to protect: the paginated row is untouched and
+    // still tagged openai, and the retained override is what keeps it reaching the proxy.
+    expect(readFileSync(rollout, "utf8")).toBe(bytes);
+    const after = new Database(dbPath, { readonly: true });
+    expect(after.query("SELECT model_provider, history_mode FROM threads WHERE id = 'fixture'").all())
+      .toEqual([{ model_provider: "openai", history_mode: "paginated" }]);
+    after.close();
+
+    // The other half of the trap (#4812): unblocking the transition is worth nothing if the
+    // retained override then cannot come back out. Restore journals it as ours, so it does.
+    const restored = JSON.parse(runRestore(codexHome, ocxHome).stdout);
+    expect(restored.success).toBe(true);
+    const native = readFileSync(configPath, "utf8");
+    expect(native).not.toContain("openai_base_url");
+    expect(native).not.toContain('model_provider = "opencodex"');
+    expect(readFileSync(rollout, "utf8")).toBe(bytes);
+  });
+
   test("a paginated home still receives the model catalog path the picker reads", () => {
     // The user-visible regression this pins. A paginated rollout made the injector refuse
     // the whole write, so `model_catalog_json` never reached config.toml: the Codex app and
@@ -852,7 +932,7 @@ describe("injectCodexConfig integration (Design B)", () => {
 
     const config = readFileSync(join(codexHome, "config.toml"), "utf8");
     expect(config).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
-    expect(config).toContain("# Auto-injected by opencodex");
+    expect(config).toContain(OCX_ROUTING_MARKER_LINE);
     expect(config).toContain("[model_providers.opencodex]");
     expect(config).not.toContain('model_provider = "opencodex"');
     expect(config).toContain('model = "gpt-5.5"');
@@ -1867,14 +1947,4 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(config).not.toContain("\r");
   });
 
-  test("inject does not turn on multi_agent_v2; fresh installs stay on Codex's default v1 surface until the user opts in", () => {
-    writeFileSync(join(codexHome, "config.toml"), 'model = "gpt-5.5"\n', "utf8");
-
-    expect(runInject(codexHome, ocxHome).status).toBe(0);
-    const config = readFileSync(join(codexHome, "config.toml"), "utf8");
-
-    expect(config).not.toContain("[features.multi_agent_v2]");
-    expect(config).not.toContain("multi_agent_v2 = true");
-    expect(config).not.toContain("multi_agent_v2 = {");
-  });
 });

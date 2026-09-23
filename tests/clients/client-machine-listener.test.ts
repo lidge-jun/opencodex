@@ -9,7 +9,7 @@ import type { OcxClientConnectionConfig, OcxConfig } from "../../src/types";
 import { RemoteWorkspaceSessionService } from "../../src/remote-control/workspace-sessions";
 import type { RemoteWorkspaceHub } from "../../src/remote-control/workspace-hub";
 import { handleManagementAPI } from "../../src/server/management-api";
-import type { ManagementAuthState } from "../../src/server/management-auth";
+import { createManagementSessionControl, type ManagementAuthState } from "../../src/server/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -113,6 +113,17 @@ describe("client machine listener", () => {
     try {
       const created = await sessions.create({ profile: "codex", deviceId, rootId });
       observeCompletion = true;
+      // The hub-side session the relayed request stands in for: minted by the
+      // operator pairing flow, so consent-bearing mutations may proceed. The
+      // machine listener itself only relays headers; pairing proof lives here.
+      const hubAuth: ManagementAuthState = {
+        available: true,
+        token: "ocx_admin_hub_fixture",
+        source: "environment",
+        sessions: new Map(),
+        pairingGrants: new Map(),
+      };
+      const hubSessionControl = createManagementSessionControl(hubAuth);
       const server = startMachineListener(0, {
         state: connection("relay"), managementAuthState: authState(),
         fetchImpl: (async (input, init) => {
@@ -120,11 +131,18 @@ describe("client machine listener", () => {
           request.headers.set("Host", new URL(request.url).host);
           return await handleManagementAPI(request, new URL(request.url), hubConfig, {
             remoteWorkspaceHub: hub, remoteWorkspaceSessions: sessions,
-          }, "gui-session") ?? new Response(null, { status: 404 });
+          }, "gui-session", hubSessionControl) ?? new Response(null, { status: 404 });
         }) as typeof fetch,
       });
       servers.push(server);
       const local = await guiHeaders(server, true);
+      hubAuth.sessions.set("ocx_session_hub", {
+        serverOrigin: "https://hub.example.test",
+        browserOrigin: local.get("X-OpenCodex-GUI-Origin")!,
+        csrfToken: "fixture-hub-csrf",
+        expiresAt: Date.now() + 60_000,
+        issuance: "pairing",
+      });
       hubConfig.corsAllowOrigins = [local.get("Origin")!];
       const headers = new Headers({
         Origin: local.get("Origin")!, "Content-Type": "application/json",
@@ -231,7 +249,9 @@ describe("client machine listener", () => {
           disconnected = true;
           return { restored: true, tokenRemoved: true, catalogRemoved: true, apiKeyId: "client-key-a" };
         },
-        scheduleStandaloneRecycle: () => { recycled = disconnected; },
+        scheduleStandaloneRecycle: tokenFingerprint => {
+          recycled = disconnected && tokenFingerprint === connection().tokenFingerprint;
+        },
       },
     });
     servers.push(server);

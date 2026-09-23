@@ -15,8 +15,12 @@ import {
   readPromptLayers,
 } from "../../src/codex/prompt-layers";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { OCX_SECTION_MARKER } from "../../src/codex/injected-marker";
 
-const MARKER = "# Auto-injected by opencodex";
+// Prompt layers deliberately keep the BARE ownership marker: 'ocx restore' is not their undo,
+// so the recovery hint that routing keys carry (#5261) does not belong here. Derived from the
+// constant rather than restated, so the two scopes cannot drift apart silently.
+const MARKER = OCX_SECTION_MARKER;
 const roots: string[] = [];
 
 function fixture(config: string | null, store?: string | null): { configPath: string; storePath: string } {
@@ -227,6 +231,26 @@ describe("model_instructions_file", () => {
 
   test("is null when absent", () => {
     expect(readPromptLayers(fixture("model = \"x\"\n")).modelInstructionsFile).toBeNull();
+  });
+
+  test("fallback decodes every TOML basic-string escape when another integer defeats Bun", () => {
+    const literal = String.raw`"\b\t\n\f\r\"\\\u0041\U0001F680"`;
+    const config = `model_context_window = 9223372036854775807\nmodel_instructions_file = ${literal}\n`;
+    expect(readPromptLayers(fixture(config)).modelInstructionsFile).toBe("\b\t\n\f\r\"\\A🚀");
+  });
+
+  test("fallback refuses malformed escapes and invalid Unicode scalars", () => {
+    for (const literal of [
+      String.raw`"bad\q"`,
+      String.raw`"bad\u12"`,
+      String.raw`"bad\uD800"`,
+      String.raw`"bad\U00110000"`,
+    ]) {
+      const config = `model_context_window = 9223372036854775807\nmodel_instructions_file = ${literal}\n`;
+      const snap = readPromptLayers(fixture(config));
+      expect(snap.modelInstructionsFile).toBe("<unreadable model_instructions_file>");
+      expect(snap.baseSelection).toEqual({ kind: "external", path: "<unreadable model_instructions_file>" });
+    }
   });
 });
 

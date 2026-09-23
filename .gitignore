@@ -68,5 +68,27 @@ tests/**/.tmp-*
 # tests/ci-workflows/repo-hygiene.test.ts, which fails if any path here becomes tracked again.
 go/
 
+# Retired root docs/ folder and the pull-request screenshot folders that used to
+# collect evidence images. Screenshots belong in the PR description or on the
+# orphan `pr-assets` branch; tests/ci-workflows/repo-hygiene.test.ts fails if any
+# path here becomes tracked again. Root-anchored so docs-site/src/content/docs/
+# is not caught by the docs/ rule.
+/docs/
+/.github/pr-assets/
+/assets/pr-screenshots/
+/docs-site/public/pr-screenshots/
+
 # Rust native helpers keep their reproducible sources and lockfile in git, never local artifacts.
 native/**/target/
+dist/macos/
+dist/release/
+desktop/src-tauri/binaries/
+desktop/src-tauri/resources/
+desktop/src-tauri/widget/
+desktop/src-tauri/gen/
+desktop/src-tauri/target/
+# Running `bun install` inside desktop/ writes a second lockfile that shadows the root one for
+# any command run from that directory. CI installs the desktop workspace with --frozen-lockfile
+# on an older Bun, so a shadowing lockfile written by a newer Bun fails the job with "Unknown
+# lockfile version" before anything is built. The root lockfile is the only one this repo keeps.
+desktop/bun.lock

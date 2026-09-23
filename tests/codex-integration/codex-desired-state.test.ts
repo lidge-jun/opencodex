@@ -23,6 +23,7 @@ import {
   shouldSyncGrokOnStart,
   syncCodexOnStartIfEnabled,
 } from "../../src/codex/desired-state";
+import { createReadinessGate } from "../../src/server/readiness";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -267,6 +268,33 @@ describe("the startup gate", () => {
     // #1046: a failed sync reports no writes, so the caller does not warn.
     expect(ran.catalogWritten).toBe(false);
     expect(ran.cacheSynced).toBe(false);
+  });
+
+  /**
+   * #5181. The gate is driven from here, so the boundary is worth pinning at the caller and not
+   * only in `runStartupReadinessSync`: a catalog-sync warning describes artifacts in the local
+   * Codex home, and the proxy that failed to write them is still serving every other provider.
+   * Treating it as terminal is what removed the only Service endpoint in a single-replica
+   * Kubernetes deployment. The sync's own `ok` remains the verdict.
+   */
+  test("a catalog-sync warning leaves the gate ready; only ok=false fails it", async () => {
+    const degraded = createReadinessGate();
+    await syncCodexOnStartIfEnabled(
+      10100,
+      {},
+      async () => ({ ok: true, warning: "catalog sync skipped: no Codex catalog source found." }),
+      degraded,
+    );
+    expect(degraded.getStatus()).toBe("ready");
+
+    const refused = createReadinessGate();
+    await syncCodexOnStartIfEnabled(
+      10100,
+      {},
+      async () => ({ ok: false }),
+      refused,
+    );
+    expect(refused.getStatus()).toBe("failed");
   });
 });
 

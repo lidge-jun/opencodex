@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { relaySseWithFailedTail, relayWithAbort } from "../../src/server";
 import { relaySseEagerBounded, type EagerRelayHooks } from "../../src/server/relay-eager";
 import { MAX_TAIL_ERROR_MESSAGE_CHARS } from "../../src/server/relay";
+import { TERMINAL_REFUSAL_FALLBACK_MESSAGE } from "../../src/lib/errors";
 import { TranslatorBudgetExceededError } from "../../src/lib/translator-budget";
 
 const encoder = new TextEncoder();
@@ -461,4 +462,232 @@ describe("optional Codex hint filtering preserves relay semantics", () => {
       expect(text).not.toContain("safety_buffering");
     });
   }
+});
+
+/**
+ * #5176: a final upstream refusal must end the turn rather than restart it.
+ *
+ * Codex classifies a `response.failed` terminal by `error.code` alone
+ * (codex-rs/codex-api/src/sse/responses.rs:417-467). Only the codes collected in
+ * CODEX_TERMINAL_CODES below end the turn; every other code falls through to the
+ * trailing `_ => ApiError::Retryable` arm, which the client retries up to
+ * `stream_max_retries` and renders as `Reconnecting N/5`. Codex has no handler
+ * for a bare `error` event at all, so the terminal this relay synthesizes is the
+ * only thing that carries the refusal to the client.
+ *
+ * `upstreamErrorTailFrame` (src/server/relay.ts) used to stamp
+ * `upstream_server_error` on that terminal unconditionally, so the upstream
+ * message survived and its verdict did not, and a refusal arrived as a retryable
+ * transport failure. It now carries the verdict when the upstream gave one, and
+ * leaves everything else classified exactly as before.
+ */
+describe("upstream refusal terminal mapping (#5176)", () => {
+  // codex-rs/codex-api/src/sse/responses.rs:423-450, in branch order.
+  const CODEX_TERMINAL_CODES = new Set([
+    "context_length_exceeded",
+    "insufficient_quota",
+    "usage_not_included",
+    "cyber_policy",
+    "misalignment_policy_violation",
+    "invalid_prompt",
+    "bio_policy",
+  ]);
+
+  // The upstream copy quoted in #5176, and the code Codex pairs with safety-refusal
+  // copy in its own fixture (responses.rs:1358-1366).
+  const SAFETY_REFUSAL_MESSAGE =
+    "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
+  const SAFETY_REFUSAL_CODE = "invalid_prompt";
+
+  const synthesizedError = (out: string): { code: string; message: string; type: string } => {
+    const dataLine = out.split("event: response.failed\ndata: ")[1]?.split("\n")[0];
+    if (!dataLine) throw new Error("missing synthesized response.failed payload");
+    const parsed = JSON.parse(dataLine) as {
+      response: { error: { code: string; message: string; type: string } };
+    };
+    return parsed.response.error;
+  };
+
+  const relayFor = (mode: "tee" | "eager", chunks: string[]) => mode === "tee"
+    ? relaySseWithFailedTail(sourceStream(chunks), new AbortController())
+    : relaySseEagerBounded(sourceStream(chunks), new AbortController(), parityHooks);
+
+  test.each([
+    ["tee", "flat"],
+    ["tee", "nested"],
+    ["eager", "flat"],
+    ["eager", "nested"],
+  ] as const)("%s %s bare refusal ends the turn with the upstream verdict", async (mode, shape) => {
+    const bare = shape === "flat"
+      ? { type: "error", code: SAFETY_REFUSAL_CODE, message: SAFETY_REFUSAL_MESSAGE }
+      : {
+        type: "error",
+        error: {
+          type: "invalid_request_error",
+          code: SAFETY_REFUSAL_CODE,
+          message: SAFETY_REFUSAL_MESSAGE,
+        },
+      };
+    const original = 'data: {"type":"response.in_progress"}\n\n'
+      + "data: " + JSON.stringify(bare) + "\n\n";
+
+    const out = await drain(relayFor(mode, [original]));
+    const error = synthesizedError(out);
+
+    // The refusal text survives, which is why the client quotes it verbatim.
+    expect(error.message).toBe(SAFETY_REFUSAL_MESSAGE);
+    // ... and so does the verdict, so the client stops instead of reconnecting.
+    expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+    expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(true);
+    expect(error.type).toBe("invalid_request_error");
+    expect(out).toContain('"retryable":false');
+  });
+
+  test.each(["tee", "eager"] as const)(
+    "%s recognizes refusal copy the upstream sent without a code",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({ type: "error", message: SAFETY_REFUSAL_MESSAGE }) + "\n\n";
+
+      const error = synthesizedError(await drain(relayFor(mode, [original])));
+
+      expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+      expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(true);
+    },
+  );
+
+  // The mirror-image defect this fix must not introduce: a real outage is not a
+  // refusal, and giving it a terminal code would strand a turn that a reconnect
+  // would have completed.
+  test.each(["tee", "eager"] as const)(
+    "%s leaves a transient upstream failure retryable",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          code: "upstream_reset",
+          message: "Upstream stream terminated unexpectedly: socket closed",
+        }) + "\n\n";
+
+      const out = await drain(relayFor(mode, [original]));
+      const error = synthesizedError(out);
+
+      expect(error.code).toBe("upstream_server_error");
+      expect(error.type).toBe("upstream_error");
+      expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(false);
+      expect(out).not.toContain('"retryable":false');
+    },
+  );
+
+  // Refusal copy quoted inside a transport diagnostic must not outrank the code
+  // the upstream actually sent, or the mirror-image defect returns through text.
+  test.each(["tee", "eager"] as const)(
+    "%s keeps an explicit non-refusal code over refusal copy in its message",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          code: "upstream_reset",
+          message: "Transport failed while forwarding: " + SAFETY_REFUSAL_MESSAGE,
+        }) + "\n\n";
+
+      const out = await drain(relayFor(mode, [original]));
+      const error = synthesizedError(out);
+
+      expect(error.code).toBe("upstream_server_error");
+      expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(false);
+      expect(out).not.toContain('"retryable":false');
+    },
+  );
+
+  // Codex accepts a refusal code with no message and supplies its own copy
+  // (sse/responses.rs:446-451), so this shape must still end the turn rather
+  // than fall through to the adapter_eof incomplete.
+  test.each(["tee", "eager"] as const)(
+    "%s ends the turn on a refusal code sent without a message",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({ type: "error", code: SAFETY_REFUSAL_CODE }) + "\n\n";
+
+      const out = await drain(relayFor(mode, [original]));
+      const error = synthesizedError(out);
+
+      expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+      expect(error.message).toBe(TERMINAL_REFUSAL_FALLBACK_MESSAGE);
+      expect(out).not.toContain('"reason":"adapter_eof"');
+    },
+  );
+
+  // Code and message must be read from the same places. When the message is
+  // nested under response.error and the code scan does not look there, the
+  // event contributes text while its verdict goes unseen.
+  test.each(["tee", "eager"] as const)(
+    "%s reads a refusal nested under response.error",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          response: {
+            error: {
+              type: "invalid_request_error",
+              code: SAFETY_REFUSAL_CODE,
+              message: "Invalid prompt.",
+            },
+          },
+        }) + "\n\n";
+
+      const error = synthesizedError(await drain(relayFor(mode, [original])));
+
+      expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+      expect(error.message).toBe("Invalid prompt.");
+    },
+  );
+
+  // Code and message share one precedence order. When two envelopes disagree,
+  // the one that supplies the message supplies the verdict, so a refusal nested
+  // below a transient code cannot promote the turn to terminal.
+  test.each(["tee", "eager"] as const)(
+    "%s takes the verdict from the envelope that supplied the message",
+    async (mode) => {
+      const original = 'data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          error: { type: "upstream_error", code: "upstream_reset", message: "socket closed" },
+          response: {
+            error: { code: SAFETY_REFUSAL_CODE, message: "Invalid prompt." },
+          },
+        }) + "\n\n";
+
+      const out = await drain(relayFor(mode, [original]));
+      const error = synthesizedError(out);
+
+      expect(error.message).toBe("socket closed");
+      expect(error.code).toBe("upstream_server_error");
+      expect(CODEX_TERMINAL_CODES.has(error.code)).toBe(false);
+      expect(out).not.toContain('"retryable":false');
+    },
+  );
+
+  // The upstream ended the turn before the socket did, so the reset that
+  // followed must not replace the refusal with a retryable upstream_reset.
+  test.each(["tee", "eager"] as const)(
+    "%s keeps a captured refusal when the upstream read then fails",
+    async (mode) => {
+      const chunks = ['data: {"type":"response.in_progress"}\n\n'
+        + "data: " + JSON.stringify({
+          type: "error",
+          code: SAFETY_REFUSAL_CODE,
+          message: SAFETY_REFUSAL_MESSAGE,
+        }) + "\n\n"];
+      const source = () => sourceStream(chunks, { failAfter: true });
+      const out = await drain(mode === "tee"
+        ? relaySseWithFailedTail(source(), new AbortController())
+        : relaySseEagerBounded(source(), new AbortController(), parityHooks));
+      const error = synthesizedError(out);
+
+      expect(error.code).toBe(SAFETY_REFUSAL_CODE);
+      expect(error.message).toBe(SAFETY_REFUSAL_MESSAGE);
+      expect(out).not.toContain('"code":"upstream_reset"');
+    },
+  );
 });

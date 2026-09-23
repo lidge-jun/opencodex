@@ -1,3 +1,4 @@
+import { NativeSteeringError } from "./native-steering";
 import { mergeSteeringContinuation } from "./native-steering-settings";
 import { markNativeControlResponse } from "./native-response-control";
 import type { NativeResponseControl } from "./native-response-control";
@@ -345,11 +346,11 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
           // the first create frame.
           let base: Record<string, unknown> | undefined;
           detachSteering = nativeControl.attach(frame => {
-            const sendControl = () => {
-              if (terminal || signal?.aborted || session.closed || ws.readyState !== WebSocket.OPEN) {
-                throw new Error("Native steering connection is no longer available");
-              }
-              beforeDispatch?.(new Headers(headers));
+            // Build, serialize and bound-check the reconstructed frame synchronously in the
+            // channel callback: a typed refusal must reach the channel's synchronous rollback
+            // (continuation slot released, journal unwritten) rather than the asynchronous
+            // failStream path, so a corrected continuation can still retry on this channel.
+            const prepare = () => {
               let outgoing = frame;
               if (frame.type === "response.create") {
                 // Generation overrides have passed route policy; identity/tools remain pinned.
@@ -361,11 +362,20 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
                   : { ...continuationBase, input: frame.input, previous_response_id: frame.previous_response_id };
               }
               const text = JSON.stringify(outgoing);
+              nativeControl.assertOutboundFrame?.(text);
               if (codexWsCreateFrameExceedsLimit(text)) {
                 throw new Error("Native steering frame exceeds the transport byte limit");
               }
-              if (frame.type === "response.create") continuationBase = outgoing;
-              try { ws.send(text); } catch {
+              return { outgoing, text };
+            };
+            const prepared = prepare();
+            const sendControl = () => {
+              if (terminal || signal?.aborted || session.closed || ws.readyState !== WebSocket.OPEN) {
+                throw new Error("Native steering connection is no longer available");
+              }
+              beforeDispatch?.(new Headers(headers));
+              if (frame.type === "response.create") continuationBase = prepared.outgoing;
+              try { ws.send(prepared.text); } catch {
                 // A send failure has unknown delivery. Never replay or fall back.
                 failStream("Native steering send failed; delivery is unknown");
                 throw new Error("Native steering send failed; delivery is unknown");
@@ -374,7 +384,13 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
             if (frame.type === "response.create" && beforeContinuation) {
               // Explicit tool-result continuations are physical request starts;
               // they keep provider pacing and revalidate auth AFTER the wait.
-              void beforeContinuation().then(sendControl).catch(() => failStream("Native steering continuation could not be dispatched; do not automatically replay queued input"));
+              // A typed pre-send refusal (e.g. the configured upstream body limit) is a
+              // known non-delivery and keeps its own message; every other failure keeps
+              // the unknown-delivery wording.
+              void beforeContinuation().then(sendControl).catch(error => failStream(
+                error instanceof NativeSteeringError ? error
+                  : new Error("Native steering continuation could not be dispatched; do not automatically replay queued input"),
+              ));
             } else sendControl();
           }, error => failStream(error));
         }

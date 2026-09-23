@@ -3,6 +3,7 @@ import type { OcxProviderConfig } from "../types";
 import { isWirePinnedModel, MODEL_ADAPTER_OVERRIDE_ALLOWED, pinnedWireAdapter } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers";
 import { type InboundWire, providerModelWireDefault } from "../providers/registry";
+import type { ResolvedModelPolicy } from "../providers/resolved-model-policy";
 
 /**
  * Resolve the wire a single model should use: a hard pin first, then a configured
@@ -22,8 +23,16 @@ export function resolveWireProtocolOverride(
   modelId: string,
   providerConfig: OcxProviderConfig,
   inbound: InboundWire = "responses",
+  staticPolicy?: ResolvedModelPolicy,
 ): OcxProviderConfig {
-  const pinned = pinnedWireAdapter(providerName, modelId);
+  // RouteResult policy is recaptured for the original inbound protocol whenever routing selects
+  // or replaces a destination, so every downstream rebuild consumes the same adapter authority.
+  if (staticPolicy) {
+    return staticPolicy.model.adapter !== providerConfig.adapter
+      ? { ...providerConfig, adapter: staticPolicy.model.adapter }
+      : providerConfig;
+  }
+  const pinned = pinnedWireAdapter(providerName, modelId, providerConfig);
   if (pinned && providerConfig.adapter !== pinned) {
     return { ...providerConfig, adapter: pinned };
   }
@@ -38,7 +47,7 @@ export function resolveWireProtocolOverride(
   if (requested
     && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requested)
     && requested !== providerConfig.adapter
-    && !isWirePinnedModel(providerName, modelId)
+    && !isWirePinnedModel(providerName, modelId, providerConfig)
     // A forward provider hands the caller's own credential upstream; the chat adapter
     // only ever sends provider.apiKey, so switching wires here would drop the auth.
     && !isCanonicalOpenAiForwardProvider(providerConfig)) {

@@ -39,8 +39,12 @@ function reserveRow(qualified: boolean, efforts = ["high", "xhigh"]): RawEntry {
   const pin = JSON.parse(readFileSync(repoPath("src/codex/data/upstream-models.json"), "utf8")) as RawCatalog;
   const luna = pin.models?.find(row => row.slug === "gpt-5.6-luna");
   if (!luna) throw new Error("Fixture requires the checked-in Luna source");
+  // Upstream rows no longer carry top-level base_instructions (openai/codex #43604); a genuine
+  // roster row does, so the fixture restores it from the template the pin still ships.
+  const template = (luna.model_messages as { instructions_template?: string } | undefined)?.instructions_template;
   return {
     ...structuredClone(luna),
+    base_instructions: typeof luna.base_instructions === "string" ? luna.base_instructions : template,
     slug: qualified ? SELECTOR : "gpt-reserve",
     display_name: qualified ? "personal / Genuine Reserve" : "Genuine Reserve",
     supported_in_api: qualified,
@@ -125,7 +129,24 @@ function sync(sandbox: Sandbox): RawCatalog {
     const config = loadConfig();
     for (const provider of Object.values(config.providers)) provider.fetch = globalThis.fetch;
     const result = await refreshCodexModelCatalog(config, undefined, { allowWhenDesiredDisabled: true });
-    if (!result.catalogExists || !result.cacheSynced) throw new Error(JSON.stringify(result));
+    if (!result.catalogExists) throw new Error(JSON.stringify(result));
+    if (result.refreshOutcome !== "committed") throw new Error(JSON.stringify(result));
+    // cacheSynced reports whether bytes were written, so a byte-identical no-op is a
+    // legitimate false and so is a broad failure. Neither can be the oracle on its own.
+    // Require the commit verdict, then read the cache back and prove it carries this
+    // catalog rather than trusting the write flag. Matching serialized slugs in order
+    // keeps the check independent of the cache document shape: it proves the same rows
+    // lead the file, not that a particular envelope was used.
+    const cacheRaw = readFileSync(${JSON.stringify(sandbox.cachePath)}, "utf8");
+    const active = JSON.parse(readFileSync(${JSON.stringify(sandbox.catalogPath)}, "utf8"));
+    const slugs = (active.models ?? []).map(row => row.slug).filter(Boolean);
+    if (slugs.length === 0) throw new Error("active catalog has no rows: " + JSON.stringify(result));
+    let cursor = -1;
+    for (const slug of slugs) {
+      const at = cacheRaw.indexOf(JSON.stringify(slug), cursor + 1);
+      if (at < 0) throw new Error("models cache is missing " + slug + ": " + JSON.stringify(result));
+      cursor = at;
+    }
     console.log("RESERVE_CATALOG_LIFECYCLE_OK");
   `;
   const child = spawnSync(process.execPath, withOwnedServiceHomePreload(["--eval", script], sandbox.preloadPath), {

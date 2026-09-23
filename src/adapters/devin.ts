@@ -15,6 +15,7 @@ import { getCachedCatalog, type CacheEntry } from "./devin/cloud-direct/catalog"
 import { collapseDevinModelUid } from "./devin/live-models";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { DEVIN_DEFAULT_API_SERVER, resolveDevinApiServer } from "../oauth/devin";
+import { isProviderIssuedThinkingSignature } from "../responses/reasoning-envelope";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
 
 /**
@@ -191,6 +192,35 @@ async function resolveWireModelUid(
  */
 export const resolveWireModelUidForTests = resolveWireModelUid;
 
+const positiveTokenCount = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+
+/**
+ * Read a per-model token count for the exact UID selected for this turn.
+ *
+ * Tries the selected UID and then its collapsed base id, preferring the
+ * canonical spelling and accepting dotted or case-folded saved hints — the same
+ * normalization the inference request applies to the model id. Where several
+ * spellings match one id, the smallest wins: a ceiling stated twice is
+ * satisfied by the lower statement.
+ */
+function devinModelTokenHint(
+  record: Record<string, number> | undefined,
+  modelUid: string,
+): number | undefined {
+  if (!record) return undefined;
+  for (const id of [modelUid, collapseDevinModelUid(modelUid)]) {
+    const exact = Object.hasOwn(record, id) ? positiveTokenCount(record[id]) : undefined;
+    if (exact !== undefined) return exact;
+    const matches = Object.entries(record)
+      .filter(([key]) => normalizeDevinModelId(key).toLowerCase() === id.toLowerCase())
+      .map(([, value]) => positiveTokenCount(value))
+      .filter((value): value is number => value !== undefined);
+    if (matches.length > 0) return Math.min(...matches);
+  }
+  return undefined;
+}
+
 /**
  * Resolve the INPUT ceiling for the exact UID selected for this turn. Catalog
  * ClientModelConfig #18 and CompletionConfiguration #3 both carry input tokens;
@@ -203,33 +233,50 @@ function resolveDevinMaxInputTokens(
   modelUid: string,
   liveWindow?: number,
 ): number | undefined {
-  const positive = (value: unknown): number | undefined =>
-    typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-  const baseId = collapseDevinModelUid(modelUid);
-  const configured = (record: Record<string, number> | undefined): number | undefined => {
-    if (!record) return undefined;
-    for (const id of [modelUid, baseId]) {
-      // Prefer the canonical spelling; retain dotted/case-folded saved hints,
-      // matching the model-id normalization used for the inference request.
-      const exact = Object.hasOwn(record, id) ? positive(record[id]) : undefined;
-      if (exact !== undefined) return exact;
-      const matches = Object.entries(record)
-        .filter(([key]) => normalizeDevinModelId(key).toLowerCase() === id.toLowerCase())
-        .map(([, value]) => positive(value))
-        .filter((value): value is number => value !== undefined);
-      if (matches.length > 0) return Math.min(...matches);
-    }
-    return undefined;
-  };
-  const contextHint = configured(provider.modelContextWindows) ?? positive(provider.contextWindow);
-  const inputHint = configured(provider.modelMaxInputTokens);
-  const ceilings = [positive(liveWindow), contextHint, inputHint]
+  const contextHint = devinModelTokenHint(provider.modelContextWindows, modelUid)
+    ?? positiveTokenCount(provider.contextWindow);
+  const inputHint = devinModelTokenHint(provider.modelMaxInputTokens, modelUid);
+  const ceilings = [positiveTokenCount(liveWindow), contextHint, inputHint]
     .filter((value): value is number => value !== undefined);
   return ceilings.length > 0 ? Math.min(...ceilings) : undefined;
 }
 
-/** Pure test seam; runtime uses the same resolver immediately before dispatch. */
+/**
+ * Resolve the OUTPUT ceiling for this turn, highest authority first:
+ *
+ * 1. the caller's explicit `max_output_tokens`, forwarded unchanged — an
+ *    explicit cap is a request, so a small one is never widened into a
+ *    configured larger one;
+ * 2. the configured per-model cap (`modelMaxOutputTokens`), read through the
+ *    same UID-aware hint lookup the input ceiling uses;
+ * 3. the provider-wide `defaultMaxOutputTokens`;
+ * 4. undefined, which leaves the cloud-direct encoder's own 8192 fallback in
+ *    place for a provider that configured nothing.
+ *
+ * This is NOT the history ceiling, and the two must not collapse into one
+ * number. CompletionConfiguration #2 is the output cap and #3 is the context
+ * window, so feeding a context window into this resolver would ask Cognition to
+ * generate a whole window's worth of output. Nothing here reads
+ * `contextWindow` or `modelContextWindows` for that reason.
+ *
+ * Step 1 keeps the caller's raw value rather than `positiveTokenCount`: the
+ * inbound parser owns what a caller may send, and re-filtering here would
+ * silently promote a rejected value to a configured cap the caller never asked
+ * for.
+ */
+function resolveDevinMaxOutputTokens(
+  provider: OcxProviderConfig,
+  modelUid: string,
+  requested: number | undefined,
+): number | undefined {
+  if (typeof requested === "number") return requested;
+  return devinModelTokenHint(provider.modelMaxOutputTokens, modelUid)
+    ?? positiveTokenCount(provider.defaultMaxOutputTokens);
+}
+
+/** Pure test seams; runtime uses the same resolvers immediately before dispatch. */
 export const resolveDevinMaxInputTokensForTests = resolveDevinMaxInputTokens;
+export const resolveDevinMaxOutputTokensForTests = resolveDevinMaxOutputTokens;
 
 export class DevinMissingCredentialError extends Error {
   constructor() {
@@ -254,6 +301,17 @@ function textFromParts(content: string | OcxContentPart[] | undefined): string {
   return content.map((part) => (part.type === "text" ? part.text : "")).filter(Boolean).join("\n");
 }
 
+const MAX_DEVIN_REMOTE_IMAGE_URL_CHARS = 8_192;
+
+function boundedDevinRemoteImageReference(imageUrl: string): string | undefined {
+  if (imageUrl.length > MAX_DEVIN_REMOTE_IMAGE_URL_CHARS) return undefined;
+  try {
+    return new URL(imageUrl).protocol === "https:" ? imageUrl : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Convert inbound content parts to the multimodal shape the wire encoder accepts.
  *
@@ -262,9 +320,10 @@ function textFromParts(content: string | OcxContentPart[] | undefined): string {
  * text-only string and a message whose only content was an image was dropped
  * entirely, which is why a pasted screenshot killed the turn and the only
  * workaround was running OCR before sending. A data: URL carries everything
- * field #10 needs; a remote https URL cannot be inlined without a fetch, so it
- * stays as an explicit text reference rather than pretending the model can see
- * a picture it cannot. Video has no Devin field and is skipped.
+ * field #10 needs; a bounded remote https URL cannot be inlined without a fetch,
+ * so it stays as an explicit text reference rather than pretending the model can
+ * see a picture it cannot. Unsupported and oversized references become a fixed
+ * omission marker, never attacker-sized prompt text. Video has no Devin field.
  */
 function mapOcxContentToWire(content: string | OcxContentPart[] | undefined): string | ContentPart[] {
   if (typeof content === "string" || !Array.isArray(content)) return content ?? "";
@@ -272,10 +331,19 @@ function mapOcxContentToWire(content: string | OcxContentPart[] | undefined): st
   for (const part of content) {
     if (part.type === "text" && part.text) {
       out.push({ type: "text", text: part.text });
+    } else if (part.type === "document") {
+      // No Devin document field; the marker keeps the turn from disappearing entirely.
+      out.push({ type: "text", text: part.text });
     } else if (part.type === "image") {
       const m = part.imageUrl.match(/^data:([^;]+);base64,(.+)$/);
       if (m) out.push({ type: "image", mimeType: m[1]!, base64Data: m[2]! });
-      else out.push({ type: "text", text: `[image url: ${part.imageUrl}]` });
+      else {
+        const remoteReference = boundedDevinRemoteImageReference(part.imageUrl);
+        out.push({
+          type: "text",
+          text: remoteReference ? `[image url: ${remoteReference}]` : "[image omitted: unsupported or oversized URL]",
+        });
+      }
     }
   }
   return out;
@@ -311,23 +379,26 @@ function assistantText(message: OcxAssistantMessage): string {
  * clients of the same service write #11 thinking with #12 signature and #18
  * signature_type on the assistant prompt.
  *
- * The signature attests the thinking it was produced with, so a block without
- * one contributes its text and nothing else rather than borrowing a neighbour's.
+ * Field #12 attests the exact text at #11, and the wire has room for one pair.
+ * Every block that carries text is replayed, so the chain stays intact; the
+ * signature rides along only when the text being replayed IS the text it
+ * attests, which is exactly the single-block case. Several independently signed
+ * blocks send an unsigned prompt rather than pairing one block's attestation
+ * with another block's words. A signature-only block attests encrypted thinking
+ * that is not being replayed at all, so it is not one of these blocks and
+ * cannot contribute the pair.
  */
 function assistantThinking(
   message: OcxAssistantMessage,
 ): { thinking?: string; signature?: string } {
   const blocks = message.content.filter(
     (part): part is Extract<typeof part, { type: "thinking" }> => part.type === "thinking",
-  );
+  ).filter(part => Boolean(part.thinking));
   if (blocks.length === 0) return {};
-  const thinking = blocks.map(b => b.thinking).filter(Boolean).join("\n");
-  // Only one signature can ride the prompt, so take the last block that has
-  // one: that is the block the turn actually ended on.
-  const signature = blocks.filter(b => b.signature).at(-1)?.signature;
+  const signature = blocks.length === 1 ? blocks[0]!.signature : undefined;
   return {
-    ...(thinking ? { thinking } : {}),
-    ...(signature ? { signature } : {}),
+    thinking: blocks.map(part => part.thinking).join("\n"),
+    ...(isProviderIssuedThinkingSignature(signature) ? { signature } : {}),
   };
 }
 
@@ -541,7 +612,7 @@ export function createDevinAdapter(
       // The signed-in account's tenant decides the host, not the static registry
       // entry: an EU or FedStart account that used provider.baseUrl would send
       // every RPC to the US server it is not provisioned on.
-      const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId);
+      const host = resolveDevinApiServer(provider.baseUrl, credentialProviderId, apiKey);
       // One catalog read per turn serves model-UID resolution, the input
       // ceiling, and the chat pre-flight inside streamChatEvents. Failures are
       // not cached, so a second read would only pay another fetch timeout on
@@ -568,10 +639,14 @@ export function createDevinAdapter(
         const maxInputTokens = resolveDevinMaxInputTokens(
           provider, modelUid, catalog?.byUid.get(modelUid)?.contextWindow,
         );
-        // The reset-retry wrapper waits out a 429 that states its own recovery
-        // delay ("limit will reset in 35 seconds") and replays the identical
-        // request — but only while zero events have been yielded, so a
-        // post-output failure still takes the terminal path untouched.
+        const maxOutputTokens = resolveDevinMaxOutputTokens(
+          provider, modelUid, parsed.options.maxOutputTokens,
+        );
+        // An admitted HTTP turn owns globally shared capacity until this call
+        // emits. Never retain that capacity while waiting out a provider 429:
+        // preserve the typed reset delay in generated diagnostic wording,
+        // never the raw trailer text that may reflect a credential. The
+        // refusal returns immediately so the caller can release its slot.
         for await (const event of streamChatEventsWithResetRetry({
           apiKey,
           apiServerUrl: host,
@@ -584,12 +659,13 @@ export function createDevinAdapter(
           // input hint used to force every model through the 128k default.
           completionOpts: {
             ...(maxInputTokens !== undefined ? { maxInputTokens } : {}),
-            ...(typeof parsed.options.maxOutputTokens === "number" ? { maxOutputTokens: parsed.options.maxOutputTokens } : {}),
+            ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
             ...(typeof parsed.options.temperature === "number" ? { temperature: parsed.options.temperature } : {}),
             ...(typeof parsed.options.topP === "number" ? { topP: parsed.options.topP } : {}),
           },
           signal: incoming.abortSignal,
         }, {
+          maxWaitMs: 0,
           execution: {
             executor: incoming.providerFetch,
             sendBudget: incoming.sendBudget,

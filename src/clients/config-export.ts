@@ -35,6 +35,18 @@ export { OPENCODE_PROVIDER_ID, OPENCODE_CONFIG_SCHEMA, OPENCODE_API_KEY_ENV, OPE
 export { normalizeExportModels } from "./config-export/model-metadata";
 export type { OmpModelEntry, OmpProviderBlock, OmpGeneratedConfig } from "./config-export/omp";
 export type { ZcodeModelEntry, ZcodeProviderBlock, ZcodeGeneratedConfig } from "./config-export/zcode";
+export type { ZcodeStoreProviderRule, ZcodeStoreModelRule } from "./config-export/zcode-store";
+export {
+  ZCODE_STORE_SCHEMA_VERSION,
+  ZCODE_STORE_PROVIDER_GROUP,
+  ZCODE_STORE_API_TYPE,
+  ZCODE_STORE_PROVIDER_NAME,
+  ZCODE_STORE_PROVIDER_RULES_PATH,
+  ZCODE_STORE_MODEL_RULES_PATH,
+  buildZcodeStoreProviderRule,
+  buildZcodeStoreContribution,
+  zcodeStoreSchemaEstablished,
+} from "./config-export/zcode-store";
 export type { DshReasoningEffort, DshWireReasoningEffort, DshModelEntry, DshProviderBlock, DshGeneratedConfig } from "./config-export/dsh";
 export type { McodeProviderBlock, McodeModelEntry, McodeGeneratedConfig } from "./config-export/mcode";
 export type { RaycastAbility, RaycastAbilityName, RaycastModelEntry, RaycastProviderEntry, RaycastGeneratedConfig } from "./config-export/raycast";
@@ -445,6 +457,30 @@ export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string 
 
 export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   return join(zcodeHomeDir(env, home), "v2", "config.json");
+}
+
+/**
+ * The provider store a current ZCode reads, which is NOT the file above.
+ *
+ * ZCode 3.14 moved custom providers to `v2/provider_config.json` and left
+ * `v2/config.json` reachable only through a one-shot import that runs when the
+ * new file is missing. The client creates the new file on first launch, so on
+ * an install that has ever run, the import has already happened and never runs
+ * again — every later write to `v2/config.json` is read by nobody (#5348).
+ *
+ * This project does not write this file; it names it so the integration can
+ * tell whether its own write can still reach the client. The env override is
+ * ZCode's own (`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`), so an operator who
+ * relocated the store is measured against the file their client actually opens
+ * rather than the default location. A relative override is refused for the same
+ * reason `ZCODE_DATA_DIR` refuses one: we and the client would disagree about
+ * which file it names, and here that disagreement decides whether an apply is
+ * reported as effective.
+ */
+export function zcodeProviderStorePath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE?.trim();
+  if (override) return absoluteClientPath(override, home, "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE");
+  return join(zcodeHomeDir(env, home), "v2", "provider_config.json");
 }
 
 /**
@@ -949,9 +985,15 @@ function buildPiClientConfig(ctx: ExportContext, sendSessionAffinityHeaders = fa
   };
 }
 
+/** Do not let provider-controlled catalog text become an environment lookup. */
+function containsEnvInterpolation(value: string): boolean {
+  return value.includes("${");
+}
+
 function buildHermesClientConfig(ctx: ExportContext): HermesGeneratedConfig {
   const models: Record<string, HermesModelEntry> = {};
   for (const model of normalizeExportModels(ctx.models)) {
+    if (containsEnvInterpolation(model.namespaced)) continue;
     const declared = model.inputModalities;
     models[model.namespaced] = declared && declared.length > 0
       ? { supports_vision: declared.includes("image") }
@@ -973,15 +1015,17 @@ function buildHermesClientConfig(ctx: ExportContext): HermesGeneratedConfig {
 }
 
 function buildOpenclawClientConfig(ctx: ExportContext): OpenclawGeneratedConfig {
-  const models: OpenclawModelEntry[] = normalizeExportModels(ctx.models).map(model => {
+  const models: OpenclawModelEntry[] = normalizeExportModels(ctx.models).flatMap(model => {
+    const name = exportModelLabel(model);
+    if (containsEnvInterpolation(model.namespaced) || containsEnvInterpolation(name)) return [];
     const context = authoritativeContextWindow(model.contextWindow);
     const input = [...new Set(model.inputModalities?.filter(value => ["text", "image", "video", "audio"].includes(value)))];
-    return {
+    return [{
       id: model.namespaced,
-      name: exportModelLabel(model),
+      name,
       ...(context !== undefined ? { contextWindow: context } : {}),
       ...(input.length > 0 ? { input } : {}),
-    };
+    }];
   });
   const headers = proxyAdmissionHeaders(ctx.config, OPENCLAW_API_KEY_ENV_REF);
   return {

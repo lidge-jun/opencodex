@@ -13,7 +13,7 @@
 import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
@@ -55,6 +55,10 @@ type ProbeResult = {
     newerVersion?: string;
     selectionUnchanged: boolean;
     failures: RuntimeProbeFailure[];
+    installedIsolation?: Record<"isolated" | "inherited", {
+      sentinelCalls: Array<{ args: string[]; completed: boolean }>;
+      lowerCalls: string[];
+    }>;
   };
 };
 
@@ -104,6 +108,8 @@ function runStatusProbe(options: {
   preferred?: "valid" | "failed" | "missing";
   persisted?: boolean;
   fullDiagnostics?: boolean;
+  /** Windows-only negative control; always a test-owned external install root. */
+  externalInstalledRoot?: string;
   /** "connect" drives `ocx connect status`; "status" drives the general `ocx status` collector. */
   surface?: "connect" | "status";
   /**
@@ -151,6 +157,10 @@ function runStatusProbe(options: {
       const rejectedDir = join(opencodexHome, "rejected");
       const selected = writeRuntimeFixture(selectedDir, "0.145.0");
       writeRuntimeFixture(lowerDir, "99.0.0");
+      if (options.externalInstalledRoot && process.platform === "win32") {
+        // Use a real executable for the Windows-only installed-root control.
+        copyFileSync(process.execPath, join(lowerDir, "codex.exe"));
+      }
       const preferred = options.preferred ?? "valid";
       runtimeEnv.CODEX_CLI_PATH = preferred === "valid" ? selected
         : preferred === "failed" ? writeRuntimeFixture(rejectedDir, "", false)
@@ -158,6 +168,8 @@ function runStatusProbe(options: {
       runtimeEnv.PATH = [selectedDir, lowerDir].join(delimiter);
       runtimeEnv.HOME = opencodexHome;
       runtimeEnv.USERPROFILE = opencodexHome;
+      // Installed Windows runtimes are discovered outside PATH under LOCALAPPDATA.
+      runtimeEnv.LOCALAPPDATA = join(opencodexHome, "local-app-data");
       runtimeEnv.FIXTURE_RUNTIME_DIRS = JSON.stringify({ selected: selectedDir, lower: lowerDir, rejected: rejectedDir });
       runtimeEnv.FIXTURE_FULL_DIAGNOSTICS = options.fullDiagnostics ? "1" : "0";
       if (options.persisted) writeFileSync(join(opencodexHome, "codex-runtime.json"), JSON.stringify({
@@ -259,6 +271,34 @@ function runStatusProbe(options: {
           }
           runtime = { beforeDiagnostics, afterDiagnostics: calls(), diagnosticsCached, newerVersion,
             selectionUnchanged: selectionBefore === readOptional(selectionPath), failures };
+          const externalRoot = process.env.FIXTURE_EXTERNAL_INSTALLED_ROOT;
+          if (externalRoot) {
+            const { execFileSync } = require("node:child_process");
+            const sentinel = join(externalRoot, "OpenAI", "Codex", "bin", "fixture-installed", "codex.exe");
+            const lowerExecutable = join(dirs.lower, "codex.exe");
+            const observeInstalled = env => {
+              const sentinelCalls = [];
+              const lowerCalls = [];
+              resolveCodexRuntime({
+                env,
+                execFileSync: (file, args, options) => {
+                  // Record attempts too: a failed external launch still violates isolation.
+                  const call = file === sentinel ? { args: [...args], completed: false } : null;
+                  if (call) sentinelCalls.push(call);
+                  const output = execFileSync(file, args, options);
+                  if (call) call.completed = true;
+                  if (file === lowerExecutable) lowerCalls.push(args.join(" "));
+                  return output;
+                },
+              });
+              return { sentinelCalls, lowerCalls };
+            };
+            // Explicit deps make both observations cold without altering the ordinary cache oracle.
+            runtime.installedIsolation = {
+              isolated: observeInstalled({ ...process.env }),
+              inherited: observeInstalled({ ...process.env, LOCALAPPDATA: externalRoot }),
+            };
+          }
         }
         console.log(JSON.stringify({ lines: captured, commandCode, status, runtime, exitCode, errors, catalogUnchanged }));
       })();
@@ -282,6 +322,7 @@ function runStatusProbe(options: {
         OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: join(opencodexHome, "desktop"),
         FIXTURE_LADDER: JSON.stringify(options.ladder),
         FIXTURE_SURFACE: options.surface ?? "connect",
+        FIXTURE_EXTERNAL_INSTALLED_ROOT: options.externalInstalledRoot ?? "",
         ...runtimeEnv,
       },
     });
@@ -422,6 +463,30 @@ describe("connected-client runtime probe scope", () => {
       runStatusProbe({ connected: true, ladder: "observed", deadlineMs });
     });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  test.skipIf(process.platform !== "win32")("isolates inherited Windows installs without disabling full discovery", () => {
+    const externalRoot = mkdtempSync(join(tmpdir(), "ocx-readiness-external-"));
+    try {
+      const installed = join(externalRoot, "OpenAI", "Codex", "bin", "fixture-installed");
+      mkdirSync(installed, { recursive: true });
+      // A real PE executable: Bun answers --version and is harmless as an unselected candidate.
+      copyFileSync(process.execPath, join(installed, "codex.exe"));
+      const probe = runStatusProbe({ connected: true, ladder: "observed", externalInstalledRoot: externalRoot });
+      expect(probe.status.readiness).toBe("ready");
+      expect(probe.runtime?.beforeDiagnostics.selected).toEqual([
+        "--version", "debug models --bundled", "debug models --bundled",
+      ]);
+      expect(probe.runtime?.beforeDiagnostics.lower).toEqual([]);
+      expect(probe.runtime?.selectionUnchanged).toBe(true);
+      expect(probe.runtime?.installedIsolation).toEqual({
+        isolated: { sentinelCalls: [], lowerCalls: ["--version"] },
+        // Removing only the environment isolation must execute the external sentinel.
+        inherited: { sentinelCalls: [{ args: ["--version"], completed: true }], lowerCalls: ["--version"] },
+      });
+    } finally {
+      removeTreeWithRetry(externalRoot);
+    }
+  }, SPAWN_BUDGET_MS);
 
   test("observes only the selected runtime and leaves full diagnostics available", () => {
     const probe = runStatusProbe({ connected: true, ladder: "observed", fullDiagnostics: true });

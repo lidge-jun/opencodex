@@ -16,6 +16,7 @@ import { resetContextRelayActivationForTests } from "../../src/codex/context-com
 const principal = "principal-a";
 const keyAdmission: DataPlaneAdmission = { kind: "configured", keyId: "k1", source: "dedicated", contextPrincipalId: principal };
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const destination = "https://chatgpt.com/backend-api/codex";
@@ -25,6 +26,7 @@ let previousCodexHome: string | undefined;
 let home = "";
 let sent: Array<{ url: string; headers: Headers }> = [];
 let failFirstAccount: string | undefined;
+let releaseSpendHome: (() => void) | undefined;
 
 function install(id: string, owner: string, token = `${id}-token`): void {
   saveCodexAccountCredential(id, { accessToken: token, refreshToken: `${id}-refresh`,
@@ -75,6 +77,8 @@ beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME; previousCodexHome = process.env.CODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-context-owner-"));
   process.env.OPENCODEX_HOME = home; process.env.CODEX_HOME = home;
+  // Direct handler dispatches need the writer lease that startServer normally holds.
+  releaseSpendHome = acquireOwnedSpendHome();
   setContextFeature(true);
   clearContextSessionOwnersForTests(); clearAccountQuota(); clearThreadAccountMap(); clearCodexUpstreamHealth();
   for (const id of ["pool-a", "pool-b", "__main__"]) clearAccountNeedsReauth(id);
@@ -98,6 +102,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release before home teardown to prevent Windows removal failures and a live unlinked database.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearContextSessionOwnersForTests(); clearAccountQuota(); clearThreadAccountMap(); clearCodexUpstreamHealth();
   removeTreeWithRetry(home);

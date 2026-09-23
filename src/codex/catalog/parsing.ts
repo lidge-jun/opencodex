@@ -194,6 +194,8 @@ export const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
    * keep appearing with its capabilities broken. Excluding the slug is what actually takes
    * it out of the routed catalog.
    */
+  "deepseek/deepseek-v4-pro",
+  "opencode-go/deepseek-v4-pro",
   "command-code/deepseek-deepseek-v4-pro",
   "commandcode/deepseek-deepseek-v4-pro",
   "orcarouter/deepseek-deepseek-v4-pro",

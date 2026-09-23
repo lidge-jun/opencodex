@@ -16,6 +16,12 @@ import {
   providerConfigSeed,
 } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY, registryEntryForProviderDestination } from "../../src/providers/registry";
+import {
+  REGISTRY_FIELD_MODEL_ID_ROLES,
+  registryModelIdKeys,
+} from "../../src/providers/registry/model-ids";
+import type { ProviderRegistryEntry } from "../../src/providers/registry/types";
+import { META_MUSE_MODELS } from "../../src/providers/registry/model-seeds";
 import { FREE_PROVIDER_DIRECTORY } from "../../src/providers/free-directory";
 import { applyProviderConfigHints } from "../../src/codex/catalog";
 import { routeModel } from "../../src/router";
@@ -40,7 +46,7 @@ const EXPECTED_KEY_PROVIDER_IDS = [
   "volcengine", "volcengine-coding-plan", "volcengine-agent-plan", "qianfan", "alibaba", "alibaba-token-plan", "alibaba-token-plan-intl", "parallel", "zenmux", "litellm", "ollama-cloud", "mistral",
   "minimax", "minimax-cn", "kimi-code", "opencode-zen", "vercel-ai-gateway", "opper",
   "opencode-free", "xiaomi", "xiaomi-mimo", "kilo", "mimo-free", "mimo", "cloudflare-ai-gateway", "cloudflare-workers-ai", "gitlab-duo",
-  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn",
+  "qoder", "qoder-cn", "codebuddy", "codebuddy-cn", "stepfun",
 ];
 
 describe("provider registry parity", () => {
@@ -58,6 +64,120 @@ describe("provider registry parity", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  test("every field carried by the shipped registry has a model-id role classification", () => {
+    // This is the runtime half. The module's satisfies clause is the compile-time half, so
+    // together they catch both a new interface field and a shipped entry carrying an unclassified field.
+    const classifiedFields = new Set(Object.keys(REGISTRY_FIELD_MODEL_ID_ROLES));
+    for (const entry of PROVIDER_REGISTRY) {
+      for (const field of Object.keys(entry)) {
+        expect(classifiedFields.has(field), `${entry.id}.${field}`).toBe(true);
+      }
+    }
+  });
+
+  test("every direct model-id map is collected independently", () => {
+    const cases = [
+      ["modelWireDefaults", "openai-chat"],
+      ["modelResponsesUpstreamStreaming", false],
+      ["modelResponsesTerminalRepair", { graceMs: 25 }],
+      ["modelSupportsServiceTier", true],
+      ["modelSupportsReasoningSummaries", false],
+      ["modelSupportsVerbosity", true],
+      ["modelContextWindows", 100_000],
+      ["modelDisplayNames", "Synthetic display name"],
+      ["modelInputModalities", ["text"]],
+      ["modelMaxOutputTokens", 8_000],
+      ["modelReasoningEfforts", ["low"]],
+      ["modelDefaultReasoningEfforts", "low"],
+      ["modelReasoningEffortMap", { low: "low" }],
+      ["virtualModels", { wireModelId: "wire-target", reasoningMode: "pro" }],
+      ["modelMaxInputTokens", 90_000],
+    ] as const;
+
+    for (const [field, value] of cases) {
+      const modelId = `vendor/${field}`;
+      const entry = {
+        id: `fixture-${field}`,
+        label: `Fixture ${field}`,
+        adapter: "openai-chat",
+        baseUrl: "https://registry-model-id.fixture.example/v1",
+        authKind: "key",
+        [field]: { [modelId]: value },
+      } as ProviderRegistryEntry;
+      expect(registryModelIdKeys(entry), field).toEqual([modelId]);
+    }
+  });
+
+  test("non-model records contribute no selector identities", () => {
+    const entry = {
+      id: "fixture-non-model-records",
+      label: "Fixture non-model records",
+      adapter: "openai-chat",
+      baseUrl: "https://registry-model-id.fixture.example/v1",
+      authKind: "key",
+      staticHeaders: { "x-model/header": "value" },
+      reasoningEffortMap: { "effort/label": "high" },
+      responsesItemIdRepair: {
+        message: ["message/value"],
+        reasoning: ["reasoning/value"],
+        repairMissingTerminalIds: true,
+      },
+    } as ProviderRegistryEntry;
+    expect(registryModelIdKeys(entry)).toEqual([]);
+  });
+
+  test("virtual models contribute selectable keys but never wire target values", () => {
+    const entry = {
+      id: "fixture-virtual-model",
+      label: "Fixture virtual model",
+      adapter: "openai-chat",
+      baseUrl: "https://registry-model-id.fixture.example/v1",
+      authKind: "key",
+      virtualModels: {
+        "client/selectable": { wireModelId: "wire/target", reasoningMode: "pro" },
+      },
+    } as ProviderRegistryEntry;
+    expect(registryModelIdKeys(entry)).toEqual(["client/selectable"]);
+    expect(registryModelIdKeys(entry)).not.toContain("wire/target");
+  });
+
+  test("deduplication keeps registry-field order and the first occurrence", () => {
+    const entry = {
+      id: "fixture-stable-deduplication",
+      label: "Fixture stable deduplication",
+      adapter: "openai-chat",
+      baseUrl: "https://registry-model-id.fixture.example/v1",
+      authKind: "key",
+      modelWireDefaults: {
+        "first/model": "openai-chat",
+        "shared/model": "openai-chat",
+      },
+      modelResponsesUpstreamStreaming: {
+        "shared/model": false,
+        "second/model": false,
+      },
+      modelContextWindows: {
+        "third/model": 100_000,
+        "shared/model": 100_000,
+      },
+    } as ProviderRegistryEntry;
+    expect(registryModelIdKeys(entry)).toEqual([
+      "first/model",
+      "shared/model",
+      "second/model",
+      "third/model",
+    ]);
+  });
+
+  test("a shipped entry's ids are recovered from its classified maps, not its models list", () => {
+    const metaMuse = PROVIDER_REGISTRY.find(entry => entry.id === "meta-muse")!;
+    // meta-muse declares these ids in BOTH its models list and its context-window, modality and
+    // effort maps. The helper never reads models, so recovering them here is evidence the maps
+    // were read. Compared against the seed the entry is built from rather than a copied literal,
+    // so adding a Muse model does not fail this case for the wrong reason.
+    expect(registryModelIdKeys(metaMuse)).toEqual([...META_MUSE_MODELS]);
+  });
+
   test("key-login export is derived from the registry", () => {
     expect(KEY_LOGIN_PROVIDERS).toEqual(deriveKeyLoginMap());
     expect(Object.keys(KEY_LOGIN_PROVIDERS)).toEqual(EXPECTED_KEY_PROVIDER_IDS);
@@ -71,15 +191,21 @@ describe("provider registry parity", () => {
       escapeBuiltinToolNames: true,
     });
     expect(KEY_LOGIN_PROVIDERS.umans.noVisionModels).toContain("umans-glm-5.2");
-    // Zen Go text-only models are vision-sidecar covered; Kimi K2.7 Code is multimodal and must NOT be listed.
+    // Zen Go text-only models are vision-sidecar covered; Kimi K2.7 Code is multimodal and must NOT
+    // be listed. deepseek-v4.1-flash was removed on 2026-09-19 after it was probed natively
+    // multimodal on this gateway; its sibling deepseek-v4-flash still rejects image_url upstream.
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).toEqual([
       "glm-5.3",
       "glm-5.2", "glm-5", "glm-5.1",
-      "deepseek-v4.1-flash", "deepseek-v4-flash",
+      "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
+      "mimo-v2.6-pro", "mimo-v2.6-flash",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
     ]);
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("deepseek-v4.1-flash");
+    expect(KEY_LOGIN_PROVIDERS["opencode-go"].modelInputModalities?.["deepseek-v4.1-flash"])
+      .toEqual(["text", "image"]);
     expect(KEY_LOGIN_PROVIDERS["opencode-go"].noVisionModels).not.toContain("kimi-k2.7-code");
     // #1338 / #1415: the Zen gateway rejects json_schema on its DeepSeek routes. The three
     // presets that share that gateway carry the narrow opt-out as a registry-only seed, so
@@ -120,7 +246,11 @@ describe("provider registry parity", () => {
 
     const zenGo = PROVIDER_REGISTRY.find(entry => entry.id === "opencode-go");
     expect(zenGo?.preserveReasoningContentModels).toContain("deepseek-v4.1-flash");
-    expect(zenGo?.noVisionModels).toContain("deepseek-v4.1-flash");
+    // Reclassified 2026-09-19: this route reads images natively on the Zen Go gateway, so it left
+    // the sidecar list and gained a positive image declaration. Its sibling stays behind.
+    expect(zenGo?.noVisionModels).not.toContain("deepseek-v4.1-flash");
+    expect(zenGo?.noVisionModels).toContain("deepseek-v4-flash");
+    expect(zenGo?.modelInputModalities?.["deepseek-v4.1-flash"]).toEqual(["text", "image"]);
     expect(Object.keys(zenGo?.modelReasoningEfforts ?? {})).toContain("deepseek-v4.1-flash");
     expect(zenGo?.modelContextWindows?.["deepseek-v4.1-flash"]).toBe(1_048_576);
 
@@ -181,7 +311,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.umans.modelContextWindows?.["umans-glm-5.2"]).toBe(405_504);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-coder"]).toEqual(["text", "image"]);
     expect(KEY_LOGIN_PROVIDERS.umans.modelInputModalities?.["umans-glm-5.2"]).toEqual(["text"]);
-    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro", "daybreak-red-latest", "daybreak-blue-latest", "gpt-6-astra"]);
+    expect(KEY_LOGIN_PROVIDERS["openai-apikey"].models).toEqual(["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro", "daybreak-red-latest", "daybreak-blue-latest", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelContextWindows?.["gpt-6-astra"]).toBe(1_050_000);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelMaxInputTokens?.["gpt-6-astra"]).toBe(922_000);
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelMaxOutputTokens?.["gpt-6-astra"]).toBe(128_000);
@@ -193,7 +323,7 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS["openai-apikey"].modelInputModalities?.["gpt-5.5"]).toEqual(["text", "image"]);
     expect((KEY_LOGIN_PROVIDERS["openai-apikey"] as unknown as { virtualModels?: unknown }).virtualModels).toBeUndefined();
     const apiRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "openai-apikey")!;
-    expect(apiRegistry.models).toHaveLength(11);
+    expect(apiRegistry.models).toEqual(KEY_LOGIN_PROVIDERS["openai-apikey"].models);
     expect(Object.keys(apiRegistry.virtualModels ?? {}).sort()).toEqual([
       "gpt-5.6-luna-pro", "gpt-5.6-sol-pro", "gpt-5.6-terra-pro",
     ]);
@@ -477,11 +607,15 @@ describe("provider registry parity", () => {
     for (const model of ["deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash"]) {
       expect(isModelVisionSidecarConsumer(provider, model)).toBe(true);
     }
-    for (const id of ["opencode-go", "opencode-zen"]) {
-      const gateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === id)!);
-      expect(isModelVisionSidecarConsumer(gateway, "deepseek-v4.1-flash")).toBe(true);
-      expect(isModelVisionSidecarConsumer(gateway, "deepseek-v4-flash")).toBe(true);
-    }
+    // Only the Go tier was probed (2026-09-19) and only for deepseek-v4.1-flash. The sibling
+    // id on the same tier still rejects image_url, and the Zen tiers could not be measured at
+    // all (HTTP 402), so an unverified tier keeps its existing classification.
+    const goGateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-go")!);
+    expect(isModelVisionSidecarConsumer(goGateway, "deepseek-v4.1-flash")).toBe(false);
+    expect(isModelVisionSidecarConsumer(goGateway, "deepseek-v4-flash")).toBe(true);
+    const zenGateway = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-zen")!);
+    expect(isModelVisionSidecarConsumer(zenGateway, "deepseek-v4.1-flash")).toBe(true);
+    expect(isModelVisionSidecarConsumer(zenGateway, "deepseek-v4-flash")).toBe(true);
     const free = providerConfigSeed(PROVIDER_REGISTRY.find(entry => entry.id === "opencode-free")!);
     expect(isModelVisionSidecarConsumer(free, "deepseek-v4-flash-free")).toBe(true);
     // Saved providers without explicit modality overrides inherit the fix during routing.
@@ -600,7 +734,7 @@ describe("provider registry parity", () => {
     expect(deriveKeyLoginMap().zai.modelMaxOutputTokens?.["glm-5.3[1m]"]).toBe(131_072);
     // `zhipu-bigmodel-coding` opts in for the same reason `zai` does: it serves the same
     // bracketed GLM ids, and that vendor's OpenAI path returns 400 code 1211 for them.
-    expect(optedInProviders).toEqual(["kimi", "zai", "zhipu-bigmodel-coding", "kimi-code"]);
+    expect(optedInProviders).toEqual(["kimi", "kimi-responses", "zai", "zhipu-bigmodel-coding", "kimi-code"]);
 
     const config: OcxConfig = {
       port: 10100,
@@ -798,6 +932,37 @@ describe("provider registry parity", () => {
     expect(apiKey.modelReasoningEfforts).toEqual(anthropicOauth?.modelReasoningEfforts);
   });
 
+  test("case-varied Anthropic effort overrides replace registry defaults", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      authMode: "oauth",
+      modelReasoningEfforts: { "Claude-Opus-5": [] },
+    };
+
+    const enriched = structuredClone(provider);
+    enrichProviderFromRegistry("anthropic", enriched);
+    expect(enriched.modelReasoningEfforts).not.toHaveProperty("claude-opus-5");
+    expect(enriched.modelReasoningEfforts?.["Claude-Opus-5"]).toEqual([]);
+
+    const config: OcxConfig = { port: 10100, defaultProvider: "anthropic", providers: { anthropic: provider } };
+    const routed = routeModel(config, "anthropic/claude-opus-5");
+    expect(routed.provider.modelReasoningEfforts).not.toHaveProperty("claude-opus-5");
+    expect(routed.provider.modelReasoningEfforts?.["Claude-Opus-5"]).toEqual([]);
+
+    // A renamed row reaches the same fill through the destination fallback
+    // (fillRecordOfArrays), which must claim registry keys case-insensitively too.
+    const customNamed: OcxProviderConfig = {
+      adapter: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      authMode: "key",
+      modelReasoningEfforts: { "Claude-Opus-5": [] },
+    };
+    enrichProviderFromRegistry("my-claude", customNamed);
+    expect(customNamed.modelReasoningEfforts).not.toHaveProperty("claude-opus-5");
+    expect(customNamed.modelReasoningEfforts?.["Claude-Opus-5"]).toEqual([]);
+  });
+
   test("the Anthropic ladder omits rungs the adapter cannot honor distinctly", () => {
     const anthropicOauth = PROVIDER_REGISTRY.find(entry => entry.id === "anthropic");
     for (const efforts of Object.values(anthropicOauth?.modelReasoningEfforts ?? {})) {
@@ -812,15 +977,12 @@ describe("provider registry parity", () => {
   });
 
   test("Kimi coding aliases preserve model context and capability parity", () => {
-    const codingModels = [
-      "k3",
-      "k3[1m]",
-      "kimi-k2.7-code",
-      "kimi-k2.7-code-highspeed",
-      "kimi-k2.6",
-      "kimi-k2.5",
-      "kimi-for-coding",
-    ];
+    // 260921: the picker AND every preset metadata list seed only ids the subscription
+    // endpoint still serves (live /coding/v1/models: kimi-for-coding[-highspeed], k3,
+    // k3-256k). Seeding a retired id in a metadata list would re-arm the model-rename
+    // migration on every boot (#5066); saved rows still naming one are repaired by
+    // MODEL_RENAMES instead.
+    const codingModels = ["k3", "k3[1m]", "k3-256k", "kimi-for-coding"];
     const parityLists = [
       "noReasoningModels",
       "noTemperatureModels",
@@ -830,30 +992,49 @@ describe("provider registry parity", () => {
       "preserveReasoningContentModels",
     ] as const;
 
-    for (const providerId of ["kimi", "kimi-code"]) {
+    for (const providerId of ["kimi", "kimi-code", "kimi-responses"]) {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.models).toEqual(codingModels);
+      // Every Coding preset defaults to the live alias. A
+      // registry rollback to the retired default would silently pass without this.
+      expect(entry?.defaultModel).toBe("kimi-for-coding");
+      expect(entry?.models).not.toContain("kimi-k2.7-code");
       for (const modelId of codingModels) {
-        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" ? 1_048_576 : 262_144);
+        // 260921: kimi-for-coding (K2.8 Preview) shares the verified 1M ceiling with k3[1m];
+        // all other ids stay at the 256K standard window.
+        expect(entry?.modelContextWindows?.[modelId]).toBe(modelId === "k3[1m]" || modelId === "kimi-for-coding" ? 1_048_576 : 262_144);
       }
       for (const field of parityLists) {
-        expect(entry?.[field]).toContain("kimi-k2.7-code");
-        expect(entry?.[field]).toContain("kimi-for-coding");
+        // Every preset list is live-id only: kimi-for-coding must be there, the retired
+        // k2.x ids must not (a stale k2.7 row would leak the dead id back into the picker).
+        if (field !== "noReasoningModels") expect(entry?.[field]).toContain("kimi-for-coding");
+        expect(entry?.[field] ?? []).not.toContain("kimi-k2.7-code");
       }
+      // kimi-for-coding left noReasoningModels when K2.8 added the adjustable ladder.
+      expect(entry?.noReasoningModels ?? []).not.toContain("kimi-for-coding");
+      expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
+      expect(entry?.modelDefaultReasoningEfforts?.["kimi-for-coding"]).toBe("max");
       expect(entry?.modelSuffixBracketStrip).toBe(true);
       expect(entry?.promptCacheKey).toBe(true);
       // Key-pool 429 rotation rebuilds the provider from the persisted config (not the routed
       // one), so the flag must survive seeding/enrichment, not just the router's registry backfill.
       expect(providerConfigSeed(entry!).promptCacheKey).toBe(true);
-      const enriched: OcxProviderConfig = { adapter: "openai-chat", baseUrl: entry!.baseUrl };
+      const enriched: OcxProviderConfig = { adapter: entry!.adapter, baseUrl: entry!.baseUrl };
       enrichProviderFromCatalog(providerId, enriched);
       expect(enriched.promptCacheKey).toBe(true);
       expect(entry?.noReasoningModels).not.toContain("k3");
       expect(entry?.noReasoningModels).not.toContain("k3[1m]");
       expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);
       expect(entry?.modelReasoningEfforts?.["k3[1m]"]).toEqual(["low", "high", "max"]);
-      for (const modelId of ["k3", "k3[1m]"]) {
+      for (const modelId of ["k3", "k3[1m]", "k3-256k"]) {
+        expect(entry?.noReasoningModels).not.toContain(modelId);
+        expect(entry?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
         expect(entry?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
+        expect(entry?.modelInputModalities?.[modelId]).toEqual(["text", "image"]);
+        for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
+          expect(entry?.[field]).toContain(modelId);
+        }
+        expect(entry?.autoToolChoiceOnlyModels).not.toContain(modelId);
         expect(entry?.modelReasoningEffortMap?.[modelId]).toEqual({
           none: "none",
           low: "low",
@@ -871,8 +1052,27 @@ describe("provider registry parity", () => {
       expect(entry?.noPenaltyModels).toContain("k3");
       expect(entry?.preserveReasoningContentModels).toContain("k3");
       expect(entry?.preserveReasoningContentModels).toContain("k3[1m]");
-      expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual([]);
+      // 260921: K2.8 gave kimi-for-coding the same adjustable low/high/max ladder as k3.
+      expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
     }
+
+    // The Responses preset shares the kimi OAuth account (same oauthId, no second login)
+    // and carries identical model metadata; the wire is the only difference.
+    const kimiResp = PROVIDER_REGISTRY.find(provider => provider.id === "kimi-responses");
+    expect(kimiResp).toBeDefined();
+    expect(kimiResp?.adapter).toBe("openai-responses");
+    expect(kimiResp?.authKind).toBe("oauth");
+    expect(kimiResp?.oauthId).toBe("kimi");
+    expect(kimiResp?.requiresAdjacentResponsesToolResults).toBe(true);
+    expect(kimiResp?.models).toEqual(codingModels);
+    expect(kimiResp?.defaultModel).toBe("kimi-for-coding");
+    expect(kimiResp?.modelContextWindows?.["kimi-for-coding"]).toBe(1_048_576);
+    expect(kimiResp?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
+    expect(kimiResp?.modelDefaultReasoningEfforts?.["kimi-for-coding"]).toBe("max");
+    expect(kimiResp?.modelInputModalities?.["kimi-for-coding"]).toEqual(["text", "image"]);
+    expect(kimiResp?.featured).toBe(false);
+    expect(kimiResp?.baseUrl).toBe(PROVIDER_REGISTRY.find(provider => provider.id === "kimi")?.baseUrl);
+    expect(resolveMetadataProvider("kimi-responses")).toBe("moonshot");
 
     const kimi = PROVIDER_REGISTRY.find(provider => provider.id === "kimi")!;
     const kimiModel = applyProviderConfigHints("kimi", providerConfigSeed(kimi), { provider: "kimi", id: "k3" });
@@ -1107,13 +1307,17 @@ describe("provider registry parity", () => {
     }
     expect(OAUTH_PROVIDERS.xai.providerConfig.defaultModel).toBe("grok-4.5");
     expect(OAUTH_PROVIDERS.xai.providerConfig.liveModels).toBe(true);
+    expect(OAUTH_PROVIDERS.xai.providerConfig.models?.[0]).toBe("grok-4.7");
     expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.6");
     expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.5");
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.7"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.6"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.5"]).toBe(500_000);
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.7"]).toEqual(["low", "medium", "high", "xhigh"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.6"]).toEqual(["low", "medium", "high", "xhigh"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
-    expect(OAUTH_PROVIDERS.xai.providerConfig.modelDefaultReasoningEfforts).toEqual({ "grok-4.6": "high" });
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelDefaultReasoningEfforts).toEqual({ "grok-4.7": "high", "grok-4.6": "high" });
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelInputModalities?.["grok-4.7"]).toEqual(["text", "image"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEffortMap).toBeUndefined();
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
     const antigravityRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "google-antigravity");
@@ -1263,6 +1467,7 @@ describe("provider registry parity", () => {
       "anthropic-apikey": "anthropic",
       "anthropic-key": "anthropic",
       kimi: "moonshot",
+      "kimi-responses": "moonshot",
       "opencode-go": "opencode-go",
       openrouter: "openrouter",
       google: "google",
@@ -1279,6 +1484,8 @@ describe("provider registry parity", () => {
       "zhipu-bigmodel": "zai",
       "zhipu-bigmodel-coding": "zai",
       "zhipu-bigmodel-responses": "zai",
+      xiaomi: "xiaomi",
+      "xiaomi-mimo": "xiaomi",
     });
     expect(resolveMetadataProvider("gemini")).toBe("google");
     expect(resolveMetadataProvider("minimax-cn")).toBe("minimax");
@@ -1338,6 +1545,30 @@ describe("provider registry parity", () => {
     expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
       .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
     expect(entry?.default_reasoning_level).toBe("high");
+  });
+
+  test("grok-4.7 carries measured context and the four-rung picker ladder", () => {
+    const xai = PROVIDER_REGISTRY.find(entry => entry.id === "xai");
+    const seed = providerConfigSeed(xai!);
+    const model = applyProviderConfigHints("xai", seed, { id: "grok-4.7", provider: "xai" });
+    expect(model.contextWindow).toBe(500_000);
+    expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(model.inputModalities).toEqual(["text", "image"]);
+
+    const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
+    const entry = entries.find(e => e.slug === "xai/grok-4.7");
+    expect(entry?.context_window).toBe(500_000);
+    expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
+      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(entry?.default_reasoning_level).toBe("high");
+  });
+
+  test("Devin grok-4-7 degraded-mode seed carries its catalog window and ladder", () => {
+    const devin = PROVIDER_REGISTRY.find(entry => entry.id === "devin");
+    expect(devin?.models).toContain("grok-4-7");
+    expect(devin?.modelContextWindows?.["grok-4-7"]).toBe(500_000);
+    expect(devin?.modelReasoningEfforts?.["grok-4-7"])
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   // The id-list assertion above only proves the preset exists. Pin the contract a user actually
@@ -1621,7 +1852,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     const provider = make();
     enrichProviderFromRegistry("CommandCode", provider);
     expect(configuredReasoningEfforts(provider, known)).toEqual(["high", "max"]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
     expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual([]);
   });
   test("preserves explicit entries and clones arrays without losing other table rows", () => {
@@ -1634,7 +1865,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     enrichProviderFromRegistry("CommandCode", provider);
     expect(provider).toEqual(once);
     expect(configuredReasoningEfforts(provider, known)).toEqual(["low"]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
     expect(configuredReasoningEfforts(provider, "custom")).toEqual([]);
     expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual(["medium"]);
     provider.modelReasoningEfforts![known]!.push("high");
@@ -1646,7 +1877,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     const provider = make({ modelReasoningEfforts: { [known]: [] } });
     enrichProviderFromRegistry("CommandCode", provider);
     expect(configuredReasoningEfforts(provider, known)).toEqual([]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
   });
   test("does not infer metadata for a different adapter, OAuth, or unrelated endpoint", () => {
     for (const override of [{ adapter: "openai-responses" }, { authMode: "oauth" as const }, { baseUrl: "https://example.test/v1" }]) {

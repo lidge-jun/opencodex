@@ -42,6 +42,7 @@ export interface CursorCheckpointSnapshot {
   coveredMessageCount?: number;
   prefixDigest?: string;
   systemDigest?: string;
+  toolSuspended?: boolean;
 }
 
 interface CursorCheckpointStore {
@@ -229,6 +230,7 @@ export function commitCursorCheckpoint(input: {
   coveredMessageCount?: number;
   prefixDigest?: string;
   systemDigest?: string;
+  toolSuspended?: boolean;
 }): string | undefined {
   if (!input.conversationId || !input.modelId || input.checkpointBytes.byteLength === 0) return undefined;
   if (input.checkpointBytes.byteLength > CURSOR_CHECKPOINT_MAX_TOTAL_BYTES) return undefined;
@@ -258,6 +260,7 @@ export function commitCursorCheckpoint(input: {
     ...(input.coveredMessageCount !== undefined ? { coveredMessageCount: input.coveredMessageCount } : {}),
     ...(input.prefixDigest ? { prefixDigest: input.prefixDigest } : {}),
     ...(input.systemDigest ? { systemDigest: input.systemDigest } : {}),
+    ...(input.toolSuspended ? { toolSuspended: true } : {}),
   };
   const blobIds = collectCheckpointBlobIds(input.checkpointBytes);
   if (blobIds === undefined) return undefined;

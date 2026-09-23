@@ -154,9 +154,11 @@ export default function PromptLayerDialog({
               ? t("codexSet.dialog.emptySource", { path: text.sourcePath ?? "" })
               : text?.reason === "not-rendered"
                 ? t("codexSet.dialog.notRendered")
-                : text?.reason === "not-exposed"
-                  ? t("codexSet.dialog.notExposed")
-                  : t("codexSet.dialog.textUnavailable")}
+                : text?.reason === "unmapped"
+                  ? t("codexSet.dialog.unmapped")
+                  : text?.reason === "not-exposed"
+                    ? t("codexSet.dialog.notExposed")
+                    : t("codexSet.dialog.textUnavailable")}
           </p>
         )}
       </div>

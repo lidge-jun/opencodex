@@ -21,6 +21,7 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 | `apiKeys?` | `OcxApiKey[]` | `[]` | 生成的 `ocx_…` data-plane 准入憑證（用於非回送綁定）。它們不授權管理 API；管理存取使用[管理 API 參考](/zh-tw/reference/management-api/)中說明的獨立憑證。由儀表板管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | 停用 | 選擇加入的已封存 session 清理政策。永不隱含啟用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 以 MiB 為單位、可被驅逐的 app 擁有日誌、快取、blob 與 continuation payload 上限。範圍 64–4096；非 RSS 上限。 |
+| `metricsExport.enabled?` | `boolean` | `false` | 在已驗證的 `GET /api/metrics` 啟用程序本機的彙總請求指標。需要重新啟動；停用時路徑回傳 404，且不會啟動任何匯出活動。 |
 | `codexAutoStart?` | `boolean` | `true` | 讓 Codex shim 在啟動 Codex 前執行 `ocx ensure`。False 使 ensure 為 no-op。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成的外部 Codex 更新取代已安裝的 shim 後還原它。環境退出：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 歷史相容性。原始中繼資料由 `ocx stop` / `ocx restore` 備份並還原。 |
@@ -141,7 +142,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 | `claudeCode.authModeMigratedAt?` | `string` | 未設定 | 內部一次性升級標記。請勿手動設定。 |
 | `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | 繼承 | 寫入生成的 `~/.claude/agents/ocx-*.md` 的 effort；與 Codex guidance 與代理上限分開。透過 `ocx claude` 重啟以重新生成。 |
 
-自動認證在找到已儲存的 Claude 認證時選擇訂閱，無認證時選擇 proxy，偵測不明確時選擇訂閱並附帶警告。請見[Claude Code 認證模式](/zh-tw/guides/claude-code/#auth-mode)。
+自動認證在找到已儲存的 Claude 認證時選擇訂閱，無認證時選擇 proxy，偵測不明確時選擇訂閱並附帶警告。請見[Claude Code 認證模式](/zh-tw/guides/claude-code/#認證模式)。
 
 ## Shadow call
 
@@ -156,6 +157,12 @@ Codex 使用小型 helper 模型處理如標題與 commit 訊息等任務。啟�
   }
 }
 ```
+
+### 目標無法使用時
+
+替換目標是操作者選定的唯一目的地，因此無法再解析的目標會讓輔助呼叫失敗，而不是把它送到別處。當目標的供應商被停用或刪除，或其組合已不存在時，被攔截的請求會在向上游送出任何內容之前回傳 `409` 與錯誤代碼 `intercept_target_unavailable`。請求記錄會記下相同代碼。請求不會直通給原生輔助模型，也不會退回預設供應商，因為兩者都會在你未選擇的情況下改變目的地、憑證與費用。組合或路由設定檔目標仍會在自身成員之間容錯移轉。像 `provider/model` 這樣的限定目標，若其供應商部分未指向任何已設定項目，也以相同方式處理，設定 API 會拒絕儲存。透過預設供應商解析的不帶前綴模型 ID 仍然有效。
+
+停用（帶 `disabled: true` 的 `PATCH /api/providers?name=<provider>`）或刪除目標所解析到的供應商仍會成功；回應會加入 `dependentShadowIntercept: { model, enabled }`，儀表板會顯示警告。重新啟用該供應商或選擇其他目標即可恢復攔截。
 
 ## Sidecar
 

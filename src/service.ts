@@ -6,8 +6,12 @@
  * restore it via the command.
  */
 
-export type { ServiceBackend, ServiceInstallState, ServiceStateEvidence } from "./service/state";
-export { SERVICE_MANAGED_ENV, stableLauncherEntry, serviceLogPath, serviceStatePathsForOpenCodexHome, parseServiceInstallState, inspectServiceStateEvidence, currentServiceHomes, serviceHomeMatches, readServiceBackend, serviceReinstallArgs, serviceInstallArgs } from "./service/state";
+export type { ServiceBackend, ServiceInstallState, ServiceStateEvidence, ServiceStateResolution, ServiceOwner, ServiceOwnership, ServiceOwnershipSubject, ServiceOwnershipResolution, ServiceStateSwapDeps, RecordServiceOwnerRequest, RecordServiceOwnerDeps, ReleaseServiceOwnerDeps, RemoveServiceStateDeps } from "./service/state";
+export { SERVICE_MANAGED_ENV, SERVICE_OWNERSHIP_PROTOCOL_VERSION, SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION, stableLauncherEntry, serviceLogPath, serviceStatePaths, serviceStatePathsForOpenCodexHome, parseServiceInstallState, parseServiceOwnership, inspectServiceStateEvidence, resolveServiceState, currentServiceHomes, serviceHomeMatches, serviceCodexHomeMatchesInstall, readServiceBackend, serviceReinstallArgs, serviceInstallArgs, ServiceStateConflictError, ServiceOwnershipSubjectMismatchError, ServiceOwnershipSubjectUnknownError, ServiceTakeoverCompatibilityChangedError, swapServiceInstallState, removeServiceInstallStateRecords, serviceOwnership, resolveServiceOwnership, sameServiceOwnershipSubject, desktopOwnsService, ownershipGrantedTo, recordServiceOwner, releaseServiceOwner } from "./service/state";
+export type { OwnershipMutationLeaseOptions, OwnershipMutationLease } from "./service/ownership-mutation-lease.mjs";
+export { acquireOwnershipMutationLease, withOwnershipMutationLease } from "./service/ownership-mutation-lease.mjs";
+export type { ManagingCliRole, ManagingCliObservation, RegisteredManagingCliInvocation, ServiceTakeoverCompatibilityInput, ServiceTakeoverCompatibility } from "./service/ownership-compatibility";
+export { registeredManagingCliInvocation, assessServiceTakeoverCompatibility, sameServiceTakeoverCompatibility } from "./service/ownership-compatibility";
 export type { ServiceApiTokenOrigin, ProvisionedServiceApiToken } from "./service/guards";
 export { ServiceOwnershipError, isServiceOwnershipError, serviceEnvironmentOwnedHere, assertServiceEnvironmentMatchesInstall, serviceRetryCommand, assertNotAdminToken, assertServiceAuthEnvironment, writeServiceApiTokenFile, assertLiveServiceManagerAllowed } from "./service/guards";
 export { resolveServiceListenPort, installedServiceListenPort, SERVICE_INSTALL_HEALTH_MS, SERVICE_INSTALL_HEALTH_WINDOWS_MS, serviceInstallHealthMs, confirmServiceServing, reportServiceServing, resolvedProxyEnv } from "./service/health";
@@ -21,7 +25,7 @@ export { buildWindowsServiceScript, buildWindowsSchtasksCreateArgs, buildWindows
 export type { WindowsSchedulerRegistrationStageDeps, FreshWindowsSchedulerRegistrationDeps, RemoveNativeWindowsServiceDeps } from "./service/windows-ops";
 export { windowsListenPort, winswListenPort, writeServiceDefinitionFile, definitionCarriesCredential, stageWindowsSchedulerRegistrationXml, stageElevatedSchedulerRegistration, describeElevatedRegistrationFailure, registerFreshWindowsSchedulerTask, removeNativeWindowsServiceForScheduler, assertWindowsNativeServiceAccountSupported, isWindowsSchedulerEndBenign, stopWindows, stopWindowsChecked, classifyWindowsServiceStop } from "./service/windows-ops";
 export type { ServiceRepairVerb, RepairServiceDeps } from "./service/repair";
-export { repairService } from "./service/repair";
+export { repairService, foreignServiceOwnerRefusal, unknownServiceOwnerRefusal } from "./service/repair";
 export type { ServiceInstallPreparationDeps, FreshWindowsSchedulerInstallDeps, ServiceStopOutcome, ServiceUninstallOutcome } from "./service/orchestration";
 export { proxyStillLiveAfterStop, prepareServiceInstall, installServiceSafely, installFreshWindowsSchedulerSafely, installedServiceRespawnRisk, stopServiceIfInstalledDetailed, setUninstallServiceHooksForTests, uninstallServiceDetailed, uninstallServiceIfInstalled, isServiceInstalled, isServiceViable } from "./service/orchestration";
 export type { ServiceDiagnostic, WindowsTaskDiagnosticIdentityDeps, WindowsServiceDiagnosticInputs, LaunchdServiceDiagnosticInputs } from "./service/diagnostics";

@@ -41,23 +41,12 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { log } from "../helpers/request-log-entry";
 import { decodeRequestLogCursor, selectRequestLogPoll } from "../../src/server/request-log-cursor";
 
 async function* replayAdapterEvents(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const event of events) yield event;
-}
-
-function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
-  return {
-    requestId: "ocx-test",
-    timestamp: 1,
-    model: "gpt-test",
-    provider: "openai",
-    status: 200,
-    durationMs: 10,
-    usageStatus: "unreported",
-    ...overrides,
-  };
 }
 
 describe("request log metadata", () => {
@@ -240,6 +229,9 @@ describe("request log metadata", () => {
       },
     } as OcxConfig;
 
+    // This row calls the handler directly, so it takes the spend-journal writer lease that
+    // startServer would have taken. Released in the finally, before the fetch stub is restored.
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -256,7 +248,11 @@ describe("request log metadata", () => {
         adapter: "openai-responses",
         sendCount: 1,
       })]);
+      // Read before the lease is released: the row asserts on metadata only, so without this it
+      // finishes with the turn's body still attached and the lease dropped underneath it.
+      await response.text();
     } finally {
+      releaseSpendHome();
       globalThis.fetch = originalFetch;
     }
   });
@@ -834,6 +830,10 @@ describe("request log metadata", () => {
       "Provider error 401: this model requires a subscription, upgrade for access",
     )).toBe("invalid_api_key");
     expect(requestLogErrorCode(429)).toBe("rate_limit_exceeded");
+    expect(requestLogErrorCode(
+      429,
+      "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
+    )).toBe("upstream_reset_replay_refused");
     expect(requestLogErrorCode(499)).toBe("client_closed_request");
     expect(requestLogErrorCode(502, "client closed request during web-search")).toBe("client_closed_request");
     expect(requestLogErrorCode(400, "blocked", "cyber_policy")).toBe("cyber_policy");

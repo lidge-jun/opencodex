@@ -23,6 +23,7 @@ description: 监听、远程访问、准入密钥、超时、存储、侧车、�
 | `apiKeys?` | `OcxApiKey[]` | `[]` | 生成的 `ocx_…` 数据平面准入凭据（用于非回环绑定）。它们不授权管理 API；管理访问使用[管理 API 参考](/zh-cn/reference/management-api/)中说明的独立凭据。由仪表板管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | 可选启用的归档会话清理策略。不会被隐式启用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 可逐出应用自有日志、缓存、blob 和续传载荷的内存上限，单位 MiB。范围 64–4096；不是 RSS 上限。 |
+| `metricsExport.enabled?` | `boolean` | `false` | 在经过认证的 `GET /api/metrics` 上启用进程本地的请求聚合指标。需要重启；禁用时该路径返回 404，且不会启动任何导出活动。 |
 | `codexAutoStart?` | `boolean` | `true` | 允许 Codex shim 在启动 Codex 之前运行 `ocx ensure`。设为 false 会让 ensure 变成无操作。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成外部 Codex 更新并覆盖安装的 shim 之后恢复该 shim。环境退出开关：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 历史兼容性。原始元数据会被备份，并由 `ocx stop` / `ocx restore` 恢复。 |
@@ -134,6 +135,12 @@ Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
   }
 }
 ```
+
+### 目标不可用时
+
+替换目标是操作者选定的唯一目的地，因此无法再解析的目标会让辅助调用失败，而不是把它发到别处。当目标的提供方被禁用或删除，或其组合已不存在时，被拦截的请求会在向上游发送任何内容之前返回 `409` 和错误代码 `intercept_target_unavailable`。请求日志记录同一代码。请求不会透传给原生辅助模型，也不会回退到默认提供方，因为两者都会在你未选择的情况下改变目的地、凭据和费用。组合或路由配置档目标仍会在自身成员之间故障转移。像 `provider/model` 这样的限定目标，如果其提供方部分未指向任何已配置项，也按同样方式处理，设置 API 会拒绝保存。通过默认提供方解析的不带前缀的模型 ID 仍然有效。
+
+禁用（带 `disabled: true` 的 `PATCH /api/providers?name=<provider>`）或删除目标所解析到的提供方仍会成功；响应会加入 `dependentShadowIntercept: { model, enabled }`，仪表板会显示警告。重新启用该提供方或选择其他目标即可恢复拦截。
 
 ## 侧车
 

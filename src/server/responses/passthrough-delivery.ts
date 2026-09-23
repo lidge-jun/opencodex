@@ -36,10 +36,6 @@ import { readDisplaySafeErrorText } from "./core-errors";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import {
-  providerModelResponsesTerminalRepair,
-  providerModelResponsesUpstreamStreaming,
-} from "../../providers/registry";
-import {
   resolvePassthroughWebSearchBridgeAuth,
   planPassthroughWebSearchBridge,
   createPassthroughWebSearchBridgeStream,
@@ -83,7 +79,10 @@ import {
 import { createRoutedCustomToolRestoreBlockRewrite } from "../responses-custom-tool-repair";
 import { createRoutedToolSearchRestoreBlockRewrite } from "../responses-tool-search-repair";
 import { createGithubCopilotResponsesBlockRewrite } from "../github-copilot-responses-repair";
-import { createGrokResponsesControlFrameBlockRewrite } from "../grok-responses-control-frame";
+import {
+  createGrokResponsesControlFrameBlockRewrite,
+  createGrokResponsesTimestampBlockRewrite,
+} from "../grok-responses-control-frame";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
 import {
   createPlaintextV2AgentMessageCallRestoreRewrite,
@@ -94,11 +93,30 @@ import { createResponsesFieldBackfillBlockRewrite } from "./responses-field-back
 import { createResponsesFunctionToolRepairBlockRewrite } from "../responses-function-tool-repair";
 import {
   createUndeclaredToolCallGuardBlockRewrite,
+  currentTurnWireToolCatalogBody,
   undeclaredToolCallNameInResponse,
   undeclaredToolCallMessage,
   normalizeDefaultNamespaceInJson,
 } from "../responses-undeclared-tool-guard";
 import { isWin32EagerRewrite, selectEagerPath } from "../../lib/bun-stream-caps";
+
+/**
+ * Platform override for the two relay-path policy calls below. Tests only.
+ *
+ * The eager relay is reachable only on win32 and darwin, so a Linux shard cannot exercise it
+ * without claiming to be one of them. Overwriting `process.platform` globally does that, and a
+ * great deal more: every filesystem, ACL and state-directory decision in the process follows it,
+ * and the spend-ledger owner lowercases its home on win32, which on a case-sensitive filesystem
+ * names a DIFFERENT directory. A row that did that stopped being able to reserve its send and
+ * delivered no terminal at all, reporting as a relay defect. This narrows the claim to the two
+ * calls that actually choose the relay path.
+ */
+let relayPlatformForTests: NodeJS.Platform | undefined;
+
+/** Internal test contract, not operator configuration: no config key reaches this. */
+export function setRelayPlatformForTests(platform: NodeJS.Platform | undefined): void {
+  relayPlatformForTests = platform;
+}
 import { linkAbortSignal, UPSTREAM_JSON_BODY_READ_OPTIONS } from "./core-lifetime";
 import { registerTurn, unregisterTurn, trackStreamLifetime } from "../lifecycle";
 import { relaySseEagerBounded } from "../relay-eager";
@@ -189,7 +207,10 @@ export async function deliverPassthroughResponse(
 
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
     const resolvedModel = headers.get("openai-model")?.trim();
-    if (resolvedModel && !logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
+    if (resolvedModel) {
+      logCtx.servedModel = resolvedModel;
+      if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
+    }
     if (isUsageDebugEnabled()) {
       const upstreamContentType = upstreamResponse.headers.get("content-type");
       if (upstreamContentType) logCtx.usageDebugContentType = upstreamContentType;
@@ -340,11 +361,7 @@ export async function deliverPassthroughResponse(
       // before relay starts. Waiting for SSE completion would retain request state across the whole
       // stream; a later body failure does not undo that this destination accepted and served the turn.
       commitReasoningReplayServingRoute(nativeExchange.request.headers);
-      const terminalRepairPolicy = providerModelResponsesTerminalRepair(
-        route.providerName,
-        route.provider,
-        route.modelId,
-      );
+      const terminalRepairPolicy = route.staticPolicy.model.responsesTerminalRepair;
       // #3761: opt-in hosted-web-search bridge. Codex always declares the hosted web_search tool,
       // and this branch relays that declaration on the assumption the destination executes it.
       // A KEY-auth gateway that does not (Ollama Cloud GLM) answers with a function_call named
@@ -366,36 +383,62 @@ export async function deliverPassthroughResponse(
       });
       // Capture the binding that actually served the first leg, after its permitted reselection.
       const webSearchBridgeBinding = requestBindings.get(nativeExchange.request);
-      // The bridge wraps the RAW upstream body, so terminal repair below still owns the single
-      // client-facing terminal — the bridge drops the terminal of every intercepted leg.
-      const upstreamSseBody = webSearchBridgePlan
+      // Repair must observe the raw first leg before the bridge suppresses an intercepted search
+      // lifecycle. Otherwise a provider that leaves that complete call open never arms repair's
+      // grace timer, so the bridge cannot execute the search or begin its continuation.
+      let passthroughSseBody = terminalRepairPolicy
+        ? relayResponsesSseWithTerminalRepair(
+          upstreamResponse.body,
+          upstream,
+          terminalRepairPolicy,
+          translatorBudget,
+          options.responsesTerminalRepairScheduler,
+        )
+        : upstreamResponse.body;
+      passthroughSseBody = webSearchBridgePlan
         ? createPassthroughWebSearchBridgeStream({
           plan: webSearchBridgePlan,
-          firstLeg: upstreamResponse.body,
+          firstLeg: passthroughSseBody,
           requestBody: nativeExchange.request.body,
           // Continuation legs replay the same built request with the executed search appended.
           // The first leg already passed the recovery ladder, the outbound size ceiling, and the
           // host circuit; a KEY-auth destination has no OAuth refresh to replay on a later leg.
-          send: (continuationBody: string) => fetchWithHeaderTimeout(
-            nativeExchange.request.url,
-            { method: nativeExchange.request.method, headers: nativeExchange.request.headers, body: continuationBody },
-            upstream.signal,
-            connectMs,
-            true,
-            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              // Pacing can outlive a manual selection change. A continuation must retain the
-              // first leg's key and appended search result, never rebuild from the original turn.
-              beforeDispatch: () => {
-                if (webSearchBridgeBinding?.kind !== "api-key"
-                  || !providerApiKeySelectionIsCurrent(config, route.providerName, webSearchBridgeBinding.provider)) {
-                  throw new Error("API key selection changed during a web-search continuation");
-                }
-              },
-              providerName: route.providerName,
-              modelId: route.modelId,
-            }),
-            false,
-          ),
+          send: async (continuationBody: string) => {
+            const continuation = await fetchWithHeaderTimeout(
+              nativeExchange.request.url,
+              { method: nativeExchange.request.method, headers: nativeExchange.request.headers, body: continuationBody },
+              upstream.signal,
+              connectMs,
+              true,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                // Pacing can outlive a manual selection change. A continuation must retain the
+                // first leg's key and appended search result, never rebuild from the original turn.
+                beforeDispatch: () => {
+                  if (webSearchBridgeBinding?.kind !== "api-key"
+                    || !providerApiKeySelectionIsCurrent(config, route.providerName, webSearchBridgeBinding.provider)) {
+                    throw new Error("API key selection changed during a web-search continuation");
+                  }
+                },
+                providerName: route.providerName,
+                modelId: route.modelId,
+              }),
+              false,
+            );
+            // The same provider can leave a complete continuation open without a terminal, which
+            // stalls the bridge's decide loop exactly like the first leg — so every leg gets the
+            // same repair, not only the intercepted first one.
+            if (!terminalRepairPolicy || !continuation.ok || !continuation.body) return continuation;
+            return new Response(
+              relayResponsesSseWithTerminalRepair(
+                continuation.body,
+                upstream,
+                terminalRepairPolicy,
+                translatorBudget,
+                options.responsesTerminalRepairScheduler,
+              ),
+              continuation,
+            );
+          },
           execute: createPassthroughWebSearchBridgeExecutor(webSearchBridgePlan, {
             providerApiKey: route.provider.apiKey ?? "",
             auth: webSearchBridgeAuth,
@@ -403,10 +446,9 @@ export async function deliverPassthroughResponse(
             describeImages: requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName),
             sidecar: config.webSearchSidecar,
           }),
-          // Scope the executed-search memo to this exact upstream (#4587). The Responses adapter
-          // derives the same scope from the same base URL before the NEXT turn is dispatched, so
-          // a replayed hosted cell can be turned back into the destination's own call and result.
-          destinationScope: bridgeSearchReplayScope(route.provider.baseUrl),
+          // Snapshot the bound conversation, provider, model, destination, and credential. The
+          // next turn must match every dimension before its hosted cell can recover this result.
+          destinationScope: bridgeSearchReplayScope(parsed._reasoningReplayScope),
           // Appending a search result can push the continuation past the ceiling the first leg
           // was admitted under, so the same limit is re-applied before every later send.
           checkOutboundBody: (continuationBody: string) => {
@@ -419,16 +461,7 @@ export async function deliverPassthroughResponse(
           onFinalize: () => releaseCodexAuthContextProbeLease(openAiSidecar?.authContext),
           signal: upstream.signal,
         })
-        : upstreamResponse.body;
-      const passthroughSseBody = terminalRepairPolicy
-        ? relayResponsesSseWithTerminalRepair(
-          upstreamSseBody,
-          upstream,
-          terminalRepairPolicy,
-          translatorBudget,
-          options.responsesTerminalRepairScheduler,
-        )
-        : upstreamSseBody;
+        : passthroughSseBody;
       const repairConfig = route.provider.responsesItemIdRepair;
       // Grok Build renders deltas live but reconstructs its durable assistant
       // turn from the completed response snapshot. Native Responses streams
@@ -499,7 +532,22 @@ export async function deliverPassthroughResponse(
           ? createGrokResponsesControlFrameBlockRewrite()
           : undefined,
         grokClientCompatibilityEnabled
-          ? createGrokResponsesSparseTerminalBlockRewrite(translatorBudget)
+          ? createGrokResponsesTimestampBlockRewrite()
+          : undefined,
+        grokClientCompatibilityEnabled
+          ? createGrokResponsesSparseTerminalBlockRewrite(
+            translatorBudget,
+            nativeExchange.outboundRequestBody,
+            {
+              clientToolAuthorizationBody: currentTurnWireToolCatalogBody(
+                parsed._rawBody,
+                parsed._replayPrefixLen ?? 0,
+              ),
+              routedNamespaceToolAliases: responseEffects.routedNamespaceToolAliases,
+              routedMuseToolNameAliases: responseEffects.routedMuseToolNameAliases,
+              convertedRoutedCustomToolNames: routedCustomToolNames,
+            },
+          )
           : undefined,
         snapshotRepairEnabled
           ? createResponsesSnapshotBlockRewrite(nativeExchange.outboundRequestBody, translatorBudget)
@@ -529,12 +577,13 @@ export async function deliverPassthroughResponse(
         ? composeSseBlockRewrites(...blockRewrites)
         : undefined;
       const needsClientRewrite = clientBlockRewrite !== undefined;
+      const relayPlatform = relayPlatformForTests ?? process.platform;
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
       // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
       // lost). The eager single reader applies the same rewrites inline.
-      const win32EagerRewrite = isWin32EagerRewrite(process.platform, needsClientRewrite);
+      const win32EagerRewrite = isWin32EagerRewrite(relayPlatform, needsClientRewrite);
       const eagerPath = selectEagerPath(
-        process.platform,
+        relayPlatform,
         needsClientRewrite,
         config.streamMode ?? "auto",
       );
@@ -805,7 +854,7 @@ export async function deliverPassthroughResponse(
       // stream that never closes. Non-streaming clients keep the plain JSON.
       if (clientRequestedStream === true
         && options.inboundTransport !== "websocket"
-        && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
+        && route.staticPolicy.model.responsesUpstreamStreaming === false
         && route.provider.adapter === "openai-responses") {
         let completed: Record<string, unknown> | undefined;
         try {
@@ -852,7 +901,7 @@ export async function deliverPassthroughResponse(
       // WS turns reframe this JSON into events in the bridge, which is the
       // other relay-free path — normalize ids so both bounded-JSON paths agree.
       const outboundJson = options.inboundTransport === "websocket"
-        && providerModelResponsesUpstreamStreaming(route.providerName, route.provider, route.modelId) === false
+        && route.staticPolicy.model.responsesUpstreamStreaming === false
         && hasResponsesItemIdRepair(route.provider.responsesItemIdRepair)
         ? (() => {
           try {

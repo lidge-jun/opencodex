@@ -4,6 +4,13 @@ import { OCX_REASONING_PREFIX } from "../../responses/reasoning-envelope";
 import { configuredReasoningEfforts, mapReasoningEffort, modelRecordValue } from "../../reasoning-effort";
 import { isPlainObject } from "./internal";
 
+/** Drop only replayed Responses reasoning items; all other continuation input stays untouched. */
+export function dropResponsesReasoningInputItems(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input.filter(item => !isPlainObject(item) || item.type !== "reasoning");
+  return input.length === body.input.length ? body : { ...body, input };
+}
+
 /**
  * Sanitize reasoning input by field policy, not by preserving each item's shape. Retaining a
  * native `encrypted_content` guarantees only that blob value: `status` is always removed;
@@ -28,6 +35,11 @@ export function sanitizeReasoningInputContent(
     preserveRawReasoningContent?: boolean;
     dropNullContentChannel?: boolean;
     stripEncryptedContent?: boolean;
+    /**
+     * Remove `id` from every reasoning item, with or without a blob, because the ids name items in a
+     * store this destination cannot read; see `OcxParsedRequest._dropForeignReasoningItemIds`.
+     */
+    dropForeignItemId?: boolean;
   },
 ): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
@@ -48,6 +60,10 @@ export function sanitizeReasoningInputContent(
     const missingSummary = !Object.prototype.hasOwnProperty.call(rec, "summary");
     const stripEncryptedContent = hasOcxEnvelope
       || (opts?.stripEncryptedContent === true && hasEncryptedContent);
+    // An id-only item is as foreign as one with a blob: a stateful destination still resolves it
+    // against its own store.
+    const dropItemId = opts?.dropForeignItemId === true
+      && Object.prototype.hasOwnProperty.call(rec, "id");
     // Codex serializes an absent reasoning content channel as `"content": null`. The field is
     // optional and null carries nothing, but a strict gateway rejects the item on its declared type
     // — xAI answers `Could not decode the compaction blob`, naming the sibling `encrypted_content`
@@ -69,7 +85,10 @@ export function sanitizeReasoningInputContent(
     const blankContent = !dropNullContentChannel
       && !opts?.preserveRawReasoningContent
       && (hasRawContent || hasOcxEnvelope);
-    if (!blankContent && !stripOutputStatus && !stripEncryptedContent && !dropNullContentChannel && !missingSummary) {
+    if (
+      !blankContent && !stripOutputStatus && !stripEncryptedContent && !dropNullContentChannel
+      && !missingSummary && !dropItemId
+    ) {
       return item;
     }
     changed = true;
@@ -78,6 +97,7 @@ export function sanitizeReasoningInputContent(
     if (dropNullContentChannel) delete next.content;
     if (stripOutputStatus) delete next.status;
     if (stripEncryptedContent) delete next.encrypted_content;
+    if (dropItemId) delete next.id;
     // Routed models can produce raw `reasoning_text` output items. Codex echoes those in later
     // native GPT requests, but ChatGPT's Responses backend accepts reasoning input only with empty
     // `content`; keep summaries/ids and drop the raw content so native passthrough does not 400.

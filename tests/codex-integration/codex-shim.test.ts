@@ -1,15 +1,15 @@
 import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { delimiter, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { autoRestoreCodexShim, buildUnixCodexShim, buildWindowsCodexShim, buildWindowsPowerShellCodexShim, diagnoseCodexShim, findCodexOnPath, inspectCodexShimBackingForCommand, installCodexShim, isLocalAbsoluteInspectionPath, isVersionManagerOwnedCodexPath, isWindowsInteropDir, lastCodexDiscoveryError, setCodexShimFreshWriteHookForTests, setCodexShimGuardedWriteHookForTests, setCodexShimProbeHookForTests, setCodexShimProbeObservationMsForTests, setCodexShimProbeShellForTests, setCodexShimRollbackRestoreHookForTests, uninstallCodexShim } from "../../src/codex/shim";
+import { prependPath, withInstalledShim } from "../helpers/codex-shim-install-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC, SHIM_MARKER, UNIX_SHIM_REVISION_MARKER } from "../../src/codex/shim-templates";
 
-const SHIM_MARKER = "opencodex codex autostart shim";
-const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
 
 /**
  * A child environment with the shim's recursion-guard state stripped.
@@ -40,10 +40,6 @@ const python3Path = process.platform === "win32"
 setCodexShimProbeObservationMsForTests(20);
 afterAll(() => setCodexShimProbeObservationMsForTests(null));
 const psPath = process.platform !== "win32" && existsSync("/bin/ps") ? "/bin/ps" : "";
-
-function prependPath(dir: string, current: string | undefined): string {
-  return [dir, current].filter(Boolean).join(delimiter);
-}
 
 function successfulLauncher(label: string): string {
   return process.platform === "win32" ? `${label}\r\n` : `#!/bin/sh\n# ${label}\nexit 0\n`;
@@ -83,48 +79,6 @@ function expectProcessGroupMissing(groupId: number): void {
     code = (error as NodeJS.ErrnoException).code;
   }
   expect(code).toBe("ESRCH");
-}
-
-function withInstalledShim(run: (paths: {
-  binDir: string;
-  home: string;
-  wrappers: string[];
-  backups: string[];
-  statePath: string;
-}) => void): void {
-  const binDir = mkdtempSync(join(tmpdir(), "ocx-shim-bin-"));
-  const home = mkdtempSync(join(tmpdir(), "ocx-shim-home-"));
-  const oldPath = process.env.PATH;
-  const oldHome = process.env.OPENCODEX_HOME;
-  const wrappers = process.platform === "win32"
-    ? [join(binDir, "codex.cmd"), join(binDir, "codex.ps1"), join(binDir, "codex")]
-    : [join(binDir, "codex")];
-  try {
-    process.env.PATH = prependPath(binDir, oldPath);
-    process.env.OPENCODEX_HOME = home;
-    for (const wrapper of wrappers) {
-      writeFileSync(wrapper, process.platform === "win32" ? `real ${wrapper}\n` : "#!/bin/sh\necho real\n", "utf8");
-      if (process.platform !== "win32") chmodSync(wrapper, 0o755);
-    }
-    const installed = installCodexShim();
-    expect(installed.installed, installed.message).toBe(true);
-    const statePath = join(home, "codex-shim.json");
-    const state = JSON.parse(readFileSync(statePath, "utf8")) as { wrappers: Array<{ wrapperPath: string; backupPath: string }> };
-    run({
-      binDir,
-      home,
-      wrappers: state.wrappers.map(file => file.wrapperPath),
-      backups: state.wrappers.map(file => file.backupPath),
-      statePath,
-    });
-  } finally {
-    if (oldPath === undefined) delete process.env.PATH;
-    else process.env.PATH = oldPath;
-    if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
-    else process.env.OPENCODEX_HOME = oldHome;
-    removeTreeWithRetry(binDir);
-    removeTreeWithRetry(home);
-  }
 }
 
 describe("Codex autostart shim", () => {
@@ -1366,7 +1320,10 @@ printf '%s\\n' child-codex
             const driverPath = join(dir, "driver.ps1");
             const realPath = join(dir, "codex-real.ps1");
             writeFileSync(join(dir, "service-api-token"), "file-token\n");
-            writeFileSync(ensurePath, failurePhase === "ensure" ? "throw 'fixture ensure failure'\n" : "exit 19\n");
+            // The Codex phase must isolate a Codex failure, so its ensure has to SUCCEED. It used
+            // to exit 19, which the wrapper now correctly reports as a failed autostart (#5261),
+            // making both phases indistinguishable.
+            writeFileSync(ensurePath, failurePhase === "ensure" ? "throw 'fixture ensure failure'\n" : "exit 0\n");
             writeFileSync(realPath, "throw 'fixture Codex failure'\n");
             writeFileSync(wrapperPath, `\uFEFF${buildWindowsPowerShellCodexShim(realPath, ensurePath, "unused.ts", "process")}`);
             const emptyToken = callerToken === "" ? "$env:OPENCODEX_API_AUTH_TOKEN = ''\n" : "";
@@ -1378,9 +1335,14 @@ printf '%s\\n' child-codex
             });
             expect(result.error).toBeUndefined();
             expect(result.status, result.stderr).toBe(0);
+            // An ensure failure no longer stops Codex from launching (#5261). The wrapper
+            // reports it on stderr and hands over to the real launcher, so the error that
+            // reaches the caller is always Codex's own, in both phases.
+            const surfaced = "fixture Codex failure";
             expect(result.stdout.trim().split(/\r?\n/)).toEqual([
-              `error:fixture ${failurePhase} failure`, `after:${callerToken ?? ""}`, "presence-preserved:True",
+              `error:${surfaced}`, `after:${callerToken ?? ""}`, "presence-preserved:True",
             ]);
+            expect(result.stderr.includes(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC)).toBe(failurePhase === "ensure");
 
             // A failed process must complete, rather than satisfy the check through a timeout.
             writeFileSync(driverPath, `\uFEFF$ErrorActionPreference = 'Stop'\n& '${wrapperPath.replace(/'/g, "''")}' exec\n`);
@@ -1391,7 +1353,8 @@ printf '%s\\n' child-codex
             expect(uncaught.signal).toBeNull();
             expect(typeof uncaught.status, uncaught.stderr).toBe("number");
             expect(uncaught.status, uncaught.stderr).not.toBe(0);
-            expect(uncaught.stderr).toContain(`fixture ${failurePhase} failure`);
+            expect(uncaught.stderr).toContain(surfaced);
+            expect(uncaught.stderr.includes(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC)).toBe(failurePhase === "ensure");
           } finally {
             if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
             else process.env.OPENCODEX_HOME = oldHome;

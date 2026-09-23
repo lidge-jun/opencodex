@@ -43,6 +43,19 @@ ocx --version
 opencodex --version
 ```
 
+## スタンドアロンバイナリ（npm 不要）
+
+リリースには、対応する macOS、Linux、Windows 向けのスタンドアロン `ocx` バイナリも含まれます。
+Bun ランタイムとダッシュボードが含まれるため、npm、Node、別途の Bun インストールは必要ありません。
+お使いの環境向けのアーカイブをダウンロードして展開し、次のように実行します。
+
+```bash
+./ocx --version
+./ocx start
+```
+
+ダッシュボードを提供するため、展開した `gui/dist` ディレクトリはバイナリの隣に置いたままにしてください。
+
 ### 配布チャネル
 
 安定チャネルの `latest` にも ChatGPT、OpenAI API キー、OpenRouter、実験段階の Cursor 経路のための

@@ -30,6 +30,7 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -104,6 +105,8 @@ describe("recovery limiter wiring is reachable from production (#4701)", () => {
       },
     } as OcxConfig;
 
+    // Acquire on the installed test home so this physical dispatch can open the spend journal.
+    const releaseSpendHome = acquireOwnedSpendHome();
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
@@ -115,6 +118,8 @@ describe("recovery limiter wiring is reachable from production (#4701)", () => {
       expect(response.status).toBe(200);
       expect(sharedPoolBackpressure().state().initialSends).toBe(1);
     } finally {
+      // Release before afterEach removes the home to prevent Windows removal failures.
+      releaseSpendHome();
       globalThis.fetch = originalFetch;
     }
   });

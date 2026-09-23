@@ -42,6 +42,28 @@ function replayThoughtSignatureMetadata(
   return signature ? { google: { thoughtSignature: signature } } : undefined;
 }
 
+/**
+ * Repair one bounded inbound-history corruption: a JSON object literal that lost exactly
+ * its opening brace (observed as `code":"…}` after `{"` went missing, taking the key's
+ * opening quote with it). Only a text that ends with `}` and parses into an object once
+ * the brace is restored counts — anything looser keeps the tolerated-{} fallback so
+ * freeform text that merely resembles JSON is never rewritten.
+ */
+function repairJsonObjectEnvelope(text: string): Record<string, unknown> | undefined {
+  if (!text.endsWith("}")) return undefined;
+  // A body that still opens with a quoted key lost only `{`; the observed shape lost
+  // `{"` together, taking the key's opening quote with it. Both restorations must parse
+  // into an object, so freeform text that merely resembles JSON is never rewritten.
+  const candidate = text.startsWith('"') ? `{${text}` : `{"${text}`;
+  try {
+    const parsed: unknown = JSON.parse(candidate);
+    if (isObj(parsed)) return parsed;
+  } catch {
+    /* fall through to the tolerated-{} path */
+  }
+  return undefined;
+}
+
 
 
 function ensureAssistantPlaceholder(messages: OcxMessage[], modelId: string, now: number): OcxAssistantMessage {
@@ -93,6 +115,10 @@ function attachPendingReasoningToCallOwner(
 }
 
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+export function hasValidatedActiveReasoningEffort(options: Pick<OcxRequestOptions, "reasoning">): boolean {
+  return options.reasoning !== undefined && options.reasoning !== "none";
+}
 
 
 export function parseRequest(
@@ -245,7 +271,9 @@ export function parseRequest(
           case "system": {
             pendingReasoning.length = 0;
             const text = inputContentParts(msg.content);
-            const flat = typeof text === "string" ? text : text.map(p => (p.type === "text" ? p.text : "")).join("");
+            const flat = typeof text === "string"
+              ? text
+              : text.map(p => (p.type === "text" || p.type === "document" ? p.text : "")).join("");
             if (flat.length > 0) systemPrompt.push(flat);
             break;
           }
@@ -331,7 +359,16 @@ export function parseRequest(
             const parsed: unknown = JSON.parse(rawArgs);
             if (isObj(parsed)) args = parsed;
           } catch {
-            console.warn(`[parser] function_call ${call.call_id} has non-JSON arguments; defaulting to {}`);
+            // One observed serialization corruption loses exactly the JSON object's opening
+            // brace; the closed envelope is tight enough to repair back into a call the
+            // routed model can still see and retry, instead of replaying {} forever.
+            const repaired = repairJsonObjectEnvelope(rawArgs);
+            if (repaired === undefined) {
+              console.warn(`[parser] function_call ${call.call_id} has non-JSON arguments; defaulting to {}`);
+            } else {
+              args = repaired;
+              console.warn(`[parser] function_call ${call.call_id} arguments lost the JSON opening brace; repaired from history`);
+            }
           }
         }
         // Do NOT map Responses item `id` (fc_/ctc_/…) onto `thoughtSignature`. That field is
@@ -540,7 +577,8 @@ export function parseRequest(
     options.reasoning = requestedEffort;
   }
   const summaryMode = data.reasoning?.summary;
-  if (!summaryMode || summaryMode === "none") options.hideThinkingSummary = true;
+  const reasoningActive = hasValidatedActiveReasoningEffort(options);
+  if (summaryMode === "none" || (!summaryMode && !reasoningActive)) options.hideThinkingSummary = true;
   if (data.presence_penalty !== undefined) options.presencePenalty = data.presence_penalty;
   if (data.frequency_penalty !== undefined) options.frequencyPenalty = data.frequency_penalty;
   if (data.service_tier !== undefined) options.serviceTier = data.service_tier;

@@ -25,7 +25,7 @@ const REVIEW_READINESS_END = "<!-- pr-quality-readiness-checklist:end -->";
  * so the "ready" claim reads as the closing confirmation, not a fourth task.
  */
 const REVIEW_READINESS_ITEMS = [
-  "All CI tests are green on my local testing.",
+  "Required local validation passed; commands, results, and any full-suite exception are documented.",
   "I pushed my PR to the latest dev commit.",
   "I resolved all correct Codex and CodeRabbit findings.",
   "My PR is ready for review.",
@@ -374,6 +374,24 @@ function appendReviewReadinessSection(body) {
   return `${body.trimEnd()}\n\n${section}\n`;
 }
 
+/** Read only the first label in a structurally valid managed four-box section. */
+function firstReviewReadinessItem(body) {
+  const readiness = extractReviewReadiness(body);
+  if (!readiness.present || readiness.total !== REVIEW_READINESS_ITEMS.length) return null;
+  const start = body.indexOf(REVIEW_READINESS_START) + REVIEW_READINESS_START.length;
+  const end = body.indexOf(REVIEW_READINESS_END);
+  return /^[ \t]*[-*][ \t]+\[[ xX]\][ \t]+([^\r\n]*?)[ \t]*\r?$/m
+    .exec(body.slice(start, end))?.[1] ?? null;
+}
+
+function reviewReadinessMigrationRequired(body) {
+  return firstReviewReadinessItem(body) === "All CI tests are green on my local testing.";
+}
+
+function reviewReadinessUsesCurrentPolicy(body) {
+  return firstReviewReadinessItem(body) === REVIEW_READINESS_ITEMS[0];
+}
+
 /**
  * Remove the bot-managed readiness section from a body. Used so the bot's own
  * checklist never counts as author-written description substance, and so a
@@ -550,6 +568,8 @@ module.exports = {
   buildReviewReadinessSection,
   extractReviewReadiness,
   appendReviewReadinessSection,
+  reviewReadinessMigrationRequired,
+  reviewReadinessUsesCurrentPolicy,
   stripReviewReadinessSection,
   REVIEW_READINESS_CLAIM_INDEX,
   uncheckReviewReadinessBoxes,

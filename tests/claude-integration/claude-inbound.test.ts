@@ -4,6 +4,7 @@ import { AnthropicRequestError as LeafAnthropicRequestError } from "../../src/cl
 import { repoPath } from "../helpers/repo-root";
 import { AnthropicRequestError, anthropicToResponsesBody, anthropicToResponsesTranslation, effortForThinkingBudget, extractOcxEffortDirective, resolveInboundModel } from "../../src/claude/inbound";
 import { parseRequest } from "../../src/responses/parser";
+import { inlineDocumentMarker } from "../../src/responses/inline-document";
 import { responsesRequestSchema } from "../../src/responses/schema";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
@@ -180,7 +181,7 @@ describe("claude inbound translation", () => {
             { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content }] },
           ],
       });
-      const marker = [{ type: "input_text", text: "[document: report.pdf]" }];
+      const marker = [{ type: "input_text", text: inlineDocumentMarker("report.pdf") }];
       expect(body.input).toEqual(carrier === "user"
         ? [{ type: "message", role: "user", content: marker }]
         : [
@@ -437,11 +438,11 @@ describe("claude inbound translation", () => {
     }) as any;
     expect(body.input[1].output).toEqual([
       { type: "input_text", text: "3 pages" },
-      { type: "input_text", text: "[document: report.pdf]" },
+      { type: "input_text", text: inlineDocumentMarker("report.pdf") },
     ]);
     // An untitled document still leaves a marker rather than the empty output that
     // read as "the tool returned nothing".
-    expect(body.input[3].output).toEqual([{ type: "input_text", text: "[document]" }]);
+    expect(body.input[3].output).toEqual([{ type: "input_text", text: inlineDocumentMarker(undefined) }]);
     expect(() => parseRequest(body)).not.toThrow();
   });
 
@@ -673,6 +674,12 @@ describe("bundled-skill elision for routed models (devlog 260712 060)", () => {
   test("text-block carrier: drive-relative dir (no separator) stays pass-through", () => {
     const texts = userTexts(requestWithSkillTextBlock("claude-api", 500_000, undefined, "C:claude-api"));
     expect(texts.some(t => t.length > 400_000)).toBe(true);
+  });
+
+  test("text-block carrier: oversized marker paths pass through without unbounded parsing", () => {
+    const oversizedDir = `/${"/".repeat(10_000)}claude-api`;
+    const texts = userTexts(requestWithSkillTextBlock("claude-api", 20_000, undefined, oversizedDir));
+    expect(texts.some(t => t.startsWith(`Base directory for this skill: ${oversizedDir}`))).toBe(true);
   });
 });
 

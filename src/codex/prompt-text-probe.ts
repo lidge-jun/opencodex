@@ -49,6 +49,9 @@ const LAYER_SECTION_TAGS: Record<string, string> = {
   skills: "skills_instructions",
   apps: "apps_instructions",
   plugins: "plugins_instructions",
+  // Context-dependent: it is absent when the active collaboration mode adds no
+  // instructions, but Codex wraps it in this tag when it does render.
+  collaboration: "collaboration_mode",
   environment: "environment_context",
   permissions: "permissions instructions",
   // Synthetic: the project doc carries no tag of its own (see extractSections).
@@ -71,11 +74,10 @@ const UNMAPPED_LAYER_IDS = [
   // truth is that this extractor has no verified tag for them.
   "personality",
   "realtime",
-  "collaboration",
   // The Rust source names a <git_attribution> marker pair, but a world-state section is
   // DIFF-rendered: it emits nothing on a turn where its state has not changed. Live
   // `codex debug prompt-input` (codex-cli 0.145.0, 32978 bytes) showed no such block and
-  // no attribution text. Listing the id here reports "not exposed" honestly instead of
+  // no attribution text. Listing the id here reports "unmapped" honestly instead of
   // claiming a tag this extractor has never actually matched - the same mistake the
   // header above records for permissions.
   "git-attribution",
@@ -85,7 +87,7 @@ export interface LayerText {
   /** Rendered text, when this layer produced a section on the probed turn. */
   text: string | null;
   /** Why the text is absent, when it is. */
-  reason: "ok" | "empty-source" | "not-rendered" | "not-exposed" | "unavailable";
+  reason: "ok" | "empty-source" | "not-rendered" | "not-exposed" | "unmapped" | "unavailable";
   bytes: number;
   /**
    * `expanded` is text Codex sends as written. `template` is a catalog
@@ -103,7 +105,7 @@ export interface LayerText {
 
 /**
  * Why the base prompt is or is not readable, at the granularity a reader can act
- * on. `LayerText.reason` has five coarse values and cannot express any of this,
+ * on. `LayerText.reason` has six coarse values and cannot express any of this,
  * which is why the detailed answer travels on its own record.
  */
 export type BasePromptReason =
@@ -374,7 +376,7 @@ function readBasePrompt(codexHome: string): BasePromptText {
 /**
  * Project the base prompt onto the legacy `base-instructions` layer slot.
  *
- * The slot is lossy by construction - five coarse reasons, no renderer that reads
+ * The slot is lossy by construction - six coarse reasons, no renderer that reads
  * `representation` - so it carries only what it can carry honestly: published text
  * when the source is text Codex sends, and otherwise no text at all. A template is
  * deliberately NOT `ok` here, because the dialog labels every `ok` layer "Text
@@ -802,6 +804,22 @@ function extractSections(raw: string): Map<string, string> {
 /** Test seam: the extraction is the part worth pinning, not the spawn. */
 export const extractSectionsForTests = extractSections;
 
+function mapSectionsToLayers(sections: Map<string, string>): Record<string, LayerText> {
+  const layers: Record<string, LayerText> = {};
+  for (const [layerId, tag] of Object.entries(LAYER_SECTION_TAGS)) {
+    const text = sections.get(tag) ?? null;
+    layers[layerId] = text === null
+      // Registered but not rendered on this turn, which is an ordinary state for
+      // a diff-rendered section rather than an error.
+      ? { text: null, reason: "not-rendered", bytes: 0 }
+      : { text, reason: "ok", bytes: Buffer.byteLength(text, "utf8") };
+  }
+  return layers;
+}
+
+/** Test seam: pin section-to-layer projection independently of the subprocess. */
+export const mapSectionsToLayersForTests = mapSectionsToLayers;
+
 /**
  * Probe once and map every known layer to its rendered text.
  *
@@ -915,15 +933,7 @@ export async function probePromptText(
       detail: "prompt output could not be parsed",
     };
   }
-  const layers: Record<string, LayerText> = {};
-  for (const [layerId, tag] of Object.entries(LAYER_SECTION_TAGS)) {
-    const text = sections.get(tag) ?? null;
-    layers[layerId] = text === null
-      // Registered but not rendered on this turn, which is an ordinary state for
-      // a diff-rendered section rather than an error.
-      ? { text: null, reason: "not-rendered", bytes: 0 }
-      : { text, reason: "ok", bytes: Buffer.byteLength(text, "utf8") };
-  }
+  const layers = mapSectionsToLayers(sections);
 
   // A file that exists and is empty is not the same as a layer that chose to send
   // nothing. Reporting "sent nothing" for an empty AGENTS.md tells the user their
@@ -944,9 +954,12 @@ export async function probePromptText(
 
   // Layers whose rendered tag we have not confirmed against live output. Leaving
   // them absent made the GUI fall through to "unavailable", which claims the probe
-  // failed when it succeeded. Saying we have no mapping is the smaller claim.
+  // failed when it succeeded. Keep this distinct from the base prompt's
+  // "not-exposed", which is confirmed to travel outside the printable message
+  // list - reusing it showed a base-prompt-specific explanation for unrelated
+  // layers.
   for (const id of UNMAPPED_LAYER_IDS) {
-    layers[id] ??= { text: null, reason: "not-exposed", bytes: 0 };
+    layers[id] ??= { text: null, reason: "unmapped", bytes: 0 };
   }
   return { ok: true, codexHome, layers, base, ...(reportedRuntime ? { runtime: reportedRuntime } : {}) };
 }

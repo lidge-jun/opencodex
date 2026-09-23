@@ -62,6 +62,7 @@ import {
   consoleGoUploadRejectionBody,
   CONSOLE_GO_UPLOAD_RETRY_DELAY_MS,
   reasoningEffortRejectionText,
+  anthropicFastRefused,
 } from "./core-opaque-recovery";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import {
@@ -81,6 +82,7 @@ import {
 } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
+import { chargeWorkflowSends } from "../../lib/workflow-budget";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -136,6 +138,7 @@ export async function prepareAdapterExchange(
     | "sendBudgetExhausted"
     | "reserveCredentialHop"
     | "pendingHopPermit"
+    | "workflowRootId"
   >,
 ) {
   const { options, config, logCtx, req } = requestContext;
@@ -246,7 +249,11 @@ export async function prepareAdapterExchange(
     return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
   }
   try {
-    initialRequest = await transportState.activeAdapter.buildRequest(parsed, { headers: requestState.selectedForwardHeaders, translatorBudget });
+    initialRequest = await transportState.activeAdapter.buildRequest(parsed, {
+      headers: requestState.selectedForwardHeaders,
+      translatorBudget,
+      abortSignal: upstream.signal,
+    });
     refreshRequestToolAliases(initialRequest);
     recordAdapterReasoning(logCtx, initialRequest);
     recordAdapterTier(logCtx, initialRequest);
@@ -381,6 +388,8 @@ export async function prepareAdapterExchange(
     // below for the same reason the two guards above do: a guard declared inside it is reset by
     // every `continue recovery`, which would let one turn walk the whole ladder down.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
+    // At most one Anthropic fast-mode downgrade per request, for the same reason.
+    const anthropicFastDowngradeGuard: { attempted: boolean } = { attempted: false };
     /**
      * Rebuild the request from the current parsed input (and any image-tier bias) and refetch
      * it once, tagging the attempt with the given recovery kind. Rebuilds are deterministic
@@ -396,6 +405,15 @@ export async function prepareAdapterExchange(
        */
       onDispatch?: () => void,
     ): Promise<Response | { failed: Response }> => {
+      // The repair permit books the request ledger, but only the transient helper reports
+      // that send to the root workflow. The other two dispatch paths confirm it here, at
+      // their physical-send boundary, without booking the request ledger again.
+      let fastDowngradeWorkflowCharged = false;
+      const chargeFastDowngradeWorkflowSend = (): void => {
+        if (recovery !== "anthropic-fast-downgrade" || fastDowngradeWorkflowCharged) return;
+        fastDowngradeWorkflowCharged = true;
+        chargeWorkflowSends(sendBudgetState.workflowRootId, 1);
+      };
       let retryRequest: AdapterRequest;
       if (transportState.sameTargetRequest !== undefined && transportState.sameTargetParsed === parsed && transportState.sameTargetToken === transportState.transportToken) {
         // Same target (key/adapter/parsed/tier unchanged): replay the exact cached request.
@@ -405,6 +423,7 @@ export async function prepareAdapterExchange(
           retryRequest = await transportState.activeAdapter.buildRequest(parsed, {
             headers: requestState.selectedForwardHeaders,
             translatorBudget,
+            abortSignal: upstream.signal,
             ...(transportState.imageTierBias > 0 ? { imageTierBias: transportState.imageTierBias } : {}),
           });
           recordAdapterReasoning(logCtx, retryRequest);
@@ -445,7 +464,10 @@ export async function prepareAdapterExchange(
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
             sendBudget: adapterDispatchBudget,
-              onPhysicalSend: send => noteAdapterPhysicalSend(retryEstimate, send),
+              onPhysicalSend: send => {
+                noteAdapterPhysicalSend(retryEstimate, send);
+                chargeFastDowngradeWorkflowSend();
+              },
               onRecoveryWithheld: noteAdapterRecoveryWithheld,
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
@@ -486,6 +508,7 @@ export async function prepareAdapterExchange(
                 // Same boundary on the helper path: the thunk is what reaches the wire, and it
                 // can be refused above before it does. use() past the first attempt is a no-op.
                 onDispatch?.();
+                if (!refetchTransientPolicy) chargeFastDowngradeWorkflowSend();
                 return fetchWithHeaderTimeout(retryRequest.url,
                   applyUpstreamRecoveryInit({
                     method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,
@@ -581,7 +604,7 @@ export async function prepareAdapterExchange(
         route.provider = refreshedProvider;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire),
+          resolveWireProtocolOverride(route.providerName, route.modelId, refreshedProvider, inboundWire, route.staticPolicy),
           config.cacheRetention,
         );
         bindRouteReasoningReplayScope({
@@ -614,7 +637,7 @@ export async function prepareAdapterExchange(
         route.provider = rotated;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
           config.cacheRetention,
         );
         bindRouteReasoningReplayScope({
@@ -632,6 +655,52 @@ export async function prepareAdapterExchange(
         // stop. Re-enter the loop guard instead, which returns it unchanged.
         if (isNonReplayableResponse(upstreamResponse)) continue recovery;
      }
+
+      // Anthropic fast mode refused (no usage credits, organization not enabled, model outside
+      // the lane, fast pool empty): resend once at standard speed, as Claude Code does. This
+      // sits before every 429 arm because the refusal says nothing about the account's standard
+      // lane; waiting, cooling, or rotating on it would punish a healthy credential. The
+      // resend is reserved and confirmed exactly like the generic OAuth hop below, and the
+      // decision lives on this request, so every later rebuild of it stays standard.
+      if (await anthropicFastRefused(
+        upstreamResponse,
+        transportState.sameTargetRequest,
+        transportState.activeAdapter.name,
+        anthropicFastDowngradeGuard.attempted,
+        upstream.signal,
+      )) {
+        const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
+        const hop = reserveCredentialHop(
+          "repair",
+          `${route.providerName}|${route.modelId}|anthropic-fast-downgrade`,
+          !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
+        );
+        if (hop.allowed) {
+          anthropicFastDowngradeGuard.attempted = true;
+          parsed.options.tierDecision = { kind: "drop" };
+          parsed.options.serviceTier = undefined;
+          if (parsed.options.tierObservation) {
+            parsed.options.tierObservation = { ...parsed.options.tierObservation, upstreamDeclinedFast: true };
+          }
+          invalidateSameTargetRequest();
+          try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+          sendBudgetState.pendingHopPermit = hop.permit;
+          let result: Response | { failed: Response };
+          try {
+            result = await rebuildAndRefetch("anthropic-fast-downgrade", () => {
+              if (!adapterOwnsDispatch) hop.permit?.use();
+            });
+          } finally {
+            sendBudgetState.pendingHopPermit = undefined;
+          }
+          if ("failed" in result) {
+            hop.permit?.release();
+            return result.failed;
+          }
+          upstreamResponse = result;
+          continue recovery;
+        }
+      }
 
       // Same-target 429 wait-and-retry (opt-in `retryOn429`, issue #487). Codex never retries
       // 429 itself (it retries 5xx only), and single-key pools cannot use the failover below,
@@ -714,7 +783,7 @@ export async function prepareAdapterExchange(
         route.provider = rotated;
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
-          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+          resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
           config.cacheRetention,
         );
         bindRouteReasoningReplayScope({
@@ -757,7 +826,7 @@ export async function prepareAdapterExchange(
           invalidateSameTargetRequest();
           logCtx.provider = formatAnthropicProviderForLog("anthropic", admitted.accountId, config);
           transportState.activeAdapter = resolveSelectionAdapter(
-            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
             config.cacheRetention,
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
@@ -832,7 +901,7 @@ export async function prepareAdapterExchange(
           }
           invalidateSameTargetRequest();
           transportState.activeAdapter = resolveSelectionAdapter(
-            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire),
+            resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
             config.cacheRetention,
           );
           sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);

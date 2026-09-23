@@ -27,7 +27,7 @@ import { codexCompatibleUrl } from "../codex/context-compat";
  * - `GET /v1/realtime?model=` — RealtimeV2 standalone (no intent)
  * - `GET /v1/live?model=` — Frameless standalone
  */
-import { appendFileSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, openSync, statSync, writeSync } from "node:fs";
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
@@ -42,9 +42,11 @@ import {
 import { formatCodexProviderForLog } from "../codex/routing";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
+import { hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
-import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
+import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential, type DataPlaneAdmission } from "./auth-cors";
+import { admissionScopeDenial } from "./admission-model-scope";
 import type { RequestLogContext } from "./request-log";
 import { codexLogAccountId } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
@@ -102,9 +104,58 @@ export const LIVE_CLIENT_PROTOCOL_HEADERS = [
  * JSONL record: direction, frame kind, byte length, and whether the payload contains U+FFFD.
  * Privacy: no frame content is written, including excerpts around replacement characters.
  * For binary frames, U+FFFD may also be introduced by UTF-8 decoding; the flag alone does not
- * identify the source of corruption. Disabled entirely when the env var is unset.
+ * identify the source of corruption. The log is created with owner-only permissions and is
+ * disabled entirely when the env var is unset.
  */
 export const LIVE_FRAME_LOG_ENV = "OCX_LIVE_FRAME_LOG";
+/**
+ * Append one JSONL record with owner-only permissions. `appendFileSync`'s `mode` only applies
+ * when it creates the file, so an existing permissive log would stay readable by other local
+ * users. Open for append, harden the target, and verify that the path still names
+ * the opened file before writing. A failed harden or identity check writes nothing. On Windows
+ * the hardened file's identity is remembered, so a replaced file is hardened again but an
+ * unchanged one does not spawn icacls for every frame.
+ */
+/** Windows ACL hardening spawns icacls; remember the file already hardened so frames do not. */
+let hardenedWindowsFrameLog: { path: string; dev: bigint; ino: bigint } | undefined;
+
+export function appendOwnerOnly(
+  path: string,
+  line: string,
+  harden: (fd: number, path: string) => void = hardenLogDescriptor,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  const fd = openSync(path, "a", 0o600);
+  try {
+    const before = fstatSync(fd, { bigint: true });
+    const memo = hardenedWindowsFrameLog;
+    const alreadyHardened = platform === "win32" && memo !== undefined && memo.path === path
+      && before.ino !== 0n && memo.dev === before.dev && memo.ino === before.ino;
+    if (!alreadyHardened) {
+      hardenedWindowsFrameLog = undefined;
+      harden(fd, path);
+    }
+    const opened = fstatSync(fd, { bigint: true });
+    const named = statSync(path, { bigint: true });
+    if (!opened.isFile() || !named.isFile() || opened.ino === 0n || named.ino === 0n
+      || opened.dev !== named.dev || opened.ino !== named.ino) {
+      throw new Error("Frame log path changed during hardening.");
+    }
+    if (platform === "win32") hardenedWindowsFrameLog = { path, dev: opened.dev, ino: opened.ino };
+    writeSync(fd, line);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function hardenLogDescriptor(fd: number, path: string): void {
+  if (process.platform === "win32") {
+    hardenSecretPath(path, { required: true });
+    return;
+  }
+  fchmodSync(fd, 0o600);
+}
+
 export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
   const logPath = process.env[LIVE_FRAME_LOG_ENV];
   if (!logPath) return;
@@ -133,7 +184,7 @@ export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
       bytes,
       fffd,
     };
-    appendFileSync(logPath, `${JSON.stringify(record)}\n`);
+    appendOwnerOnly(logPath, `${JSON.stringify(record)}\n`);
   } catch {
     // Frame forensics must never break the relay.
   }
@@ -167,7 +218,7 @@ export function logLiveSidebandStage(
     const record: Record<string, unknown> = { ts: new Date().toISOString(), stage };
     if (detail?.status !== undefined) record.status = detail.status;
     if (detail?.code !== undefined) record.code = detail.code;
-    appendFileSync(logPath, JSON.stringify(record) + "\n");
+    appendOwnerOnly(logPath, JSON.stringify(record) + "\n");
   } catch {
     // Diagnostics must never break the relay.
   }
@@ -551,6 +602,62 @@ async function readRequestBodyCapped(req: Request, maxBytes: number): Promise<Ar
 }
 
 /**
+ * Who is asking and for which live model, as far as a per-key scope is concerned.
+ *
+ * This path has no router to resolve a destination, so the model is read where
+ * the client states it — the call-create session, or a standalone socket's own
+ * query — and the provider is whichever OpenAI upstream this relay settles on.
+ * `model` is undefined when nobody stated one: a call-create that sends no
+ * session model, or a join onto a call this compatibility path never recorded.
+ */
+export interface LiveScopeDestination {
+  admission?: DataPlaneAdmission;
+  model: string | undefined;
+}
+
+/**
+ * The live model a call-create body names, or undefined when it names none.
+ *
+ * Both inbound shapes carry it at `session.model` — JSON directly, multipart in
+ * the `session` field — and this path relays the body upstream unchanged, so
+ * the string is the destination rather than a selector the proxy rewrites. A
+ * body that states nothing readable leaves the model to the upstream, which is
+ * a destination no model list can describe.
+ */
+export async function liveCallCreateModel(body: ArrayBuffer, contentType: string): Promise<string | undefined> {
+  try {
+    let session: unknown;
+    if (contentType.toLowerCase().includes("multipart/form-data")) {
+      const form = await new Response(body, { headers: { "content-type": contentType } }).formData();
+      const raw = form.get("session");
+      session = typeof raw === "string" ? JSON.parse(raw) : undefined;
+    } else {
+      session = (JSON.parse(new TextDecoder().decode(body)) as { session?: unknown } | null)?.session;
+    }
+    const model = (session as { model?: unknown } | null | undefined)?.model;
+    return typeof model === "string" && model.trim() ? model.trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The model a sideband upgrade is for, or undefined when the request names none.
+ *
+ * A standalone session states it in the query it forwards. A join names nothing
+ * of its own: the call it attaches to chose a model at create time, and only a
+ * recorded binding can say which. This compatibility path keeps no such record,
+ * so a native join is undefined here and the external path in `audio-live.ts`
+ * supplies the model its binding stored.
+ */
+export function liveSidebandModel(target: LiveSidebandTarget): string | undefined {
+  if (target.style === "realtime-standalone" || target.style === "frameless-standalone") {
+    return new URLSearchParams(target.query).get("model")?.trim() || undefined;
+  }
+  return undefined;
+}
+
+/**
  * Resolve OpenAI/ChatGPT auth + headers for live HTTP or sideband WebSocket relays.
  * Shared by call-create and sideband so pool token override stays consistent.
  */
@@ -559,6 +666,7 @@ export async function resolveLiveRelay(
   config: OcxConfig,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
+  destination?: LiveScopeDestination,
 ): Promise<LiveRelayTarget | Response> {
   try {
     validateForwardAdmissionCredential(req.headers, config);
@@ -624,8 +732,22 @@ export async function resolveLiveRelay(
 
   // Client protocol headers first so provider/auth headers below always win on conflict.
   const headers: Record<string, string> = clientProtocolHeaders(req.headers);
+  const scopedModel = destination?.model;
   if (forward) {
     const { provider } = forward;
+    // The upstream is settled here and voice bills it for whatever model this
+    // request carries. Refuse before any of it is sent, and give back the probe
+    // lease the resolution took. A join states no model and this path keeps no
+    // record of the call it attaches to, so a key with a model list is refused
+    // there rather than admitted against an assumed default.
+    const denial = admissionScopeDenial(config, destination?.admission, scopedModel, {
+      providerName: forward.providerName,
+      modelId: scopedModel,
+    });
+    if (denial) {
+      forward.releaseProbeLease?.();
+      return denial;
+    }
     if (provider.headers) Object.assign(headers, provider.headers);
     for (const [name, value] of forward.headers) headers[name] = value;
     logCtx.model = "gpt-live";
@@ -640,6 +762,11 @@ export async function resolveLiveRelay(
   if (forwardAuthError) return forwardAuthError;
   if (candidates.keyed) {
     const { provider, apiKey, providerName } = candidates.keyed;
+    const denial = admissionScopeDenial(config, destination?.admission, scopedModel, {
+      providerName,
+      modelId: scopedModel,
+    });
+    if (denial) return denial;
     if (provider.headers) Object.assign(headers, provider.headers);
     headers.authorization = `Bearer ${apiKey}`;
     logCtx.provider = providerName;
@@ -663,13 +790,17 @@ export async function handleLive(
   config: OcxConfig,
   logCtx: RequestLogContext,
   turnAdmissionLease?: AdmissionLease,
+  admission?: DataPlaneAdmission,
 ): Promise<Response> {
   const inboundContentType = req.headers.get("content-type") ?? "application/octet-stream";
   const inboundBodyOrError = await readRequestBodyCapped(req, LIVE_REQUEST_MAX_BYTES);
   if (inboundBodyOrError instanceof Response) return inboundBodyOrError;
   const inboundBody = inboundBodyOrError;
 
-  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease);
+  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease, {
+    admission,
+    model: await liveCallCreateModel(inboundBody, inboundContentType),
+  });
   if (relay instanceof Response) return relay;
 
   const headers: Record<string, string> = { ...relay.headers };
@@ -766,8 +897,12 @@ export async function resolveLiveSidebandUpgrade(
   logCtx: RequestLogContext,
   target: LiveSidebandTarget,
   turnAdmissionLease?: AdmissionLease,
+  admission?: DataPlaneAdmission,
 ): Promise<{ headers: Record<string, string>; upstreamWsUrl: string; recordOutcome?: LiveRelayTarget["recordOutcome"] } | Response> {
-  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease);
+  const relay = await resolveLiveRelay(req, config, logCtx, turnAdmissionLease, {
+    admission,
+    model: liveSidebandModel(target),
+  });
   if (relay instanceof Response) return relay;
   return {
     headers: relay.headers,

@@ -6,6 +6,7 @@ import type { ProviderAdapter } from "../../src/adapters/base";
 import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { getAccountSet, getCredential, saveCredential, setActiveAccount } from "../../src/oauth/store";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const actualResolver = await import("../../src/server/adapter-resolve");
@@ -57,6 +58,7 @@ mock.module("../../src/server/adapter-resolve", () => ({
 const { handleResponses } = await import("../../src/server/responses");
 const originalHome = process.env.OPENCODEX_HOME;
 let home = "";
+let releaseSpendHome: (() => void) | undefined;
 
 /**
  * `enabled: undefined` is the case that matters after #2568d — the key absent entirely, which is
@@ -100,6 +102,8 @@ async function seedAccounts(count: number): Promise<void> {
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-adapter-event-failover-"));
   process.env.OPENCODEX_HOME = home;
+  // Take the writer lease after this case installs its home so direct handler dispatch can open the spend journal.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearGenericFailoverHealth();
   attempts = [];
   attemptKeys = [];
@@ -111,6 +115,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearGenericFailoverHealth();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;

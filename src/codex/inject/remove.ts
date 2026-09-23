@@ -1,7 +1,6 @@
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { atomicWriteFile } from "../../config";
 import {
-  OCX_SECTION_MARKER,
   REALTIME_WS_BASE_URL_KEY,
   hasInjectedOpenaiBaseUrl,
   rootTomlString,
@@ -23,119 +22,8 @@ import {
   stripRootRoutedModel,
 } from "./config-toml";
 
-/**
- * Sub-table headers like `[model_providers.opencodex.env_http_headers]` appear when a Codex app
- * config rewrite re-serializes the provider's inline `env_http_headers` table. They define the
- * same `model_providers.opencodex` provider, so cleanup must remove them too — otherwise the
- * provider survives with no `name` and Codex rejects the whole config
- * ("provider name must not be empty"). The dot terminator keeps a user's
- * `[model_providers.opencodex_backup]`-style tables out of scope.
- */
-function isOcxProviderHeaderLine(trimmedLine: string): boolean {
-  // Root form matched by regex, not equality: TOML v1.0 allows a trailing comment
-  // (`[model_providers.opencodex] # comment`), and an exact compare would miss that form.
-  // The sub-table prefix check already tolerates trailing comments by construction.
-  return (
-    /^\[model_providers\.opencodex\]\s*(?:#.*)?$/.test(trimmedLine) ||
-    trimmedLine.startsWith("[model_providers.opencodex.")
-  );
-}
-
-export function hasOcxProviderTable(content: string): boolean {
-  return content
-    .split("\n")
-    .some((line) => isOcxProviderHeaderLine(line.trim()));
-}
-
-export function removeOcxSection(content: string): string {
-  const lines = content.split("\n");
-  const filtered: string[] = [];
-  let inOcxSection = false;
-  for (const line of lines) {
-    if (
-      line.includes(OCX_SECTION_MARKER) ||
-      isOcxProviderHeaderLine(line.trim())
-    ) {
-      inOcxSection = true;
-      continue;
-    }
-    if (inOcxSection) {
-      // End the injected section at the next table header that ISN'T our own. Exact match on the
-      // provider name (plus our own sub-tables) so a user's
-      // "[model_providers.opencodex_backup]" (or similar) is preserved, not swallowed.
-      if (/^\s*\[/.test(line) && !isOcxProviderHeaderLine(line.trim())) {
-        inOcxSection = false;
-        filtered.push(line);
-      }
-      continue;
-    }
-    filtered.push(line);
-  }
-  return (
-    filtered
-      .join("\n")
-      .replace(/\n{3,}/g, "\n\n")
-      .trimEnd() + "\n"
-  );
-}
-
-/**
- * Capture `[model_providers.opencodex]` verbatim so it can survive a restore that only
- * takes routing down (#4812).
- *
- * This is deliberately NOT a mirror of `removeOcxSection`'s scan. That one opens a
- * section on any line containing `OCX_SECTION_MARKER`, which is safe there only because
- * `stripInjectedOpenaiBaseUrl` has already consumed the identical marker that annotates
- * the root `openai_base_url`. Capture runs against the untouched file, so the same rule
- * would collect that marker and the routing line under it — and re-appending the result
- * would restore the exact base-url override the caller just removed.
- *
- * So the anchor is the provider header itself, via the shared `isOcxProviderHeaderLine`,
- * with an immediately preceding marker line pulled in as its comment. Sharing that
- * predicate is what keeps capture and removal from disagreeing about what our table is.
- */
-export function extractOcxProviderTableBlock(content: string): string | null {
-  const lines = content.split("\n");
-  const collected: string[] = [];
-  let capturing = false;
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index]!;
-    if (isOcxProviderHeaderLine(line.trim())) {
-      if (!capturing) {
-        const previous = lines[index - 1];
-        if (previous !== undefined && previous.includes(OCX_SECTION_MARKER)) collected.push(previous);
-        capturing = true;
-      }
-      collected.push(line);
-      continue;
-    }
-    if (!capturing) continue;
-    // A foreign table header closes ours, exactly as in `removeOcxSection`. A later
-    // `[model_providers.opencodex.*]` sub-table reopens capture on the next iteration,
-    // which is why the two are separate passes over the same predicate.
-    if (/^\s*\[/.test(line)) {
-      capturing = false;
-      continue;
-    }
-    collected.push(line);
-  }
-  if (collected.length === 0) return null;
-  return collected.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
-}
-
-/**
- * Append a captured provider table to stripped content, as one buffer.
- *
- * Pure on purpose. Upstream resolves `model_provider` against the merged provider map and
- * fails the WHOLE config load on a miss — not the one thread — so a config carrying root
- * `model_provider = "opencodex"` without this table breaks every `codex` invocation. The
- * strip and the re-append therefore have to reach disk in a single write, which they can
- * only do if the append is a transform rather than a second file operation.
- */
-export function appendOcxProviderTableBlock(content: string, block: string): string {
-  if (hasOcxProviderTable(content)) return content;
-  return `${content.replace(/\n+$/, "")}\n\n${block.replace(/\n+$/, "")}\n`;
-}
+import { appendOcxProviderTableBlock, extractOcxProviderTableBlock, hasOcxProviderTable, removeOcxSection } from "./provider-table";
+export { appendOcxProviderTableBlock, extractOcxProviderTableBlock, hasOcxProviderTable, removeOcxSection } from "./provider-table";
 
 /** Read the provider table straight off disk, before anything has transformed it. */
 export function readOcxProviderTableBlock(): string | null {

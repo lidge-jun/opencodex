@@ -874,3 +874,54 @@ describe("config.json schema resilience", () => {
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
+
+describe("manual compaction settings", () => {
+  test("saves, reloads, replaces effort, and clears without changing other settings", async () => {
+    const config = baseConfig();
+    config.effortCap = "high";
+    const originalProviders = structuredClone(config.providers);
+    expect((await (await getSettings(config))!.json()).compactionRouting).toBeNull();
+    const setting = { model: "gateway/cheap", reasoningEffort: "low" };
+    const response = await putSettings(config, { compactionRouting: setting });
+    expect(response?.status).toBe(200);
+    expect((await response!.json()).compactionRouting).toEqual(setting);
+    expect(loadConfig().compactionRouting).toEqual(setting);
+    expect((await (await getSettings(config))!.json()).compactionRouting).toEqual(setting);
+    await putSettings(config, { compactionRouting: { model: "gateway/cheap" } });
+    expect(loadConfig().compactionRouting).toEqual({ model: "gateway/cheap" });
+    const automatic = { model: "gateway/cheap", triggers: ["manual", "auto"] };
+    expect((await putSettings(config, { compactionRouting: automatic }))?.status).toBe(200);
+    expect(loadConfig().compactionRouting).toEqual(automatic);
+    await putSettings(config, { compactionRouting: null });
+    expect(config.compactionRouting).toBeUndefined();
+    expect(loadConfig().compactionRouting).toBeUndefined();
+    expect(config.effortCap).toBe("high");
+    expect(config.providers).toEqual(originalProviders);
+    expect((await (await getSettings(config))!.json()).compactionRouting).toBeNull();
+  });
+
+  test("rejects malformed settings before any mutation", async () => {
+    const config = baseConfig();
+    config.compactionRouting = { model: "gateway/cheap", reasoningEffort: "low" };
+    const before = structuredClone(config);
+    for (const value of [false, [], {}, { model: " " }, { model: 2 }, { model: "m", reasoningEffort: "invalid" }, { model: "m", enabled: true },
+      { model: "m", triggers: [] }, { model: "m", triggers: ["nope"] }, { model: "m", triggers: ["manual", "manual"] }, { model: "m", triggers: "manual" }]) {
+      const response = await putSettings(config, { compactionRouting: value, streamMode: "eager-relay" });
+      expect(response?.status).toBe(400);
+      expect(config).toEqual(before);
+    }
+  });
+
+  test("failed persistence restores the override and its deletion intent", async () => {
+    const { projectConfigRebaseProvenance } = await import("../../src/config/rebase-provenance");
+    const config = baseConfig();
+    config.compactionRouting = { model: "gateway/cheap", reasoningEffort: "low" };
+    const before = projectConfigRebaseProvenance(config);
+    const deps = { saveConfigPreservingClaudeCode() { throw new Error("fixture save failure"); } };
+    for (const value of [null, { model: "gateway/other" }]) {
+      await expect(putSettings(config, { compactionRouting: value }, deps)).rejects.toThrow("fixture save failure");
+      expect(projectConfigRebaseProvenance(config)).toEqual(before);
+      expect(config.compactionRouting).toEqual({ model: "gateway/cheap", reasoningEffort: "low" });
+    }
+  });
+});

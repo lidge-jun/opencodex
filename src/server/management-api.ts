@@ -1,6 +1,5 @@
 import { remoteWorkspaceEnabled } from "../remote-control/workspace-activation";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../codex/catalog";
 import {
@@ -51,6 +50,7 @@ import {
 import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../types";
 import type { DesktopProfileModel } from "../claude/desktop-profile";
 import { drainAndShutdown } from "./lifecycle";
+import { noteExplicitShutdownRequested } from "./management/system-restart";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
@@ -63,6 +63,7 @@ import { handleLogsUsageRoutes } from "./management/logs-usage-routes";
 import { handleStorageLogGuardRoutes } from "./management/storage-log-guard-routes";
 import { handleRequestHistoryRoutes } from "./management/request-history-routes";
 import { handleRoutingAnalyticsRoutes } from "./management/routing-analytics-routes";
+import { handleMetricsRoutes } from "./management/metrics-routes";
 import { handleProviderRoutes } from "./management/provider-routes";
 import { handleModelRoutes } from "./management/model-routes";
 import { handleAgentSettingsRoutes } from "./management/agent-settings-routes";
@@ -70,6 +71,8 @@ import { handleOauthAccountRoutes } from "./management/oauth-account-routes";
 import { handleComboRoutes } from "./management/combo-routes";
 import { handleSystemRoutes } from "./management/system-routes";
 import { handleSidebarRoutes } from "./management/sidebar-routes";
+import { handleUsageTimelineRoutes } from "./management/usage-timeline-routes";
+import { handleCompanionRoutes } from "./management/companion-routes";
 import { handleCodexPromptRoutes } from "./management/codex-prompt-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
@@ -83,15 +86,11 @@ import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-typ
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
 import { handleSessionRoutes } from "./management/session-routes";
+import { packageVersion } from "../lib/package-version";
 
 // installed npm version instead of a stale hardcode.
-export const VERSION = (() => {
-  try {
-    return JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
-  } catch {
-    return "0.0.0";
-  }
-})();
+const MANAGEMENT_VERSION_FALLBACK = "0.0.0";
+export const VERSION = packageVersion(MANAGEMENT_VERSION_FALLBACK);
 
 const managementConvergenceBindings = new WeakMap<object, Readonly<{
   factory: (config: Readonly<OcxConfig>) => ConvergeCodex;
@@ -161,6 +160,12 @@ async function handleGrokCouponRoutesOnDemand(ctx: ManagementContext): Promise<R
   return handleGrokCouponRoutes(ctx);
 }
 
+async function handleAnthropicResetGrantRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/anthropic/reset-grants", true)) return null;
+  const { handleAnthropicResetGrantRoutes } = await import("./management/anthropic-reset-grant-routes");
+  return handleAnthropicResetGrantRoutes(ctx);
+}
+
 async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/remote-workspace")) return null;
   if (!remoteWorkspaceEnabled(ctx.config)) {
@@ -168,8 +173,11 @@ async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Prom
       status: ctx.req.method === "GET" ? 200 : 404, headers: { "cache-control": "no-store" },
     });
   }
-  if (ctx.req.method !== "GET" && ctx.principal !== "gui-session") {
-    return Response.json({ error: "A dashboard session is required for Remote Workspace changes." }, { status: 403 });
+  if (ctx.req.method !== "GET" && (
+    ctx.principal !== "gui-session"
+    || ctx.sessionControl?.isPaired(ctx.req, ctx.config) !== true
+  )) {
+    return Response.json({ error: "A paired dashboard session is required for Remote Workspace changes." }, { status: 403 });
   }
   const { handleRemoteWorkspaceRoutes } = await import("./management/remote-workspace-routes");
   return handleRemoteWorkspaceRoutes(ctx);
@@ -265,7 +273,7 @@ export async function handleManagementAPI(
     } catch { /* best-effort */ }
   }
   const ctx: ManagementContext = { req, url, config, deps, version: VERSION, principal, sessionControl, convergeCodexCatalog, syncClaudeAgentDefsBestEffort };
-  let routed: Response | null;
+  let routed: Response | null | undefined;
   try {
     routed = handleSessionRoutes(ctx)
     ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))
@@ -276,6 +284,8 @@ export async function handleManagementAPI(
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleGrokCouponRoutesOnDemand(ctx))
+    ??     (await handleAnthropicResetGrantRoutesOnDemand(ctx))
+    ??     handleMetricsRoutes(ctx)
     ??     (await handleRoutingAnalyticsRoutes(ctx))
     ??     (await handleRoutingProfileRoutesOnDemand(ctx))
     ??     (await handleProviderRoutes(ctx))
@@ -289,6 +299,8 @@ export async function handleManagementAPI(
     ??     (await handleComboRoutes(ctx))
     ??     (await handleSystemRoutes(ctx))
     ??     (await handleLabRoutesOnDemand(ctx))
+      ?? (await handleUsageTimelineRoutes(ctx))
+      ?? (await handleCompanionRoutes(ctx))
       ?? (await handleSidebarRoutes(ctx));
   } catch (error) {
     const tooLarge = managementBodyTooLargeResponse(error, req, config);
@@ -394,6 +406,9 @@ export async function handleManagementAPI(
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
     // which is exactly why an intentional stop has to do it here — unless the caller is
     // `ocx stop`, which does it itself once the proxy is proven down.
+    // Mark the stop before the first await after acceptance, so an automatic restart draining
+    // concurrently cannot reach its handoff while teardown is still pending.
+    noteExplicitShutdownRequested();
     const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
     setTimeout(async () => {
       let shutdownSucceeded = false;

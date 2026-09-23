@@ -19,6 +19,7 @@ import { resolveInboundModel, effortForThinkingBudget, effortFromOutputConfig, f
 import { systemToInstructions, toolsToResponses, toolChoiceToResponses } from "./inbound-content-options";
 import { stabilizeClaudeInstructionsForPromptCache } from "./inbound-cache-stabilize";
 import { decodeReasoningEnvelope, encodeReasoningEnvelope, OCX_REASONING_PREFIX } from "../responses/reasoning-envelope";
+import { inlineDocumentMarker } from "../responses/inline-document";
 import { createTranslatorBudget, type TranslatorBudget } from "../lib/translator-budget";
 
 
@@ -41,6 +42,26 @@ function imageBlockToInputImage(block: Rec): Rec | null {
   return null;
 }
 
+function documentTitle(block: Rec): string | undefined {
+  return typeof block.title === "string" && block.title.length > 0 ? block.title : undefined;
+}
+
+/** An Anthropic base64 document as the Responses `input_file` block that carries its bytes. */
+function documentBlockToInputFile(block: Rec): Rec | null {
+  const source = block.source;
+  if (!isRec(source) || source.type !== "base64") return null;
+  const mediaType = typeof source.media_type === "string" && source.media_type.length > 0
+    ? source.media_type
+    : "application/octet-stream";
+  if (typeof source.data !== "string" || source.data.length === 0) return null;
+  const title = documentTitle(block);
+  return {
+    type: "input_file",
+    file_data: `data:${mediaType};base64,${source.data}`,
+    ...(title !== undefined ? { filename: title } : {}),
+  };
+}
+
 function toolResultOutput(block: Rec): string | Rec[] {
   const isError = block.is_error === true;
   const content = block.content;
@@ -55,9 +76,11 @@ function toolResultOutput(block: Rec): string | Rec[] {
         const img = imageBlockToInputImage(item);
         if (img) out.push(img);
       } else if (item.type === "document") {
-        // Same marker as the user-message document case below: the model should see the
-        // attachment happened instead of an empty tool output.
-        out.push({ type: "input_text", text: `[document${typeof item.title === "string" ? `: ${item.title}` : ""}]` });
+        // Tool output has no structured document carrier on this route — the Responses tool
+        // output vocabulary has no input_file block, and every adapter's tool-result path
+        // flattens to text — so this keeps the #939 marker. The user-message branch below is
+        // where bytes survive. Recorded as the remaining half of #5212.
+        out.push({ type: "input_text", text: inlineDocumentMarker(documentTitle(item)) });
       }
     }
     if (isError) out.unshift({ type: "input_text", text: "[tool error]" });
@@ -95,6 +118,7 @@ export function effectiveBlockedSkillNames(cc?: Pick<OcxClaudeCodeConfig, "block
 /** Injected-skill payloads below this size are never stubbed (not worth it). */
 const SKILL_ELISION_MIN_CHARS = 10_000;
 const SKILL_TEXT_MARKER = "Base directory for this skill: ";
+const SKILL_TEXT_PATH_MAX_CHARS = 4_096;
 
 interface SkillElisionContext {
   /** Skill-tool call ids whose input names a blocked skill (result-body carrier). */
@@ -115,11 +139,15 @@ const NO_ELISION: SkillElisionContext = { callIds: new Set(), names: [] };
 function maybeElideSkillText(text: string, names: readonly string[]): string {
   if (names.length === 0 || text.length < SKILL_ELISION_MIN_CHARS) return text;
   if (!text.startsWith(SKILL_TEXT_MARKER)) return text;
-  const firstLineEnd = text.indexOf("\n");
-  const dir = text.slice(SKILL_TEXT_MARKER.length, firstLineEnd === -1 ? text.length : firstLineEnd).trim();
+  const pathStart = SKILL_TEXT_MARKER.length;
+  const pathPrefix = text.slice(pathStart, pathStart + SKILL_TEXT_PATH_MAX_CHARS + 1);
+  const firstLineEnd = pathPrefix.indexOf("\n");
+  if (firstLineEnd === -1 && pathPrefix.length > SKILL_TEXT_PATH_MAX_CHARS) return text;
+  const dir = pathPrefix.slice(0, firstLineEnd === -1 ? pathPrefix.length : firstLineEnd).trim();
   // Windows clients send `C:\Users\...\claude-api`; normalize separators before
   // basenaming (repo precedent: src/codex/inject.ts isOpencodexCatalogPath).
-  const base = dir.replace(/\\/g, "/").split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
+  const normalizedDir = dir.replace(/\\/g, "/").replace(/\/+$/, "");
+  const base = normalizedDir.slice(normalizedDir.lastIndexOf("/") + 1).toLowerCase();
   if (!names.includes(base)) return text;
   return `[opencodex] '${base}' skill document bundle (${text.length} chars) elided for routed models `
     + "(claudeCode.blockedSkills). The skill is loaded; answer from general knowledge instead of citing the bundle.";
@@ -208,9 +236,12 @@ function userMessageToItems(content: unknown, input: Rec[], elide: SkillElisionC
         break;
       }
       case "document":
-        // No Responses equivalent for raw document blocks; surface the title so the
-        // model at least sees the attachment happened.
-        pending.push({ type: "input_text", text: `[document${typeof raw.title === "string" ? `: ${raw.title}` : ""}]` });
+        // A base64 document now rides the Responses input_file block, so a target with a
+        // counterpart receives the bytes instead of a sentence about them (#5212). Every other
+        // source is a reference this route cannot dereference, and keeps the marker #939
+        // introduced — which is also what a target with no document representation still sees.
+        pending.push(documentBlockToInputFile(raw)
+          ?? { type: "input_text", text: inlineDocumentMarker(documentTitle(raw)) });
         break;
       default:
         break; // thinking/redacted_thinking never appear in user messages; ignore unknowns

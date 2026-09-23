@@ -14,9 +14,9 @@
  * what `appendBridgeSearchTurn` would have written onto a continuation leg, so a replayed turn
  * and a continued turn show the destination the same conversation.
  *
- * Scope. Entries are keyed by the upstream destination in addition to the cell id. The cell id is
- * a v4 UUID minted here, so it cannot collide across conversations, but an unscoped key would let
- * a history replayed against a DIFFERENT provider resurrect a call that provider never made.
+ * Scope. Entries are keyed by the exact conversation and serving identity in addition to the cell
+ * id. The cell id is a v4 UUID minted here, but possession of a client-visible id is not authority
+ * to recover result text under another provider, model, destination, or credential.
  *
  * Bounds and privacy. Result text is web content the caller already received, but it is still
  * request-derived data: it lives in memory only, is never logged, serialized, or exported, and is
@@ -26,7 +26,7 @@
  * alone. Neither re-running the search nor inventing a result is an acceptable recovery.
  */
 
-import { reasoningReplayDestinationIdentity } from "./reasoning-replay-cache";
+import type { OcxReasoningReplayScopeRef } from "../types";
 
 const MAX_ENTRIES = 64;
 const MAX_TOTAL_BYTES = 512 * 1024;
@@ -58,14 +58,24 @@ let clockForTests: (() => number) | null = null;
 const now = (): number => clockForTests?.() ?? Date.now();
 
 /**
- * Identify the upstream destination a bridged search belongs to.
+ * Identify the exact conversation and upstream binding a bridged search belongs to.
  *
- * Reuses the salted process-local destination digest the reasoning replay cache already defines,
- * so both stores agree on what "the same upstream" means and neither invents a second notion of
- * destination identity.
+ * The serving route binds this holder only after provider, model, and physical credential
+ * selection. A missing conversation or binding fails closed: a cell id is client-visible and is
+ * not itself authority to recover another request's retained result.
  */
-export function bridgeSearchReplayScope(baseUrl: string | undefined): string | undefined {
-  return reasoningReplayDestinationIdentity(baseUrl);
+export function bridgeSearchReplayScope(scope: OcxReasoningReplayScopeRef | undefined): string | undefined {
+  const identity = scope?.current;
+  if (!scope?.clientPrincipalId || !scope.clientThreadId || !identity) return undefined;
+  return JSON.stringify([
+    scope.clientPrincipalId,
+    scope.clientThreadId,
+    identity.providerName,
+    identity.providerDestinationIdentity,
+    identity.adapterName,
+    identity.modelId,
+    identity.credentialIdentity,
+  ]);
 }
 
 function keyFor(scope: string, cellItemId: string): string {

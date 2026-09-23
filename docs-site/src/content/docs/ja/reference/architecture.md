@@ -117,7 +117,7 @@ Codex コンテキスト compaction はルーティングされたモデルで�
 ## キャッシュとカタログ
 
 - `codex/model-cache.ts` はリアルタイム `/models` 結果をプロバイダー別にメモリで TTL キャッシュし（デフォルト 5 分、Codex 自身のキャッシュと一致）、fetch が失敗すると stale-fallback を提供します。
-- `codex/catalog.ts` facade が公開する `codex/catalog/sync.ts` は、ルーティングされたモデルを名前空間項目として Codex のカタログにマージし、おすすめの [サブエージェントモデル](/ja/guides/codex-integration/#the-subagent-picker) を先にランク付けし、`disabledModels` をフィルタし、一回限りのバックアップから元のカタログを完全に復元できます。
+- `codex/catalog.ts` facade が公開する `codex/catalog/sync.ts` は、ルーティングされたモデルを名前空間項目として Codex のカタログにマージし、おすすめの [サブエージェントモデル](/ja/guides/codex-integration/#サブエージェントピッカー) を先にランク付けし、`disabledModels` をフィルタし、一回限りのバックアップから元のカタログを完全に復元できます。
 
 ## Reasoning effort
 

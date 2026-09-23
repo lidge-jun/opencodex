@@ -370,6 +370,23 @@ export function isCodexAccountGenerationLive(id: string, generation: number): bo
   return !!record?.credential && record.deletedAt == null && record.generation === generation;
 }
 
+/**
+ * The same verdict as {@link isCodexAccountGenerationLive}, over ONE store load.
+ *
+ * `readCodexAccountRecord` is `loadCodexAccountRecordStore()[id]`, so asking it per row
+ * reloads, reparses and renormalizes the whole file per row — the exact shape
+ * {@link loadCodexAccountRecordSnapshot} was added to avoid. The denial reader resolves
+ * several accounts in one synchronous pass on the request path, so it opens one checker and
+ * closes over the snapshot instead.
+ */
+export function beginCodexAccountGenerationLiveCheck(): (id: string, generation: number) => boolean {
+  const snapshot = loadCodexAccountRecordSnapshot();
+  return (id, generation) => {
+    const record = snapshot[id];
+    return !!record?.credential && record.deletedAt == null && record.generation === generation;
+  };
+}
+
 export function saveCodexAccountCredentialIfGeneration(
   id: string,
   generation: number,
@@ -596,6 +613,41 @@ function withCredentialMutationLockSync<T>(fn: () => T): T {
 }
 
 type CodexTokenResult = { accessToken: string; chatgptAccountId: string; generation: number };
+type CodexRefreshGenerationHandoff = (accountId: string, fromGeneration: number, toGeneration: number) => void;
+// var (hoisted, initialized to undefined) rather than const: a registrar reached
+// through an import cycle can register while this module body is still evaluating,
+// and the lazily created Set must be reachable rather than in the temporal dead zone.
+var refreshGenerationHandoffs: Set<CodexRefreshGenerationHandoff> | undefined;
+function refreshHandoffs(): Set<CodexRefreshGenerationHandoff> {
+  return refreshGenerationHandoffs ??= new Set();
+}
+
+/** Register process-local state that must follow a credential refresh generation. */
+export function registerCodexRefreshGenerationHandoff(handoff: CodexRefreshGenerationHandoff): () => void {
+  const set = refreshHandoffs();
+  set.add(handoff);
+  return () => set.delete(handoff);
+}
+
+/**
+ * Invoke every registered handoff for one committed `fromGeneration` to `toGeneration` move.
+ *
+ * Each listener runs independently and a throw is contained: by the time handoffs run the
+ * rotated credential is already persisted, so a failing listener must not reject the shared
+ * refresh promise (surviving waiters would see a refresh failure that never happened), must
+ * not starve the remaining listeners, and must not block plan reconciliation. The warning
+ * carries no account id or token material — the same scrub refresh error messages get.
+ */
+function dispatchRefreshGenerationHandoffs(accountId: string, fromGeneration: number, toGeneration: number): void {
+  for (const handoff of refreshHandoffs()) {
+    try {
+      handoff(accountId, fromGeneration, toGeneration);
+    } catch (error) {
+      console.warn("[codex-auth] a refresh generation handoff listener failed", error);
+    }
+  }
+}
+
 type CodexRefreshResult = CodexTokenResult & {
   credential?: CodexAccountCredentials;
   /**
@@ -1377,6 +1429,19 @@ async function resolveCodexToken(
    * committed result, for every waiter, including none.
    */
   const refreshPromise = fetchPromise.then(async (result): Promise<CodexRefreshResult> => {
+    // Generation-dependent completion belongs to the flight, not to its initiating
+    // request. The owner may stop waiting after a disconnect while this detached work
+    // still commits G+1; advance process-local affinities before any waiter observes
+    // the result (and even when there are no surviving waiters).
+    if (result.selfRefreshed) {
+      dispatchRefreshGenerationHandoffs(id, result.generation - 1, result.generation);
+      // A propagated alias committed at its OWN generation, so its affinities sit at
+      // alias.generation - 1: without this handoff they fail the exact-generation
+      // liveness check on the very next request that reads them.
+      for (const alias of result.propagatedAliases ?? []) {
+        dispatchRefreshGenerationHandoffs(alias.id, alias.generation - 1, alias.generation);
+      }
+    }
     await notePlanFromRefreshedAccessToken(id, result.accessToken, result.generation);
     // One settlement path for the whole flight: the refreshing account, then any dormant alias that
     // adopted the same rotated JWT. An alias holds the identical access token, so a changed

@@ -43,7 +43,7 @@ Etkinleştirildiğinde operasyonel sözleşme:
   `round-robin` ise `quotaWindow` ayarını yok sayar.
 
 Bkz.
-[Yapılandırma](/tr/reference/configuration/#anthropicaccountpool-experimental).
+[Yapılandırma](/tr/reference/configuration/providers/#anthropicaccountpool-deneysel).
 
 ## Hızlı Başlangıç
 
@@ -564,7 +564,7 @@ görsel baytları ve istek bağlamına göre önbelleğe alınır; böylece ayn�
 bağlam çifti her tekrarda tekrar açıklanmaz. Uzak `https:` görselleri asla
 önbelleğe alınmaz çünkü içerikleri değişebilir.
 
-Her anahtar için [yapılandırma referansı](/tr/reference/configuration/#sidecars)
+Her anahtar için [yapılandırma referansı](/tr/reference/configuration/server/#sidecarlar)
 bölümüne bakın. Anthropic-OAuth web araması ve görsel açıklaması, deponun mevcut
 Claude Code OAuth parmak izi emsalini yeniden kullanır, ancak uzun gözetimsiz
 çalıştırmalar için bunlara güvenmeden önce hesabınız ve iş yükünüzle kapsamlı
@@ -738,4 +738,4 @@ tutucusu olarak `"haiku"` iletin.
 
 `config.json` içindeki `claudeCode.stabilizePromptCache: true`, dönüştürülen rotalarda sistem talimatlarının sonundaki desteklenen Claude bildirimlerini son kullanıcı mesajına taşır. Varsayılan değer `false` olur. Yalnızca bu rol değişikliği istemcileriniz için uygunsa etkinleştirin. Kod bloklarındaki örnekler ve eşleşmeyen metin korunur; yerel Anthropic aktarımı değişmez. Meta veri yoksa önbellek anahtarı kararlı talimatlardan hesaplanır. Bu seçenek konuşma kimliği oluşturmaz veya üst hizmette önbellek isabeti garanti etmez.
 
-OpenCode Go’nun `deepseek-v4.1-flash` Chat rotasında, dönüştürülen zaman çizelgesi sistem hatırlatmaları bekleyen araç sonuçlarından sonra konumlarını ve system rolünü otomatik olarak korur. Böylece yeni hatırlatmalar eklenmesi, baştaki sistem istemini yeniden yazmaz. Bu davranış `stabilizePromptCache` açık veya kapalıyken geçerlidir; diğer modellerin ve hedeflerin dönüşümü ile yerel Anthropic aktarımı değişmez. Önbelleğin yeniden kullanımı için kararlı bir oturum kimliği ve kullanılabilir üst hizmet önbelleği hâlâ gereklidir. Önceki talimatların veya araçların değişmesi ve konuşmanın sıkıştırılması da önbellek isabetini etkileyebilir; hatırlatma sırasını korumak tek başına yeniden kullanımı garanti etmez.
+Dönüştürülen tüm Chat rotalarında zaman çizelgesi hatırlatmaları, bekleyen araç sonuçlarından sonra konuşmadaki konumlarını korur. Böylece yeni bir hatırlatma eklenmesi baştaki sistem istemini yeniden yazmaz ve konuşmanın ortasındaki bir yönerge, izlemesi gereken turların önüne geçmez. O konumun hangi rolü taşıdığı ayrı bir karardır: sağlayıcı `foldDeveloperRoleToSystem: false` kaydetmedikçe hatırlatma `system` olarak gönderilir; bu kayıt, üst hizmetin `developer` rolünü kabul ettiğini belirtir ve rol aynı konumda iletilir. Kabul etmeyen bir üst hizmet `400 role 'developer' is not allowed` yanıtı verir ve tur hiç başlamaz; kaydı olmayan hedefin katlanmasının nedeni budur. Bu davranış `stabilizePromptCache` açık veya kapalıyken geçerlidir; yerel Anthropic aktarımı değişmez. Önbelleğin yeniden kullanımı için kararlı bir oturum kimliği ve kullanılabilir üst hizmet önbelleği hâlâ gereklidir. Önceki talimatların veya araçların değişmesi ve konuşmanın sıkıştırılması da önbellek isabetini etkileyebilir; hatırlatma sırasını korumak tek başına yeniden kullanımı garanti etmez.

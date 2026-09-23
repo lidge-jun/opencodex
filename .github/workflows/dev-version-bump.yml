@@ -188,25 +188,48 @@ jobs:
             echo "::notice::${branch} exists without an open pull request; validating it"
             git fetch origin "${branch}"
 
-            # Fail closed on unexpected content. The branch carries the bot's own one-line
-            # bump, so anything else on it means a human or another job is using that name and
-            # this job must not push to it or open a pull request from it.
-            changed_files="$(git diff --name-only "origin/dev...origin/${branch}")"
-            if [ "${changed_files}" != "package.json" ]; then
-              echo "::error::${branch} touches unexpected files: ${changed_files:-<none>}"
+            # Fail closed on unexpected content. The branch carries the bot's own version move,
+            # which touches only the four version sources that scripts/release-version-sources.ts
+            # owns, and always package.json. Anything else on it means a human or another job is
+            # using that name and this job must not push to it or open a pull request from it.
+            # --no-renames lists a rename as its deletion plus its addition, so a file renamed onto
+            # an allowed name still shows the path it removed. The case arms are literal paths.
+            changed_files="$(git diff --no-renames --name-only "origin/dev...origin/${branch}")"
+            touches_package_json=false
+            while IFS= read -r changed_file; do
+              case "${changed_file}" in
+                package.json) touches_package_json=true ;;
+                desktop/src-tauri/tauri.conf.json|desktop/src-tauri/Cargo.toml|desktop/src-tauri/Cargo.lock) ;;
+                *)
+                  echo "::error::${branch} touches unexpected files: ${changed_files:-<none>}"
+                  exit 1
+                  ;;
+              esac
+            done <<< "${changed_files}"
+            if [ "${touches_package_json}" != "true" ]; then
+              echo "::error::${branch} does not move package.json: ${changed_files:-<none>}"
               exit 1
             fi
-            branch_version="$(git show "origin/${branch}:package.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")"
-            if [ "${branch_version}" != "${NEXT_VERSION}" ]; then
-              echo "::error::${branch} carries ${branch_version}, expected ${NEXT_VERSION}"
-              exit 1
-            fi
+            # The decide step already rewrote the version sources in this working tree. Put them
+            # back first: git refuses to switch over local edits, and the check below must read
+            # what the branch commits, not what this run wrote.
+            git checkout -- package.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
             git checkout -B "${branch}" "origin/${branch}"
+            # The diff above proved every other file matches the merge base with dev, so this is
+            # the merge base's checker reading the branch's four committed version sources.
+            bun scripts/release-version-sources.ts check "${NEXT_VERSION}" || {
+              echo "::error::${branch} does not carry ${NEXT_VERSION} in every version source"
+              exit 1
+            }
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git checkout -b "${branch}"
-            git add package.json
+            bun scripts/release-version-sources.ts check "${NEXT_VERSION}" || {
+              echo "::error::the bump did not move every version source to ${NEXT_VERSION}"
+              exit 1
+            }
+            git add -- package.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
             git commit -m "${subject}"
             git push origin "${branch}"
           fi
@@ -220,7 +243,8 @@ jobs:
 
           ${reason}
 
-          This moves \`dev\` to \`${NEXT_VERSION}\`.
+          This moves \`dev\` to \`${NEXT_VERSION}\` in \`package.json\` and the desktop version
+          sources (\`tauri.conf.json\`, \`Cargo.toml\`, and the \`opencodex-desktop\` entry of \`Cargo.lock\`).
 
           Opened automatically by \`.github/workflows/dev-version-bump.yml\`. The same
           version-line move was previously done by hand in 32529c2b2, e4a85d134, 076ad3036, and

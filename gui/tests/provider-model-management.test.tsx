@@ -7,10 +7,14 @@ import ProviderModels from "../src/components/provider-workspace/ProviderModels"
 import { LanguageProvider } from "../src/i18n/provider";
 import type { ModelRow } from "../src/pages/models-shared";
 import type { WorkspaceProvider } from "../src/provider-workspace/catalog";
+import { acceptActionDialog, actionDialogOpen, dismissActionDialog } from "./helpers/action-dialog";
 
-const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "HTMLElement",
+  "IS_REACT_ACT_ENVIRONMENT", "confirm", "alert", "prompt"] as const;
 const originalFetch = globalThis.fetch;
 let previous: Record<(typeof globals)[number], unknown>;
+/** Platform dialogs reached, which must stay empty. */
+let touched: string[];
 let win: Window;
 let root: Root | undefined;
 let host: HTMLElement;
@@ -102,10 +106,18 @@ beforeEach(() => {
   win = new Window({ url: "http://localhost/#providers" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
   for (const [key, value] of Object.entries({ document: win.document, window: win, navigator: win.navigator,
-    localStorage: win.localStorage, sessionStorage: win.sessionStorage, IS_REACT_ACT_ENVIRONMENT: true })) {
+    localStorage: win.localStorage, sessionStorage: win.sessionStorage, HTMLElement: win.HTMLElement,
+    IS_REACT_ACT_ENVIRONMENT: true })) {
     Object.defineProperty(globalThis, key, { configurable: true, value });
   }
-  win.confirm = () => true;
+  // The removal gate is an in-page dialog now. Every platform dialog is a trap: the app's
+  // webview draws none of them, so reaching one is the defect this lane removed.
+  touched = [];
+  for (const name of ["confirm", "alert", "prompt"] as const) {
+    const trap = () => { touched.push(name); throw new Error(`${name}() must not be reached`); };
+    Object.defineProperty(globalThis, name, { configurable: true, value: trap });
+    Object.defineProperty(win, name, { configurable: true, value: trap });
+  }
   rows = []; custom = []; selected = {}; available = {}; requests = []; reads = {}; recovery = 0;
   deleteMode = "ok"; underlying = undefined; writeGate = undefined; queues.clear();
   globalThis.fetch = api as typeof fetch;
@@ -117,6 +129,7 @@ afterEach(async () => {
   root = undefined; globalThis.fetch = originalFetch;
   win.close();
   for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+  expect(touched).toEqual([]);
 });
 
 // Observe DOM state, not elapsed time. Timeout is only a failing-test bound.
@@ -172,7 +185,21 @@ async function mount(name = "vendor") {
   const { createRoot } = await import("react-dom/client");
   await act(async () => { root = createRoot(host); root.render(<LanguageProvider><Harness /></LanguageProvider>); });
 }
-async function click(button: HTMLButtonElement) { expect(button).toBeDefined(); await act(async () => { button.click(); }); }
+/**
+ * Clicks, then accepts the in-page consent dialog when the control opens one. Removal used
+ * to be gated by `confirm()`, which this file stubbed to true — and which the desktop
+ * webview answers false without drawing, so Delete and Hide did nothing there. The
+ * dismissal cases drive the dialog themselves, so they can assert it appeared at all.
+ */
+async function click(button: HTMLButtonElement) {
+  expect(button).toBeDefined();
+  await act(async () => { button.click(); });
+  if (!actionDialogOpen(win.document as unknown as Document)) return;
+  await act(async () => {
+    acceptActionDialog(win.document as unknown as Document);
+    await Promise.resolve();
+  });
+}
 async function current() { await waitFor(() => host.querySelector('[data-testid="parent-ready"]')?.getAttribute("data-ready") === "true"); }
 async function refreshCurrent() { await act(async () => { refresh(); }); await current(); }
 
@@ -223,10 +250,19 @@ test("same-label custom and account-native rows keep disjoint Delete/Hide identi
 });
 
 for (const customRow of [true, false]) {
-  test(`cancel ${customRow ? "Delete" : "Hide"} sends no write and preserves the row`, async () => {
+  test(`dismissing ${customRow ? "Delete" : "Hide"} sends no write and preserves the row`, async () => {
     if (customRow) addCustom(); else rows = [row("custom-model")];
-    win.confirm = () => false; await mount(); await waitFor(() => actionable().length === 1);
-    await click(action("vendor/custom-model", customRow ? "Delete" : "Hide")); expect(requests).toEqual([]); expect(ids()).toEqual(["custom-model"]);
+    await mount(); await waitFor(() => actionable().length === 1);
+    const button = action("vendor/custom-model", customRow ? "Delete" : "Hide");
+    await act(async () => { button.click(); });
+    /*
+     * The gate must actually appear. Answering through the shared `click` helper would let
+     * this case pass if the control became a no-op — which is precisely the defect this
+     * lane exists for, since inside the app every one of these buttons did nothing.
+     */
+    expect(actionDialogOpen(win.document as unknown as Document)).toBe(true);
+    await act(async () => { dismissActionDialog(win.document as unknown as Document); await Promise.resolve(); });
+    expect(requests).toEqual([]); expect(ids()).toEqual(["custom-model"]);
   });
 }
 
@@ -250,7 +286,12 @@ test("single flight blocks a second row until the first write and all reconcilia
   writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
   await mount(); await waitFor(() => actionable().length === 2);
   const first = action("vendor/custom-model", "Delete"); const second = action("vendor/second", "Hide");
-  await act(async () => { first.click(); second.click(); }); expect(requests).toHaveLength(1);
+  await act(async () => { first.click(); second.click(); });
+  // One dialog, not two: the flight is claimed before consent is awaited, so the second
+  // row cannot open its own gate while this one is unanswered.
+  expect(win.document.querySelectorAll("dialog.modal-overlay")).toHaveLength(1);
+  await act(async () => { acceptActionDialog(win.document as unknown as Document); await Promise.resolve(); });
+  expect(requests).toHaveLength(1);
   const inventory = hold("/api/models"); const ownership = hold("/api/custom-models");
   await act(async () => { releaseWrite(); }); await inventory.started; await ownership.started;
   expect(actionable()).toEqual([]);

@@ -1,6 +1,5 @@
 import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
-import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import { linkRequestSessionLane } from "../request-log-conversation";
 import type { OcxConfig } from "../../types";
@@ -9,6 +8,8 @@ import { handleResponses as handleResponsesCore } from "./core";
 import { requestPacingOverloadResponse } from "./pacing-overload";
 import { captureExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import { captureCallerDirectAuth } from "../../providers/caller-authorization";
+import { resolvePolicyProfileId } from "../../routing/profile";
+import { parseSyntheticRowId } from "../fast-row";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -129,6 +130,7 @@ export async function handleResponsesWithPolicyFallback(
   const runCore = deps.runCore ?? handleResponsesCore;
   let requestBodyReadNotified = false;
   let storedPool401ReplayDispatched = false;
+  let rawBody: Record<string, unknown> | null = null;
   const coreOptions: CoreOptions = {
     ...options,
     openAiSidecarAuth: options.openAiSidecarAuth === undefined
@@ -144,23 +146,24 @@ export async function handleResponsesWithPolicyFallback(
         options.onRequestBodyRead?.();
       },
     } : {}),
+    onRequestBodyParsed: body => {
+      options.onRequestBodyParsed?.(body);
+      if (rawBody === null && body && typeof body === "object" && !Array.isArray(body)
+        && typeof (body as { model?: unknown }).model === "string") {
+        const model = (body as { model: string }).model;
+        const { fastRow, effortRow } = parseSyntheticRowId(model, config);
+        if (resolvePolicyProfileId(config, fastRow?.baseId ?? effortRow?.baseId ?? model) === null) return;
+        // Recovery and other core preparation may mutate the parsed body in place. Keep an
+        // immutable snapshot of the original wire body so a retry cannot serialize those
+        // mutations. Object-identity metadata is re-established by each attempt, not serialized.
+        rawBody = structuredClone(body as Record<string, unknown>);
+      }
+    },
     onStoredPool401ReplayDispatched: () => {
       storedPool401ReplayDispatched = true;
       options.onStoredPool401ReplayDispatched?.();
     },
   };
-  let rawBody: Record<string, unknown> | null = null;
-  try {
-    const parsed = await readJsonRequestBody(
-      req.clone(),
-      undefined,
-      resolveInboundBodyLimitBytes(config.maxInboundBodyBytes),
-    );
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) rawBody = parsed as Record<string, unknown>;
-  } catch {
-    // Core owns the client-facing parse/decompression error.
-  }
-
   let response: Response;
   try {
     response = await runCore(req, config, logCtx, coreOptions);

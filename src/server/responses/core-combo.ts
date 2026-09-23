@@ -521,7 +521,7 @@ export async function executeComboResponses(
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
-        if (Object.hasOwn(config.providers, completedTarget.provider)
+        if (!options.compactionRoutingOverride && Object.hasOwn(config.providers, completedTarget.provider)
           && provider && provider.disabled !== true
           && currentCombo?.targets.some(target => targetKey(target) === targetKey(completedTarget))) {
           rememberComboForLane(sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration);
@@ -678,9 +678,13 @@ export async function executeComboResponses(
     attemptRetained = true;
     lastFailure = failure.response;
     lastFailedChildLog = childLog;
-    const failureDecision = comboFailureDecision(failure.response.status, failure.classificationText, {
-      code: failure.upstreamCode,
-    });
+    // A non-replayable failure (the answer to a spent ambiguous-reset replacement) may follow a
+    // send that already ran the turn, so no later target may receive it, whatever its status says.
+    const failureDecision = failure.nonReplayable
+      ? "stop"
+      : comboFailureDecision(failure.response.status, failure.classificationText, {
+        code: failure.upstreamCode,
+      });
     const wantsStream = (rawBody as { stream?: unknown } | null)?.stream === true;
     // Local byte admission has its own diagnostic; do not relabel it as an upstream refusal.
     const classifyOverflow = failure.response.status === 413

@@ -12,12 +12,13 @@
  * fallback ladder, so the Codex catalog AND the wire clamp agree with the model instead of a
  * hand-written guess.
  *
- * Failure policy: the network is never on the critical path. A missing, stale or corrupt
- * snapshot yields undefined, which leaves every hand-written contract untouched. The second
+ * Failure policy: a missing or corrupt snapshot yields undefined, and an expired snapshot still
+ * serves its last ladder while a best-effort refresh runs in the background. The second
  * cache records rungs the upstream actually rejected (400/403 naming reasoning_effort), so an
  * entitlement gap (muse-spark max needs an active Muse Code subscription) costs one rejected
  * request instead of failing every turn that selects that rung.
  */
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 // Leaf modules on purpose: this file is imported from reasoning-effort.ts, which combos/types.ts
@@ -26,6 +27,7 @@ import { join } from "node:path";
 import { atomicWriteFile } from "../config/atomic-write";
 import { getConfigDir } from "../config/paths";
 import type { OcxProviderConfig } from "../types";
+import { resolveProviderApiKey } from "./api-key-resolve";
 
 const FILENAME = "reasoning-metadata-cache.json";
 const SUPPORT_FILENAME = "reasoning-support-cache.json";
@@ -87,7 +89,7 @@ interface MetadataSnapshot {
 }
 
 interface SupportSnapshot {
-  version: 1;
+  version: 2;
   rows: Record<string, { effort: string; at: number; evidence?: string }>;
 }
 
@@ -135,6 +137,11 @@ function metadataProviderKey(provider: OcxProviderConfig): string | undefined {
   return undefined;
 }
 
+/** Whether catalog sync should bootstrap metadata for this destination. */
+export function providerUsesReasoningMetadata(provider: OcxProviderConfig): boolean {
+  return metadataProviderKey(provider) !== undefined;
+}
+
 /**
  * Local mirror of `modelRecordValue()` from `src/reasoning-effort.ts`, which imports this
  * module and so cannot be imported back. Exact id, then the `family:` prefix, then a
@@ -159,11 +166,31 @@ function modelLadderValue(
   return undefined;
 }
 
-/** Opaque row key: providerKey|modelId|effort. None of the three may contain a pipe. */
-const KEY_SEP = "|";
+/**
+ * Bind learned capability to the credential that supplied the evidence. A digest keeps the
+ * credential itself out of the persisted cache while remaining stable across restarts and key
+ * selection. Providers without key-auth identity may use metadata, but cannot teach the cache.
+ *
+ * The hash input is the resolved wire credential, not the configured expression: the catalog
+ * path carries the raw config string in apiKey (a keychain:/env reference stays unresolved
+ * there), while the request path carries the resolved secret in apiKey and the configured
+ * expression in _apiKeyAttempt.reference. The request path hashes apiKey exactly as routed --
+ * the reference is only provenance, and re-resolving it at record time could read a credential
+ * rotated since the request was served. The catalog path resolves the configured expression,
+ * so both sides still bind learned refusals to the same wire credential, and a rotation behind
+ * a stable reference starts clean instead of inheriting the previous credential's refusals.
+ */
+function credentialIdentity(provider: OcxProviderConfig): string | undefined {
+  const resolved = provider._apiKeyAttempt?.reference !== undefined
+    ? provider.apiKey
+    : resolveProviderApiKey(provider.apiKey);
+  if (typeof resolved !== "string" || resolved.length === 0) return undefined;
+  return createHash("sha256").update(resolved).digest("hex");
+}
 
-function supportKey(providerKey: string, modelId: string, effort: string): string {
-  return providerKey + KEY_SEP + modelId + KEY_SEP + effort;
+/** JSON encoding avoids delimiter ambiguity in provider, model, and effort identifiers. */
+function supportKey(providerKey: string, credential: string, modelId: string, effort: string): string {
+  return JSON.stringify([providerKey, credential, modelId, effort]);
 }
 
 function loadSnapshot(): MetadataSnapshot | null {
@@ -220,7 +247,9 @@ function loadSupport(): Map<string, number> {
   }
   const rows = new Map<string, number>();
   const parsed = readJsonFile<SupportSnapshot>(SUPPORT_FILENAME);
-  if (parsed && parsed.version === 1 && parsed.rows && typeof parsed.rows === "object") {
+  // Version 1 rows had no credential identity and are deliberately invalidated: accepting them
+  // would preserve destination-wide refusals written by a lower-entitlement account.
+  if (parsed && parsed.version === 2 && parsed.rows && typeof parsed.rows === "object") {
     for (const [key, row] of Object.entries(parsed.rows)) {
       if (!row || typeof row.at !== "number") continue;
       if (nowMs - row.at > SUPPORT_TTL_MS) continue;
@@ -273,8 +302,9 @@ export function metadataDeclaresType(provider: OcxProviderConfig, modelId: strin
 
 export function isReasoningEffortLearnedUnsupported(provider: OcxProviderConfig, modelId: string, effort: string): boolean {
   const key = metadataProviderKey(provider);
-  if (!key) return false;
-  return loadSupport().has(supportKey(key, modelId, effort));
+  const credential = credentialIdentity(provider);
+  if (!key || !credential) return false;
+  return loadSupport().has(supportKey(key, credential, modelId, effort));
 }
 
 /**
@@ -291,10 +321,11 @@ export function dropLearnedUnsupportedReasoningEfforts(
 ): string[] {
   if (efforts.length === 0) return [...efforts];
   const key = metadataProviderKey(provider);
-  if (!key) return [...efforts];
+  const credential = credentialIdentity(provider);
+  if (!key || !credential) return [...efforts];
   const support = loadSupport();
   if (support.size === 0) return [...efforts];
-  const kept = efforts.filter(effort => !support.has(supportKey(key, modelId, effort)));
+  const kept = efforts.filter(effort => !support.has(supportKey(key, credential, modelId, effort)));
   return kept.length === 0 ? [...efforts] : kept;
 }
 
@@ -334,8 +365,9 @@ export function recordUnsupportedReasoningEffort(
   evidence?: string,
 ): boolean {
   const key = metadataProviderKey(provider);
-  if (!key || !effort) return false;
-  const rowKey = supportKey(key, modelId, effort);
+  const credential = credentialIdentity(provider);
+  if (!key || !credential || !effort) return false;
+  const rowKey = supportKey(key, credential, modelId, effort);
   const rows = loadSupport();
   if (rows.has(rowKey)) return false;
   rows.set(rowKey, Date.now());
@@ -346,15 +378,14 @@ export function recordUnsupportedReasoningEffort(
     try {
       const out: SupportSnapshot["rows"] = {};
       for (const [rowKey, at] of rows) {
-        const parts = rowKey.split(KEY_SEP);
         const evidenceText = supportEvidence.get(rowKey);
         out[rowKey] = {
-          effort: parts[2] ?? "",
+          effort: JSON.parse(rowKey)[3] ?? "",
           at,
           ...(evidenceText ? { evidence: evidenceText } : {}),
         };
       }
-      atomicWriteFile(join(getConfigDir(), SUPPORT_FILENAME), JSON.stringify({ version: 1, rows: out }) + "\n");
+      atomicWriteFile(join(getConfigDir(), SUPPORT_FILENAME), JSON.stringify({ version: 2, rows: out }) + "\n");
     } catch {
       // Best-effort persistence only.
     }
@@ -371,11 +402,10 @@ export function flushReasoningSupportCache(): void {
     const rows = loadSupport();
     const out: SupportSnapshot["rows"] = {};
     for (const [rowKey, at] of rows) {
-      const parts = rowKey.split(KEY_SEP);
       const evidenceText = supportEvidence.get(rowKey);
-      out[rowKey] = { effort: parts[2] ?? "", at, ...(evidenceText ? { evidence: evidenceText } : {}) };
+      out[rowKey] = { effort: JSON.parse(rowKey)[3] ?? "", at, ...(evidenceText ? { evidence: evidenceText } : {}) };
     }
-    atomicWriteFile(join(getConfigDir(), SUPPORT_FILENAME), JSON.stringify({ version: 1, rows: out }) + "\n");
+    atomicWriteFile(join(getConfigDir(), SUPPORT_FILENAME), JSON.stringify({ version: 2, rows: out }) + "\n");
   } catch {
     // Best-effort persistence only.
   }
@@ -462,19 +492,36 @@ export function planReasoningEffortDowngrade(args: {
  * kept so the gate can be checked against real data and widened without another format change.
  * Non-reasoning models carry no ladder and are dropped.
  */
-export async function refreshReasoningMetadata(options: { force?: boolean } = {}): Promise<{
+type RefreshOutcome = {
   ok: boolean;
   reason: string;
   providers?: number;
   models?: number;
-}> {
+};
+
+/** Bound a caller's wait without cancelling the shared refresh job. */
+function waitForRefresh(work: Promise<RefreshOutcome>, waitMs: number | undefined): Promise<RefreshOutcome> {
+  if (waitMs === undefined) return work;
+  if (!Number.isSafeInteger(waitMs) || waitMs < 0) {
+    return Promise.resolve({ ok: false, reason: "invalid wait budget" });
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<RefreshOutcome>(resolve => {
+    timer = setTimeout(() => resolve({ ok: false, reason: "wait budget exceeded" }), waitMs);
+    timer.unref?.();
+  });
+  return Promise.race([work, deadline]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+export async function refreshReasoningMetadata(options: { force?: boolean; waitMs?: number } = {}): Promise<RefreshOutcome> {
   const snapshot = loadSnapshot();
   if (!options.force && snapshot && Date.now() - snapshot.fetchedAt <= CACHE_TTL_MS) {
     return { ok: true, reason: "fresh" };
   }
   if (refreshInFlight) {
-    await refreshInFlight;
-    return { ok: true, reason: "coalesced" };
+    return waitForRefresh(refreshInFlight.then(() => ({ ok: true, reason: "coalesced" })), options.waitMs);
   }
   const job = (async () => {
     const response = await fetch(SOURCE_URL, {
@@ -523,21 +570,22 @@ export async function refreshReasoningMetadata(options: { force?: boolean } = {}
     return { ok: true, reason: "refreshed", providers: Object.keys(providers).length, models };
   })();
   refreshInFlight = job.catch(() => undefined).finally(() => { refreshInFlight = null; });
-  try {
-    return await job;
-  } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
-  }
+  const settled = job.catch((error): RefreshOutcome => ({
+    ok: false,
+    reason: error instanceof Error ? error.message : String(error),
+  }));
+  return waitForRefresh(settled, options.waitMs);
 }
 
 /**
- * Kick a background refresh when the snapshot is missing or stale. Called from the ladder read
- * path so both the long-lived proxy and short-lived ocx sync self-heal without a new CLI
- * surface. One refresh per process at a time; failures are ignored on purpose.
+ * Optional background refresh for callers that do not wait for a snapshot. Catalog sync uses
+ * refreshReasoningMetadata with a bounded wait; an expired ladder read can request this refresh.
+ * A classified toggle/budget model can have a fallback ladder without any snapshot, so this
+ * path must never bootstrap a missing snapshot. One refresh per process; failures are ignored.
  */
 export function ensureReasoningMetadataSnapshot(): void {
   const snapshot = loadSnapshot();
-  if (snapshot && Date.now() - snapshot.fetchedAt <= CACHE_TTL_MS) return;
+  if (!snapshot || Date.now() - snapshot.fetchedAt <= CACHE_TTL_MS) return;
   if (refreshInFlight) return;
   void refreshReasoningMetadata().catch(() => undefined);
 }

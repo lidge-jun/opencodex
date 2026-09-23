@@ -1,27 +1,67 @@
 # Providers And Adapters
 
+The opt-in `inlineThinkTagModels` list follows static-policy override and model-rename rules;
+shared Kiro/Chat splitting and raw display follow [Chat compatibility](providers/chat-compat.md#inline-think-tag-recovery).
+
+Meta Muse management login in `src/server/management/oauth-account-routes.ts` requires a
+server-resolved `gui-session` before starting credential acquisition, including local import,
+device login, add-account and reauthentication. This principal is not a checkbox receipt;
+forged GUI headers and raw management credentials do not substitute for it. Direct CLI login
+and other OAuth providers retain their existing policies. `src/oauth/meta-muse-device.ts`
+cancels unparsed authorization/mint failures, including mint429, without reflecting their bodies.
+
+The capture-only bridge in `src/adapters/coding-agent/turn.ts` reports staging failures with
+the fixed `tool_bridge_setup_failed` error, never an OS error carrying private file paths.
+Failure prevents CLI spawn and settles the bridge's private directory; the CodeBuddy adapter
+also settles its prompt-file directory. Catalog and MCP-config write failures cover both owners.
+In a compiled executable, the bridge launches the private `__codebuddy-mcp` CLI entrypoint;
+source execution launches the MCP module with Bun. Both paths advertise only the request's
+isolated catalog and leave tool execution to the external client. Qoder appends the folded
+system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or
+`QODERCN_APPEND_SYSTEM_PROMPT` child environment,
+never through command-line arguments or inherited vendor variables.
+
+Kimi Coding's Chat, API-key, and optional Responses presets consume the same model seeds in
+`src/providers/registry/model-seeds.ts`, including the native `k3-256k` ID. The Responses preset
+shares the `kimi` OAuth account and Coding endpoint, keeps Chat as the featured default, and
+enables adjacent tool-result repair on its Responses wire. Its metadata alias is generated from
+the registry; sharing authentication does not implicitly share a usage-price namespace.
+
 OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
 the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
+Anthropic model-scoped quota labels in `src/providers/quota/vendor-probes-oauth.ts` publish
+only canonical Fable, Opus, or Sonnet labels after removing terminal controls; unknown upstream display names are omitted.
+
 | Path | Responsibility |
 | --- | --- |
 | `src/providers/registry.ts` | Compatibility facade; canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata live in `src/providers/registry/entries-core.ts` and `entries-extended.ts`, with model seeds in `model-seeds.ts`. |
+| `src/providers/registry/model-ids.ts` | Classifies every `ProviderRegistryEntry` field by what its KEYS mean for selector decoding, and derives the native model ids an entry names. The classification is exhaustive by construction: a new registry field fails typecheck until its keys are given a meaning, which is what stops an identity-bearing map from being silently left out of decoding. Imported directly rather than through the facade, which is at its file-size cap. |
 | `src/providers/derive.ts` | Enrichment from provider presets into user config. |
-| `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. |
+| `src/providers/model-rename-fields.ts`, `src/providers/model-rename-migration.ts` | Classifies every provider config field for a declared model rename. Exact-model records, lists and nested request-pacing keys follow the replacement; an already saved replacement entry wins. Provider-wide settings and credential fields are not model identities. |
+| `src/providers/resolved-model-policy.ts`, `src/providers/resolved-model-policy-merge.ts` | Static provider/model policy resolution for the final upstream wire model, plus its pure clone/merge/URL/family helpers. The resolver detaches and freezes registry defaults, operator overrides, exact explicit input-modality declarations, provider-scoped hard wire pins (including Command Code's `claude-` prefix), aliases, and explicit false/empty values with field-level provenance. Provider derivation, routing, catalog hints, gather admission, and adapter selection consume its detached frozen result. Callers supply transport match, the exact capability row, and a credential-free effective auth decision; credential bytes, usability evidence, account/quota/health state, and observed limits remain outside the result. |
+
+| `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. Meta Muse device authorization, polling, and key-mint JSON responses share the 64 KiB bounded-body ceiling and the request's deadline; oversized declared or streamed bodies are rejected before JSON parsing. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Command Code manual callback JSON remains opaque to the shared `code#state` parser and is state-validated by its provider parser. A raw Command Code paste with an explicit `#state` suffix must match the flow state on the direct prompt as well. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. |
 | `src/combos/request.ts` | Clones each selected combo target request and applies the existing target capability ladder: adaptive unknown targets and explicit empty ladders receive no unsupported reasoning/thinking controls, while known ladders retain per-target resolution. |
 | `src/adapters/openai-responses.ts` | Native OpenAI/ChatGPT Responses passthrough. |
 | `src/responses/muse-tool-name-alias.ts` | Host-gated Meta Muse 64-char tool-name alias/restore used by the Responses passthrough. |
-| `src/adapters/openai-chat.ts`, `src/adapters/openai-chat/` | OpenAI-compatible Chat Completions bridge, split into leaves (`wire.ts`, `messages.ts`, `response-events.ts`, `passthrough.ts`, `tool-call-validation.ts`, `tool-schema.ts`, `errors.ts`). Its client delivery shapes in `src/chat/outbound.ts` and `src/server/chat-native-sse.ts` relay the upstream `service_tier` echo on non-stream, folded-stream, and synthesized-SSE bodies, never inventing the key when the upstream omits it. |
-| `src/adapters/anthropic.ts` | Anthropic Messages bridge. A `refusal` or `content_filter` stop reason yields an explicit `incomplete` event with `retryable: false` rather than `done` with that stopReason (#4312); `max_tokens` remains `done`. |
-| `src/adapters/google.ts` | Gemini bridge. |
+| `src/adapters/openai-chat.ts`, `src/adapters/openai-chat/` | OpenAI-compatible Chat Completions bridge, split into leaves (`wire.ts`, `messages.ts`, `response-events.ts`, `passthrough.ts`, `parallel-tool-calls.ts`, `reasoning-wire.ts`, `tool-call-validation.ts`, `tool-schema.ts`, `errors.ts`). `parallel-tool-calls.ts` owns the `parallel_tool_calls` wire value for both the translated and native builders, so the three provider states — configured opt-out, configured opt-in, and the unset default that forwards only a caller's explicit `false` — cannot drift between them. `reasoning-wire.ts` applies explicit gateway-object and tool-bearing effort-omission declarations to both builders; absent declarations leave native raw forwarding unchanged. Its client delivery shapes in `src/chat/outbound.ts` and `src/server/chat-native-sse.ts` relay the upstream `service_tier` echo on non-stream, folded-stream, and synthesized-SSE bodies, never inventing the key when the upstream omits it. |
+| `src/adapters/anthropic.ts` | Anthropic Messages bridge. A `refusal` or `content_filter` stop reason yields an explicit `incomplete` event with `retryable: false` rather than `done` with that stopReason (#4312); `max_tokens` remains `done`. It is the wire that defines `tools[*].strict` and `tools[*].allowed_callers`, so a rebuilt declaration carries both: an explicit `strict: true` and any `allowed_callers` the caller declared. An absent `strict` stays absent, because the Messages inbound records it as `false` and a `false` on the wire would read as an opt-out nobody asked for. Anthropic Fast uses the native `anthropic-speed` FastWire: a set decision sends `speed: "fast"` with `fast-mode-2026-02-01` in one case-insensitively merged, deduplicated `anthropic-beta` header that preserves OAuth betas. Stream and buffered `usage.speed` echoes confirm fast or downgrade to standard; no echo leaves the request assumed. `tests/adapters/anthropic/anthropic-fast-speed.test.ts` pins the wire and echoes. |
+| `src/adapters/google.ts` | Gemini bridge. The final wire compiler owns [endpoint-scoped tool-schema loss policy](providers/google.md#google-tool-schema-loss-reporting): compatible mode changes no request bytes, strict initial loss creates no physical send, and strict non-direct repair creates no changed repair send. A caller-declared strict tool selects `functionCallingConfig.mode: "VALIDATED"` in place of the absent-choice default; `NONE`, `ANY` and a forced-name choice are stronger constraints the caller asked for and are never overwritten. |
+| `src/adapters/declaration-carrier.ts`, `src/adapters/input-media-guard.ts` | Default-deny allowlists for constraints the normalized request carries but a wire may not be able to express: `tools[*].allowed_callers`, which fences a tool off from callers, and inline document bytes. Both are refused with a 400 at the single guard every registered adapter passes through, rather than left to each adapter, because an adapter that never learned about the carrier rebuilds without it and answers normally. `allowed_callers` reaches the `anthropic` wire; document bytes reach `anthropic`, `openai-chat` and `google`; the `openai-responses` wire is exempt from the whole guard because it forwards the original body. Adding an `AdapterWire` member makes the omission visible in these lists instead of at a customer's upstream. The unrestricted `["direct"]` caller default is not a restriction. |
 | `src/adapters/azure.ts` | Azure OpenAI bridge. |
 | `src/adapters/cursor.ts`, `src/adapters/cursor/` | Cursor protobuf transport: discovery, request builder, event decoding, MCP, thread continuity, native-exec policy. |
-| `src/adapters/devin.ts`, `src/adapters/devin/cloud-direct/` | Devin runTurn transport over Cognition Connect-RPC. `GetChatMessage` uses the Responses provider executor and shared physical-send budget; catalog and JWT support RPCs remain outside inference-send accounting. |
+| `src/adapters/devin.ts`, `src/adapters/devin/cloud-direct/` | Devin runTurn transport over Cognition Connect-RPC. `GetChatMessage` uses the Responses provider executor and shared physical-send budget; catalog and JWT support RPCs remain outside inference-send accounting. Provider-stated 429 reset delays are surfaced to the client rather than slept inside an admitted turn, so they cannot retain shared active-turn capacity. A recorded tenant host is used only for the stored account whose credential owns the transmitted key, searched in the configured provider id and then its deprecated alias; a configured, forwarded, or unmatched key uses the configured base URL or the US default. |
 | `src/adapters/kiro.ts` and `src/adapters/kiro/` | Kiro event/tool/thinking/truncation/retry handling. The original path is a facade over leaves for wire identity, reasoning, conversation state, token estimation, payload assembly, streaming, and the adapter. |
-| `src/adapters/mimo-free.ts` | Mimo Free transport (client identity + JWT). |
+| `src/adapters/mimo-free.ts` | Mimo Free transport (client identity + JWT). Concurrent requests share one JWT bootstrap bound only to its timeout; each request stops waiting on its own abort without cancelling the others. |
+| `src/adapters/command-code.ts`, `src/adapters/command-code-tool-text.ts`, `src/adapters/command-code-restored-schema.ts` | Command Code OAuth NDJSON translation. For every `xiaomi/mimo-` model, text, native calls, reasoning, and terminal decisions share one byte-bounded queue with linear queue visits. Markup is deduplicated against matching native calls; text-only restoration requires one contiguous text run, a clean finish, a declared tool, and arguments validated against supported schema constraints. A parameter-free (freeform) block may omit `</function>` but must end with `</tool_call>`; parameter blocks keep the canonical close. Native, reasoning, and other intervening events release an open markup block as text. Regex patterns, other unsupported constraints, and abnormal finishes fail closed. |
 | `src/adapters/image.ts`, `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts`, `src/adapters/anthropic-image-codec.ts` | Image conversion for adapter ingress and Anthropic-specific normalization/limits. An image's ladder position is pinned to its own identity (content hash + media type), so appending a newer image cannot re-encode older ones and bust Anthropic's prompt prefix cache (#4532). |
 | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/upstream-http-error.ts` | Shared adapter execution support: turn queueing, tool-catalog nudging, client identity, upstream error normalization. |
+
+Inline document admission shares one encoding predicate between its scanner and parser in
+`src/responses/inline-document.ts`: malformed base64 quantum/padding lengths are refused,
+and valid padded or unpadded payloads pass unchanged without a decoding allocation.
 
 Adapter output must stay in internal `AdapterEvent` form until `src/bridge/sse.ts` converts it back
 to Responses SSE or WebSocket frames, or `src/bridge/response-json.ts` buffers it into a JSON
@@ -57,10 +97,44 @@ Provider-scoped capability hints remain authoritative when discovery returns an 
 capabilities. In particular, `src/providers/registry/entries-core.ts` assigns OpenCode Go's live
 `deepseek-v4.1-flash` route the official 1,048,576-token window instead of the conservative 128k
 routed-model fallback.
+Meta's two direct surfaces keep separate reasoning contracts: `meta-model` remains capped at
+`xhigh`, while `meta-muse` advertises `max` and sends the transparent Muse compatibility
+User-Agent required by that credential surface. The existing registry header merge keeps an
+operator-supplied User-Agent authoritative.
 The same registry declares the first-party `deepseek-flash` model with `text` and `image` input,
 so it bypasses the vision sidecar by default; explicit `noVisionModels` or text-only declarations
 remain authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash`
-remain sidecar-backed by default. Zen routes are unchanged and unprobed in this update.
+remain sidecar-backed by default.
+
+OpenCode Go's `deepseek-v4.1-flash` joined them on 2026-09-19: probed against
+`https://opencode.ai/zen/go/v1/chat/completions` with this proxy's headers, the route accepts an
+`image_url` part and the model reads it, so it left `noVisionModels` and gained a positive
+`modelInputModalities` declaration. Its sibling `deepseek-v4-flash` on the same gateway still
+answers HTTP 400 "Model only supports text input" and stays sidecar-backed. The Zen tiers
+(`opencode-zen`, `opencode-free`) were not measurable (HTTP 402) and keep their existing
+classification — an unverified tier is not evidence.
+
+Because `enrichProviderFromRegistry` fills `noVisionModels` all-or-nothing and fills
+`modelInputModalities` per-key beneath the saved value, both halves of a stale classification are
+frozen into any config saved while it was current. `src/providers/stale-vision-classification-migration.ts`
+repairs exactly those two saved values and runs inside the shared startup repair pass in
+`src/providers/model-rename-startup.ts`. Correcting the registry alone fixes new installs only.
+
+It covers both states that reach a running process, because the sidecar predicate reads
+`noVisionModels` before `modelInputModalities`: the full stale pair (modalities still the stale
+declaration and the id listed, both rewritten) and the half-repaired row (modalities already
+corrected but the id still listed, where removing the name is what stops the image from being
+stripped). The paired modality declaration is the guard in both cases, which is why a name listed
+without one is left alone — that row is either a half-finished repair or a deliberate operator
+entry, and the projection does not guess which. The row must also still be the registry's own:
+identity resolves through `providerMatchesRegistryTransport`, the rule `enrichProviderFromRegistry`
+applies before it writes registry metadata, plus the entry's adapter. `opencode-go` is a pinned
+key preset without `preserveCustomDestination`, so its id alone claims a row — exactly as it does
+for enrichment — and an entry that opts into destination preservation narrows the projection with
+it. `modelCapabilities` is never written: it is the
+axis that outranks every source here, so it is where a deliberate text-only override belongs
+(`ocx provider edit <provider> --model <id> --text-only` writes it) and the one declaration a
+restart cannot take back.
 
 The BigModel Coding Plan Responses preset uses the separately documented
 `https://open.bigmodel.cn/api/v1` transport and a static catalog. Its provider row
@@ -80,6 +154,38 @@ not an authentication or entitlement decision.
 
 Routed Responses continuations whose local replay state is missing resolve their recovery decision from the selected wire protocol, not the model name; the contract lives in [Responses transport](transports/responses.md).
 
+Volcengine Ark Coding Plan is a native Responses preset at `/api/coding/v3/responses`. Validated
+tool continuations there reject the reasoning item the previous turn returned, so its registry
+entry sets `dropResponsesReasoningItems`, which removes replayed Responses `reasoning` items from
+continuation input before forwarding. That is lossy — summaries, item ids and `encrypted_content`
+go with the item — and an explicit `false` on the provider turns it off. The flag belongs to the
+DESTINATION rather than to the provider-wide wire, so `routedProviderConfig` fills it on the
+early-return path too: a row saved on Chat still reaches the Responses adapter when one model
+opts in through `modelAdapters`, and would otherwise forward the rejected item. Because it changes
+the continuation body, it is part of the compatibility behavior record and two routes that
+disagree about it are not the same subject.
+
+A row already saved on `openai-chat` keeps that wire. The entry is
+`preserveCustomDestination` with key auth, so `providerMatchesRegistryTransport` refuses the
+adapter mismatch and the request path returns the stored row unchanged, and the retired Chat
+destination stays an alias so that row keeps this entry's metadata. There is deliberately no
+startup config migration: the Z.AI one (`src/providers/zai-responses-migration.ts`) is
+behavior-preserving only because it gates on `providerMatchesRegistryTransport` and therefore
+rewrites rows the router already canonicalizes, which a Volcengine Chat row is not.
+
+Command Code ships its own per-model `reasoning_effort` table in
+`src/providers/command-code-efforts.ts`, and that table decides the wire effort. Profile refresh
+adds newly listed efforts while retaining accepted rungs; every observed upstream rejection stays
+excluded from later refreshes for that destination and model. Configuration can take precedence, but only when the provider declares
+`modelReasoningEffortsAuthoritative`:
+`providerConfigSeed` copies the shipped table into every materialized preset and both enrichment
+and routing keep a persisted row over the current seed, so neither the presence of a configured
+row nor its difference from today's table establishes that a human wrote it. With the flag the
+ladder resolves through `configuredReasoningEfforts`, the same function that advertises the Codex
+picker, so the catalog and the wire agree; a rung the upstream then refuses is returned as that
+error rather than replayed without the effort, because the operator asked for it. The flag is part
+of the compatibility behavior record for the same reason as above.
+
 The shared Responses path follows the [bounded multipart recovery contract](subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 
 ## Hosted-search continuation binding
@@ -91,7 +197,10 @@ the configured entry, reference, revision, resolved key, authentication mode, an
 disabled or removed provider fails the same check. Drift produces the bridge's failed terminal
 without another provider request, and an unchanged binding resends the built request with its
 executed search result appended, never re-entering the initial reselection/rebuild path. Initial
-dispatch keeps its normal reselection policy. `tests/web-search/web-search-passthrough-bridge.test.ts`
+dispatch keeps its normal reselection policy. When the route's registry policy carries a
+terminal-repair grace (`modelResponsesTerminalRepair`), the response body of every successful
+continuation is wrapped by the same repair that saw the raw first leg, so a complete leg the
+destination leaves open still ends that leg on schedule instead of stalling the turn. `tests/web-search/web-search-passthrough-bridge.test.ts`
 covers drift during search, while pacing, and before first-leg headers return, plus successful
 first-dispatch reselection and result preservation.
 
@@ -104,17 +213,26 @@ searches run, their hosted cells complete, the held client calls are released fo
 execute, and the leg's own terminal closes the turn with no continuation sent upstream. The
 destination therefore does not receive that search result during the turn. It gets it on the next
 one: every search the bridge executes is recorded in `src/responses/bridge-search-replay-cache.ts`
-under the hosted cell's proxy-minted id, scoped to the upstream destination and bounded by entry
-count, total bytes, and a one-hour TTL. When the caller replays that cell,
+under the hosted cell's proxy-minted id, scoped to the admitted caller principal, client
+conversation, and exact provider, adapter, model, destination, and physical credential binding, and bounded by entry count, total
+bytes, and a one-hour TTL. An unavailable scope fails closed. The caller principal comes from
+`resolveContextPrincipal`; a caller that presents no opencodex API key (a keyless loopback
+client) has none and is never given a shared one, so nothing is recorded or restored for it and
+its hosted cells reach the destination unchanged. When the caller replays that cell,
 `restoreBridgedWebSearchCalls` in `src/adapters/openai-responses/tool-output-recovery.ts` puts the
 destination's own `function_call` and the executed `function_call_output` back in the cell's
 position before the next turn's first leg is dispatched, recording exactly the text
 `appendBridgeSearchTurn` would have sent on a continuation leg so a replayed turn and a continued
 turn show the destination one consistent conversation. The rewrite runs only for a provider with
-`webSearchBridge.enabled`, and a miss — unknown id, expired entry, a different destination, or a
-`call_id` the body already carries — leaves the replayed item untouched. Re-running the search or
-synthesizing result text is not a permitted recovery. The bridge finalizes request-scoped OpenAI sidecar authority on completion, failure, and client cancellation — cancellation releases immediately rather than waiting on an abandoned upstream read — so a recovery probe lease no search consumed is always returned.
+`webSearchBridge.enabled`, and a miss — unknown id, expired entry, a different conversation or
+serving binding, or a `call_id` the body already carries — leaves the replayed item untouched.
+Re-running the search or synthesizing result text is not a permitted recovery. The bridge finalizes
+request-scoped OpenAI sidecar authority on completion, failure, and client cancellation —
+cancellation releases immediately rather than waiting on an abandoned upstream read — so a
+recovery probe lease no search consumed is always returned.
 `tests/web-search/web-search-bridge-replay.test.ts` pins the restore and each of those refusals.
+A forward OpenAI search sidecar retries a 429 only when the requested delay fits both its retry ceiling and the remaining overall sidecar deadline. A delay that cannot fit returns and records the original 429 so pool routing retains quota evidence.
+One search makes at most three physical sends in total: connection-reset recovery and 429 replays draw from the same budget, and a budget spent with a 429 in hand ends with that 429 as the recorded outcome.
 A leg whose
 upstream terminal is `response.failed` or `response.incomplete` runs no search at all and closes
 any cell it opened rather than leaving it in progress. Assistant text is not treated as a search
@@ -167,3 +285,14 @@ and `ocx config import` all reach `configSchema` only and never call
 this field in the tree, so a value that survives file load still cannot be spent. It refuses
 silently by design; config-time is where the operator is told why. The planner requires the
 provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
+
+## Shared type declarations
+
+`src/types/` holds the declarations every layer imports: config types (`src/types/config.ts`),
+provider and account types (`src/types/provider.ts`, `src/types/accounts.ts`), and the internal
+request shape (`src/types/request.ts`). Two files also own small resolvers that must agree at every
+boundary. `src/types/tools.ts` owns tool-name identity: namespaced and dotted names, declared-name
+normalization, and `tool_choice` alias resolution, so every adapter matches a declared tool the
+same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream
+HTTP-version pin, shared by the config load schema, the management write boundary, and the fetch
+runtime, so no boundary accepts a value another rejects.

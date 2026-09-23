@@ -11,7 +11,7 @@ import type { ServiceDiagnostic } from "./diagnostics";
 import { assertServiceEnvironmentMatchesInstall } from "./guards";
 import { runLaunchctl, launchdEvictionTargets, launchctlBootoutBenign, probeLaunchdLoadState, installLaunchd, startLaunchd, stopLaunchd, statusLaunchd, uninstallLaunchd } from "./launchd";
 import { assertSchedulerRegistrationBeforeStart } from "./repair";
-import { SERVICE_MANAGED_ENV, TASK, plistPath, serviceStatePaths, writeServiceInstallState } from "./state";
+import { SERVICE_MANAGED_ENV, TASK, plistPath, removeServiceInstallStateRecords, writeServiceInstallState } from "./state";
 import type { ServiceBackend } from "./state";
 import { unitPath, isSystemd, installSystemd, startSystemd, stopSystemd, statusSystemd, uninstallSystemd, systemdServiceInstallCleanupOps } from "./systemd";
 import { writeWindowsSchedulerAssets, stageWindowsSchedulerRegistrationXml, removeWindowsSchedulerRegistrationStage, registerFreshWindowsSchedulerTask, recordWindowsSchedulerOwnership, removeNativeWindowsServiceForScheduler, installWindows, installWindowsNative, startWindows, isWindowsSchedulerEndBenign, stopWindows, stopWindowsChecked, statusWindows, statusWindowsXml, killWindowsServiceWrapperProcesses, uninstallWindows, classifyWindowsServiceStop } from "./windows-ops";
@@ -172,7 +172,8 @@ export async function proxyStillLiveAfterStop(deps: {
     const probeDeadline = canRespawn
       ? deadline
       : now() + (SERVICE_STOP_LIVENESS.timeoutMs! * SERVICE_STOP_LIVENESS.attempts! + 250);
-    return findLiveProxy({ ...SERVICE_STOP_LIVENESS, deadlineAt: probeDeadline, nowFn: now });
+    // A package-tree-fenced proxy (#5496) still holds the port; stop must not call it gone.
+    return findLiveProxy({ ...SERVICE_STOP_LIVENESS, deadlineAt: probeDeadline, nowFn: now, acceptPackageTreeFenced: true });
   });
   for (;;) {
     try {
@@ -205,6 +206,7 @@ async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
   const live = await findLiveProxy({
     ...SERVICE_STOP_LIVENESS,
     deadlineAt: Date.now() + 7000,
+    acceptPackageTreeFenced: true,
   });
   const liveKillPid = verifiedKillTarget(live?.pid);
   if (liveKillPid !== null) {
@@ -527,9 +529,7 @@ export function stopServiceIfInstalledDetailed(): ServiceStopOutcome {
 
 /** Delete install-state files; stale state would make `ocx update` "reinstall" a service that no longer exists. */
 export function removeServiceInstallState(): void {
-  for (const path of serviceStatePaths()) {
-    try { if (existsSync(path)) unlinkSync(path); } catch { /* best-effort */ }
-  }
+  removeServiceInstallStateRecords();
 }
 
 type UninstallServiceHooksForTests = {

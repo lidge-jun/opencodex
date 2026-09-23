@@ -216,7 +216,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
     const result = await startLoginFlow("chatgpt", {
       forceLogin: true,
       ...(useDeviceFlow ? { flow: "device" as const } : {}),
-    });
+    }, { flowId });
 
     // Open the browser server-side (same pattern as /api/oauth/login in management-api.ts).
     // The GUI's window.open is popup-blocked because it runs after an await, not a direct click.
@@ -226,9 +226,12 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
     // machine. Opening it on the hub host is useless at best, and on a
     // headless host it fails. `deviceCode` is the same signal the generic
     // OAuth login route uses to make this decision.
+    // Reported to the caller rather than discarded (#5261): a login whose browser never opened
+    // is indistinguishable from one that did, so it reads as success while nothing happens.
+    let browserLaunch: "started" | "failed" | "skipped" = "skipped";
     if (result.url && !result.deviceCode && shouldOpenBrowserForLogin(body.openBrowser, runtimeConfig)) {
       const { openUrl } = await import("../../lib/open-url");
-      openUrl(result.url);
+      browserLaunch = (await openUrl(result.url)).status === "started" ? "started" : "failed";
     }
 
     (async () => {
@@ -488,6 +491,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
       flowId,
       url: result.url,
       instructions: result.instructions,
+      // Never fatal: the URL is still a valid thing to open by hand, and the flow stays live.
+      browserLaunch,
       // Dropped before #3366: every device-code surface renders this field,
       // so withholding it left the GUI and CLI with no code to show.
       ...(result.deviceCode ? { deviceCode: result.deviceCode } : {}),
@@ -527,11 +532,21 @@ export async function handleCodexAuthLoginCode(req: Request): Promise<Response> 
 }
 
 export async function handleCodexAuthLoginCancel(req: Request): Promise<Response> {
-  const body = (await req.json().catch(() => ({}))) as { flowId?: string };
+  const body: unknown = await req.json().catch(() => null);
+  const suppliedId = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as { flowId?: unknown }).flowId : undefined;
+  const flowId = typeof suppliedId === "string" ? suppliedId.trim() : "";
+  if (!flowId) return jsonResponse({ error: "flowId required" }, 400);
   const { cancelLoginFlow } = await import("../../oauth");
-  const cancelled = cancelLoginFlow("chatgpt");
-  expireCodexAuthFlow(body.flowId ?? null);
-  return jsonResponse({ ok: true, cancelled });
+  const flow = codexAuthLoginState.get(flowId);
+  if (!flow || flow.status !== "pending") {
+    return jsonResponse({ error: "login flow expired or unknown" }, 400);
+  }
+  if (!cancelLoginFlow("chatgpt", flowId)) {
+    return jsonResponse({ error: "login flow expired or unknown" }, 400);
+  }
+  expireCodexAuthFlow(flowId);
+  return jsonResponse({ ok: true, cancelled: true });
 }
 
 export async function handleCodexAuthLoginStatus(req: Request, url: URL, config: OcxConfig): Promise<Response> {

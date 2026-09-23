@@ -8,13 +8,21 @@ import type { AdapterFetchContext, AdapterRequest, ProviderAdapter } from "./bas
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { debugDroppedFrame } from "../lib/debug";
-import { configuredReasoningEfforts } from "../reasoning-effort";
+import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effort";
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
 import { parseDataUrl } from "./image";
 import { createAdapterPhysicalSend } from "./physical-send";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./command-code-tool-text";
+
+function declaredTools(tools: OcxTool[]): CommandCodeDeclaredTools {
+  return new Map(tools.map(tool => [
+    namespacedToolName(tool.namespace, tool.name),
+    { freeform: tool.freeform === true, schema: tool.parameters },
+  ]));
+}
 
 // Retain the short ids emitted by the first local integration. New requests use the live catalog's
 // provider-native IDs directly; this map is compatibility-only and is not a model fallback list.
@@ -32,7 +40,7 @@ function canonicalCommandCodeModelId(modelId: string): string {
 /** Flatten tool-result content for the text-only wire output, keeping an `[image]` marker per image part in content order. */
 function toolResultText(content: string | OcxContentPart[]): string {
   if (typeof content === "string") return content;
-  return content.map(part => (part.type === "text" ? part.text : "[image]")).join("");
+  return content.map(part => (part.type === "text" || part.type === "document" ? part.text : "[image]")).join("");
 }
 
 /** Best-effort media type from a remote https URL extension, e.g. image/png. */
@@ -149,6 +157,7 @@ function wireMessages(messages: OcxMessage[]): Array<Record<string, unknown>> {
     else for (const part of message.content) {
       if (part.type === "text") content.push({ type: "text", text: part.text });
       else if (part.type === "image") content.push(wireImagePart(part.imageUrl));
+      else if (part.type === "document") content.push({ type: "text", text: part.text });
       else content.push({ type: "text", text: "[video]" });
     }
     out.push({ role: "user", content });
@@ -372,6 +381,34 @@ function isMissingToolResultError(value: unknown): boolean {
   return text.includes("tool result is missing") || text.includes("tool_result is missing");
 }
 
+function isToolCallFinishReason(reason: string | undefined): boolean {
+  return reason === "tool_calls" || reason === "tool-calls" || reason === "tool_use";
+}
+
+/** Deliver the queue's ordered events while keeping native and restored call bytes charged until yielded. */
+async function* emitOrderedToolEvents(events: AdapterEvent[], budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index]!;
+    if (event.type !== "tool_call_start") { yield event; continue; }
+    const delta = events[index + 1];
+    const end = events[index + 2];
+    if (delta?.type !== "tool_call_delta" || end?.type !== "tool_call_end") {
+      throw new Error("Command Code ordered tool call is incomplete");
+    }
+    yield event;
+    budget.openCall(event.id);
+    try {
+      budget.reserveTransient(new TextEncoder().encode(delta.arguments).byteLength,
+        { kind: "tool_args", callId: event.id }).commitRetained();
+      yield delta;
+      yield end;
+    } finally {
+      budget.closeCall(event.id);
+    }
+    index += 2;
+  }
+}
+
 async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenerator<Record<string, unknown>> {
   if (!response.body) throw new Error("Command Code response body missing");
   const reader = response.body.getReader();
@@ -483,13 +520,51 @@ async function fetchCommandCode(request: AdapterRequest, ctx: AdapterFetchContex
   }
 }
 
+/**
+ * Has the operator declared their own ladders authoritative for this provider?
+ *
+ * Comparing a configured row against the shipped table cannot answer this. `providerConfigSeed`
+ * copies the whole table into every materialized preset, and both enrichment and routing keep a
+ * persisted row over the current seed, so a row written by an older release keeps its old value
+ * and starts LOOKING like an operator edit the moment the shipped table is corrected — at which
+ * point the stale row would outrank the correction and disable the rejection repair below.
+ * Provenance has to be declared rather than inferred, so it is: `providerConfigSeed` never
+ * writes this flag, which makes its presence something only a human can have caused.
+ */
+function operatorChoseCommandCodeLadder(provider: OcxProviderConfig, canonicalId: string): boolean {
+  if (provider.modelReasoningEffortsAuthoritative !== true) return false;
+  return modelRecordValue(provider.modelReasoningEfforts, canonicalId) !== undefined;
+}
+
+/**
+ * Resolve the ladder this request may draw a wire effort from.
+ *
+ * The shipped table is a default, not a ceiling the operator cannot reach past. Until this
+ * existed the adapter read `commandCodeReasoningEfforts() ?? configuredReasoningEfforts()`, so a
+ * model with a row ignored configuration outright while a model without one honoured it — and
+ * the catalog disagreed with both, because `configuredReasoningEfforts` is what advertises the
+ * picker. An operator who widened a pinned row saw the wider ladder offered in Codex and then
+ * watched the adapter strip the rung on the way out (#5096).
+ *
+ * An operator who sets `modelReasoningEffortsAuthoritative` now resolves through the same
+ * function the catalog uses, so the picker and the wire agree, and sanitization, tier healing and
+ * learned-refusal dropping apply to it. Every other provider keeps the shipped table, including a
+ * value learned by a profile refresh.
+ */
+function commandCodeEffortLadder(provider: OcxProviderConfig, canonicalId: string): readonly string[] | undefined {
+  if (operatorChoseCommandCodeLadder(provider, canonicalId)) {
+    return configuredReasoningEfforts(provider, canonicalId);
+  }
+  return commandCodeReasoningEfforts(canonicalId, provider.baseUrl) ?? configuredReasoningEfforts(provider, canonicalId);
+}
+
 function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string, requested: string | undefined): string | undefined {
   if (!requested || requested === "none") return undefined;
   // Compatibility ids (deepseek-v4-flash / glm-5.2) must resolve to their canonical
   // Command Code id before the effort lookup, or legacy requests silently lose the
   // reasoning effort because the official table is keyed by the canonical ids.
   const canonicalId = canonicalCommandCodeModelId(modelId);
-  const supported = commandCodeReasoningEfforts(canonicalId) ?? configuredReasoningEfforts(provider, canonicalId);
+  const supported = commandCodeEffortLadder(provider, canonicalId);
   if (!supported) return undefined;
   // Only remap xhigh/ultra→max for models whose official profile documents that
   // aliasing (deepseek v4, glm-5.2). Muse Spark's upstream accepts xhigh as a
@@ -501,7 +576,11 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
     lower === "zai-org/glm-5.2";
   if (requested === "xhigh" && !supported.includes("xhigh") && supported.includes("max")) {
     wire = "max";
-  } else if (requested === "ultra" && needsAlias && supported.includes("max")) {
+  } else if (requested === "ultra" && needsAlias && !supported.includes("ultra") && supported.includes("max")) {
+    // The xhigh branch above already refuses to alias a rung the ladder advertises; ultra has to
+    // match it. No shipped row offers ultra, so this changes nothing for the built-in table — but
+    // an authoritative operator ladder that does offer it would otherwise advertise ultra in the
+    // picker and quietly send max, which is the catalog/wire disagreement this file just fixed.
     wire = "max";
   }
   return (supported as readonly string[]).includes(wire) ? wire : undefined;
@@ -509,10 +588,18 @@ function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string
 
 export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderAdapter {
   const executor = (provider as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch ?? globalThis.fetch;
+  // The server builds one adapter per routed request and hands parseStream a guarded wrapper
+  // rather than the Response fetchResponse returned, so the stream reads the declared catalog of
+  // the request this instance last built. A parser with no built request restores nothing.
+  let lastDeclaredTools: CommandCodeDeclaredTools | undefined;
+  let restoreMiMoTools = false;
   return {
     name: "command-code",
     async buildRequest(parsed: OcxParsedRequest): Promise<AdapterRequest> {
       if (!provider.apiKey) throw new Error("Command Code credential missing — run ocx login command-code");
+      // Every MiMo generation Command Code serves writes the same <tool_call> grammar, and the
+      // text echo was reported on V2.5 as well as V2.6 (patlux/pi-commandcode-provider#110).
+      restoreMiMoTools = /^xiaomi\/mimo-/i.test(canonicalCommandCodeModelId(parsed.modelId));
       const cwd = currentWorkingDirectory();
       const tools = visibleTools(parsed);
       const toolNudge = buildNonOpenAIToolCatalogNudgeForTools(tools, parsed.options.toolChoice);
@@ -550,6 +637,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         "x-session-id": commandCodeSessionId(parsed),
       };
       if (cwd) headers["x-project-slug"] = projectSlug(cwd);
+      lastDeclaredTools = declaredTools(tools);
       return {
         url: `${provider.baseUrl.replace(/\/$/, "")}/alpha/generate`, method: "POST",
         headers,
@@ -576,7 +664,12 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
         try { return (JSON.parse(request.body) as { params?: { model?: unknown } }).params?.model; } catch { return undefined; }
       })();
       if (typeof modelId !== "string") return response;
-      const refreshed = await refreshCommandCodeReasoningEfforts(modelId, executor);
+      // An operator who wrote this ladder authorized the rung deliberately. Replaying the turn
+      // without it would answer at the provider default and hide a wrong configuration behind a
+      // successful-looking response, so the upstream rejection is what the caller gets. The
+      // downgrade below stays for the shipped table, where the rung was never the caller's idea.
+      if (operatorChoseCommandCodeLadder(provider, canonicalCommandCodeModelId(modelId))) return response;
+      const refreshed = await refreshCommandCodeReasoningEfforts(modelId, executor, currentEffort, provider.baseUrl);
       if (!refreshed || refreshed.includes(currentEffort)) return response;
       const retry = requestWithoutReasoningEffort(request);
       if (!retry) return response;
@@ -591,14 +684,30 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
     },
     async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
       let sawFinish = false;
+      const toolText = new CommandCodeToolTextFilter(budget, lastDeclaredTools);
       for await (const event of ndjson(response, budget)) {
         switch (event.type) {
-          case "text-delta": if (typeof event.text === "string") yield { type: "text_delta", text: event.text }; break;
-          case "reasoning-delta": if (typeof event.text === "string") yield { type: "thinking_delta", thinking: event.text }; break;
+          case "text-start": if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.textStart(event.id), budget); break;
+          case "text-delta": if (typeof event.text === "string") {
+            if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.textDelta(event.id, event.text), budget);
+            else yield { type: "text_delta", text: event.text };
+          } break;
+          case "text-end": if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.textEnd(event.id), budget); break;
+          case "tool-input-start": if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.toolInputStart(event.id, event.toolName), budget); break;
+          case "reasoning-delta": if (typeof event.text === "string") {
+            const thinking: AdapterEvent = { type: "thinking_delta", thinking: event.text };
+            if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.enqueueEvent(thinking, event.text), budget);
+            else yield thinking;
+          } break;
           case "tool-call": {
             const id = typeof event.toolCallId === "string" ? event.toolCallId : randomUUID();
             const name = typeof event.toolName === "string" ? event.toolName : "tool";
             const input = event.input ?? event.args ?? {};
+            // MiMo markup the gateway echoed as text for this same call must not reach the client.
+            if (restoreMiMoTools) {
+              yield* emitOrderedToolEvents(toolText.nativeCall(id, name, input), budget);
+              break;
+            }
             const argumentsText = typeof input === "string" ? input : JSON.stringify(input);
             yield { type: "tool_call_start", id, name };
             budget.openCall(id);
@@ -620,13 +729,14 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             if (sawFinish) break;
             sawFinish = true;
             const usageValue = event.totalUsage ?? event.usage;
-            const stopReason = typeof event.rawFinishReason === "string" ? event.rawFinishReason : typeof event.finishReason === "string" ? event.finishReason : undefined;
+            let stopReason = typeof event.rawFinishReason === "string" ? event.rawFinishReason : typeof event.finishReason === "string" ? event.finishReason : undefined;
             // The AI SDK's `error` finish reason means the generation failed upstream, not that it
             // stopped. Reporting it as a `done` left the bridge to infer failure from a stop-reason
             // string, which either read as a clean completion or (once classified) mislabelled an
             // upstream error as a content filter and rejected it from the replay cache for the
             // wrong reason.
             if (stopReason === "error") {
+              yield* emitOrderedToolEvents(toolText.releaseAll(), budget);
               // Keep the usage: a failed turn still consumed tokens, and dropping it makes the
               // turn look free in accounting and reports zeros to the client.
               yield {
@@ -638,10 +748,17 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
               };
               break;
             }
+            const restored = (stopReason === "stop" || isToolCallFinishReason(stopReason)) && restoreMiMoTools
+              ? toolText.finish() : { events: toolText.releaseAll(), salvaged: false };
+            yield* emitOrderedToolEvents(restored.events, budget);
+            // Markup restored as a call ends the step on a tool call even when the model's own
+            // finish reason says it stopped, because the call is what it meant to send.
+            if (restored.salvaged && !isToolCallFinishReason(stopReason)) stopReason = "tool_calls";
             yield { type: "done", usage: usage(usageValue), stopReason };
             break;
           }
           case "error": {
+            yield* emitOrderedToolEvents(toolText.releaseAll(), budget);
             const message = eventError(event.error);
             if (isMissingToolResultError(message)) {
               // Provider-side tool-result validation: the request carried an assistant tool
@@ -653,11 +770,16 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             }
             break;
           }
+          default:
+            if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.boundary(), budget);
         }
       }
       // A stream that ends without a finish event still needs a terminal done so the
       // server does not wait on an adapter that silently stopped emitting.
-      if (!sawFinish) yield { type: "done", usage: undefined, stopReason: undefined };
+      if (!sawFinish) {
+        yield* emitOrderedToolEvents(toolText.releaseAll(), budget);
+        yield { type: "done", usage: undefined, stopReason: undefined };
+      }
     },
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const events: AdapterEvent[] = [];

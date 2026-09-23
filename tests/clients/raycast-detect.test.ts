@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { detectRaycast, type RaycastDetectDeps } from "../../src/integrations/raycast-detect";
+import {
+  detectRaycast,
+  realRaycastDetectDeps,
+  type RaycastDetectDeps,
+} from "../../src/integrations/raycast-detect";
 
 /**
  * Stubbed deps only. The real detector spawns `defaults` and reads the
@@ -29,6 +33,21 @@ function fakeDeps(
 }
 
 describe("detectRaycast", () => {
+  test("the macOS preference probe uses the system binary with a bounded runtime", () => {
+    let invocation: { command: string[]; timeout?: number } | undefined;
+    const spawnSync = ((command: string[], options: { timeout?: number }) => {
+      invocation = { command, timeout: options.timeout };
+      return { exitCode: 0, stdout: Buffer.from("1") };
+    }) as unknown as typeof Bun.spawnSync;
+
+    const deps = realRaycastDetectDeps({ platform: "darwin", spawnSync });
+    expect(deps.readDefault("com.raycast.macos.v1", "subscriptions_active")).toBe("1");
+    expect(invocation).toEqual({
+      command: ["/usr/bin/defaults", "read", "com.raycast.macos.v1", "subscriptions_active"],
+      timeout: 2_000,
+    });
+  });
+
   test("darwin: a Pro subscription, the app bundle and the revealed ai folder", () => {
     const deps = fakeDeps("darwin", ["/Applications/Raycast.app", "/home/u/.config/raycast/ai"], { defaultValue: "1" });
     expect(detectRaycast(deps)).toEqual({
@@ -53,6 +72,17 @@ describe("detectRaycast", () => {
     expect(detectRaycast(fakeDeps("darwin", [], { defaultValue: null })).plan).toBe("unknown");
     expect(detectRaycast(fakeDeps("darwin", [], { defaultValue: "(null)" })).plan).toBe("unknown");
     expect(detectRaycast(fakeDeps("darwin", [], { defaultValue: "" })).plan).toBe("unknown");
+  });
+
+  test("darwin: a timed-out or killed defaults probe is unknown, not a false positive", () => {
+    // A probe the 2s timeout kills reports a null or non-zero exit code; neither reads the
+    // preference. stdout carries "1" so a probe that ignored the exit code would report Pro.
+    for (const exitCode of [null, 143]) {
+      const spawnSync = (() => ({ exitCode, exitedDueToTimeout: true, stdout: Buffer.from("1") })) as unknown as typeof Bun.spawnSync;
+      const deps = realRaycastDetectDeps({ platform: "darwin", spawnSync });
+      expect(deps.readDefault("com.raycast.macos.v1", "subscriptions_active")).toBeNull();
+      expect(detectRaycast(deps).plan).toBe("unknown");
+    }
   });
 
   test("win32: LOCALAPPDATA\\Programs\\Raycast is the install path and the plan is unknown", () => {

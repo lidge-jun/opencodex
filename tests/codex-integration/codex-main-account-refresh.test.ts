@@ -328,4 +328,28 @@ describe("publication never overwrites an external Codex writer (#2999)", () => 
     expect(token?.accessToken).toBe("ocx-staged-access");
     expect(readFileSync(authPath, "utf8")).toContain("ocx-staged-access");
   });
+
+  test("a caller cancelled during the refresh does not commit the late result", async () => {
+    // The refresh seam resolves after the caller aborted (a client that disconnected
+    // mid-/v1/models). The late result must never reach auth.json on behalf of a
+    // request that no longer exists: the publication is fenced before the rename,
+    // the file keeps its prior bytes, and the credential mutation epoch does not
+    // advance for a commit that never happened.
+    const authPath = join(home, "auth.json");
+    seedExpired(authPath);
+    const before = readFileSync(authPath, "utf8");
+    const controller = new AbortController();
+    const epochBefore = codexCredentialMutationEpoch();
+
+    await expect(getValidMainAccountToken({
+      signal: controller.signal,
+      refreshToken: async () => {
+        controller.abort(new Error("client disconnected"));
+        return refreshOk();
+      },
+    })).rejects.toThrow("client disconnected");
+
+    expect(readFileSync(authPath, "utf8")).toBe(before);
+    expect(codexCredentialMutationEpoch()).toBe(epochBefore);
+  });
 });

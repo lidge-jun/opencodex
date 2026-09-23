@@ -15,6 +15,8 @@ export interface BoundedBodyOptions {
 	 * Reader cancellation and lock release still run. Defaults to false.
 	 */
 	fatalUtf8?: boolean;
+	/** Report UTF-8 validity without rejecting malformed bodies. */
+	reportUtf8Validity?: boolean;
 	/**
 	 * Byte ceiling for retained body data. Defaults to BOUNDED_BODY_MAX_BYTES (64 KiB),
 	 * which suits error bodies; callers materializing whole success payloads (e.g. a
@@ -44,6 +46,8 @@ export interface BoundedBodyResult {
 	oversized: boolean;
 	/** False means callers should use a status-only fallback, not `text`. */
 	displaySafe: boolean;
+	/** Present when reportUtf8Validity was requested and the retained body reached EOF. */
+	utf8Valid?: boolean;
 }
 
 export interface BoundedBytesOptions {
@@ -238,6 +242,14 @@ function decodeUtf8(chunks: readonly Uint8Array[], fatal: boolean, timedOut = fa
 	}
 }
 
+function decodeUtf8WithValidity(bytes: Uint8Array): { text: string; utf8Valid: boolean } {
+	try {
+		return { text: decodeUtf8([bytes], true), utf8Valid: true };
+	} catch {
+		return { text: decodeUtf8([bytes], false), utf8Valid: false };
+	}
+}
+
 /**
  * Consume the original response body under strict memory and time bounds.
  *
@@ -326,6 +338,24 @@ export async function readBoundedResponseBody(
 
 			const { value, done } = outcome as ReadableStreamReadResult<Uint8Array>;
 			if (done) {
+				if (options.reportUtf8Validity) {
+					const bytes = retained.subarray(0, retainedBytes);
+					// A fatal decode that returned already proved the bytes valid; still
+					// honour the reporting contract instead of dropping utf8Valid.
+					const decoded = options.fatalUtf8 === true
+						? { text: decodeUtf8([bytes], true), utf8Valid: true }
+						: decodeUtf8WithValidity(bytes);
+					return {
+						text: decoded.text,
+						truncated: false,
+						timedOut: false,
+						totalTimedOut: false,
+						inactivityTimedOut: false,
+						oversized: false,
+						displaySafe: true,
+						utf8Valid: decoded.utf8Valid,
+					};
+				}
 				return {
 					text: decodeUtf8([retained.subarray(0, retainedBytes)], options.fatalUtf8 === true),
 					truncated: false,

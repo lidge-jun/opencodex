@@ -158,6 +158,14 @@
 .integration-consequence-body { display: flex; flex-direction: column; gap: 12px; }
 .integration-consequence-body p { margin: 0; font-size: var(--text-caption); line-height: var(--leading-body); }
 .integration-consequence-body code { font-family: var(--font-code); font-size: inherit; overflow-wrap: anywhere; }
+.integration-plan { margin-top: 14px; }
+.integration-plan h4, .integration-plan h5 { margin: 0 0 8px; }
+.integration-plan-group + .integration-plan-group { margin-top: 14px; }
+.integration-plan-details { display: flex; flex-direction: column; gap: 8px; }
+.integration-plan-details p { margin: 0; }
+.integration-plan-changes { margin: 0; padding-inline-start: 20px; }
+.integration-plan-changes li { margin: 4px 0; }
+.integration-plan-changes code { font-family: var(--font-code); overflow-wrap: anywhere; }
 
 /* The Claude Code connection switch, relocated out of the sidebar. */
 .claudecode-connection-head { display: flex; align-items: center; gap: 10px; padding: 10px 0; }
