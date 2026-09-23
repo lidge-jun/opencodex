@@ -1,4 +1,12 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { clearAccountNeedsReauth } from "../../src/codex/auth-api";
+import { clearPoolRotationState } from "../../src/codex/pool-rotation";
+import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
 import { handleResponses } from "../../src/server/responses";
 import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
 import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
@@ -18,6 +26,7 @@ import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { BOUNDED_WS_RUNTIME, codexWsUpstreamFetch, streamingInit } from "../helpers/ws-upstream-fixtures";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
  * #4191: a Codex WebSocket that dies after its create frame left, before any Responses event,
@@ -36,12 +45,14 @@ class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
   static script: (ws: FakeWebSocket) => void = () => {};
   url: string;
+  headers: Headers;
   sent: string[] = [];
   closed = false;
   listeners = new Map<string, Listener[]>();
 
-  constructor(url: string) {
+  constructor(url: string, options?: { headers?: HeadersInit }) {
     this.url = url;
+    this.headers = new Headers(options?.headers);
     FakeWebSocket.instances.push(this);
     queueMicrotask(() => FakeWebSocket.script(this));
   }
@@ -244,6 +255,110 @@ describe("handleResponses replaces a dead socket's send once under retryOnReset 
     takeSpendHome();
     return handleResponses(request, config, logCtx, { codexWsRuntimeIdentity: BOUNDED_WS_RUNTIME, sendBudget });
   }
+
+  describe("in pool mode", () => {
+    const ACCOUNT_ID = "work";
+    const OTHER_ACCOUNT_ID = "other";
+    const HOME_KEYS = ["HOME", "OPENCODEX_HOME", "CODEX_HOME"] as const;
+    let home = "";
+    let previousHomes: Array<string | undefined>;
+
+    function clearPoolState(): void {
+      clearAccountNeedsReauth(ACCOUNT_ID);
+      clearAccountNeedsReauth(OTHER_ACCOUNT_ID);
+      clearCodexUpstreamHealth();
+      clearThreadAccountMap();
+      clearPoolRotationState();
+      clearAccountQuota();
+    }
+
+    beforeEach(() => {
+      previousHomes = HOME_KEYS.map(key => process.env[key]);
+      home = mkdtempSync(join(tmpdir(), "ocx-ws-ambiguous-pool-"));
+      for (const key of HOME_KEYS) process.env[key] = home;
+      takeSpendHome();
+      clearPoolState();
+      // A primed pool does not issue unrelated background usage requests during the turn.
+      for (const id of [ACCOUNT_ID, OTHER_ACCOUNT_ID]) {
+        setAccountQuotaFromParsed(id, { weeklyPercent: 10 });
+      }
+      writeFileSync(join(home, "codex-accounts.json"), JSON.stringify(Object.fromEntries(
+        [ACCOUNT_ID, OTHER_ACCOUNT_ID].map(id => [id, {
+          credential: {
+            accessToken: `${id}-access`,
+            refreshToken: `${id}-grant`,
+            expiresAt: Date.now() + 3_600_000,
+            chatgptAccountId: `acc-${id}`,
+          },
+          generation: 1,
+          refreshGrantFingerprint: createHash("sha256")
+            .update(`codex-refresh-grant:${id}-grant`).digest("hex"),
+        }]),
+      )));
+    });
+
+    afterEach(() => {
+      // Release the writer before removing its database or restoring the surrounding home.
+      releaseSpendHome?.();
+      releaseSpendHome = undefined;
+      clearPoolState();
+      for (const [index, key] of HOME_KEYS.entries()) {
+        if (previousHomes[index] === undefined) delete process.env[key];
+        else process.env[key] = previousHomes[index];
+      }
+      removeTreeWithRetry(home);
+    });
+
+    for (const [status, body] of [
+      [429, JSON.stringify({ error: { message: "quota exhausted" } })],
+      [503, "busy"],
+      [400, JSON.stringify({
+        detail: "The 'gpt-5.5' model is not supported when using Codex with a ChatGPT account.",
+      })],
+    ] as const) {
+      test(`a replacement ${status} cannot send the turn through the second account`, async () => {
+        installFake(SOCKET_DEATHS[0]![1]);
+        const http: Headers[] = [];
+        globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+          http.push(new Headers(init?.headers));
+          return new Response(body, { status });
+        }) as typeof fetch;
+        const config: OcxConfig = {
+          ...forwardConfig({ codexAccountMode: "pool", retryOnReset: {} }),
+          activeCodexAccountId: ACCOUNT_ID,
+          autoSwitchThreshold: 0,
+          accountPoolStrategy: "round-robin",
+          codexAccounts: [{ id: ACCOUNT_ID, label: "work" }, { id: OTHER_ACCOUNT_ID, label: "other" }],
+        };
+        const request = new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: "gpt-5.5", input: "hello", stream: true, store: false }),
+        });
+        const response = await send(request, config);
+
+        // Both transports count: the dead socket's 502 must not rotate before the HTTP row.
+        const credentials = [...FakeWebSocket.instances.map(ws => ws.headers), ...http];
+        expect(credentials.map(headers => headers.get("authorization"))).not.toContain("Bearer other-access");
+        expect(FakeWebSocket.instances).toHaveLength(1);
+        const socket = FakeWebSocket.instances[0]!;
+        expect(socket.headers.get("authorization")).toBe("Bearer work-access");
+        expect(socket.sent).toHaveLength(1);
+        expect(JSON.parse(socket.sent[0]!)).toMatchObject({ type: "response.create" });
+        expect(http).toHaveLength(1);
+        expect(http[0]!.get("authorization")).toBe("Bearer work-access");
+        expect(http[0]!.get("chatgpt-account-id")).toBe("acc-work");
+        if (status === 400) {
+          expect(response.status).toBe(400);
+          expect(await response.text()).toBe(body);
+        } else {
+          expect(response.status).toBe(REPLAY_REFUSED_STATUS);
+          expect(response.headers.get("x-should-retry")).toBe("false");
+          expect(await response.json()).toMatchObject({ error: { code: UPSTREAM_RESET_REPLAY_REFUSED_CODE } });
+        }
+      });
+    }
+  });
 
   test.each(SOCKET_DEATHS)("when %s, one HTTP send of the same turn serves it", async (_name, script) => {
     installFake(script);
