@@ -24,13 +24,14 @@
 
 ## `src/adapters/openai-responses/reasoning.ts`
 
-- `sanitizeReasoningInputContent` gains `dropStrippedItemId?: boolean`. When true and the item's
+- `sanitizeReasoningInputContent` gains `dropForeignItemId?: boolean` (named `dropStrippedItemId` in
+  the first revision; see 050). When true and the item's
   `encrypted_content` is being removed, also delete `id`. Items that keep their blob, or never had
   one, keep their id.
 
 ## `src/adapters/openai-responses/passthrough.ts`
 
-- Pass `dropStrippedItemId: parsed._dropForeignReasoningItemIds === true` into the existing
+- Pass `dropForeignItemId: parsed._dropForeignReasoningItemIds === true` into the existing
   `sanitizeReasoningInputContent` call. Azure inherits this through `inner.buildRequest`.
 
 ## Invariants kept

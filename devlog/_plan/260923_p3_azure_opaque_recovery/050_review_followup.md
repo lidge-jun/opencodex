@@ -27,3 +27,17 @@ knows that: its tuple is provider, durable destination, adapter, model, durable 
 New cases in `tests/responses/responses-azure-opaque-blob-recovery.test.ts`, on both adapters: a
 session first served by the other provider moves over with one clean send; a model change on the
 same destination keeps the id and drops the blob.
+
+## Second round (head 2987b26b9e)
+
+CI on 2987b26b9e passed every required job. Two further findings:
+
+- **Id-only reasoning items kept their id** after a store change, because the drop was tied to
+  stripping a blob. Valid: a stateful destination resolves a blobless `rs_*` id the same way. The
+  sanitizer option is now `dropForeignItemId` and removes the id of every reasoning item while the
+  flag is set; the item and its summary stay. New case: an id-only item after a proven switch.
+- **`responsesPath` is not part of the durable destination identity.** Declined here.
+  `durableReplayDestinationIdentity` also keys the persisted thought-signature store, so widening it
+  re-keys durable state repository-wide. The gap needs two providers with the same base URL and
+  credential whose different `responsesPath` values back separate item stores. It is a separate
+  change to the replay identity contract, not part of this recovery fix.

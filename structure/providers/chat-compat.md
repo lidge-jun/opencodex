@@ -190,7 +190,8 @@ Recovery is admitted for every adapter whose registry contract resolves to the R
 `resolvedAdapterWire`), not for one adapter name. `openai-responses` qualifies directly and
 `azure`/`azure-openai` through `contractParent`; before #5583 a name check left Azure's wrapper of
 the same passthrough outside recovery. Once the destination itself has rejected foreign opaque
-state, the stripped reasoning item also loses its `id`: the id was minted by the refused identity,
+state, replayed reasoning items also lose their `id`, with or without a blob: the id names an item
+in the refused identity's store,
 and without `store: false` a stateful destination resolves it against its own store and answers
 `Item with id 'rs_…' not found` on the recovered send. `_dropForeignReasoningItemIds` carries that
 signal from `prepareOpaqueBlobRecovery` and from the rejection memo below into
