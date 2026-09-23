@@ -272,9 +272,10 @@ recorded against its credential on that request.
 
 A 2xx replacement carries no marker, and its stream can still fail before any output. Preflight
 then rebuilds that failure as a fresh Response, so the request execution budget's
-`ambiguousResendSpent` is the fact both remaining send paths check: combo failover stops and answers
-with the refusal instead of the projected 5xx, and the direct path skips the streamed opaque-blob
-rebuild.
+`ambiguousResendSpent` makes the combo stop: a status the client would resend becomes the refusal,
+and anything else keeps its status and the non-replayable marker. The direct path skips the
+streamed opaque-blob rebuild and settles the preflight's projected failure by the same rule.
+Policy fallback does not hop on a marked answer.
 
 **An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
 The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the

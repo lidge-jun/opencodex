@@ -73,7 +73,7 @@ import {
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
-import { replayRefusalResponse } from "../../lib/upstream-retry";
+import { settleOperatorReplacement } from "../../lib/upstream-retry";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -680,16 +680,19 @@ export async function executeComboResponses(
     lastFailure = failure.response;
     lastFailedChildLog = childLog;
     // A replacement that answers 200 is unmarked, and its zero-output failure only exists once
-    // preflight has rebuilt the stream as a fresh Response. The shared grant is the one fact that
-    // survives both, so a spent grant stops here and answers with the refusal rather than a status
-    // the client would send the turn again on.
-    if (!failure.nonReplayable && comboSendScope?.ambiguousResendSpent) {
-      adoptFailedChildLog(childLog);
-      return replayRefusalResponse();
+    // preflight has rebuilt the stream as a fresh Response. A spent grant never hops: a status the
+    // client would resend becomes the refusal, and anything else reaches the client as it is.
+    const spentReplacement = !failure.nonReplayable && comboSendScope?.ambiguousResendSpent === true;
+    if (spentReplacement) {
+      const settled = settleOperatorReplacement(failure.response);
+      if (settled !== failure.response) {
+        adoptFailedChildLog(childLog);
+        return settled;
+      }
     }
     // A non-replayable failure (the answer to a spent ambiguous-reset replacement) may follow a
     // send that already ran the turn, so no later target may receive it, whatever its status says.
-    const failureDecision = failure.nonReplayable
+    const failureDecision = failure.nonReplayable || spentReplacement
       ? "stop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,
