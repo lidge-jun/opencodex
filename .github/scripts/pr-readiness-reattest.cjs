@@ -116,6 +116,8 @@ function qualifyingAuthorBodyEdit({ live, event, checkpointAt }) {
   const checkpointMs = Date.parse(checkpointAt);
   const eventMs = Date.parse(event?.updatedAt ?? "");
   // GitHub can advance the live PR timestamp after the author event arrives.
+  // Do not cap the lag: a delayed event still proves this author's post-checkpoint
+  // edit when the exact body and head are unchanged at the live read.
   const liveMs = Date.parse(live?.updatedAt ?? "");
   return Boolean(
     event?.name === "pull_request_target" &&

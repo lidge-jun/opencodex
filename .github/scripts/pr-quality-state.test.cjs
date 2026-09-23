@@ -795,14 +795,14 @@ describe("durable readiness re-attestation", () => {
     assert.equal(result.pending.checkpointAt, null);
   });
 
-  it("accepts an author edit when the live PR timestamp advances after the event", () => {
+  it("accepts a delayed author event when the live head and body remain unchanged", () => {
     const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase: "await-clear", checkpointAt: CHECKPOINT };
     const result = advanceReattestation({
       pending,
       legacy: false,
       current: true,
       readiness: readiness(0),
-      live: live(body0, { updatedAt: "2026-09-22T01:00:02.000Z" }),
+      live: live(body0, { updatedAt: "2026-09-22T09:00:01.000Z" }),
       event: authorEdit(body0, body4),
     });
     assert.equal(result.pending.phase, "await-check");

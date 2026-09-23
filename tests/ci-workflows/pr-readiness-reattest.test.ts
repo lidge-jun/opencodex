@@ -90,14 +90,15 @@ describe("author-applied policy migration with durable re-attestation", () => {
     expect(pending(saved(retick, T5))).toBeNull();
   });
 
-  test("clear edit survives a later live PR timestamp", async () => {
+  test("clear edit survives a live PR timestamp eight hours later", async () => {
     const first = await initialize();
+    const laterComment = "2026-09-22T08:00:08Z";
     const result = await runEnforcePrTarget(script, {
-      pr: { body: body(CURRENT, 0), draft: true, head: { sha: HEAD }, updated_at: T4 },
+      pr: { body: body(CURRENT, 0), draft: true, head: { sha: HEAD }, updated_at: "2026-09-22T08:00:06Z" },
       eventPayload: { body: body(CURRENT, 0), draft: true, head: { sha: HEAD }, updated_at: T3 },
-      eventAction: "edited", previousBody: body(OLD), comments: [first], commentUpdatedAt: T5,
+      eventAction: "edited", previousBody: body(OLD), comments: [first], commentUpdatedAt: laterComment,
     });
-    expect(pending(saved(result, T5)).phase).toBe("await-check");
+    expect(pending(saved(result, laterComment)).phase).toBe("await-check");
     expect(promotions(result)).toEqual([]);
     expect(bodyWrites(result)).toEqual([]);
   });
