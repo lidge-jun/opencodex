@@ -256,6 +256,15 @@ export async function injectSystemEnv(
   };
 
   try {
+    // Older releases injected DISABLE_COMPACT=1 next to CLAUDE_CODE_MAX_CONTEXT_TOKENS and
+    // tracked it. Nothing produces it now, and a same-port restart keeps the record because
+    // this proxy already answers the stale-cleanup probe, so drop it here. Only a tracked
+    // value is ours; a DISABLE_COMPACT the user set in launchd is left alone.
+    if (injectedKeys.includes("DISABLE_COMPACT")) {
+      unsetLaunchctlEnv("DISABLE_COMPACT");
+      injectedKeys.splice(injectedKeys.indexOf("DISABLE_COMPACT"), 1);
+      writeTracking(port, injectedKeys, tracked);
+    }
     inject("ANTHROPIC_BASE_URL", destination.origin);
     inject("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
     if (markerMode === "proxy") {
