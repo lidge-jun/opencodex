@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
 import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
+import { handleDesktopAppRestart } from "../../src/cli/restart-scope";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 
 /**
@@ -167,6 +168,21 @@ describe("Codex desktop app restart (#2292)", () => {
     expect(result).toEqual({
       attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "test_environment",
     });
+  });
+
+  // An injected adapter still execs through the platform default when no exec is injected, so
+  // only an injected exec proves the caller is simulating the OS.
+  test("an injected adapter without an injected exec still never reaches the OS", () => {
+    const result = restartCodexDesktopApp({ lock: isolatedLock(), platform: "win32", adapter: windowsDesktopAppAdapter });
+    expect(result.reason).toBe("test_environment");
+  });
+
+  test("the CLI says why nothing was restarted under the test runner", async () => {
+    const out: string[] = [];
+    const log = { log: (...a: unknown[]) => { out.push(a.join(" ")); }, error: (...a: unknown[]) => { out.push(a.join(" ")); } };
+    const result = await handleDesktopAppRestart(log);
+    expect(result.reason).toBe("test_environment");
+    expect(out.join("\n")).toContain("NODE_ENV=test");
   });
 
   test("fails closed when the package cannot be identified, killing nothing", () => {
