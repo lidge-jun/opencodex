@@ -159,6 +159,35 @@ describe("desktop startup surface", () => {
     expect(page).toContain("progress.failedPhase");
   });
 
+  test("a hidden login launch keeps the lightweight surface until an explicit open", () => {
+    const finish = startup.slice(
+      startup.indexOf("fn finish("),
+      startup.indexOf("pub fn diagnostic("),
+    );
+    expect(finish).toContain("loads_dashboard_on_ready(LaunchOrigin::detect(), visible, requested)");
+    expect(finish).toContain("window.is_visible()");
+    expect(finish).toContain("startup.dashboard_requested()");
+    expect(finish).toContain("pub fn open_dashboard(");
+    expect(finish).toContain("startup.request_dashboard();");
+    expect(finish).toContain("startup.ready_dashboard()");
+    expect(finish).toContain("crate::window::show(&window)");
+    // The request is recorded before progress is read, so an open racing Ready is never lost.
+    const open = finish.slice(finish.indexOf("pub fn open_dashboard("));
+    expect(open.indexOf("startup.request_dashboard();")).toBeLessThan(open.indexOf("startup.ready_dashboard()"));
+    // The Rust behavioral tests own the navigation outcomes; this only pins that they exist.
+    for (const name of [
+      "fn explicit_dashboard_navigation_is_consumed_once_per_run()",
+      "fn a_refused_dashboard_navigation_is_retried_on_the_next_open()",
+      "fn an_open_during_startup_is_remembered_until_the_run_restarts()",
+    ]) expect(startup).toContain(name);
+
+    expect(lib).toContain("startup::open_dashboard(&app)");
+    expect(lib).toContain("startup::open_dashboard(app)");
+    const tray = code(repoPath(`${SRC}/tray.rs`));
+    expect(tray).toContain('"open-dashboard" =>');
+    expect(tray).toContain("crate::startup::open_dashboard(app)");
+  });
+
   test("the snapshot answers with a state rather than with nothing", () => {
     // The page returns early on a falsy progress, so an absent answer was not a neutral one: it
     // was a window frozen on its own markup, with no diagnostic in it and no event coming.

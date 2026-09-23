@@ -162,9 +162,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 let _ = popup::show(app, endpoint, anchor);
             }
             "open-dashboard" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    window::show(&window);
-                }
+                crate::startup::open_dashboard(app);
             }
             "open-browser" => {
                 let Some(endpoint) = app

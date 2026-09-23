@@ -5,9 +5,11 @@ discovers the loopback proxy, lazily retries management authentication, starts
 the bundled `ocx` sidecar only when the configured endpoint is unreachable,
 and owns the tray, autostart, single-instance, and window lifecycle behavior.
 
-`desktop/ui/` is the startup surface. Once the runtime reports healthy the shell navigates the
-webview to the proxy's loopback dashboard (`/#/usage`) rather than bundling or serving `gui/dist`
-itself. The page renders what the shell tells it and probes nothing on its own; it asks
+`desktop/ui/` is the startup surface. Once the runtime reports healthy, a visible or manually
+launched shell navigates the webview to the proxy's loopback dashboard (`/#/usage`) rather than
+bundling or serving `gui/dist` itself. A hidden login launch retains the small bundled ready surface
+until a person explicitly opens the dashboard. The page renders what the shell tells it and probes
+nothing on its own; it asks
 `startup_phases` for the state list rather than restating it, takes the current state from
 `startup_snapshot` on load because the first states finish in milliseconds, and then follows the
 `startup-phase` event. `startup_snapshot` always answers with a state; it used to be able to
@@ -73,6 +75,18 @@ item passes back is the only one that starts hidden, and only where there is a t
 manual launch shows its window before the sequence begins, a login launch after the tray verdict.
 Registering happens once per process, so a retry re-runs only the runtime half and cannot build a
 second tray icon with its own refresh loop.
+
+A hidden login launch does not preload the full dashboard after Ready. `finish` keeps the bundled
+startup surface while the main window remains hidden; Open Dashboard, a second ordinary app launch,
+and the shell's explicit open command all pass through `startup::open_dashboard`, which performs the
+one lazy navigation before showing the window. A no-tray login launch is already visible and keeps
+the eager behavior, as does every manual launch. If a person opens during startup, the bootstrap is
+shown immediately and the open is recorded before progress is read; `finish` reads that request
+after it records Ready, so whichever side runs second navigates, and the one-shot claim keeps it to
+one navigation. A WebView that refuses the navigation script gives the claim back, so the next open
+retries instead of being suppressed for the run. Both the claim and the request reset with each run.
+
+> Decision record: [ADR-5494](decisions/ADR-5494-lightweight-background-startup.md)
 
 `desktop/src-tauri/src/exit.rs` owns what ends the process. Where there is a usable tray, closing
 the window and the platform's quit gesture both hide; only the tray's Quit asks to end, and an

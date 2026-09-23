@@ -365,6 +365,18 @@ pub struct Startup {
     /// before `live`, and never held across an await.
     reporting: Mutex<()>,
     running: AtomicBool,
+    /// Whether this window has already left the bundled bootstrap surface.
+    ///
+    /// Explicit open actions can arrive repeatedly from the tray, the single-instance hook, and
+    /// the shell command. Navigating on every action would recreate the React application and
+    /// discard renderer state, so the transition is owned here and consumed exactly once per run.
+    dashboard_loaded: AtomicBool,
+    /// Whether a person asked for the dashboard during this run.
+    ///
+    /// An explicit open that arrives while startup is still running only shows the bootstrap page;
+    /// `finish` reads this after it has recorded Ready, and `open_dashboard` sets it before it
+    /// reads progress, so whichever of the two runs second sees the other and navigates.
+    dashboard_requested: AtomicBool,
     /// Which run the state belongs to.
     ///
     /// A run's deadline guard outlives the run it was started for, and a retry that begins before
@@ -385,6 +397,8 @@ impl Startup {
             }),
             reporting: Mutex::new(()),
             running: AtomicBool::new(false),
+            dashboard_loaded: AtomicBool::new(false),
+            dashboard_requested: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             registered: Mutex::new(None),
         }
@@ -460,6 +474,33 @@ impl Startup {
         live.consent = ConsentState::Idle;
         live.reported.clear();
         live.latest = Progress::new(Phase::NotStarted, 0);
+        self.dashboard_loaded.store(false, Ordering::SeqCst);
+        self.dashboard_requested.store(false, Ordering::SeqCst);
+    }
+
+    fn should_navigate_dashboard(&self) -> bool {
+        !self.dashboard_loaded.swap(true, Ordering::SeqCst)
+    }
+
+    /// Give the one navigation back when the WebView refused the script, so the next open retries.
+    fn navigation_failed(&self) {
+        self.dashboard_loaded.store(false, Ordering::SeqCst);
+    }
+
+    fn request_dashboard(&self) {
+        self.dashboard_requested.store(true, Ordering::SeqCst);
+    }
+
+    fn dashboard_requested(&self) -> bool {
+        self.dashboard_requested.load(Ordering::SeqCst)
+    }
+
+    /// The dashboard URL once this run is Ready, otherwise nothing.
+    fn ready_dashboard(&self) -> Option<String> {
+        let progress = self.latest();
+        (progress.phase == Phase::Ready.id())
+            .then_some(progress.dashboard)
+            .flatten()
     }
 
     /// Whether the run has already said how it ended.
@@ -1379,10 +1420,72 @@ fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
         return;
     }
     if let Some(window) = app.get_webview_window("main") {
-        // justified: replacing the bootstrap page with the dashboard is how this window has always
-        // navigated, and the string is a URL this process resolved, not anything a page supplied.
-        let _ = window.eval(format!("window.location.replace({dashboard:?})"));
+        let visible = window.is_visible().unwrap_or(true);
+        let startup = app.try_state::<Startup>();
+        let requested = startup
+            .as_ref()
+            .is_some_and(|startup| startup.dashboard_requested());
+        if loads_dashboard_on_ready(LaunchOrigin::detect(), visible, requested) {
+            match startup {
+                Some(startup) => {
+                    navigate_once(&startup, &dashboard, |url| navigate_dashboard(&window, url));
+                }
+                None => {
+                    navigate_dashboard(&window, &dashboard);
+                }
+            }
+        }
     }
+}
+
+/// Open the full dashboard only when a person asks for it.
+///
+/// A hidden login launch deliberately leaves its WebView on the tiny bundled startup surface after
+/// the runtime becomes ready. The tray, a second ordinary application launch, or the bootstrap
+/// command reaches this function and pays the dashboard cost at that point. If startup is still in
+/// progress the bootstrap is merely shown; `finish` observes the now-visible window and performs
+/// the navigation once the endpoint is ready.
+pub fn open_dashboard(app: &AppHandle) {
+    let startup = app.try_state::<Startup>();
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    if let Some(startup) = startup {
+        // The request is recorded before progress is read; see `dashboard_requested`.
+        startup.request_dashboard();
+        if let Some(dashboard) = startup.ready_dashboard() {
+            navigate_once(&startup, &dashboard, |url| navigate_dashboard(&window, url));
+        }
+    }
+    crate::window::show(&window);
+}
+
+fn loads_dashboard_on_ready(origin: LaunchOrigin, window_visible: bool, requested: bool) -> bool {
+    origin == LaunchOrigin::User || window_visible || requested
+}
+
+/// Perform this run's single dashboard navigation through `navigate`.
+///
+/// `navigate` reports whether the WebView accepted the script. Acceptance is not proof that the
+/// page finished loading, but a refusal certainly left the bootstrap page in place, so the claim is
+/// returned and the next explicit open tries again instead of being suppressed for the whole run.
+fn navigate_once(startup: &Startup, dashboard: &str, navigate: impl FnOnce(&str) -> bool) -> bool {
+    if !startup.should_navigate_dashboard() {
+        return false;
+    }
+    if navigate(dashboard) {
+        return true;
+    }
+    startup.navigation_failed();
+    false
+}
+
+fn navigate_dashboard(window: &tauri::WebviewWindow, dashboard: &str) -> bool {
+    // justified: replacing the bootstrap page with the dashboard is how this window has always
+    // navigated, and the string is a URL this process resolved, not anything a page supplied.
+    window
+        .eval(format!("window.location.replace({dashboard:?})"))
+        .is_ok()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1489,9 +1592,9 @@ fn elapsed(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        approval_still_current, attach_plan, claim_after_silence, shows_window,
-        stop_after_approval, unavailable, AttachPlan, ConsentState, Expiry, LaunchOrigin, Phase,
-        Progress, Startup, AUTOSTART_FLAG, DEADLINE, PHASES, POLL,
+        approval_still_current, attach_plan, claim_after_silence, loads_dashboard_on_ready,
+        navigate_once, shows_window, stop_after_approval, unavailable, AttachPlan, ConsentState,
+        Expiry, LaunchOrigin, Phase, Progress, Startup, AUTOSTART_FLAG, DEADLINE, PHASES, POLL,
     };
     use crate::claim::ClaimResult;
     use crate::ownership::{Claim, Consent, Owner, Recorded};
@@ -1771,6 +1874,102 @@ mod tests {
             LaunchOrigin::User,
             TrayAvailability::Unavailable
         ));
+    }
+
+    #[test]
+    fn only_a_hidden_login_launch_defers_the_full_dashboard() {
+        assert!(loads_dashboard_on_ready(LaunchOrigin::User, false, false));
+        assert!(loads_dashboard_on_ready(LaunchOrigin::User, true, false));
+        assert!(loads_dashboard_on_ready(
+            LaunchOrigin::Autostart,
+            true,
+            false
+        ));
+        assert!(!loads_dashboard_on_ready(
+            LaunchOrigin::Autostart,
+            false,
+            false
+        ));
+        // An open that arrived during startup counts even if the queued show has not landed yet.
+        assert!(loads_dashboard_on_ready(
+            LaunchOrigin::Autostart,
+            false,
+            true
+        ));
+    }
+
+    #[test]
+    fn explicit_dashboard_navigation_is_consumed_once_per_run() {
+        let startup = Startup::new();
+        let mut navigations = Vec::new();
+        assert!(navigate_once(
+            &startup,
+            "http://127.0.0.1:10100/#/usage",
+            |url| {
+                navigations.push(url.to_string());
+                true
+            }
+        ));
+        assert!(!navigate_once(
+            &startup,
+            "http://127.0.0.1:10100/#/usage",
+            |url| {
+                navigations.push(url.to_string());
+                true
+            }
+        ));
+        assert_eq!(
+            navigations,
+            vec!["http://127.0.0.1:10100/#/usage".to_string()]
+        );
+
+        startup.restart();
+        assert!(navigate_once(
+            &startup,
+            "http://127.0.0.1:10101/#/usage",
+            |_| true
+        ));
+        assert!(!navigate_once(
+            &startup,
+            "http://127.0.0.1:10101/#/usage",
+            |_| true
+        ));
+    }
+
+    #[test]
+    fn a_refused_dashboard_navigation_is_retried_on_the_next_open() {
+        let startup = Startup::new();
+        assert!(!navigate_once(
+            &startup,
+            "http://127.0.0.1:10100/#/usage",
+            |_| false
+        ));
+        let mut attempts = 0;
+        assert!(navigate_once(
+            &startup,
+            "http://127.0.0.1:10100/#/usage",
+            |_| {
+                attempts += 1;
+                true
+            }
+        ));
+        assert_eq!(attempts, 1);
+        assert!(!navigate_once(
+            &startup,
+            "http://127.0.0.1:10100/#/usage",
+            |_| true
+        ));
+    }
+
+    #[test]
+    fn an_open_during_startup_is_remembered_until_the_run_restarts() {
+        let startup = Startup::new();
+        assert!(!startup.dashboard_requested());
+        assert_eq!(startup.ready_dashboard(), None);
+        startup.request_dashboard();
+        assert!(startup.dashboard_requested());
+        startup.restart();
+        assert!(!startup.dashboard_requested());
     }
 
     #[test]

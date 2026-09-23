@@ -52,7 +52,9 @@ The tray icon requires an AppIndicator-capable desktop environment.
 The app asks its bundled CLI to run `ocx resolve --json` and attaches to a reachable local
 proxy if one is already running. It starts the bundled runtime only when the CLI proves
 absence; an uncertain result is shown as a startup failure. The dashboard then opens in
-the app's webview at the resolved loopback endpoint.
+the app's webview at the resolved loopback endpoint. A login launch that starts hidden in the
+tray keeps the lightweight startup page instead, and loads the dashboard the first time you open
+it from the tray or launch the app again.
 
 Use the tray's **Open dashboard** or **Open in browser** action to move between the
 embedded dashboard and your normal browser. The tray also provides update checks.

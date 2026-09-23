@@ -40,7 +40,7 @@ Tepsi simgesi, AppIndicator destekleyen bir masaüstü ortamı gerektirir.
 
 ## İlk açılış
 
-Uygulama, paketindeki CLI'dan `ocx resolve --json` çalıştırmasını ister ve zaten çalışan erişilebilir bir yerel proxy varsa ona bağlanır. Paketindeki çalışma zamanını yalnızca CLI yokluğunu kanıtlarsa başlatır; belirsiz sonuç başlangıç hatası olarak gösterilir. Ardından kontrol paneli, uygulamanın web görünümünde çözümlenen geri döngü uç noktasında açılır.
+Uygulama, paketindeki CLI'dan `ocx resolve --json` çalıştırmasını ister ve zaten çalışan erişilebilir bir yerel proxy varsa ona bağlanır. Paketindeki çalışma zamanını yalnızca CLI yokluğunu kanıtlarsa başlatır; belirsiz sonuç başlangıç hatası olarak gösterilir. Ardından kontrol paneli, uygulamanın web görünümünde çözümlenen geri döngü uç noktasında açılır. Oturum açılışında tepside gizli başlayan bir uygulama ise hafif başlangıç sayfasını korur ve kontrol panelini tepsiden ilk açtığınızda ya da uygulamayı yeniden başlattığınızda yükler.
 
 Gömülü kontrol paneli ile normal tarayıcınız arasında geçmek için tepsideki **Open dashboard** veya **Open in browser** eylemini kullanın. Tepsi, güncelleme denetimlerini de sunar.
 

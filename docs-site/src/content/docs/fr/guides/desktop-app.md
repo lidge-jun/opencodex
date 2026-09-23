@@ -40,7 +40,7 @@ L’icône de zone de notification nécessite un environnement de bureau compati
 
 ## Premier lancement
 
-L’application demande à son CLI intégré d’exécuter `ocx resolve --json` et se connecte à un proxy local accessible s’il en existe déjà un. Elle ne démarre son environnement d’exécution intégré que lorsque le CLI établit l’absence de proxy ; un résultat incertain est affiché comme un échec de démarrage. Le tableau de bord s’ouvre alors dans la vue web de l’application, au point de terminaison loopback trouvé.
+L’application demande à son CLI intégré d’exécuter `ocx resolve --json` et se connecte à un proxy local accessible s’il en existe déjà un. Elle ne démarre son environnement d’exécution intégré que lorsque le CLI établit l’absence de proxy ; un résultat incertain est affiché comme un échec de démarrage. Le tableau de bord s’ouvre alors dans la vue web de l’application, au point de terminaison loopback trouvé. Un lancement à l’ouverture de session qui démarre masqué dans la zone de notification conserve plutôt la page de démarrage légère et ne charge le tableau de bord qu’à sa première ouverture depuis la zone de notification ou à un nouveau lancement de l’application.
 
 Utilisez l’action **Open dashboard** ou **Open in browser** de la zone de notification pour passer du tableau de bord intégré à votre navigateur habituel. Le menu permet aussi de rechercher les mises à jour.
 

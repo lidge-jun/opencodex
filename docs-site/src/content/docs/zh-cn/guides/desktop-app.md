@@ -40,7 +40,7 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 ## 首次启动
 
-应用会让内置 CLI 运行 `ocx resolve --json`；如果已有可访问的本地 proxy，就连接到它。只有 CLI 证实不存在运行时，应用才会启动内置运行时；结果不确定时会显示启动失败。随后，仪表盘会在应用的 webview 中通过找到的 loopback 端点打开。
+应用会让内置 CLI 运行 `ocx resolve --json`；如果已有可访问的本地 proxy，就连接到它。只有 CLI 证实不存在运行时，应用才会启动内置运行时；结果不确定时会显示启动失败。随后，仪表盘会在应用的 webview 中通过找到的 loopback 端点打开。登录时隐藏在托盘中启动的应用会保留轻量的启动页，直到你第一次从托盘打开或再次启动应用时才加载仪表盘。
 
 使用托盘中的 **Open dashboard** 或 **Open in browser**，可在内嵌仪表盘与常用浏览器之间切换。托盘也提供更新检查。
 
