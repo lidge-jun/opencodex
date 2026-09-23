@@ -268,11 +268,13 @@ by that retirement. Quota fallback retains independent shared/Reserve evidence.
 
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
-widening Codex's five-row advertisement window. Fresh defaults are Astra, Sol, Terra, Luna, 5.5.
-Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
+widening Codex's five-row advertisement window. Fresh defaults are the GPT-6 trio: Astra, Sol,
+Luna. Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
 non-Astra choices, then move retained bare `gpt-5.5` last. The old fifth choice is dropped;
 an unmarked empty list becomes Astra only, and an unset list receives the fresh defaults.
-`subagentModelsVersion: 1` records completion, so later user edits (including an empty list or
+A second one-time step replaces a roster that exactly equals the earlier generated default
+(Astra, 5.6 Sol, 5.6 Terra, 5.6 Luna, 5.5, in order) with the trio and keeps every other list.
+`subagentModelsVersion: 2` records completion, so later user edits (including an empty list or
 removing Astra) persist. The migration rebases on the latest disk config under the existing
 mutation lock; failed persistence degrades to an in-memory roster for that run without a stale
 whole-config overwrite. Existing disabled-model visibility rules remain unchanged.

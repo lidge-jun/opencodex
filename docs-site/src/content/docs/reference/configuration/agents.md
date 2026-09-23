@@ -14,7 +14,7 @@ On the first start after upgrading, existing `subagentModels` lists receive
 `gpt-6-astra` first. The first four unique non-Astra choices are retained and the
 old fifth choice is dropped. If `gpt-5.5` is retained, it moves to the end.
 The previous default list therefore becomes Astra, Sol, Terra, Luna, 5.5.
-An unset list receives the current defaults; an explicit empty legacy list becomes
+An unset legacy list receives the current defaults; an explicit empty legacy list becomes
 `["gpt-6-astra"]`. Existing Astra entries are not duplicated.
 
 The current default is `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`. A stored list
