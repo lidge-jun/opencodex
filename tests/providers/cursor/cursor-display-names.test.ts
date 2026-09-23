@@ -36,6 +36,7 @@ describe("cursor picker labels reach the catalog", () => {
     }
     // Cursor's own product name stays; a third-party model keeps its `cursor/<id>` slug.
     expect(labels["grok-4.6"]).toBe("Cursor Grok 4.6");
+    expect(labels["grok-4.7"]).toBe("Cursor Grok 4.7");
     expect(labels["grok-4.5"]).toBe("Cursor Grok 4.5");
     expect(labels).not.toHaveProperty("kimi-k3");
     expect(labels).not.toHaveProperty("claude-opus-5");
@@ -46,6 +47,7 @@ describe("cursor picker labels reach the catalog", () => {
   test("a fresh seed exposes only the branded labels through configuredModelDisplayName", () => {
     const seeded = providerConfigSeed(cursorEntry());
     expect(configuredModelDisplayName(seeded, "grok-4.6")).toBe("Cursor Grok 4.6");
+    expect(configuredModelDisplayName(seeded, "grok-4.7")).toBe("Cursor Grok 4.7");
     expect(configuredModelDisplayName(seeded, "kimi-k3")).toBeUndefined();
     expect(configuredModelDisplayName(seeded, "claude-4-sonnet-1m")).toBeUndefined();
     expect(configuredModelDisplayName(seeded, "composer-2.5-fast")).toBeUndefined();
@@ -62,6 +64,7 @@ describe("cursor picker labels reach the catalog", () => {
     expect(configuredModelDisplayName(existing, "kimi-k3")).toBe("My K3");
     // ...the branded row gains its label, and an unbranded row stays on its routed slug.
     expect(configuredModelDisplayName(existing, "grok-4.6")).toBe("Cursor Grok 4.6");
+    expect(configuredModelDisplayName(existing, "grok-4.7")).toBe("Cursor Grok 4.7");
     expect(configuredModelDisplayName(existing, "claude-opus-5")).toBeUndefined();
   });
 });

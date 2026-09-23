@@ -136,6 +136,21 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 
 关于目标策略、冷却、别名和路由失败，请参见 [Combos](/guides/combos/)。
 
+### Codex 提示词层
+
+| 方法和路径 | 用途 | 典型错误 |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | 读取提示词层快照：层、基础变体、选择和 drift 状态 | — |
+| `GET /api/codex-prompt/text` | 通过 `codex debug prompt-input` 探测模型可见的提示词文本 | 故障弱化：不可用的探测降级为正文中的状态，而非 HTTP 错误 |
+| `PUT /api/codex-prompt/toggle` | 启用或禁用一个可切换的层 | 400 无效正文或未知层；409 `stale_revision`、`layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | 替换自定义层集合 | 400 无效正文、`invalid_characters`、规范化 UTF-8 层超过 65,536 字节时 `body_too_large`、超过 131,072 字节时 `composed_too_large`；409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | 选择默认基础提示词或一个已保存的变体 | 400 无效正文、与任何已保存变体都不匹配的 id 返回 `unknown_layer`；409 `stale_revision`、当前基础提示词为外部时 `developer_instructions_not_owned` |
+| `PUT /api/codex-prompt/base` | 创建（省略 `id` 或 `id: null`）、编辑或删除（`delete: true`）一个基础变体。提供的 `id` 仅用于编辑，必须引用已保存的变体。`body` 在测量或存储前会被规范化（制表符展开，CR/CRLF 折叠为 LF） | 400 无效正文、`default` id 或与任何已保存变体都不匹配的 id 返回 `unknown_layer`、规范化 UTF-8 正文超过 65,536 字节时 `body_too_large`；409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | 将 `config.toml` 中的 `developer_instructions` 导入为自定义层 | 400 无效正文、`invalid_characters`、`body_too_large`、`composed_too_large`；409 `config_unreadable`、`nothing_to_adopt`、`adopt_unsupported_form`、`stale_revision` |
+| `POST /api/codex-prompt/repair` | 修复 `config.toml` 与受管 projection 之间的 drift | 400 无效正文；409 `config_unreadable`、`nothing_to_repair`、`repair_unsupported`、`stale_revision` |
+
+有关层模型和每个层写入的键，请参见 [Codex 提示词层](/zh-cn/guides/codex-prompt/)。
+
 ### 配置、启动、同步和更新
 
 | 方法和路径 | 用途 | 典型错误 |
@@ -158,7 +173,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 
 | 方法和路径 | 用途 | 典型错误 |
 | --- | --- | --- |
-| `GET /api/logs` | 查询经过过滤的内存请求日志 | — |
+| `GET /api/logs` | 查询经过过滤的内存请求日志；`servedModel` 记录上游返回的模型，`wireModel` 记录与客户端模型不同的实际发送模型。两者不同时，仪表板显示 `wire → served`，提示信息保留两者；缺少上游证据时不推断模型。 | — |
 | `GET, PUT /api/debug` | 读取调试标志；设置、清除或重置捕获类别 | 400 无效或空更新 |
 | `GET /api/debug/logs` | 读取有上限的 provider/debug 日志条目 | — |
 | `GET /api/debug/usage-logs` | 读取有上限的 usage-debug 条目 | — |
@@ -288,7 +303,7 @@ OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上�
 | `PUT /api/codex-auth/accounts/pause-exhausted` | 暂停配额已耗尽的账户 | 变更锁失败会变成 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 清除一个账户或所有账户的运行时冷却 | 400 id 无效 |
 | `GET, PUT /api/codex-auth/active` | 读取或选择当前活跃账户 | 400 账户无效或缺失；409 暂停/旧行冲突 |
-| `PUT /api/codex-auth/auto-switch` | 设置自动切换账户的配额阈值 | 400 阈值无效 |
+| `PUT /api/codex-auth/auto-switch` | 使用不含 `id` 的 `{ threshold }` 设置全局阈值，或使用 `{ id, threshold }` 设置账号覆盖值；`id: '__main__'` 选择 Codex Desktop 账号。指定 `id` 时，`threshold: null` 删除该账号的覆盖值并恢复继承全局阈值 | 400 ID/阈值无效；404 账号不存在 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | 更新 Codex 账户池选择策略 | 400 策略/配置无效 |
 | `PUT /api/codex-auth/failover` | 设置账户故障转移阈值 | 400 阈值无效 |
 | `GET /api/codex-auth/quota` | 按账户读取缓存的配额状态 | — |

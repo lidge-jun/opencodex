@@ -52,6 +52,11 @@ as the supported-location recovery path; uncertain publication and cleanup warni
 the CLI. The quickstart documents inspection before retry, private-permission requirements,
 and fresh-location examples. Diagnostics do not introduce a fallback or alter file I/O ordering.
 
+`src/config/persisted-mutation.ts` owns schema-valid on-disk mutations under the shared lock.
+It rechecks the file before committing, retries a changed snapshot up to three times, and
+returns unavailable for missing, invalid, or persistently conflicting config. Its one-shot
+test seam and the mutation types remain re-exported through `src/config.ts`.
+
 `src/config/paths.ts` is the single owner of `OPENCODEX_HOME` expansion and resolution. It exposes
 the config directory and `config.json` path and retains the existing cache rule: a relative home is
 resolved once for each distinct raw environment value, so a later working-directory change cannot
@@ -80,6 +85,10 @@ one that cannot be observed, retires the memo and the pre-rename call performs t
 
 `src/types.ts` is the shape; the load/validate pipeline lives in the split config leaves — schema in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`) and replace-path persistence in `src/config/persist-unlocked.ts`, with `src/config.ts` as the compatibility facade — and is not reproduced here. What
 matters for maintainers is which groups exist and who resolves them:
+
+A schema-invalid top-level JSON value is repairable only when it is a non-array object.
+`loadConfig` backs up arrays, primitives, and null before using defaults, so the repair
+merge cannot turn them into a valid config while discarding the original bytes.
 
 | Group | Keys | Resolution rule |
 | --- | --- | --- |
@@ -184,6 +193,18 @@ Native Codex sub-agent defaults are a separate, explicit opt-in. When
 `agents.default_subagent_reasoning_effort`. Unmarked values are user-owned and must never be
 overwritten. Disabling the option and fallback restore remove only marker-owned values; journal
 restore must preserve later user edits while stripping those managed values.
+
+An injection whose OpenCodex config explicitly selects the v1 multi-agent surface also
+reconciles Codex's higher-precedence global `features.multi_agent_v2` override to disabled before
+taking the journal baseline. It uses the same format-preserving feature transition as explicit
+mode selection, and it runs inside the injection's coordinated write boundary: the transition and
+the artifact commit share one preimage. A publication conflict after the toggle, or final
+coordinator validation or commit failure after the artifact writes, restores the flag, config,
+profile and journal while the native and config locks are held. No competing writer can land
+between them. Validation-only injection and externally managed provider configs remain read-only.
+The write lock first compares the plan derived from the original input to reject stale work. After
+the v1 transition, the coordinator publishes a witness derived from the rederived plan and the
+post-transition input, so its recorded id describes the bytes committed by the injection.
 
 ### History backup manifest contract
 
@@ -340,11 +361,12 @@ and `routeModel`, but user config overrides registry defaults per field/key.
 
 `src/providers/resolved-model-policy.ts` is the detached static-policy authority for this merge
 contract. It preserves each field's existing rule rather than assigning one global priority:
-operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key,
+operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key with a case-varied operator key claiming the registry row,
 restriction lists form a stable union, and hard wire pins precede valid operator overrides and
 registry wire defaults. Only the canonical `openai-apikey` provider merges
-`modelContextWindows` and `modelMaxInputTokens` by taking the lower positive value; other
-providers use ordinary operator-per-key fill. Its output is recursively
+`modelContextWindows` and `modelMaxInputTokens` by taking the lower positive value across
+case-equal keys, retaining the operator's row spelling and provenance even when registry-clamped;
+other providers use ordinary operator-per-key fill. Its output is recursively
 frozen and carries field/model provenance. It never persists resolved policy and excludes API keys,
 account selection, quota, health, cooldowns, discovered availability, and request-owned evidence.
 Observed context/input/output values are combined only in a call-local projection that can narrow a
@@ -557,3 +579,5 @@ userinfo is stripped while host and port stay visible, `direct` and credential-l
 print unchanged, and a non-URL value that is not `direct` is masked whole. `config export`
 keeps the raw file so exports can restore credentials. Get and mutation output select
 redaction by the normalized final path segment, matching lookup and mutation semantics.
+
+`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-tiers.md#ongoing-priority-failback) requires quota strategy and a positive threshold.

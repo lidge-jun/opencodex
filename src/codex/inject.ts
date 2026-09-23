@@ -4,7 +4,6 @@ import {
   loadConfig,
   observeConfigGeneration,
   readConfigAdmissionSnapshot,
-  websocketsEnabled,
   withConfigMutationLockSync,
 } from "../config";
 import { CodexWriteLockSkipped, withCodexWriteLock } from "./codex-write-lock";
@@ -40,8 +39,7 @@ import {
   removeJournal,
   writeJournal,
 } from "./journal";
-import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "./history-provider";
-import { applyPaginatedOpenaiCompat } from "./inject/paginated-openai-compat";
+import { HISTORY_RELABEL_STANDS_DOWN } from "./history-provider";
 import {
   describeHistoryJobFailure,
   deriveCodexHistoryOperation,
@@ -54,45 +52,29 @@ import {
   hasInjectedCodexRouting,
   hasInjectedOpenaiBaseUrl,
   rootTomlString,
-  stripJournaledOpenaiBaseUrl,
 } from "./injected-marker";
 import {
   CODEX_CONFIG_PATH,
   CODEX_PROFILE_PATH,
   getCodexHome,
-  resolveCodexStateDbPath,
   tomlString,
 } from "./paths";
-import { transformManagedSubagentDefaults } from "./subagent-defaults";
 import type { OcxConfig } from "../types";
 import {
   configuredManagedSubagentDefaults,
   standaloneCodexRoutingTarget,
-  usesProviderTable,
   validateCodexRoutingTarget,
   type CodexRoutingTarget,
 } from "./inject/routing-target";
 import {
-  applyEol,
-  buildProfileFileForTarget,
-  buildProviderTableBlockForTarget,
-  chooseCatalogPathForInjection,
-  dominantEol,
-  ensureFastModeFeature,
   externalCodexModelProvider,
-  normalizeServiceTier,
-  removeProfileSection,
-  setRootModelCatalogPath,
-  setRootModelProvider,
-  setRootOpenaiBaseUrlForTarget,
-  setRootRealtimeWsBaseUrl,
-  stripExistingModelProvider,
-  stripInjectedOpenaiBaseUrl,
-  stripOpencodexCatalogPath,
-  stripRootContextWindowOverrides,
 } from "./inject/config-toml";
-import { hasOcxProviderTable, removeOcxSection } from "./inject/remove";
-
+import { prepareInjectedV1SurfaceReconcile } from "./inject/multi-agent-v2";
+import {
+  deriveCodexInjectionPlan,
+  type CodexInjectionPlanContext,
+  type CodexInjectionPlanOk,
+} from "./inject/plan";
 
 export { effectiveLoopbackListenerPort, isLoopbackHostname, shouldInjectApiAuthHeader } from "./loopback-target";
 
@@ -167,6 +149,19 @@ export interface CodexInjectResult {
 }
 
 class CodexHistoryPreflightRefusal extends Error {}
+
+/**
+ * A refusal raised inside the write boundary. The caller's catch has already
+ * restored the captured preimages — a landed v1-surface reconcile included —
+ * so the carried result is returned verbatim by the outer wrapper.
+ */
+class CodexInjectRefusal extends Error {
+  constructor(readonly result: CodexInjectResult) {
+    super(result.message);
+    this.name = "CodexInjectRefusal";
+  }
+}
+
 let historyArtifactStageForTests: ((stage: string) => void) | undefined;
 export function setHistoryArtifactStageForTests(hook: typeof historyArtifactStageForTests): void {
   historyArtifactStageForTests = hook;
@@ -174,6 +169,11 @@ export function setHistoryArtifactStageForTests(hook: typeof historyArtifactStag
 let beforeHistoryArtifactCommitForTests: ((kind: string) => void) | undefined;
 export function setBeforeHistoryArtifactCommitForTests(hook: typeof beforeHistoryArtifactCommitForTests): void {
   beforeHistoryArtifactCommitForTests = hook;
+}
+let publishCurrentTxIdForTests: (() => string) | undefined;
+/** Test seam: supply a stale coordinator predecessor after the v1 toggle has run. */
+export function setInjectPublishCurrentTxIdForTests(hook: typeof publishCurrentTxIdForTests): void {
+  publishCurrentTxIdForTests = hook;
 }
 
 export async function injectCodexConfig(
@@ -184,6 +184,7 @@ export async function injectCodexConfig(
   try { return await injectCodexConfigImpl(port, config, options); }
   catch (error) {
     if (error instanceof CodexHistoryPreflightRefusal) return { success: false, historyPreflightFailureReason: error.message, message: `Codex config injection refused: ${error.message}. Existing configuration and history were preserved.` };
+    if (error instanceof CodexInjectRefusal) return error.result;
     throw error;
   }
 }
@@ -218,10 +219,6 @@ async function injectCodexConfigImpl(
   }
 
   const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
-  const preflightTableMode = usesProviderTable(routingTarget);
-  const compactionOnly = routingTarget.clientCompaction === true
-    && routingTarget.desktopAuthless !== true
-    && routingTarget.requiresAdmissionToken !== true;
   const activeProvider = externalCodexModelProvider(rawContent);
   if (activeProvider) {
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
@@ -253,257 +250,46 @@ async function injectCodexConfigImpl(
     };
   }
 
-  // Marker-owned native defaults are OpenCodex residue, never part of the
-  // user's journal baseline. Clean them before either snapshotting or adding a
-  // root routing key: inserting that key ahead of a marker-owned first table
-  // would otherwise separate the table marker from its header. Ambiguous
-  // markers fail closed without writing config, profile, or journal state.
-  const nativeDefaultsBaseline = transformManagedSubagentDefaults(
-    rawContent,
-    null,
-  );
-  if (!nativeDefaultsBaseline.ok) {
-    return {
-      success: false,
-      message:
-        `Codex config injection refused: existing OpenCodex-managed native sub-agent defaults are ambiguous: ${nativeDefaultsBaseline.error}. ` +
-        `No files were changed; inspect ${CODEX_CONFIG_PATH}.`,
-    };
-  }
-  const baselineContent = nativeDefaultsBaseline.content;
+  /*
+   * The v1-surface reconcile mutates config.toml through the native
+   * `codex features` transition, so it runs INSIDE the coordinated write
+   * boundary below — under the same lock and preimage as the artifact commit.
+   * Run here, a later ambiguous-baseline, journal, or lock refusal left
+   * config.toml changed while the rest of the injection failed, and a
+   * competing writer could land between the transition and the commit.
+   * Its dependencies are resolved now because the commit callback is
+   * synchronous and cannot await them there.
+   */
+  const v1Reconcile = await prepareInjectedV1SurfaceReconcile(config, options);
 
   /*
-   * The journal write used to happen HERE, before the transforms. It now happens
-   * inside the write lock further down, and the transforms were hoisted above it
-   * rather than the lock being narrowed to the three file writes.
-   *
-   * Why: the lock's witness hashes the CANDIDATE BYTES, and those are not final
-   * until `profileContent` and the EOL-applied `content` exist. Opening the lock
-   * before them would leave nothing to hash; keeping the journal outside the
-   * lock would leave the first artifact-creating write unserialized, which is
-   * the hole this edge exists to close.
-   *
-   * The move is safe because the region between here and the writes performs no
-   * filesystem mutation — its only touch is `existsSync` on the catalog paths
-   * (`chooseCatalogPathForInjection`) — and because `writeJournal` is called
-   * with `configContent`, so it snapshots the baseline it is handed rather than
-   * rereading `config.toml` underneath the transforms.
+   * The plan against the admitted input. When the reconcile transitions the
+   * file under the lock, the committed bytes are re-derived from the
+   * post-transition input by reconcileAndDerivePlan. Admission compares the
+   * original candidate for stale input; publication fingerprints the rederived
+   * candidate so the transition describes the bytes actually committed.
    */
-  // EOL boundary: transforms below are LF-pure; preserve the file's dominant ending on write.
-  const eol = dominantEol(rawContent);
-  let content = applyEol(baselineContent, "\n");
-
-  // Idempotent clean-up of any prior injection: drop the provider table (marker-based) and every
-  // stray/mis-nested model_provider line, so re-injecting can't duplicate keys or leave the buggy
-  // table-nested key behind.
-  // Design B form FIRST: removeOcxSection also keys on the marker line, so a root-level
-  // marker + openai_base_url pair must be gone before it scans or it would swallow root keys.
-  content = stripInjectedOpenaiBaseUrl(content);
-  // #1798: after a Codex app rewrite the markers are gone but the values we recorded writing
-  // are still ours. Consume them by value here, BEFORE the routing form is chosen, so a
-  // Design B -> provider-table transition (hostname change, authless opt-in) cannot leave our
-  // own root URLs behind as if they were the user's, and so re-inject never journals them as
-  // not-ours (which would make them unrestorable).
-  content = stripJournaledOpenaiBaseUrl(
-    content,
-    journaledInjectedOpenaiBaseUrl({ readOnly: !!options.beforeClientWrite }),
-    journaledInjectedRealtimeWsBaseUrl({ readOnly: !!options.beforeClientWrite }),
-  );
-  // Whether this home already published the provider id that its thread rows may reference.
-  // Design B strips the table below; it may only stay stripped if those rows can be relabeled.
-  const hadOcxProviderTableOnDisk = hasOcxProviderTable(content);
-  if (hadOcxProviderTableOnDisk) {
-    content = removeOcxSection(content);
-  }
-  content = removeProfileSection(content);
-  content = stripExistingModelProvider(content);
-  content = stripRootContextWindowOverrides(content);
-  content = normalizeServiceTier(content);
-  content = ensureFastModeFeature(content, config?.fastMode);
-
-  const catalogPath = chooseCatalogPathForInjection(
-    content,
-    options.catalogPath,
-  );
-  content = catalogPath
-    ? setRootModelCatalogPath(content, catalogPath)
-    : stripOpencodexCatalogPath(content);
-
-  // Provider-table form: non-loopback admission or an explicit Desktop policy.
-  const providerTableMode = usesProviderTable(routingTarget);
-  // Client compaction is the one table form that must not orphan existing threads. It changes
-  // the DEFAULT provider to `opencodex`, but a thread already tagged `openai` keeps resolving
-  // to Codex's built-in entry, and without the root override that entry is api.openai.com —
-  // the thread would resume outside this proxy and outside configured routing. Keeping the
-  // marker-owned root override alongside the table fixes that at the source: codex builds its
-  // provider map as merge_configured_model_providers(built_in_model_providers(openai_base_url),
-  // model_providers), so the override lands on the built-in `openai` entry when the map is
-  // built, independent of which id is the default, and the merge leaves that entry alone for
-  // every id except the two Amazon Bedrock ones. With the managed override in place both
-  // entries point at this proxy. That is a guarantee about the line we own: when the user owns
-  // the root line we inject nothing, and the built-in entry keeps whatever destination they
-  // chose, so an `openai`-tagged thread follows their configuration rather than this proxy.
-  //
-  // Re-tagging history was the alternative and it cannot be made durable: the length-preserving
-  // first-line repair cannot grow "openai" into "opencodex" without pre-existing padding, and
-  // codex re-appends that stale first line whenever it writes git or memory-mode metadata.
-  //
-  // Authless is excluded here on purpose: its whole point is a provider that carries
-  // requires_openai_auth = false, so it forward-tags resume history with originals backed up
-  // instead, and that includes the case where a user enables authless and client compaction
-  // together. Only the compaction-only form skips the history unit up front. When forward
-  // tagging turns out to be impossible because Codex already paginated those rows, the same
-  // retention is selected below from the preflight verdict rather than from the routing form.
-  let keepRootOverrideAlongsideTable = providerTableMode
-    && routingTarget.clientCompaction === true
-    && routingTarget.desktopAuthless !== true
-    && routingTarget.requiresAdmissionToken !== true;
-  let keptUserBaseUrl = false;
-  let keptUserRealtimeWsBaseUrl = false;
-  if (providerTableMode) {
-    // Legacy (non-loopback) injection: the built-in openai provider cannot carry the
-    // x-opencodex-api-key env header, so keep the opencodex provider table + root re-tag.
-    // The authless opt-in needs the same table because only a dedicated provider can carry
-    // requires_openai_auth = false.
-    // 1) Root key BEFORE the first table header (must be a global, not nested under a table).
-    content = setRootModelProvider(content);
-    // 2) Provider table appended at EOF (position-independent).
-    content =
-      content.trimEnd() +
-      "\n" +
-      buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}), config?.codexProviderDisplayName);
-    // 3) Keep existing `openai`-tagged threads reaching the proxy (see above). Ownership rules
-    // are the Design B ones: a user's own root line is never replaced.
-    if (keepRootOverrideAlongsideTable) {
-      content = stripInjectedOpenaiBaseUrl(content);
-      const rootFallback = setRootOpenaiBaseUrlForTarget(content, routingTarget);
-      content = rootFallback.content;
-      keptUserBaseUrl = rootFallback.keptUserBaseUrl;
-    }
-  } else {
-    // Design B (loopback): a single root override; codex keeps its native `openai` provider id
-    // so thread history is never remapped. Any legacy form was already stripped above.
-    content = stripInjectedOpenaiBaseUrl(content); // normalize before idempotent re-insert
-    const result = setRootOpenaiBaseUrlForTarget(content, routingTarget);
-    content = result.content;
-    keptUserBaseUrl = result.keptUserBaseUrl;
-    // Voice sideband override rides on the routing override: same value, same ownership rule,
-    // and never when the user owns the routing line (we inject nothing in that case).
-    if (!keptUserBaseUrl) {
-      const realtime = setRootRealtimeWsBaseUrl(content, routingTarget);
-      content = realtime.content;
-      keptUserRealtimeWsBaseUrl = realtime.keptUserRealtimeWsBaseUrl;
-    }
-  }
-
-  const desiredSubagentDefaults = configuredManagedSubagentDefaults(config);
-  const routingOwnershipWarning =
-    keptUserBaseUrl && desiredSubagentDefaults
-      ? "Native Codex sub-agent defaults were not injected: a user-owned root openai_base_url prevents OpenCodex from managing active Codex routing."
-      : undefined;
-  const managedDefaults = transformManagedSubagentDefaults(
-    content,
-    keptUserBaseUrl ? null : desiredSubagentDefaults,
-  );
-  let nativeSubagentDefaultsWarning = routingOwnershipWarning;
-  let managedDefaultsMessage = routingOwnershipWarning
-    ? `  ⚠️ ${routingOwnershipWarning}\n`
-    : "";
-  if (managedDefaults.ok) {
-    content = managedDefaults.content;
-    if (desiredSubagentDefaults && managedDefaults.conflicts.length > 0) {
-      const keys = managedDefaults.conflicts
-        .map((conflict) => `agents.${conflict.key}`)
-        .join(", ");
-      nativeSubagentDefaultsWarning = `Native Codex sub-agent defaults were not injected: user-owned ${keys} preserved.`;
-      managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
-    }
-  } else {
-    const action =
-      desiredSubagentDefaults && !keptUserBaseUrl
-        ? "were not injected"
-        : "could not be safely removed";
-    nativeSubagentDefaultsWarning = `Native Codex sub-agent defaults ${action}: ${managedDefaults.error}.`;
-    managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
-  }
-
-  const profileContent = buildProfileFileForTarget(
+  const planContext: CodexInjectionPlanContext = {
+    config,
     routingTarget,
-    catalogPath,
-    websocketsEnabled(config ?? {}),
-    config?.fastMode,
-    config?.codexProviderDisplayName,
-  );
-  content = applyEol(content, eol);
-
-  // Resolve storage from the normalized candidate. Owned duplicate catalog keys
-  // are repairable above and must not make this read-only preflight throw.
-  const historyPreflight = (): string | null => {
-    try {
-      return preflightCodexHistoryInjection(
-        preflightTableMode,
-        config?.syncResumeHistory !== false && !compactionOnly,
-        resolveCodexStateDbPath({ readConfig: () => content }),
-      );
-    } catch {
-      return "history_injection_preflight_unavailable";
-    }
+    catalogPathOption: options.catalogPath,
+    journalReadOnly: !!options.beforeClientWrite,
   };
-  /*
-   * ONE refusal stands the relabel unit down instead of vetoing the config transition, and
-   * only because it is permanent. Codex allocates paginated rollout ordinals in its own
-   * writer, so `assertLegacyHistoryRecord` refuses every rollout on a current install and no
-   * amount of retrying changes that. While it vetoed the write, `model_catalog_json` never
-   * reached config.toml, so the app and the CLI both fell back to their built-in model list
-   * while `ocx sync` still reported success.
-   *
-   * Every other reason — an unreadable state database, a rollout whose identity changed, a
-   * preflight that could not run — describes a store that may well be relabelable on the next
-   * attempt. Treating those as a stand-down would record the transition as converged and
-   * suppress the relabel permanently, so they keep the hard refusal and the rollback.
-   */
-  /*
-   * Re-observed inside the artifact transaction. A store that migrates to paginated history
-   * mid-write can retire the relabel unit while its already-admitted candidate leaves
-   * existing provider references resolvable. Existing provider definitions are retained
-   * before the witness; no post-commit compensation may overwrite a newer native write.
-   */
-  const observeHistoryRefusalOrThrow = (known: string | null): string | null => {
-    if (known) return known;
-    const observed = historyPreflight();
-    if (observed && observed !== HISTORY_RELABEL_STANDS_DOWN) throw new CodexHistoryPreflightRefusal(observed);
-    return observed;
-  };
-  const compat = applyPaginatedOpenaiCompat(historyPreflight(), routingTarget, content, eol);
-  content = compat.content;
-  keepRootOverrideAlongsideTable ||= compat.retainedRootOverride;
-  const observedHistoryRefusal = compat.refusal;
-  if (observedHistoryRefusal && observedHistoryRefusal !== HISTORY_RELABEL_STANDS_DOWN) {
+  const admittedPlan = deriveCodexInjectionPlan(rawContent, planContext);
+  if (admittedPlan.kind === "refused") {
     return {
       success: false,
-      historyPreflightFailureReason: observedHistoryRefusal,
-      message: compat.message,
+      ...(admittedPlan.historyPreflightFailureReason
+        ? { historyPreflightFailureReason: admittedPlan.historyPreflightFailureReason }
+        : {}),
+      message: admittedPlan.message,
     };
   }
-  let historyRelabelRefusal = observedHistoryRefusal;
 
   /*
-   * Rows this home may have tagged `opencodex` resolve only through a provider table. Design B
-   * selects built-in `openai` for new work, but background relabel and native publication are
-   * not atomic. Codex can paginate after the final check or when the worker starts. Retain
-   * an existing definition BEFORE the witness regardless of preflight, so worker failure
-   * cannot orphan old references. Explicit restoration keeps its removal and history guards.
-   */
-  if (hadOcxProviderTableOnDisk && !providerTableMode) {
-    content = applyEol(
-      content.trimEnd() + "\n" + buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}), config?.codexProviderDisplayName),
-      eol,
-    );
-  }
-
-  /*
-   * The witness, built from the FINAL bytes. Everything it hashes is either the
-   * output about to be written or evidence that can be re-read under the lock;
+   * The admission witness hashes the planned bytes before the native toggle.
+   * Its evidence is re-read under the lock to reject stale input. Publication
+   * uses a separate witness after the toggle, if the plan was rederived;
    * ownership rides along as recorded context because it is not re-observed
    * there — see `write-coordination.ts`.
    */
@@ -515,13 +301,8 @@ async function injectCodexConfigImpl(
     observedGeneration.kind === "ready"
       ? { present: true, value: observedGeneration.generation.value }
       : { present: false, value: 0 };
-  const candidate = {
-    configBytes: content,
-    profileBytes: profileContent,
-    catalogPath,
-  };
   const witness = buildInjectWitness(
-    candidate,
+    admittedPlan.candidate,
     rawContent,
     persistedIdentity,
     generation,
@@ -565,76 +346,132 @@ async function injectCodexConfigImpl(
     };
   }
 
-  const journalBaselineIsNative = (): boolean => {
+  const journalBaselineIsNative = (nativeInput: string): boolean => {
     // Value evidence survives an app rewrite that removes the ownership comments.
     const journaledBaseUrl = journaledInjectedOpenaiBaseUrl({ readOnly: true });
     const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl({ readOnly: true });
     const looksInjectedByValue =
-      (journaledBaseUrl !== null && rootTomlString(rawContent, "openai_base_url") === journaledBaseUrl)
+      (journaledBaseUrl !== null && rootTomlString(nativeInput, "openai_base_url") === journaledBaseUrl)
       || (journaledRealtimeWsBaseUrl !== null
-        && rootTomlString(rawContent, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
-    return !hasInjectedCodexRouting(rawContent) && !looksInjectedByValue;
+        && rootTomlString(nativeInput, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
+    return !hasInjectedCodexRouting(nativeInput) && !looksInjectedByValue;
   };
   const readCurrentProfile = (): string | null => existsSync(CODEX_PROFILE_PATH)
     ? readFileSync(CODEX_PROFILE_PATH, "utf-8")
     : null;
   const unverifiedJournalMessage = "Codex configuration was not written: the journal has no verified baseline for the current config/profile. Current files and the journal were preserved.";
-  if (!journalBaselineIsNative() && hasUnverifiedJournalBaseline(baselineContent, readCurrentProfile())) {
-    return { success: false, message: unverifiedJournalMessage };
+  // When the reconcile will rewrite config.toml under the lock, the baseline it
+  // must be journaled against does not exist yet — this check runs inside the
+  // boundary on the post-transition plan instead. Otherwise the admitted bytes
+  // are final and the early refusal saves acquiring the lock just to say no.
+  if (v1Reconcile?.enabledAtPrepare !== true
+    && !journalBaselineIsNative(rawContent)
+    && hasUnverifiedJournalBaseline(admittedPlan.baselineContent, readCurrentProfile())) {
+    return {
+      success: false,
+      message: unverifiedJournalMessage,
+    };
   }
 
   if (options.validateOnly) {
     return {
       success: true,
-      ...(historyRelabelRefusal ? { historyPreflightFailureReason: historyRelabelRefusal } : {}),
+      ...(admittedPlan.historyRelabelRefusal ? { historyPreflightFailureReason: admittedPlan.historyRelabelRefusal } : {}),
       message: "Codex config injection preflight passed; no files were changed.",
     };
   }
 
-  const applyNativeArtifacts = (): void => {
+  /*
+   * Re-observed inside the artifact transaction. A store that migrates to
+   * paginated history mid-write can retire the relabel unit while its
+   * already-admitted candidate leaves existing provider references resolvable.
+   */
+  const observeHistoryRefusalOrThrow = (plan: CodexInjectionPlanOk): string | null => {
+    if (plan.historyRelabelRefusal) return plan.historyRelabelRefusal;
+    const observed = plan.historyPreflight();
+    if (observed && observed !== HISTORY_RELABEL_STANDS_DOWN) throw new CodexHistoryPreflightRefusal(observed);
+    return observed;
+  };
+
+  /*
+   * The half of the injection that only exists inside the write boundary: the
+   * v1-surface reconcile first, then the plan re-derived from whatever bytes
+   * the transition left so the committed file cannot re-enable the flag the
+   * reconcile just turned off. Every refusal here is thrown as
+   * CodexInjectRefusal so the caller's catch restores the preimage — the flag
+   * flip included — before the result is reported.
+   */
+  const reconcileAndDerivePlan = (): { plan: CodexInjectionPlanOk; nativeInput: string } => {
+    let nativeInput = rawContent;
+    let plan = admittedPlan;
+    if (v1Reconcile) {
+      const reconciled = v1Reconcile.run();
+      if (!reconciled.ok) {
+        throw new CodexInjectRefusal({ success: false, message: reconciled.message });
+      }
+      nativeInput = reconciled.content;
+      if (reconciled.content !== rawContent) {
+        const rederived = deriveCodexInjectionPlan(reconciled.content, planContext);
+        if (rederived.kind === "refused") {
+          throw new CodexInjectRefusal({
+            success: false,
+            ...(rederived.historyPreflightFailureReason
+              ? { historyPreflightFailureReason: rederived.historyPreflightFailureReason }
+              : {}),
+            message: rederived.message,
+          });
+        }
+        plan = rederived;
+      }
+      // Seam for the mutual-exclusion regression: the feature transition has
+      // landed and the artifact commit has not — the window a competing writer
+      // must be unable to enter.
+      historyArtifactStageForTests?.("after-v1-reconcile");
+    }
+    if (!journalBaselineIsNative(nativeInput)
+      && hasUnverifiedJournalBaseline(plan.baselineContent, readCurrentProfile())) {
+      throw new CodexInjectRefusal({ success: false, message: unverifiedJournalMessage });
+    }
+    return { plan, nativeInput };
+  };
+
+  const applyNativeArtifacts = (plan: CodexInjectionPlanOk, nativeInput: string): void => {
     beforeHistoryArtifactCommitForTests?.(eligibility.kind);
-    historyRelabelRefusal = observeHistoryRefusalOrThrow(historyRelabelRefusal);
-    const preImages = captureCodexPreImages();
-    try {
+    plan.historyRelabelRefusal = observeHistoryRefusalOrThrow(plan);
     historyArtifactStageForTests?.("after-preflight");
     writeJournal({
-      currentStateIsNative: journalBaselineIsNative(),
-      configContent: baselineContent,
+      currentStateIsNative: journalBaselineIsNative(nativeInput),
+      configContent: plan.baselineContent,
       owner: options.journalOwner,
     });
     // A native snapshot may have been refreshed above. An older hashless routed snapshot
     // must not gain the new injection's hash and later overwrite preserved user edits.
-    if (hasUnverifiedJournalBaseline(baselineContent, readCurrentProfile())) throw new Error(unverifiedJournalMessage);
-    atomicWriteFile(CODEX_CONFIG_PATH, content);
+    if (hasUnverifiedJournalBaseline(plan.baselineContent, readCurrentProfile())) throw new Error(unverifiedJournalMessage);
+    atomicWriteFile(CODEX_CONFIG_PATH, plan.content);
     historyArtifactStageForTests?.("after-config");
-    atomicWriteFile(CODEX_PROFILE_PATH, profileContent);
-    markJournalInjectedState(content, profileContent, {
+    atomicWriteFile(CODEX_PROFILE_PATH, plan.profileContent);
+    markJournalInjectedState(plan.content, plan.profileContent, {
       // A root override is ours whenever we wrote one and no user-owned value won. That is
-      // loopback Design B, the client-compaction form, and any table form that retained the
-      // root line for a paginated openai row, all of which keep the marker-owned line beside
-      // the table. Journaling it matters because the marker comment is not durable: the Codex
-      // app can reserialize config.toml and drop comments, and restore then has only the
-      // journaled value to tell our line from a user's (#1798). Other table forms record null.
-      injectedOpenaiBaseUrl: (providerTableMode && !keepRootOverrideAlongsideTable) || keptUserBaseUrl
+      // loopback Design B, the client-compaction form, and a table form that retained the
+      // root line for paginated history. Journaling it matters because the marker comment
+      // is not durable: the Codex app can reserialize config.toml and drop comments, and
+      // restore then has only the journaled value to distinguish our line from a user's.
+      // Other table forms record null.
+      injectedOpenaiBaseUrl: (plan.providerTableMode && !plan.keepRootOverrideAlongsideTable) || plan.keptUserBaseUrl
         ? null
-        : rootTomlString(content, "openai_base_url"),
+        : rootTomlString(plan.content, "openai_base_url"),
       // The sideband override is ours only when we wrote it this pass (never in legacy mode,
       // never when the user owns either key).
-      injectedRealtimeWsBaseUrl: providerTableMode || keptUserBaseUrl || keptUserRealtimeWsBaseUrl
+      injectedRealtimeWsBaseUrl: plan.providerTableMode || plan.keptUserBaseUrl || plan.keptUserRealtimeWsBaseUrl
         ? null
-        : rootTomlString(content, REALTIME_WS_BASE_URL_KEY),
+        : rootTomlString(plan.content, REALTIME_WS_BASE_URL_KEY),
       // This is the catalog artifact selected for this injection, even when config.toml
       // already points at that path and therefore needs no textual rewrite.
-      injectedCatalogPath: catalogPath,
+      injectedCatalogPath: plan.catalogPath,
     });
     historyArtifactStageForTests?.("after-artifacts");
     // Detect migration throughout the artifact transaction, not just at entry.
-    historyRelabelRefusal = observeHistoryRefusalOrThrow(historyRelabelRefusal);
-    } catch (error) {
-      const compensated = restoreCodexPreImages(preImages);
-      if (!compensated.complete) throw new CodexPartialWriteError(compensated.unrestored);
-      throw error;
-    }
+    plan.historyRelabelRefusal = observeHistoryRefusalOrThrow(plan);
   };
 
   /*
@@ -644,6 +481,14 @@ async function injectCodexConfigImpl(
    * legacy-uncoordinated home, which publishes no transition to resolve.
    */
   let transitionReceipt: { nativeGeneration: number; currentTxId: string } | undefined;
+
+  /*
+   * The plan the committed write actually used: the admitted plan, or the
+   * re-derivation from the post-reconcile bytes when the feature transition
+   * rewrote config.toml under the lock. Every reader below the boundary takes
+   * this plan so the report describes the bytes that were committed.
+   */
+  let effectivePlan: CodexInjectionPlanOk = admittedPlan;
 
   if (eligibility.kind === "legacy-uncoordinated") {
     const applyLegacy = (): CodexInjectResult | undefined => {
@@ -661,7 +506,22 @@ async function injectCodexConfigImpl(
         };
       }
       runClientWriteGuard(options.beforeClientWrite);
-      applyNativeArtifacts();
+      /*
+       * One preimage covers the reconcile and the artifact commit together: a
+       * refusal after the feature transition hands back the exact bytes the
+       * home started with, flag included.
+       */
+      const preImages = captureCodexPreImages();
+      try {
+        const resolved = reconcileAndDerivePlan();
+        applyNativeArtifacts(resolved.plan, resolved.nativeInput);
+        effectivePlan = resolved.plan;
+      } catch (error) {
+        const restored = restoreCodexPreImages(preImages);
+        if (!restored.complete) throw new CodexPartialWriteError(restored.unrestored);
+        throw error;
+      }
+      return undefined;
     };
     // Only connected guarded writes add C here. A concurrent disconnect claim
     // either follows this commit or is observed by the guard before any write.
@@ -670,10 +530,16 @@ async function injectCodexConfigImpl(
       : applyLegacy();
     if (skipped) return skipped;
   } else {
+    let coordinatedPreImages: ReturnType<typeof captureCodexPreImages> | undefined;
     const coordinated = await withCodexWriteLock(
       {
         timeoutMs: options.lockTimeoutMs ?? DEFAULT_INJECT_LOCK_TIMEOUT_MS,
         ...(eligibility.kind === "adopt" ? { adoption: { direction: "apply" as const } } : {}),
+        onPostCallbackFailure: () => {
+          if (!coordinatedPreImages) throw new Error("Codex injection preimages were not captured.");
+          const restored = restoreCodexPreImages(coordinatedPreImages);
+          if (!restored.complete) throw new CodexPartialWriteError(restored.unrestored);
+        },
         admitted: { authoritySnapshotId: witness.comparisonId },
         readAdmissionUnderLock: () => ({
           authoritySnapshotId: recomputeInjectWitness({
@@ -697,34 +563,6 @@ async function injectCodexConfigImpl(
         // a disconnect's restored files.
         runClientWriteGuard(options.beforeClientWrite);
         /*
-         * Publish BEFORE touching the filesystem. `assertPublished` runs after this
-         * callback returns and throws unless a transition was recorded, so writing
-         * first would replace every file and only then fail — with SQLite rolling
-         * back and the filesystem staying changed.
-         *
-         * `beginTransition` returns a conflict rather than throwing, so its result
-         * is checked here; ignoring it would reach the same failure by a slower
-         * route.
-         */
-        const published = ctx.coordinator.beginTransition(
-          {
-            nativeGeneration: ctx.expectation.nativeBefore,
-            currentTxId: ctx.currentTxId,
-          },
-          {
-            txId: ctx.expectation.txId,
-            direction: "apply",
-            authoritySnapshotId: ctx.admission.authoritySnapshotId,
-            nextRetryAt: new Date().toISOString(),
-          },
-        );
-        if (published.kind !== "updated") {
-          throw new CodexWriteConflictError(
-            `The Codex transition could not be published: ${published.kind}.`,
-          );
-        }
-
-        /*
          * Exact pre-images, captured under the lock and used for compensation.
          *
          * A rolled-back coordinator row is not a rolled-back filesystem: each
@@ -732,10 +570,45 @@ async function injectCodexConfigImpl(
          * failure partway leaves earlier replacements in place. `restoreJournalState`
          * cannot be the undo — it restores whichever journal occupies the path,
          * which need not be the one this operation wrote.
+         *
+         * The capture precedes the v1-surface reconcile on purpose: one verified
+         * preimage covers the feature transition and the artifact commit, so a
+         * later refusal restores the flag the transition flipped along with the
+         * files the commit replaced.
          */
         const preImages = captureCodexPreImages();
+        coordinatedPreImages = preImages;
+        let resolved: { plan: CodexInjectionPlanOk; nativeInput: string };
         try {
-          applyNativeArtifacts();
+          resolved = reconcileAndDerivePlan();
+          // The admission id compared pre-toggle bytes. Once the native toggle
+          // has run, publish the rederived candidate and its actual input as the
+          // committed-byte witness before writing the remaining artifacts.
+          const committedWitness = buildInjectWitness(
+            resolved.plan.candidate,
+            resolved.nativeInput,
+            persistedIdentity,
+            generation,
+            witness.observedOwnership,
+          );
+          const published = ctx.coordinator.beginTransition(
+            {
+              nativeGeneration: ctx.expectation.nativeBefore,
+              currentTxId: publishCurrentTxIdForTests?.() ?? ctx.currentTxId,
+            },
+            {
+              txId: ctx.expectation.txId,
+              direction: "apply",
+              authoritySnapshotId: committedWitness.comparisonId,
+              nextRetryAt: new Date().toISOString(),
+            },
+          );
+          if (published.kind !== "updated") {
+            throw new CodexWriteConflictError(
+              `The Codex transition could not be published: ${published.kind}.`,
+            );
+          }
+          applyNativeArtifacts(resolved.plan, resolved.nativeInput);
         } catch (error) {
           // Compensate, then ALWAYS throw. Returning a partial result would let the
           // lock commit a row describing an apply that did not finish.
@@ -748,6 +621,7 @@ async function injectCodexConfigImpl(
         return {
           kind: "applied" as const,
           preImages,
+          plan: resolved.plan,
           /*
            * The receipt the terminal update matches on. The transition commits
            * when the callback returns, so this pair is what the post-job
@@ -765,6 +639,7 @@ async function injectCodexConfigImpl(
     if (coordinated.status !== "acquired") {
       return codexInjectLockOutcome(coordinated);
     }
+    effectivePlan = coordinated.value.plan;
     recordCodexNativeTransactionProvenance(
       coordinated.value.preImages,
       coordinated.value.receipt.currentTxId,
@@ -788,15 +663,15 @@ async function injectCodexConfigImpl(
   // A stood-down relabel unit spawns no Worker: the preflight it would run first has
   // already refused, and the config half is committed either way.
   historyArtifactStageForTests?.("before-history-worker");
-  const historyOutcome: CodexHistoryJobOutcome = historyRelabelRefusal
+  const historyOutcome: CodexHistoryJobOutcome = effectivePlan.historyRelabelRefusal
     ? { kind: "skipped" }
     : await runCodexHistoryJob({
       ...resolveCodexHistoryJobTarget(),
       expectedDesiredEnabled: true,
       operation: deriveCodexHistoryOperation({
         direction: "apply",
-        resumeHistory: config?.syncResumeHistory !== false && !keepRootOverrideAlongsideTable,
-        legacyMode: providerTableMode,
+        resumeHistory: config?.syncResumeHistory !== false && !effectivePlan.keepRootOverrideAlongsideTable,
+        legacyMode: effectivePlan.providerTableMode,
       }),
     });
   // A blocked or failed unit is reported, not silently counted as zero work:
@@ -821,23 +696,23 @@ async function injectCodexConfigImpl(
     resolveCodexHistoryTransition(transitionReceipt, historyOutcome);
   }
 
-  const catalogMessage = catalogPath
-    ? `  Codex model catalog: ${catalogPath}\n`
+  const catalogMessage = effectivePlan.catalogPath
+    ? `  Codex model catalog: ${effectivePlan.catalogPath}\n`
     : `  Codex model catalog not injected because no opencodex catalog file exists yet.\n`;
   const ejected = (history as { ejectedRows?: number }).ejectedRows ?? 0;
   const migratedRows = (history.rows ?? 0) + ejected;
   const historyMessage =
-    keepRootOverrideAlongsideTable
-      ? (keptUserBaseUrl
+    effectivePlan.keepRootOverrideAlongsideTable
+      ? (effectivePlan.keptUserBaseUrl
         ? `  Codex resume history: left unchanged; threads already tagged openai follow your configured root openai_base_url.\n`
         : `  Codex resume history: left unchanged; existing threads keep reaching the proxy through the retained openai_base_url override.\n`)
-      : historyRelabelRefusal
-      ? `  ⚠️ Codex resume history: left to Codex's native writer (${historyRelabelRefusal}); existing threads keep the provider they are tagged with. Routing and the model catalog were still installed, so new threads reach the proxy.\n`
+      : effectivePlan.historyRelabelRefusal
+      ? `  ⚠️ Codex resume history: left to Codex's native writer (${effectivePlan.historyRelabelRefusal}); existing threads keep the provider they are tagged with. Routing and the model catalog were still installed, so new threads reach the proxy.\n`
       : config?.syncResumeHistory === false
       ? `  Codex resume history: left unchanged (syncResumeHistory=false).\n`
       : history.failed
-        ? formatApplyHistoryFailure(historyOutcome, providerTableMode)
-        : providerTableMode
+        ? formatApplyHistoryFailure(historyOutcome, effectivePlan.providerTableMode)
+        : effectivePlan.providerTableMode
           ? `  Codex resume history: ${history.rows} thread(s) made visible for opencodex; originals backed up for restore.\n`
           : migratedRows > 0
             ? `  Codex resume history: restored original provider metadata for ${migratedRows} manifest-backed thread(s) (one-time).\n`
@@ -849,35 +724,35 @@ async function injectCodexConfigImpl(
   // misdescribe the file it just produced: new threads do use the injected table. Report that
   // mixed result on its own terms, and never tell the operator to delete a setting of theirs.
   // Ownership alone says nothing about destination: their line may already target this proxy.
-  if (keptUserBaseUrl && keepRootOverrideAlongsideTable) {
+  if (effectivePlan.keptUserBaseUrl && effectivePlan.keepRootOverrideAlongsideTable) {
     return {
       success: true,
-      ...(nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning } : {}),
-      ...(historyRelabelRefusal ? { historyPreflightFailureReason: historyRelabelRefusal } : {}),
+      ...(effectivePlan.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: effectivePlan.nativeSubagentDefaultsWarning } : {}),
+      ...(effectivePlan.historyRelabelRefusal ? { historyPreflightFailureReason: effectivePlan.historyRelabelRefusal } : {}),
       message:
         `Injected opencodex as default provider into Codex config (client-side compaction mode; ChatGPT auth remains required).\n` +
         `  Your root openai_base_url was left exactly as you set it, so opencodex did not add its own.\n` +
         catalogMessage +
         historyMessage +
-        managedDefaultsMessage +
+        effectivePlan.managedDefaultsMessage +
         `  New threads use the injected opencodex provider and route through the proxy.\n` +
         `  Threads already tagged openai resolve through Codex's built-in provider, which your root openai_base_url points at.\n` +
         `  No root URL change is required to enable client-side compaction for new threads.\n` +
         `  Fallback: codex --profile opencodex (same behavior)`,
     };
   }
-  if (keptUserBaseUrl) {
+  if (effectivePlan.keptUserBaseUrl) {
     return {
       success: true,
-      ...(nativeSubagentDefaultsWarning
-        ? { nativeSubagentDefaultsWarning }
+      ...(effectivePlan.nativeSubagentDefaultsWarning
+        ? { nativeSubagentDefaultsWarning: effectivePlan.nativeSubagentDefaultsWarning }
         : {}),
-      ...(historyRelabelRefusal ? { historyPreflightFailureReason: historyRelabelRefusal } : {}),
+      ...(effectivePlan.historyRelabelRefusal ? { historyPreflightFailureReason: effectivePlan.historyRelabelRefusal } : {}),
       message:
         `⚠️ Codex routing NOT injected: your config already sets a root openai_base_url, and opencodex never overwrites a user-owned override.\n` +
         catalogMessage +
         historyMessage +
-        managedDefaultsMessage +
+        effectivePlan.managedDefaultsMessage +
         `  To route plain codex through the proxy, remove your openai_base_url line from ~/.codex/config.toml and rerun 'ocx start'.\n` +
         `  Reference config: ${CODEX_PROFILE_PATH}`,
     };
@@ -886,22 +761,22 @@ async function injectCodexConfigImpl(
     ? `Injected opencodex as default provider into Codex config (authless Desktop mode: requires_openai_auth = false).\n`
     : routingTarget.clientCompaction === true
       ? `Injected opencodex as default provider into Codex config (client-side compaction mode; ChatGPT auth remains required).\n`
-    : providerTableMode
+    : effectivePlan.providerTableMode
       ? `Injected opencodex as default provider into Codex config.\n`
       : `Pointed Codex's built-in openai provider at the opencodex proxy (openai_base_url + realtime sideband override).\n`;
   return {
     success: true,
-    ...(nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning } : {}),
-    ...(historyRelabelRefusal ? { historyPreflightFailureReason: historyRelabelRefusal } : {}),
+    ...(effectivePlan.nativeSubagentDefaultsWarning ? { nativeSubagentDefaultsWarning: effectivePlan.nativeSubagentDefaultsWarning } : {}),
+    ...(effectivePlan.historyRelabelRefusal ? { historyPreflightFailureReason: effectivePlan.historyRelabelRefusal } : {}),
     message:
       headline +
       catalogMessage +
       historyMessage +
-      managedDefaultsMessage +
+      effectivePlan.managedDefaultsMessage +
       `  All models now route through opencodex proxy (like OpenRouter).\n` +
       `  OpenAI models (gpt-5.5, etc.) are passed through to OpenAI.\n` +
       `  Custom models route to their configured providers.\n` +
-      (providerTableMode
+      (effectivePlan.providerTableMode
         ? `  Fallback: codex --profile opencodex (same behavior)`
         : `  Fallback reference: ${CODEX_PROFILE_PATH}`),
   };

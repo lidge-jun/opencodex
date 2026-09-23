@@ -84,8 +84,8 @@ ChatGPT パススルーカタログには GPT-5.6 Sol/Terra/Luna の名前空間
 
 ## 2. アカウントログイン(OAuth)
 
-OAuth ログインを使うプロバイダープリセットは 8 つで、これに実験的な非公式デバイスフロー
-ブリッジ経由の GitHub Copilot が加わります。認証情報は `~/.opencodex/auth.json` に保存され、
+プロバイダープリセットはアカウントログインを使えます。実験的な非公式デバイスフロー
+ブリッジ経由の GitHub Copilot もその一つです。認証情報は `~/.opencodex/auth.json` に保存され、
 自動更新されます。`ocx login codex` も受け付けますが、これは上記のプロバイダーではありません。
 Codex アカウントプールのログイン (`ocx account login codex` と同じフロー) に転送されます。
 プールは独自の台帳を持ち、この経路はプロキシの起動を必要とします。`chatgpt` と `openai` は
@@ -110,7 +110,8 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth は独立した Grok CLI サブスクリプションゲートウェイを使用します。API キーのオーバーライドは `https://api.x.ai/v1` を使用し、Priority Processing を注入する場合があります。ライブ一覧を優先し、フォールバックのデフォルトモデルは `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude モデル; ライブモデル一覧は `/v1/models` から取得。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 コーディングモデル。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code のモデル。`kimi-for-coding` は現在 K2.8 Preview を指し、100 万トークンのコンテキスト、`low`/`high`/`max` の推論、テキストと画像入力に対応します。`k3-256k` の上限は固定で 256K です。 |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | `kimi` と同じ OAuth ログインとモデル一覧を Responses 方式で使用します。推論内容はサーバー側で暗号化されたままですが、ツール呼び出しと結果は確認できます。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research サブスクリプションゲートウェイ（Hermes Agent と同じバックエンド）。`portal.nousresearch.com` へのデバイスグラントログイン; access トークンはリクエストごとの inference JWT。有料 + `:free` モデルの混在カタログ（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` など）はサインイン中のアカウントからライブ探索されます。Refresh トークンは単回使用で、更新のたびにローテーションされます。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初回ログインは、インストール済みでサインインした `kiro-cli` セッションを取り込みます（Unix では `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`、Windows PowerShell では `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex` でインストールしてから `kiro-cli login` を実行）。**アカウントを追加**は `kiro-cli` をログアウトして新しいブラウザログインを開始し、`kiro-cli` 自体のアカウントを切り替えてアカウント別プロファイルメタデータを保存します。既存の OpenCodex アカウントは保持され、キャンセルまたは失敗時には以前の `kiro-cli` セッションが復元されます。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth を Cloud Code Assist wire で使用。ライブ探索は認証済みの CCA `v1internal:fetchAvailableModels` エンドポイントを使用し、ログイン中のアカウントで利用可能な agent モデルのみを公開します。管理されたカタログはフォールバックとして残ります。 |
@@ -146,6 +147,13 @@ opencodex は呼び出し元が指定した安定した `prompt_cache_key` だ�
 安定したセッション/タスク key が必須とされています。key のないリクエストは keyless のままです。
 opt-in した上流がこのフィールドを拒否しても、opencodex はフィールドを削除して再試行したり、保存済み
 設定を変更したりしません。他のプロバイダーは deny-by-default のままです。
+
+`kimi`、`kimi-code`、`kimi-responses` の `k3`、`k3[1m]`、`k3-256k` に表示する料金は、
+デフォルトの 5 分間キャッシュ書き込み料金を含む [API 価格](https://platform.kimi.ai/docs/pricing/chat)
+に基づく推定値です。Code Plan の請求額や割り当て量を示すものではありません。1M 版の K3 は
+`k3-256k` の約 2 倍の割り当て量を消費します。`kimi-for-coding` は K2.8 Preview に切り替わったため、
+旧 K2.7 の料金は適用されません。ユーザーが `modelCosts` を指定しない限り推定料金は不明のままで、
+不明な料金を除外するルーティング規則では選択対象から外れることがあります。
 
 [ウェブダッシュボード](/ja/guides/web-dashboard/)からも OAuth を開始できます。
 
@@ -185,7 +193,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 96 個含まれています。キー方式 80、OAuth 12、ローカル 3、
+opencodex には組み込みプリセットが 97 個含まれています。キー方式 80、OAuth 13、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -443,11 +451,13 @@ Cursor は別の実験的アダプターとして追跡します。`adapter: "cu
 Provider ピッカーに実験的 local config 項目として表示され、Cursor の静的フォールバックモデルカタログ
 メタデータを保存します。Cursor アクセストークンを設定すると opencodex は Cursor ライブ HTTP/2 トランスポートを
 使います。バンドル済みフォールバックリストには 1M コンテキストの `gpt-5.6-sol` / `terra` / `luna`、500K コンテキストの
-Grok 4.5 / 4.6 の通常・Fast 行、262K コンテキストの `kimi-k3` が含まれ、ライブ探索結果に基づき現在の
-アカウントに表示するモデルを決定します。Grok 4.6 は両形式で `low` / `medium` / `high` / `xhigh` を公開し、
-4.5 は `high` までです。Fast リクエストは対応する Grok ベースモデルを、独立した `effort` と `fast=true` の
-`requested_model` パラメータとともに送信します。平坦化された `cursor-grok-{version}-{effort}-fast` id は
-探索と picker の識別子としてのみ使われます。Cursor は Kimi K3 を effort サフィックス付きの wire id
+Grok 4.5 / 4.6 / 4.7 の通常・Fast 行、262K コンテキストの `kimi-k3` が含まれ、ライブ探索結果に基づき現在の
+アカウントに表示するモデルを決定します。Grok 4.6 と 4.7 は両形式で `low` / `medium` / `high` / `xhigh` を公開し、
+4.5 は `high` までです。Grok 4.5 と 4.6 の Fast リクエストは、対応するベースモデルを独立した `effort` と
+`fast=true` の `requested_model` パラメータとともに送信します。これらの平坦化された
+`cursor-grok-{version}-{effort}-fast` id は探索と picker の識別子としてのみ使われます。Grok 4.7 は
+`cursor-` プレフィックスなしで一覧に表示され、`grok-4.7-{effort}-fast` を直接送信します。
+Cursor は Kimi K3 を effort サフィックス付きの wire id
 としてのみ提供するため、`cursor/kimi-k3` は `low` / `high` / `max` のラダーを公開し、既定値はモデル
 ドキュメントの API 既定値と同じ `max` です。Cursor サーバーが直接送るネイティブ read/write/delete/ls/grep/shell/fetch 実行は Codex
 承認とサンドボックス経路をバイパスするためデフォルトで無効です。信頼できるローカル実験でのみ

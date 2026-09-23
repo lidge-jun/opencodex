@@ -626,6 +626,20 @@ describe("a real user document is not rejected for being richer than ours", () =
 });
 
 describe("we refuse rather than corrupt or crash", () => {
+  test("a TOML file with an unsafe integer array is refused without being rewritten", () => {
+    const configPath = installClient("kimi");
+    const seed = '[providers.mine]\napi = "http://keep-me"\nports = [9007199254740993]\n';
+    writeFileSync(configPath, seed);
+
+    const result = applyIntegration({
+      clientId: "kimi", models: MODELS, config: CONFIG, port: 10100,
+      env: TEST_ENV, home, store,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("unsafe");
+    expect(readFileSync(configPath, "utf8")).toBe(seed);
+  });
+
   test("a TOML file with special floats is refused, not silently rewritten", () => {
     /*
      * Bun's TOML parser mangles these before we ever see the document: `inf`

@@ -211,12 +211,13 @@ describe("Command Code provider", () => {
       "meta/muse-spark-1.3-contributor",
       "meta/muse-spark-1.2",
       "meta/muse-spark-1.2-contributor",
+      "xai/grok-4.6",
+      "xai/grok-4.7",
     ];
     const verifiedTextOnlyModels = [
       "deepseek/deepseek-v4-flash",
       "zai-org/GLM-5.2",
       "zai-org/GLM-5.3",
-      "xai/grok-4.6",
     ];
 
     expect(apiKey?.modelInputModalities).toEqual(oauth?.modelInputModalities);

@@ -192,6 +192,14 @@ still cover the rule, which is a judgement only review makes.
   there is none, no icon is claimed, the window is shown on launch whatever the launch origin, and
   closing it quits through the same drain; see [`desktop-shell.md`](desktop-shell.md).
   Enforced by `tests/clients/desktop-tray-availability.test.ts`.
+- **INV-COMPANION-01** — Timeline model rows and available ids merge historical pool providers
+  under their base provider, while account grouping keeps separate labels. A legacy
+  account-qualified model filter selects the entire merged row; hiding a base provider removes
+  all its accounts, and hiding a raw provider removes that account's attributions.
+  Enforced by `tests/usage/usage-timeline.test.ts`.
+- **INV-COMPANION-02** — Loaded and updated companion model selections normalize older
+  account-qualified ids to canonical timeline ids and deduplicate them.
+  Enforced by `tests/server/companion-settings.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage
@@ -240,7 +248,7 @@ Raw reasoning content and provider-authored summaries remain distinct on the Res
 
 Connected-browser pairing and dashboard failure meanings follow the [management UI contract](gui-and-management-api.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
 
-Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](gui-and-management-api.md#dashboard-surfaces) defines terminal release and completion notification.
+Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](gui-and-management-api.md#dashboard-surfaces) defines terminal release and completion notification. A GET answered with 404 `unknown_flow` is the exception: the flow no longer exists, so polling stops and the generic failure state appears.
 
 Cline CLI is a managed file integration: its provider settings and catalog share one recoverable journal operation. The [paired-file contract](clients/integrations.md#cline-paired-files) defines its stop/restart requirement.
 Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
@@ -262,3 +270,4 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 Codex compaction can select a request-local model through the
 [existing Responses handlers](transports/responses.md#compaction-routing-overrides) for the configured
 manual and automatic triggers, while subsequent turns keep their conversation settings.
+The optional [ongoing priority failback](providers/openai-tiers.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary.

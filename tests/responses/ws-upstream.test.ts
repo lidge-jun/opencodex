@@ -9,6 +9,7 @@ import { isEagerRelaySseResponse } from "../../src/server/relay";
 import { isWin32EagerRewrite } from "../../src/lib/bun-stream-caps";
 import { fetchWithTransientRetry, isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
+import { shouldRetryCodexPoolAccountModel400 } from "../../src/server/responses/core-codex-account";
 import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
 import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
 import { readCodexWsStage } from "../../src/server/responses/codex-ws-wire";
@@ -898,6 +899,14 @@ describe("codexWsUpstreamFetch", () => {
     }
 
     // Independent oracle: openai/codex d2d5b702, responses_websocket.rs:1016-1064
+    test("a wrapped Astra refusal reaches the alternate-account recovery predicate", async () => {
+      const message = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+      const response = await receive({ type: "error", status_code: 400,
+        error: { type: "invalid_request_error", code: "invalid_request_error", message } });
+      expect(await shouldRetryCodexPoolAccountModel400(response, "gpt-6-astra")).toBe(true);
+      expect(await response.json()).toEqual({ error: { type: "invalid_request_error", code: "invalid_request_error", message } });
+    });
+
     // explicitly accepts numeric window-minutes as the HTTP header string "15".
     test.each(["status", "status_code"])("returns %s 429 as bounded HTTP JSON with scalar quota headers", async field => {
       const { status_code, ...frame } = refusal;

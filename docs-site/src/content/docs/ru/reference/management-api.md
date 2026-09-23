@@ -162,6 +162,21 @@ GUI-сессия в стиле loopback не выпускается.
 
 О стратегиях целей, cooldown, alias и routing-failure см. [Combos](/guides/combos/).
 
+### Слои промпта Codex
+
+| Метод и путь | Назначение | Особые ошибки |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | Прочитать снимок слоёв промпта: слои, базовые варианты, выбор и состояние drift | — |
+| `GET /api/codex-prompt/text` | Проверить текст промпта, видимый модели, через `codex debug prompt-input` | Fail-soft: недоступный probe деградирует до статуса в теле, а не HTTP-ошибки |
+| `PUT /api/codex-prompt/toggle` | Включить или выключить один переключаемый слой | 400 invalid body или unknown layer; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | Заменить набор пользовательских слоёв | 400 invalid body, `invalid_characters`, `body_too_large`, когда нормализованный UTF-8 слой превышает 65 536 байт, `composed_too_large` свыше 131 072 байт; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | Выбрать базовый промпт по умолчанию или один сохранённый вариант | 400 invalid body, `unknown_layer` для id, не совпадающего ни с одним сохранённым вариантом; 409 `stale_revision`, `developer_instructions_not_owned`, когда текущий base внешний |
+| `PUT /api/codex-prompt/base` | Создать (`id` опущен или `id: null`), изменить или удалить (`delete: true`) один базовый вариант. Указанный `id` предназначен только для редактирования и должен ссылаться на сохранённый вариант. `body` нормализуется (табуляции раскрываются, CR/CRLF сворачиваются в LF) до измерения или сохранения | 400 invalid body, `unknown_layer` для id `default` или id, не совпадающего ни с одним сохранённым вариантом, `body_too_large`, когда нормализованное UTF-8 тело превышает 65 536 байт; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | Импортировать `developer_instructions` из `config.toml` как пользовательский слой | 400 invalid body, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | Устранить drift между `config.toml` и принадлежащей projection | 400 invalid body; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+О модели слоёв и ключах, которые записывает каждый слой, см. [Слои промпта Codex](/ru/guides/codex-prompt/).
+
 ### Конфигурация, startup, sync и updates
 
 | Метод и путь | Назначение | Особые ошибки |
@@ -181,6 +196,11 @@ GUI-сессия в стиле loopback не выпускается.
 | `GET, PUT /api/shadow-call-settings` | Прочитать или обновить настройки shadow-call interception | 400 invalid shape or value |
 
 ### Логи, usage и storage
+
+В журналах запросов поле `servedModel` сохраняется, когда вышестоящий сервис сообщает модель, которая ответила.
+Поле `wireModel` сохраняется, когда отправленная вышестоящему сервису модель отличается от модели, показанной клиенту.
+Если эти модели различаются, панель показывает `wire → served`, а подсказка сохраняет оба значения. Если вышестоящий
+сервис не сообщил модель ответа, она остаётся неизвестной и не выводится из запрошенной модели.
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
@@ -329,7 +349,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Очистить runtime cooldown для одного аккаунта или для всех | 400 invalid id |
 | `GET, PUT /api/codex-auth/active` | Прочитать или выбрать активный аккаунт | 400 invalid or missing account; 409 paused/legacy-row conflict |
-| `PUT /api/codex-auth/auto-switch` | Задать порог квоты для автоматического переключения аккаунтов | 400 invalid threshold |
+| `PUT /api/codex-auth/auto-switch` | Задать глобальный порог через `{ threshold }` без `id` или переопределение аккаунта через `{ id, threshold }`; `id: '__main__'` выбирает аккаунт Codex Desktop. При указанном `id` значение `threshold: null` удаляет переопределение и восстанавливает наследование глобального порога | 400 invalid id/threshold; 404 missing account |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Обновить стратегию выбора в пуле аккаунтов Codex | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Задать порог failover аккаунтов | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Прочитать кэшированное состояние квоты по аккаунтам | — |
