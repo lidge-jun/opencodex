@@ -277,6 +277,13 @@ Instruction notice extraction scans fence ranges once and walks original lines b
 a decreasing cursor. It accepts exactly one ASCII space inside the token notice, preserves
 unmatched prefix bytes, and does not repeatedly scan or copy shrinking prompt prefixes.
 
+## Claude skill marker path bound
+
+`src/claude/inbound.ts` examines at most 4,097 characters after the skill base-directory
+marker when deciding whether to elide a large blocked skill bundle. A marker path longer
+than 4,096 characters passes through unchanged; a recognized bounded path retains the
+existing elision behavior. This bound applies to translated Claude Messages ingress.
+
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 

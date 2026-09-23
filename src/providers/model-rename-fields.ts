@@ -121,6 +121,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   transientRetryOn5xx: "none",
   retryOnReset: "none",
   reasoningSplitModels: "list",
+  inlineThinkTagModels: "list",
   reasoningDetailsModels: "list",
   thinkingToggleModels: "list",
   thinkingBudgetModels: "list",

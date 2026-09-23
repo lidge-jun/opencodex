@@ -489,3 +489,20 @@ and neither explicit `default.` nor `default__` identity exists. It cannot borro
 alias; unknown suffixes still fail as undeclared tools. See [ADR-0099](../decisions/ADR-0099-responses-http-sse.md).
 
 > Decision record: [ADR-0099](../decisions/ADR-0099-responses-http-sse.md)
+
+## Mixed encrypted-content slots
+
+A mixed `encrypted_content` slot may contain structurally valid Fernet runs alongside text.
+`src/server/responses/encrypted-payload.ts` recognizes at most 64 runs per slot. Finding a
+65th marks the slot as overflow: sanitization and agent-message stripping replace that
+whole slot with `[encrypted content omitted]`, while unreadable-task detection remains
+fail-closed. The scanner never emits an unexamined suffix as text. The limit constrains
+part expansion without changing single-token replay or the separate 32-part task-recovery cap.
+
+## Injected combo summary defaults
+
+An injected combo default supplies `summary: "auto"` only when no summary was specified; caller
+summary choices remain intact. Raw display and hidden-envelope replay follow
+[reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
+Final-route normalization preserves visible raw reasoning when the parsed request has a validated
+active effort and omits summary; explicit `summary: "none"` still hides it.

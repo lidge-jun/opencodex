@@ -151,6 +151,22 @@ restores Desktop even with `--keep-catalog`; retries preserve the original catal
 not clear a newer connection. Authorized uninstall completes or resumes owned Desktop cleanup
 before removing OpenCodex state, and preserves recovery state when cleanup conflicts or fails.
 
+The server-owned applied marker (`claudeCode.desktopProfile.appliedFingerprint` and
+`appliedAt`) is committed through `src/claude/desktop-applied-marker.ts` only while the
+persisted desired profile still matches the exact profile handed to the Desktop writer and
+its prior fingerprint and time are unchanged. Sync compares profile presence, content and
+both marker fields before committing; an initially absent profile can receive a marker, while
+a concurrently deleted or changed profile or a newer marker is left intact and the existing
+skip outcome is reported. Provider-change auto-apply requires a present profile and emits a
+generic diagnostic when the same comparison declines its marker. Default-family key order
+does not change desired content; the comparison uses each family's selected route.
+
+The profile PUT in `src/server/management/agent-settings-routes.ts` validates against a
+persisted profile snapshot and commits only `claudeCode.desktopProfile` under the config
+mutation lock. Client marker fields are discarded. Unchanged desired content keeps the
+latest persisted marker, including one committed while the PUT awaited model discovery;
+a concurrent desired-profile edit declines the PUT with 409 instead of being overwritten.
+
 These guarantees concern files on disk. Fully quitting and reopening Desktop is required after
 apply, rotation/recovery or restoration; there is no automatic process restart or guarantee that
 a running app discarded a key. Local disconnect does not revoke the hub key or remove arbitrary

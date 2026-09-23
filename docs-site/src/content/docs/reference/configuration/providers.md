@@ -246,6 +246,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | Native `openai-responses` providers, including `authMode: "forward"`. Opt-in replacement of a send that failed while the caller had observed nothing: absent means off, object presence enables it unless `enabled: false`. Covers both ambiguous stages — a connection that died before any response header, and an SSE body that died after the header while carrying only control events. Only a self-contained request is ever replaced: `store: false`, complete `input`, no `previous_response_id`, `conversation` or `stream_id`, and only client-executed tools. `replacements` is the number of replacement sends ONE logical request may make across every leg and every combo child (1..2, default 1) — not a per-leg retry count and not a send budget, so a replacement still has to fit inside the send allowance the leg already had. A request that already emitted output or a tool call is never replaced, whatever this is set to. The replacement inference may still be billed if the origin had already started the first one, which is why this is off by default. |
 | `autoToolChoiceOnlyModels?` | `string[]` | Models whose `tool_choice` accepts only `auto` or `none`; forced choices are downgraded. |
 | `preserveReasoningContentModels?` | `string[]` | Models requiring prior assistant `reasoning_content` in chat history. |
+| `inlineThinkTagModels?` | `string[]` | Opt-in recovery for `openai-chat` gateways without a server-side reasoning parser. A leading `<think>` / `<thinking>` / `<reasoning>` block (optionally after whitespace) activates splitting in streamed and buffered replies. All answer whitespace is preserved. Subsequent tags are delimiters anywhere, including same-line interleaving and code fences; this mode does not interpret Markdown. Ordinary text or a code fence before the first tag keeps the whole reply untouched. Off by default; prefer structured upstream reasoning or `reasoningSplitModels` where supported. |
 | `reasoningDetailsModels?` | `string[]` | Models whose endpoint returns thinking as a structured `reasoning_details` array (MiniMax M-series with `reasoning_split`); stream deltas are cumulative snapshots that are prefix-diffed, and preserved reasoning replays as a `reasoning_details` array instead of a `reasoning_content` string. |
 | `requiresReasoningPlaceholderModels?` | `string[]` | Models whose upstream rejects a tool_call continuation missing `reasoning_content` (DeepSeek thinking mode); a minimal placeholder is injected when the replay cache misses. Defaults to `preserveReasoningContentModels`; set `[]` to opt out. |
 | `showThinkingSummary?` | `boolean` | Display provider-authored summaries when a Responses client omits `reasoning.summary`. Explicit wire `"none"` wins; a client that serializes its preference as omission cannot be distinguished. Raw reasoning remains content and is never relabeled as a summary. The `google-antigravity` preset defaults to `true`; explicit `false` disables that default. CCA Gemini requests also opt into `generationConfig.thinkingConfig.includeThoughts` when display is enabled; image, Claude and gpt-oss requests do not. This does not change client configuration or global catalog summary defaults. |
@@ -277,6 +278,14 @@ A bridged search result is shown to the provider again on the conversation's nex
 the same caller, conversation, provider, model and selected key. The caller is identified by the
 opencodex API key it presents, so a client that sends no opencodex API key gets no such replay:
 its earlier search cells reach the provider unchanged, as they do for a provider without the bridge.
+
+An explicit `inlineThinkTagModels` list replaces matching registry defaults; `[]` disables recovery.
+
+Translated Responses requests with a validated active reasoning effort preserve raw reasoning
+when `reasoning.summary` is omitted. Explicit `"none"` keeps it hidden for replay; omission
+without an active effort also stays hidden. An injected combo default adds `summary: "auto"`
+only when the caller has not chosen a summary mode. Raw reasoning is never relabeled as a
+provider-authored summary, and Codex still controls its display with `show_raw_agent_reasoning`.
 
 Custom-model `reasoningEfforts` normally override discovered provider metadata. The bounded
 exception is an explicit custom row whose model id has pinned native Codex capabilities,

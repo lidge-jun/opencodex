@@ -21,6 +21,7 @@ import { inspectWindowsSchedulerServiceStatus, schtasksErrorDetail, probeWindows
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { win32 } from "node:path";
 import { serviceDiagnosticsSummary } from "./diagnostics";
+import { runServiceClaim } from "./claim";
 
 /**
  * `restart` is NO LONGER folded into `repair`.
@@ -184,6 +185,14 @@ export function parseServiceArgs(args: string[]): ParsedServiceArgs {
 export async function serviceCommand(...args: (string | undefined)[]): Promise<void> {
   const filteredArgs = args.filter((a): a is string => Boolean(a));
   const execute = async (): Promise<void> => {
+    // `claim` is not an install verb: it is deliberately outside planServiceCommand (whose
+    // backend/installation checks do not apply to an ownership write) and outside
+    // assertServiceEnvironmentMatchesInstall — a takeover is not an install.
+    if (filteredArgs[0] === "claim") {
+      const code = await runServiceClaim(filteredArgs.slice(1));
+      if (code !== 0) process.exitCode = code;
+      return;
+    }
     // Planning reads manager state. Repeat it only after the writer lock is held, otherwise a
     // bare command can choose install from a snapshot another service command already changed.
     const plan = planServiceCommand(filteredArgs);
@@ -419,7 +428,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
       console.log("✅ service uninstalled.");
       break;
     default:
-      console.error("Usage: ocx service [install|repair|restart|start|stop|status|uninstall|remove] [--native|--scheduler]");
+      console.error("Usage: ocx service [install|repair|restart|start|stop|status|uninstall|remove|claim] [--native|--scheduler]");
       console.error("       With no subcommand, installs when absent or repairs/restarts an existing service.");
       console.error("       repair: refresh the installed backend, reloading it only when the definition changed; stale Windows tasks may request admin approval.");
       console.error("       restart: the same refresh, but always restarts the service — on macOS a healthy job is kickstarted in place.");

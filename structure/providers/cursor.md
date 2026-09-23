@@ -195,9 +195,10 @@ markers up to a byte-counted cap, then switches to a constant-space suppressed s
 the JSON object closes; neither an oversized tail nor a malformed payload returns to prose.
 Malformed argument diagnostics contain only the failure class and an optional tool name,
 never the argument content. `src/adapters/cursor/protobuf-events.ts` buffers advertised textual calls
-until turn finalization. It flushes them onto the atomic tool-call path only when the turn
+until turn finalization, charging each retained argument immediately against the normal per-call
+and per-turn translator budgets. It flushes them onto the atomic tool-call path only when the turn
 contained no real client-tool frame; any real frame, including one left incomplete, wins and
-drops the whole textual buffer. A missing advertised-name set is fail-closed. Finalize also
+drops the whole textual buffer and releases its charges. A missing advertised-name set is fail-closed. Finalize also
 clears any held or suppressed prefix. Coverage lives in
 `tests/providers/cursor/cursor-protobuf-events.test.ts`.
 

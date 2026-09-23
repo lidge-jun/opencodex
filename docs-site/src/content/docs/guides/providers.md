@@ -135,7 +135,7 @@ Two exceptions are worth knowing because you can hit them:
 | Command Code | `ocx login command-code` — opencodex reads five-hour and weekly windows plus a credit balance | `commandcode` — the same service on `/provider/v1` with a key |
 | GitHub Copilot | `ocx login github-copilot` — requires an active Copilot subscription | the same `github-copilot` provider with `authMode: "key"`. The device flow above is the supported path, and either credential is a Copilot one, so the subscription still pays |
 | OrcaRouter | `ocx login orcarouter-oauth` — consent mints a user-owned, long-lived `sk-orca-…` key, and the request then carries a key | `orcarouter` — the same key pasted by hand |
-| Meta Muse | `ocx login meta-muse` imports the Muse Code CLI key. Meta scopes that credential to its own CLI, so this is an unsupported use: how the calls settle is not observable from the API, and you should treat every call as billable against your account | `meta-model` is the supported path — every call is metered per token, and a Muse Code subscription does not work there |
+| Meta Muse | `ocx login meta-muse` can import a local Muse Code CLI key or start device login. Meta scopes that credential to its own CLI, so this is an unsupported use: how the calls settle is not observable from the API, and you should treat every call as billable against your account | `meta-model` is the supported path — every call is metered per token, and a Muse Code subscription does not work there |
 
 Cursor, Kiro and Nous Portal are login-only and have no API-key equivalent. Google Antigravity is
 login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
@@ -731,17 +731,19 @@ material off it. Muse Spark is also reachable through resellers, with a narrower
 `command-code` carries both tiers, while `opencode-go` serves only
 `muse-spark-1.3-contributor`.
 
-**Meta Muse Code (`meta-muse`).** On macOS, if you already use the Muse Code CLI, this
-imports the API key it stored after `muse login` instead of asking you to provision a
-second one. OpenCodex never launches the CLI: if no credential is present it tells you to
-run `muse login` yourself.
-
-Elsewhere it asks you to paste the key. Meta ships no native Windows CLI, and on Linux the
-CLI exists but where it stores its credential has not been verified, so OpenCodex refuses
-to guess at a credential store and points you at [dev.meta.ai](https://dev.meta.ai)
-instead, where the same key is visible. A pasted key faces the same format check and the
-same live validation against the Model API as an imported one. See
+**Meta Muse Code (`meta-muse`).** A plain macOS login first tries the API key already
+stored by `muse login`. With no local credential, or on another platform, it starts the
+browser device-approval flow. Add-account and reauthentication skip local import to avoid
+reusing the account being replaced. OpenCodex never launches the Muse CLI. If device login
+fails without cancellation, an available manual-input surface can accept a pasted key;
+that key faces the same format and Model API validation as an imported key. See
 [Platform support](/reference/platform-support/) for the full per-platform picture.
+
+Starting any Meta Muse login through the management API requires a dashboard session,
+including add-account and reauthentication. A raw admin token or forged GUI headers receive
+`403 oauth_consent_required` before a credential is read or a grant starts. This gate uses
+the server-resolved session principal, not a separately recorded warning-checkbox receipt.
+Direct `ocx login meta-muse` and other OAuth providers keep their existing login policies.
 
 Both seeded `meta-muse` models expose `minimal`/`low`/`medium`/`high`/`xhigh`/`max` to
 routed clients, including Grok's effort picker. Requests use

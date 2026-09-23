@@ -398,7 +398,8 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
   const applyInvocation = argv.length === 0 || command === "apply" || applyFlags.length > 0;
   if (applyInvocation) {
     const rest = argv.filter(arg => arg !== "apply");
-    const parsedTarget = parseDesktopApplyArgs(rest, loadConfig());
+    const preApplyConfig = loadConfig();
+    const parsedTarget = parseDesktopApplyArgs(rest, preApplyConfig);
     if ("error" in parsedTarget) { console.error(parsedTarget.error); return 2; }
     const { target } = parsedTarget;
     try {
@@ -424,7 +425,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
         console.log(`Claude Desktop gateway 설정을 적용했습니다: ${result.path}`);
         for (const line of gatewayModeExplanation({
           requestedExplicitly: applyFlags.some(flag => flag !== "--first-party"),
-          config: loadConfig(),
+          config: preApplyConfig,
         })) {
           console.log(line);
         }

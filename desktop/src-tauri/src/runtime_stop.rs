@@ -9,7 +9,8 @@
 //!
 //! The result is a document, not a guess. `ocx stop --json` puts one summary on stdout and its
 //! human output on stderr, and this consumes the outcome and the exit code rather than inferring
-//! either. A stop that did not end in exit 0 with the runtime down is a stop that did not happen.
+//! either. Only an exact exit-0 stop or validated history-only completion may lead to takeover;
+//! approval and manager refusals stay terminal even when the endpoint becomes quiet.
 
 use serde::Deserialize;
 use std::time::Duration;
@@ -19,6 +20,7 @@ use tokio::time::{timeout_at, Instant};
 
 /// The wire version this shell understands.
 pub const SCHEMA: &str = "ocx-stop/1";
+const HISTORY_INCOMPLETE_EXIT_CODE: i32 = 79;
 
 /// How long the stop may take.
 ///
@@ -38,6 +40,8 @@ pub enum Outcome {
     HistoryIncomplete,
     HistoryDeferred,
     Failed,
+    ApprovalChanged,
+    ManagerStillActive,
 }
 
 impl Outcome {
@@ -48,6 +52,8 @@ impl Outcome {
             Self::HistoryIncomplete => "history-incomplete",
             Self::HistoryDeferred => "history-deferred",
             Self::Failed => "failed",
+            Self::ApprovalChanged => "approval-changed",
+            Self::ManagerStillActive => "manager-still-active",
         }
     }
 }
@@ -99,7 +105,10 @@ pub struct StopSummary {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StopResult {
     /// The CLI reported a clean stop and a runtime that is down.
-    Stopped(StopSummary),
+    Stopped(Box<StopSummary>),
+    ApprovalChanged(String),
+    ManagerStillActive(String),
+    HistoryIncomplete(String),
     /// It reported anything else, or the run could not be read at all.
     Failed(String),
 }
@@ -109,9 +118,21 @@ impl StopResult {
         matches!(self, Self::Stopped(_))
     }
 
+    pub fn is_approval_changed(&self) -> bool {
+        matches!(self, Self::ApprovalChanged(_))
+    }
+
+    pub fn may_check_silence(&self) -> bool {
+        matches!(self, Self::Stopped(summary) if summary.outcome == Outcome::Stopped)
+            || matches!(self, Self::HistoryIncomplete(_))
+    }
+
     pub fn describe(&self) -> String {
         match self {
             Self::Stopped(summary) => summary.message.clone(),
+            Self::ApprovalChanged(reason) => reason.clone(),
+            Self::ManagerStillActive(reason) => reason.clone(),
+            Self::HistoryIncomplete(reason) => reason.clone(),
             Self::Failed(reason) => reason.clone(),
         }
     }
@@ -157,6 +178,25 @@ pub fn read(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> StopResult 
             summary.schema
         ));
     }
+    if summary.outcome == Outcome::ApprovalChanged {
+        return StopResult::ApprovalChanged(summary.message);
+    }
+    if summary.outcome == Outcome::ManagerStillActive {
+        return StopResult::ManagerStillActive(summary.message);
+    }
+    if summary.outcome == Outcome::HistoryIncomplete
+        && exit_code == Some(HISTORY_INCOMPLETE_EXIT_CODE)
+        && summary.exit_code == HISTORY_INCOMPLETE_EXIT_CODE
+        && !summary.ok
+        && summary.runtime_down
+        && matches!(summary.proxy, Proxy::Stopped | Proxy::StoppedOrphan)
+    {
+        return StopResult::HistoryIncomplete(format!(
+            "{} (outcome {})",
+            summary.message,
+            summary.outcome.as_str()
+        ));
+    }
     let agrees = matches!(
         (summary.outcome, summary.proxy),
         (Outcome::Stopped, Proxy::Stopped)
@@ -180,13 +220,52 @@ pub fn read(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> StopResult 
                 .unwrap_or_else(|| "none".to_owned())
         ));
     }
-    StopResult::Stopped(summary)
+    StopResult::Stopped(Box::new(summary))
 }
 
-/// Run the bundled `ocx stop --json`, under the caller's deadline.
+/// Run the ordinary bundled stop used when this app exits its own runtime.
 pub async fn run(app: &AppHandle, deadline: Instant) -> StopResult {
+    run_with_args(app, deadline, vec!["stop".to_owned(), "--json".to_owned()]).await
+}
+
+/// Run the bundled stop bound to the approved runtime, under the caller's deadline.
+pub async fn run_approved(
+    app: &AppHandle,
+    deadline: Instant,
+    approved: &crate::resolve::Resolved,
+) -> StopResult {
+    let (Some(pid), Some(port), crate::resolve::Takeover::Supported { token, .. }) = (
+        approved.liveness.pid,
+        approved.liveness.port,
+        &approved.takeover,
+    ) else {
+        return StopResult::Failed("the approved runtime could not be identified".to_owned());
+    };
+    if pid == 0 || port == 0 {
+        return StopResult::Failed("the approved runtime could not be identified".to_owned());
+    }
+    let argv = vec![
+        "stop".to_owned(),
+        "--json".to_owned(),
+        "--expect-pid".to_owned(),
+        pid.to_string(),
+        "--expect-port".to_owned(),
+        port.to_string(),
+        "--expect-hostname".to_owned(),
+        approved.liveness.hostname.clone().unwrap_or_default(),
+        "--expect-config-home".to_owned(),
+        approved.config_home.clone(),
+        "--expect-cli-version".to_owned(),
+        approved.cli_version.clone(),
+        "--expect-compatibility-token".to_owned(),
+        token.clone(),
+    ];
+    run_with_args(app, deadline, argv).await
+}
+
+async fn run_with_args(app: &AppHandle, deadline: Instant, argv: Vec<String>) -> StopResult {
     let command = match app.shell().sidecar("ocx") {
-        Ok(command) => command.args(["stop", "--json"]),
+        Ok(command) => command.args(argv),
         Err(error) => {
             return StopResult::Failed(format!("the bundled CLI could not be started ({error})"))
         }
@@ -224,7 +303,10 @@ mod tests {
                 assert_eq!(summary.proxy, Proxy::Stopped);
                 assert!(summary.runtime_down);
             }
-            StopResult::Failed(reason) => panic!("{reason}"),
+            StopResult::ApprovalChanged(reason)
+            | StopResult::ManagerStillActive(reason)
+            | StopResult::HistoryIncomplete(reason)
+            | StopResult::Failed(reason) => panic!("{reason}"),
         }
         // Nothing was running is equally a runtime that is down.
         assert!(read(
@@ -302,5 +384,45 @@ mod tests {
         let result = read(Some(0), future.as_bytes(), b"");
         assert!(!result.is_stopped());
         assert!(result.describe().contains("ocx-stop/2"));
+    }
+
+    #[test]
+    fn guarded_refusals_parse_as_terminal_results() {
+        for (outcome, expected) in [
+            ("approval-changed", Outcome::ApprovalChanged),
+            ("manager-still-active", Outcome::ManagerStillActive),
+        ] {
+            let output = document(false, outcome, 1, false, "unknown");
+            let result = read(Some(1), output.as_bytes(), b"");
+            assert!(!result.may_check_silence());
+            match result {
+                StopResult::ApprovalChanged(_) if expected == Outcome::ApprovalChanged => {}
+                StopResult::ManagerStillActive(_) if expected == Outcome::ManagerStillActive => {}
+                other => panic!("unexpected result: {other:?}"),
+            }
+            assert_eq!(expected.as_str(), outcome);
+        }
+    }
+
+    #[test]
+    fn only_proven_history_incomplete_may_continue_to_silence() {
+        let complete = document(false, "history-incomplete", 79, true, "stopped");
+        let result = read(Some(79), complete.as_bytes(), b"");
+        assert!(matches!(&result, StopResult::HistoryIncomplete(_)));
+        assert!(!result.is_stopped());
+        assert!(result.may_check_silence());
+
+        let wrong_exit = read(Some(80), complete.as_bytes(), b"");
+        assert!(matches!(wrong_exit, StopResult::Failed(_)));
+        let unproven = document(false, "history-incomplete", 79, false, "stopped");
+        assert!(matches!(
+            read(Some(79), unproven.as_bytes(), b""),
+            StopResult::Failed(_)
+        ));
+        let deferred = document(false, "history-deferred", 80, true, "stopped");
+        assert!(!read(Some(80), deferred.as_bytes(), b"").may_check_silence());
+        let not_running = document(true, "not-running", 0, true, "not-running");
+        assert!(!read(Some(0), not_running.as_bytes(), b"").may_check_silence());
+        assert!(!read(Some(1), b"{", b"").may_check_silence());
     }
 }
