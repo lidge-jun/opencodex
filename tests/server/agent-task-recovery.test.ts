@@ -1251,7 +1251,9 @@ describe("recovery refuses a wrong-family echoed routing header", () => {
   const echoCases: Array<[string, string, string]> = [
     ["FINAL_ANSWER envelope echoing a NEW_TASK header", FINAL_ANSWER_ENVELOPE, `${ROUTING_ENVELOPE}Recovered final answer.`],
     ["FINAL_ANSWER envelope echoing a NEW_TASK header mid-assignment", FINAL_ANSWER_ENVELOPE, `Recovered final answer.\n\n${ROUTING_ENVELOPE}`],
+    ["FINAL_ANSWER echo followed by a NEW_TASK header", FINAL_ANSWER_ENVELOPE, `${FINAL_ANSWER_ENVELOPE}${ROUTING_ENVELOPE}Recovered final answer.`],
     ["NEW_TASK envelope echoing a FINAL_ANSWER header", ROUTING_ENVELOPE, `${FINAL_ANSWER_ENVELOPE}Recovered final answer.`],
+    ["NEW_TASK echo followed by a FINAL_ANSWER header", ROUTING_ENVELOPE, `${ROUTING_ENVELOPE}${FINAL_ANSWER_ENVELOPE}Recovered task.`],
     ["MESSAGE envelope echoing a FINAL_ANSWER header", ROUTING_ENVELOPE.replace("NEW_TASK", "MESSAGE"), `${FINAL_ANSWER_ENVELOPE}Recovered final answer.`],
   ];
 

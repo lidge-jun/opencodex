@@ -197,6 +197,17 @@ describe("V2 routed agent-message ciphertext guard", () => {
     ]))).toBe(true);
   });
 
+  test.each([
+    FOLLOWUP_ROUTING_ENVELOPE,
+    FINAL_ANSWER_ENVELOPE,
+  ])("blocks an encrypted envelope with a blank line after its type", envelope => {
+    const input = agentMessage([
+      { type: "input_text", text: envelope.replace("\n", "\n\n") },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]);
+    expect(hasUnreadableEncryptedAgentTask(input)).toBe(true);
+  });
+
   test("blocks a FINAL_ANSWER envelope without a Task name followed only by a Fernet payload", () => {
     expect(hasUnreadableEncryptedAgentTask(agentMessage([
       { type: "input_text", text: FINAL_ANSWER_ENVELOPE },

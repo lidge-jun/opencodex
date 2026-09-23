@@ -191,7 +191,7 @@ function textWithoutFernetRuns(payload: string, runs: readonly FernetTokenRun[])
  * fail closed with a structured error rather than paste the token. Recovery admission,
  * not the strip, is the trust boundary for decryption.
  */
-export const AGENT_MESSAGE_ROUTING_ENVELOPE = /(?:^|\n)Message Type\s*:\s*(?:NEW_TASK|MESSAGE|FOLLOWUP_TASK)[^\n]*\nTask name\s*:[^\n]*\nSender\s*:[^\n]*\nPayload\s*:\s*(?:\n|$)|(?:^|\n)Message Type\s*:\s*FINAL_ANSWER[^\n]*\n(?:Task name\s*:[^\n]*\n)?Sender\s*:[^\n]*\nPayload\s*:\s*(?:\n|$)/gi;
+export const AGENT_MESSAGE_ROUTING_ENVELOPE = /(?:^|\n)Message Type\s*:\s*(?:NEW_TASK|MESSAGE|FOLLOWUP_TASK)[^\n]*\n\s*Task name\s*:[^\n]*\n\s*Sender\s*:[^\n]*\n\s*Payload\s*:\s*(?:\n|$)|(?:^|\n)Message Type\s*:\s*FINAL_ANSWER[^\n]*\n\s*(?:Task name\s*:[^\n]*\n\s*)?Sender\s*:[^\n]*\n\s*Payload\s*:\s*(?:\n|$)/gi;
 
 // CXC is the compatibility-hook control namespace. Strip only the tagged paragraph:
 // later untagged paragraphs may be genuine task text. Repeated CXC paragraphs are
