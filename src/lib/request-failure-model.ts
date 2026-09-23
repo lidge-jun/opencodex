@@ -229,6 +229,9 @@ const RECOVERY_KIND_CAUSE = {
   "opaque-blob-rejection": "ciphertext-refusal",
   "empty-completion": "empty-output",
   "reasoning-effort-downgrade": "parameter-rejected",
+  // Anthropic refused `speed: "fast"` (no usage credits, org not enabled, model outside the
+  // lane); the same turn succeeds once the parameter is dropped.
+  "anthropic-fast-downgrade": "parameter-rejected",
 } as const satisfies Record<AttemptRecoveryKind, RequestFailureCause>;
 
 export function causeForRecoveryKind(kind: AttemptRecoveryKind): RequestFailureCause {

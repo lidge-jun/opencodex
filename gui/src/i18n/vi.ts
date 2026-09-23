@@ -924,6 +924,7 @@ export const vi: Record<TKey, string> = {
   "logs.detail.attempt.recovery.oauthAccount429": "Tài khoản bị giới hạn tần suất (429)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "Đã bỏ trạng thái mã hóa cũ",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "Đã giảm mức suy luận",
+  "logs.detail.attempt.recovery.anthropicFastDowngrade": "Chế độ nhanh bị từ chối, thử lại ở tốc độ chuẩn",
   "logs.detail.outcome.label": "Kết quả",
   "logs.detail.outcome.completed": "Hoàn tất",
   "logs.detail.outcome.failed": "Thất bại",

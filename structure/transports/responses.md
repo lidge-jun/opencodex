@@ -289,6 +289,8 @@ narrows provider defaults, and provider-level `supportsServiceTier: false` canno
 Capability is namespaced by the selected provider and model; model-name similarity and adapter type
 alone never opt a gateway in.
 
+Anthropic Fast eligibility and downgrade recovery use the [Responses failover contract](responses-failover.md#anthropic-fast-downgrade-recovery).
+
 `POST /v1/responses/compact` handles remote compaction v1 before the generic `/v1/responses` branch
 and before the `/v1/*` guard. Unknown `/v1/*` paths return JSON 404 errors instead of falling through
 to GUI static serving.

@@ -912,6 +912,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.attempt.recovery.oauthAccount429": "Ограничение частоты для аккаунта (429)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "Устаревшее зашифрованное состояние отброшено",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "Уровень рассуждения понижен",
+  "logs.detail.attempt.recovery.anthropicFastDowngrade": "Быстрый режим отклонён, повтор со стандартной скоростью",
   "logs.detail.outcome.label": "Итог",
   "logs.detail.outcome.completed": "Завершено",
   "logs.detail.outcome.failed": "Сбой",

@@ -2424,6 +2424,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.attempt.recovery.oauthAccount429": "帳號速率受限 (429)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "已捨棄過期加密狀態",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "已降低推理強度",
+  "logs.detail.attempt.recovery.anthropicFastDowngrade": "快速模式遭拒，改以標準速度重試",
   "logs.detail.outcome.label": "結果",
   "logs.detail.outcome.completed": "已完成",
   "logs.detail.outcome.failed": "失敗",

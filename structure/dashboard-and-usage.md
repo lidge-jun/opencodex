@@ -517,3 +517,9 @@ and unknown-cap policies still govern cost evidence and routing.
 
 The Models app-server status read is owned by its API-base/restart effect, not the picker tab; switching
 to Combos preserves a pending read and its existing stale-state banner.
+
+Anthropic Fast pricing applies a 2x list-price multiplier only when the response confirms
+`usage.speed: "fast"`; an absent echo or standard-speed downgrade retains standard pricing.
+`tests/usage/usage-anthropic-fast-pricing.test.ts` pins that distinction. The request-metrics recovery
+label `anthropic-fast-downgrade` projects to `fast_downgrade`, separate from reasoning-effort
+`effort_downgrade`.

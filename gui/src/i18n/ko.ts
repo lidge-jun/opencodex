@@ -926,6 +926,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.attempt.recovery.oauthAccount429": "계정 속도 제한 (429)",
   "logs.detail.attempt.recovery.opaqueBlobRejection": "만료된 암호화 상태 제거",
   "logs.detail.attempt.recovery.reasoningEffortDowngrade": "추론 강도 하향",
+  "logs.detail.attempt.recovery.anthropicFastDowngrade": "빠른 모드 거부, 표준 속도로 재시도",
   "logs.detail.outcome.label": "결과",
   "logs.detail.outcome.completed": "완료",
   "logs.detail.outcome.failed": "실패",

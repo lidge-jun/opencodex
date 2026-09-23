@@ -520,6 +520,7 @@ export interface PriorityPricingRule {
 }
 
 const XAI_PRIORITY_PRICING = "https://docs.x.ai/developers/advanced-api-usage/priority-processing";
+const ANTHROPIC_FAST_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing";
 
 /**
  * Exact provider/model priority premiums. Routed resellers never inherit a vendor rule merely
@@ -554,6 +555,17 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
     source: XAI_PRIORITY_PRICING,
     verifiedAt: modelId === "grok-4.7" ? "2026-09-23" : "2026-08-18",
   })),
+  // Claude Code subscription fast draws usage credits at API fast rates, so OAuth is included.
+  ...["anthropic", "anthropic-apikey"].flatMap(provider =>
+    ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"].map((modelId): PriorityPricingRule => ({
+      provider,
+      modelId,
+      multiplier: 2,
+      requiresResponseConfirmation: true,
+      source: ANTHROPIC_FAST_PRICING,
+      verifiedAt: "2026-09-23",
+    })),
+  ),
 ];
 
 /** Exact provider/model priority-pricing lookup. */

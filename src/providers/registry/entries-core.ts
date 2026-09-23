@@ -14,6 +14,7 @@ import { cursorFastCapableBases } from "../../adapters/cursor/catalog";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
 import { isCanonicalOpenRouterTarget } from "../openrouter-routing";
 import type { ProviderRegistryEntry } from "./types";
+import { ANTHROPIC_FAST_MODE_BETA } from "../anthropic-fast";
 import {
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
@@ -84,6 +85,27 @@ import {
   CLINE_PASS_TEXT_ONLY_MODELS,
   CLINE_PASS_MODEL_INPUT_MODALITIES,
 } from "./model-seeds";
+
+/**
+ * Claude fast mode (`speed: "fast"` + beta), shared by the OAuth and API-key Anthropic entries.
+ * Only the models Anthropic documents for the lane are classified; Opus 4.6 silently runs
+ * standard and Opus 4.7, Sonnet, Haiku and Fable reject `speed`, so they and future ids stay
+ * unclassified. Source: https://platform.claude.com/docs/en/build-with-claude/fast-mode
+ * (2026-09-23) and the live probe in devlog/_plan/260923_anthropic_fast_speed.
+ */
+const ANTHROPIC_FAST_WIRE = Object.freeze({
+  kind: "anthropic-speed" as const,
+  canonicalToWire: Object.freeze({ priority: "fast" }),
+  foreignCallerTiers: "drop" as const,
+  betas: Object.freeze([ANTHROPIC_FAST_MODE_BETA]),
+});
+const ANTHROPIC_FAST_MODELS: Readonly<Record<string, boolean>> = Object.freeze({
+  "claude-opus-5-5": true,
+  "claude-opus-5": true,
+  "claude-opus-4-8": true,
+});
+const ANTHROPIC_FAST_TIER_DESCRIPTION =
+  "Claude fast mode: faster output at 2x price; needs usage credits (subscription) or fast-mode access (API)";
 
 export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
@@ -419,6 +441,12 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // falls back to 8192, which truncates long answers with stop_reason=max_tokens.
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     defaultModel: "claude-sonnet-5",
+    // Claude fast mode on the subscription lane (Claude Code `/fast`): the OAuth route accepts
+    // `speed` and gates it on account entitlement (usage credits / org enablement), probed live
+    // 2026-09-23 (devlog/_plan/260923_anthropic_fast_speed/020_probe-evidence.md).
+    fastWire: ANTHROPIC_FAST_WIRE,
+    modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
+    fastTierDescription: ANTHROPIC_FAST_TIER_DESCRIPTION,
   },
   {
     id: "anthropic-apikey",
@@ -438,6 +466,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     defaultModel: "claude-sonnet-5",
+    fastWire: ANTHROPIC_FAST_WIRE,
+    modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
+    fastTierDescription: ANTHROPIC_FAST_TIER_DESCRIPTION,
   },
   {
     id: "kimi",

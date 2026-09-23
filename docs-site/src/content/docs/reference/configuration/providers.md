@@ -510,6 +510,28 @@ contract; existing configurations see these migration deltas:
 
 Explicit capability `false` and Responses caller-tier forwarding retain their existing contracts.
 
+### Anthropic Fast (`anthropic-speed`)
+
+The built-in `anthropic` (stored Claude OAuth) and `anthropic-apikey` entries advertise Fast only
+for `claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`. Other Claude models are unclassified;
+the entries have no provider-wide Fast default. An eligible `--fast` or Fast selector sends
+`speed: "fast"` and adds `fast-mode-2026-02-01` to the existing `anthropic-beta` header. The proxy
+preserves OAuth beta values and sends one deduplicated header. `fastMode: false` disables this
+injection.
+
+Anthropic's `usage.speed` echo determines the outcome: `fast` confirms Fast, `standard` records a
+downgrade, and a missing echo is unconfirmed. Only confirmed Fast usage receives the 2x list-price
+estimate (Opus 5.5 $8 input / $40 output; Opus 5 and 4.8 $10 input / $50 output per million tokens).
+If the first fast send is rejected because usage credits are required, an organization disabled Fast,
+the model rejects `speed`, or the fast pool is empty, the main adapter dispatch can make one budgeted
+standard-speed resend. Generic rate limits and capacity errors keep their usual handling. Subsequent
+builds of that request stay at standard speed; a new turn may encounter the refusal again.
+
+Subscription Fast on Pro/Max needs usage credits; Team/Enterprise organizations also need admin
+enablement. First-party API Fast is a research preview that requires access. See
+[Anthropic Fast mode](https://platform.claude.com/docs/en/build-with-claude/fast-mode) and
+[Claude Code Fast mode](https://code.claude.com/docs/en/fast-mode) for access and billing terms.
+
 ### Cursor Fast (`cursor-variant`)
 
 Cursor has no `service_tier` field. Its fast product is a different **model variant** —

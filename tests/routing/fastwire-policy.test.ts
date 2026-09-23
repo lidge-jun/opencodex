@@ -230,7 +230,7 @@ describe("resolveFastPolicy matrix", () => {
     expect(resolveFastPolicy(authority, MODEL).adapter).toBe("anthropic");
   });
 
-  test("anthropic-speed has no A1 adapter mapping", () => {
+  test("anthropic-speed is unavailable on a non-Anthropic final adapter", () => {
     const policy = resolveFastPolicy({
       ...authorityForMatrix({
         source: "provider-adapter",
@@ -247,6 +247,26 @@ describe("resolveFastPolicy matrix", () => {
       },
     }, MODEL);
     expect(policy).toMatchObject({ eligibility: "wire-unavailable", forwardCallerTier: false });
+  });
+
+  test("anthropic-speed is eligible on the anthropic adapter and never forwards caller tiers", () => {
+    const policy = resolveFastPolicy({
+      ...authorityForMatrix({
+        source: "provider-adapter",
+        declaration: "explicit",
+        overrideAllowed: true,
+        capability: "true",
+        chatForeignTierForward: true,
+      }),
+      providerAdapter: "anthropic",
+      fastWireDeclaration: {
+        kind: "anthropic-speed",
+        canonicalToWire: { priority: "fast" },
+        foreignCallerTiers: "drop",
+        betas: ["fast-mode-2026-02-01"],
+      },
+    }, MODEL);
+    expect(policy).toMatchObject({ adapter: "anthropic", eligibility: "eligible", forwardCallerTier: false });
   });
 
   test("an incompatible hard pin reports pin-unavailable", () => {
@@ -678,17 +698,25 @@ describe("FastWire config and registry validation", () => {
     })).toBeNull();
   });
 
-  test("cursor is the only registry FastWire declaration, and it is the variant wire", () => {
-    // A1 shipped none; Cursor's Fast is a model VARIANT rather than a service_tier field,
-    // so it must declare its own wire instead of inheriting the OpenAI adapter default.
-    // Every other provider still gets its wire from defaultFastWireForAdapter.
+  test("registry FastWire declarations are cursor's variant wire and Anthropic's speed wire", () => {
+    // Cursor's Fast is a model VARIANT and Anthropic's is a top-level `speed` field, so
+    // neither can inherit the OpenAI adapter default. Every other provider still gets its
+    // wire from defaultFastWireForAdapter.
     const declared = PROVIDER_REGISTRY.filter(entry => entry.fastWire !== undefined);
-    expect(declared.map(entry => entry.id)).toEqual(["cursor"]);
-    expect(declared[0]?.fastWire).toEqual({
+    expect(declared.map(entry => entry.id).sort()).toEqual(["anthropic", "anthropic-apikey", "cursor"]);
+    expect(declared.find(entry => entry.id === "cursor")?.fastWire).toEqual({
       kind: "cursor-variant",
       canonicalToWire: { priority: "fast" },
       foreignCallerTiers: "drop",
     });
+    for (const id of ["anthropic", "anthropic-apikey"]) {
+      expect(declared.find(entry => entry.id === id)?.fastWire).toEqual({
+        kind: "anthropic-speed",
+        canonicalToWire: { priority: "fast" },
+        foreignCallerTiers: "drop",
+        betas: ["fast-mode-2026-02-01"],
+      });
+    }
   });
 });
 

@@ -371,7 +371,10 @@ and `routeModel`, but user config overrides registry defaults per field/key.
 contract. It preserves each field's existing rule rather than assigning one global priority:
 operator scalars and explicit booleans fill over registry defaults, per-model maps fill per key with a case-varied operator key claiming the registry row,
 restriction lists form a stable union, and hard wire pins precede valid operator overrides and
-registry wire defaults. Only the canonical `openai-apikey` provider merges
+registry wire defaults. Exact OpenCode Go pins and the Command Code API-key preset's case-insensitive
+`claude-` prefix pin both select Anthropic Messages; the latter applies only at
+`https://api.commandcode.ai/provider/v1` and leaves MiMo and `command-code` OAuth unchanged.
+Only the canonical `openai-apikey` provider merges
 `modelContextWindows` and `modelMaxInputTokens` by taking the lower positive value across
 case-equal keys, retaining the operator's row spelling and provenance even when registry-clamped;
 other providers use ordinary operator-per-key fill. Its output is recursively

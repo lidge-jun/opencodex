@@ -319,9 +319,11 @@ boundary. Histogram buckets are cumulative and end with `le="+Inf"`, equal to th
 | `opencodex_metrics_process_start_time_seconds` | none | Process-local reset boundary. |
 
 The `recovery` label takes one of a fixed set of classes: `transient`, `connection`, `credential`,
-`rate_limit`, `quota`, `policy`, `ciphertext`, `payload`, `empty_completion`, `effort_downgrade` and
-`other`. The set is closed, so no model, account, user or request identifier can ever appear in a
-series. `rate_limit`, `quota`, `policy` and `ciphertext` are separate because the operator response
+`rate_limit`, `quota`, `policy`, `ciphertext`, `payload`, `empty_completion`, `effort_downgrade`,
+`fast_downgrade` and `other`. The set is closed, so no model, account, user or request identifier
+can ever appear in a series. `fast_downgrade` records an Anthropic Fast refusal repaired at standard
+speed; it is distinct from the reasoning-effort `effort_downgrade` class. `rate_limit`, `quota`,
+`policy` and `ciphertext` are separate because the operator response
 differs: wait out the limit, move to another account, change the prompt, or drop stale encrypted
 state. A rejected opaque reasoning blob counts as `ciphertext` rather than `payload`.
 
