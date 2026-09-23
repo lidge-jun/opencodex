@@ -270,6 +270,12 @@ response, so `consumeComboFailure` records `nonReplayable` and the combo stops r
 on, say, a context overflow. The cost is that a real 401, 402 or 429 on a replacement send is not
 recorded against its credential on that request.
 
+A 2xx replacement carries no marker, and its stream can still fail before any output. Preflight
+then rebuilds that failure as a fresh Response, so the request execution budget's
+`ambiguousResendSpent` is the fact both remaining send paths check: combo failover stops and answers
+with the refusal instead of the projected 5xx, and the direct path skips the streamed opaque-blob
+rebuild.
+
 **An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
 The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the
 Codex WebSocket transport still settles `upstream_closed_before_response` (socket closed

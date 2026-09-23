@@ -274,6 +274,9 @@ export function createResponsesSendBudget(
     noteAdapterRecoveryWithheld,
     sendBudgetExhausted,
     claimAmbiguousResend,
+    get ambiguousResendSpent(): boolean {
+      return isRequestExecutionBudget(sendBudget) && sendBudget.ambiguousResendSpent === true;
+    },
     get pendingHopPermit(): SingleUseDispatchPermit | undefined {
       return pendingHopPermit;
     },
@@ -313,6 +316,7 @@ function adapterDispatchBudgetView(
     get lastTargetKey(): string | undefined { return budget.lastTargetKey; },
     remainingBaseSends: (cap: number): number => budget.remainingBaseSends(cap),
     claimAmbiguousResend: (limit: number): boolean => budget.claimAmbiguousResend?.(limit) === true,
+    get ambiguousResendSpent(): boolean { return budget.ambiguousResendSpent === true; },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       // A dispatch whose upstream state is unknown is refused on its own merits. A hop that
       // already paid does not make an unsafe replay safe, so that check stays with the budget.

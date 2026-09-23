@@ -131,6 +131,27 @@ function oneLogicalRequest() {
 }
 
 describe("one resend budget across composed recovery legs", () => {
+  test("a fresh budget has not spent an ambiguous resend", () => {
+    const budget = createRequestExecutionBudget();
+    expect(budget.ambiguousResendSpent).toBe(false);
+    expect(budget.claimAmbiguousResend?.(0)).toBe(false);
+    expect(budget.ambiguousResendSpent).toBe(false);
+  });
+
+  test("a derived scope observes the parent's spent ambiguous resend", () => {
+    const parent = createRequestExecutionBudget();
+    const child = deriveRequestExecutionBudget(parent, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    expect(parent.claimAmbiguousResend?.(GRANT)).toBe(true);
+    expect(child.ambiguousResendSpent).toBe(true);
+  });
+
+  test("a parent observes a derived scope's spent ambiguous resend", () => {
+    const parent = createRequestExecutionBudget();
+    const child = deriveRequestExecutionBudget(parent, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    expect(child.claimAmbiguousResend?.(GRANT)).toBe(true);
+    expect(parent.ambiguousResendSpent).toBe(true);
+  });
+
   test("the whole chain spends the grant once, whatever each leg was separately entitled to", async () => {
     silenceWarn();
     const request = oneLogicalRequest();
@@ -233,12 +254,16 @@ describe("one resend budget across composed recovery legs", () => {
       get lastTargetKey(): string | undefined { return owner.lastTargetKey; },
       remainingBaseSends: (cap: number): number => owner.remainingBaseSends(cap),
       claimAmbiguousResend: (limit: number): boolean => owner.claimAmbiguousResend?.(limit) === true,
+      get ambiguousResendSpent(): boolean | undefined { return owner.ambiguousResendSpent; },
       reserveDispatch: intent => owner.reserveDispatch(intent),
     };
 
     const first = deriveRequestExecutionBudget(view, CODEX_TEXT_GUARDED_BUDGET_POLICY);
     const second = deriveRequestExecutionBudget(view, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    expect(second.ambiguousResendSpent).toBe(false);
     expect(first.claimAmbiguousResend?.(GRANT)).toBe(true);
+    expect(second.ambiguousResendSpent).toBe(true);
+    expect(view.ambiguousResendSpent).toBe(true);
     expect(second.claimAmbiguousResend?.(GRANT)).toBe(false);
     expect(view.claimAmbiguousResend?.(GRANT)).toBe(false);
     expect(owner.claimAmbiguousResend?.(GRANT)).toBe(false);

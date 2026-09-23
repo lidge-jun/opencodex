@@ -212,6 +212,7 @@ export async function preparePassthroughExchange(
     | "recoveryClassFor"
     | "sendBudgetExhausted"
     | "claimAmbiguousResend"
+    | "ambiguousResendSpent"
     | "reserveCredentialHop"
     | "pendingHopPermit"
     | "workflowRootId"
@@ -1554,7 +1555,8 @@ export async function preparePassthroughExchange(
       if (options.abortSignal?.aborted) return transportFailureResponse(options.abortSignal.reason);
       upstreamResponse = preflight.response;
       if (preflight.kind === "failed") {
-        if (!configuredTransientSendBudgetExhausted()) {
+        // A zero-output failure does not undo an ambiguous replacement already sent.
+        if (!configuredTransientSendBudgetExhausted() && !sendBudgetState.ambiguousResendSpent) {
           const streamedOpaqueRecovery = await attemptOpaqueBlobRecovery({
             response: upstreamResponse,
             outboundBody: request.body,
