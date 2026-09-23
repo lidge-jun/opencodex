@@ -19,6 +19,7 @@ const MAX_COMPONENTS = 16;
 
 function durationSeconds(tail: string, allowBareSeconds: boolean): number | undefined {
   let rest = tail.trimStart();
+  if (allowBareSeconds && rest.startsWith("~")) rest = rest.slice(1).trimStart();
   let seconds = 0;
   let components = 0;
   while (true) {
@@ -50,7 +51,8 @@ function durationSeconds(tail: string, allowBareSeconds: boolean): number | unde
 
 /**
  * Supports reset(s) in, try again in and Retry-After/retry after hints; accepts
- * compound durations and rounds UP once after summing all components.
+ * compound durations, the generated Retry-After approximation marker, and
+ * rounds UP once after summing all components.
  * A bare number is permitted only for header-style Retry-After hints, never
  * for "reset in 2026". When a message declares several usable lower bounds,
  * honour the longest one rather than re-entering a still-live quota window.
