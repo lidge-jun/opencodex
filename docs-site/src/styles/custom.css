@@ -852,6 +852,7 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
 @media (max-width: 48rem) { .lp-dl-grid { grid-template-columns: 1fr; } }
 /* Detected platform: its card stands alone; the others sit in the disclosure. */
 .lp-download:has(.lp-dl-more:not([hidden])) .lp-dl-grid { grid-template-columns: minmax(0, 28rem); }
+.lp-download:has(.lp-dl-more:not([hidden])) .lp-dl-grid .lp-dl-actions { min-height: 0; }
 .lp-dl-more:not([hidden]) { display: block; margin-top: 1rem; }
 .lp-dl-more > summary {
   display: inline-flex;
