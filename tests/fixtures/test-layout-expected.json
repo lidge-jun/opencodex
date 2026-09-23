@@ -1434,6 +1434,7 @@
   "update-pnpm.test.ts": "update",
   "update-stop-classification.test.ts": "update",
   "update-stop-first.test.ts": "update",
+  "update-transactional-leftovers.test.ts": "update",
   "update-transactional.test.ts": "update",
   "update-tray-handoff.test.ts": "update",
   "update-tree-ownership.test.ts": "update",
