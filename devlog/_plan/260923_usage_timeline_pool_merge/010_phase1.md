@@ -13,7 +13,7 @@
   compare against their settings.
 - `hiddenProviders` hides an attribution when either the raw or the base provider is listed.
 - `modelAccount` grouping: account = explicit `accountLogLabel`, else the `main`/`p<hex6>`
-  suffix of an OpenAI-family provider, else `unknown`.
+  suffix of a provider, else `unknown`.
 
 `tests/usage/usage-timeline.test.ts`
 
