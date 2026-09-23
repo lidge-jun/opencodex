@@ -24,6 +24,15 @@ const BACKEND = 'short = "ocx-local"\nfull = "npm:@bitkyc08/opencodex"\nexplicit
 const metadataProbe = (exists: (path: string) => boolean) =>
   (path: string): "present" | "absent" => exists(path) ? "present" : "absent";
 
+/**
+ * The detector reports owner paths in one spelling for every candidate: a drive-letter or UNC path
+ * uses forward slashes (so lexical and resolved candidates compare), POSIX paths are unchanged.
+ * Expected values built with native path.join must be spelled the same way.
+ */
+function reportedPath(path: string): string {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\") ? path.replaceAll("\\", "/") : path;
+}
+
 function misePackage(root: string, version = "2.59.0"): string {
   const toolRoot = join(root, "custom mise data", "installs", "ocx-local");
   const packagePath = join(
@@ -52,8 +61,8 @@ describe("mise installation ownership", () => {
         owner: {
           tool: "ocx-local",
           backend: "npm:@bitkyc08/opencodex",
-          installPath: join(root, "custom mise data", "installs", "ocx-local", "2.59.0"),
-          toolRoot: join(root, "custom mise data", "installs", "ocx-local"),
+          installPath: reportedPath(join(root, "custom mise data", "installs", "ocx-local", "2.59.0")),
+          toolRoot: reportedPath(join(root, "custom mise data", "installs", "ocx-local")),
         },
       });
       expect(detectInstallFromPath(packagePath)).toBe("mise");
@@ -76,7 +85,7 @@ describe("mise installation ownership", () => {
       const floating = join(toolRoot, "latest", exact.slice(join(toolRoot, "2.59.0").length + 1));
       expect(detectInstallOwnershipFromPath(floating)).toMatchObject({
         installer: "mise",
-        owner: { tool: "ocx-local", installPath: join(toolRoot, "2.59.0") },
+        owner: { tool: "ocx-local", installPath: reportedPath(join(toolRoot, "2.59.0")) },
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -99,6 +108,33 @@ describe("mise installation ownership", () => {
       rmSync(linkParent, { recursive: true, force: true });
       rmSync(real, { recursive: true, force: true });
     }
+  });
+
+  test("reports a Windows install in forward-slash spelling whatever the input separators", () => {
+    const metadata = "C:/Users/RUNNER~1/AppData/Local/mise/installs/ocx-local/.mise.backend.toml";
+    const deps = {
+      exists: () => false,
+      probe: (path: string) => (path === metadata ? "present" : "absent") as "present" | "absent",
+      readFile: () => BACKEND,
+      realpath: (value: string) => value,
+    };
+    const expected = {
+      installer: "mise",
+      owner: {
+        tool: "ocx-local",
+        backend: "npm:@bitkyc08/opencodex",
+        installPath: "C:/Users/RUNNER~1/AppData/Local/mise/installs/ocx-local/2.59.0",
+        toolRoot: "C:/Users/RUNNER~1/AppData/Local/mise/installs/ocx-local",
+      },
+    };
+    for (const packagePath of [
+      "C:\\Users\\RUNNER~1\\AppData\\Local\\mise\\installs\\ocx-local\\2.59.0\\node_modules\\@bitkyc08\\opencodex\\bin",
+      "C:/Users/RUNNER~1/AppData/Local/mise/installs/ocx-local/2.59.0/node_modules/@bitkyc08/opencodex/bin",
+    ]) {
+      expect(detectInstallOwnershipFromPath(packagePath, deps)).toEqual(expected);
+    }
+    expect(reportedPath("C:\\a\\b")).toBe("C:/a/b");
+    expect(reportedPath("/tmp/mise\\state")).toBe("/tmp/mise\\state");
   });
 
   test("does not infer mise ownership from a .mise path or mise on PATH", () => {
