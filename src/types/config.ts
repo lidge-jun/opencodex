@@ -437,6 +437,12 @@ export interface OcxConfig {
   metricsExport?: { enabled?: boolean };
   /** Opt in to one identical-turn retry when a Responses completion has no text or tool call. */
   emptyCompletionRetry?: boolean;
+  /** chatgpt-bridge module switch and state location (handoff 2026-09-11 §4). */
+  chatgptBridge?: {
+    enabled?: boolean;
+    statePath?: string;
+    devspaceMcpUrl?: string;
+  };
   /** Suppress allowlisted client-facing Codex transport hints; provider enforcement is unchanged. */
   dropCodexSafetyBuffering?: boolean;
   /**

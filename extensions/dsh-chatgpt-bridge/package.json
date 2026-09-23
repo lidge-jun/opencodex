@@ -1,0 +1,27 @@
+{
+  "name": "@opencodex/dsh-chatgpt-bridge",
+  "version": "0.1.0",
+  "description": "DSH host+client plugin: persistent session bindings between specific DSH sessions and a normal ChatGPT chat, maintained by OpenCodex chatgpt-bridge",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/host.js",
+  "types": "dist/host.d.ts",
+  "exports": {
+    ".": "./dist/host.js",
+    "./client": "./dist/client.js"
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "bunx tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-agent": "0.1.2-rc.1",
+    "@deepseek-ai/dsh-api-session-controller": "0.1.2-rc.1"
+  },
+  "dsh": {
+    "platform": "web",
+    "client": {
+      "inject": []
+    }
+  }
+}

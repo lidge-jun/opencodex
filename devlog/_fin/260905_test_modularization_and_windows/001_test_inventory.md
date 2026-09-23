@@ -415,6 +415,10 @@ Sum of the table: **1061**. Zero leftover.
 
 `phase100-native-parity.test.ts`
 
+#### `tests/chatgpt-bridge/` (4)
+
+`chatgpt-bridge-core.test.ts`, `chatgpt-bridge-codex-host.test.ts`, `chatgpt-bridge-dsh-host.test.ts`, `chatgpt-bridge-provider-adapter.test.ts` — added 2026-09-11 (chatgpt-bridge integration, feat/chatgpt-bridge)
+
 ## 3. Cross-cutting coupling
 
 ### 3.A tests/helpers imported by how many tests (unique files)

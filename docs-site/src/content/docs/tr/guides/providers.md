@@ -316,8 +316,8 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 96 yerleşik önayar ile birlikte gelir: 80 anahtar tabanlı, 12
-OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
+opencodex 97 yerleşik önayar ile birlikte gelir: 80 anahtar tabanlı, 12
+OAuth, dört yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
 girdiler:

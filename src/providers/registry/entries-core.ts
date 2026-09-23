@@ -87,6 +87,19 @@ import {
 
 export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
+    id: "chatgpt-web",
+    label: "ChatGPT Web (bridge, experimental)",
+    adapter: "chatgpt-web",
+    baseUrl: "https://chatgpt.com",
+    authKind: "local",
+    featured: false,
+    dashboardPreset: true,
+    note: "Web ChatGPT models served through the chatgpt-bridge module (browser transport). Turns fail with CHATGPT_WEB_TRANSPORT_UNAVAILABLE until the module browser transport is enabled; no keys are stored and web login lives in the managed browser profile.",
+    models: ["chatgpt-web/luna", "chatgpt-web/instant", "chatgpt-web/medium", "chatgpt-web/high"],
+    liveModels: false,
+    defaultModel: "chatgpt-web/luna",
+  },
+  {
     id: "openai",
     label: "OpenAI (Codex login)",
     adapter: "openai-responses",

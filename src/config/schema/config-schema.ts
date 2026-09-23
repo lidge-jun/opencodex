@@ -153,6 +153,13 @@ export const configSchema = z.object({
   configRebaseProvenance: z.unknown().optional(),
   // A retry can be billable, so absence and malformed hand edits both stay off.
   emptyCompletionRetry: z.boolean().optional().catch(false),
+  chatgptBridge: z
+    .object({
+      enabled: z.boolean().optional().catch(false),
+      statePath: z.string().min(1).optional().catch(undefined),
+      devspaceMcpUrl: z.string().min(1).optional().catch(undefined),
+    })
+    .optional().catch(undefined),
   // Header suppression changes what Codex sees, so absence and malformed edits stay off.
   dropCodexSafetyBuffering: z.boolean().optional().catch(false),
   // A malformed hand edit must not silently stop opening the browser: fall back

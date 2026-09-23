@@ -6,6 +6,7 @@ import { createCodeBuddyAdapter } from "./codebuddy/adapter";
 import { createQoderAdapter } from "./qoder/adapter";
 import { createCommandCodeAdapter } from "./command-code";
 import { createCursorAdapter } from "./cursor";
+import { createChatGptWebAdapter } from "../chatgpt-bridge/provider/adapter";
 import { createDevinAdapter } from "./devin";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
@@ -43,7 +44,8 @@ export type AdapterWire =
   | "google"
   | "kiro"
   | "cursor"
-  | "devin";
+  | "devin"
+  | "chatgpt-web";
 
 export type AdapterMutationContract =
   | "codex-owned"
@@ -129,6 +131,11 @@ export const ADAPTER_REGISTRY = {
     wire: "devin",
     mutation: "codex-owned",
     create: (provider: OcxProviderConfig, context: AdapterFactoryContext) => createDevinAdapter(provider, context),
+  },
+  "chatgpt-web": {
+    wire: "chatgpt-web",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createChatGptWebAdapter(provider),
   },
   "mimo-free": {
     contractParent: "openai-chat",

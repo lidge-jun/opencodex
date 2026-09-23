@@ -312,6 +312,12 @@ describe("membership oracle", () => {
       // Placed under routing/ by its author (#3523, restored by #3530): it exercises the oauth
       // routing quorum, not the Anthropic adapter, so the anthropic- seed is wrong for it.
       "anthropic-quorum-cache.test.ts",
+      // chatgpt-bridge/ is its own domain (2026-09-11): the "chat" oauth seed would grab the
+      // basename, but the file exercises the chatgpt-bridge core store, not oauth.
+      "chatgpt-bridge-core.test.ts",
+      "chatgpt-bridge-codex-host.test.ts",
+      "chatgpt-bridge-dsh-host.test.ts",
+      "chatgpt-bridge-provider-adapter.test.ts",
     ]);
     const mismatches: string[] = [];
     let resolved = 0;
