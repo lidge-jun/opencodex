@@ -123,6 +123,12 @@ export async function handleDesktopAppRestart(
         + "nothing was stopped.",
       );
       return result;
+    case "test_environment":
+      log.error(
+        "Skipped the Codex desktop app restart: running under the test runner (NODE_ENV=test), "
+        + "so the real app was not touched.",
+      );
+      return result;
     case "restart_in_flight":
       log.error(
         "Another Codex desktop-app restart is already running; this one did nothing. "
