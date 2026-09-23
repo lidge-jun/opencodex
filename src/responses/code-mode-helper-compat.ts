@@ -92,6 +92,9 @@ export function compileCodeModeHelperInput(
     }
     return `const result = await tools.view_image(${JSON.stringify(viewArgs)});\nif (result && result.image_url) { image(result.image_url); } else { text(result); }`;
   }
+  if (helperName === "create_goal" || helperName === "get_goal" || helperName === "update_goal") {
+    return `const result = await tools.${helperName}(${JSON.stringify(args)});\ntext(result);`;
+  }
   return `const result = await tools.exec_command(${JSON.stringify(args)});\ntext(result);`;
 }
 

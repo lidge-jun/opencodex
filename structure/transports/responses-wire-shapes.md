@@ -225,6 +225,12 @@ The passthrough guard resolves an emitted name through that same `normalizeDecla
 whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
 `normalizeDefaultNamespaceInItem` implemented only the bare-tool case (#4176), so a
 `default.`-prefixed code-mode helper was admitted as `exec` (#4412) and then relayed verbatim.
+The bounded helper vocabulary includes the goal lifecycle calls that Codex advertises inside its
+unified `exec` description (`create_goal`, `get_goal`, and `update_goal`). Routed providers that
+echo one of those nested names, with or without an invented `default.` prefix, are restored to the
+declared `exec` and compiled back to the matching `tools.<helper>(...)` call. A genuinely declared
+bare goal tool keeps its bare identity, and a catalog declaring neither that tool nor `exec` still
+fails closed.
 `default.view_image` is not a legal Responses tool name, and Codex stores what it receives, so the
 one relayed item was refused by `^[a-zA-Z0-9_-]+$` on every later replay of that conversation and
 the task could not be compacted or continued (#5095). The rewrite now falls back to the resolver

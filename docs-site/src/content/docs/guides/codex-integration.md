@@ -594,6 +594,12 @@ executes and authorizes the command. Valid JavaScript fallback fields, ambiguous
 and unrelated tool namespaces are not converted. This compatibility repair does not bypass
 provider rate limits or change the configured retry policy.
 
+The same repair covers the goal helpers. A routed model that calls `create_goal`, `get_goal`, or
+`update_goal` (or a `default.`-prefixed spelling of one) as a tool while the catalog declares only
+code-mode `exec` has the call converted into the matching `tools.<helper>(...)` call inside
+`exec`. A catalog that genuinely declares the bare goal tool keeps it, and a catalog that declares
+neither the tool nor `exec` still rejects the call as undeclared.
+
 Routed code-mode turns are also told the host's rules for the nested helpers before the first
 call: `tools.apply_patch` takes one string that opens and closes with the bare patch marker lines,
 the isolate has no `import`, and long-running commands are polled through `write_stdin`. When a
