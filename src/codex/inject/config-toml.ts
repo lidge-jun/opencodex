@@ -317,7 +317,11 @@ export const ROOT_WEB_SEARCH_DISABLED_LINE = 'web_search = "disabled"';
 export const ROOT_WEB_SEARCH_DISABLED_VALUE = "disabled";
 
 export function isRootWebSearchLine(line: string): boolean {
-  return /^\s*web_search\s*=/.test(line);
+  // The quoted spellings are the same key to TOML, and `tomlStringPattern` -- which the value
+  // evidence below goes through -- already reads them. A predicate that matched only the bare
+  // spelling would leave `"web_search" = "live"` in place while inserting our own line, and two
+  // root keys of the same name stop Codex from loading the file at all.
+  return /^\s*(?:"web_search"|'web_search'|web_search)\s*=/.test(line);
 }
 
 /** What an earlier injection recorded about this key, read back from the journal. */

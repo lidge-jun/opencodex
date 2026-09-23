@@ -599,7 +599,8 @@ const [maBusy, setMaBusy] = useState(false);
       });
     } catch {
       setSidecar(previous);
-      setSidecarCodexApply(undefined);
+      // The request failed before any answer existed, so it says nothing about the Codex file:
+      // an outstanding report stays until a write that ran or a successful sync settles it.
     } finally {
       setSidecarSaving(false);
     }

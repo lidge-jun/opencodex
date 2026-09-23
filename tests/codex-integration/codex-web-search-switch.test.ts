@@ -93,9 +93,21 @@ describe("root web_search ownership", () => {
     expect(on.content).not.toContain(OCX_ROUTING_MARKER_LINE);
     expect(on.content).not.toContain("disabled");
     // A key the operator has taken back is not overwritten by the record.
-    const reclaimed = `${on.content}web_search = "indexed"\n`;
+    const reclaimed = on.content.replace('web_search = "live"', 'web_search = "indexed"');
+    expect(rootWebSearchLines(reclaimed)).toEqual(['web_search = "indexed"']);
     expect(ensureRootWebSearchDisabled(reclaimed, false, { replacedUserLine: 'web_search = "live"' }).content)
       .toBe(reclaimed);
+  });
+
+  test("a quoted key spelling is the same key, not a second one", () => {
+    // TOML reads `"web_search"` and `web_search` as one key, so writing ours next to the
+    // operator's quoted line would make the file unloadable rather than disable the tool.
+    const quoted = ['"web_search" = "live"', 'model = "gpt-5.6-luna"', "", "[features]", "fast_mode = true", ""].join("\n");
+    const off = ensureRootWebSearchDisabled(quoted, true);
+    expect(rootWebSearchLines(off.content)).toEqual([ROOT_WEB_SEARCH_DISABLED_LINE]);
+    expect(off.replacedUserLine).toBe('"web_search" = "live"');
+    const on = ensureRootWebSearchDisabled(off.content, false, { replacedUserLine: off.replacedUserLine });
+    expect(rootWebSearchLines(on.content)).toEqual(['"web_search" = "live"']);
   });
 
   test("a marker-less line the journal proves we wrote is still ours", () => {
