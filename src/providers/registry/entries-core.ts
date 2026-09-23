@@ -880,6 +880,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       // deepseek-v4-flash stays listed — that route rejects image_url upstream.
       "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
+      // V2.6 is multimodal first-party, but image forwarding on this gateway is unprobed:
+      // the sidecar describes images until a route probe proves native input.
+      "mimo-v2.6-pro", "mimo-v2.6-flash",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
     ],

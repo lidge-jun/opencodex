@@ -271,6 +271,8 @@ export const THINKING_TOGGLE_MAP: Record<string, string> = {
 };
 export const OPENCODE_GO_THINKING_TOGGLE_MODELS = [
   "mimo-v2.5", "mimo-v2.5-pro", "glm-5", "glm-5.1",
+  // V2.6 keeps the vendor's thinking toggle; listed ahead of a Go probe (preemptive, 2026-09-23).
+  "mimo-v2.6-pro", "mimo-v2.6-flash",
 ];
 /**
  * Zhipu's domestic BigModel platform. Text families first, then the vision member: modalities are
@@ -949,6 +951,8 @@ export const CLINE_PASS_MODELS = [
   "cline-pass/kimi-k2.7-code",
   "cline-pass/kimi-k2.6",
   "cline-pass/deepseek-v4-flash",
+  "cline-pass/mimo-v2.6-pro",
+  "cline-pass/mimo-v2.6-flash",
   "cline-pass/mimo-v2.5",
   "cline-pass/mimo-v2.5-pro",
   "cline-pass/minimax-m3",
@@ -997,6 +1001,8 @@ export const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "cline-pass/kimi-k2.7-code": 262_144,
   "cline-pass/kimi-k2.6": 262_144,
   "cline-pass/deepseek-v4-flash": 1_048_576,
+  "cline-pass/mimo-v2.6-pro": 1_048_576,
+  "cline-pass/mimo-v2.6-flash": 1_048_576,
   "cline-pass/mimo-v2.5": 1_050_000,
   "cline-pass/mimo-v2.5-pro": 1_050_000,
   "cline-pass/minimax-m3": 1_048_576,

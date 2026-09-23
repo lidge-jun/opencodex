@@ -53,3 +53,11 @@ and the missing Chat ultraspeed id were folded above. B-CAT-04 rejection confirm
 - New catalog-hint cases go to a sibling test file registered in `scripts/test-layout/layout.json` and
   `tests/fixtures/test-layout-expected.json` (`codex-catalog.test.ts` is ~11 lines under its cap).
 - Saved `defaultModel`/`models` survive enrichment (`src/providers/derive.ts:523`); no MiMo rename rule exists.
+
+## Re-audit (gpt-6-sol 01a0cca0: 010 NEAR-PASS, 020 PASS)
+
+Residual accepted for Go vision: a persisted Go `noVisionModels` list is filled all-or-nothing (`src/providers/derive.ts:551`), so
+an existing config does not learn the V2.6 entries. With V2.6 metadata text-only, the catalog advertises text-only for those
+rows and the app blocks image attachment instead of sending an image the route may reject; new configs get the sidecar.
+A guarded list repair would apply to every provider's all-or-nothing lists and is a separate unit. No opencode-go key is
+configured locally, so the route probe that would settle native image support stays a follow-up.
