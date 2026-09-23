@@ -271,7 +271,7 @@ referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Bir geri d�
 proxy'si (`127.0.0.1`, varsayılan) hiçbir kabul anahtarı gerektirmez. Referans
 verilen bir değişkeni yalnızca istemci şeması desteklediğinde ve proxy geri
 döngünün ötesine bağlandığında ayarlayın; kabul anahtarlarının nasıl verildiğini
-görmek için [Uzaktan erişim](/tr/reference/configuration/#remote-access)
+görmek için [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim)
 bölümüne bakın. Yukarı akış sağlayıcılarının kendi anahtarları tamamen ayrı bir
 şeydir ve [Sağlayıcılar](/tr/guides/providers/) bölümüne göre yapılandırılır.
 Oluşturulan gjc entegrasyonu gizli olmayan bir loopback yer tutucusu kullanır; ortam değişkeni gerekmez. Yalnızca loopback desteklenir, uzak erişim kimlik bilgileri yapılandırılmaz.

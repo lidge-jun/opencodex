@@ -155,7 +155,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 
 공급자 등록·교체(`POST /api/providers`)는 `responsesPath`와 `chatCompletionsPath`를 검증한 뒤 메모리와 파일의 설정을 변경합니다. `PATCH /api/providers?name=<provider>`는 요청 본문을 저장된 공급자에 병합합니다. `disabled` 외의 필드를 변경하는 업데이트(`requestPacing`만 변경하는 업데이트 제외)는 저장 전에 병합된 공급자의 경로를 같은 방식으로 검증하며, 유지된 경로가 유효하지 않으면 `400`을 반환하고 설정을 변경하지 않습니다. 설정 파일을 읽을 때도 같은 경로 규칙을 적용합니다.
 
-API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ocx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/reference/configuration/server/#claude-code)에서 설정합니다.
+API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ocx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/ko/reference/configuration/server/#claude-code-claudecode)에서 설정합니다.
 
 ## 공급자 진단용 외부 요청 안전성
 

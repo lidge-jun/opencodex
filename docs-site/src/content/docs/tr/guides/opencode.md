@@ -131,7 +131,7 @@ olmayan bir bağlantının gerektirdiği budur.
 Bir geri döngü bağlantısı (`127.0.0.1`, varsayılan) hiçbir şeyi doğrulamaz, bu
 nedenle `{env:…}` referansı etkisizdir ve değişkeni ayarlanmamış
 bırakabilirsiniz. Yalnızca `hostname` geri döngünün ötesine ayarlandığında
-önemlidir; bkz. [Uzaktan erişim](/tr/reference/configuration/#remote-access). Bu
+önemlidir; bkz. [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim). Bu
 kabul anahtarı opencodex'in kendisine aittir ve
 [Sağlayıcılar](/tr/guides/providers/) altında yapılandırılan yukarı akış
 sağlayıcı anahtarlarıyla ilgisizdir.

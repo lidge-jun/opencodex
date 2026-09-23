@@ -370,7 +370,7 @@ ChatGPT bearer はメインルーティングプロバイダーには転送し�
 モデル、detail、画像バイト、リクエストコンテキストを基準にキャッシュし、同じ画像とコンテキストを毎回再説明
 しません。内容が変わり得るリモート `https:` 画像はキャッシュしません。
 
-全設定キーは[設定リファレンス](/ja/reference/configuration/#sidecars)で確認できます。
+全設定キーは[設定リファレンス](/ja/reference/configuration/server/#サイドカー)で確認できます。
 Anthropic OAuth のウェブ検索と画像説明は保存所ですでに使っている Claude Code OAuth
 fingerprint 方式をそのまま踏襲しますが、長時間の無人作業に使う前に自身のアカウントと実際の作業で
 十分 soak test するのが無難です。

@@ -23,7 +23,7 @@ interface ProviderAdapter {
 `AdapterEvent`'lere yükseltir. `fetchResponse`, bir adaptörün yeniden
 denemelere/zaman aşımlarına sahip olmasına izin verirken `runTurn`, tek bir HTTP
 getirmesini takip eden tek bir yanıt akışı olarak temsil edilemeyen aktarımları
-destekler. [`bridge.ts`](/tr/reference/architecture/#kopru-bridge) daha sonra
+destekler. [`bridge.ts`](/tr/reference/architecture/#köprü-bridge) daha sonra
 olayları Responses SSE'ye dönüştürür.
 
 ## `openai-chat`

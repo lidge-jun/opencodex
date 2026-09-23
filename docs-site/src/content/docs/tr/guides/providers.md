@@ -52,7 +52,7 @@ işaretler.
 Bu tahmin yalnızca görüntüleme amaçlıdır. Hesap seçimini, oturum bağlılığını,
 otomatik geçişi, soğuma sürelerini veya diğer herhangi bir yönlendirme kararını
 değiştirmez. Bireysel hesap durumu ve yönlendirme kontrolleri için [Codex Auth
-hesap havuzu](/tr/guides/web-dashboard/#codex-auth-ve-hesap-havuzlari) bölümünü
+hesap havuzu](/tr/guides/web-dashboard/#codex-auth-ve-hesap-havuzları) bölümünü
 kullanın.
 
 Sevk edilen v1 yapılandırmaları otomatik olarak işaretçi 2'ye ve tek bir seçenek
@@ -626,7 +626,7 @@ anahtarları değiştirebilir veya kaldırabilir; yönetim API'si
 Kontrol panelini açmadan aynı Codex, OAuth ve API anahtarı havuzlarını incelemek
 veya değiştirmek için `ocx account list`, `ocx account current` ve `ocx account
 use` komutlarını kullanın. Komutlar, JSON çıktısı ve yeni oturum davranışı için
-[CLI referansına](/tr/reference/cli/#ocx-account-subcommand) bakın.
+[CLI referansına](/tr/reference/cli/providers-accounts/#ocx-account-alt-komut) bakın.
 
 ### GPT-5.6 önizleme yolları
 
@@ -692,7 +692,7 @@ okuma/yazma/silme/ls/grep/shell/fetch yürütmesi varsayılan olarak devre dış
 denemeler için (veya kontrol panelinde **Sağlayıcılar → Cursor → JSON Düzenle**
 aracılığıyla) `~/.opencodex/config.json` içindeki `providers.cursor` nesnesinde
 `unsafeAllowNativeLocalExec: true` ayarlayın. Tam bir örnek için [Yapılandırma
-referansı](/tr/reference/configuration/#cursor-saglayicisi-adapter-cursor)
+referansı](/tr/reference/configuration/providers/#cursor-sağlayıcısı-adapter-cursor)
 bölümüne bakın. MCP, ekran kaydı ve bilgisayar kullanımı yürütücü kancaları
 olarak mevcuttur; yapılandırılmış bir yerel yürütücü olmadan opencodex isteği
 politika engellemek yerine tipli yürütücü yok sonuçları döndürür. Cursor OAuth

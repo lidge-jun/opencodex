@@ -768,6 +768,7 @@
     "exhaustive-deps-suppression.test.ts": "ci-workflows",
     "docs-provider-billing-claims.test.ts": "ci-workflows",
     "docs-provider-preset-counts.test.ts": "ci-workflows",
+    "docs-link-targets.test.ts": "ci-workflows",
     "docs-readme-translation-parity.test.ts": "ci-workflows",
     "docs-remote-hub-claims.test.ts": "ci-workflows",
     "doctor-codex-envkey-readiness.test.ts": "service",
@@ -1692,7 +1693,16 @@
     "platform-dialog-guard.test.ts": "gui",
     "api-key-catalog-authority.test.ts": "providers",
     "release-resume-identity.test.ts": "ci-workflows",
-    "update-bun-ownership-lease.test.ts": "update"
+    "update-bun-ownership-lease.test.ts": "update",
+    "cursor-continuation-invariants.test.ts": "providers/cursor",
+    "chat-native-spend.test.ts": "responses",
+    "responses-compaction-policy-identity.test.ts": "responses",
+    "server-auth-scoped-quota.test.ts": "server",
+    "responses-code-mode-shell-compile.test.ts": "responses",
+    "cursor-request-compat.test.ts": "providers/cursor",
+    "responses-xai-request-compat.test.ts": "responses",
+    "responses-continuation-boundaries.test.ts": "responses",
+    "responses-custom-tool-historical-replay.test.ts": "responses"
   },
   "migrated": [
     "adapters",

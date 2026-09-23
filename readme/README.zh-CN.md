@@ -95,21 +95,24 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 
 它是同一套仪表板的原生外壳，另带 WidgetKit 扩展，无需打开浏览器即可查看代理状态、
 今日用量和提供商配额。代理本身没有变化：应用会连接已在运行的代理；若未发现，
-则启动内置的 `ocx` sidecar。仪表板仍位于 **http://localhost:10100**。
+则启动内置的 `ocx` sidecar。仪表板仍使用代理的端口（未另行配置时为
+**http://localhost:10100**）。
 
-桌面应用目前仍处于测试阶段。构建已签名以保障完整性，但尚未公证，因此 macOS
-首次启动时需要右键点击并选择“打开”，Windows SmartScreen 也会对安装程序发出警告。
+桌面应用目前仍处于测试阶段。macOS 应用的发布构建已使用 Developer ID 签名并完成公证
+（本地构建采用 ad-hoc 签名）；Windows 安装程序尚未进行代码签名，因此首次运行时
+SmartScreen 会发出警告。
 小组件需要 macOS 14 或更高版本；它所呈现的快照模型位于 [`app/`](../app)
 （`MenuBarCore`）。
 
-请从[最新发布版本](https://github.com/lidge-jun/opencodex/releases)下载，或使用
-`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` 在本地构建。
+请从[最新发布版本](https://github.com/lidge-jun/opencodex/releases)下载，或在本地构建：
+先在仓库根目录运行 `bun install && bun run build:gui`，再进入 `desktop/` 运行
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`。
 
 安装位置、服务文件以及写入磁盘的其他内容均列在
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) 中。
-[桌面应用指南](https://lidge-jun.github.io/opencodex/guides/desktop-app/)和
-[macOS 菜单栏应用指南](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
-介绍了各平台的安装方式和 Gatekeeper 提示。
+[桌面应用指南](https://opencodex.me/zh-cn/guides/desktop-app/)和
+[macOS 菜单栏应用指南](https://opencodex.me/zh-cn/guides/macos-menu-bar/)
+介绍了各平台的安装方式和首次启动步骤。
 
 </details>
 
@@ -201,8 +204,9 @@ services:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -210,8 +214,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

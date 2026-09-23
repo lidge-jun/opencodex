@@ -420,7 +420,7 @@ yeniden başlatma ipucunu yazdırır; `ocx doctor` yeniden başlatma güvenliği
 
 Katalog senkronizasyonu seçilen alt ajan modellerini Codex için kullanılabilir
 hale getirir; seçici sıralaması için [Codex App model
-seçicisi](/tr/guides/codex-app-models/#subagent-selection) ve v1/base/v2
+seçicisi](/tr/guides/codex-app-models/#alt-ajan-seçimi) ve v1/base/v2
 delegasyonu ve geri dönüş davranışı için [Alt Ajan
 Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
@@ -463,7 +463,7 @@ ocx restore    # durdurmadan geri yükleyin  (takma ad: ocx eject)
 ocx restore back # düz Codex'i çalışan proxy'ye yeniden yönlendirin
 ```
 
-opencodex yönetilen bir [arka plan servisi](/tr/reference/cli/#ocx-service)
+opencodex yönetilen bir [arka plan servisi](/tr/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove)
 olarak çalıştığında `OCX_SERVICE=1` ayarlar, böylece servis odaklı bir yeniden
 başlatma Codex yapılandırmasını **bozmaz** — yalnızca açık bir `ocx stop` / `ocx
 service stop` yerel Codex'i geri yükler.

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { create, fromBinary } from "@bufbuild/protobuf";
-import { toBinary } from "@bufbuild/protobuf";
+import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
 import {
   createCursorBlobRequestScope,
   cursorBlobMetrics,
@@ -35,6 +34,7 @@ import { resetDebugSettingsForTests } from "../../../src/lib/debug-settings";
 import {
   CURSOR_EXTERNAL_ROOT_BYTE_LIMIT,
   CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT,
+  CURSOR_EXTERNAL_CURRENT_REQUEST_GUIDANCE,
   CURSOR_EXTERNAL_ROOT_BLOB_LIMIT,
   CURSOR_ROUTING_LEVEL_PARAMETER_ID,
   encodeCursorRunRequest,
@@ -1054,7 +1054,7 @@ describe("Cursor blob handshake", () => {
 
     expect(run?.action?.action.case).toBe("userMessageAction");
     const value = run?.action?.action.case === "userMessageAction" ? run.action.action.value : undefined;
-    expect(value?.userMessage?.text).toBe(CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT);
+    expect(value?.userMessage?.text).toBe(`${CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT}\n\n${CURSOR_EXTERNAL_CURRENT_REQUEST_GUIDANCE}\n\n[Current user request]\nread a file`);
     // Tool results are still replayed via history blobs.
     const roots = decodeRootMessages(bytes) as Array<{ role?: string }>;
     expect(JSON.stringify(roots)).toContain("contents");

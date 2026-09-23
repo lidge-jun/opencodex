@@ -172,7 +172,7 @@ Sağlayıcı kaydı ve değiştirme (`POST /api/providers`), bellekteki veya dis
 API anahtarı sağlayıcıları değişmez bir anahtar veya bir ortam referansı
 tutabilir. OAuth sağlayıcıları `ocx login` tarafından doldurulan kimlik bilgisi
 deposunu kullanır; abonelik destekli Claude Code başlatma davranışı
-[`claudeCode.authMode`](/tr/reference/configuration/server/#claude-code) altında
+[`claudeCode.authMode`](/tr/reference/configuration/server/#claude-code-claudecode) altında
 yapılandırılır.
 
 ## Sağlayıcı teşhis giden güvenliği

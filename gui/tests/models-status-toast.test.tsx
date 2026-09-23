@@ -613,6 +613,31 @@ test("leaving Models aborts its pending picker save", async () => {
   expect(container.querySelector(".action-toast")).toBeNull();
 });
 
+test("changing Models tabs preserves the pending app-server status read", async () => {
+  const baseFetch = globalThis.fetch;
+  let statusSignal: AbortSignal | null | undefined;
+  let releaseStatus!: (response: Response) => void;
+  globalThis.fetch = (async (input, init) => {
+    if (String(input).endsWith("/api/system/codex-app-server")) {
+      statusSignal = init?.signal;
+      return new Promise<Response>(resolve => { releaseStatus = resolve; });
+    }
+    return baseFetch(input, init);
+  }) as typeof fetch;
+
+  await mountModelsForRefreshWarning();
+  await waitForModelsFeedback(() => releaseStatus !== undefined);
+  const combosTab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+    .find(button => button.textContent?.startsWith("Combos"));
+  expect(combosTab).toBeDefined();
+  await act(async () => { combosTab!.click(); });
+
+  expect(statusSignal?.aborted).toBe(false);
+  await act(async () => { releaseStatus(Response.json({ state: "stale", runningCount: 1 })); });
+  await waitForModelsFeedback(() => container.querySelector(".codex-stale-banner") !== null);
+  expect(container.querySelector(".codex-stale-banner")).not.toBeNull();
+});
+
 
 function holdPostSaveAppServerRead() {
   const baseFetch = globalThis.fetch;

@@ -68,7 +68,14 @@ the persisted values/default, initial refusal, non-direct repair withholding, di
 behavior, and content-free diagnostics. English and all translated copies change together.
 
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
-served at the site root, with Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, and Japanese under `/ja`. `docs-site/astro.config.mjs` is the locale source of truth.
+served at the site root, with French under `/fr`, Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, Japanese under `/ja`, and Turkish under `/tr`. `docs-site/astro.config.mjs` is the locale source of truth.
+
+Internal links are checked in two places. `docs-site/src/integrations/internal-links.mjs` runs inside the
+Astro build, so the CI `docs` job and Deploy Docs both refuse a site whose generated HTML carries an
+internal href or src naming a file the build did not produce, or a fragment the target page lacks. It sees
+only generated HTML: client-rendered links and other hosts are outside it. `tests/ci-workflows/docs-link-targets.test.ts`
+checks the docs URLs hard-coded in README files, `src/`, `gui/src/`, `skills/` and issue templates against the
+content tree, without fragments, and only on pull requests that start the Bun suite.
 
 Server-configuration credential rows in English and every locale copy distinguish data-plane `apiKeys` from the independent management admin credential and link the matching locale management reference. Credential setup instructions themselves stay in the management reference; the rows only name the separation.
 
@@ -463,6 +470,8 @@ dedicated job, and queueing a new batch behind a surviving process from the prec
 the process timeout without executing tests. The per-process home isolation and live-home/service
 manager guards remain active because the preload installs them before the lock boundary.
 Test teardown follows the [sandbox cleanup contract](test-sandbox-cleanup.md).
+`tests/preload.ts` resolves cleanup dependencies after home/lock admission and before test cases; teardown awaits native-main startup releases and config hardening, then the sandbox's registered ACL child reaps before removing that root. Its synchronous exit fallback leaves an undrained root for ownership-checked stale recovery instead of blocking child cleanup with removal retries. `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
+`tests/helpers/test-sandbox-cleanup.ts` exposes case-scoped lifecycle ownership: cancellation starts listener stops while owned asynchronous work settles, and repeated close/stop calls share one promise. After teardown starts, only the lifecycle's own abort reason is absorbed; any other error, including a foreign AbortError, still fails its case. Callers settle that lifecycle before draining producers/reaps and restoring or removing a home. The helper does not replace fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
 A test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
 batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
 failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
@@ -581,18 +590,7 @@ The public server configuration reference documents the optional
 
 Catalog synchronization follows the [reasoning metadata refresh contract](../catalog.md#reasoning-metadata-refresh).
 
-## Bun updater ownership transaction
-
-`src/update/ownership-transaction.ts` holds one mutation lease across the Bun updater's awaited
-stop, package replacement and recovery work. The parent never puts its token in the global
-environment. Fixed stop/service/direct-recovery children can join it; package-manager and
-ancillary children receive environments without the capability. Refusals return through the
-lease boundary before exiting, and thrown failures release it after owner-aware recovery.
-Replacement and recovery inspect both the captured endpoint and the freshly read runtime record.
-Malformed or unreadable records remain unknown. Recovery requires the same complete owner
-identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.
-Direct recovery retains the lease until readiness or its bounded deadline. The normal successful
-manual-runtime update still prints the existing restart hint.
+Bun updater ownership and recovery follow the [service transaction contract](service-and-sidecars.md#bun-updater-ownership-transaction).
 
 Linux release bundling enables Tauri verbosity on the primary attempt so linuxdeploy diagnostics remain visible. macOS signing verbosity and publication/signature gates are unchanged.
 

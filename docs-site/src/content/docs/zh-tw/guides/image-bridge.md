@@ -51,7 +51,7 @@ Image Bridge 選項位於 `~/.opencodex/config.json` 的 `images` 之下。Bridg
 
 ## 運作方式
 
-Image Bridge 僅在選取了**非 OpenAI** 模型、且 **Responses** 回合的 `/v1/responses` tools 陣列中包含 hosted `image_generation` 工具時啟用。它**不會**攔截 Codex 內建的 `image_gen` 工具，該工具直接 POST 到 `/v1/images/generations`（或 `/images/edits`）— 該路徑另見 [Codex 整合](/zh-tw/guides/codex-integration/#built-in-image-generation-image_gen)。
+Image Bridge 僅在選取了**非 OpenAI** 模型、且 **Responses** 回合的 `/v1/responses` tools 陣列中包含 hosted `image_generation` 工具時啟用。它**不會**攔截 Codex 內建的 `image_gen` 工具，該工具直接 POST 到 `/v1/images/generations`（或 `/images/edits`）— 該路徑另見 [Codex 整合](/zh-tw/guides/codex-integration/#內建圖像生成image_gen)。
 
 1. 當 Responses 請求在 `tools` 中列出 `image_generation` 時，OpenCodex 在請求前處理期間偵測到它。
 2. Hosted tool 被替換為一個路由模型可正常呼叫的**合成函式工具** — 模型看到的是一個可呼叫的工具，而非一個它無法執行的不透明 hosted tool。

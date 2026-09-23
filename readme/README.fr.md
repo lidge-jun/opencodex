@@ -99,24 +99,25 @@ rouvre le tableau de bord à tout moment.
 Une application native qui reprend le même tableau de bord, accompagnée d’une extension WidgetKit qui
 affiche l’état du proxy, l’utilisation du jour et les quotas des fournisseurs sans ouvrir de
 navigateur. Le proxy ne change pas : l’application détecte une instance en cours d’exécution ou
-démarre le sidecar `ocx` inclus, tandis que le tableau de bord reste accessible à l’adresse
-**http://localhost:10100**.
+démarre le sidecar `ocx` inclus, tandis que le tableau de bord reste accessible sur le port du proxy
+(**http://localhost:10100** sauf si vous en avez configuré un autre).
 
-Cette version est en bêta. Les versions distribuées sont signées pour en garantir l’intégrité, mais ne sont pas
-notariées : macOS demande donc un clic droit → **Ouvrir** au premier lancement, et Windows
-SmartScreen affiche un avertissement pour le programme d’installation. Le widget nécessite macOS 14
-ou une version ultérieure ; le modèle de données des instantanés qu’il affiche se trouve dans [`app/`](../app)
-(`MenuBarCore`).
+Cette version est en bêta. Les versions publiées de l’application macOS sont signées avec un identifiant
+Developer ID et notariées (les compilations locales sont signées ad hoc) ; le programme d’installation
+Windows n’est pas encore signé, et SmartScreen affiche donc un avertissement au premier lancement.
+Le widget nécessite macOS 14 ou une version ultérieure ; le modèle de données des instantanés qu’il
+affiche se trouve dans [`app/`](../app) (`MenuBarCore`).
 
 Téléchargez l’application depuis la [dernière version publiée](https://github.com/lidge-jun/opencodex/releases),
-ou compilez-la localement avec
-`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
+ou compilez-la localement : exécutez `bun install && bun run build:gui` à la racine du dépôt, puis
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` dans
+`desktop/`.
 
 Les emplacements d’installation, les fichiers de service et tous les autres éléments écrits sur le
 disque sont répertoriés dans [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed).
-Le [guide de l’application de bureau](https://lidge-jun.github.io/opencodex/guides/desktop-app/) et le
-[guide de l’application macOS dans la barre des menus](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
-détaillent l’installation sur chaque plateforme et le message de Gatekeeper.
+Le [guide de l’application de bureau](https://opencodex.me/fr/guides/desktop-app/) et le
+[guide de l’application macOS dans la barre des menus](https://opencodex.me/fr/guides/macos-menu-bar/)
+détaillent l’installation sur chaque plateforme et le premier lancement.
 
 </details>
 
@@ -214,8 +215,9 @@ des fournisseurs, les contrôles d'acceptation authentifiés, la gestion distant
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -223,8 +225,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

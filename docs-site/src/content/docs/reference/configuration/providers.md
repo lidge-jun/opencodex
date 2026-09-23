@@ -598,7 +598,7 @@ the dashboard keeps the standard-price estimate as a documented lower bound and 
 
 API-key providers may hold a literal key or an environment reference. OAuth providers use the
 credential store populated by `ocx login`; subscription-backed Claude Code launch behavior is
-configured under [`claudeCode.authMode`](/reference/configuration/server/#claude-code).
+configured under [`claudeCode.authMode`](/reference/configuration/server/#claude-code-claudecode).
 
 OrcaRouter exposes both forms explicitly: `orcarouter` is the manual API-key provider and
 `orcarouter-oauth` runs browser consent with S256 PKCE, then stores the returned durable API key as

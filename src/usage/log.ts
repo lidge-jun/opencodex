@@ -222,7 +222,38 @@ export interface PersistedRequestSpend extends RequestSpendTotals {
 }
 
 const MAX_PERSISTED_MOVE_REASONS = 8;
+// Model selectors are NOT length-bound at admission: configured and discovered
+// model ids reach MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, and the wire `model`
+// field is raw client input. Persisting a plain prefix would merge selectors
+// that share it, so over-long selectors persist as prefix + a digest of the
+// FULL selector — bounded, deterministic, and still exact-matchable.
+const MAX_PERSISTED_REQUESTED_MODEL_LEN = 130;
+const REQUESTED_MODEL_DIGEST_HEX_LEN = 16;
 const LOGICAL_REQUEST_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/**
+ * Persisted form of the wire model selector. Selectors within the bound persist
+ * verbatim; longer selectors persist as a prefix plus a short digest of the full
+ * value, so two distinct selectors that share the prefix never collapse into one
+ * persisted identity. Exact-match readers (`requested_model = ?`) must encode
+ * lookup input through this same function. Idempotent — encoded forms fit the
+ * bound — which matters because rows are normalized again on read.
+ *
+ * Idempotence has one cost: a literal selector that equals another selector's
+ * persisted form is indistinguishable from it, so both rows share one display
+ * value and one exact-match filter. Reaching that needs the caller to send the
+ * exact prefix-and-digest string; keeping them apart would need a separate
+ * full-selector digest column.
+ */
+export function encodePersistedRequestedModel(selector: string): string {
+  if (selector.length <= MAX_PERSISTED_REQUESTED_MODEL_LEN) return selector;
+  const digest = createHash("sha256")
+    .update(selector)
+    .digest("hex")
+    .slice(0, REQUESTED_MODEL_DIGEST_HEX_LEN);
+  const prefixLen = MAX_PERSISTED_REQUESTED_MODEL_LEN - REQUESTED_MODEL_DIGEST_HEX_LEN - 1;
+  return `${selector.slice(0, prefixLen)}~${digest}`;
+}
 
 export function isLogicalRequestId(value: unknown): value is string {
   return typeof value === "string" && LOGICAL_REQUEST_ID_RE.test(value);
@@ -898,7 +929,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(resolvedModel ? { resolvedModel } : {}),
     ...(servedModel ? { servedModel } : {}),
     ...(entry.wireModel ? { wireModel: entry.wireModel } : {}),
-    ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(typeof entry.requestedModel === "string" && entry.requestedModel
+      ? { requestedModel: encodePersistedRequestedModel(entry.requestedModel) }
+      : {}),
     ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
       ? { requestedEffort: capMetadataString(entry.requestedEffort) }

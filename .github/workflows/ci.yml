@@ -52,6 +52,9 @@ on:
       - "bun.lock"
       - "tsconfig.json"
       - "README.md"
+      - "readme/**"
+      - "skills/**"
+      - ".github/ISSUE_TEMPLATE/**"
       - "LICENSE"
   workflow_dispatch:
     inputs:
@@ -236,6 +239,9 @@ jobs:
               - 'bun.lock'
               - 'tsconfig.json'
               - 'README.md'
+              - 'readme/**'
+              - 'skills/**'
+              - '.github/ISSUE_TEMPLATE/**'
               - 'LICENSE'
             # Native-gated surface: platform-macos, widget and desktop-shell
             # only run when the code they build or bundle could have changed.
