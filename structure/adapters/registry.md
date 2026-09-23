@@ -97,7 +97,11 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   with no evidence the adapter hint is omitted and the encoder still serializes
   its own 128000 fallback for field #3. Connect trailer diagnostics expose only an
   allowlisted error code, hexadecimal trace id and typed `retryAfterSeconds`, optionally rendered as
-  generated `retry after ~Ns` wording; raw text stays internal because it can reflect credentials. Investigation and limits:
+  generated `retry after ~Ns` wording; the shared retry-delay parser accepts that generated
+  approximation marker and preserves the same lower-bound delay when the diagnostic returns as an
+  outer error message. Each bounded replay evaluates its own typed delay or compatible message, so
+  a later refusal may change between the raw reset sentence and the generated diagnostic without
+  losing the next wait. Raw text stays internal because it can reflect credentials. Investigation and limits:
   `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
