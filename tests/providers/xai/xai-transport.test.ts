@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
+import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
 import { parseRequest } from "../../../src/responses/parser";
 import { buildModelsRequest } from "../../../src/oauth";
 import {
@@ -11,6 +11,7 @@ import {
   XAI_GROK_CLIENT_VERSION,
 } from "../../../src/providers/xai-transport";
 import { getProviderRegistryEntry } from "../../../src/providers/registry";
+import { routedProviderConfig } from "../../../src/router";
 import { XAI_RESPONSES_OPT_IN_MODELS, xaiResponsesOptInState } from "../../../src/providers/xai-responses-opt-in";
 import { resolveWireProtocolOverride } from "../../../src/server/adapter-resolve";
 import type { OcxAssistantMessage, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
@@ -814,5 +815,62 @@ describe("xAI reasoning_content cache preservation", () => {
 
     expect(req.context.messages.filter(message => message.role === "assistant")).toHaveLength(0);
     expect(req.context.messages).toHaveLength(1);
+  });
+});
+
+// docs.x.ai/docs/guides/reasoning: "presencePenalty, frequencyPenalty, and stop cannot be used
+// with reasoning models. Requests that include them return an error." Live 2026-09-23 through
+// the local proxy: xai/grok-4.7 answers 200 without penalties and 400 invalid-argument "Model
+// grok-4.7 does not support parameter presencePenalty." with presence_penalty (likewise
+// frequency_penalty).
+describe("xAI reasoning models reject penalty parameters", () => {
+  const REASONING = [
+    "grok-4.7",
+    "grok-4.6",
+    "grok-4.5",
+    "grok-4.3",
+    "grok-4.20-multi-agent-0309",
+    "grok-4.20-0309-reasoning",
+    "grok-build-0.1",
+  ];
+  const penalties = (modelId: string): OcxParsedRequest => ({
+    modelId,
+    context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+    stream: false,
+    options: { presencePenalty: 0.1, frequencyPenalty: 0.2 },
+  });
+  const routedXai = (): OcxProviderConfig => routedProviderConfig("xai", {
+    adapter: "openai-chat",
+    baseUrl: "https://api.x.ai/v1",
+    apiKey: "sk-test",
+    authMode: "key",
+  });
+
+  test("the registry seeds the documented reasoning ids and leaves non-reasoning ids alone", () => {
+    const xai = getProviderRegistryEntry("xai");
+    expect(xai?.noPenaltyModels).toEqual(REASONING);
+    expect(xai?.noPenaltyModels).not.toContain("grok-4.20-0309-non-reasoning");
+    expect(xai?.noPenaltyModels).not.toContain("grok-composer-2.5-fast");
+  });
+
+  test("openai-chat omits both penalties for grok-4.7 and forwards them for a non-reasoning id", () => {
+    const adapter = createOpenAIChatAdapter(routedXai());
+    const dropped = JSON.parse(adapter.buildRequest(penalties("grok-4.7")).body as string) as Record<string, unknown>;
+    expect(dropped.presence_penalty).toBeUndefined();
+    expect(dropped.frequency_penalty).toBeUndefined();
+    const kept = JSON.parse(adapter.buildRequest(penalties("grok-composer-2.5-fast")).body as string) as Record<string, unknown>;
+    expect(kept.presence_penalty).toBe(0.1);
+    expect(kept.frequency_penalty).toBe(0.2);
+  });
+
+  test("the Chat passthrough drops both penalties for grok-4.7", () => {
+    const body = JSON.parse(buildOpenAIChatPassthroughRequest(
+      routedXai(),
+      { model: "grok-4.7", messages: [], presence_penalty: 0.1, frequency_penalty: 0.2 },
+      "grok-4.7",
+      false,
+    ).body) as Record<string, unknown>;
+    expect(body.presence_penalty).toBeUndefined();
+    expect(body.frequency_penalty).toBeUndefined();
   });
 });

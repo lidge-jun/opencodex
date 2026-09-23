@@ -125,7 +125,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `noReasoningModels?` | `string[]` | reasoning/thinking 매개변수를 거부하는 모델입니다. |
 | `noTemperatureModels?` | `string[]` | 호출자가 지정한 `temperature`를 거부하는 모델입니다. |
 | `noTopPModels?` | `string[]` | 호출자가 지정한 `top_p`를 거부하는 모델입니다. |
-| `noPenaltyModels?` | `string[]` | presence/frequency penalty를 허용하지 않는 모델입니다. |
+| `noPenaltyModels?` | `string[]` | presence/frequency penalty를 허용하지 않는 모델입니다. 기본 `xai` 프리셋은 xAI 문서가 이 값을 거부한다고 밝힌 추론 모델(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)을 여기에 넣습니다. 추론이 없는 모델은 호출자가 보낸 penalty를 그대로 받습니다. |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` 엔드포인트가 `response_format`을 거부하는 정확한 모델 ID입니다. 요청 모델이 항목과 정확히 일치할 때만 필드를 생략하며, 그 외 `openai-chat` 모델에서는 structured-output 변환을 유지합니다. |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` 엔드포인트가 `json_schema` 형식은 거부하지만 `json_object`는 받는 정확한 모델 ID입니다. 이런 요청은 필드를 지우는 대신 `json_object`로 낮춰 보내므로, JSON을 요청한 클라이언트가 산문 대신 JSON을 받습니다. 한 모델이 두 목록에 모두 있으면 `noStructuredOutputModels`가 우선합니다. `opencode go`, `opencode zen`, `opencode free` 프리셋이 DeepSeek 경로에 기본으로 싣습니다. |
 | `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` 목적지가 `developer` 역할을 받는지 기록합니다. `foldDeveloperRoleToSystem`이 없으면 `system`, `true`이면 `system`, `false`이면 `developer`로 보냅니다. 값이 없다는 것은 이 목적지에 대해 기록된 것이 없다는 뜻이고, `true`는 상위 서비스가 역할을 거부한다는 기록, `false`는 받아들인다는 기록입니다. 어느 경우에도 메시지는 대화 안의 원래 위치를 유지하며 역할만 바뀝니다. 역할을 거부하는 목적지는 `400 role 'developer' is not allowed`로 응답해 턴이 시작조차 못 하므로, 기록이 없는 상태의 기본값을 접는 쪽으로 둡니다. |

@@ -29,6 +29,17 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Responses request compatibility
 
+### Reasoning-model sampling parameters
+
+xAI documents that `presencePenalty`, `frequencyPenalty` and `stop` "cannot be used with
+reasoning models" and answers them with `400 invalid-argument`. The registry seeds the documented
+reasoning ids (`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`,
+`grok-4.20-0309-reasoning`, `grok-build-0.1`) into `noPenaltyModels`, so the openai-chat
+adapter and the Chat passthrough omit `presence_penalty` / `frequency_penalty` for them.
+`grok-4.20-0309-non-reasoning` and `grok-composer-2.5-fast` keep caller penalties.
+Regression coverage: `tests/providers/xai/xai-transport.test.ts`
+("xAI reasoning models reject penalty parameters").
+
 `src/adapters/xai-web-search.ts` omits `auto`/`none` tool selection after normalization if no tools
 remain in either the top-level catalog or `additional_tools`. Cached-only search removal follows
 the same rule. When an omitted `none` selector stated the turn's only client-call prohibition,
