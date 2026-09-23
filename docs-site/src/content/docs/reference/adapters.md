@@ -495,6 +495,13 @@ configuration that names the old id is rewritten at startup.
   `CompletionConfiguration`, #2 is the output cap and #3 is the context window; swapping those two
   makes every turn fail with an opaque `invalid_argument`. A temperature of exactly 0 is refused, so
   it is clamped to the smallest accepted value.
+- A pre-output 429 that states a recovery delay is retried in place: the adapter waits the full
+  stated delay and replays the request up to twice, with a cumulative wait capped at 30 minutes
+  (`OPENCODEX_DEVIN_STATED_RESET_WAIT_MS`, hard ceiling one hour). Retrying earlier than the
+  stated delay is deliberately not attempted — the hint is the provider's best estimate of its own
+  window, and each replay slot is finite. If the limit still refuses, the final 429 surfaces to the
+  client with the stated delay preserved as its cooldown hint; a `~` in that hint marks a delay
+  recovered from a secondhand message, so it is approximate rather than an exact header value.
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the
   [provider guide](/guides/providers/) for login instructions.
 
