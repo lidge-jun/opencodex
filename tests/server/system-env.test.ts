@@ -634,6 +634,68 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     const shellWrite = writes.find(w => w.path.includes("claude-env.sh"));
     expect(shellWrite!.data).toContain('[ -z "${ANTHROPIC_DEFAULT_OPUS_MODEL+x}" ] && export ANTHROPIC_DEFAULT_OPUS_MODEL=');
   });
+
+  // A slot opencodex injected earlier is opencodex-owned (revertSystemEnv already unsets every
+  // tracked key regardless of its value). Re-injection must therefore refresh it and drop it once
+  // the config stops producing it; before this, the user-wins guard froze the old value in launchd
+  // until the proxy restarted.
+  function trackingWithLevers(keys: string[]): string {
+    return JSON.stringify({
+      pid: 123, port: 4096, injectedAt: "2026-07-11T00:00:00.000Z",
+      injectedKeys: ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", ...keys],
+    });
+  }
+
+  test("re-inject refreshes a tracked slot whose configured value changed", async () => {
+    const writes = capturedWrites();
+    trackingFile = trackingWithLevers(["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.ANTHROPIC_DEFAULT_HAIKU_MODEL = "mock/old-small";
+    launchctlEnvValues.ANTHROPIC_SMALL_FAST_MODEL = "mock/old-small";
+    const config = { ...baseConfig, claudeCode: { systemEnv: true, smallFastModel: "mock/new-small" } } satisfies OcxConfig;
+    expect(await injectSystemEnv(4096, config)).toEqual({ injected: true });
+    const setCalls = launchctlCommands();
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_DEFAULT_HAIKU_MODEL mock/new-small");
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_SMALL_FAST_MODEL mock/new-small");
+    const keys = JSON.parse(writes.filter(w => w.path.includes("system-env-port")).at(-1)!.data).injectedKeys as string[];
+    expect(keys).toEqual(expect.arrayContaining(["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"]));
+  });
+
+  test("re-inject unsets a tracked slot the config no longer produces", async () => {
+    const writes = capturedWrites();
+    trackingFile = trackingWithLevers(["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.ANTHROPIC_DEFAULT_HAIKU_MODEL = "mock/old-small";
+    launchctlEnvValues.ANTHROPIC_SMALL_FAST_MODEL = "mock/old-small";
+    expect(await injectSystemEnv(4096, baseConfig)).toEqual({ injected: true });
+    const setCalls = launchctlCommands();
+    expect(setCalls).toContain("launchctl unsetenv ANTHROPIC_DEFAULT_HAIKU_MODEL");
+    expect(setCalls).toContain("launchctl unsetenv ANTHROPIC_SMALL_FAST_MODEL");
+    const keys = JSON.parse(writes.filter(w => w.path.includes("system-env-port")).at(-1)!.data).injectedKeys as string[];
+    expect(keys).not.toContain("ANTHROPIC_DEFAULT_HAIKU_MODEL");
+    expect(keys).not.toContain("ANTHROPIC_SMALL_FAST_MODEL");
+    expect(keys).toEqual(expect.arrayContaining(["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"]));
+  });
+
+  test("a tracked auto-compact value is refreshed, not read back as a user override", async () => {
+    capturedWrites();
+    trackingFile = trackingWithLevers(["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.CLAUDE_CODE_AUTO_COMPACT_WINDOW = "500000";
+    expect(await injectSystemEnv(4096, baseConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain("launchctl setenv CLAUDE_CODE_AUTO_COMPACT_WINDOW 829800");
+  });
+
+  test("an untracked (user-owned) slot is neither overwritten nor unset on re-inject", async () => {
+    capturedWrites();
+    trackingFile = trackingWithLevers([]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.ANTHROPIC_DEFAULT_HAIKU_MODEL = "user/own-haiku";
+    const config = { ...baseConfig, claudeCode: { systemEnv: true, smallFastModel: "mock/new-small" } } satisfies OcxConfig;
+    expect(await injectSystemEnv(4096, config)).toEqual({ injected: true });
+    const haikuCalls = launchctlCommands().filter(c => c.includes("ANTHROPIC_DEFAULT_HAIKU_MODEL") && !c.includes("getenv"));
+    expect(haikuCalls).toEqual([]);
+  });
 });
 
 test("system-env preserves the shell seam without a back-import", () => {

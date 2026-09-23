@@ -1666,8 +1666,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const warnings: string[] = [];
     // authMode changes must reconcile the injected system env too: switching back to
     // Subscription has to remove the opencodex-owned dummy ANTHROPIC_AUTH_TOKEN
-    // (audit R1 blocker #1/#2, devlog 260720_claude_authmode_persist).
-    if (body.systemEnv !== undefined || body.authMode !== undefined) {
+    // (audit R1 blocker #1/#2, devlog 260720_claude_authmode_persist). Model slots and
+    // levers feed the same injection, so a changed or cleared slot must not linger in
+    // launchd until the next restart.
+    const systemEnvInputs = ["systemEnv", "authMode", "model", "smallFastModel", "tierModels",
+      "maxContextTokens", "alwaysEnableEffort", "autoContext", "autoCompactWindow"] as const;
+    if (systemEnvInputs.some(field => body[field] !== undefined)) {
       try {
         await applySystemEnvToggle(config, config.port);
       } catch (err) {
