@@ -137,8 +137,14 @@ sidecar is switched off (`webSearchSidecar.enabled: false`), the injection also 
 `web_search` mode and writes `web_search = "disabled"` — the only value that removes the native
 hosted tool from the model's tool list, which is what an operator running an MCP search server
 instead needs. Ownership follows the routing keys: the marker-owned pair is removed again once the
-sidecar is back on, and a user-owned root line is replaced only while the switch is off (two root
-keys of the same name are invalid TOML) and returns with the journal snapshot on `ocx restore`.
+sidecar is back on. It needs one record the routing keys do not, because this is the only root value
+the injection REPLACES rather than only adds: the journal keeps the value it wrote
+(`injectedRootWebSearch`), so a line whose ownership comment a Codex app reserialize dropped is
+still recognized as ours (#1798), and the exact user-owned line it had to remove
+(`replacedRootWebSearch`), which the next pass with the sidecar back on puts back in our pair's
+place. A user-owned root line is therefore replaced only while the switch is off — two root keys of
+the same name are invalid TOML — and is not lost while it is gone. `ocx restore` replays the journal
+snapshot on top of that.
 
 `src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
 keeps its native provider id, which decides whether existing thread history still resolves.

@@ -43,6 +43,26 @@ interface Journal {
    */
   injectedRealtimeWsBaseUrl?: string | null;
   /**
+   * The root `web_search` value this injection wrote, when it wrote one.
+   *
+   * Same reasoning as {@link injectedOpenaiBaseUrl}, for the one other root key whose value is a
+   * mode Codex reads: the marker comment above `web_search = "disabled"` does not survive a Codex
+   * app reserialize, and without value evidence the next injection cannot tell our line from the
+   * operator's. The failure that buys is quiet: a re-enabled sidecar whose client still has the
+   * native tool switched off has nothing to intercept, which is the empty state the switch exists
+   * to avoid.
+   */
+  injectedRootWebSearch?: string | null;
+  /**
+   * The user-owned root `web_search` line this injection REMOVED while the sidecar was off.
+   *
+   * Two root keys of the same name are invalid TOML, so the operator's mode has to leave the file
+   * for as long as the switch is off. Recording the exact line is what puts it back when the
+   * sidecar is switched on again — including for a line the snapshot predates, which is the case
+   * `ocx restore` alone cannot cover.
+   */
+  replacedRootWebSearch?: string | null;
+  /**
    * The catalog path this injection actually wrote to.
    *
    * #1798: restore re-resolves the catalog from the CURRENT config, so a Codex app rewrite
@@ -156,6 +176,10 @@ export interface InjectedJournalOwnership {
   injectedOpenaiBaseUrl: string | null;
   injectedRealtimeWsBaseUrl: string | null;
   injectedCatalogPath: string | null;
+  /** Omitted by callers that inject no `web_search` line, which is the value it then records. */
+  injectedRootWebSearch?: string | null;
+  /** Omitted by callers that removed no user `web_search` line. */
+  replacedRootWebSearch?: string | null;
 }
 
 export function markJournalInjectedState(
@@ -177,6 +201,8 @@ export function markJournalInjectedState(
   // would mistake a preserved user override for injected routing.
   journal.injectedOpenaiBaseUrl = ownership.injectedOpenaiBaseUrl;
   journal.injectedRealtimeWsBaseUrl = ownership.injectedRealtimeWsBaseUrl;
+  journal.injectedRootWebSearch = ownership.injectedRootWebSearch ?? null;
+  journal.replacedRootWebSearch = ownership.replacedRootWebSearch ?? null;
   journal.injectedCatalogPath = ownership.injectedCatalogPath;
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal));
 }
@@ -196,6 +222,16 @@ export function journaledInjectedOpenaiBaseUrl(options: { readOnly?: boolean } =
 /** The root `experimental_realtime_ws_base_url` the last injection wrote, or null. */
 export function journaledInjectedRealtimeWsBaseUrl(options: { readOnly?: boolean } = {}): string | null {
   return readJournal(options.readOnly !== true)?.injectedRealtimeWsBaseUrl ?? null;
+}
+
+/** The root `web_search` value the last injection wrote, or null when it wrote none. */
+export function journaledInjectedRootWebSearch(options: { readOnly?: boolean } = {}): string | null {
+  return readJournal(options.readOnly !== true)?.injectedRootWebSearch ?? null;
+}
+
+/** The user-owned root `web_search` line the last injection removed, or null when there was none. */
+export function journaledReplacedRootWebSearch(options: { readOnly?: boolean } = {}): string | null {
+  return readJournal(options.readOnly !== true)?.replacedRootWebSearch ?? null;
 }
 
 /** The catalog path the last injection wrote to, or null when none was recorded. */

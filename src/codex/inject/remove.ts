@@ -10,15 +10,17 @@ import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "../
 import {
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
+  journaledInjectedRootWebSearch,
+  journaledReplacedRootWebSearch,
 } from "../journal";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, readRootTomlString } from "../paths";
 import { transformManagedSubagentDefaults } from "../subagent-defaults";
 import {
   applyEol,
   dominantEol,
+  ensureRootWebSearchDisabled,
   removeProfileSection,
   stripInjectedOpenaiBaseUrl,
-  stripInjectedRootWebSearch,
   stripOpencodexCatalogPath,
   stripRootRoutedModel,
 } from "./config-toml";
@@ -66,6 +68,8 @@ function stripOpencodexConfigResult(
   content: string,
   journaledBaseUrl: string | null = null,
   journaledRealtimeWsBaseUrl: string | null = null,
+  journaledRootWebSearch: string | null = null,
+  journaledReplacedWebSearch: string | null = null,
 ): StripOpencodexConfigResult {
   let out = content;
   const hadRootOcxProvider =
@@ -76,7 +80,13 @@ function stripOpencodexConfigResult(
   const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out)
     || (journaledBaseUrl !== null && rootTomlString(out, "openai_base_url") === journaledBaseUrl);
   out = stripInjectedOpenaiBaseUrl(out); // before removeOcxSection — it keys on the marker line too
-  out = stripInjectedRootWebSearch(out);
+  // The enabled direction of the web-search transform is also the purge: it drops our pair, drops a
+  // marker-less `disabled` the journal proves we wrote, and puts back the operator line we had to
+  // remove for as long as the switch was off. Nothing of ours is written here.
+  out = ensureRootWebSearchDisabled(out, false, {
+    injectedValue: journaledRootWebSearch,
+    replacedUserLine: journaledReplacedWebSearch,
+  }).content;
   out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl, journaledRealtimeWsBaseUrl);
   if (hasOcxProviderTable(out)) {
     out = removeOcxSection(out);
@@ -176,11 +186,19 @@ export function removeCodexConfig(
   // ownership verdict, which must agree with what was actually removed.
   const journaledBaseUrl = journaledInjectedOpenaiBaseUrl();
   const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl();
+  const journaledRootWebSearch = journaledInjectedRootWebSearch();
+  const journaledReplaced = journaledReplacedRootWebSearch();
   const had = hasOpencodexRouting(content)
     || (journaledBaseUrl !== null && rootTomlString(content, "openai_base_url") === journaledBaseUrl)
     || (journaledRealtimeWsBaseUrl !== null
       && rootTomlString(content, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
-  const stripped = stripOpencodexConfigResult(content, journaledBaseUrl, journaledRealtimeWsBaseUrl);
+  const stripped = stripOpencodexConfigResult(
+    content,
+    journaledBaseUrl,
+    journaledRealtimeWsBaseUrl,
+    journaledRootWebSearch,
+    journaledReplaced,
+  );
   // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
   // afterwards would find nothing.
   const retainedBlock = historyDisposition === "stand-down-retain"

@@ -468,6 +468,12 @@ async function injectCodexConfigImpl(
       injectedRealtimeWsBaseUrl: plan.providerTableMode || plan.keptUserBaseUrl || plan.keptUserRealtimeWsBaseUrl
         ? null
         : rootTomlString(plan.content, REALTIME_WS_BASE_URL_KEY),
+      // The web-search pair follows the sidecar's master switch, and it is the one root value we
+      // REPLACE rather than only add: the operator's own mode has to leave the file while the
+      // switch is off. Both halves are recorded here — the value we wrote (the marker comment is
+      // not durable) and the line we removed (so re-enabling the sidecar can return it).
+      injectedRootWebSearch: plan.injectedRootWebSearch,
+      replacedRootWebSearch: plan.replacedRootWebSearch,
       // This is the catalog artifact selected for this injection, even when config.toml
       // already points at that path and therefore needs no textual rewrite.
       injectedCatalogPath: plan.catalogPath,

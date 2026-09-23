@@ -224,8 +224,11 @@ do: the Dashboard's web-search card warns when the write did not happen, and `oc
 --enabled off` prints whether it happened. Only a save that moves the switch triggers the write, so
 the ordinary "nothing changed" answer reports `not_requested` and prints nothing extra. A root
 `web_search` line the operator set by hand is replaced while the sidecar is off, since two root keys
-of the same name are not valid TOML; `ocx restore` replays the journal snapshot and brings that
-value back, like every other line the injection rewrites.
+of the same name are not valid TOML. Its exact text is recorded in the Codex journal and put back in
+its place when the sidecar is switched on again — including for a line added after the journal
+snapshot was taken, which `ocx restore` alone cannot cover. The same record is what still
+recognizes our own `disabled` line when the Codex app has rewritten `config.toml` and dropped the
+comment that named its owner.
 
 You can still set `enabled: false` in `config.json` if you prefer to edit the
 file directly. Anthropic-OAuth search and image description reuse the existing

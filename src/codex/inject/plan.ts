@@ -17,6 +17,8 @@ import {
 import {
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
+  journaledInjectedRootWebSearch,
+  journaledReplacedRootWebSearch,
 } from "../journal";
 import { stripJournaledOpenaiBaseUrl } from "../injected-marker";
 import { CODEX_CONFIG_PATH, resolveCodexStateDbPath } from "../paths";
@@ -75,6 +77,10 @@ export interface CodexInjectionPlanOk {
   keepRootOverrideAlongsideTable: boolean;
   keptUserBaseUrl: boolean;
   keptUserRealtimeWsBaseUrl: boolean;
+  /** The root `web_search` value this plan writes, or null when it writes none. */
+  injectedRootWebSearch: string | null;
+  /** The user-owned root `web_search` line this plan removed, for the journal to carry. */
+  replacedRootWebSearch: string | null;
   nativeSubagentDefaultsWarning: string | undefined;
   managedDefaultsMessage: string;
   /**
@@ -172,8 +178,18 @@ export function deriveCodexInjectionPlan(
   content = ensureFastModeFeature(content, config?.fastMode);
   // Codex's own web-search switch follows the sidecar's master switch. While the sidecar is off,
   // the client must not keep offering a native `web_search` tool that an MCP search server is
-  // meant to replace.
-  content = ensureRootWebSearchDisabled(content, config?.webSearchSidecar?.enabled === false);
+  // meant to replace. The journal carries both halves of an earlier pass — the value we wrote,
+  // because the marker comment does not survive a Codex app reserialize, and the operator line we
+  // had to remove, because the sidecar coming back on is what returns it.
+  const webSearch = ensureRootWebSearchDisabled(
+    content,
+    config?.webSearchSidecar?.enabled === false,
+    {
+      injectedValue: journaledInjectedRootWebSearch({ readOnly: ctx.journalReadOnly }),
+      replacedUserLine: journaledReplacedRootWebSearch({ readOnly: ctx.journalReadOnly }),
+    },
+  );
+  content = webSearch.content;
 
   const catalogPath = chooseCatalogPathForInjection(
     content,
@@ -357,6 +373,8 @@ export function deriveCodexInjectionPlan(
     keepRootOverrideAlongsideTable,
     keptUserBaseUrl,
     keptUserRealtimeWsBaseUrl,
+    injectedRootWebSearch: webSearch.wroteValue,
+    replacedRootWebSearch: webSearch.replacedUserLine,
     nativeSubagentDefaultsWarning,
     managedDefaultsMessage,
     historyRelabelRefusal: observedHistoryRefusal,
