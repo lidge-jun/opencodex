@@ -186,18 +186,19 @@ describe("native Anthropic image input reaches client documents", () => {
       .filter(model => model.provider === provider);
     expect(models.length).toBeGreaterThan(0);
     const context = { baseUrl: "http://127.0.0.1:10100/v1", config, models };
-    // Client exports include a sibling for each catalog-approved Fast selector. Check image
-    // input on both base and Fast rows, while deriving the expected selectors from the raw
-    // catalog rather than the export normalizer under test.
+    // Client exports must include exactly the documented Anthropic Fast selectors. Keep this
+    // roster explicit so new base catalog models cannot silently change the assertion.
     const expectedInputs = models
       .map(model => ({ id: model.namespaced, input: ["text", "image"] }))
+      .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    const expectedFastInputs = ["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]
+      .map(model => ({ id: `${provider}/${model}--fast`, input: ["text", "image"] }))
       .sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
     const expectImageInputs = (rows: Array<{ id: string; input: string[] }>) => {
       const baseRows = rows.filter(row => !row.id.endsWith("--fast"));
       const fastRows = rows.filter(row => row.id.endsWith("--fast"));
       expect(baseRows).toEqual(expectedInputs);
-      expect(fastRows.length).toBeGreaterThan(0);
-      expect(fastRows.every(row => row.input.includes("text") && row.input.includes("image"))).toBe(true);
+      expect(fastRows).toEqual(expectedFastInputs);
     };
 
     for (const client of ["aside", "pi", "gajae", "prime", "omo", "omp"] as const) {
