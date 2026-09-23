@@ -460,8 +460,9 @@ function backupLegacyOnce(): void {
  * removed. Entries for other providers stay, so their downgrade recovery survives; the file
  * goes once nothing is left. Account deletion drops the provider's whole legacy entry, since
  * a refreshed token cannot be matched to the account it came from. A backup entry that is
- * not a regular file (a symlink, a directory) is removed, never followed or rewritten, and
- * the rewrite replaces the entry itself. Best-effort like the create path: this runs after
+ * not a regular file is never followed or rewritten; a symlink is removed, while a directory
+ * is left in place with a warning. A regular backup is replaced atomically when providers
+ * remain and removed when none do. Best-effort like the create path: this runs after
  * persist, so a failure must not report a failed logout for an account that is already
  * gone; it warns instead. A stale uninstall-manifest entry is harmless:
  * removeOwnedConfigState skips paths that no longer exist.

@@ -113,7 +113,16 @@ const LOOPBACK_ADDRESS_NO_PROXY = ["127.0.0.1", "::1", "[::1]"] as const;
 // itself a proxy-env mutation callers observe (the lab sandbox rejects these keys).
 function inheritedLoopbackBypass(): readonly string[] | undefined {
   const schemeProxy = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].some(key => process.env[key]?.trim());
-  if (schemeProxy) return LOOPBACK_ADDRESS_NO_PROXY;
+  const httpAllProxy = ["ALL_PROXY", "all_proxy"].some(key => {
+    const value = process.env[key]?.trim();
+    if (!value) return false;
+    try {
+      return ["http:", "https:"].includes(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  });
+  if (schemeProxy || httpAllProxy) return LOOPBACK_ADDRESS_NO_PROXY;
   return socks5ProxyFromEnv() !== undefined ? LOOPBACK_NO_PROXY : undefined;
 }
 

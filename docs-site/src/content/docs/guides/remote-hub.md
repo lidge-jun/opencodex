@@ -115,7 +115,7 @@ values below are examples:
 The loopback companion is unauthenticated: every process and OS user on this machine can use the
 hub's provider credentials and account quota, and can exhaust the shared turn capacity that
 authenticated remote clients depend on. Do not enable it on a shared or multi-tenant host. If the
-host is shared, omit the `unauthenticatedLoopbackListener` command and do not run the hub's local
+host is shared, leave the `unauthenticatedLoopbackListener` setting disabled and do not run the hub's local
 integrations.
 
 Binding to `127.0.0.1` means the kernel refuses remote connections, but it does not stop a browser:

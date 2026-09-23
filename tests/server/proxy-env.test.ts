@@ -235,6 +235,8 @@ describe("applyProxyEnv", () => {
   test.each([
     ["an inherited HTTP proxy", { HTTP_PROXY: "http://proxy.invalid:3128" }],
     ["an inherited HTTPS proxy", { https_proxy: "http://proxy.invalid:3128" }],
+    ["an inherited HTTP ALL_PROXY", { ALL_PROXY: "http://proxy.invalid:3128" }],
+    ["an inherited lowercase HTTPS all_proxy", { all_proxy: "https://proxy.invalid:3128" }],
   ] as const)("adds only loopback addresses for %s and no config.proxy", (_label, inherited) => {
     // Bun applies an inherited HTTP(S) proxy itself and matches NO_PROXY entries as domain
     // suffixes, so adding "localhost" there would also send any *.localhost name direct.

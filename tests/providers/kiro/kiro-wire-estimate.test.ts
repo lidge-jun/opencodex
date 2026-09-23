@@ -41,4 +41,10 @@ describe("kiro wire token estimate", () => {
     // The old path fell back to the bare "kiro" id for an empty model; both select the Kiro ratio.
     expect(estimateKiroWireTokens(korean, "")).toBe(expectedFor("kiro"));
   });
+
+  test("empty model id uses the Kiro ratio for Latin text", () => {
+    const latin = "command code".repeat(30);
+    expect(estimateKiroWireTokens(latin, ""))
+      .toBe(Math.ceil(estimateTokens(latin, "kiro") * KIRO_LATIN_WIRE_EXPANSION));
+  });
 });

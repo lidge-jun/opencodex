@@ -142,6 +142,7 @@ describe("the one-port hub recipe", () => {
       const callout = source.slice(opened, opened + (closing?.index ?? 0));
       expect(callout, locale).toContain(dedicated);
       expect(callout, locale).toContain(sharedHost);
+      expect(callout, locale).not.toMatch(/`unauthenticatedLoopbackListener` (?:command|명령)/);
       // The same unauthenticated surface is offered again by the ported form; the warning
       // must reach that command too, or a reader following only that section misses it.
       const ported = source.indexOf('"port":10104');
