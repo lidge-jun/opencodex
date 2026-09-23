@@ -121,6 +121,16 @@
       ]
     },
     {
+      "path": "config-proxy.md",
+      "tier": 2,
+      "title": "Proxy Configuration",
+      "scope": "Global proxy activation, start flags, and credential-safe CLI output.",
+      "documents": [
+        "src/cli/",
+        "src/config/"
+      ]
+    },
+    {
       "path": "codex-home.md",
       "tier": 2,
       "title": "Codex Home",
@@ -400,7 +410,7 @@
       "path": "ops/docs-and-release.md",
       "tier": 6,
       "title": "Docs And Release",
-      "scope": "Docs site, workflow map, branch policy, release flow, and cross-platform CI.",
+      "scope": "Docs site, workflow map, branch policy, and release flow.",
       "documents": [
         ".github/",
         "bin/",
@@ -412,6 +422,16 @@
         "src/lib/",
         "src/service.ts",
         "src/update/"
+      ]
+    },
+    {
+      "path": "ops/cross-platform-ci.md",
+      "tier": 6,
+      "title": "Cross-platform CI",
+      "scope": "Test lanes, platform coverage, aggregate gating, and release CI proof.",
+      "documents": [
+        ".github/",
+        "scripts/"
       ]
     },
     {
