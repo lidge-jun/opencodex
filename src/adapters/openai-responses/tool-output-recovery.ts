@@ -194,7 +194,8 @@ export function repairUnidentifiedToolOutputItems(body: unknown): unknown {
  *   reasoning-bearing assistant turn (#1477). Gated on
  *   `synthesizeMissingCallOutputs` (stateless AND non-forward wires); forward replay keeps
  *   fail-closed behavior.
- * - `function_call_output`/`custom_tool_call_output` without their paired call item
+ * - `function_call_output`/`custom_tool_call_output` without their paired call item, when
+ *   `repairOrphanOutputs` is enabled
  *   ("No tool call found for function call output with call_id ..."). Converted to user
  *   messages so the result text survives. `function_call_output` also pairs with
  *   `local_shell_call` (codex-rs emits shell outputs as function_call_output).
@@ -342,7 +343,12 @@ export function restoreBridgedWebSearchCalls(body: unknown, destinationScope: st
   return changed ? { ...body, input: restored } : body;
 }
 
-export function repairOrphanedInputItems(body: unknown, dropReasoning: boolean, synthesizeMissingCallOutputs = false): unknown {
+export function repairOrphanedInputItems(
+  body: unknown,
+  dropReasoning: boolean,
+  synthesizeMissingCallOutputs = false,
+  repairOrphanOutputs = true,
+): unknown {
   if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
   const input = body.input;
 
@@ -381,7 +387,7 @@ export function repairOrphanedInputItems(body: unknown, dropReasoning: boolean, 
       // incomplete. With no call id and no output, preserve the invalid item so validation fails
       // closed rather than pretending any tool result exists.
       const knownNullOutput = callId.length > 0 && item.output == null;
-      if (!paired && (knownNullOutput || usableOutput)) {
+      if (repairOrphanOutputs && !paired && (knownNullOutput || usableOutput)) {
         changed = true;
         repaired.push({
           type: "message",

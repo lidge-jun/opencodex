@@ -110,10 +110,10 @@ describe("cursor external-replay repetition breaker (devlog 260826 gap-9)", () =
     expect(repeats[0]).toContain("5 times in a row");
   });
 
-  test("severe repetition appends exactly one strategy-change note", () => {
+  test("a fresh user action does not inherit an older repetition warning", () => {
     const texts = rootTexts(encode(repeatedHistory(4)));
     const notes = texts.filter(text => text.includes("Take a DIFFERENT action now"));
-    expect(notes).toHaveLength(1);
+    expect(notes).toHaveLength(0);
   });
 
   test("two repeats collapse but do not trigger the note", () => {

@@ -43,7 +43,7 @@ export interface RequestSpendTracker extends RequestSendObserver, RequestSpendSe
 export function createRequestSpendTracker(
   logCtx: Pick<
     RequestLogContext,
-    "provider" | "accountLogLabel" | "usageLogInputTokens" | "spendOutputCeilingTokens"
+    "provider" | "accountLogLabel" | "usageLogInputTokens" | "spendOutputCeilingTokens" | "spendInputEstimateTokens"
   > & Partial<Pick<RequestLogContext, "localTerminalReason" | "terminalSource" | "errorCode">>,
   rootId: string | undefined,
   injected?: SpendReservationLedger,
@@ -90,7 +90,7 @@ export function createRequestSpendTracker(
           ...(logCtx.accountLogLabel !== undefined ? { identityId: logCtx.accountLogLabel } : {}),
           ...(logCtx.provider !== undefined ? { poolId: logCtx.provider } : {}),
         },
-        inputTokens: logCtx.usageLogInputTokens ?? 0,
+        inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
         outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0,
         ...(alreadySent ? { alreadySent: true } : {}),
       });

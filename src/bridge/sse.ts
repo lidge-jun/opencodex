@@ -24,6 +24,7 @@ import {
 import { progressiveFreeformInput } from "../responses/progressive-freeform-input";
 import { encodeCompactionSummary } from "../responses/compaction";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
+import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
 import { isTruncatedStopReason, truncationReasonFor } from "../responses/truncated-stop-reason";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "../responses/reasoning-envelope";
 import { rememberReasoningForCall } from "../responses/reasoning-replay-cache";
@@ -1089,6 +1090,7 @@ export function bridgeToResponsesSSE(
                     // replaced by the normalized ones.
                     const mayNormalize = ownsFreeformGrammar && currentToolCall.name === "apply_patch";
                     if (!((mayCompile || mayNormalize) && mayBecomePatchEnvelope(full))
+                      && !(mayCompile && mayBecomeCodeModeShellInput(currentToolCall.args, full))
                       && full.startsWith(emitted) && full.length > emitted.length) {
                       emit("response.custom_tool_call_input.delta", {
                         item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,

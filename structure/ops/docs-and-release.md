@@ -456,8 +456,7 @@ one promise. After teardown starts only the lifecycle's own abort reason is abso
 error, including a foreign AbortError, still fails its case.
 Callers settle that lifecycle before draining producers/reaps and restoring or removing a home;
 the helper does not replace fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
-A test
-failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
+A test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
 batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
 failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
 jobs this run actually requested, then requires `success` from every one of them and `skipped`

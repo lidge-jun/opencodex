@@ -1613,13 +1613,13 @@ describe("Codex account pricing identity", () => {
     }
   });
 
-  test("only recognized historical phex and main suffixes retain the existing fallback", () => {
+  test("only recognized historical phex suffixes retain the existing fallback", () => {
     refreshUserCostOverlays(config([]));
     const custom = { ...row, provider: "legacy" };
-    for (const provider of ["legacy-pabcdef", "legacy-main"]) {
+    for (const provider of ["legacy-pabcdef"]) {
       expect(resolveMatchedPrice(provider, modelId, [custom], [])?.cost4).toEqual(RATE);
     }
-    for (const provider of ["legacy-unknown", "legacy-pABCDEF", "legacy-pabcde", "legacy-oabcdef", "legacy-__main__"]) {
+    for (const provider of ["legacy-unknown", "legacy-pABCDEF", "legacy-pabcde", "legacy-oabcdef", "legacy-__main__", "legacy-main"]) {
       expect(resolveMatchedPrice(provider, modelId, [custom], [])).toBeNull();
     }
   });
