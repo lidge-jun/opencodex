@@ -36,10 +36,10 @@ export function sanitizeReasoningInputContent(
     dropNullContentChannel?: boolean;
     stripEncryptedContent?: boolean;
     /**
-     * Also remove `id` from an item whose `encrypted_content` this call removes, because the id names
-     * an item in another store; see `OcxParsedRequest._dropForeignReasoningItemIds`.
+     * Remove `id` from every reasoning item, with or without a blob, because the ids name items in a
+     * store this destination cannot read; see `OcxParsedRequest._dropForeignReasoningItemIds`.
      */
-    dropStrippedItemId?: boolean;
+    dropForeignItemId?: boolean;
   },
 ): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
@@ -60,8 +60,9 @@ export function sanitizeReasoningInputContent(
     const missingSummary = !Object.prototype.hasOwnProperty.call(rec, "summary");
     const stripEncryptedContent = hasOcxEnvelope
       || (opts?.stripEncryptedContent === true && hasEncryptedContent);
-    const dropItemId = stripEncryptedContent
-      && opts?.dropStrippedItemId === true
+    // An id-only item is as foreign as one with a blob: a stateful destination still resolves it
+    // against its own store.
+    const dropItemId = opts?.dropForeignItemId === true
       && Object.prototype.hasOwnProperty.call(rec, "id");
     // Codex serializes an absent reasoning content channel as `"content": null`. The field is
     // optional and null carries nothing, but a strict gateway rejects the item on its declared type
@@ -84,7 +85,10 @@ export function sanitizeReasoningInputContent(
     const blankContent = !dropNullContentChannel
       && !opts?.preserveRawReasoningContent
       && (hasRawContent || hasOcxEnvelope);
-    if (!blankContent && !stripOutputStatus && !stripEncryptedContent && !dropNullContentChannel && !missingSummary) {
+    if (
+      !blankContent && !stripOutputStatus && !stripEncryptedContent && !dropNullContentChannel
+      && !missingSummary && !dropItemId
+    ) {
       return item;
     }
     changed = true;

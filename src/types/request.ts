@@ -94,8 +94,8 @@ export interface OcxParsedRequest {
    * Set when replayed reasoning item ids name items in a store this destination cannot read: by
    * prepareOpaqueBlobRecovery before the one recovery rebuild, and by bindRouteReasoningReplayScope
    * while the rejection memo is live or after a proven switch to a different destination or
-   * credential. The Responses passthrough then removes a reasoning item's `id` together with the
-   * `encrypted_content` it strips. A stateful destination resolves a replayed id against its own
+   * credential. The Responses passthrough then removes the `id` of every replayed reasoning item,
+   * whether or not it carries a blob. A stateful destination resolves a replayed id against its own
    * store, so keeping it turns the send into `Item with id 'rs_…' not found` (#5583). A model
    * change on the same destination and credential does not set this.
    */

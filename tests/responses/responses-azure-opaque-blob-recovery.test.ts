@@ -349,6 +349,40 @@ describe("switching a conversation onto a Responses destination through /v1/resp
       expect(logCtx.activeAttempt?.sendCount).toBe(1);
     });
 
+    test(`${provider}: a proven switch from another destination also drops the id of a blobless reasoning item`, async () => {
+      const outbound: Array<Record<string, unknown>> = [];
+      statefulDestination(outbound);
+      const previous: ProviderName = provider === "azure" ? "responses" : "azure";
+      const session = `id-only-switch-to-${provider}`;
+      const idOnlyReasoning = {
+        type: "reasoning",
+        id: FOREIGN_ITEM_ID,
+        summary: [{ type: "summary_text", text: "prior reasoning" }],
+      };
+
+      const seeded = await handleResponses(
+        switchedRequest(previous, session, { input: [userMessage()] }),
+        config(),
+        { model: "", provider: "" },
+      );
+      expect(seeded.status).toBe(200);
+      await seeded.text();
+
+      const response = await handleResponses(
+        switchedRequest(provider, session, { input: [idOnlyReasoning, userMessage()] }),
+        config(),
+        { model: "", provider: "" },
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+
+      expect(outbound).toHaveLength(2);
+      expect(outbound[1]!.input).toEqual([
+        { type: "reasoning", summary: [{ type: "summary_text", text: "prior reasoning" }] },
+        userMessage(),
+      ]);
+    });
+
     test(`${provider}: a model change on the same destination and credential keeps the item id`, async () => {
       const outbound: Array<Record<string, unknown>> = [];
       globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
