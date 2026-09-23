@@ -325,6 +325,13 @@ export async function injectSystemEnv(
     // same-port restart keeps the tracking record. Only tracked keys are touched, so a user-owned value is never removed.
     for (const name of [...injectedKeys]) {
       if ((SYSTEM_ENV_NAMES as readonly string[]).includes(name) || producedLevers.has(name)) continue;
+      // Older releases only ever injected DISABLE_COMPACT=1. Any other value was set by hand,
+      // so ownership is released without deleting it.
+      if (name === "DISABLE_COMPACT" && launchctlGetenv(name) !== "1") {
+        injectedKeys.splice(injectedKeys.indexOf(name), 1);
+        writeTracking(port, injectedKeys, tracked);
+        continue;
+      }
       unsetLaunchctlEnv(name);
       injectedKeys.splice(injectedKeys.indexOf(name), 1);
       writeTracking(port, injectedKeys, tracked);

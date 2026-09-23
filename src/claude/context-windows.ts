@@ -9,7 +9,7 @@
  * Values are authoritative context windows only (native override table /
  * adapter-reported CatalogModel.contextWindow); nothing is guessed.
  */
-import { aliasForNative, aliasForRoute, legacyAliasForNative, legacyAliasForRoute } from "./alias";
+import { aliasForNative, aliasForRoute, currentClaudeAliasSpelling, legacyAliasForNative, legacyAliasForRoute } from "./alias";
 import { desktop3pAlias } from "./desktop-3p";
 import { nativeOpenAiContextWindow, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
 
@@ -210,8 +210,11 @@ export function effectiveModelEnv(
 ): Record<string, string> {
   const out: Record<string, string> = {};
   const auto = autoOverride ?? resolveAutoContext(claudeCode);
+  // A slot still configured with a legacy claude-ocx selector is emitted in its current
+  // ocx-claude spelling. The route is identical, but Claude Code applies the context window
+  // (and keeps compact) only for ids that do not start with "claude-".
   const set = (name: string, value: string | undefined) => {
-    const marked = withOneMillionMarker(value, windows, auto);
+    const marked = withOneMillionMarker(value === undefined ? undefined : currentClaudeAliasSpelling(value), windows, auto);
     if (marked) out[name] = marked;
   };
   set("ANTHROPIC_MODEL", claudeCode?.model);

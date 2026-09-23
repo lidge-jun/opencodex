@@ -601,6 +601,25 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     expect(JSON.parse(trackingWrite!.data).injectedKeys).not.toContain("DISABLE_COMPACT");
   });
 
+  test("a tracked DISABLE_COMPACT the user changed by hand is released, not deleted", async () => {
+    const writes = capturedWrites();
+    trackingFile = JSON.stringify({
+      pid: 123,
+      port: 4096,
+      injectedAt: "2026-07-11T00:00:00.000Z",
+      injectedKeys: [
+        "ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "DISABLE_COMPACT",
+      ],
+    });
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.DISABLE_COMPACT = "0";
+    expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).not.toContain("launchctl unsetenv DISABLE_COMPACT");
+    const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
+    expect(JSON.parse(trackingWrite!.data).injectedKeys).not.toContain("DISABLE_COMPACT");
+  });
+
   test("a DISABLE_COMPACT the user set in launchd is left alone", async () => {
     capturedWrites();
     launchctlEnvValues.DISABLE_COMPACT = "1";

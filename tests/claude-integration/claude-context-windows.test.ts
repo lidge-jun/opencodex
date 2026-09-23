@@ -188,7 +188,10 @@ describe("auto-context (devlog 260712 020 + audit 021)", () => {
     // Default 272k sits under the 829,800 compact window, so the marker stays off.
     expect(env.ANTHROPIC_MODEL).toBe("gpt-5.6-sol");
     const readable = effectiveModelEnv({ model: "claude-ocx-native--gpt-5.6-sol" }, windows);
-    expect(readable.ANTHROPIC_MODEL).toBe("claude-ocx-native--gpt-5.6-sol");
+    // A legacy slot is emitted in the current spelling so Claude Code applies its window.
+    expect(readable.ANTHROPIC_MODEL).toBe("ocx-claude-native--gpt-5.6-sol");
+    const escaped = effectiveModelEnv({ tierModels: { opus: "claude-ocx2-openrouter--a~sb[1m]" } }, windows);
+    expect(escaped.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("ocx-claude2-openrouter--a~sb[1m]");
     // Opting into the measured 922k ceiling clears the compact window and marks [1m].
     const opted = buildClaudeContextWindows(["gpt-5.6-sol"], [], 922_000);
     expect(effectiveModelEnv({ model: "gpt-5.6-sol" }, opted).ANTHROPIC_MODEL).toBe("gpt-5.6-sol[1m]");

@@ -112,6 +112,17 @@ function toLegacyAlias(alias: string | null): string | null {
   return null;
 }
 
+/**
+ * The current spelling of a selector that may still use a legacy prefix. Legacy and
+ * current prefixes decode to the same route (plain stays literal, v2 expands escapes), so
+ * swapping the prefix is safe. Only the prefix changes: a trailing `[1m]` marker survives.
+ */
+export function currentClaudeAliasSpelling(selector: string): string {
+  if (selector.startsWith(CLAUDE_ALIAS_PREFIX_V2)) return CLAUDE_ALIAS_PREFIX_CURRENT_V2 + selector.slice(CLAUDE_ALIAS_PREFIX_V2.length);
+  if (selector.startsWith(CLAUDE_ALIAS_PREFIX_V1)) return CLAUDE_ALIAS_PREFIX_CURRENT + selector.slice(CLAUDE_ALIAS_PREFIX_V1.length);
+  return selector;
+}
+
 /** Legacy `claude-ocx-`/`claude-ocx2-` spelling of {@link aliasForRoute}. */
 export function legacyAliasForRoute(provider: string, modelId: string): string | null {
   return toLegacyAlias(aliasForRoute(provider, modelId));
