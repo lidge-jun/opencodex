@@ -501,7 +501,10 @@ enabling it takes effect without a restart.
 
 `src/server/request-log.ts` preserves upstream `servedModel` independently of route-derived
 `resolvedModel`; `src/usage/log.ts` persists it with `wireModel`. The Logs model column and detail view
-compare `servedModel` with `wireModel ?? model`. An absent upstream model stays absent; the tooltip
+compare `servedModel` with `wireModel ?? model`. `recordObservedServedModel` in `src/usage/log.ts` refuses
+the client's own selector echoed in `response.model` (Anthropic routes keep `anthropic/<model>` there), and
+`modelIdentityLogFields` drops the same echo from older rows on read, so neither draws a false reroute.
+An absent upstream model stays absent; the tooltip
 retains all available model identities. Historical Codex `openai`, `chatgpt` and `openai-multi` main
 labels collapse for reporting; configured provider names ending in `-main` remain separate.
 

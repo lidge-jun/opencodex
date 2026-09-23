@@ -198,6 +198,7 @@ export async function applyFinalRouteRequestNormalization(args: {
   if (parsed._responseModelId !== undefined && parsed._responseModelId !== parsed.modelId) {
     logCtx.resolvedModel = route.modelId;
     logCtx.wireModel = route.modelId;
+    logCtx.responseModelEcho = parsed._responseModelId;
     logCtx.preserveResolvedModelFromRoute = true;
   }
 

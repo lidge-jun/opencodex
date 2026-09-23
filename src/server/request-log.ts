@@ -43,7 +43,7 @@ import {
   normalizeRequestFailureAttribution,
   normalizeRequestSpend,
   readRecentUsageEntries,
-  modelIdentityLogFields, sanitizeServedModel,
+  modelIdentityLogFields, recordObservedServedModel,
   usageForFinalLog,
   usageStatusForFinalLog,
   usageTotalTokens,
@@ -176,6 +176,8 @@ export interface RequestLogContext {
   wireModel?: string;
   /** Internal: client-facing response metadata must not replace the physical routed model. */
   preserveResolvedModelFromRoute?: boolean;
+  /** Internal: client-facing selector written into response.model; never an upstream observation. */
+  responseModelEcho?: string;
   usage?: OcxUsage;
   usageLogInputTokens?: number;
   /**
@@ -568,7 +570,7 @@ export function addRequestLog(entry: RequestLogEntry) {
   // line-oriented viewer — while `usage.jsonl` looked clean, which is the worst shape for a
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
-  const servedModel = sanitizeServedModel(entry.servedModel);
+  const servedModel = modelIdentityLogFields(entry).servedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
     && servedModel === entry.servedModel && entry.claudeCompatibility === undefined
@@ -901,12 +903,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
     ? (payload as { response?: unknown }).response
     : payload;
   if (!source || typeof source !== "object") return;
-  const model = (source as { model?: unknown }).model;
-  const servedModel = sanitizeServedModel(model);
-  if (servedModel) {
-    logCtx.servedModel = servedModel;
-    if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = servedModel;
-  }
+  recordObservedServedModel(logCtx, (source as { model?: unknown }).model);
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
   if (typeof serviceTier === "string" && serviceTier.trim()) {
     const sanitized = sanitizeLogMetadataString(serviceTier);
