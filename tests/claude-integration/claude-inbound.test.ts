@@ -519,6 +519,16 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
     expect(body.prompt_cache_key).toMatch(/^[0-9a-f]{32}$/);
   });
 
+  test("metadata.user_id longer than 64 chars is hashed into user (OpenAI/Azure limit)", () => {
+    const userId = JSON.stringify({ device_id: "d".repeat(64), account_uuid: "", session_id: "s".repeat(36) });
+    const { body } = anthropicToResponsesTranslation({
+      model: "m", max_tokens: 1, messages,
+      metadata: { user_id: userId },
+    });
+    expect(body.user).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.prompt_cache_key).toBe((body.user as string).slice(0, 32));
+  });
+
   test("no metadata + system present: fallback key from system hash, source=system", () => {
     const a = anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, system: "be nice" });
     const b = anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, system: "be nice" });
