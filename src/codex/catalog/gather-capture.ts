@@ -25,6 +25,7 @@ import {
 } from "../model-cache";
 import {
   buildModelsRequest,
+  getOAuthCredentialApiBaseUrl,
   getValidAccessTokenSnapshot,
   observeActiveOAuthAccessToken,
   resolveModelsAuthToken,
@@ -318,9 +319,9 @@ export function captureTrustedOpenAiApiPolicy(
 export function captureModelsRequest(
   name: string,
   provider: OcxProviderConfig,
-  observedAuth: ModelsAuthResolution | undefined,
+  oauthApiBaseUrl: string | undefined,
 ): CapturedModelsRequest {
-  const observed = { oauthApiBaseUrl: observedAuth?.oauthApiBaseUrl };
+  const observed = { oauthApiBaseUrl };
   const withoutCredential = buildModelsRequest(provider, undefined, name, observed);
   const withCredential = buildModelsRequest(provider, REQUEST_CREDENTIAL_SENTINEL, name, observed);
   const method = withoutCredential.method ?? "GET";
@@ -376,7 +377,15 @@ export function captureProviderGather(
     && provider.liveModels !== false
     ? authResolver.resolve(name, provider)
     : undefined;
-  const request = captureModelsRequest(name, provider, observedAuth);
+  // A refreshing capture carries the stored origin so accounts on different hosts keep separate
+  // flights. The send is rebuilt from the auth the gather resolves, and the observed path never
+  // reads the live store.
+  const oauthApiBaseUrl = observedAuth
+    ? observedAuth.oauthApiBaseUrl
+    : authResolver.kind === "refreshing" && provider.authMode === "oauth"
+      ? getOAuthCredentialApiBaseUrl(name)
+      : undefined;
+  const request = captureModelsRequest(name, provider, oauthApiBaseUrl);
   const resolved = resolveProviderModelDiscovery(name, provider);
   const discovery = detachedFrozen({
     ...(resolved.spec ? { spec: resolved.spec } : {}),

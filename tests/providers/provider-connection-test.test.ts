@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync} from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setFetchCursorUsableModelsForTests } from "../../src/adapters/cursor/live-models";
@@ -7,7 +7,6 @@ import { setFetchQoderModelsForTests } from "../../src/adapters/qoder/live-model
 import { clearCachedUserJwt } from "../../src/adapters/devin/cloud-direct/auth";
 import { setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { encodeMessage, encodeString } from "../../src/adapters/devin/cloud-direct/wire";
-import * as oauth from "../../src/oauth";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { saveConfig } from "../../src/config";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
@@ -119,35 +118,50 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     expect(body).toMatchObject({ ok: true, models: 1 });
   });
 
-  test("Copilot probe keeps account A's bearer and host when the active account switches to B", async () => {
+  test("Copilot probe keeps account A's refreshed bearer and host when the active account switches to B", async () => {
+    const previous = { HOME: process.env.HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME, CODEX_HOME: process.env.CODEX_HOME };
+    const root = mkdtempSync(join(tmpdir(), "ocx-copilot-probe-refresh-"));
+    process.env.HOME = join(root, "home");
+    process.env.OPENCODEX_HOME = join(root, "opencodex");
+    process.env.CODEX_HOME = join(root, "codex");
+    const originalRefresh = OAUTH_PROVIDERS["github-copilot"]!.refresh;
     const calls: { url: string; authorization: string | null }[] = [];
     globalThis.fetch = (async (input, init) => {
       calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
       return Response.json({ data: [{ id: "fixture-model" }] });
     }) as typeof fetch;
-    await saveCredential("github-copilot", {
-      accountId: "account-a", access: "fixture-account-a", refresh: "fixture-refresh-a",
-      expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.githubcopilot.com",
-    });
-    const snapshot = await oauth.getValidAccessTokenSnapshot("github-copilot");
-    const resolveSnapshot = spyOn(oauth, "getValidAccessTokenSnapshot").mockImplementation(async () => {
-      await saveCredential("github-copilot", {
-        accountId: "account-b", access: "fixture-account-b", refresh: "fixture-refresh-b",
-        expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.business.githubcopilot.com",
-      });
-      return snapshot;
-    });
+    let refreshCalls = 0;
     try {
+      await saveCredential("github-copilot", {
+        accountId: "account-a", access: "fixture-account-a-old", refresh: "fixture-refresh-a",
+        expires: Date.now() - 1, apiBaseUrl: "https://api.githubcopilot.com",
+      });
+      OAUTH_PROVIDERS["github-copilot"]!.refresh = async () => {
+        refreshCalls += 1;
+        await saveCredential("github-copilot", {
+          accountId: "account-b", access: "fixture-account-b", refresh: "fixture-refresh-b",
+          expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.business.githubcopilot.com",
+        });
+        return {
+          accountId: "account-a", access: "fixture-account-a-new", refresh: "fixture-refresh-a",
+          expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.githubcopilot.com",
+        };
+      };
       const config = baseConfig({
         "github-copilot": { ...structuredClone(OAUTH_PROVIDERS["github-copilot"]!.providerConfig) },
       });
       const { body } = await probe(config, "github-copilot");
 
-      expect(resolveSnapshot).toHaveBeenCalledTimes(1);
-      expect(calls).toEqual([{ url: "https://api.githubcopilot.com/models", authorization: "Bearer fixture-account-a" }]);
+      expect(refreshCalls).toBe(1);
+      expect(calls).toEqual([{ url: "https://api.githubcopilot.com/models", authorization: "Bearer fixture-account-a-new" }]);
       expect(body).toMatchObject({ ok: true, models: 1 });
     } finally {
-      resolveSnapshot.mockRestore();
+      OAUTH_PROVIDERS["github-copilot"]!.refresh = originalRefresh;
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      removeTreeWithRetry(root);
     }
   });
 

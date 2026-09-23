@@ -472,10 +472,10 @@ export async function fetchProviderModelsWithAuth(
       "degraded",
     );
   }
-  // The captured request predates any refresh and never read the credential store, so a
-  // refreshing gather rebuilds it from the auth it resolved: the token and its origin, together.
+  // The captured request predates any refresh, so a refreshing gather rebuilds it
+  // from the auth it resolved: the token and its origin, together.
   const request = resolveAuth.kind === "refreshing"
-    ? captureModelsRequest(name, prov, auth)
+    ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl)
     : captured.request;
   const url = request.url;
   let headers = materializeCapturedHeaders(request, apiKey);

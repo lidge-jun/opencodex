@@ -193,8 +193,9 @@ than pairing a durable account key with the provider registry's default host. Th
 the provider connection test and for refreshing catalog gathers of every OAuth row: the token and
 its origin come from one snapshot, so a Copilot account switch or a refresh that moves the
 account's API host cannot pair one account's token with another origin, and a key row never
-borrows a stored OAuth account's origin. If the stored destination is invalid, registered Devin
-discovery and routing use the registry's fixed base URL instead of a stale configured override. For Devin, the irreversible roster fingerprint covers
+borrows a stored OAuth account's origin. If the stored
+destination is invalid, registered Devin discovery and routing use the registry's fixed base URL
+instead of a stale configured override. For Devin, the irreversible roster fingerprint covers
 both credential and validated destination, so switching either observes neither fresh nor stale
 data recorded under the previous pair.
 Entitlement-specific rosters (Qoder, Devin, Cursor) additionally bind their cache entry to an
