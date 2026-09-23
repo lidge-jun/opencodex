@@ -209,7 +209,7 @@ import/export는 로컬 설정만 다뤄요. 허브 프로필을 바꾸지 않�
 
 Claude Code 2.1.129 이상은 `GET /v1/models?limit=1000`에서 게이트웨이 모델을 찾아 기본 `/model`
 선택기에 표시해요. `description`이 없는 항목은 "From gateway"로 보이는데, opencodex는 Claude Code CLI용
-항목마다 `description`(`Routed by OpenCodex to <provider>/<model>`)을 보내고 Claude Code 2.1.257 이상은
+항목마다 `description`(`Routed by OpenCodex to <provider>/<model>`, 네이티브 항목은 `Routed by OpenCodex to native <model>`, Fast 항목은 끝에 ` · Fast`, 1M 항목은 기본 설명 그대로)을 보내고 Claude Code 2.1.257 이상은
 그 내용을 대신 보여줘요. 선택기는 `claude` 또는 `anthropic`으로 시작하는 ID만
 받으므로, opencodex는 라우팅 모델을 안정적이고 되돌릴 수 있는 별칭으로 노출해요.
 

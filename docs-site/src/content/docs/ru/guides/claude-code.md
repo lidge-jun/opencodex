@@ -163,7 +163,7 @@ Claude Desktop: работающий процесс может хранить п
 
 Claude Code 2.1.129+ обнаруживает модели шлюза через `GET /v1/models?limit=1000` и показывает их
 в нативном селекторе `/model`. Строка без `description` подписана «From gateway»; opencodex отправляет
-её для каждой строки Claude Code CLI (`Routed by OpenCodex to <provider>/<model>`), и Claude Code 2.1.257+
+её для каждой строки Claude Code CLI (`Routed by OpenCodex to <provider>/<model>`; для нативных строк — `Routed by OpenCodex to native <model>`, строки Fast добавляют ` · Fast`, строки 1M сохраняют базовое описание), и Claude Code 2.1.257+
 показывает этот текст вместо подписи. Поскольку селектор принимает только id,
 начинающиеся с `claude` или `anthropic`, opencodex публикует маршрутизируемые модели как
 стабильные обратимые алиасы:

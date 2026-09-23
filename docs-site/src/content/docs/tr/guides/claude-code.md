@@ -314,7 +314,7 @@ gerekirse anahtarı hub'da ayrıca iptal edin.
 Claude Code 2.1.129+, `GET /v1/models?limit=1000` aracılığıyla ağ geçidi
 modellerini keşfeder ve bunları yerel `/model` seçicisinde listeler. `description`
 alanı olmayan bir satır "From gateway" olarak görünür; opencodex her Claude Code CLI
-satırı için bir tane gönderir (`Routed by OpenCodex to <provider>/<model>`) ve Claude Code
+satırı için bir tane gönderir (`Routed by OpenCodex to <provider>/<model>`; yerel satırlarda `Routed by OpenCodex to native <model>`, Fast satırları sona ` · Fast` ekler, 1M satırları temel açıklamayı korur) ve Claude Code
 2.1.257+ onun yerine bunu gösterir. Seçici yalnızca `claude` veya `anthropic` ile başlayan
 kimlikleri kabul ettiğinden, opencodex yönlendirilen modelleri kararlı, tersine
 çevrilebilir takma adlar olarak sunar:

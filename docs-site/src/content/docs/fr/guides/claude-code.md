@@ -301,7 +301,7 @@ pas les copies externes ; révoquez-la séparément sur le hub si nécessaire.
 
 Claude Code 2.1.129+ découvre les modèles de passerelle via `GET /v1/models?limit=1000` et les répertorie dans
 le sélecteur natif `/model`. Une ligne sans `description` affiche « From gateway » ; opencodex en envoie une pour
-chaque ligne du CLI Claude Code (`Routed by OpenCodex to <provider>/<model>`), que Claude Code 2.1.257+ affiche
+chaque ligne du CLI Claude Code (`Routed by OpenCodex to <provider>/<model>` ; lignes natives : `Routed by OpenCodex to native <model>` ; les lignes Fast ajoutent ` · Fast` et les lignes 1M gardent la description de base), que Claude Code 2.1.257+ affiche
 à la place. Comme ce sélecteur n'accepte que les identifiants commençant
 par `claude` ou `anthropic`, opencodex expose les modèles routés sous forme d'alias stables et réversibles :
 
