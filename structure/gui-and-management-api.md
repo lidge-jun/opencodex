@@ -11,7 +11,7 @@ Explicit Codex CLI installation observation is a local CLI surface, not a manage
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 The shared server request path follows the Responses
-[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior. The configuration-only [priority failback](providers/openai-accounts.md#ongoing-priority-failback) preference adds no new dashboard control or account-eligibility override.
 
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314). Management provider-validation calls use the [initialization-independent relative send-path validation](config.md#provider-relative-send-paths) before persistence. Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing). CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
@@ -348,3 +348,25 @@ have a PID, so they remain exclusive for a conservative ten-minute window before
 recovery; operators no longer need to delete `update-job.json` after a dead worker.
 
 > Decision record: [ADR-0077](decisions/ADR-0077-startup-safety.md)
+
+
+Aside refresh from `ocx sync` also uses a one-shot process-bound capability for its exact POST route.
+It never sends the reusable management credential to a listener selected through public liveness
+discovery, and configured-port-only legacy proxies must be restarted before they can own this mutation.
+
+The `kimi-responses` preset shares Kimi's icon and display brand while its provider id remains distinct.
+
+The dashboard's auto-switch route accepts `{ threshold }` for the global value and `{ id, threshold }`
+for an account override. Account thresholds are integers 0..100 or `null` to inherit, and account-list
+DTOs always expose `autoSwitchThresholdOverride` as that integer or `null`; account controls are
+specified in [Codex account controls](codex-account-controls.md).
+
+A GET with HTTP 404 and code `unknown_flow` is terminal even during cancellation ownership: the flow
+no longer exists, so polling stops, the flow is released, and the existing generic failure state
+appears, as on the DELETE path. Other retryable non-2xx GET errors cannot expose a replacement login
+POST before a concurrent DELETE settles. Retryable GET/DELETE races preserve same-flow cancellation
+retry, last trusted device details, and the existing poll cadence. Outside same-flow cancellation
+ownership, a GET HTTP failure stops polling without starting a second login POST.
+
+Pairing-grant source limiting applies only to invalid guesses from an allowed browser origin; disallowed
+origins record no limiter state, and a valid grant redeems even from a throttled source.

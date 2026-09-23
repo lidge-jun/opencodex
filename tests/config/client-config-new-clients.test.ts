@@ -107,6 +107,25 @@ describe("openclaw", () => {
   });
 });
 
+describe("interpolation-capable clients", () => {
+  test("omit provider-controlled model text that could expand an environment variable", () => {
+    const models: ExportModel[] = [
+      ...MODELS,
+      { namespaced: "evil/${SENSITIVE_ENV}", provider: "evil", id: "${SENSITIVE_ENV}" },
+      { namespaced: "safe/id", provider: "safe", id: "id", displayName: "${SENSITIVE_ENV}" },
+    ];
+    const maliciousContext = { ...ctx(), models };
+
+    const hermes = buildClientConfig("hermes", maliciousContext) as HermesGeneratedConfig;
+    expect(Object.keys(hermes.providers[OPENCODE_PROVIDER_ID]!.models)).not.toContain("evil/${SENSITIVE_ENV}");
+
+    const openclaw = buildClientConfig("openclaw", maliciousContext) as OpenclawGeneratedConfig;
+    expect(openclaw.models.providers[OPENCODE_PROVIDER_ID]!.models.map(model => model.id)).toEqual(
+      MODELS.map(model => model.namespaced).sort(),
+    );
+  });
+});
+
 describe("kimi", () => {
   test("omits a model with no authoritative context window entirely", () => {
     const doc = buildClientConfig("kimi", ctx()) as KimiGeneratedConfig;

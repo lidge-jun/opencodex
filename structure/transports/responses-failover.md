@@ -396,3 +396,42 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+
+## Account refusal and rotation boundaries
+
+Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum,
+cooldown and the three-rotation request cap remain in force, the complete credential/transport/replay
+identity is refreshed, and usage is attributed to the serving account. Single-account installs do not
+retry; a missing alternate credential preserves the original error. Organization or project exhaustion
+allows an initial alternate attempt because the response does not identify the refusing scope. After
+resolving an alternate, organization-level retry is withheld only when both credentials have the same
+known workspace account id. Stored Pool/main-pool alternates supply that id directly; a request-owned
+`main` alternate uses the caller credential's `chatgpt-account-id`. Project exhaustion remains
+retryable because no project identity is available. Distinct or unknown workspaces retain failover;
+same-workspace suppression applies only to the in-request move. A suppressed move still records
+normalized 429/402 evidence and cooldown on the refused account. Credential-refresh failures are
+fenced by account and global routing-state generations, so late failures from obsolete state are ignored.
+`src/codex/quota-rejection.ts` owns the scoped-exhaustion evidence used only after an alternate
+credential has been resolved.
+
+Send-budget refusal is attributed as a withheld rotation only when a model-family-aware eligibility
+check confirms from the live roster that at least two accounts exist and an alternate is not currently
+cooled. That check applies no cooldown and advances no rotation.
+
+Precommit Codex model refusals use bounded account recovery for HTTP `detail` and WebSocket-projected
+`error.message` bodies. Only an exact HTTP 400 refusal naming the requested or wire model establishes
+denial evidence; ordinary malformed requests and committed stream errors do not authorize another
+send. Account selectors, uploaded files and send budgets retain their existing restrictions.
+
+OpenCode Go inference POSTs obey the same operator gate; the destination itself does not authorize
+replay. A granted pre-header replacement that returns transient 5xx has its body cancelled and returns
+the non-replayable refusal. Policy fallback and account rotation preserve that marker instead of
+interpreting its 429 as fresh quota evidence. `src/server/responses/policy-fallback.ts` retains one
+deep snapshot of the first parsed wire body for a policy selector, including supported synthetic Fast
+and effort forms; retries serialize that snapshot so prior recovery mutation cannot alter a later
+provider's input. Object-identity metadata is recomputed per attempt.
+
+Compaction route identity excludes policy selectors and combos on either side; synthetic fast/effort
+suffixes are removed before identity checks. A stale selector resolved only through the default
+provider cannot establish the original serving identity and remains portable.

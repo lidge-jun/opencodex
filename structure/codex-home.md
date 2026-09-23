@@ -78,8 +78,9 @@ treat it as destructive, not as an upgrade or restart command.
 Service install-state ownership uses this same resolver. In WSL, an unset `CODEX_HOME` may resolve
 to the single discoverable Windows Desktop home; recording Linux `~/.codex` instead would make a
 later repair or uninstall look foreign even though the service and runtime were started from the
-same environment. An explicit `CODEX_HOME` remains authoritative, and existing foreign ownership
-records are never migrated implicitly.
+same environment. A record written before that discovery still names Linux `~/.codex`; service
+commands refuse it and name the recorded home to rerun with, because stop and repair would otherwise
+restore a different home. An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly.
 
 > Decision record: [ADR-0006](decisions/ADR-0006-codex-home.md)
 
@@ -278,7 +279,8 @@ a deliberate user choice:
   `ocx status`.
 - Project-level Codex config that bypasses managed routing
   (`src/codex/project-config-warnings.ts`), surfaced by `ocx doctor` as a warning rather than an
-  override.
+  override. Project candidates and opened handles must be regular files of at most 1 MiB;
+  nonblocking descriptor reads reject changed size or timestamps. Global config reads are unchanged.
 
 Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
@@ -352,3 +354,5 @@ Codex pool settings and their consumers follow the [reset-first ordering contrac
 Upstream API-key usage follows the [physical-attempt account attribution contract](dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Stored Direct substitution follows the [credential identity contract](providers/openai-accounts.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
+
+Native-main owner claims and credential-generation backoff remain authoritative during [priority failback priming](providers/openai-accounts.md#ongoing-priority-failback); the preference grants no access through a fenced main profile.

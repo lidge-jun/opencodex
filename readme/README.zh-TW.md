@@ -94,20 +94,21 @@ ocx start                         # 代理 + 儀表板位於 localhost:10100
 
 它是同一套儀表板的原生外殼，另附 WidgetKit 擴充套件，無需開啟瀏覽器就能查看代理狀態、
 今日用量與供應商配額。代理本身沒有改變：應用程式會尋找正在執行的代理，找不到便啟動隨附的
-`ocx` sidecar；儀表板仍位於 **http://localhost:10100**。
+`ocx` sidecar；儀表板仍使用代理的連接埠（除非你設定了其他連接埠，否則為 **http://localhost:10100**）。
 
-目前仍是 Beta 版。建置會簽章以確保完整性，但尚未經公證，因此 macOS 在首次啟動時需要按右鍵 → **開啟**，
-Windows SmartScreen 則會對安裝程式顯示警告。小工具需要 macOS 14 或更新版本；它所呈現的快照模型位於
+目前仍是 Beta 版。macOS 應用程式的發行版建置使用 Developer ID 簽章並經過公證（本機建置則使用 ad-hoc 簽章）；
+Windows 安裝程式尚未經程式碼簽章，因此首次執行時 SmartScreen 會顯示警告。小工具需要 macOS 14 或更新版本；它所呈現的快照模型位於
 [`app/`](../app)（`MenuBarCore`）。
 
-請從[最新發行版](https://github.com/lidge-jun/opencodex/releases)下載，或使用
-`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` 在本機建置。
+請從[最新發行版](https://github.com/lidge-jun/opencodex/releases)下載，或在本機建置：先在儲存庫根目錄執行
+`bun install && bun run build:gui`，再於 `desktop/` 執行
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`。
 
 安裝位置、服務檔案，以及其他寫入磁碟的內容，都列在
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)。
-[桌面應用程式指南](https://lidge-jun.github.io/opencodex/guides/desktop-app/) 與
-[macOS 選單列應用程式指南](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
-說明各平台的安裝方式與 Gatekeeper 提示。
+[桌面應用程式指南](https://opencodex.me/zh-tw/guides/desktop-app/) 與
+[macOS 選單列應用程式指南](https://opencodex.me/zh-tw/guides/macos-menu-bar/)
+說明各平台的安裝方式與首次啟動步驟。
 
 </details>
 
@@ -198,8 +199,9 @@ services:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -207,8 +209,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

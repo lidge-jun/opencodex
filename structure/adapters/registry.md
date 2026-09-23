@@ -85,6 +85,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   rows each base model's collapsed UID gathers — the EFFORT_TOKENS suffixes, tier rows
   like `-1m` included: unmeasured rows abstain, unanimous measured rows advertise
   `["text"]` or `["text", "image"]`, and measured disagreement stays unadvertised.
+  The degraded static roster includes `grok-4-7` with its catalog-measured ladder but
+  omits `grok-4-6` until a Devin-specific ladder is measured; live discovery can still
+  return 4.6 for an account that offers it.
 
   At dispatch the adapter reads the same per-account/host cache once more for the
   exact selected wire UID and forwards `completionOpts.maxInputTokens`: the smallest

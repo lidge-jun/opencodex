@@ -74,7 +74,7 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 | Path | Owner | Notes |
 | --- | --- | --- |
 | `~/.opencodex/config.json` | opencodex | Init creates via private temp plus no-replace hard link; dashboard and explicit updates use atomic replacement. |
-| `~/.opencodex/auth.json` | opencodex | OAuth tokens; not committed. Multiauth shape: `provider -> { activeAccountId, accounts[] }` (legacy single-credential values normalize on load; a one-time `auth.json.pre-multiauth` backup guards downgrades). ChatGPT scratch OAuth stays separate from the Codex account store. For multi-slot providers, credentials without `accountId`/email replace the active slot on a normal login; an explicit add-account login preserves the prior slot and appends a distinct one. Single-slot providers such as ChatGPT remain replacement-only. |
+| `~/.opencodex/auth.json` | opencodex | OAuth tokens; not committed. Multiauth shape: `provider -> { activeAccountId, accounts[] }` (legacy single-credential values normalize on load; a one-time `auth.json.pre-multiauth` backup guards downgrades). ChatGPT scratch OAuth stays separate from the Codex account store. Logout, account deletion and provider deletion remove that provider from it and delete the file once empty; failed updates warn without becoming fatal. For multi-slot providers, credentials without `accountId`/email replace the active slot on a normal login; an explicit add-account login preserves the prior slot and appends a distinct one. Single-slot providers such as ChatGPT remain replacement-only. |
 | `~/.opencodex/codex-accounts.json` | opencodex | Hardened main-plus-added credential store used by `openai` in Pool mode. |
 | `~/.opencodex/catalog-backup.json` | opencodex | One-time pristine Codex catalog backup for restore; per-catalog copies are hashed variants (see [`catalog.md`](catalog.md)). |
 | `~/.opencodex/usage.jsonl` | opencodex | Append-only request usage log (0o600); request metadata + token counts only, never prompts or auth. |
@@ -96,6 +96,15 @@ validation. The shared reader's cancellation contract and the login-specific byt
 are defined in [bounded response ingestion](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 ## Non-negotiable invariants
+
+- **INV-COMPANION-01** — Timeline model rows and available ids merge historical pool providers
+  under their base provider, while account grouping keeps separate labels. A legacy
+  account-qualified model filter selects the entire merged row; hiding a base provider removes
+  all its accounts, and hiding a raw provider removes that account's attributions.
+  Enforced by `tests/usage/usage-timeline.test.ts`.
+- **INV-COMPANION-02** — Loaded and updated companion model selections normalize older
+  account-qualified ids to canonical timeline ids and deduplicate them.
+  Enforced by `tests/server/companion-settings.test.ts`.
 
 Each invariant carries a stable id. A bound invariant names one test, and that test names the id
 back, so deleting or renaming the test fails `bun run structure:check` instead of quietly unbinding the
@@ -202,7 +211,7 @@ batches bounded to 300 seconds, with dedicated worker-heavy families kept single
 dedicated batch steps set `OCX_TEST_NO_QUEUE=1`: their sequential
 processes are one logical runner, while each process still installs its own isolated home and test
 guards. The workflow contract and process bounds live in
-[`ops/docs-and-release.md`](ops/docs-and-release.md#cross-platform-ci).
+[`ops/cross-platform-ci.md`](ops/cross-platform-ci.md).
 
 `structure/manifest.json` declares both source-review coverage and cross-cutting contract authority.
 `scripts/structure-ssot.ts` validates that topology, and generated `structure/INDEX.md` publishes it.
@@ -261,4 +270,4 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 Codex compaction can select a request-local model through the
 [existing Responses handlers](transports/responses-failover.md#compaction-routing-overrides) for the configured
-manual and automatic triggers, while subsequent turns keep their conversation settings.
+manual and automatic triggers, while subsequent turns keep their conversation settings. The optional [ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary.

@@ -228,7 +228,7 @@ env-reference, либо несекретную loopback-заглушку. Loopba
 `OPENCODEX_OPENCODE_API_KEY`, `OPENCODEX_HERMES_API_KEY` или `OPENCODEX_OPENCLAW_API_KEY`.
 Интеграция gjc использует несекретное локальное значение и не требует переменной окружения. Она поддерживает только loopback и не настраивает учётные данные удалённого доступа.
 Как выдаются admission key, описано в
-[Удалённом доступе](/reference/configuration/#remote-access). Ключи upstream-провайдеров — это совсем
+[Удалённом доступе](/ru/reference/configuration/server/#удалённый-доступ). Ключи upstream-провайдеров — это совсем
 отдельная история и настраиваются в [Провайдерах](/guides/providers/).
 
 Тот же payload отдаётся через `GET /api/client-config` и показывается на вкладке API в дашборде,

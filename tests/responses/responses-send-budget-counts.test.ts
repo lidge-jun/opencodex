@@ -417,6 +417,27 @@ describe("ambiguous reset safety across Responses recovery", () => {
     expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
     expect(sends).toBe(1);
   });
+
+  test("an OpenCode Go destination refuses an ambiguous pre-answer reset instead of replaying", async () => {
+    // The removed replaySafe exception let the first send to this destination retry a
+    // dropped inference once. With it gone the destination behaves like every other:
+    // reset before the answer -> refusal 429, exactly one send on the wire.
+    const config = {
+      defaultProvider: "go",
+      providers: { go: transientChatProvider("go", { baseUrl: "https://opencode.ai/zen/go/v1" }) },
+    } as unknown as OcxConfig;
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      throw Object.assign(new Error("The socket connection was closed unexpectedly."), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    takeSpendHome();
+    const response = await handleResponses(responsesRequest("go/model-go"), config, logCtx);
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+    expect(sends).toBe(1);
+  });
 });
 
 describe("ambiguous reset safety after outer recovery", () => {

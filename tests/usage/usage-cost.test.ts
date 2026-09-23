@@ -385,8 +385,37 @@ describe("resolveMatchedPrice", () => {
     expect(resolveMatchedPrice("openrouter", "anthropic-claude-3.5-sonnet")).toBeNull();
   });
 
-  test("16. shipped overlay membership: 131 keys, including canonical Fable 5.1, Opus 5, Opus 5.5, OpenCode Go and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(139);
+  test("Kimi Coding wires share K3 API reference estimates, not plan billing", () => {
+    const expected = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3 };
+    for (const provider of ["kimi", "kimi-code", "kimi-responses"]) {
+      for (const model of ["k3", "k3[1m]", "k3-256k"]) {
+        const price = resolveMatchedPrice(provider, model, undefined, []);
+        expect(price?.cost4).toEqual(expected);
+        expect(price?.source).toBe("expected");
+        expect(price?.status).toBe("verified-derived");
+        expect(price?.sourceRef).toContain("default 5-minute cache-write");
+        expect(price?.sourceRef).toContain("not Code Plan billing/quota");
+      }
+      const usage = { inputTokens: 100, outputTokens: 10 };
+      const input = { provider, model: "kimi-for-coding", usageStatus: "reported" as const, usage };
+      expect(resolveMatchedPrice(provider, input.model, undefined, [])).toBeNull();
+      expect(estimateRequestCost(input, undefined, [])).toBeNull();
+      expect(estimateAttemptCost({ ...input, ordinal: 1 }, undefined, undefined, [])).toBeNull();
+      expect(estimateComboCost([
+        { ...input, model: "k3", ordinal: 1 },
+        { ...input, ordinal: 2 },
+      ], undefined, undefined, [])).toBeNull();
+      const override: ExpectedPriceOverlay = {
+        provider, modelId: input.model, cost4: expected,
+        source: "config:modelCosts", verifiedAt: "user-configured", status: "verified",
+      };
+      expect(resolveMatchedPrice(provider, input.model, undefined, [override])?.source).toBe("user");
+      expect(estimateRequestCost(input, undefined, [override])?.cost.total).toBeGreaterThan(0);
+    }
+  });
+
+  test("16. shipped overlay membership: 142 keys, including canonical Fable 5.1, Opus 5, Opus 5.5, OpenCode Go and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(142);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [
@@ -442,11 +471,11 @@ describe("resolveMatchedPrice", () => {
       "google-antigravity/gpt-oss-120b-medium",
       "kimi/k3",
       "kimi/k3[1m]",
+      "kimi/k3-256k",
       "kimi/kimi-k2.7-code",
       "kimi/kimi-k2.7-code-highspeed",
       "kimi/kimi-k2.6",
       "kimi/kimi-k2.5",
-      "kimi/kimi-for-coding",
       "moonshot/kimi-k3",
       "moonshot/kimi-k2.7-code",
       "moonshot/kimi-k2.7-code-highspeed",
@@ -454,11 +483,14 @@ describe("resolveMatchedPrice", () => {
       "moonshot/kimi-k2.5",
       "kimi-code/k3",
       "kimi-code/k3[1m]",
+      "kimi-code/k3-256k",
       "kimi-code/kimi-k2.7-code",
       "kimi-code/kimi-k2.7-code-highspeed",
       "kimi-code/kimi-k2.6",
       "kimi-code/kimi-k2.5",
-      "kimi-code/kimi-for-coding",
+      "kimi-responses/k3",
+      "kimi-responses/k3[1m]",
+      "kimi-responses/k3-256k",
       "alibaba-token-plan/qwen3.8-max",
       "alibaba-token-plan-intl/qwen3.8-max",
       // OpenCode Go — served ids with no jawcode bundle row; each reuses the
@@ -936,11 +968,12 @@ describe("xAI Priority Processing pricing", () => {
 
   test("xAI rules declare exact 2x premiums with official provenance", () => {
     const xaiRules = PRIORITY_PRICING_RULES.filter(rule => rule.provider === "xai");
-    expect(xaiRules.map(rule => rule.modelId)).toEqual(["grok-4.5", "grok-4.6"]);
+    expect(xaiRules.map(rule => rule.modelId)).toEqual(["grok-4.5", "grok-4.6", "grok-4.7"]);
     expect(xaiRules.every(rule => rule.multiplier === 2)).toBe(true);
     expect(xaiRules.every(rule => rule.requiresResponseConfirmation === true)).toBe(true);
     expect(xaiRules.every(rule => rule.source === "https://docs.x.ai/developers/advanced-api-usage/priority-processing")).toBe(true);
     expect(findPriorityPricingRule("xai", "grok-4.6")?.multiplier).toBe(2);
+    expect(findPriorityPricingRule("xai", "grok-4.7")?.verifiedAt).toBe("2026-09-23");
     expect(findPriorityPricingRule("openrouter", "grok-4.6")).toBeUndefined();
     expect(resolveMatchedPrice("openrouter", "grok-4.6")?.cost4).toEqual({
       input: 2,
@@ -973,6 +1006,14 @@ describe("xAI Priority Processing pricing", () => {
     expect(confirmed.cost.total).toBeCloseTo(0.46, 9);
     expect(confirmed.cost.cacheRead).toBeCloseTo(0.02, 9);
     expect(confirmed.priorityMultiplier).toBe(2);
+  });
+
+  test("grok-4.7 uses the published base price and whole-request long-context band", () => {
+    expect(resolveMatchedPrice("xai", "grok-4.7")?.cost4).toEqual({
+      input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0,
+    });
+    expect(CONTEXT_TIERS.find(tier => tier.provider === "xai" && tier.modelId === "grok-4.7"))
+      .toMatchObject({ thresholdInputTokens: 200_000, inclusive: true, confirmedPriorityRelation: "lower-bound" });
   });
 
   test("an assumed priority outcome stays at the standard price", () => {
@@ -1572,13 +1613,13 @@ describe("Codex account pricing identity", () => {
     }
   });
 
-  test("only recognized historical phex and main suffixes retain the existing fallback", () => {
+  test("only recognized historical phex suffixes retain the existing fallback", () => {
     refreshUserCostOverlays(config([]));
     const custom = { ...row, provider: "legacy" };
-    for (const provider of ["legacy-pabcdef", "legacy-main"]) {
+    for (const provider of ["legacy-pabcdef"]) {
       expect(resolveMatchedPrice(provider, modelId, [custom], [])?.cost4).toEqual(RATE);
     }
-    for (const provider of ["legacy-unknown", "legacy-pABCDEF", "legacy-pabcde", "legacy-oabcdef", "legacy-__main__"]) {
+    for (const provider of ["legacy-unknown", "legacy-pABCDEF", "legacy-pabcde", "legacy-oabcdef", "legacy-__main__", "legacy-main"]) {
       expect(resolveMatchedPrice(provider, modelId, [custom], [])).toBeNull();
     }
   });

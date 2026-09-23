@@ -113,13 +113,17 @@ function cloneRecordOfArrays(input: Record<string, string[]>): Record<string, st
  * is how a partially customized `modelInputModalities` could leave a
  * vision-capable model advertising no image support, which in turn collapses any
  * combo containing it to text-only. Routing already merges these maps per key
- * (`mergeRecordFill` in src/router.ts); catalog enrichment now matches.
+ * (`mapFill` in src/providers/resolved-model-policy-merge.ts); catalog enrichment now matches.
  */
 function fillRecordOfArrays(
   seed: Record<string, string[]>,
   user: Record<string, string[]> | undefined,
 ): Record<string, string[]> {
-  return { ...cloneRecordOfArrays(seed), ...(user ? cloneRecordOfArrays(user) : {}) };
+  const userKeys = new Set(Object.keys(user ?? {}).map(key => key.toLowerCase()));
+  const defaults = Object.fromEntries(
+    Object.entries(seed).filter(([key]) => !userKeys.has(key.toLowerCase())),
+  );
+  return { ...cloneRecordOfArrays(defaults), ...(user ? cloneRecordOfArrays(user) : {}) };
 }
 
 function cloneNestedRecord(input: Record<string, Record<string, string>>): Record<string, Record<string, string>> {
@@ -534,7 +538,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // Per-model fill for the same reason as modelInputModalities above: an all-or-nothing
   // copy let ONE customized model hide the registry's ladder for every other model on the
   // provider. That split the two planes apart — routing merges these maps per key
-  // (mergeRecordFill in src/router.ts), so the wire honored the effort while /v1/models and
+  // (mapFill in src/providers/resolved-model-policy-merge.ts), so the wire honored the effort while /v1/models and
   // every client export showed no effort control at all.
   if (resolvedStatic.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(resolvedStatic.modelReasoningEfforts);
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };

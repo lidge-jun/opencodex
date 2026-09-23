@@ -15,38 +15,20 @@ different custom destination does not inherit its upstream assumptions. Object-f
 also narrow the decision by inbound protocol and authentication mode; an auth-scoped default must
 not leak from a subscription transport into an API-key or forwarded-credential route.
 
-xAI keeps `openai-chat` as its provider-wide compatibility wire, but Grok 4.5/4.6 subscription
+xAI keeps `openai-chat` as its provider-wide compatibility wire, but Grok 4.5/4.6/4.7 subscription
 Responses requests default to native `openai-responses`. Existing namespace, hosted-search and
 reasoning-replay normalization remains in force. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this
 default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. The OAuth lane is service-tier classified per model
-(`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13): grok-4.6, grok-4.5,
+(`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13 and 2026-09-23;
+`devlog/_plan/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
 grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast accept `service_tier: "priority"` over Grok OAuth and echo it, so those
 routes resolve Fast-eligible, publish `--fast` rows, and forward a caller-sent tier on either
 wire (`chatServiceTier: true`). grok-4.20-multi-agent-0309 stays unclassified with its
 caller-tier pin: the gateway accepts the field but answers `service_tier: "default"`, a live
 downgrade rather than a fast tier.
-
-Native Responses participates in the same pre-stream OAuth HTTP-429 account rotation as the Chat
-bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes
-the complete credential/transport/replay identity, and attributes usage to the serving account.
-Single-account installs do not retry; a missing alternate credential preserves the original error.
-
-`shouldRetryCodexPoolAccountQuota` withholds that rotation when the 429 or 402 body names an
-organization- or project-scoped exhaustion (`codexScopedExhaustionCode` in
-`src/codex/quota-rejection.ts`). Every credential inside the refusing organization meets the same
-counter, so the move would pay a second cold prompt prefix for no new capacity. Withholding the
-move does not withhold the accounting: `src/server/responses/passthrough-delivery.ts` applies the
-response's quota headers to the serving account and records the 429 outcome on the ordinary
-delivery path, so the account still earns its cooldown and leaves the selection pool. The gate
-fails closed — an empty, truncated, unparseable, duplicate-keyed or aborted body keeps the broad
-behaviour, and `rate_limit_exceeded`, `slow_down` and plan-level exhaustion still rotate.
-Credential-refresh failures are fenced by both the account generation and a global routing-state
-generation. Reauthentication advances the account fence; replacing the whole routing roster
-advances the global fence. A late failure from either obsolete state is ignored, while failures
-captured after the reset still contribute to the bounded cooldown.
 
 Startup removes legacy Grok 4.5/4.6 Chat overrides once and persists the provider-owned
 `xaiResponsesDefaultVersion` marker. Later explicit Chat choices survive restarts. The migration
@@ -481,3 +463,29 @@ terminal tail, while an opted-in terminal repair keeps its unframed suffix taint
 request-log accounting without promoting a truncated repair candidate.
 
 > Decision record: [ADR-0044](../decisions/ADR-0044-responses-http-sse.md)
+
+
+## Inbound history and code-mode shell wire repairs
+
+Inbound function-call history with a missing JSON object prefix is repaired for every provider when
+restoring it produces an object; other malformed argument strings replay as `{}` (`src/responses/parser.ts`).
+Function-wrapper restoration supports `default.`-prefixed `exec` and `apply_patch` aliases while
+retaining the existing ambiguity and foreign-grammar boundaries.
+
+For a verified code-mode catalog, `src/responses/code-mode-shell-input.ts` recognizes a structured
+`cmd` or `command` object submitted under `exec` and the canonical `input` wrapper. Only known shell
+options and one command field are accepted, and any command that parses as JavaScript remains
+unchanged, including ambiguous single identifiers. The helper compiler serializes recognized
+arguments into `tools.exec_command(...)` and emits its result through `text(...)`; the proxy executes
+nothing. JSON, native Responses and adapter-event SSE use the same completion rule. Possible
+shell-object previews stay held until completion so raw JSON or shell text cannot precede compiled
+JavaScript. Ordinary JavaScript stays progressive. Coverage: `tests/responses/responses-code-mode-shell-compile.test.ts`.
+
+An explicit custom-tool denial also requests recovery for unmapped historical results without a live
+catalog; history never adds current tool authorization. The custom-tool compatibility contract owns
+lowering and final validation. Muse may wrap an already-flattened namespace identity such as
+`default.mcp__server__tool` only when the complete suffix exactly matches a declared namespaced name
+and neither explicit `default.` nor `default__` identity exists. It cannot borrow a manufactured bare
+alias; unknown suffixes still fail as undeclared tools. See [ADR-0099](../decisions/ADR-0099-responses-http-sse.md).
+
+> Decision record: [ADR-0099](../decisions/ADR-0099-responses-http-sse.md)

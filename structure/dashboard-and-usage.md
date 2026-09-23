@@ -470,9 +470,11 @@ do not read a source-tree `package.json`.
 ## Quota-reset notifications
 
 `src/quota/` implements the opt-in `quotaResetNotify` section. With the section absent, or enabled
-without a sink, nothing is detected, delivered, or written. Startup still arms one unref'd poller
-interval (`src/server/background-lifecycle.ts`) whose tick is a no-op until the section is enabled,
-so enabling it takes effect without a restart.
+without a sink, no reset is detected or delivered and no new baseline is created. Cleanup can still
+write when an existing baseline is forgotten: `src/quota/reset-observer.ts` runs
+`forgetQuotaBaseline` without a sink. Startup still arms one unref'd poller interval
+(`src/server/background-lifecycle.ts`) whose tick is a no-op until the section is enabled, so
+enabling it takes effect without a restart.
 
 - `src/quota/window-mapping.ts` maps provider and Codex quota snapshots to one neutral window list,
   and `src/quota/reset-detector.ts` compares two consecutive observations of a window and emits at
@@ -490,3 +492,28 @@ so enabling it takes effect without a restart.
   quota reports are fetched only when the dashboard or CLI asks, and an overnight reset goes
   unobserved. `src/quota/reset-activation.ts` installs the sink independently of the poller, so
   `pollSeconds: 0` observes live traffic only.
+
+
+## Usage history and model identity
+
+`src/server/request-log.ts` preserves upstream `servedModel` independently of route-derived
+`resolvedModel`; `src/usage/log.ts` persists it with `wireModel`. The Logs model column and detail view
+compare `servedModel` with `wireModel ?? model`. An absent upstream model stays absent; the tooltip
+retains all available model identities. Historical Codex `openai`, `chatgpt` and `openai-multi` main
+labels collapse for reporting; configured provider names ending in `-main` remain separate.
+
+Request-history selectors longer than 130 characters persist as a prefix plus a digest of the complete
+selector; exact-match filtering uses the same idempotent encoding. The derived index rebuilds when its
+projection version changes and encodes older raw-selector rows from canonical JSONL so exact filters
+still find them. CLI access-key usage is unavailable without an ISO-8601 UTC attribution timestamp,
+rather than a measured zero or never-used key.
+
+Kimi Coding K3 price rows use API-reference estimates with the default five-minute cache-write rate,
+not Code Plan billing or quota. The three Coding presets have explicit price namespaces. The
+retargeted `kimi-for-coding` alias stays unpriced until a verified K2.8 price or a user `modelCosts`
+override exists; the retired K2.7 mapping is not reused. Request, attempt and combo estimates remain
+unknown rather than zero or partial totals. User prices take precedence and existing unknown-price
+and unknown-cap policies still govern cost evidence and routing.
+
+The Models app-server status read is owned by its API-base/restart effect, not the picker tab; switching
+to Combos preserves a pending read and its existing stale-state banner.

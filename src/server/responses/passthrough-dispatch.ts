@@ -41,6 +41,7 @@ import {
   NamespaceToolCollisionError,
   restoreRoutedNamespaceCalls,
 } from "../../responses/namespace-tool-compat";
+import { restoreRoutedCustomCalls, RoutedCustomToolCompatError } from "../../responses/custom-tool-compat";
 import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
 import { formatErrorResponse } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
@@ -61,7 +62,6 @@ import {
   parseMuseSubscriptionUsage,
 } from "../../providers/muse-subscription-usage";
 import { restoreMuseToolNames } from "../../responses/muse-tool-name-alias";
-import { restoreRoutedCustomCalls } from "../../responses/custom-tool-compat";
 import { restorePlaintextV2AgentMessageCalls } from "../../responses/plaintext-v2-agent-messages";
 import {
   recordAdapterReasoning,
@@ -122,7 +122,6 @@ import { recordCodexUpstreamOutcome } from "../../codex/routing";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import {
-  isOpenCodeGoDestination,
   rateLimitRetryPolicyFor,
   rateLimitRetryDelayMs,
   transientRetryPolicyFor,
@@ -136,6 +135,7 @@ import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
@@ -328,7 +328,11 @@ export async function preparePassthroughExchange(
       // unstructured 500 — and no request log — depending only on whether a rotation ran first.
       // Same shape for a tool_choice this proxy cannot honor: the destination rejects a schema the
       // catalog had to drop, so the selector naming it is a client input error, not a 500.
-      if (error instanceof NamespaceToolCollisionError || error instanceof XaiToolSchemaCompatibilityError) {
+      if (
+        error instanceof NamespaceToolCollisionError
+        || error instanceof XaiToolSchemaCompatibilityError
+        || error instanceof RoutedCustomToolCompatError
+      ) {
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(error.message));
       }
       throw error;
@@ -889,12 +893,6 @@ export async function preparePassthroughExchange(
         { abortSignal: upstream.signal, label: safeHostLabel(request.url),
           attempts: remainingTransientSendBudget(transientSendAttempts()), onSendsConsumed: noteTransientSends,
           claimAmbiguousResend: claimPreHeaderResend,
-          // The OpenCode Go destination stalls-then-drops inference sends (ambiguous
-          // pre-header resets surfacing as refused 429s); its subscription traffic is
-          // inference-only, so a bounded reset replay here absorbs the blip instead of
-          // failing the turn. Recovery legs keep the fail-closed refusal; only this
-          // initial send is replay-eligible. Attempts stay budget-bounded via attempts.
-          replaySafe: isOpenCodeGoDestination(route.provider),
         },
       );
     } catch (err) {
@@ -1310,10 +1308,11 @@ export async function preparePassthroughExchange(
         // No credential moved, so the reservation costs nothing.
         hop.permit?.release();
       } else {
-        // Rotation was available -- the roster cap above admitted it -- and the shared request
-        // budget refused. Recorded so a one-send log is not read as "nothing was eligible",
-        // which is the ambiguity this attribution exists to remove (#5044).
-        noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
+        // The activation quorum ignores cooldowns; prove that the selector has a live alternate
+        // before describing this as a recovery that only the shared request budget withheld.
+        if (hasEligibleGenericOAuthFailoverTarget(
+          route.providerName, transportState.genericFailoverAccountId, Date.now(), route.modelId,
+        )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
       }
     }
 

@@ -44,6 +44,55 @@ describe("qoder adapter", () => {
     expect(args).not.toContain("--dangerously-skip-permissions");
   });
 
+  test("passes system and developer prompts only in the scoped child environment", async () => {
+    const secretSystem = "private system instructions";
+    const secretDeveloper = "private developer context";
+    let args: readonly string[] = [];
+    let childEnv: NodeJS.ProcessEnv = {};
+    const adapter = createQoderAdapter(provider(), {
+      which: () => "/bin/qoder",
+      spawn: (_command, childArgs, options) => {
+        args = childArgs;
+        childEnv = options.env ?? {};
+        return fakeChild(['{"type":"result","subtype":"success","is_error":false}\n']);
+      },
+    });
+    await adapter.runTurn!(parsed({
+      context: {
+        systemPrompt: [secretSystem],
+        messages: [
+          { role: "developer", content: secretDeveloper, timestamp: 0 },
+          { role: "user", content: "hello", timestamp: 0 },
+        ],
+      },
+    }), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, () => {});
+
+    expect(args.join(" ")).not.toContain(secretSystem);
+    expect(args.join(" ")).not.toContain(secretDeveloper);
+    expect(args).not.toContain("--append-system-prompt-file");
+    expect(childEnv.QODER_APPEND_SYSTEM_PROMPT).toBe(`${secretSystem}\n\n${secretDeveloper}`);
+  });
+
+  test("never inherits an ambient Qoder prompt for either region", () => {
+    const previous = process.env.QODER_APPEND_SYSTEM_PROMPT;
+    const previousCn = process.env.QODERCN_APPEND_SYSTEM_PROMPT;
+    process.env.QODER_APPEND_SYSTEM_PROMPT = "ambient-secret";
+    process.env.QODERCN_APPEND_SYSTEM_PROMPT = "ambient-cn-secret";
+    try {
+      for (const profile of [QODER_GLOBAL_PROFILE, QODER_CN_PROFILE]) {
+        expect(buildQoderChildEnv(profile, "pat").QODER_APPEND_SYSTEM_PROMPT).toBeUndefined();
+        const promptEnv = profile.region === "cn" ? "QODERCN_APPEND_SYSTEM_PROMPT" : "QODER_APPEND_SYSTEM_PROMPT";
+        expect(buildQoderChildEnv(profile, "pat")[promptEnv]).toBeUndefined();
+        expect(buildQoderChildEnv(profile, "pat", "request-only")[promptEnv]).toBe("request-only");
+      }
+    } finally {
+      if (previous === undefined) delete process.env.QODER_APPEND_SYSTEM_PROMPT;
+      else process.env.QODER_APPEND_SYSTEM_PROMPT = previous;
+      if (previousCn === undefined) delete process.env.QODERCN_APPEND_SYSTEM_PROMPT;
+      else process.env.QODERCN_APPEND_SYSTEM_PROMPT = previousCn;
+    }
+  });
+
   test("keeps Global and CN profiles, executables, destinations, and PAT variables isolated", async () => {
     expect(resolveQoderProfile("https://qoder.com/")).toBe(QODER_GLOBAL_PROFILE);
     expect(resolveQoderProfile("https://qoder.cn/")).toBe(QODER_CN_PROFILE);

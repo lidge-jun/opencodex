@@ -1,3 +1,4 @@
+import { baseProviderLabel } from "../providers/label";
 import { cacheTokensFromUsage, usageAttributions } from "./summary";
 import type { PersistedUsageEntry } from "./log";
 import { usageDisplayTotalTokens } from "./totals";
@@ -53,6 +54,30 @@ function enumValue<T extends string>(value: string | null, values: readonly T[],
 
 export function isTimelineModelId(value: unknown): value is string {
   return typeof value === "string" && /^[^/\s]+\/\S+$/.test(value);
+}
+
+/**
+ * Pool accounts log as `openai-p<hex6>` (and older rows as `openai-main`/`chatgpt`), so the raw
+ * provider would draw one line per account for the same model. The usage summary already folds these
+ * through `baseProviderLabel`; the timeline keys on the same label so both views agree.
+ */
+function timelineModelId(provider: string, model: string): string {
+  return `${baseProviderLabel(provider)}/${model}`;
+}
+
+/** A saved selection may still name a pool account (`openai-p6bc633/gpt-5`); it selects the merged row. */
+export function normalizeTimelineModelId(id: string): string {
+  const cut = id.indexOf("/");
+  return timelineModelId(id.slice(0, cut), id.slice(cut + 1));
+}
+
+/**
+ * In account grouping the pool suffix is the account when no explicit label was stamped. Codex pool
+ * accounts and Anthropic OAuth accounts (`formatAnthropicProviderForLog`) both log that way.
+ */
+function poolAccountLabel(provider: string): string | undefined {
+  if (baseProviderLabel(provider) === provider) return undefined;
+  return provider.match(/-(main|p[a-f0-9]{6})$/)?.[1];
 }
 
 function parseModels(raw: string | null): string[] | null | { error: string } {
@@ -127,6 +152,7 @@ export function createTimelineAccumulator(query: TimelineQuery): { add(entry: Pe
   const series = new Map<string, SeriesState>();
   const availableModels = new Set<string>();
   const hiddenProviders = new Set(query.hiddenProviders);
+  const selectedModels = query.models === null ? null : new Set(query.models.map(normalizeTimelineModelId));
   let missingMeasurements = 0;
 
   function add(entry: PersistedUsageEntry): void {
@@ -134,19 +160,21 @@ export function createTimelineAccumulator(query: TimelineQuery): { add(entry: Pe
     const bucket = Math.floor((entry.timestamp - startMs) / (bucketSeconds * 1000));
     if (bucket < 0 || bucket >= buckets) return;
     for (const attribution of usageAttributions(entry)) {
-      if (hiddenProviders.has(attribution.provider)) continue;
-      const modelId = `${attribution.provider}/${attribution.model}`;
+      const provider = baseProviderLabel(attribution.provider);
+      if (hiddenProviders.has(attribution.provider) || hiddenProviders.has(provider)) continue;
+      const modelId = timelineModelId(attribution.provider, attribution.model);
       availableModels.add(modelId);
-      if (query.models && !query.models.includes(modelId)) continue;
+      if (selectedModels && !selectedModels.has(modelId)) continue;
+      const accountLogLabel = attribution.accountLogLabel ?? poolAccountLabel(attribution.provider) ?? "unknown";
       const id = query.grouping === "model"
         ? modelId
-        : `${modelId} · ${attribution.accountLogLabel ?? "unknown"}`;
+        : `${modelId} · ${accountLogLabel}`;
       let state = series.get(id);
       if (!state) {
         state = {
-          provider: attribution.provider,
+          provider,
           model: attribution.model,
-          ...(query.grouping === "modelAccount" ? { accountLogLabel: attribution.accountLogLabel ?? "unknown" } : {}),
+          ...(query.grouping === "modelAccount" ? { accountLogLabel } : {}),
           points: Array<number>(buckets).fill(0),
           requests: new Map(),
         };

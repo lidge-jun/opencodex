@@ -49,6 +49,9 @@ const LAYER_SECTION_TAGS: Record<string, string> = {
   skills: "skills_instructions",
   apps: "apps_instructions",
   plugins: "plugins_instructions",
+  // Context-dependent: it is absent when the active collaboration mode adds no
+  // instructions, but Codex wraps it in this tag when it does render.
+  collaboration: "collaboration_mode",
   environment: "environment_context",
   permissions: "permissions instructions",
   // Synthetic: the project doc carries no tag of its own (see extractSections).
@@ -71,7 +74,6 @@ const UNMAPPED_LAYER_IDS = [
   // truth is that this extractor has no verified tag for them.
   "personality",
   "realtime",
-  "collaboration",
   // The Rust source names a <git_attribution> marker pair, but a world-state section is
   // DIFF-rendered: it emits nothing on a turn where its state has not changed. Live
   // `codex debug prompt-input` (codex-cli 0.145.0, 32978 bytes) showed no such block and
@@ -802,6 +804,22 @@ function extractSections(raw: string): Map<string, string> {
 /** Test seam: the extraction is the part worth pinning, not the spawn. */
 export const extractSectionsForTests = extractSections;
 
+function mapSectionsToLayers(sections: Map<string, string>): Record<string, LayerText> {
+  const layers: Record<string, LayerText> = {};
+  for (const [layerId, tag] of Object.entries(LAYER_SECTION_TAGS)) {
+    const text = sections.get(tag) ?? null;
+    layers[layerId] = text === null
+      // Registered but not rendered on this turn, which is an ordinary state for
+      // a diff-rendered section rather than an error.
+      ? { text: null, reason: "not-rendered", bytes: 0 }
+      : { text, reason: "ok", bytes: Buffer.byteLength(text, "utf8") };
+  }
+  return layers;
+}
+
+/** Test seam: pin section-to-layer projection independently of the subprocess. */
+export const mapSectionsToLayersForTests = mapSectionsToLayers;
+
 /**
  * Probe once and map every known layer to its rendered text.
  *
@@ -915,15 +933,7 @@ export async function probePromptText(
       detail: "prompt output could not be parsed",
     };
   }
-  const layers: Record<string, LayerText> = {};
-  for (const [layerId, tag] of Object.entries(LAYER_SECTION_TAGS)) {
-    const text = sections.get(tag) ?? null;
-    layers[layerId] = text === null
-      // Registered but not rendered on this turn, which is an ordinary state for
-      // a diff-rendered section rather than an error.
-      ? { text: null, reason: "not-rendered", bytes: 0 }
-      : { text, reason: "ok", bytes: Buffer.byteLength(text, "utf8") };
-  }
+  const layers = mapSectionsToLayers(sections);
 
   // A file that exists and is empty is not the same as a layer that chose to send
   // nothing. Reporting "sent nothing" for an empty AGENTS.md tells the user their

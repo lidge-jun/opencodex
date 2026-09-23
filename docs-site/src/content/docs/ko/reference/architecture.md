@@ -151,7 +151,7 @@ Codex 컨텍스트 compaction은 라우팅된 모델에서도 동작합니다. `
   자체 캐시와 일치), fetch가 실패하면 stale-fallback을 제공합니다.
 - `codex/catalog.ts` facade가 내보내는 `codex/catalog/sync.ts`는 라우팅된 모델을 네임스페이스
   항목으로 Codex의 카탈로그에 병합하고, 추천
-  [서브에이전트 모델](/ko/guides/codex-integration/#the-subagent-picker)을 먼저 랭크하며,
+  [서브에이전트 모델](/ko/guides/codex-integration/#서브에이전트-선택기)을 먼저 랭크하며,
   `disabledModels`를 필터링하고, 일회성 백업으로부터 원본 카탈로그를 완전히 복원할 수 있습니다.
 
 ## Reasoning effort

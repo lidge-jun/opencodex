@@ -129,6 +129,8 @@ export const NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES: ReadonlySet<string> = new Set
  *
  * Rewrites invented `default.<name>` prefixes back to a declared bare tool when that bare tool
  * is declared and neither `default.<name>` nor `default__<name>` was explicitly declared (#4176).
+ * The same wrapper may surround an already-flattened namespace identity; accept that exact
+ * declared suffix without treating its child name as a bare declaration.
  * Also normalizes legacy helper names (`exec_command`, `shell_command`, `apply_patch`, `view_image`) to
  * `exec` when code-mode `exec` is declared in the request catalog.
  *
@@ -151,7 +153,13 @@ export function normalizeDeclaredToolName(
     const bareDeclared = declaredBare ?? declared;
     if (
       bare.length > 0
-      && bareDeclared.has(bare)
+      && (
+        bareDeclared.has(bare)
+        // Muse can wrap the complete `namespace__tool` identity in `default.`. Requiring the
+        // exact flattened identity to be declared preserves the #4176 provenance boundary:
+        // `default.tool` still cannot borrow a namespaced tool's manufactured bare alias.
+        || (bare.includes("__") && declared.has(bare))
+      )
       && !declared.has("default." + bare)
       && !declared.has("default__" + bare)
     ) {

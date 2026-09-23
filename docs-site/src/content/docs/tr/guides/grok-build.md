@@ -108,7 +108,7 @@ Bu nedenle opencodex bu durumda hiçbir şey yazmaz (ve daha önceki bir geri d�
 bağlantısından kalan tüm blokları kaldırır) ve modelleri yönetilen işaretçilerin
 dışında kendiniz yapılandırırsınız, burada opencodex'in yaptığı hiçbir şey
 onları ezemez. Tam tablo için [Manuel
-tarif](#otomatik-kayit-olmadan-manuel-tarif) bölümüne bakın ve hem `base_url`
+tarif](#otomatik-kayıt-olmadan-manuel-tarif) bölümüne bakın ve hem `base_url`
 (gerçekte `grok` çalıştırdığınız yerden erişilebilen bir ana bilgisayar) hem de
 `api_key` (`OPENCODEX_API_AUTH_TOKEN` değeriniz) ayarlayın.
 

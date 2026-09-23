@@ -291,7 +291,7 @@ extend that observation.
 
 ## Bound-thread rebind destination
 
-A quota-strategy re-evaluation may move a LIVE thread binding only to an account that has genuine
+An ordinary quota-strategy re-evaluation may move a LIVE thread only to an account that has genuine
 quota headroom and is also strictly cooler than the bound account. Both bars are load-bearing.
 Without the headroom bar, "strictly cooler" has no floor, so a pool whose every member sits in the
 80-100% band hands a long conversation from account to account on consecutive turns; Codex prompt
@@ -343,3 +343,55 @@ often that refusal fires and can never replace it.
 
 Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 `src/codex/auth-api/login-flow.ts` distinguishes HTTP 429 from an attempted warmup as `codex_warmup_rate_limited` and preserves that code in OAuth status. Failed attempted warmup does not persist replacement credentials; quota-confirmed deferred registration and HTTP 401/403 handling remain separate. `src/codex/warmup.ts` retains a known 429 when bounded error-body draining times out.
+
+
+## Per-account auto-switch thresholds
+
+`codexAccountAutoSwitchThresholds` is persisted per-account routing metadata. Each 0..100 value
+overrides global `autoSwitchThreshold` for that source account; absence inherits global, and 0 disables
+only usage-driven switching from that account. Runtime resolves this effective value for unbound
+selection, quota/reset-first bound-task re-evaluation, fill-first, priority-tier headroom, main-account
+pin reuse, previews and subagent quota fallback. Failure recovery remains separate. The stable
+`__main__` alias participates, deletion removes an added account's sidecar entry, and malformed maps
+degrade as a unit rather than invalidating config. Zero never disables main-account hard-lock,
+startup policy binding, quota cooldowns or model entitlement checks. Pool pin reuse and caller-owned
+fallback enforce relevant cooldown when the bearer matches the already-observed main credential,
+including after an awaited entitlement read. This uses memory-only identity evidence; unrelated
+callers and explicit Direct retain their existing policy, and an independent model's cooldown does
+not block another quota scope. Cache-affinity preservation across model detours still retires shared
+state at genuine 100% exhaustion, including with a zero account override; below exhaustion the
+threshold remains disabled.
+
+Refusal detection accepts the HTTP `detail` envelope and the WebSocket refused-create projection's
+`error.message` envelope. Both require HTTP 400 and the complete model-specific refusal sentence;
+malformed or competing envelopes, unrelated errors and postcommit stream errors authorize no replay.
+The same evidence feeds the bounded alternate attempt and later automatic selection without changing
+a manual pin or threshold-zero quota policy.
+`codexScopedExhaustionCode` exposes its result only to the post-resolution rotation gate; a code by
+itself cannot bind a refusal to every credential in a heterogeneous pool.
+
+## Ongoing priority failback
+
+`codexAccountPriorityFailback: true` explicitly permits bound quota-strategy tasks to return to a
+strictly higher priority with known non-exhausted headroom. It defaults off and requires the bound
+source account's effective threshold to be positive: source override 0 disables it, while a positive
+source override enables it even with global 0. A candidate's positive effective threshold requires
+usage below that value; candidate 0 removes only this preference, never unknown/exhausted, health,
+entitlement or hard-lock exclusions. This separate preference can lose a warm cache; ordinary
+rebinding stays strictly cooler. The shared `routing.ts` helper gives preview and resolve the same
+result after generation, refusal, health, pin and model checks; independent/model lanes retain their
+shared-cursor isolation. Stale quota and short-window observation timestamps do not authorize this
+optional move. Every member of the selected higher-priority tier must pass those checks before
+lowest-usage selection.
+
+`src/codex/quota-observation-freshness.ts` keeps process-local observation times for quota windows
+that contribute to the candidate's score. Credits and partial updates preserve carried timestamps;
+hydrated bars alone cannot authorize failback until live observations cover those windows. This
+evidence changes no persisted quota shape, scoring, recovery or hard-lock policy. `account-priority.ts`
+owns the five-minute cadence; `auth-api/pool-mode-gate.ts` bounds request-triggered attempts,
+including failures, while preserving main-owner claims and per-credential WHAM dispatch backoff.
+No requests means no new polling. For this reason only, stale observation proof bypasses aggregate
+quota-cache freshness after the existing attempt backoff. Main refresh keeps its owned lease and
+passive intent: cache bypass does not clear an inference reauthentication mark. Other prime reasons
+retain their existing cache rules. The split config schema degrades malformed optional values to
+false. Exact-account and Direct routes are unchanged.

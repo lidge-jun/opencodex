@@ -14,10 +14,37 @@ export type PackageTreeIntegrityStatus =
 
 export interface PackageTreeIntegrityGuard {
   status(): PackageTreeIntegrityStatus;
+  /**
+   * Permanently disarms the guard: cancels any pending restart timer and
+   * invalidates queued callbacks. Called from `server.stop()` so a still-queued
+   * replacement callback cannot schedule a drain-and-restart after shutdown
+   * has already begun.
+   */
+  dispose(): void;
 }
 
-type ObservePackageTree = () => PackageTreeObservation | null;
-type PackageTreeRuntimeInstall = "bun" | "npm" | "pnpm" | "source";
+export interface PackageTreeIntegrityOptions {
+  /**
+   * Called once when a replaced package tree persists past `replacedRestartDelayMs`
+   * of sustained failure. The intended handler is the graceful drain-and-restart
+   * acceptor: an out-of-band install (npm/bun/pnpm global upgrade under a live
+   * proxy) then self-heals instead of serving 503s until someone restarts by hand.
+   * Only `package_tree_replaced` counts — an unreadable manifest resets the timer,
+   * so an install still mid-write does not trigger a restart on partial state.
+   */
+  onReplaced?: () => void;
+  /** Sustained-replacement delay before `onReplaced` fires. 0 fires on first detection. */
+  replacedRestartDelayMs?: number;
+  /**
+   * Test seam; production uses an unref'd timer. May return a cancellation
+   * function; when it does, `resetRestartTimer` cancels the pending callback
+   * instead of leaving it queued behind a generation check.
+   */
+  schedule?: (callback: () => void, delayMs: number) => (() => void) | void;
+}
+
+export type ObservePackageTree = () => PackageTreeObservation | null;
+export type PackageTreeRuntimeInstall = "bun" | "npm" | "pnpm" | "source";
 
 const packageManifestUrl = new URL("../../package.json", import.meta.url);
 
@@ -70,17 +97,123 @@ const PACKAGE_TREE_RECHECK_MS = 1_000;
 export function createPackageTreeIntegrityGuard(
   observe: ObservePackageTree = observePackageManifest,
   now: () => number = Date.now,
+  options: PackageTreeIntegrityOptions = {},
 ): PackageTreeIntegrityGuard {
   const boot = observe();
   let lastOkAt: number | null = null;
+  let notified = false;
+  let timerGeneration = 0;
+  let timerScheduled = false;
+  let cancelScheduled: (() => void) | null = null;
+  let waitingForReadableTree = false;
+  let replacementCandidate: PackageTreeObservation | null = null;
+  const restartDelayMs = options.replacedRestartDelayMs ?? 5_000;
+  const schedule = options.schedule ?? ((callback, delayMs) => {
+    const timer = setTimeout(callback, delayMs);
+    timer.unref?.();
+    return () => clearTimeout(timer);
+  });
+
+  const resetRestartTimer = (): void => {
+    timerGeneration += 1;
+    timerScheduled = false;
+    const cancel = cancelScheduled;
+    cancelScheduled = null;
+    cancel?.();
+  };
+
+  const armRestartTimer = (delayMs = restartDelayMs): void => {
+    if (!options.onReplaced || notified || timerScheduled) return;
+    timerScheduled = true;
+    const generation = timerGeneration;
+    const verifyAndNotify = () => {
+      if (generation !== timerGeneration || notified) return;
+      timerScheduled = false;
+      const current = observe();
+      if (boot === null || current === null) {
+        // A package manager may replace package.json before the rest of the tree.
+        // Wait for a readable tree, then require a fresh full debounce interval.
+        resetRestartTimer();
+        waitingForReadableTree = true;
+        armRestartTimer(PACKAGE_TREE_RECHECK_MS);
+        return;
+      }
+      if (sameObservation(boot, current)) {
+        resetRestartTimer();
+        waitingForReadableTree = false;
+        replacementCandidate = null;
+        return;
+      }
+      if (waitingForReadableTree) {
+        waitingForReadableTree = false;
+        replacementCandidate = current;
+        resetRestartTimer();
+        armRestartTimer();
+        return;
+      }
+      if (replacementCandidate === null || !sameObservation(replacementCandidate, current)) {
+        replacementCandidate = current;
+        resetRestartTimer();
+        armRestartTimer();
+        return;
+      }
+      try {
+        options.onReplaced?.();
+        notified = true;
+      } catch {
+        // A failed restart admission must not leave the proxy fenced forever.
+        // Re-observe after the normal debounce and try again if replacement persists.
+        armRestartTimer(Math.max(PACKAGE_TREE_RECHECK_MS, restartDelayMs));
+      }
+    };
+    if (delayMs === 0) {
+      // Defer like the scheduled path: verifyAndNotify can arm the next timer, and a
+      // synchronous verify inside this frame would re-enter armRestartTimer while this
+      // arm is still running.
+      queueMicrotask(verifyAndNotify);
+    } else {
+      // The seam may run the callback synchronously; defer the work so
+      // cancelScheduled ownership is settled before verifyAndNotify can
+      // re-enter armRestartTimer.
+      const cancel = schedule(() => {
+        queueMicrotask(verifyAndNotify);
+      }, delayMs);
+      if (generation === timerGeneration && timerScheduled && typeof cancel === "function") {
+        cancelScheduled = cancel;
+      }
+    }
+  };
+
   return {
+    dispose(): void {
+      resetRestartTimer();
+      notified = true;
+    },
     status(): PackageTreeIntegrityStatus {
       const at = now();
       if (lastOkAt !== null && at - lastOkAt < PACKAGE_TREE_RECHECK_MS) return { ok: true };
       const current = observe();
-      if (boot === null || current === null) return { ok: false, reason: "package_tree_unreadable" };
-      if (!sameObservation(boot, current)) return { ok: false, reason: "package_tree_replaced" };
+      if (boot === null || current === null) {
+        const wasWatchingReplacement = timerScheduled;
+        resetRestartTimer();
+        if (wasWatchingReplacement && boot !== null) {
+          waitingForReadableTree = true;
+          armRestartTimer(PACKAGE_TREE_RECHECK_MS);
+        }
+        return { ok: false, reason: "package_tree_unreadable" };
+      }
+      if (!sameObservation(boot, current)) {
+        if (replacementCandidate === null || !sameObservation(replacementCandidate, current)) {
+          replacementCandidate = current;
+          resetRestartTimer();
+        }
+        armRestartTimer();
+        return { ok: false, reason: "package_tree_replaced" };
+      }
       lastOkAt = at;
+      resetRestartTimer();
+      waitingForReadableTree = false;
+      replacementCandidate = null;
       return { ok: true };
     },
   };
@@ -96,7 +229,10 @@ export function createRuntimePackageTreeIntegrityGuard(
   installer: PackageTreeRuntimeInstall,
   observe: ObservePackageTree = observePackageManifest,
   now: () => number = Date.now,
-): PackageTreeIntegrityGuard {
-  if (installer === "source" || isStandaloneBinary()) return { status: () => ({ ok: true }) };
-  return createPackageTreeIntegrityGuard(observe, now);
-}
+  options: PackageTreeIntegrityOptions = {},
+  ): PackageTreeIntegrityGuard {
+    if (installer === "source" || isStandaloneBinary()) {
+      return { status: () => ({ ok: true }), dispose: () => {} };
+    }
+    return createPackageTreeIntegrityGuard(observe, now, options);
+  }

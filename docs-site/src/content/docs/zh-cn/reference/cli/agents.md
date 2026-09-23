@@ -181,7 +181,7 @@ opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi �
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。
 :::
 
-任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，只有在客户端配置格式支持的情况下才设置相应的环境变量。有关准入密钥的签发方法，请参阅 [Remote access](/reference/configuration/#remote-access)。上游 provider 自身的密钥需要单独配置，请参阅 [Providers](/guides/providers/)。
+任何密钥都不会被序列化。生成的配置里携带的要么是有文档记录的环境引用，要么是非机密的环回占位值。环回代理（`127.0.0.1`，默认值）根本不需要准入密钥。当代理绑定到环回地址之外时，只有在客户端配置格式支持的情况下才设置相应的环境变量。有关准入密钥的签发方法，请参阅 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。上游 provider 自身的密钥需要单独配置，请参阅 [Providers](/guides/providers/)。
 
 生成的 gjc 集成使用非机密的本地环回占位值，不需要环境变量。此集成仅支持本地环回，不配置远程准入凭据。
 

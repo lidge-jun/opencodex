@@ -102,7 +102,8 @@
         "src/update/",
         "src/usage/",
         "src/vision/",
-        "src/web-search/"
+        "src/web-search/",
+        "src/config/persisted-mutation.ts"
       ]
     },
     {
@@ -180,7 +181,6 @@
       "documents": [
         "src/adapters/",
         "src/bridge/",
-        "src/codex/",
         "src/lib/",
         "src/responses/",
         "src/server/"
@@ -193,7 +193,8 @@
       "scope": "Upstream reset retry, the ambiguous-resend gate, combo failover and commit boundaries, compaction routing, and output headroom.",
       "documents": [
         "src/lib/",
-        "src/server/"
+        "src/server/",
+        "src/codex/"
       ]
     },
     {
@@ -439,7 +440,8 @@
       "documents": [
         "src/server/",
         "src/service-manager-probe.ts",
-        "src/sidecar/"
+        "src/sidecar/",
+        "src/update/"
       ]
     },
     {
@@ -456,8 +458,7 @@
         "src/cli/",
         "src/codex/",
         "src/lib/",
-        "src/service.ts",
-        "src/update/"
+        "src/service.ts"
       ]
     },
     {
@@ -489,6 +490,36 @@
         "gui/",
         "app/",
         "desktop/"
+      ]
+    },
+    {
+      "path": "config-proxy.md",
+      "tier": 2,
+      "title": "Proxy Configuration",
+      "scope": "Global proxy activation, start flags, and credential-safe CLI output.",
+      "documents": []
+    },
+    {
+      "path": "codex-account-controls.md",
+      "tier": 5,
+      "title": "Codex Account Controls",
+      "scope": "Account selection order, custom usage thresholds, and stable account-card editing.",
+      "documents": []
+    },
+    {
+      "path": "ops/cross-platform-ci.md",
+      "tier": 6,
+      "title": "Cross-platform CI",
+      "scope": "Test lanes, platform coverage, aggregate gating, and release CI proof.",
+      "documents": []
+    },
+    {
+      "path": "ops/test-sandbox-cleanup.md",
+      "tier": 6,
+      "title": "Test Sandbox Cleanup",
+      "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
+      "documents": [
+        "tests/"
       ]
     }
   ],

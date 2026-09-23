@@ -248,6 +248,14 @@ as `response.incomplete`, never synthetic success. The repair shares the per-tur
 budget, preserves backpressure, and composes ahead of item-id/snapshot rewrites so HTTP/SSE and
 WebSocket clients observe the same canonical lifecycle.
 
+When the hosted-search bridge is also armed, repair wraps the raw first leg BEFORE the bridge:
+the bridge suppresses an intercepted `web_search` lifecycle, so a complete call whose leg never
+closes would otherwise leave the grace timer unarmed and the turn stalled. The same wrap applies
+to every continuation leg the bridge's `send` returns — each leg gets its own grace window on the
+shared abort controller — so a terminal-less continuation cannot stall the bridged turn either.
+`tests/web-search/web-search-passthrough-bridge.test.ts` drives both legs through `handleResponses`
+with an injected scheduler and proves search execution, continuation dispatch, and final terminal.
+
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a
 `response.failed` frame is sent; otherwise `response.completed` carries through the original status.

@@ -1,5 +1,8 @@
 # xAI Grok Provider
 
+Managed alias allocation retries nested-table reservation when rewriting references
+cannot parse the first candidate. Other rewrite failures still refuse the update.
+
 The Grok client picker forwards the `meta-muse` catalog's `max` effort through its existing managed-block export; this follows the [Muse provider contract](../providers-and-adapters.md).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
@@ -24,11 +27,22 @@ retains xAI provider behavior; see
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
+## Responses request compatibility
+
+`src/adapters/xai-web-search.ts` omits `auto`/`none` tool selection after normalization if no tools
+remain in either the top-level catalog or `additional_tools`. Cached-only search removal follows
+the same rule. When an omitted `none` selector stated the turn's only client-call prohibition,
+the explicit empty `tools` catalog preserves that denial. Available forced function selectors remain intact.
+`src/adapters/openai-responses/request-strips.ts` preserves valid xAI custom-call item ids and
+repairs missing/invalid ids from a stable digest of the JSON-encoded `(call_id, name, input)`
+string tuple. Incomplete tuples remain unchanged, and call/result pairing uses the original call id.
+Other destinations retain their existing item-id behavior, including OpenAI `store:false`.
+
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grok's Responses path shares `src/responses/apply-patch-envelope.ts` for freeform restoration.
 The declared `input` field remains authoritative; alternate-field and outer-fence recovery is
-limited to unambiguous bare `exec` and `apply_patch` calls and does not rewrite foreign grammars.
+limited to unambiguous bare or `default.`-prefixed `exec` and `apply_patch` calls and does not rewrite foreign grammars.
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
 `devlog/_fin/260716_grok_build_hardening/`.
@@ -157,7 +171,8 @@ Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#r
 
 xAI's Priority Processing (`service_tier: "priority"` on Chat Completions and Responses,
 documented for the API-key product) is honored by the Grok OAuth subscription gateway on a
-probed model set (live probe 2026-09-13, `devlog/_fin/260913_xai_oauth_fast/`): grok-4.6,
+probed model set (live probes 2026-09-13 and 2026-09-23, `devlog/_fin/260913_xai_oauth_fast/`
+and `devlog/_plan/260923_grok47_parity/010_probe-evidence.md`): grok-4.7, grok-4.6,
 grok-4.5, grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast each echoed `priority` upstream. The registry entry classifies exactly
 that set in `modelSupportsServiceTier` and declares `chatServiceTier: true`, so the OAuth lane

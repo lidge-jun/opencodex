@@ -464,3 +464,13 @@ keeps only allowlisted transport verdict codes. Adapter error events take a diff
 mapping cyber-policy codes to HTTP 400. The same file holds the shared usage shaping; `input_tokens_details` and
 `output_tokens_details` are always emitted, with zero defaults, because strict Responses clients
 deserialize them as required fields.
+
+
+Active-turn admission owns workflow admission, so both remain held until a streaming body finishes or
+is cancelled.
+
+The shared endpoint path also preserves the cyber-policy stop when a malformed UTF-8 5xx body is
+replacement-decoded; other malformed-body usage, quota, reset evidence and classification retain the
+status-only fallback. Rebuilt failures remain non-replayable and cyber-policy failures carry neither
+`Retry-After` nor quota-reset metadata. The [Responses failover contract](responses-failover.md)
+owns the bounded recovery and replay decisions.

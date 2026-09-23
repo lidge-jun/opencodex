@@ -201,5 +201,5 @@ Dosyayı doğrudan düzenlemeyi tercih ediyorsanız `config.json` içinde yine d
 açıklaması mevcut Claude Code OAuth parmak izi emsalini yeniden kullanır, ancak
 hedeflenen hesap ve iş yükü ile kapsamlı bir şekilde test edilmelidir.
 
-Her alan için [Yapılandırma referansı](/tr/reference/configuration/#sidecars)
+Her alan için [Yapılandırma referansı](/tr/reference/configuration/server/#sidecarlar)
 bölümüne bakın.

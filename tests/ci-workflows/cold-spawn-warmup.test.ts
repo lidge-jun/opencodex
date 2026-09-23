@@ -6,11 +6,12 @@ import {
   COLD_SPAWN_WARMUP_HOOK_BUDGET_MS,
   moduleGraphSpecifiers,
   resetColdSpawnWarmupForTests,
+  spawnModuleGraphWarmupChild,
   warmColdSpawn,
   warmModuleGraph,
 } from "../helpers/cold-spawn-warmup";
 import { repoPath, repoRoot } from "../helpers/repo-root";
-import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { INTERNAL_DEADLINE_MS, SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import {
   analyzeWarmupRegistration,
   dispositionComplaints,
@@ -263,6 +264,44 @@ describe("warm-up failure policy", () => {
     await expect(warmModuleGraph({ graph: "cold-spawn-warmup-test/unresolvable" }))
       .rejects.toThrow("needs either an entry or a source");
   });
+
+  test("a warm-up child that never exits is killed at the deadline, not awaited forever", async () => {
+    resetColdSpawnWarmupForTests();
+    // Run 35511743422's macos 2/2 leg held this shape for eighteen silent minutes: a child
+    // that could not be observed to exit, waited on through a synchronous spawn whose own
+    // timeout rode the dead event loop. The bound has to live on the parent's live loop —
+    // SIGKILL at the deadline, then settle.
+    const startedAt = performance.now();
+    const result = await spawnModuleGraphWarmupChild(
+      "setInterval(() => undefined, 60_000)",
+      repoRoot(),
+      undefined,
+      1_000,
+    );
+    expect(performance.now() - startedAt).toBeLessThan(INTERNAL_DEADLINE_MS);
+    expect(result.timedOut).toBe(true);
+    expect(result.exitCode).not.toBe(0);
+  });
+
+  test("a descendant holding the child's pipes does not turn exit into a wait for EOF", async () => {
+    resetColdSpawnWarmupForTests();
+    // `close` is what a clean exit earns. A grandchild that keeps the write end open must not
+    // convert it into an unbounded wait, so exit starts a reap grace instead.
+    const script = [
+      'const { spawn } = require("node:child_process");',
+      'spawn(process.execPath, ["--eval", "setTimeout(() => process.exit(0), 8_000)"], { detached: true, stdio: "inherit" }).unref();',
+      'process.stdout.write("ok\\n");',
+      "process.exit(0);",
+    ].join("\n");
+    const startedAt = performance.now();
+    // The parent exits before its short deadline; the descendant keeps the pipe open
+    // past that deadline, so only reap grace should settle the completed child.
+    const result = await spawnModuleGraphWarmupChild(script, repoRoot(), undefined, 1_000);
+    expect(performance.now() - startedAt).toBeLessThan(INTERNAL_DEADLINE_MS);
+    expect(result.exitCode).toBe(0);
+    expect(result.timedOut).toBe(false);
+    expect(result.stdout).toContain("ok");
+  }, INTERNAL_DEADLINE_MS);
 
   test("a real module graph loads, and reports what it loaded", async () => {
     resetColdSpawnWarmupForTests();

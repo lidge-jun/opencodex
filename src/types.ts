@@ -28,6 +28,7 @@ export {
   OPENAI_PROVIDER_TIER_VERSION,
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
   captureWireAdapterHardPins,
+  captureWireAdapterHardPinPrefixes,
   isWirePinnedModel,
   pinnedWireAdapter,
 } from "./types/wire";

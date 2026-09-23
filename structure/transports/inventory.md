@@ -98,6 +98,14 @@ promises are observed, and a cancellation that never settles cannot extend the r
 After an attached read, cleanup removes the abort listener, cancels any inactivity timer, and
 attempts to release the reader lock. `tests/server/bounded-body.test.ts` covers these paths.
 
+`readBoundedResponseBody` accepts `reportUtf8Validity`: the body decodes with replacement
+characters instead of rejecting, and a result that reached EOF carries `utf8Valid`. Combined with
+`fatalUtf8`, a returned body is valid by construction and reports `true`. Timeout and oversized
+results omit the field. `consumeComboFailure` uses it for 5xx bodies: only a valid body supplies
+quota evidence, usage, or classification, and a malformed body keeps the status-only fallback
+unless its lenient decode identifies a cyber-policy refusal, which must still stop the combo
+(`tests/providers/cyber-policy-error-fidelity.test.ts`).
+
 `src/oauth/orcarouter.ts` applies this reader to a successful `POST /api/v1/auth/keys` response
 with a 65,536-byte (64 KiB) ceiling. One 30-second signal, combined with caller cancellation,
 covers both fetching the response headers and consuming the body; no separate body or inactivity
@@ -299,7 +307,9 @@ Response constructor; this tunnel assembles the body from a socket, so a respons
 its upstream headers hands the coded bytes to whatever parses them. The request therefore asks
 for `identity` unless the caller chose an `accept-encoding` itself, a `gzip` or `deflate`
 response is decoded and stops advertising the coding and the coded length, and any other coding
-is refused by name rather than surfaced as bytes no caller can read.
+is refused by name rather than surfaced as bytes no caller can read. Buffered decoded SOCKS5
+bodies stop at 32 MiB; event streams may continue beyond that while decoded bytes stay within
+the greater of 32 MiB or 128 times the coded bytes consumed, so highly compressed bombs stop.
 
 ## Raw transport null-body statuses
 

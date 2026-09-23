@@ -1,171 +1,56 @@
 ---
 title: macOS Menu Bar App
-description: A native menu bar companion that shows OpenCodex proxy status, usage, and provider quotas at a glance.
+description: Use the OpenCodex desktop app's macOS tray, native usage panel, and widget.
 ---
 
-The macOS companion puts OpenCodex in your menu bar: proxy health, recent usage, and
-per-provider quota pressure, without opening the dashboard.
-
-It is a separate application from the proxy. `ocx` keeps running as it always has; the
-companion is a read-mostly client that talks to the local management API.
-
-## Desktop app (Tauri)
-
-The same dashboard can run inside the OpenCodex desktop app. The Usage companion panel
-uses the OS selector to show the matching macOS, Windows, or Linux installation steps.
-While the dashboard is inside the desktop shell, choose **Open in browser** to open the
-current dashboard view in your normal browser.
+The macOS menu bar item is part of the OpenCodex desktop app. It shows usage from the local proxy and opens a native usage panel. The same app also contains the dashboard and a WidgetKit extension. See the [desktop app guide](/guides/desktop-app/) for installation on other platforms.
 
 ## Install
 
-Install the desktop app from the
-[latest release](https://github.com/lidge-jun/opencodex/releases). On macOS, download
-`OpenCodex-<version>-macos.dmg`, open it, and drag `OpenCodex.app` to Applications.
-Windows users can run `OpenCodex-<version>-windows-x64.msi`; Linux users can use the
-AppImage or `OpenCodex-<version>-linux-amd64.deb`.
+Download `OpenCodex-<version>-macos.dmg` from the [latest release](https://github.com/lidge-jun/opencodex/releases). Open the DMG and drag `OpenCodex.app` to Applications. The desktop app requires macOS 13 or later; its widget requires macOS 14 or later.
 
-```bash
-chmod +x OpenCodex-<version>-linux-x86_64.AppImage
-sudo apt install ./OpenCodex-<version>-linux-amd64.deb
-```
+## First launch
 
-## First launch: Gatekeeper
+Release builds of `OpenCodex.app` are signed with a Developer ID, use the hardened runtime, and are notarized by Apple with the ticket stapled to the app. On first launch, macOS normally asks only for the standard confirmation for an app downloaded from the internet. If macOS still blocks it, open **System Settings → Privacy & Security** and choose **Open Anyway** for OpenCodex. Apps you build yourself are ad-hoc signed; see [Build from source](#build-from-source).
 
-**The first launch will be blocked.** macOS will say:
+The app shows its startup progress in a window when you open it. It enables **Start at Login** once on first launch; you can turn that off from the tray menu. Later launches from the login item start with the window hidden while the tray remains available.
 
-> "OpenCodex.app" cannot be opened because the developer cannot be verified.
+## Menu bar and usage panel
 
-This is expected, and it is worth explaining rather than talking you past it. Gatekeeper
-wants a Developer ID signature and a notarization ticket from Apple, both of which
-require a paid Apple Developer account. OpenCodex does not have one, so the app ships
-ad-hoc signed: the bundle is intact and its signature is valid, but Apple has not
-vouched for the publisher.
+The menu bar headline shows today's total tokens by default. In the dashboard's **Menu bar & widget** settings, you can choose requests, tokens, estimated cost, quota, or icon only.
 
-To open it anyway:
+Use **Show Usage** in the tray menu to open the native panel. The panel shows today's and 30-day totals, a usage chart, a model list, and provider and account limits according to your display settings. Totals include tokens and requests, with estimated cost when enabled. Quota rows show their window, percentage, and reset time. Missing measurements appear as `—`, and partial usage is marked as incomplete.
 
-1. Right-click (or Control-click) `OpenCodex.app` in Finder.
-2. Choose **Open**.
-3. Click **Open** in the dialog that appears.
+The panel has **Refresh**, **Dashboard**, and **Settings** controls. **Dashboard** opens the usage view in the desktop window; **Settings** opens the companion settings there. The tray menu also offers **Open Dashboard**, **Open in Browser**, **Start at Login**, **Stop proxy**, **Check for Updates…**, an **Install update** item when one is available, and **Quit**. **Stop proxy** is always listed but is enabled only when the app started the proxy itself; a proxy you started separately keeps running. Closing the window or using Command-Q hides the app when its tray is available; use the tray's **Quit** to exit it.
 
-If that dialog does not offer an Open button, go to **System Settings → Privacy &
-Security**, find the blocked-app notice, and click **Open Anyway**.
-
-macOS remembers the decision, so this is a one-time step per version.
-
-Alternatively, remove the quarantine attribute from the terminal:
-
-```bash
-xattr -d com.apple.quarantine /Applications/OpenCodex.app
-```
-
-If you would rather not do either, build from source — a local build carries no
-quarantine attribute at all. See [Build from source](#build-from-source).
-
-## What it shows
-
-The menu bar icon reflects proxy state without using colour, since macOS menu bar items
-are monochrome by convention:
-
-| Icon | Meaning |
-| --- | --- |
-| Solid mark | Running and protected |
-| Solid mark with a notch | Running, but routing protection is at risk |
-| Outlined mark | Starting up, or degraded |
-| Faded outline | Not running, or needs an API key |
-
-Clicking it opens a panel with four sections:
-
-**Status** — whether the proxy is running, the loopback endpoint the app is using, and
-the protection state. When the proxy recommends a remediation command (for example
-`ocx service install`), it appears here as selectable text. The app never runs it for
-you.
-
-**Usage** — requests, tokens, and estimated cost over the last 7 days, with a daily
-trend. A `~` after the request count means part of it is estimated rather than reported
-by the provider.
-
-By default, the menu bar headline shows total tokens; change the headline metric in the
-dashboard Usage companion settings when you prefer requests, cost, quota, or an icon only.
-On macOS 26, the popover and widgets adopt Liquid Glass; earlier macOS versions use the
-standard popover material.
-
-**Quotas** — one row per provider, showing the window under the most pressure. A
-provider at 99% of a five-hour limit and 10% of its monthly limit shows the five-hour
-figure, because that is the one currently blocking you. The window name is printed under
-the provider so `42% of API usage` and `42% of a month` are never confused.
-
-**Providers** — a collapsible list with a switch per provider. The default provider's
-switch is inert while it is enabled, because the proxy refuses to disable it; choose a
-different default in the dashboard first.
-
-## What it can do
-
-- **Dashboard** opens the web dashboard in your browser.
-- **Stop proxy** stops the proxy, after confirming. This is deliberately not called
-  "Restart": stopping also stops the launchd service, so nothing brings the proxy back
-  automatically. The panel then shows the command to start it again.
-- **Provider switches** enable or disable a provider.
-
-Everything else — accounts, model configuration, storage — stays in the dashboard.
+The tray headline refreshes every 60 seconds. While the native panel is open, its data refreshes every 60 seconds; **Refresh** requests an immediate update.
 
 ## Widget
 
-Add the widget from the desktop: right-click, choose **Edit Widgets**, then add
-**OpenCodex**. It shows proxy status, today's usage, quota pressure, and the same
-privacy-safe usage snapshot as the desktop app. The widget refreshes when the app polls.
-It requires macOS 14 or later and reads only the privacy-safe snapshot written by the
-OpenCodex app; it does not receive API keys or raw account data.
+On macOS 14 or later, open OpenCodex.app once, then Control-click an empty area of the desktop, choose **Edit Widgets**, search for **OpenCodex**, and add the size you want. Widget sizes show different combinations of proxy status, today's tokens and requests, estimated cost, quotas, and a usage chart. The extension reads a local snapshot written by the desktop app; that snapshot contains display data, not API keys or raw account data. The app refreshes the widget snapshot on every fifth 60-second tray tick, about every five minutes while the proxy is connected. WidgetKit also requests a new timeline after five minutes.
 
 ## Connecting to the proxy
 
-The app finds the proxy automatically. It reads `~/.opencodex/runtime-port.json` (or
-`$OPENCODEX_HOME/runtime-port.json`) and falls back to port `10100`. Only the port is
-taken from that file; the host is always loopback.
+The desktop app asks its bundled CLI to run `ocx resolve --json`. It attaches to an existing reachable local proxy, or starts its bundled runtime only when the CLI proves no runtime is listening. If discovery is uncertain, startup reports the problem instead of starting a second proxy. The app talks to the resolved port on `127.0.0.1`.
 
-If your proxy is bound to a non-loopback address it will require an API key. The panel
-says so and offers a link to the dashboard.
-
-**This case is not supported yet.** The app reads a key from the macOS Keychain and
-retries once with it, but there is no UI for entering one and no supported way to
-provision it by hand — the item is a data-protection Keychain entry, which Keychain
-Access does not create. So on a non-loopback bind the panel stays on "Needs API key".
-
-A loopback proxy — the default — needs no key at all. Native key entry is planned.
-
-## Polling
-
-The app is deliberately quiet. It checks whether the proxy is alive every 5 seconds, and
-fetches the expensive aggregate data — usage and quotas — only while the panel is open,
-at most once a minute. After three consecutive failures it backs off to every 30 seconds
-rather than hammering a proxy you stopped on purpose.
+For management requests, the app first tries without a token. If the proxy returns HTTP 401, it retries using `OPENCODEX_ADMIN_AUTH_TOKEN` from the app's environment or the resolved configuration home's `admin-api-token` file. It does not use the macOS Keychain for this token. A proxy bound only to an address the app cannot reach on loopback cannot be attached to by the desktop shell.
 
 ## Build from source
 
-Requires macOS 13 or later, the Xcode Command Line Tools, and [Bun](https://bun.sh):
+On macOS 13 or later, with Bun, Rust, and the macOS Swift/Xcode tools available, build the dashboard from the repository root, then run the desktop commands from `desktop/`:
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
-cd opencodex
+bun install
+bun run build:gui
+cd desktop
+bun install
 bun run prepare-sidecar
 bun run prepare-widget
-bunx tauri build
+bun run build:local
 ```
 
-The bundle appears in Tauri's release output, with the WidgetKit appex under
-`OpenCodex.app/Contents/PlugIns/`.
-
-Building a universal binary (`UNIVERSAL=1`) needs the full Xcode toolchain — Command
-Line Tools ships only current-architecture Swift compatibility libraries, and the build
-will tell you so rather than failing with a linker error.
-
-If you have a Developer ID certificate in your keychain, set `MACOS_SIGN_IDENTITY` to
-sign with the hardened runtime instead of ad-hoc:
-
-```bash
-MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run prepare-widget
-```
+`build:local` produces the local app and DMG without requiring a Tauri updater signing key. A direct `bunx tauri build` requires `TAURI_SIGNING_PRIVATE_KEY` because it also produces an updater artifact. The widget build uses an ad-hoc signature unless `MACOS_SIGN_IDENTITY` is set, and local desktop bundles are also ad-hoc signed. The app runs, but macOS does not register an ad-hoc signed widget extension, so a local build usually shows no OpenCodex widget. `build:local` always ad-hoc signs the app, so setting `MACOS_SIGN_IDENTITY` alone does not help: the widget registers only when the app and the extension are both signed by the same Developer ID team, as the release build does. Use a release build when you need the widget.
 
 ## Uninstall
 
-Drag `OpenCodex.app` to the Trash. The app writes no preferences or state of its own, and
-stores nothing in the Keychain today.
+Turn off **Start at Login** in the tray menu if you enabled it, then move `OpenCodex.app` from Applications to the Trash. This removes the bundled CLI and widget extension, but does not remove the proxy's `$OPENCODEX_HOME` state or a separately installed `ocx` service. The desktop app also writes an installation ID and login-item markers in its app configuration directory, plus a widget snapshot under `~/Library/Containers/com.opencodex.desktop.widget/Data/Library/Application Support/OpenCodex/snapshot.json`; moving the app to the Trash does not delete those files.

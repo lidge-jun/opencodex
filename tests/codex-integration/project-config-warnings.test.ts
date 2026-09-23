@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   analyzeProjectCodexConfig,
   collectProjectCodexConfigWarnings,
@@ -12,6 +13,7 @@ import {
   parseTomlDocument,
   parseTrustedProjectPathsFromCodexConfig,
   relPath,
+  readBoundedProjectConfig,
   resolveEffectiveProjectModelProvider,
 } from "../../src/codex/project-config-warnings";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -302,6 +304,51 @@ describe("collectProjectCodexConfigWarnings", () => {
 
     expect(discoverProjectCodexConfigPaths({ cwd: projectDir, codexConfigPath: globalAlias }))
       .not.toContain(candidatePath);
+  });
+
+  test("skips symlinked project configs", () => {
+    if (process.platform === "win32") return;
+    const projectDir = join(testDir, "symlink-project");
+    const projectConfigPath = join(projectDir, ".codex", "config.toml");
+    const targetPath = join(testDir, "target-config.toml");
+    mkdirSync(join(projectDir, ".codex"), { recursive: true });
+    writeFileSync(targetPath, 'model_provider = "anthropic"');
+    symlinkSync(targetPath, projectConfigPath);
+
+    expect(discoverProjectCodexConfigPaths({ cwd: projectDir })).not.toContain(projectConfigPath);
+  });
+
+  test("skips project configs larger than the diagnostic limit", () => {
+    const projectDir = join(testDir, "large-project");
+    const projectConfigPath = join(projectDir, ".codex", "config.toml");
+    mkdirSync(join(projectDir, ".codex"), { recursive: true });
+    writeFileSync(projectConfigPath, Buffer.alloc(1024 * 1024 + 1, 0x20));
+
+    expect(discoverProjectCodexConfigPaths({ cwd: projectDir })).not.toContain(projectConfigPath);
+  });
+
+  test("the bounded reader accepts the exact limit and refuses larger or non-regular files", () => {
+    const file = join(testDir, "bounded-project.toml");
+    const content = 'model_provider = "external"\n';
+    writeFileSync(file, content);
+    expect(readBoundedProjectConfig(file)).toBe(content);
+    writeFileSync(file, content.padEnd(1024 * 1024, " "));
+    expect(readBoundedProjectConfig(file)?.length).toBe(1024 * 1024);
+    writeFileSync(file, Buffer.alloc(1024 * 1024 + 1, 0x20));
+    expect(readBoundedProjectConfig(file)).toBeNull();
+    expect(readBoundedProjectConfig(testDir)).toBeNull();
+  });
+
+  test("the bounded reader rejects a substituted FIFO without waiting for a writer", () => {
+    if (process.platform === "win32") return;
+    const fifo = join(testDir, "project-config-fifo");
+    expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+    const moduleUrl = new URL("../../src/codex/project-config-warnings.ts", import.meta.url).href;
+    const script = `const { readBoundedProjectConfig } = await import(${JSON.stringify(moduleUrl)}); console.log(readBoundedProjectConfig(process.argv[1]));`;
+    const child = spawnSync(process.execPath, ["--eval", script, fifo], { timeout: 3000, encoding: "utf8" });
+    expect(child.error).toBeUndefined();
+    expect(child.status).toBe(0);
+    expect(child.stdout.trim()).toBe("null");
   });
 
   test("skips untrusted projects even when they define bypass config", () => {

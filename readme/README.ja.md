@@ -96,22 +96,24 @@ ocx start                         # プロキシとダッシュボードが loca
 
 同じダッシュボードを包むネイティブアプリに、ブラウザーを開かなくてもプロキシの状態、今日の使用量、
 プロバイダーのクォータを確認できる WidgetKit 拡張を加えたものです。プロキシ自体は変わりません。アプリは
-起動中のプロキシを見つけるか、同梱の `ocx` サイドカーを起動し、ダッシュボードは引き続き
-**http://localhost:10100** で開きます。
+起動中のプロキシを見つけるか、同梱の `ocx` サイドカーを起動します。ダッシュボードはプロキシの
+ポートで開きます（別のポートを設定していなければ **http://localhost:10100**）。
 
-現在はベータ版です。ビルドは改ざん検知のため署名されていますが公証はされていないため、macOS では
-初回起動時に右クリックして「開く」を選ぶ必要があり、Windows ではインストーラーに SmartScreen の警告が
-表示されます。ウィジェットには macOS 14 以降が必要です。表示に使うスナップショットモデルは
+現在はベータ版です。macOS アプリのリリースビルドは Developer ID で署名され、公証されています
+（ローカルビルドはアドホック署名）。Windows インストーラーはまだコード署名されていないため、
+初回起動時に SmartScreen の警告が表示されます。ウィジェットには macOS 14 以降が必要です。
+表示に使うスナップショットモデルは
 [`app/`](../app)（`MenuBarCore`）にあります。
 
 [最新リリース](https://github.com/lidge-jun/opencodex/releases)からダウンロードするか、
-`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` でローカルビルドできます。
+ローカルでビルドできます。リポジトリのルートで `bun install && bun run build:gui` を実行し、
+`desktop/` で `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` を実行します。
 
 インストール先、サービスファイルなどディスクに書き込まれるものは
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) にまとめています。
-[デスクトップアプリガイド](https://lidge-jun.github.io/opencodex/guides/desktop-app/)と
-[macOS メニューバーアプリガイド](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)では、
-プラットフォーム別のインストール手順と Gatekeeper の確認画面を説明しています。
+[デスクトップアプリガイド](https://opencodex.me/ja/guides/desktop-app/)と
+[macOS メニューバーアプリガイド](https://opencodex.me/ja/guides/macos-menu-bar/)では、
+プラットフォーム別のインストール手順と初回起動について説明しています。
 
 </details>
 
@@ -209,8 +211,9 @@ services:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -218,8 +221,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

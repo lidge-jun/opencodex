@@ -79,10 +79,9 @@ target's own recovery decision, while the physical-send total is what binds ever
 The request's send budget bounds how many times it may reach upstream; the spend ledger bounds
 what those sends may cost, and it is the only bound here that survives a restart. Its production
 caller is `request-spend.ts`, installed on the execution budget at genuine ingress in `core.ts`
-and parked on the log context so `addFinalRequestLog` can settle it.
+and parked on the log context so `addFinalRequestLog` can settle it. Native Chat installs the same tracker before its independent physical-send ladder and charges it immediately before each dispatch, so that fast path cannot bypass root, identity or provider-pool ceilings.
 
-It books by observing the budget's own send counter rather than by being called from each
-dispatch site. That counter moves exactly once per physical send — a reservation increments it, a
+The Responses path books by observing the budget's own send counter rather than calling each dispatch site; Native Chat directly charges messages, tool definitions and the output ceiling. That counter moves exactly once per physical send — a reservation increments it, a
 refund decrements it, and an externally reported send settles against a booking already counted —
 so one ledger entry per increment is one entry per send, and a dispatch path added later cannot
 forget to book. The previous attempt at this wiring shipped the whole reserve/dispatch/settle
@@ -95,7 +94,7 @@ during this process's lifetime can still be released for free.
 Settlement follows what the request learned. The terminal usage belongs to the last send that
 left, so that one settles with the real figure; every earlier send failed without reporting usage
 of its own and may still have been billed, so it becomes unresolved spend rather than free. A
-request that reports no usage at all leaves all of them unresolved.
+request that reports no usage at all leaves all of them unresolved. If deferred settlement reaches a tracker with reserved sends after its ledger lease ends, only `SPEND_LEDGER_OWNER_NOT_HELD` is dropped with the discarded ledger. Other owner and storage failures propagate with pending send IDs intact so settlement can be retried.
 
 Replay resolves what nobody is left to settle, and resolves it as unresolved spend whatever state
 it was in. Giving an undispatched one its tokens back would assume the journal is complete up to

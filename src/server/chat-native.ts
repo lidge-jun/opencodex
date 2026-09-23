@@ -32,6 +32,7 @@ import {
   REPLAY_REFUSAL_CLIENT_HEADERS,
   REPLAY_REFUSED_STATUS,
   retainReplayRefusal,
+  UpstreamRetryEvidenceError,
   type UpstreamSendRecovery,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
@@ -48,6 +49,7 @@ import {
   transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { fastPolicyForModel } from "../providers/service-tier";
+import { stampApiKeyAccountLabel } from "../providers/label";
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { enrichOpenCodeZenFreeTierMessage } from "../providers/opencode-zen-rate-limit";
 import type { OcxProviderTransport } from "../providers/xai-transport";
@@ -68,11 +70,15 @@ import {
 } from "./request-log";
 import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
 import { registerTurn, unregisterTurn } from "./lifecycle";
+import { attachRequestSpendTracker } from "./responses/request-spend";
+import { workflowRefusalResponse } from "./workflow-refusal";
 
 type Rec = Record<string, unknown>;
 
 const MAX_NATIVE_CHAT_JSON_BYTES = 32 * 1024 * 1024;
 const MAX_NATIVE_CHAT_ERROR_BYTES = 64 * 1024;
+
+class NativeChatSpendRefusal extends Error {}
 
 const chatEffortSnapshots = new WeakMap<Rec, {
   inputModel: string;
@@ -262,6 +268,8 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
   if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
   let activeProvider: OcxProviderConfig = route.provider;
+  stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
+  const spendTracker = attachRequestSpendTracker(req, logCtx);
   let activeAdapter: ProviderAdapter = createOpenAIChatAdapter(activeProvider);
   let activeRequest: AdapterRequest;
   let retainedRequestBytes = 0;
@@ -339,6 +347,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
                     throw new Error("Provider key selection is no longer available for native Chat");
                   }
                   activeProvider = current;
+                  stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
                   activeAdapter = createOpenAIChatAdapter(current);
                   activeRequest.releaseBodyObservation?.();
                   releaseRetainedRequest();
@@ -353,6 +362,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
                 const encoding = new Headers(init.headers).get("accept-encoding");
                 if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
                 if (init.signal?.aborted) throw init.signal.reason;
+                if (!spendTracker.charge()) throw new NativeChatSpendRefusal();
                 noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).
@@ -432,6 +442,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       if (!transientSendAvailable()) break;
       try { void response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
       activeProvider = rotated;
+      stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
       activeAdapter = createOpenAIChatAdapter(activeProvider);
       releaseRetainedRequest();
       activeRequest = buildActiveRequest();
@@ -443,6 +454,12 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     cleanupAbort();
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "client_cancelled");
+    const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendError instanceof NativeChatSpendRefusal) {
+      const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);
+      finishLog(429);
+      return refusal;
+    }
     if (isTranslatorBudgetExceededError(error)) {
       return fail(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
     }
