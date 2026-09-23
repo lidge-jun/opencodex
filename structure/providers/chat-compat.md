@@ -185,6 +185,18 @@ switch therefore costs one extra upstream round trip and one turn of degraded re
 wedging the thread; unrelated 4xx responses and requests whose outbound body carries no blob never
 enter this recovery.
 
+Recovery is admitted for every adapter whose registry contract resolves to the Responses wire
+(`adapterSpeaksResponsesWire` in `src/server/responses/core-opaque-recovery.ts`, through
+`resolvedAdapterWire`), not for one adapter name. `openai-responses` qualifies directly and
+`azure`/`azure-openai` through `contractParent`; before #5583 a name check left Azure's wrapper of
+the same passthrough outside recovery. Once the destination itself has rejected foreign opaque
+state, the stripped reasoning item also loses its `id`: the id was minted by the refused identity,
+and without `store: false` a stateful destination resolves it against its own store and answers
+`Item with id 'rs_…' not found` on the recovered send. `_dropRejectedReasoningItemIds` carries that
+signal from `prepareOpaqueBlobRecovery` and from the rejection memo below into
+`sanitizeReasoningInputContent`. A proven route switch alone keeps the item id, as before.
+`tests/responses/responses-azure-opaque-blob-recovery.test.ts` runs the switch on both adapters.
+
 After a self-identified opaque-blob rejection, the proxy also keeps a five-minute rejection memo.
 The memo key is the resolved conversation identity plus the durable serving identity: provider,
 destination, adapter, model, and credential. It is recorded only when the blobless recovery resend

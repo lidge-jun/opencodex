@@ -519,6 +519,9 @@ existing suffix precedence.
 - Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
   unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL
   targets Azure's v1 Responses API directly, so the adapter does not append `api-version`.
+- Shares the Responses recovery for reasoning state another provider produced: after a
+  `400 invalid_encrypted_content` it resends once without that state. See
+  [Proxy formats](/reference/proxy-formats/) under "Switching providers in an existing conversation".
 
 ## Image utilities (`image.ts`)
 
