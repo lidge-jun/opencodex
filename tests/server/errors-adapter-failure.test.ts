@@ -9,6 +9,7 @@ import {
 import { bufferCompactResponse } from "../../src/server/responses";
 import { rewriteUpstreamPolicyRefusal } from "../../src/server/responses/policy-refusal";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
 import { collectSse } from "../helpers/responses-conformance";
 
 describe("adapterFailureFromMessage", () => {
@@ -155,6 +156,39 @@ describe("xAI policy-refusal 403", () => {
       .toBe("I can't help with that request.");
     expect(extractPolicyRefusalText("")).toBe("");
     expect(extractPolicyRefusalText("   ")).toBe("");
+  });
+
+  // The proxy's own error text is `Provider error <status>: <upstream JSON>`, so the prefix and
+  // the JSON arrive together; stripping only the prefix left a JSON literal to match against.
+  test("unwraps a JSON body that still carries the Provider error prefix", () => {
+    const body = 'Provider error 403: {"error":"I can\'t help with that request."}';
+    expect(extractPolicyRefusalText(body)).toBe("I can't help with that request.");
+    expect(isUpstreamPolicyRefusal(403, body)).toBe(true);
+  });
+
+  // runAdmittedHttpTurn releases a lease the handler did not transfer as soon as it returns,
+  // which would leave the refusal stream outside active-turn accounting while it is delivered.
+  test("a streamed refusal keeps its turn lease until the body is read", async () => {
+    const budget = createTranslatorBudget();
+    const lease = tryAdmitTurn();
+    expect(lease).not.toBeNull();
+    try {
+      const response = rewriteUpstreamPolicyRefusal({
+        status: 403,
+        errorText: JSON.stringify({ error: "I can't help with that request." }),
+        stream: true,
+        modelId: "grok-4.6",
+        translatorBudget: budget,
+        turnAdmissionLease: lease!,
+      });
+      expect(lease!.isTransferred()).toBe(true);
+      const active = getActiveTurnCount();
+      await response!.text();
+      expect(getActiveTurnCount()).toBe(active - 1);
+    } finally {
+      lease?.release();
+      budget.dispose();
+    }
   });
 
   test("rewriteUpstreamPolicyRefusal returns Codex incomplete/content_filter for both wires", async () => {
