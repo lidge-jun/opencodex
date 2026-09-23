@@ -136,7 +136,7 @@ function observePathCli(
     return { status: "unknown", reason: "the selected managing CLI is not a readable file" };
   }
   const self = (deps.platform === "win32" ? win32 : posix).resolve(deps.execPath);
-  if (found === self || found.toLowerCase() === self.toLowerCase()) {
+  if (found === self || (deps.platform === "win32" && found.toLowerCase() === self.toLowerCase())) {
     // Never spawn ourselves for our own version: the answer is already in hand, and the
     // recursion that produced it is the #5418 regression.
     return { status: "observed", version: deps.ownVersion(), identity: found };

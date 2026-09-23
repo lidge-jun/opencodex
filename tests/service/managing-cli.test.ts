@@ -112,3 +112,36 @@ describe("Windows managing CLI selection", () => {
     } finally { home.remove(); }
   });
 });
+
+describe("managing CLI self observation", () => {
+  test("POSIX differing case probes the selected executable", () => {
+    const selected = "/opt/ocx";
+    const commands: string[] = [];
+    const spawn = ((command: string) => {
+      commands.push(command);
+      return { status: 0, stdout: "2.62.0", stderr: "" };
+    }) as unknown as typeof spawnSync;
+    const result = observeManagingClis(null, {
+      platform: "linux", env: { PATH: "/opt" }, execPath: "/opt/OCX",
+      exists: path => path === selected, isFile: () => true,
+      ownVersion: () => "2.61.0", spawn,
+    });
+    expect(result.path).toMatchObject({ status: "observed", version: "2.62.0", identity: selected });
+    expect(commands).toEqual([selected]);
+  });
+
+  test("Windows differing case still recognizes the running CLI", () => {
+    let spawns = 0;
+    const spawn = (() => {
+      spawns++;
+      return { status: 0, stdout: "2.62.0", stderr: "" };
+    }) as unknown as typeof spawnSync;
+    const result = observeManagingClis(null, {
+      platform: "win32", env: { PATH: "C:\\opt", PATHEXT: ".EXE" },
+      execPath: "C:\\OPT\\OCX.EXE", exists: path => path === "C:\\opt\\ocx.EXE",
+      isFile: () => true, ownVersion: () => "2.61.0", spawn,
+    });
+    expect(result.path).toMatchObject({ status: "observed", version: "2.61.0" });
+    expect(spawns).toBe(0);
+  });
+});
