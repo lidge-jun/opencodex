@@ -3201,4 +3201,12 @@ export const ko: Record<TKey, string> = {
   "remote.event.status": "상태",
   "remote.event.tool": "원격 도구",
   "remote.event.error": "오류",
+  "quotaSummary.aria": "Provider 사용량 요약",
+  "quotaSummary.updated": "{time} 갱신",
+  "quotaSummary.dataAt": "{time} 기준 데이터",
+  "quotaSummary.observedAt": "{time} 관측",
+  "quotaSummary.warn": "70% 이상 사용",
+  "quotaSummary.critical": "90% 이상 사용",
+  "quotaSummary.credits": "크레딧",
+  "quotaSummary.refreshFailed": "최근 갱신에 실패해 이전 값을 표시합니다",
 };

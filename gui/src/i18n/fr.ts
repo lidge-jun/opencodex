@@ -3168,4 +3168,12 @@ export const fr: Record<TKey, string> = {
   "remote.event.status": "État",
   "remote.event.tool": "Outil distant",
   "remote.event.error": "Erreur",
+  "quotaSummary.aria": "Résumé des quotas des fournisseurs",
+  "quotaSummary.updated": "Mis à jour à {time}",
+  "quotaSummary.dataAt": "Données de {time}",
+  "quotaSummary.observedAt": "Observé à {time}",
+  "quotaSummary.warn": "Plus de 70 % utilisés",
+  "quotaSummary.critical": "Plus de 90 % utilisés",
+  "quotaSummary.credits": "Crédits",
+  "quotaSummary.refreshFailed": "Échec de la dernière actualisation ; affichage de la lecture précédente",
 };

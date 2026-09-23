@@ -3202,4 +3202,12 @@ export const tr: Record<TKey, string> = {
   "remote.event.status": "Durum",
   "remote.event.tool": "Uzak araç",
   "remote.event.error": "Hata",
+  "quotaSummary.aria": "Sağlayıcı kota özeti",
+  "quotaSummary.updated": "{time} güncellendi",
+  "quotaSummary.dataAt": "{time} verisi",
+  "quotaSummary.observedAt": "{time} gözlemlendi",
+  "quotaSummary.warn": "%70+ kullanıldı",
+  "quotaSummary.critical": "%90+ kullanıldı",
+  "quotaSummary.credits": "Krediler",
+  "quotaSummary.refreshFailed": "Son yenileme başarısız; önceki değer gösteriliyor",
 };

@@ -3171,4 +3171,12 @@ export const vi: Record<TKey, string> = {
   "models.fastRows.disabled": "Đã tắt hàng model Fast.",
   "models.fastRows.loadFailed": "Không thể tải cài đặt hàng Fast.",
   "models.fastRows.updateFailed": "Không thể cập nhật cài đặt hàng Fast.",
+  "quotaSummary.aria": "Tóm tắt hạn mức nhà cung cấp",
+  "quotaSummary.updated": "Cập nhật lúc {time}",
+  "quotaSummary.dataAt": "Dữ liệu lúc {time}",
+  "quotaSummary.observedAt": "Ghi nhận lúc {time}",
+  "quotaSummary.warn": "Đã dùng trên 70%",
+  "quotaSummary.critical": "Đã dùng trên 90%",
+  "quotaSummary.credits": "Tín dụng",
+  "quotaSummary.refreshFailed": "Lần làm mới gần nhất thất bại; đang hiển thị số liệu trước đó",
 };
