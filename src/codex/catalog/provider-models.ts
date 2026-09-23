@@ -255,8 +255,9 @@ export async function fetchProviderModelsWithAuth(
     const profile = resolvedProfile as CodeBuddyProfile;
     // Cache reads/writes are provider/key-fingerprint-scoped: an irreversible fingerprint of
     // the configured key means a key switch never reuses the roster cached for the previous
-    // key. The --help roster itself reflects the CLI's signed-in account, which the
-    // fingerprint cannot observe, so the cache scope is the key, not the account.
+    // key. The roster comes from the product configuration endpoint authenticated with that
+    // same key, so the fingerprint scope and the roster's authority are the same identity: the
+    // roster is the key's own account answer, never the CLI login's.
     const authorityIdentity = createHash("sha256").update(apiKey).digest("hex");
     const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
     if (fresh) {

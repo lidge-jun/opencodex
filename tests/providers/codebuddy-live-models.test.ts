@@ -1,28 +1,32 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   fetchCodeBuddyModels,
-  parseCodeBuddyHelpRoster,
+  parseCodeBuddyConfigRoster,
   setFetchCodeBuddyModelsForTests,
-  type CodeBuddyExecFn,
 } from "../../src/adapters/codebuddy/live-models";
-import { CODEBUDDY_CN_PROFILE, clearCodeBuddyBinaryCache } from "../../src/adapters/codebuddy/profiles";
+import { CODEBUDDY_CN_PROFILE, CODEBUDDY_GLOBAL_PROFILE } from "../../src/adapters/codebuddy/profiles";
 import { gatherRoutedModels, resetCatalogRuntimeStateForTests } from "../../src/codex/catalog";
 import { clearModelCache, setCached } from "../../src/codex/model-cache";
 import type { OcxConfig } from "../../src/types";
 
-// The binary-discovery cache is module-level; reset it so one test's injected binary
-// cannot mask another test's missing-binary case.
-beforeEach(() => clearCodeBuddyBinaryCache());
+// Envelope captured 260923 from GET https://www.codebuddy.cn/v3/config with a valid CN key:
+// data.agents[0].models is the same 17-id roster the CLI prints for --model on a signed-in
+// account of that key, and data.models carries the wider per-account metadata catalog.
+function authenticatedEnvelope(models: string[] = ["hy4-preview-f", "hy3", "hy3-x", "deepseek-v4.1-flash", "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.2", "glm-5.1", "glm-5v-turbo", "minimax-m3-pay", "minimax-m2.7", "kimi-k3-2", "kimi-k2.8-preview", "kimi-k2.7", "kimi-k2.6", "deepseek-v4-pro"]): unknown {
+  return { code: 0, msg: "ok", requestId: "req-test", data: { agents: [{ name: "cli", models, tools: [] }], enterpriseId: "ent", models: models.map(id => ({ id, name: id })), productFeatures: {} } };
+}
 
-const ROSTER_LINE = "  --model <model>                                  Model for the current session. Please provide the model ID. Currently supported: (hy4-preview-f, hy3, hy3-x, deepseek-v4.1-flash, glm-5.3, glm-5.3-flash, glm-5.2, glm-5.1, glm-5v-turbo, minimax-m3-pay, minimax-m2.7, kimi-k3-2, kimi-k2.8-preview, kimi-k2.7, kimi-k2.6, deepseek-v4-pro)";
+// Envelope measured 260923 for an absent or invalid key: the anonymous config answers no
+// agents array at all and an empty models list, so no roster exists to misattribute.
+const ANONYMOUS_ENVELOPE: unknown = { code: 0, msg: "ok", requestId: "req-test", data: { agent: {}, models: [], mcp: {}, codebase: {}, features: {} } };
 
-describe("CodeBuddy help-roster parser", () => {
-  test("parses the account roster in order", () => {
-    const result = parseCodeBuddyHelpRoster(ROSTER_LINE);
+describe("CodeBuddy configuration-roster parser", () => {
+  test("parses the authenticated key's roster in order", () => {
+    const result = parseCodeBuddyConfigRoster(authenticatedEnvelope());
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.models).toHaveLength(16);
+      expect(result.models).toHaveLength(17);
       expect(result.models[0]).toBe("hy4-preview-f");
       expect(result.models).toContain("kimi-k3-2");
       expect(result.models).toContain("deepseek-v4.1-flash");
@@ -30,65 +34,88 @@ describe("CodeBuddy help-roster parser", () => {
   });
 
   test("filters custom selectors, blanks, and duplicates", () => {
-    const result = parseCodeBuddyHelpRoster("--model <model>  Model for the current session. Please provide the model ID. Currently supported: (kimi-k3-2, custom:mine, kimi-k3-2, )");
+    const result = parseCodeBuddyConfigRoster(authenticatedEnvelope(["kimi-k3-2", "custom:mine", "kimi-k3-2", ""]));
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.models).toEqual(["kimi-k3-2"]);
   });
 
-  test("a missing roster line fails closed", () => {
-    expect(parseCodeBuddyHelpRoster("Usage: codebuddy|cbc [options] [command] [prompt]"))
-      .toMatchObject({ ok: false, error: "invalid_output" });
-  });
-
-  test("parses a roster line reflowed across multiple lines", () => {
-    // The vendor help formatter wraps long descriptions to the terminal width, so the
-    // intro sentence and the roster itself can both break across lines.
-    const wrapped = [
-      "  --model <model>",
-      "      Model for the current session. Please provide the",
-      "model ID. Currently supported: (glm-5.3, kimi-k3-2,",
-      "  hy4-preview-f)",
-    ].join("\n");
-    const result = parseCodeBuddyHelpRoster(wrapped);
+  test("prefers the cli agent when several agents are declared", () => {
+    const body = { data: { agents: [
+      { name: "other", models: ["other-model"] },
+      { name: "cli", models: ["cli-model"] },
+    ] } };
+    const result = parseCodeBuddyConfigRoster(body);
     expect(result.ok).toBe(true);
-    if (result.ok) expect(result.models).toEqual(["glm-5.3", "kimi-k3-2", "hy4-preview-f"]);
+    if (result.ok) expect(result.models).toEqual(["cli-model"]);
   });
 
-  test("a changed intro sentence still parses", () => {
-    const result = parseCodeBuddyHelpRoster("--model <model>  Pick a model. Currently supported: (glm-5.3)");
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.models).toEqual(["glm-5.3"]);
+  test("the anonymous envelope an invalid key receives fails closed as empty", () => {
+    const result = parseCodeBuddyConfigRoster(ANONYMOUS_ENVELOPE);
+    expect(result).toMatchObject({ ok: false, error: "empty" });
+    if (!result.ok) expect(result.detail).toContain("anonymous");
   });
 
-  test("an empty roster fails closed", () => {
-    expect(parseCodeBuddyHelpRoster("--model <model>  Model for the current session. Please provide the model ID. Currently supported: ()"))
-      .toMatchObject({ ok: false, error: "empty" });
+  test("a missing data object fails closed", () => {
+    expect(parseCodeBuddyConfigRoster({ code: 0, msg: "ok" })).toMatchObject({ ok: false, error: "invalid_output" });
+    expect(parseCodeBuddyConfigRoster(null)).toMatchObject({ ok: false, error: "invalid_output" });
+  });
+
+  test("an authenticated envelope with an empty agent roster fails closed", () => {
+    expect(parseCodeBuddyConfigRoster(authenticatedEnvelope([]))).toMatchObject({ ok: false, error: "empty" });
   });
 });
 
 describe("CodeBuddy live model fetch", () => {
-  test("spawns the CLI with the account env and returns the roster", async () => {
-    let seenCommand = "";
-    let seenArgs: readonly string[] = [];
-    let seenEnv: Record<string, string> = {};
-    const exec: CodeBuddyExecFn = async (command, args, options) => {
-      seenCommand = command;
-      seenArgs = args;
-      seenEnv = options.env;
-      return { stdout: ROSTER_LINE, stderr: "" };
-    };
-    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { which: () => "/usr/bin/codebuddy", exec });
+  function recordingFetch(status: number, body: unknown) {
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    const fetchLike = (async (url: RequestInfo | URL, init?: RequestInit) => {
+      const headers: Record<string, string> = {};
+      for (const [key, value] of Object.entries(init?.headers ?? {})) headers[key.toLowerCase()] = String(value);
+      seen.push({ url: String(url), headers });
+      return new Response(status === 200 ? JSON.stringify(body) : JSON.stringify(body), { status });
+    }) as typeof fetch;
+    return { fetchLike, seen };
+  }
+
+  test("requests the region's configuration endpoint with the key and returns the roster", async () => {
+    const { fetchLike, seen } = recordingFetch(200, authenticatedEnvelope());
+    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.models).toContain("kimi-k3-2");
-    expect(seenCommand).toBe("/usr/bin/codebuddy");
-    expect(seenArgs).toEqual(["--help"]);
-    expect(seenEnv.CODEBUDDY_API_KEY).toBe("cb-cn-key");
-    expect(seenEnv.CODEBUDDY_INTERNET_ENVIRONMENT).toBe("internal");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe("https://www.codebuddy.cn/v3/config");
+    // The roster's authority is the key on the request: the header must carry it, and the
+    // gateway requires a CLI-shaped User-Agent before it authenticates the key at all.
+    expect(seen[0]!.headers["x-api-key"]).toBe("cb-cn-key");
+    expect(seen[0]!.headers["user-agent"]).toMatch(/^CLI\/\d+\.\d+\.\d+ CodeBuddy\/\d+\.\d+\.\d+$/);
   });
 
-  test("a missing CLI is a clear error, never a crash", async () => {
-    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { which: () => undefined });
-    expect(result).toMatchObject({ ok: false, error: "cli_not_found" });
+  test("the global profile addresses the global configuration endpoint", async () => {
+    const { fetchLike, seen } = recordingFetch(200, authenticatedEnvelope(["glm-5.3"]));
+    const result = await fetchCodeBuddyModels(CODEBUDDY_GLOBAL_PROFILE, "cb-global-key", { fetch: fetchLike });
+    expect(result.ok).toBe(true);
+    expect(seen[0]!.url).toBe("https://www.codebuddy.ai/v3/config");
+  });
+
+  test("a non-200 answer is a clear error carrying the gateway's message", async () => {
+    const { fetchLike } = recordingFetch(400, { code: 12403, msg: "check ua, get coding copilot version error" });
+    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
+    expect(result).toMatchObject({ ok: false, error: "http" });
+    if (!result.ok) expect(result.detail).toContain("check ua");
+  });
+
+  test("a timed-out request is a timeout, never a crash", async () => {
+    const fetchLike = (async () => {
+      throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    }) as typeof fetch;
+    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
+    expect(result).toMatchObject({ ok: false, error: "timeout" });
+  });
+
+  test("a body that is not JSON fails closed as invalid output", async () => {
+    const fetchLike = (async () => new Response("<html>gateway error page</html>", { status: 200 })) as typeof fetch;
+    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
+    expect(result).toMatchObject({ ok: false, error: "invalid_output" });
   });
 });
 
@@ -110,7 +137,7 @@ describe("CodeBuddy catalog cache isolation", () => {
           liveModels: true,
           defaultModel: "default",
           // Mirrors the registry seed: the static list ships the vendor default even though
-          // the account-scoped --help roster does not print it.
+          // the key-scoped configuration roster does not list it.
           models: ["default"],
         },
       },
@@ -122,7 +149,7 @@ describe("CodeBuddy catalog cache isolation", () => {
     try {
       let keyBFetches = 0;
       setFetchCodeBuddyModelsForTests((_profile, apiKey) => {
-        if (apiKey === "cb-key-a") return { ok: false, error: "process", detail: "denied" };
+        if (apiKey === "cb-key-a") return { ok: false, error: "http", detail: "denied" };
         keyBFetches += 1;
         return { ok: true, models: ["roster-b-model"] };
       });
@@ -144,13 +171,13 @@ describe("CodeBuddy catalog cache isolation", () => {
     }
   });
 
-  test("a second account never receives the first account's fresh or stale roster", async () => {
+  test("a second key never receives the first key's fresh or stale roster", async () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       setFetchCodeBuddyModelsForTests((_profile, apiKey) => (
         apiKey === "cb-key-a"
           ? { ok: true, models: ["roster-a-model"] }
-          : { ok: false, error: "process", detail: "denied" }
+          : { ok: false, error: "http", detail: "denied" }
       ));
 
       const first = await gatherRoutedModels(codeBuddyConfig("cb-key-a"));
@@ -169,4 +196,37 @@ describe("CodeBuddy catalog cache isolation", () => {
       warn.mockRestore();
     }
   });
+});
+
+// The roster authority is the key on the request, so the cached roster can only ever be the
+// key's own answer. The remaining cross-key guard is the cooldown/fingerprint isolation above.
+test("an invalid key answers the anonymous envelope and never caches a roster", async () => {
+  setFetchCodeBuddyModelsForTests(() => ({ ok: false, error: "empty", detail: "anonymous" }));
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    clearModelCache();
+    resetCatalogRuntimeStateForTests();
+    const config = {
+      providers: {
+        "codebuddy-cn": {
+          adapter: "codebuddy",
+          baseUrl: "https://www.codebuddy.cn",
+          authMode: "key",
+          apiKey: "cb-wrong-key",
+          liveModels: true,
+          defaultModel: "default",
+          models: ["default"],
+        },
+      },
+    } as unknown as OcxConfig;
+    const models = await gatherRoutedModels(config);
+    const ids = models.filter(m => m.provider === "codebuddy-cn").map(m => m.id);
+    // Degraded to the configured selector only — no roster from any other account.
+    expect(ids).toEqual(["default"]);
+  } finally {
+    warn.mockRestore();
+    setFetchCodeBuddyModelsForTests(null);
+    clearModelCache();
+    resetCatalogRuntimeStateForTests();
+  }
 });

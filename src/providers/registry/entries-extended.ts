@@ -1400,8 +1400,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // Official CodeBuddy Code CLI provider, CHINA / `internal` environment. Identical adapter and
     // binary as `codebuddy`; the region is fixed by the profile's CODEBUDDY_INTERNET_ENVIRONMENT
     // and this canonical baseUrl. CN key: https://copilot.tencent.com/profile/keys. The CN model
-    // roster differs from Global and is discovered live from the account-scoped --help roster;
-    // the seeded list in codebuddy-models.ts is only the degraded fallback (§八).
+    // roster differs from Global and is discovered live from the key-authenticated product
+    // configuration roster; the seeded list in codebuddy-models.ts is only the degraded
+    // fallback (§八).
     id: "codebuddy-cn",
     label: "CodeBuddy (CN)",
     adapter: "codebuddy",
