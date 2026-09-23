@@ -112,6 +112,7 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
+  isConnectionResetError,
   settleOperatorReplacement,
   refetchAfterProtocolSafeReset,
   replayRefusalResponse,
@@ -1712,15 +1713,26 @@ export async function preparePassthroughExchange(
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
       console.warn(`[upstream-retry] codex websocket died before any Responses event (${safeHostLabel(request.url)}); `
         + "using one replacement over HTTP");
-      try {
-        const replacement = await sendAmbiguousReplacement().then(adoptObservedResponse);
-        upstreamResponse = settleOperatorReplacement(replacement);
-      } catch (err) {
-        if (upstream.signal.aborted) return transportFailureResponse(err);
-        // The first send may already have run the turn, so a replacement that failed settles as
-        // the refusal rather than as a transport error the client would retry.
-        upstreamResponse = replayRefusalResponse();
+      let replacement: Response | undefined;
+      while (!replacement) {
+        try {
+          replacement = await sendAmbiguousReplacement().then(adoptObservedResponse);
+        } catch (err) {
+          if (upstream.signal.aborted) return transportFailureResponse(err);
+          // A replacement that reset before its head is the pre-header row again: a configured
+          // second grant (and a send the budget can still fund) may buy one more send. The gate
+          // claims from the request's finite allowance, so this loop is bounded by it.
+          if (
+            isConnectionResetError(err)
+            && remainingTransientSendBudget(transientSendAttempts()) > 0
+            && claimPreHeaderResend()
+          ) continue;
+          break;
+        }
       }
+      // The first send may already have run the turn, so a replacement that failed settles as
+      // the refusal rather than as a transport error the client would retry.
+      upstreamResponse = replacement ? settleOperatorReplacement(replacement) : replayRefusalResponse();
       continue passthroughRecovery;
     }
 

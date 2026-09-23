@@ -313,7 +313,9 @@ after the create frame) and `upstream_no_response` (origin never produced an eve
 and 504. Those describe something the upstream did after our send, and they are the contract
 the public server reference already documents. The 504 and a drop after the response started
 are never replaced. Only the 502 of a socket that closed or errored before any Responses event
-may be replaced, once, over HTTP, when the provider opted into `retryOnReset` (#4191).
+may be replaced over HTTP, when the provider opted into `retryOnReset` (#4191). That replacement
+claims from the request's one allowance; if it resets before its head, that is the pre-header row
+again and may use a configured second replacement, otherwise it settles as the refusal.
 
 This reclassification is the recorded behaviour change: before it, the pre-header refusal
 borrowed `upstream_closed_before_response` and its 502, which multiplied the duplicate send

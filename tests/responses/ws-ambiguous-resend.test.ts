@@ -452,4 +452,32 @@ describe("handleResponses replaces a dead socket's send once under retryOnReset 
     expect(FakeWebSocket.instances).toHaveLength(1);
     expect(http).toHaveLength(1);
   });
+
+  test("a replacement that resets before its head may use a configured second grant", async () => {
+    installFake(SOCKET_DEATHS[0]![1]);
+    let calls = 0;
+    const http = stubHttp(() => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+      return completed();
+    });
+    const response = await send(turn(), forwardConfig({ retryOnReset: { replacements: 2 } }));
+
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(http).toHaveLength(2);
+  });
+
+  test("with one grant, a replacement that resets before its head settles as the refusal", async () => {
+    installFake(SOCKET_DEATHS[0]![1]);
+    const http = stubHttp(() => {
+      throw Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+    });
+    const response = await send(turn(), forwardConfig({ retryOnReset: {} }));
+
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
+    expect(await response.json()).toMatchObject({ error: { code: UPSTREAM_RESET_REPLAY_REFUSED_CODE } });
+    expect(http).toHaveLength(1);
+  });
 });
