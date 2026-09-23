@@ -20,7 +20,7 @@
  * targeting it is the caller's explicit act.
  */
 import { homedir } from "node:os";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../codex/inject";
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
@@ -556,7 +556,17 @@ export function omoConfigPath(env: OpencodeLaunchEnv = process.env, home: string
  * client-owned override to mirror, and this registry does not invent one.
  */
 export function asideHomeDir(_env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
-  return join(home, ".aside");
+  const root = join(home, ".aside");
+  // A user who relocated Aside (for example to an external volume) leaves ~/.aside as a
+  // symlink, and Aside itself follows it (issue 5648). Canonicalize only that top-level
+  // alias, once, and only onto a directory: every boundary below the root (u/, account
+  // directories, models.json) keeps refusing links against the canonical path.
+  try {
+    if (lstatSync(root).isSymbolicLink() && statSync(root).isDirectory()) return realpathSync.native(root);
+  } catch {
+    // Missing or unreadable: the literal path lets the profile reader report it.
+  }
+  return root;
 }
 
 /**
