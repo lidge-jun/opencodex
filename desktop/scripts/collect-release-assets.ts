@@ -42,6 +42,7 @@ export interface CollectReleaseAssetsOptions {
   target: string;
   out: string;
   repoRoot?: string;
+  bundleRoot?: string;
 }
 
 function findBundle(directory: string, kind: BundleKind): string {
@@ -61,13 +62,17 @@ export function collectReleaseAssets(options: CollectReleaseAssetsOptions): stri
   const repoRoot = resolve(options.repoRoot ?? join(import.meta.dir, "../.."));
   const bundles = bundlesByTarget[options.target];
   if (!bundles) throw new Error(`Unsupported desktop target: ${options.target}`);
+  const bundleRoot = resolve(
+    options.bundleRoot
+      ?? join(repoRoot, "desktop", "src-tauri", "target", options.target, "release", "bundle"),
+  );
 
   const output = resolve(options.out);
   mkdirSync(output, { recursive: true });
   const written: string[] = [];
   for (const bundle of bundles) {
     const source = findBundle(
-      join(repoRoot, "desktop", "src-tauri", "target", options.target, "release", "bundle", bundle.dir),
+      join(bundleRoot, bundle.dir),
       bundle.kind,
     );
     const destinationName = `OpenCodex-${options.version}-${bundle.name}`;
@@ -98,8 +103,11 @@ if (import.meta.main) {
   const version = argument("--version");
   const target = argument("--target");
   const out = argument("--out");
+  const bundleRoot = argument("--bundle-root");
   if (!version || !target || !out) {
     throw new Error("Usage: collect-release-assets.ts --version <version> --target <target> --out <dir>");
   }
-  for (const path of collectReleaseAssets({ version, target, out })) console.log(`Wrote ${path}`);
+  const options: CollectReleaseAssetsOptions = { version, target, out };
+  if (bundleRoot) options.bundleRoot = bundleRoot;
+  for (const path of collectReleaseAssets(options)) console.log(`Wrote ${path}`);
 }

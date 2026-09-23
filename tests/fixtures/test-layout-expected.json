@@ -833,6 +833,7 @@
   "legacy-shell-compat.test.ts": "responses",
   "live-call-bindings.test.ts": "server",
   "live-service-manager-guard.test.ts": "service",
+  "linux-desktop-packaged-e2e.test.ts": "ci-workflows",
   "local-aside-sync-capability.test.ts": "server",
   "local-destinations.test.ts": "lib",
   "local-management-attestation.test.ts": "server",

@@ -244,11 +244,43 @@ marker, which the GUI detects to identify the shell without using IPC.
 
 ## Release packaging and updater
 
+### Linux packaged-shell acceptance
+
+The ordinary hosted Linux lane builds both AppImage and deb bundles with updater artifacts disabled,
+extracts each payload into a disposable directory, and boots its real application executable under a
+private Xvfb, Openbox, and D-Bus session. Openbox supplies only the window-manager close protocol;
+it does not supply a tray host. `desktop/scripts/linux-packaged-e2e.ts` gives each format fresh
+`HOME`, `XDG_*`, `CODEX_HOME`, and `OPENCODEX_HOME` roots plus a loopback port held until the app
+spawn boundary, then requires a visible OpenCodex window, the bundled sidecar's matching `/healthz`
+identity, port and version. It then asks the window manager to close the only window (`wmctrl -i -c`,
+the path a close button takes) and requires the app to exit on its own with code 0 and no signal and
+the runtime to be gone; destroying the X window or a crash does not count as a drain. Its
+report records readiness time and whole app-process-tree RSS as evidence; those observations are not
+pass/fail budgets until a reviewed cross-platform baseline exists.
+
+Extraction is intentional. A GitHub-hosted runner is disposable but its package database is still a
+shared job resource, and a normal pull request does not need passwordless package installation or GUI
+elevation to prove that the packaged executable and resources boot together. The separate
+`desktop-installed-gate.yml` remains the authority for real installation, package-manager ownership,
+takeover consent, elevation cancellation/acceptance, and in-place updater behavior on explicitly
+approved disposable GUI runners. Passing the hosted lane must never be described as passing those
+privileged installation flows.
+
+AppImage and deb are built with independent `CARGO_TARGET_DIR` roots in hosted acceptance and release
+jobs, then copied into a read-only staging layout for verification and collection. Tauri patches a
+per-format updater marker into the release binary while bundling; sharing one Cargo target lets one
+format observe a binary mutated for the other. The isolated roots make the marker and every other
+bundler mutation format-local.
+
+> Decision record: [ADR-5493](decisions/ADR-5493-linux-packaged-shell-acceptance.md)
+
 Linux AppImage packaging uses `desktop/scripts/appimage-patchelf.py` to preserve
 the compiled Bun CLI when linuxdeploy sets the executable RPATH. Only the exact
-AppDir sidecar, still byte-identical to the prepared CLI, is exempt; other ELF
+AppDir sidecar under the active `CARGO_TARGET_DIR`, still byte-identical to the
+prepared target-matching CLI, is exempt; other ELF
 operations use the system patchelf. `desktop/scripts/verify-linux-sidecar.sh`
-extracts the completed AppImage, compares its CLI bytes and runs its version command
+extracts the completed AppImage (the release passes the staged isolated AppImage directory; a local
+build keeps the default Cargo target path), compares its CLI bytes and runs its version command
 on the hosted runner before any release asset is collected.
 The macOS release combines both prepared CLI architectures with `lipo` into the
 universal external binary Tauri expects, and checks that both slices are present.

@@ -5,6 +5,7 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "build:local": "bun scripts/build-local.ts",
+    "e2e:linux-packaged": "bun scripts/linux-packaged-e2e.ts",
     "icons": "bun scripts/generate-icons.ts",
     "icons:check": "bun scripts/generate-icons.ts --check",
     "prepare-sidecar": "bun scripts/prepare-sidecar.ts",

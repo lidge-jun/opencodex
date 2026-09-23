@@ -123,6 +123,43 @@ describe("desktop release scripts", () => {
     }
   });
 
+  test("collects Linux formats from an explicitly staged isolated bundle root", () => {
+    const root = temporaryDirectory();
+    try {
+      const bundleRoot = join(root, "isolated-linux-bundles");
+      mkdirSync(join(bundleRoot, "appimage"), { recursive: true });
+      mkdirSync(join(bundleRoot, "deb"), { recursive: true });
+      writeFileSync(join(bundleRoot, "appimage", "OpenCodex.AppImage"), "appimage");
+      writeFileSync(join(bundleRoot, "deb", "OpenCodex.deb"), "deb");
+
+      const files = collectReleaseAssets({
+        version: "2.61.0",
+        target: "x86_64-unknown-linux-gnu",
+        out: join(root, "release"),
+        repoRoot: root,
+        bundleRoot,
+      });
+
+      expect(files.map(path => basename(path))).toEqual([
+        "OpenCodex-2.61.0-linux-x86_64.AppImage",
+        "OpenCodex-2.61.0-linux-x86_64.AppImage.sha256",
+        "OpenCodex-2.61.0-linux-amd64.deb",
+        "OpenCodex-2.61.0-linux-amd64.deb.sha256",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the Linux sidecar verifier takes the staged AppImage directory and keeps the local default", () => {
+    const verifier = readFileSync(repoPath("desktop", "scripts", "verify-linux-sidecar.sh"), "utf8");
+    expect(verifier).toContain('bundle="${1:-$root/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage}"');
+    const wrapper = readFileSync(repoPath("desktop", "scripts", "appimage-patchelf.py"), "utf8");
+    expect(wrapper).toContain('os.environ.get("CARGO_TARGET_DIR"');
+    expect(wrapper).toContain("APPDIR_SIDECAR_TAIL");
+    expect(wrapper).not.toContain('desktop/src-tauri/target" / triple');
+  });
+
   test("rejects ambiguous bundle matches", () => {
     const root = temporaryDirectory();
     try {
@@ -408,6 +445,7 @@ describe("the desktop build toolchain carries the bundle-type marker", () => {
         || (major === minimumCliWithBundlePatch.major && minor! >= minimumCliWithBundlePatch.minor),
     ).toBe(true);
   });
+
 });
 
 describe("widget extension signing", () => {
