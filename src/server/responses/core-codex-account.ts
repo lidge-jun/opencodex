@@ -173,8 +173,9 @@ export function normalizeCodexUnsupportedModelDetail(value: string): string {
  * that comparison fail for the one model that is still account-gated, which silently disabled
  * both the alternate-account retry and the same-account ladder built for exactly that case.
  *
- * The envelope is unchanged and stays exact: a top-level `detail` string, whitespace-collapsed
- * and case-folded, matching the whole sentence with nothing before or after it. No prose is
+ * Accept the HTTP `detail` envelope and the `error.message` envelope emitted by the
+ * WebSocket refused-create projection. Both must match the whole sentence, whitespace-collapsed
+ * and case-folded, with nothing before or after it. Competing envelopes are ambiguous. No prose is
  * inferred and no other 400 shape is admitted, because a 400 is also what a malformed request
  * earns and that must never read as an entitlement fact.
  */
@@ -186,7 +187,18 @@ export function codexUnsupportedModelFromDetail(
   try {
     const payload = JSON.parse(bodyText) as unknown;
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
-    const detail = (payload as { detail?: unknown }).detail;
+    const record = payload as Record<string, unknown>;
+    const hasDetail = Object.hasOwn(record, "detail");
+    const hasError = Object.hasOwn(record, "error");
+    if (hasDetail === hasError) return undefined;
+    let detail: unknown = record.detail;
+    if (hasError) {
+      const error = record.error;
+      if (!error || typeof error !== "object" || Array.isArray(error)) return undefined;
+      const fields = error as Record<string, unknown>;
+      if ([fields.type, fields.code].some(value => value != null && typeof value !== "string")) return undefined;
+      detail = fields.message;
+    }
     if (typeof detail !== "string") return undefined;
     const matched = /^the '([^']{1,256})' model is not supported when using codex with a chatgpt account\.$/u
       .exec(normalizeCodexUnsupportedModelDetail(detail));
@@ -448,6 +460,7 @@ export function applyCodexAccountGatedWireNormalization(parsed: OcxParsedRequest
   if (logCtx) {
     logCtx.preserveResolvedModelFromRoute = true;
     delete logCtx.resolvedModel;
+    logCtx.wireModel = wireModel;
   }
   parsed.modelId = wireModel;
   if (!parsed._rawBody || typeof parsed._rawBody !== "object") return;

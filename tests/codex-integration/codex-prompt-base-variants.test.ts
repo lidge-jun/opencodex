@@ -6,9 +6,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   MAX_BASE_VARIANTS,
+  computePromptProbeStateFingerprint,
   readBaseVariants,
   readPromptLayers,
   selectBaseVariant,
@@ -59,6 +60,38 @@ describe("base variant selection", () => {
       kind: "external",
       path: "/etc/somebody-elses.md",
     });
+  });
+
+  test("a hand-set key with standard TOML escapes stays external and cannot be overwritten", () => {
+    const config = 'model_instructions_file = "\\u002Fetc\\u002Fsomebody-elses.md"\n';
+    const paths = fixture(config);
+    expect(readPromptLayers(paths).baseSelection).toEqual({
+      kind: "external",
+      path: "/etc/somebody-elses.md",
+    });
+
+    const result = selectBaseVariant({ kind: "default" }, rev(paths), paths);
+    expect(result).toMatchObject({ ok: false, error: "developer_instructions_not_owned" });
+    expect(read(paths.configPath)).toBe(config);
+  });
+
+  test("unsafe integer fallback follows a Unicode-escaped base file in selection and fingerprint", () => {
+    const paths = fixture('model_context_window = 9223372036854775807\nmodel_instructions_file = "\\u0062ase.md"\n');
+    const basePath = join(dirname(paths.configPath), "base.md");
+    writeFileSync(basePath, "first base", "utf8");
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = dirname(paths.configPath);
+    try {
+      const snap = readPromptLayers(paths);
+      expect(snap.modelInstructionsFile).toBe("base.md");
+      expect(snap.baseSelection).toEqual({ kind: "external", path: "base.md" });
+      const before = computePromptProbeStateFingerprint(paths);
+      writeFileSync(basePath, "second base", "utf8");
+      expect(computePromptProbeStateFingerprint(paths)).not.toBe(before);
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
   });
 
   test("selecting a variant writes an absolute path, and the default removes the key", () => {
@@ -179,6 +212,15 @@ describe("base variant selection", () => {
     // Editing an existing one is still allowed at the cap.
     const id = readBaseVariants(paths)[0]!.id;
     expect(writeBaseVariant({ id, title: "edited", body: "b2" }, rev(paths), paths).ok).toBe(true);
+  });
+
+  test("a caller-supplied id cannot create a variant", () => {
+    const paths = fixture("model = \"x\"\n");
+    expect(writeBaseVariant({ id: "aaaaaa", title: "Injected", body: "b" }, rev(paths), paths)).toMatchObject({
+      ok: false,
+      error: "unknown_layer",
+    });
+    expect(readBaseVariants(paths)).toEqual([]);
   });
 
   test("a stale revision is refused", () => {

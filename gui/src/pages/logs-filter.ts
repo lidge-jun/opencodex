@@ -37,6 +37,7 @@ export interface FilterableLogEntry {
   timestamp?: unknown;
   model?: unknown;
   resolvedModel?: unknown;
+  servedModel?: unknown;
   provider?: unknown;
   surface?: LogSurface;
   status?: unknown;
@@ -122,6 +123,7 @@ export function filterLogs<T extends FilterableLogEntry>(
     if (modelQuery && ![
       normalized(log.model),
       normalized(log.resolvedModel),
+      normalized(log.servedModel),
       ...logAttempts.map(attempt => normalized(attempt.model)),
     ].some(value => value === modelQuery)) return false;
 
@@ -164,7 +166,7 @@ export function extractLogFilterOptions(logs: readonly FilterableLogEntry[]): {
   const models = new Map<string, string>();
   const providers = new Map<string, string>();
   for (const log of logs) {
-    for (const value of [log.model, log.resolvedModel, ...attempts(log).map(attempt => attempt.model)]) {
+    for (const value of [log.model, log.resolvedModel, log.servedModel, ...attempts(log).map(attempt => attempt.model)]) {
       addOption(models, value);
     }
     for (const value of [log.provider, ...attempts(log).map(attempt => attempt.provider)]) {

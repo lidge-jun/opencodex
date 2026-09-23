@@ -48,6 +48,18 @@ async function call(method: string, body?: unknown, userAgent?: string): Promise
 }
 
 describe("companion settings", () => {
+  // INV-COMPANION-02
+  test("a chart selection saved per pool account names the merged timeline row", async () => {
+    await withHome(async home => {
+      writeFileSync(join(home, "companion.json"), JSON.stringify({
+        models: ["openai-p6bc633/gpt-6-astra", "openai-pe2d42f/gpt-6-astra", "chatgpt/gpt-5.6-sol", "xai/grok-4.7"],
+      }));
+      expect(loadCompanionSettings().settings.models).toEqual(["openai/gpt-6-astra", "openai/gpt-5.6-sol", "xai/grok-4.7"]);
+      const result = await call("PUT", { settings: { models: ["openai-main/gpt-5.6-luna", "openai/gpt-5.6-luna"] } });
+      expect(result.body.settings.models).toEqual(["openai/gpt-5.6-luna"]);
+    });
+  });
+
   test("nested native model identifiers survive settings writes", async () => {
     await withHome(async () => {
       const models = ["cloudflare-ai/@cf/meta/llama", "github-models/openai/gpt-4.1"];

@@ -3,6 +3,9 @@ import { configReasoningPinsConfigError } from "./provider-validation";
 import { adoptCustomModelCatalogMigration, projectCustomModelCatalogMigration } from "../codex/custom-model-catalog-migration";
 import { refreshPreservedProviderOwner, refreshUserCostOverlays } from "../usage/user-cost-overlays";
 import {
+  applyConfigObjectChildDeletions,
+  clearPendingConfigObjectChildDeletions,
+  prepareConfigObjectChildDeletionRebase,
   clearPendingConfigTopLevelDeletions,
   configHasRebaseProvenance,
   configRebaseDeletionKeys,
@@ -357,12 +360,14 @@ export function reconcileLiveConfigFromDisk(config: OcxConfig, persistedBaseline
     ...(persisted.hostname !== undefined ? { hostname: persisted.hostname } : {}),
   });
 
+  const childDeletions = prepareConfigObjectChildDeletionRebase(config);
   reconcileConfigRecord(
     config as unknown as Record<string, unknown>,
     persistedBaseline as unknown as Record<string, unknown>,
     persisted as unknown as Record<string, unknown>,
     new Set(["hostname", "port", ...(claudeGuardArmed ? ["claudeCode"] : [])]),
   );
+  applyConfigObjectChildDeletions(config, childDeletions);
 
   if (claudeGuardArmed && !pendingLiveClaudeMutation) {
     if (persisted.claudeCode === undefined) delete config.claudeCode;
@@ -420,6 +425,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
   const pinError = configReasoningPinsConfigError(config);
   if (pinError) throw new Error(pinError);
   withConfigMutationLockSync(() => {
+    const childDeletions = prepareConfigObjectChildDeletionRebase(config);
     const bindingBaseline = persistedLiveServerBinding.get(config);
     // One authoritative pre-write read feeds both the live-config reconciliation and
     // custom-model deletion migration. A second read could observe different bytes.
@@ -477,6 +483,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
         }
       }
     }
+    applyConfigObjectChildDeletions(config, childDeletions);
     if (claudeCodeBaseline.has(config)) {
       if (onDisk !== undefined) {
         const baseline = claudeCodeBaseline.get(config);
@@ -516,6 +523,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
       else config.configRebaseProvenance = structuredClone(projectedConfig.configRebaseProvenance);
       liveConfigBaseline.set(config, structuredClone(projectedConfig));
     }
+    clearPendingConfigObjectChildDeletions(config);
     clearPendingConfigTopLevelDeletions(config);
   });
 }

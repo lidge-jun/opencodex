@@ -186,7 +186,15 @@ describe("native Anthropic image input reaches client documents", () => {
       .filter(model => model.provider === provider);
     expect(models.length).toBeGreaterThan(0);
     const context = { baseUrl: "http://127.0.0.1:10100/v1", config, models };
-    const expectedInputs = models.map(model => ({ id: model.namespaced, input: ["text", "image"] }));
+    // Client exports include a sibling for each catalog-approved Fast selector. Check image
+    // input on both base and Fast rows, while deriving the expected selectors from the raw
+    // catalog rather than the export normalizer under test.
+    const expectedInputs = models.flatMap(model => [
+      { id: model.namespaced, input: ["text", "image"] },
+      ...(model.fastRowAvailable === true
+        ? [{ id: `${model.namespaced}--fast`, input: ["text", "image"] }]
+        : []),
+    ]).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
     for (const client of ["aside", "pi", "gajae", "prime", "omo", "omp"] as const) {
       const document = buildClientConfig(client, context) as PiGeneratedConfig;

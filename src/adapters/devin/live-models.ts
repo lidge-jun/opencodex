@@ -30,6 +30,7 @@ export const DEVIN_STATIC_MODELS = [
   "glm-5-2",
   "kimi-k2-7",
   "grok-4-5",
+  "grok-4-7",
 ] as const;
 
 /**
@@ -73,6 +74,9 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-3-8-flash": 1_048_576,
   "grok-4-5": 500_000,
   "grok-4-6": 500_000,
+  // Live Devin catalog context_length, 2026-09-23:
+  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  "grok-4-7": 500_000,
 };
 
 /**
@@ -135,6 +139,9 @@ export function sortDevinRungs(rungs: Iterable<string>): string[] {
  */
 export const DEVIN_MODEL_EFFORTS: Record<string, string[]> = {
   "swe-2": ["medium", "high", "max"],
+  // Live Devin catalog, 2026-09-23:
+  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  "grok-4-7": ["low", "medium", "high", "xhigh", "max"],
 };
 
 /**

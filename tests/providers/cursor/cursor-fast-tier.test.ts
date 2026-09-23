@@ -52,6 +52,7 @@ describe("Codex Fast reaches Cursor's fast variant", () => {
 
     expect(decide("claude-opus-5")).toEqual(FAST_DECISION);
     expect(decide("grok-4.6")).toEqual(FAST_DECISION);
+    expect(decide("grok-4.7")).toEqual(FAST_DECISION);
     expect(decide("kimi-k3")).toEqual({ kind: "drop" });
   });
 
@@ -75,6 +76,15 @@ describe("Codex Fast reaches Cursor's fast variant", () => {
     // Off, it keeps the cursor- prefix the regular variant requires.
     expect(createCursorRequest(parsedFor("cursor/grok-4.6", "high")).modelId)
       .toBe("cursor-grok-4.6-high");
+  });
+
+  test("grok-4.7 Fast sends the live flattened id with no cursor prefix", () => {
+    const fast = createCursorRequest(parsedFor("cursor/grok-4.7", "xhigh", FAST_DECISION));
+    expect(fast.modelId).toBe("grok-4.7-xhigh-fast");
+    expect(fast.requestedModelParameters).toBeUndefined();
+    expect(createCursorRequest(parsedFor("cursor/grok-4.7", "xhigh")).modelId)
+      .toBe("grok-4.7-xhigh");
+    expect(cursorRequestEmitsFastVariant(parsedFor("cursor/grok-4.7", "xhigh", FAST_DECISION))).toBe(true);
   });
 
   test("a base without a fast variant is byte-identical with the toggle on", () => {

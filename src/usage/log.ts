@@ -5,7 +5,7 @@ import { getConfigDir } from "../config";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { sanitizeLogMetadataString } from "../lib/redact";
+import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
 import { normalizeAttemptDeliverySummary } from "./attempt-delivery";
 import {
@@ -284,6 +284,10 @@ export interface PersistedUsageEntry {
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   resolvedModel?: string;
+  /** Model the upstream actually served (openai-model header or response body). */
+  servedModel?: string;
+  /** The exact model id sent upstream when it differs from the client-facing `model`. */
+  wireModel?: string;
   requestedModel?: string;
   /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
   shadowCallRewrittenFrom?: string;
@@ -806,6 +810,39 @@ function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
 }
 
+const MAX_SERVED_MODEL_LENGTH = 200;
+/**
+ * An upstream model is an identifier, never free-form text to truncate into one. A value the
+ * secret redactor would change is dropped rather than logged, because credential-shaped text can
+ * fit the identifier alphabet.
+ */
+export function sanitizeServedModel(value: unknown): string | undefined {
+  return typeof value === "string"
+    && value.length <= MAX_SERVED_MODEL_LENGTH
+    && /^[A-Za-z0-9._:/@+-]+$/.test(value)
+    && redactSecretString(value) === value
+    ? value
+    : undefined;
+}
+
+/**
+ * Model identity fields for a log row. The served model is sanitized, and a resolvedModel that
+ * only echoed a dropped served model is dropped with it, so the rejected value cannot survive
+ * under the other name.
+ */
+export function modelIdentityLogFields(source: { resolvedModel?: string; servedModel?: unknown; wireModel?: string }): {
+  resolvedModel?: string; servedModel?: string; wireModel?: string;
+} {
+  const servedModel = sanitizeServedModel(source.servedModel);
+  const resolvedModel = source.servedModel !== undefined && source.resolvedModel === source.servedModel && !servedModel
+    ? undefined : source.resolvedModel;
+  return {
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
+    ...(source.wireModel ? { wireModel: source.wireModel } : {}),
+  };
+}
+
 /** Test seam: the normalization branch old rows take is worth asserting directly. */
 export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): PersistedUsageEntry {
   return normalizeUsageEntry(entry);
@@ -817,6 +854,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const callerServiceTier = sanitizeLogMetadataString(entry.callerServiceTier);
   const responseServiceTier = sanitizeLogMetadataString(entry.responseServiceTier);
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const servedModel = sanitizeServedModel(entry.servedModel);
+  const resolvedModel = entry.servedModel !== undefined && entry.resolvedModel === entry.servedModel && !servedModel
+    ? undefined : entry.resolvedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const transportPhase = isKnownTransportPhase(entry.transportPhase) ? entry.transportPhase : undefined;
   const terminalSource = isKnownTerminalSource(entry.terminalSource) ? entry.terminalSource : undefined;
@@ -855,7 +895,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.conversationId === "string" && entry.conversationId.trim()
       ? { conversationId: entry.conversationId.trim().slice(0, 128) }
       : {}),
-    ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
+    ...(entry.wireModel ? { wireModel: entry.wireModel } : {}),
     ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
     ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort

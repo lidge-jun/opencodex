@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { capEstimateAtContextWindow, charsPerToken, estimateTokens } from "../../src/lib/token-estimate";
+import {
+  capEstimateAtContextWindow,
+  charsPerToken,
+  estimateTokens,
+  estimateTokensFromCharacterCounts,
+} from "../../src/lib/token-estimate";
 
 describe("script-segmented ratio", () => {
   const korean = "한국어 텍스트는 토큰 밀도가 높아서 영어 기준 추정이 과소계산됩니다 ".repeat(10);
@@ -9,6 +14,13 @@ describe("script-segmented ratio", () => {
     const cjk = cjkOf(s);
     return Math.ceil((s.length - cjk) / latin + cjk / 1.5);
   };
+
+  test("pre-counted script buckets preserve estimates without replacement strings", () => {
+    expect(estimateTokensFromCharacterCounts(10, 3, "kiro/kiro-auto"))
+      .toBe(estimateTokens("xxxxxxxxxx한한한", "kiro/kiro-auto"));
+    expect(estimateTokensFromCharacterCounts(250_000_000, 1, "kiro/kiro-auto"))
+      .toBe(Math.ceil(250_000_000 / 2.8 + 1 / 1.5));
+  });
 
   test("CJK characters are counted at their own denser ratio, not the model ratio", () => {
     expect(estimateTokens(korean, "gpt-5.6-sol")).toBe(expected(korean, 4));

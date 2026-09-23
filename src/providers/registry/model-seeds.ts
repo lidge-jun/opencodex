@@ -231,6 +231,7 @@ export const OPENAI_DAYBREAK_REASONING_EFFORTS: Record<string, string[]> = Objec
 );
 export const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.map(id => `openai/${id}`);
 export const XAI_MODELS = [
+  "grok-4.7",
   "grok-4.6",
   "grok-4.5",
   "grok-4.3",
@@ -329,7 +330,7 @@ export const DEEPSEEK_VISION_PREVIEW_MODEL = "deepseek-v4-flash-vision-exp";
  * CommandCode routes verified to accept image input end-to-end (#2406).
  *
  * Verified-negative and therefore deliberately ABSENT: deepseek/deepseek-v4-flash,
- * zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6. Those
+ * zai-org/GLM-5.2, zai-org/GLM-5.3. Those
  * routes accept the request and drop the image, which is worse than declining it — the
  * model answers about an image it never saw. Do not add an id here on family resemblance;
  * capability intersection trusts this map.
@@ -351,10 +352,16 @@ export const COMMAND_CODE_IMAGE_MODELS = [
   "meta/muse-spark-1.3-contributor",
   "meta/muse-spark-1.2",
   "meta/muse-spark-1.2-contributor",
+  // Live 2026-09-23 3x3 random-color grid (180x180) via ocx 2.62.0:
+  // 4.7 read 9/9 in user messages and tool results; 4.6 read 9/9 and 8/9.
+  // Neither route requested a vision sidecar. Evidence:
+  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  "xai/grok-4.6",
+  "xai/grok-4.7",
   // Native Z.AI VLM (docs.z.ai/guides/vlm/glm-5.3-flash). This exact id is already
   // classified as natively vision-capable in NVIDIA_NIM_VISION_MODELS in this file;
   // it is not one of the verified-negative ids the header names (those are
-  // deepseek/deepseek-v4-flash, zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6 —
+  // deepseek/deepseek-v4-flash, zai-org/GLM-5.2, zai-org/GLM-5.3 —
   // different ids). Adding it on the shared GLM-5.3 prefix would be the family-
   // resemblance mistake the header forbids; the VLM docs are the evidence (#4505).
   "z-ai/glm-5.3-flash",
@@ -649,11 +656,13 @@ export const ALIBABA_TOKEN_PLAN_PRESERVE_REASONING = [
 // entitlement tiers. Bare `k3` advertises the Moderato 256K ceiling; the local `[1m]`
 // alias advertises Allegretto's 1M ceiling and is stripped before the upstream request.
 // The separately billed Moonshot API uses `kimi-k3`.
+// 260921: `k3-256k` is the same K3 served under the explicit ceiling id (verified live
+// 260921: same 988-token scaffold and identity answer as bare `k3` on the same input).
 // Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
 //           https://www.kimi.com/code/docs/en/kimi-code/error-reference.html
 export const KIMI_K3_STANDARD_CONTEXT_WINDOW = 262_144;
 export const KIMI_K3_1M_CONTEXT_WINDOW = 1_048_576;
-export const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]"];
+export const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]", "k3-256k"];
 // 260921 Kimi K2.8: `kimi-for-coding` is the stable subscription alias Moonshot re-points
 // at each coding release. Live GET /coding/v1/models lists only kimi-for-coding[-highspeed],
 // k3, k3-256k — the k2.x ids are retired from the subscription endpoint. Since K2.8 Preview
