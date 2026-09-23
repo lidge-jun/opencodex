@@ -231,6 +231,7 @@ ikiye ayrılır.
 | Sınıflandırılmış kimlik doğrulama, abonelik, kota, hız sınırı, aşırı yük veya yukarı akış sunucu hatası | Yalnızca durum yeterli olmadığında bile hedefi soğutun ve atlayın. |
 | İstemci iptali (499), `origin_rejected`, siber politika reddi, bağlam taşması veya diğer geçersiz istek | Durun ve hatayı döndürün; başka bir hedef isteği geçerli kılmaz. |
 | `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren veya modele özgü görüntü girdisini reddeden (`param: input`) yapılandırılmış HTTP 400 | Çıktı başlamadan önce bekleme süresi kaydetmeden sonraki uygun hedefe atlar; aşağıdaki isteğe bağlı parametre uyumluluğuna bakın. |
+| Süreç içi bir bağdaştırıcının (`runTurn`) yürüttüğü Responses turunda, geçerli isteğin bildirmediği ilk araç çağrısı (herhangi bir çıktıdan ve yeniden oynatılamaz yan etkiden önce) | Hedefi bekleme süresine alır ve aynı araç kataloğuyla sonraki hedefe atlar. Görünür çıktıdan veya yeniden oynatılamaz bir yan etkiden sonra ret kesindir. Chat Completions ve Anthropic Messages istekleri değişmez. |
 | Diğer sınıflandırılmamış hatalar | Durun ve hatayı döndürün. |
 
 Atlanan bir hedef varsayılan olarak 60 saniye boyunca soğuma süresine girer.

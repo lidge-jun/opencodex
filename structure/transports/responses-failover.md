@@ -155,6 +155,14 @@ relay identity markers are restored on the wrapped response so Windows/Bun strea
 logging retain their existing owners. A failed child keeps its physical attempt receipt and usage,
 while the successful child remains the logical request result.
 
+A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents`
+(`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful
+event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat
+recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed
+undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After
+any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and
+Anthropic Messages inbound requests do not use this classification.
+
 HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
 structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
 deprecated, sunset, decommissioned, or no longer available). An unrelated application-level 410 is

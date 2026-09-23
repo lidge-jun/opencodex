@@ -152,6 +152,7 @@ async function* replay(
 
 export async function preflightAdapterEvents(
   source: AsyncIterable<AdapterEvent>,
+  classifyFirstEvent?: (event: AdapterEvent) => Extract<AdapterEvent, { type: "error" }> | undefined,
 ): Promise<AdapterEventPreflight> {
   const iterator = source[Symbol.asyncIterator]();
   const buffered: AdapterEvent[] = [];
@@ -164,6 +165,12 @@ export async function preflightAdapterEvents(
       buffered.push(next.value);
       if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
       continue;
+    }
+    const classifiedError = replayUnsafe ? undefined : classifyFirstEvent?.(next.value);
+    if (classifiedError) {
+      buffered.push(classifiedError);
+      await iterator.return?.();
+      return { stream: replay(buffered, iterator), error: classifiedError, empty: false, replayUnsafe };
     }
     buffered.push(next.value);
     if (next.value.type === "error") {
