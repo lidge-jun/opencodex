@@ -221,6 +221,13 @@ export function configuredOutboundFetch(
   } catch {
     return base!(input, init);
   }
+  // A mixed inherited SOCKS/HTTP ALL_PROXY environment cannot put bare "localhost" in
+  // NO_PROXY: Bun would also bypass its HTTP proxy for app.localhost. Keep the name exact
+  // here and force native fetch direct so the opposite-case HTTP proxy cannot take over.
+  if (proxy && explicitProxy === undefined && (url.protocol === "http:" || url.protocol === "https:")
+    && normalizeProxyHostname(url.hostname) === "localhost") {
+    return base!(input, { ...init, proxy: false } as ProxyCapableRequestInit);
+  }
   if (proxy && (url.protocol === "http:" || url.protocol === "https:") && (explicitProxy !== undefined || !noProxyMatches(url))) {
     return socks5Fetch(input, init, proxy);
   }

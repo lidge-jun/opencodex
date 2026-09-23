@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import { applyProxyEnv } from "../../src/config";
-import { configuredOutboundFetch, noProxyMatches, resolveProxyRoute, configureSocks5Fetch } from "../../src/lib/proxy-env";
+import { configuredOutboundFetch, noProxyMatches, resolveProxyRoute, configureSocks5Fetch, type ProxyCapableRequestInit } from "../../src/lib/proxy-env";
 import type { OcxConfig } from "../../src/types";
 
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "OCX_TEST_PROXY_REF", "OCX_TEST_NO_PROXY_REF"] as const;
@@ -293,9 +293,11 @@ describe("applyProxyEnv", () => {
   });
 
   test.each([
-    ["alone", {}, "http://localhost:11434/v1/models", "localhost,127.0.0.1,::1,[::1]"],
-    ["beside an inherited HTTP proxy", { HTTP_PROXY: "http://proxy.invalid:3128" }, "http://127.0.0.1:11434/v1/models", "127.0.0.1,::1,[::1]"],
-  ] as const)("an inherited SOCKS proxy %s: loopback goes direct, *.localhost stays on SOCKS", async (_label, inherited, loopbackUrl, expectedNoProxy) => {
+    ["alone", "ALL_PROXY", {}, "http://localhost:11434/v1/models", "localhost,127.0.0.1,::1,[::1]", false],
+    ["beside an inherited HTTP proxy", "ALL_PROXY", { HTTP_PROXY: "http://proxy.invalid:3128" }, "http://127.0.0.1:11434/v1/models", "127.0.0.1,::1,[::1]", false],
+    ["with lowercase HTTP all_proxy", "ALL_PROXY", { all_proxy: "http://proxy.invalid:3128" }, "http://localhost:11434/v1/models", "127.0.0.1,::1,[::1]", true],
+    ["with uppercase HTTP ALL_PROXY", "all_proxy", { ALL_PROXY: "http://proxy.invalid:3128" }, "http://localhost:11434/v1/models", "127.0.0.1,::1,[::1]", true],
+  ] as const)("an inherited SOCKS proxy %s: loopback goes direct, *.localhost stays on SOCKS", async (_label, socksKey, inherited, loopbackUrl, expectedNoProxy, forcedDirect) => {
     const refusing = createTcpServer(socket => socket.destroy());
     await new Promise<void>((resolve, reject) => {
       refusing.once("error", reject);
@@ -304,19 +306,22 @@ describe("applyProxyEnv", () => {
     const address = refusing.address();
     if (!address || typeof address === "string") throw new Error("proxy fixture did not bind a TCP port");
     // socks5h: the proxy resolves the name, so the fixture fails the request without local DNS.
-    process.env.ALL_PROXY = `socks5h://127.0.0.1:${address.port}`;
+    process.env[socksKey] = `socks5h://127.0.0.1:${address.port}`;
     Object.assign(process.env, inherited);
     applyProxyEnv(configWithProxy());
     // Beside an HTTP(S) proxy Bun reads NO_PROXY too, with suffix matching, so no bare localhost.
     expect(process.env.NO_PROXY).toBe(expectedNoProxy);
     let directCalls = 0;
-    const direct = async () => {
+    let directProxy: string | false | undefined;
+    const direct = async (_input: RequestInfo | URL, init?: RequestInit) => {
       directCalls += 1;
+      directProxy = (init as ProxyCapableRequestInit | undefined)?.proxy;
       return new Response("direct");
     };
     try {
       expect(await (await configuredOutboundFetch(loopbackUrl, undefined, direct)).text()).toBe("direct");
       expect(directCalls).toBe(1);
+      if (forcedDirect) expect(directProxy).toBe(false);
       await expect(configuredOutboundFetch("http://app.localhost:11434/v1/models", undefined, direct)).rejects.toThrow();
       expect(directCalls).toBe(1);
     } finally {

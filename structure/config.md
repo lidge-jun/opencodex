@@ -550,7 +550,9 @@ SOCKS proxy is the only inherited proxy; whenever Bun applies an inherited HTTP(
 or HTTP(S) `ALL_PROXY`/`all_proxy`, it matches by domain suffix, so activation adds only the
 loopback addresses (never `localhost`); a proxy-free
 process is left untouched. The in-process
-matcher treats a bare `localhost` or IP-literal entry as one host, never a suffix. An inherited non-empty
+matcher treats a bare `localhost` or IP-literal entry as one host, never a suffix. When opposite-case
+`ALL_PROXY` and `all_proxy` provide SOCKS and HTTP(S) together, the SOCKS wrapper forces an exact
+`localhost` request direct while keeping the address-only environment bypass. An inherited non-empty
 lowercase `no_proxy`, which Bun fetch reads first with suffix matching, receives only the loopback
 addresses, never a name it would match as a suffix. When the
 environment no longer selects SOCKS, activation
