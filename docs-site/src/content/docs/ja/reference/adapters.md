@@ -194,6 +194,7 @@ model discovery の両方に適用されます。
 **認証:** `api-key` ヘッダーの `key`（Bearer ではない）。
 
 - リクエスト構成は Responses passthrough に任せます。`baseUrl` に未解釈のテンプレート placeholder がないか検証し、`Authorization` を `api-key` に差し替えます。設定 URL が Azure v1 Responses API を直接指すため、`api-version` は追加しません。
+- 別のプロバイダーが生成した推論状態に対する Responses の復旧を共有します。`400 invalid_encrypted_content` を受けると、その状態（暗号化コンテンツと推論アイテムの `rs_…` ID）を除いて一度だけ再送します。
 
 ## 画像ユーティリティ（`image.ts`）
 

@@ -253,7 +253,11 @@ Cline IDE/CLI 中提供，不能通过 API 使用；`minimax/minimax-m2.5` 是�
 
 通往同一批模型的受支持路径，是使用 [opencode.ai/auth](https://opencode.ai/auth) 获取的 OpenCode Zen API 密钥、走带密钥的 **`opencode-zen`** 预设。若 OpenCode 之后公布了免密钥层级的第三方接入方式，opencodex 可以跟进；在此之前，这个预设的作用是记录该限制。上游条款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
-大多数使用带 bearer 密钥的 `openai-chat` adapter；少数仅暴露 Anthropic 兼容端点的提供商（例如 **Xiaomi MiMo**）使用 `anthropic` adapter（`x-api-key`）。
+大多数使用带 bearer 密钥的 `openai-chat` adapter；**Xiaomi MiMo**（`xiaomi`）等 Anthropic 兼容预设
+使用 `anthropic` adapter（`x-api-key`）。小米还提供 OpenAI Chat 预设 `xiaomi-mimo` 和 token plan 预设
+`mimo`。三个预设默认都使用 MiMo V2.6（`mimo-v2.6-pro`；`xiaomi-mimo` 使用 `mimo-v2.6-flash`）。
+小米将在 2026-10-21 停用 `mimo-v2.5` 和 `mimo-v2.5-pro`，且不会重定向；若已将 V2.5 保存为默认模型，
+请在此日期前手动切换，opencodex 不会替你改写配置。
 火山方舟 Coding Plan 和 Agent Plan 都通过 `openai-responses` adapter 使用原生 Responses 端点。在已验证的 Ark Coding Plan 工具调用 continuation 中，回放上一次 Responses 返回的 `reasoning` item 会触发 `400 InvalidParameter`，因此 Coding Plan 预设会在转发 continuation input 前移除这类 replayed reasoning item；这会丢失该轮的 reasoning 状态，可用 `dropResponsesReasoningItems: false` 关闭。已经保存为 `openai-chat` 的 Coding Plan 配置不会被改写，仍按 Chat 走；如需切换，请手动把 `adapter` 改为 `openai-responses` 并把 `responsesPath` 设为 `/responses`，或删除后重新添加该预设。显式的逐模型 `openai-chat` override 仍可使用。
 内置 DeepSeek preset 同样会让 `deepseek-v4-flash` 使用原生 Responses 端点，并保留上游 SSE
 流式输出。如果该模型已经完成全部输出项却缺少最终 Responses 事件，opencodex 会应用模型级
@@ -295,10 +299,17 @@ agent-tool 证据。Nscale service token 可在 [Nscale Console](https://console
 inference key 可从 [Vultr Console](https://my.vultr.com) 的订阅概览复制。
 
 **Command Code 发现：**该预设从固定的 Provider API 主机读取 Command Code 的
-`/provider/v1/models` 列表，保留含 `/` 的原生模型 id，并将实时发现限制为 256 KiB 和 256 条原始记录。
+`/provider/v1/models` 列表，保留提供商原生模型 id，并将实时发现限制为 256 KiB 和 256 条原始记录。
 `ocx login command-code` 支持通过浏览器进行 OAuth 登录（现有 Command Code CLI 用户还可选择从
 `~/.commandcode/auth.json` 导入本地 CLI 凭据）；模型目录按账户隔离，并在登录后从经过认证的发现
-端点获取。聊天请求使用已配置的 bearer 密钥。密钥可在 [Command Code Studio](https://commandcode.ai/studio/) 创建。
+端点获取。Provider API 预设（`commandcode`）使用当前配置的密钥：大多数模型 id 通过带 Bearer 头的
+Chat Completions 请求调用；`claude-*` 模型 id 则通过带 `x-api-key` 的 Anthropic Messages 请求调用，
+因为 Command Code 只在 `/provider/v1/messages` 上提供这些模型。若其他提供商复用 `commandcode` 名称
+但使用不同端点，它仍保持自己的请求协议。OAuth 预设（`command-code`）使用已保存的账户 bearer 令牌
+进行认证后的模型发现，并从 `/alpha/generate` 以 NDJSON 流式生成。若网关将 MiMo 工具调用标记作为文本
+回显，而实际工具调用已存在，则会移除重复标记。对于 MiMo 模型，只有在响应正常结束后，才会将没有
+对应原生调用的完整声明工具调用恢复为实际调用；中断或被过滤的轮次会保留文本形式的标记。
+Provider API 密钥可在 [Command Code Studio](https://commandcode.ai/studio/) 创建。
 
 **OrcaRouter 认证与模型发现：**可用 `ocx login orcarouter-oauth` 走浏览器一键授权，
 也可用 `ocx login orcarouter` 粘贴已有 API key。PKCE 流程会先监听本机回环端口，为每次登录

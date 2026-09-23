@@ -585,8 +585,11 @@ supported third-party path for the keyless tier, opencodex can follow it; until 
 stays as documentation of the restriction. Upstream terms:
 [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
-Most use the `openai-chat` adapter with a bearer key; a few that expose only an Anthropic-compatible
-endpoint (e.g. **Xiaomi MiMo**) use the `anthropic` adapter (`x-api-key`).
+Most use the `openai-chat` adapter with a bearer key; Anthropic-compatible presets such as
+**Xiaomi MiMo** (`xiaomi`) use the `anthropic` adapter (`x-api-key`). Xiaomi also has an OpenAI Chat
+preset, `xiaomi-mimo`, and a token-plan preset, `mimo`. All three default to MiMo V2.6 (`mimo-v2.6-pro`,
+or `mimo-v2.6-flash` on `xiaomi-mimo`). Xiaomi retires `mimo-v2.5` and `mimo-v2.5-pro` on 2026-10-21
+with no redirect, so switch a saved V2.5 default before then; opencodex does not rewrite it for you.
 Volcengine Coding Plan and Agent Plan use their native Responses endpoints through `openai-responses`.
 During validated Ark Coding Plan tool continuations, replaying the returned Responses `reasoning` item
 answered `400 InvalidParameter`, so the Coding Plan preset drops replayed reasoning items before
@@ -657,9 +660,9 @@ Bearer header, while `claude-*` ids use Anthropic Messages with `x-api-key`, bec
 serves them only on `/provider/v1/messages`. A provider that reuses the `commandcode` name for a
 different endpoint keeps its own wire. The OAuth preset (`command-code`) uses the stored account bearer for
 authenticated discovery and streams generation from `/alpha/generate` as NDJSON. MiMo tool-call
-markup echoed by the gateway as text is removed when it duplicates a real call. On the observed
-MiMo 2.6 models, a complete declared-tool call with no native counterpart is restored only after a
-clean finish; interrupted or filtered turns leave the markup as text. Create Provider-API keys at
+markup echoed by the gateway as text is removed when it duplicates a real call. On MiMo models, a
+complete declared-tool call with no native counterpart is restored only after a clean finish;
+interrupted or filtered turns leave the markup as text. Create Provider-API keys at
 [Command Code Studio](https://commandcode.ai/studio/).
 
 **OrcaRouter authentication and discovery.** Choose either `ocx login orcarouter-oauth` for

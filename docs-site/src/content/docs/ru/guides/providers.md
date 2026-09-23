@@ -296,9 +296,12 @@ Zen может отвечать общими 429 без заголовков `Re
 путь для бесключевого уровня, opencodex сможет его использовать; до тех пор пресет документирует
 ограничение. Условия вышестоящего сервиса: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
-Большинство использует адаптер `openai-chat` с bearer-ключом; немногие провайдеры, предоставляющие
-только Anthropic-совместимую конечную точку (например, **Xiaomi MiMo**), используют адаптер
-`anthropic` (`x-api-key`).
+Большинство провайдеров использует адаптер `openai-chat` с bearer-ключом; пресеты с поддержкой
+протокола Anthropic, такие как **Xiaomi MiMo** (`xiaomi`), используют адаптер `anthropic` (`x-api-key`).
+У Xiaomi также есть пресет OpenAI Chat `xiaomi-mimo` и пресет токенного плана `mimo`. Все три по
+умолчанию используют MiMo V2.6 (`mimo-v2.6-pro`, а `xiaomi-mimo` — `mimo-v2.6-flash`). 2026-10-21
+Xiaomi прекратит поддержку `mimo-v2.5` и `mimo-v2.5-pro` без перенаправления. До этой даты смените
+сохранённую модель V2.5 по умолчанию: opencodex не изменит её автоматически.
 Volcengine Coding Plan и Agent Plan используют нативные конечные точки Responses через адаптер `openai-responses`. В проверенных продолжениях с вызовом инструментов на Ark Coding Plan повторная отправка элемента `reasoning`, возвращённого предыдущим ходом, даёт `400 InvalidParameter`, поэтому пресет Coding Plan удаляет такие элементы перед пересылкой входа продолжения. Состояние reasoning того хода при этом теряется; отключается через `dropResponsesReasoningItems: false`. Уже сохранённая конфигурация Coding Plan с `openai-chat` не переписывается и остаётся на Chat: чтобы перейти, вручную смените `adapter` на `openai-responses` и `responsesPath` на `/responses` либо удалите и заново добавьте пресет.
 
 > **Три маршрута тарификации Volcengine:** `volcengine` — Ark API с оплатой по факту,
@@ -340,13 +343,22 @@ Vultr сейчас документирует tool calling только для `
 Service token Nscale создаётся в [Nscale Console](https://console.nscale.com), а inference key Vultr
 копируется со страницы подписки в [Vultr Console](https://my.vultr.com).
 
-**Discovery для Command Code.** Пресет читает список `/provider/v1/models` с фиксированного
-хоста Provider API, сохраняет нативные id моделей со знаком `/` и ограничивает live discovery размером
-256 KiB и 256 исходными строками. `ocx login command-code` поддерживает вход через OAuth в браузере
-(с возможностью импорта локальных учётных данных CLI из `~/.commandcode/auth.json` для существующих
-пользователей CLI Command Code); каталог моделей привязан к учётной записи и берётся из
-аутентифицированного discovery endpoint после входа. Запросы чата используют настроенный bearer-ключ.
-Ключи создаются в [Command Code Studio](https://commandcode.ai/studio/).
+**Discovery для Command Code.** Пресет читает список `/provider/v1/models` с фиксированного хоста
+Provider API, сохраняет исходные идентификаторы моделей и ограничивает размер каталога 256 KiB и
+256 исходными строками. `ocx login command-code` поддерживает вход через OAuth в браузере и может
+импортировать локальные учётные данные CLI из `~/.commandcode/auth.json` для пользователей Command Code
+CLI. После входа каталог моделей загружается через аутентифицированную конечную точку discovery и
+зависит от учётной записи. Пресет Provider API (`commandcode`) отправляет активный настроенный ключ:
+для большинства моделей используется Chat Completions с заголовком Bearer, а модели `claude-*` идут
+через Anthropic Messages с `x-api-key`, поскольку Command Code предоставляет их только по адресу
+`/provider/v1/messages`. Если другой провайдер использует имя `commandcode` для иной конечной точки,
+он сохраняет собственный протокол. Пресет OAuth (`command-code`) использует сохранённый bearer-токен
+учётной записи для аутентифицированного discovery и передаёт поток генерации из `/alpha/generate`
+в формате NDJSON. Разметка вызова инструментов MiMo, которую шлюз возвращает как текст, удаляется,
+если она дублирует настоящий вызов. Для моделей MiMo полный вызов объявленного инструмента без
+соответствующего нативного вызова восстанавливается только после штатного завершения; при прерывании
+или фильтрации ответа разметка остаётся текстом. Ключи Provider API создаются в
+[Command Code Studio](https://commandcode.ai/studio/).
 
 **Квота Command Code.** Дашборд и `ocx account refresh` опрашивают окна `/alpha/billing/credits` (5 часов и неделя) на каноническом хосте `https://api.commandcode.ai`. OAuth-пресет (`command-code`) использует сохранённый bearer аккаунта; пресет Provider-API ключа (`commandcode`) — активный настроенный ключ. Пользовательски изменённый похожий base URL не опрашивается. Если Command Code также сообщает расход за период, оставшиеся monthly / purchased / free credits показываются как USD-окно.
 

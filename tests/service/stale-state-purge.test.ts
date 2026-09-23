@@ -57,7 +57,8 @@ describe("snapshot-guarded stale-state purge", () => {
     const stopFn = cliSource.slice(cliSource.indexOf("async function handleStop("), cliSource.indexOf("async function handleUninstall()"));
 
     const snapshotAt = stopFn.indexOf("const stalePidValue = readPidFileValue()");
-    const probeAt = stopFn.indexOf("await findLiveProxy()");
+    // The orphan probe opts into package-tree fenced identity (#5496); its position is what matters.
+    const probeAt = stopFn.indexOf("await findLiveProxy(");
     expect(snapshotAt).toBeGreaterThan(-1);
     expect(probeAt).toBeGreaterThan(-1);
     expect(snapshotAt).toBeLessThan(probeAt);

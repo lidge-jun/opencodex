@@ -389,3 +389,22 @@ okuyamazsa opencodex bu sağlayıcıya okunamayan baytlar göndermek yerine
 `unreadable_encrypted_agent_task` ile başarısız olur. Çalışan görevleri
 etrafındaki istemci davranışı için [Alt Ajan
 Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
+
+### Mevcut bir konuşmada sağlayıcı değiştirmek
+
+Yeniden gönderilen bir akıl yürütme öğesi, yalnızca onu üreten sağlayıcı ve kimlik bilgisinin
+okuyabildiği bir `encrypted_content` taşır. opencodex konuşmaya en son başka bir sağlayıcının hizmet
+verdiğini biliyorsa bu blob'u göndermeden önce kaldırır ve öğenin özetini korur. O sağlayıcı farklı bir
+uç nokta veya kimlik bilgisi de kullandıysa öğenin `rs_…` kimliği de kaldırılır, çünkü yeni hedefin
+bulamayacağı bir öğeyi gösterir. opencodex bunu bilemediğinde, örneğin proxy yeniden başlatıldıktan
+sonra, yeni hedef blob'u reddeder: OpenAI ve Azure OpenAI `400 invalid_encrypted_content` döndürür.
+opencodex bu durumda isteği önceki sağlayıcının akıl yürütme durumu olmadan, yani blob ve `rs_…` kimliği
+olmadan yalnızca bir kez yeniden gönderir; aksi hâlde yanıt `Item with id 'rs_…' not found` olurdu.
+
+Bu kurtarma Responses protokolünü konuşan her adaptör için geçerlidir, bu nedenle `openai-responses` ve
+`azure-openai` aynı şekilde davranır. Başarılı bir kurtarmadan sonra aynı hedefteki sonraki turlar,
+sonraki beş dakika boyunca bu durumu ilk gönderimden önce kaldırır. Yeniden gönderim, isteğin normal
+gönderim bütçesinden düşülür. Sıradan bir 400 ve bir 429 bu yolla yeniden gönderilmez; 5xx de öyle, tek
+bir dar istisnayla: şifreli araç çıktısı taşıyan bir istek için gövdesi tam olarak o şifre çözme reddi
+olan bir 502 aynı tek yeniden gönderimi alır. İkinci ret istemciye değiştirilmeden ulaşır. Bu durumda
+hedef sağlayıcıda yeni bir konuşma başlatın.

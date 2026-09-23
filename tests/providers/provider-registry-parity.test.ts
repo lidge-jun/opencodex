@@ -199,6 +199,7 @@ describe("provider registry parity", () => {
       "glm-5.2", "glm-5", "glm-5.1",
       "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
+      "mimo-v2.6-pro", "mimo-v2.6-flash",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
     ]);
@@ -1483,6 +1484,8 @@ describe("provider registry parity", () => {
       "zhipu-bigmodel": "zai",
       "zhipu-bigmodel-coding": "zai",
       "zhipu-bigmodel-responses": "zai",
+      xiaomi: "xiaomi",
+      "xiaomi-mimo": "xiaomi",
     });
     expect(resolveMetadataProvider("gemini")).toBe("google");
     expect(resolveMetadataProvider("minimax-cn")).toBe("minimax");

@@ -1,13 +1,25 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex — Codex, Claude Code, Claude Desktop, Grok Build를 위한 범용 프로바이더 프록시" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>OpenAI Codex, Claude Code, Claude Desktop, Grok Build를 위한 범용 프로바이더 프록시</b><br>
 명령어 두 줄이면, 그 모두가 지정한 LLM으로 돌아갑니다.</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X에서 @claudeebum 팔로우"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/github/v/release/lidge-jun/opencodex?label=desktop&logo=github&color=24292f" alt="최신 데스크톱 릴리스"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
 </p>
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-macos.svg" alt="macOS용 OpenCodex 다운로드" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-windows.svg" alt="Windows용 OpenCodex 다운로드" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-linux.svg" alt="Linux용 OpenCodex 다운로드" width="220"></a>
+</p>
+<p align="center"><sub>데스크톱 앱 (베타): macOS 유니버설 <code>.dmg</code> · Windows x64 <code>.msi</code> · Linux x86_64 <code>.AppImage</code> / <code>.deb</code>. 터미널이 더 편하다면 CLI를 설치하세요:</sub></p>
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -78,7 +90,29 @@ DeepSeek, Kimi, Qwen, Ollama를 비롯한 어떤 LLM이든 Codex, Claude Code, C
 
 ## 빠른 시작
 
-### 개인 설치
+### 데스크톱 앱 (베타)
+
+데스크톱 앱은 같은 프록시와 대시보드를 네이티브 창에 담은 것으로, 트레이와 번들된 `ocx`를 갖춥니다.
+이미 실행 중인 프록시에 붙거나 번들된 프록시를 시작하며, 대시보드는 프록시 포트에서 열립니다
+(다른 포트를 설정하지 않았다면 **http://localhost:10100**). 플랫폼에 맞는 파일을
+[최신 릴리스](https://github.com/lidge-jun/opencodex/releases/latest)에서 고르세요.
+
+| 플랫폼 | 파일 | 참고 |
+|---|---|---|
+| macOS 13+ (Apple Silicon 및 Intel) | `OpenCodex-<version>-macos.dmg` | 유니버설 빌드, Developer ID로 서명 및 공증됨 |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 아직 코드 서명되지 않음: SmartScreen이 한 번 물으면 **추가 정보 → 실행**을 선택 |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` 또는 `-linux-amd64.deb` | 트레이는 AppIndicator를 지원하는 데스크톱이 필요 |
+
+릴리스 페이지에서 모든 파일 옆에 `.sha256`이 함께 있습니다. macOS 14 이상에서는 프록시 상태,
+오늘의 사용량, 프로바이더 쿼터를 보여 주는 WidgetKit 확장도 함께 설치됩니다. 위젯이 그리는
+스냅샷 모델은 [`app/`](../app)의 `MenuBarCore`에 있습니다. 앱을 직접 빌드하려면 저장소 루트에서
+`bun install && bun run build:gui`를 실행한 다음,
+`desktop/`에서 macOS라면 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`을, Windows와 Linux라면 `bun install && bun run prepare-sidecar && bun run build:local`을 실행하세요. 위젯 빌드 단계는 macOS에서만 돌아갑니다.
+[데스크톱 앱 가이드](https://opencodex.me/ko/guides/desktop-app/)와
+[macOS 메뉴 막대 앱 가이드](https://opencodex.me/ko/guides/macos-menu-bar/)에서 첫 실행 안내를 볼 수 있고,
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에는 디스크에 쓰는 모든 항목이 정리되어 있습니다.
+
+### 개인 설치 (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
@@ -89,31 +123,6 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 
 **http://localhost:10100**을 열고 웹 대시보드에서 전부 설정하세요. 프로바이더 추가(내장 40개 이상,
 또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
-
-<details>
-<summary><b>데스크톱 앱과 macOS 위젯 — 베타</b></summary>
-
-같은 대시보드를 감싼 네이티브 앱과, 브라우저를 열지 않고 프록시 상태·오늘의 사용량·프로바이더
-쿼터를 보여 주는 WidgetKit 확장입니다. 프록시 자체는 그대로입니다. 앱은 실행 중인 프록시를 찾거나
-번들된 `ocx` 사이드카를 시작하며, 대시보드는 프록시의 포트에서 열립니다(다른 포트를 설정하지 않았다면
-**http://localhost:10100**).
-
-현재 베타 버전입니다. macOS 앱의 릴리스 빌드는 Developer ID로 서명되고 공증됩니다(로컬 빌드는
-ad-hoc 서명). Windows 설치 파일은 아직 코드 서명되지 않아 처음 실행할 때 SmartScreen 경고가
-표시됩니다. 위젯은 macOS 14 이상에서 쓸 수 있으며,
-위젯이 그리는 스냅샷 모델은 [`app/`](../app)의 `MenuBarCore`에 있습니다.
-
-[최신 릴리스](https://github.com/lidge-jun/opencodex/releases)에서 다운로드하거나
-직접 빌드하세요. 저장소 루트에서 `bun install && bun run build:gui`를 실행한 다음,
-`desktop/`에서 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`을 실행합니다.
-
-설치 위치, 서비스 파일을 비롯해 디스크에 쓰는 항목은
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에 정리되어 있습니다.
-[데스크톱 앱 가이드](https://opencodex.me/ko/guides/desktop-app/)와
-[macOS 메뉴 막대 앱 가이드](https://opencodex.me/ko/guides/macos-menu-bar/)에서
-플랫폼별 설치 방법과 첫 실행 안내를 확인할 수 있습니다.
-
-</details>
 
 ### ChatGPT 계정 풀
 
@@ -246,13 +255,13 @@ ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 �
 
 ## 지원 플랫폼
 
-| OS | 지원 상태 | 서비스 관리자 |
-|---|---|---|
-| macOS (arm64 / x64) | 완전 지원 | launchd |
-| Linux (x64 / arm64) | 완전 지원 | systemd (user unit) |
-| Windows (x64) | 완전 지원 | Task Scheduler (숨김) / 선택적 네이티브 서비스 (`--native`, WinSW) |
+| OS | 지원 상태 | 서비스 관리자 | 데스크톱 앱 (베타) |
+|---|---|---|---|
+| macOS (arm64 / x64) | 완전 지원 | launchd | 유니버설 `.dmg` |
+| Linux (x64 / arm64) | 완전 지원 | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | 완전 지원 | Task Scheduler (숨김) / 선택적 네이티브 서비스 (`--native`, WinSW) | x64 `.msi` |
 
-[Node](https://nodejs.org) 18 이상이 필요합니다. Bun 런타임은 `npm install` 때 번들되므로 따로 설치할
+CLI 설치에는 [Node](https://nodejs.org) 18 이상이 필요하고, 데스크톱 앱은 Node와 Bun 모두 필요 없습니다. Bun 런타임은 `npm install` 때 번들되므로 따로 설치할
 필요가 없고, Windows에서도 WSL이 필요 없습니다. npm이 번들 런타임의 설치 스크립트를 막았다면
 [설치 문서](https://opencodex.me/ko/getting-started/installation/)를 보세요.
 

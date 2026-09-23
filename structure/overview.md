@@ -147,6 +147,11 @@ still cover the rule, which is a judgement only review makes.
   there, reported as an unidentified holder otherwise. A configured `port: 0` still asks the OS for a
   port, and an explicit `--port` still waits for its pin instead of hopping.
   Enforced by `tests/cli/cli-dispatch.test.ts`.
+- **INV-FENCE-01** — A proxy fenced by the package-tree guard stays discoverable by attested identity:
+  `/healthz` keeps answering the local attestation challenge, and liveness accepts the fenced 503
+  only for opted-in callers and only with a proof from the pid and port this home's runtime record
+  names. An unattested fenced body is never identity.
+  Enforced by `tests/server/proxy-liveness-package-tree-fence.test.ts`.
 - **INV-RESEND-01** — One vocabulary states how far a failed request got, why it failed, and whether
   it may be sent again. The rosters are declared in the import-free `src/usage/telemetry-contract.ts`
   so the dashboard can name their members, and `src/lib/request-failure-model.ts` re-exports them and

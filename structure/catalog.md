@@ -127,6 +127,20 @@ are emitted only as selector-qualified rows whose account provenance matches. Th
 the bare native or API-key model list. This keeps account-scoped upstream ids such as
 `gpt-daybreak-blue-latest` callable without treating them as a static release allowlist.
 
+Configured natives are the operator's way to widen that bare list without a release. A bare
+`gpt-*` id under `providers.openai.models` on the canonical Codex forward provider joins
+`NATIVE_OPENAI_MODELS` / `SUPPORTED_NATIVE_OPENAI_SLUGS` in place (`src/codex/catalog/native-models.ts`),
+and `metadata.ts` keeps its pinned-capability, upstream-entry and context tables in step through
+a subscription. Each borrows the pinned `gpt-6-sol` row under a name generated from its slug, takes
+the GPT-6 272,000 / 872,000 context pair (`NATIVE_GPT6_CONTEXT`, also used by the built-in GPT-6
+rows), and is never account-gated. Built-in, retired and reserve ids never register. The filter
+lives in `src/config/derived-registries.ts`, whose `refreshConfigDerivedRegistries` runs on every
+load, persist and reconcile path, so every process that loads config sees the same set; removing
+the id unregisters it and the next canonical write drops the row. Configured natives are not in
+`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS` or `NATIVE_MAIN_DRAIN_SENTINEL_MODELS` (they behave
+like `gpt-5.5` there), and a combo `nativeAlias` cannot target one because schema validation runs
+before registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
+
 Retirement is a catalog/evidence policy, not a universal request denylist. Manually supplied
 model ids still follow generic routing. User-selected config and historical usage remain stored.
 

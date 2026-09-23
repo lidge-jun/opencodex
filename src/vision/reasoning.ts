@@ -1,4 +1,4 @@
-import { NATIVE_OPENAI_MODELS, nativeReasoningEfforts } from "../codex/catalog/metadata";
+import { SUPPORTED_NATIVE_OPENAI_SLUGS, nativeReasoningEfforts } from "../codex/catalog/metadata";
 import {
   VISION_REASONING_EFFORTS,
   sanitizeVisionReasoning,
@@ -13,15 +13,13 @@ declare module "../types" {
   }
 }
 
-const NATIVE_VISION_MODELS = new Set(NATIVE_OPENAI_MODELS);
-
 /**
  * Return the known vision reasoning ladder for a native OpenAI model.
  * Unknown/custom models deliberately return undefined so callers stay permissive when reliable
  * capability metadata is unavailable.
  */
 export function nativeVisionReasoningEfforts(modelId: string): VisionReasoningEffort[] | undefined {
-  if (!NATIVE_VISION_MODELS.has(modelId)) return undefined;
+  if (!SUPPORTED_NATIVE_OPENAI_SLUGS.has(modelId)) return undefined;
   const advertised = new Set(nativeReasoningEfforts(modelId));
   const supported = VISION_REASONING_EFFORTS.filter(effort => advertised.has(effort));
   return supported.length > 0 ? [...supported] : undefined;

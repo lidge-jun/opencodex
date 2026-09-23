@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { lookup } from "node:dns/promises";
+import { EventEmitter } from "node:events";
 import { createServer } from "node:http";
 import { createConnection, createServer as createTcpServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
@@ -148,6 +149,142 @@ describe("local management direct transport", () => {
       for (const socket of sockets) socket.destroy();
       if (port !== 0) await close(server);
     }
+  });
+
+  test("an aborted request releases its client socket before it settles", async () => {
+    let accept!: () => void;
+    const accepted = new Promise<void>(resolve => { accept = resolve; });
+    const sockets = new Set<Socket>();
+    const server = createTcpServer(socket => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      accept();
+    });
+    const controller = new AbortController();
+    let client: Socket | undefined;
+    let clientClosed = false;
+    try {
+      const port = await listen(server);
+      const pending = directLocalHttpFetch(`http://127.0.0.1:${port}/healthz`, {
+        signal: controller.signal,
+      }, {
+        connect(hostname, selectedPort) {
+          client = createConnection({ host: hostname, port: selectedPort });
+          client.once("close", () => { clientClosed = true; });
+          return client;
+        },
+      });
+      await accepted;
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      expect(clientClosed).toBe(true);
+      expect(client?.destroyed).toBe(true);
+    } finally {
+      client?.destroy();
+      for (const socket of sockets) socket.destroy();
+      await close(server);
+    }
+  });
+
+  test("a never-connected socket without close still settles by its deadline", async () => {
+    const socket = Object.assign(new EventEmitter(), {
+      setTimeout() { return this; },
+      destroy() { return this; },
+    }) as unknown as Socket;
+    let deadlineActive = false;
+    let scheduledMs: number | undefined;
+    await expect(directLocalHttpFetch("http://127.0.0.1:9/healthz", {}, {
+      timeoutMs: 20,
+      connect: () => socket,
+      scheduleDeadline: (onTimeout, delayMs) => {
+        scheduledMs = delayMs;
+        deadlineActive = true;
+        const timer = setTimeout(() => { deadlineActive = false; onTimeout(); }, delayMs);
+        return () => { clearTimeout(timer); deadlineActive = false; };
+      },
+    })).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(scheduledMs).toBe(20);
+    expect(deadlineActive).toBe(false);
+  });
+
+  test("an external deadline settles a socket that never closes and clears the local timer", async () => {
+    const socket = Object.assign(new EventEmitter(), {
+      setTimeout() { return this; },
+      destroy() { return this; },
+    }) as unknown as Socket;
+    const controller = new AbortController();
+    let localDeadlineActive = false;
+    let localDeadlineFired = false;
+    const pending = directLocalHttpFetch("http://127.0.0.1:9/healthz", {
+      signal: controller.signal,
+    }, {
+      timeoutMs: 1_000,
+      connect: () => socket,
+      scheduleDeadline: (onTimeout, delayMs) => {
+        localDeadlineActive = true;
+        const timer = setTimeout(() => { localDeadlineFired = true; onTimeout(); }, delayMs);
+        return () => { clearTimeout(timer); localDeadlineActive = false; };
+      },
+    });
+    const exchangeTimer = setTimeout(() => controller.abort(new DOMException("exchange deadline", "TimeoutError")), 20);
+    try {
+      await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+      expect(localDeadlineFired).toBe(false);
+      expect(localDeadlineActive).toBe(false);
+    } finally {
+      clearTimeout(exchangeTimer);
+    }
+  });
+
+  test("an exchange deadline still cancels teardown after response framing completes", async () => {
+    const socket = Object.assign(new EventEmitter(), {
+      setTimeout() { return this; },
+      destroy() { return this; },
+    }) as unknown as Socket;
+    const controller = new AbortController();
+    let localDeadlineActive = false;
+    let localDeadlineFired = false;
+    const pending = directLocalHttpFetch("http://127.0.0.1:9/healthz", {
+      signal: controller.signal,
+    }, {
+      timeoutMs: 1_000,
+      connect: () => socket,
+      scheduleDeadline: (onTimeout, delayMs) => {
+        localDeadlineActive = true;
+        const timer = setTimeout(() => { localDeadlineFired = true; onTimeout(); }, delayMs);
+        return () => { clearTimeout(timer); localDeadlineActive = false; };
+      },
+    });
+    socket.emit("data", Buffer.from("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"));
+    controller.abort(new DOMException("exchange deadline", "TimeoutError"));
+    await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(localDeadlineFired).toBe(false);
+    expect(localDeadlineActive).toBe(false);
+  });
+
+  test("destroy failure settles an aborted request without waiting for close", async () => {
+    const socket = Object.assign(new EventEmitter(), {
+      setTimeout() { return this; },
+      destroy() { throw new Error("destroy failed"); },
+    }) as unknown as Socket;
+    const controller = new AbortController();
+    let deadlineActive = false;
+    let deadlineFired = false;
+    const pending = directLocalHttpFetch("http://127.0.0.1:9/healthz", {
+      signal: controller.signal,
+    }, {
+      timeoutMs: 200,
+      connect: () => socket,
+      scheduleDeadline: (onTimeout, delayMs) => {
+        deadlineActive = true;
+        const timer = setTimeout(() => { deadlineFired = true; onTimeout(); }, delayMs);
+        return () => { clearTimeout(timer); deadlineActive = false; };
+      },
+    });
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(deadlineFired).toBe(false);
+    expect(deadlineActive).toBe(false);
   });
 
   test("times out an accepted silent socket without an AbortSignal", async () => {

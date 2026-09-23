@@ -10,7 +10,10 @@ import {
   getRequestLogEntries,
   type RequestLogContext,
 } from "../../src/server/request-log";
-import { appendUsageEntry, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
+import {
+  appendUsageEntry, normalizeUsageEntryForTest, resetUsageReadCacheForTests, usageLogPath,
+  type PersistedUsageEntry,
+} from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { log } from "../helpers/request-log-entry";
 
@@ -68,4 +71,63 @@ test("upstream served model persists only when it is a plausible bounded identif
     else process.env.OPENCODEX_HOME = previousHome;
     removeTreeWithRetry(home);
   }
+});
+
+function anthropicContext(): RequestLogContext {
+  return {
+    model: "claude-opus-5-5",
+    provider: "anthropic",
+    resolvedModel: "claude-opus-5-5",
+    wireModel: "claude-opus-5-5",
+    preserveResolvedModelFromRoute: true,
+    responseModelEcho: "anthropic/claude-opus-5-5",
+  };
+}
+
+test("the client selector echoed in response.model is not recorded as the served model", () => {
+  const echoed = anthropicContext();
+  applyResponseLogMetadata(echoed, { response: { model: "anthropic/claude-opus-5-5" } });
+  expect(echoed.servedModel).toBeUndefined();
+  expect(echoed.resolvedModel).toBe("claude-opus-5-5");
+
+  // A model the upstream really answered with is still an observation.
+  const rerouted = anthropicContext();
+  applyResponseLogMetadata(rerouted, { response: { model: "claude-opus-5-1" } });
+  expect(rerouted.servedModel).toBe("claude-opus-5-1");
+
+  // A combo parent inherits a child's echo of the combo selector.
+  const combo: RequestLogContext = {
+    model: "mycombo", provider: "combo", requestedModel: "mycombo", wireModel: "claude-opus-5-5",
+  };
+  applyResponseLogMetadata(combo, { model: "mycombo" });
+  expect(combo.servedModel).toBeUndefined();
+  expect(combo.resolvedModel).toBeUndefined();
+});
+
+test("rows persisted with a selector echo lose it on read", () => {
+  const row = (fields: Partial<PersistedUsageEntry>): PersistedUsageEntry => ({
+    requestId: "legacy", timestamp: 1, provider: "anthropic", model: "claude-opus-5-5",
+    status: 200, durationMs: 10, usageStatus: "unreported", ...fields,
+  });
+  const namespaced = normalizeUsageEntryForTest(row({
+    wireModel: "claude-opus-5-5", resolvedModel: "claude-opus-5-5", servedModel: "anthropic/claude-opus-5-5",
+    requestedModel: "anthropic/claude-opus-5-5",
+  }));
+  expect(namespaced).not.toHaveProperty("servedModel");
+  expect(namespaced.resolvedModel).toBe("claude-opus-5-5");
+
+  // Before the wire model was recorded, the echo also leaked into resolvedModel.
+  const beforeWireModel = normalizeUsageEntryForTest(row({
+    resolvedModel: "anthropic/claude-opus-5-5", servedModel: "anthropic/claude-opus-5-5",
+  }));
+  expect(beforeWireModel).not.toHaveProperty("servedModel");
+  expect(beforeWireModel).not.toHaveProperty("resolvedModel");
+
+  const combo = normalizeUsageEntryForTest(row({
+    provider: "combo", model: "mycombo", requestedModel: "mycombo", servedModel: "mycombo", wireModel: "claude-opus-5-5",
+  }));
+  expect(combo).not.toHaveProperty("servedModel");
+
+  const genuine = normalizeUsageEntryForTest(row({ wireModel: "claude-opus-5-5", servedModel: "claude-opus-5-1" }));
+  expect(genuine.servedModel).toBe("claude-opus-5-1");
 });

@@ -246,10 +246,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const bootstrapKeyRef = useRef<string | null>(null);
   const removeBusyRef = useRef(false);
 
-  const notify = useCallback((msg: string, ok: boolean = true) => {
+  const notify = useCallback((msg: string, ok: boolean = true, tone?: NoticeTone) => {
     setStatus(msg);
     setStatusOk(ok);
-    setStatusTone(ok ? "ok" : "err");
+    setStatusTone(tone ?? (ok ? "ok" : "err"));
     setStatusRevision(revision => revision + 1);
   }, []);
 

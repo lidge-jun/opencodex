@@ -371,3 +371,25 @@ cette réparation, cela devient un message utilisateur normal. Si une tâche v2 
 mais la cible routé sélectionnée ne peut pas lire le texte chiffré natif ChatGPT, opencodex échoue avec
 `unreadable_encrypted_agent_task` au lieu d'envoyer des octets illisibles à ce fournisseur. Voir
 [Surface du sous-agent](/fr/guides/sub-agent-surface/) pour le comportement du client autour des tâches des travailleurs.
+
+### Changer de fournisseur dans une conversation existante
+
+Un élément de raisonnement rejoué transporte un `encrypted_content` que seuls le fournisseur et
+l’identifiant qui l’ont produit peuvent lire. Quand opencodex sait que la conversation a été servie en
+dernier par un autre fournisseur, il retire ce blob avant l’envoi et conserve le résumé de l’élément.
+Si ce fournisseur utilisait aussi un autre point de terminaison ou un autre identifiant, l’identifiant
+`rs_…` de l’élément est retiré également, car il désigne un élément que la nouvelle destination ne peut
+pas retrouver. Quand opencodex ne peut pas le savoir, par exemple après un redémarrage du proxy, la
+nouvelle destination rejette le blob : OpenAI et Azure OpenAI répondent `400 invalid_encrypted_content`.
+opencodex renvoie alors la requête une seule fois sans l’état de raisonnement du fournisseur précédent,
+c’est-à-dire sans le blob ni l’identifiant `rs_…`, qui provoquerait sinon
+`Item with id 'rs_…' not found`.
+
+Cette récupération s’applique à tout adaptateur qui parle le protocole Responses, donc
+`openai-responses` et `azure-openai` se comportent de la même façon. Après une récupération réussie, les
+tours suivants de cette conversation sur la même destination retirent cet état avant le premier envoi
+pendant les cinq minutes suivantes. Le renvoi est compté dans le budget d’envoi normal de la requête. Un
+400 ordinaire et un 429 ne sont jamais renvoyés de cette manière, pas plus qu’un 5xx, à une exception
+près : un 502 dont le corps est exactement le rejet de déchiffrement d’une sortie d’outil chiffrée, pour
+une requête qui en contient une, obtient le même renvoi unique. Un second rejet parvient au client sans
+modification. Dans ce cas, démarrez une nouvelle conversation chez le fournisseur de destination.

@@ -13,6 +13,7 @@ import {
 } from "./core-errors";
 import { parseSyntheticRowId } from "../fast-row";
 import { resolveComboId, comboIdFromRawBody, NoAvailableComboTargetsError } from "../../combos";
+import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveShadowCallTarget } from "./shadow-target-availability";
 import { recallComboForLane } from "./combo-session-recall";
 import {
   sessionLaneIdFromRequest,
@@ -488,7 +489,15 @@ export async function prepareResponsesRequest(
         const resolvedSource = routeConcreteModel(config, parsed.modelId);
         sourceIdentity = { providerName: resolvedSource.providerName, modelId: sourcePrefix };
       } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
-      const targetRoute = resolveRoute(_sci.model);
+      // A dead target fails this helper call once, before any send; it never falls through to
+      // the native source model or to the default provider (#5618).
+      const target = resolveShadowCallTarget(_sci.model, resolveRoute);
+      if ("unavailable" in target) {
+        logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(sourcePrefix);
+        logCtx.errorCode = INTERCEPT_TARGET_UNAVAILABLE_CODE;
+        return interceptTargetUnavailableResponse(_sci.model, target.unavailable);
+      }
+      const targetRoute = target.route;
       if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute)) {
         credentialDomainWasRewritten = true;
         const _sciOriginal = parsed.modelId;

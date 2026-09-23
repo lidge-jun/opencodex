@@ -337,6 +337,16 @@ startup identity cancels the pending restart. Failed restart admission retries a
 bounded delay. Stopping the server before the accepted restart begins vetoes it, and a service child
 restarts only while it still owns the service home. Source checkouts and standalone binaries remain outside this fence.
 
+The fence withholds readiness, never identity (INV-FENCE-01). The fenced `/healthz` still answers a
+local attestation challenge and reports `restartCapability`, plus the `installedVersion` on disk
+once the replacement has held for the full stability interval (a readable manifest alone does not
+mean the install finished).
+Liveness accepts that 503 only when a caller opts in (`ocx restart`, `ocx stop`, service stop) and
+only after this home's runtime record names the same pid and port and the listener proves that
+record's secret; the pid in the body is never trusted alone. Ensure, update health and replacement
+waits stay opted out. A fenced restart compares the CLI with `installedVersion`, because the in-place
+respawn runs the replaced files at the same path, and refuses while that version is unreadable.
+
 ## Release workflow
 
 Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs

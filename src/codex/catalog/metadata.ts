@@ -41,6 +41,7 @@ import { CODEX_NATIVE_ALIAS_CATALOG_KIND } from "./kinds";
 import { RESERVE_METADATA_SOURCE_FIELD } from "./reserve";
 import {
   ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
+  NATIVE_GPT6_CONTEXT,
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_GPT6_ASTRA_MINOR_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
@@ -52,10 +53,13 @@ import {
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
   SUPPORTED_NATIVE_OPENAI_SLUGS,
   RETIRED_NATIVE_OPENAI_MODELS,
+  configuredNativeOpenAiModels,
   hasNativeOpenAiCapabilityMetadata,
+  isConfiguredNativeOpenAiModel,
   isNativeOpenAiCapabilityAliasModel,
   nativeOpenAiAliasPresentation,
   nativeOpenAiCapabilitySourceSlug,
+  subscribeConfiguredNativeOpenAiModels,
 } from "./native-models";
 import { cachedAvailableAccountGatedNativeModels } from "../model-entitlements";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
@@ -186,15 +190,16 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   // family's measured 922,000 clamp — advertising 922,000 here over-stated the ceiling by 50k.
   // maxInputTokens is clamped to the resolved window by nativeOpenAiMaxInputTokens, so this reads
   // 272,000 by default and 872,000 only under the long-window opt-in.
-  [NATIVE_GPT6_ASTRA_MODEL]: { contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 },
+  [NATIVE_GPT6_ASTRA_MODEL]: { ...NATIVE_GPT6_CONTEXT },
   // Sol and Luna ship the same 272,000 / 872,000 pair in their roster rows (probe of
   // /backend-api/codex/models?client_version=0.155.0, 2026-09-23). Unmeasured here, so they take
   // the row's own ceiling rather than the GPT-5.6 family's measured 922,000.
-  [NATIVE_GPT6_SOL_MODEL]: { contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 },
-  [NATIVE_GPT6_LUNA_MODEL]: { contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 },
+  [NATIVE_GPT6_SOL_MODEL]: { ...NATIVE_GPT6_CONTEXT },
+  [NATIVE_GPT6_LUNA_MODEL]: { ...NATIVE_GPT6_CONTEXT },
   // Astra Minor borrows Astra's row, so it inherits Astra's numbers. No account we hold can reach
   // it, so this is inheritance, not a measurement.
-  [NATIVE_GPT6_ASTRA_MINOR_MODEL]: { contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 },
+  [NATIVE_GPT6_ASTRA_MINOR_MODEL]: { ...NATIVE_GPT6_CONTEXT },
+  // Configured natives (providers.openai.models) are added at registration with the same pair.
 };
 
 // Snapshot rows plus roster-captured rows the snapshot lacks (see pinned-models.ts).
@@ -562,7 +567,8 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
   // Keyed on the SOURCE so an alias of a self-described row (gpt-6-astra-minor -> gpt-6-astra)
   // is admitted the same way an alias of a GPT-5.6 row (Daybreak -> Sol) always was; for a
   // self-described slug itself the source is the slug, so nothing else changes.
-  if (!sourceSlug.startsWith("gpt-5.6-") && !SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(sourceSlug)) {
+  if (!sourceSlug.startsWith("gpt-5.6-") && !SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(sourceSlug)
+    && !isConfiguredNativeOpenAiModel(slug)) {
     return undefined;
   }
   const source = PINNED_UPSTREAM_MODELS.get(sourceSlug);
@@ -621,6 +627,24 @@ export const UPSTREAM_NATIVE_ENTRIES: Map<string, RawEntry> = new Map(
   }),
 );
 
+// Configured natives join the three per-slug tables in place: other modules hold these exact
+// objects, so a replacement would go unseen. Built-in ids are never configured, so a removal
+// cannot delete a built-in row.
+subscribeConfiguredNativeOpenAiModels((current, removed) => {
+  for (const slug of removed) {
+    PINNED_NATIVE_CAPABILITY_ENTRIES.delete(slug);
+    UPSTREAM_NATIVE_ENTRIES.delete(slug);
+    delete NATIVE_OPENAI_CONTEXT_OVERRIDES[slug];
+  }
+  for (const slug of current) {
+    const pinned = pinnedNativeCapabilityEntry(slug);
+    if (pinned) PINNED_NATIVE_CAPABILITY_ENTRIES.set(slug, pinned);
+    const upstream = upstreamNativeEntryForSlug(slug);
+    if (upstream) UPSTREAM_NATIVE_ENTRIES.set(slug, upstream);
+    NATIVE_OPENAI_CONTEXT_OVERRIDES[slug] = { ...NATIVE_GPT6_CONTEXT };
+  }
+});
+
 export function upstreamNativeEntry(slug: string): RawEntry | null {
   const entry = UPSTREAM_NATIVE_ENTRIES.get(slug);
   if (!entry) return null;
@@ -672,7 +696,9 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
 export function nativeOpenAiSlugs(): string[] {
   const live = catalogNativeSlugs();
   const availableGated = cachedAvailableAccountGatedNativeModels();
-  const candidates = live.length > 0 ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]) : NATIVE_OPENAI_MODELS;
+  const candidates = live.length > 0
+    ? unique([...live, ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS, ...configuredNativeOpenAiModels()])
+    : NATIVE_OPENAI_MODELS;
   return candidates.filter(slug => (
     !ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(slug) || availableGated.has(slug)
   ));
@@ -881,5 +907,5 @@ function catalogNativeSlugs(): string[] {
 export function listCatalogNativeSlugs(): string[] {
   // Ensure documented additions (e.g. gpt-6-astra) appear even when the bundled catalog
   // predates the slug — mirrors nativeOpenAiSlugs() which already merges them for /v1/models.
-  return unique([...catalogNativeSlugs(), ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS]);
+  return unique([...catalogNativeSlugs(), ...DOCUMENTED_NATIVE_OPENAI_ADDITIONS, ...configuredNativeOpenAiModels()]);
 }

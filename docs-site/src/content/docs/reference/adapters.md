@@ -212,8 +212,11 @@ only on `/provider/v1/messages`; the pin applies only while the provider points 
 endpoint. It supports forwarding `prompt_cache_key`; this is separate
 from the OAuth adapter's session header and does not guarantee a provider cache hit.
 The OAuth `command-code` preset streams `/alpha/generate` as NDJSON. MiMo tool-call
-markup echoed by the gateway as text is removed when it duplicates a real call, or
-restored as a real call when a complete declared-tool call has no native counterpart.
+markup echoed by the gateway as text is removed when it duplicates a real call. After a
+clean stop or tool-call finish, a complete declared-tool call with no native counterpart
+is restored as a real call; an interrupted or failed turn leaves the markup as text. A
+freeform call echoed without its `</function>` close counts as complete once
+`</tool_call>` arrives. This applies to every MiMo model Command Code serves.
 
 ## `anthropic`
 
@@ -519,6 +522,9 @@ existing suffix precedence.
 - Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
   unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL
   targets Azure's v1 Responses API directly, so the adapter does not append `api-version`.
+- Shares the Responses recovery for reasoning state another provider produced: after a
+  `400 invalid_encrypted_content` it resends once without that state. See
+  [Proxy formats](/reference/proxy-formats/) under "Switching providers in an existing conversation".
 
 ## Image utilities (`image.ts`)
 

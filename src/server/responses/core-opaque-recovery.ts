@@ -8,6 +8,7 @@ import type { OcxParsedRequest } from "../../types";
 import type { RequestLogContext } from "../request-log";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { rememberReasoningReplayOpaqueBlobRejection } from "../../responses/reasoning-replay-cache";
+import { resolvedAdapterWire } from "../../responses/continuation-ownership";
 
 export const OPAQUE_RESPONSES_INPUT_TYPES = new Set([
   "reasoning",
@@ -22,6 +23,21 @@ export const FUNCTION_OUTPUT_TYPES = new Set(["function_call_output", "custom_to
 // backend-minted encrypted_content; the ChatGPT backend decrypts them in its function-output
 // path, so a cross-identity replay of those parts produces ENCRYPTED_FUNCTION_OUTPUT_REJECTION.
 export const AGENT_MESSAGE_TYPE = "agent_message";
+
+
+/**
+ * Whether the adapter serving this send speaks the Responses wire, as the adapter registry
+ * declares it.
+ *
+ * Recovery used to compare the adapter name with `"openai-responses"`. Azure OpenAI wraps the same
+ * passthrough under its own name, so an `invalid_encrypted_content` after moving a conversation
+ * onto Azure never recovered (#5583). The registry already records that relationship as
+ * `contractParent: "openai-responses"`, so reading the resolved wire covers Azure and any later
+ * wrapper of the same contract by construction, while every translated wire stays excluded.
+ */
+export function adapterSpeaksResponsesWire(adapterName: string): boolean {
+  return resolvedAdapterWire(adapterName) === "openai-responses";
+}
 
 
 export function encryptedFunctionOutputParts(output: unknown): boolean {
@@ -284,7 +300,7 @@ export function shouldAttemptOpaqueBlobRecovery(args: {
       && isEncryptedFunctionOutputRejection(args.errorBody)
     );
   return acceptedStatus
-    && args.adapterName === "openai-responses"
+    && adapterSpeaksResponsesWire(args.adapterName)
     && !args.alreadyAttempted
     && outboundResponsesBodyCarriesOpaqueBlob(args.outboundBody)
     && isSelfIdentifiedOpaqueBlobRejection(args.errorBody);
@@ -352,7 +368,7 @@ export async function opaqueBlobRejectionBodyForRecovery(
     isNonReplayableResponse(response)
     || response.status < 400
     || (response.status >= 500 && response.status !== 502)
-    || adapterName !== "openai-responses"
+    || !adapterSpeaksResponsesWire(adapterName)
     || alreadyAttempted
     || !outboundResponsesBodyCarriesOpaqueBlob(outboundBody)
   ) return undefined;
@@ -394,6 +410,9 @@ export async function consoleGoUploadRejectionBody(
 
 export function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
   parsed._stripReasoningEncryptedContent = true;
+  // The destination rejected state another serving identity minted. A reasoning item's id names
+  // an item in that identity's store, so it goes with the blob.
+  parsed._dropForeignReasoningItemIds = true;
   const rawBody = parsed._rawBody;
   if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return;
   const input = (rawBody as { input?: unknown }).input;

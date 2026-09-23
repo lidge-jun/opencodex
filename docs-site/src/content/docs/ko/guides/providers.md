@@ -263,8 +263,12 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 
 같은 모델로 가는 지원 경로는 [opencode.ai/auth](https://opencode.ai/auth)에서 발급받은 OpenCode Zen API 키를 쓰는 **`opencode-zen`** 프리셋입니다. 나중에 OpenCode가 키 없는 등급의 서드파티 경로를 공개하면 opencodex도 따라갈 수 있고, 그때까지 이 프리셋은 제한을 기록해 두는 역할을 합니다. 업스트림 약관: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
-대부분은 bearer 키와 함께 `openai-chat` 어댑터를 사용하며, Anthropic 호환 엔드포인트만 노출하는 일부
-(예: **Xiaomi MiMo**)는 `anthropic` 어댑터(`x-api-key`)를 사용합니다.
+대부분은 bearer 키와 함께 `openai-chat` 어댑터를 사용하며, **Xiaomi MiMo**(`xiaomi`) 같은
+Anthropic 호환 프리셋은 `anthropic` 어댑터(`x-api-key`)를 사용합니다. Xiaomi에는 OpenAI Chat
+프리셋 `xiaomi-mimo`와 토큰 플랜 프리셋 `mimo`도 있습니다. 세 프리셋 모두 기본 모델은 MiMo V2.6이며,
+`xiaomi-mimo`에서는 `mimo-v2.6-flash`, 나머지에서는 `mimo-v2.6-pro`를 사용합니다. Xiaomi는
+2026-10-21에 `mimo-v2.5`와 `mimo-v2.5-pro`를 리디렉션 없이 종료하므로, 저장된 V2.5 기본 모델을
+그전에 바꾸세요. opencodex가 자동으로 변경하지는 않습니다.
 Volcengine Coding Plan과 Agent Plan은 `openai-responses` 어댑터로 네이티브 Responses 엔드포인트를 사용합니다. 검증된 Ark Coding Plan 도구 연속 호출에서는 직전 턴이 돌려준 Responses `reasoning` 항목을 그대로 다시 보내면 `400 InvalidParameter`가 나므로, Coding Plan 프리셋은 연속 입력을 전달하기 전에 그 항목을 제거합니다. 그 턴의 reasoning 상태는 사라지며 `dropResponsesReasoningItems: false`로 끌 수 있습니다. 이미 `openai-chat`으로 저장된 Coding Plan 설정은 덮어쓰지 않고 Chat 그대로 둡니다. 바꾸려면 `adapter`를 `openai-responses`로, `responsesPath`를 `/responses`로 직접 수정하거나 프리셋을 지우고 다시 추가하세요.
 
 > **Volcengine의 세 가지 과금 경로:** `volcengine`은 종량제 Ark API,
@@ -302,12 +306,21 @@ embedding 모델을 함께 반환하므로 공식 도구 호출 API 예제에 �
 Nscale service token은 [Nscale Console](https://console.nscale.com)에서 만들고, Vultr inference key는
 [Vultr Console](https://my.vultr.com)의 구독 overview에서 복사합니다.
 
-**Command Code 검색:** 프리셋은 Command Code의 `/provider/v1/models` 목록을 고정된 Provider API
-호스트에서 읽고, 슬래시가 포함된 네이티브 모델 ID를 보존하며 live discovery를 256 KiB와 raw 행
-256개로 제한합니다. `ocx login command-code`는 브라우저 OAuth 로그인을 지원하며(기존 Command Code
-CLI 사용자는 `~/.commandcode/auth.json`의 로컬 CLI 자격 증명을 가져올 수 있음), 모델 카탈로그는
-계정 단위이며 로그인 후 인증된 discovery 엔드포인트에서 가져옵니다. 채팅 요청은 설정된 bearer
-키를 사용합니다. 키는 [Command Code Studio](https://commandcode.ai/studio/)에서 생성합니다.
+**Command Code 검색.** 프리셋은 고정된 Provider API 호스트에서 Command Code의
+`/provider/v1/models` 목록을 읽고, 프로바이더의 원래 ID를 보존하며 검색을 256 KiB와 원본 행
+256개로 제한합니다. `ocx login command-code`는 브라우저 로그인을 통한 OAuth를 지원합니다.
+기존 Command Code CLI 사용자는 `~/.commandcode/auth.json`에서 로컬 CLI 자격 증명을 가져올 수도
+있습니다. 모델 카탈로그는 계정별로 제공되며 로그인 후 인증된 검색 엔드포인트에서 가져옵니다.
+Provider API 프리셋(`commandcode`)은 현재 설정된 활성 키를 전송합니다. 대부분의 모델 ID에는
+Bearer 헤더를 사용하는 Chat Completions를 쓰지만, `claude-*` ID에는 `x-api-key`를 사용하는
+Anthropic Messages를 씁니다. Command Code가 해당 모델을 `/provider/v1/messages`에서만 제공하기
+때문입니다. 다른 엔드포인트에 `commandcode`라는 이름을 재사용한 프로바이더는 자체 통신 방식을
+유지합니다. OAuth 프리셋(`command-code`)은 저장된 계정 bearer로 인증된 모델 검색을 수행하고,
+`/alpha/generate`에서 생성 결과를 NDJSON으로 스트리밍합니다. 게이트웨이가 실제 도구 호출과 중복된
+MiMo 도구 호출 마크업을 텍스트로 되돌리면 해당 마크업을 제거합니다. MiMo 모델에서 선언된 도구 호출이
+완전하지만 대응하는 네이티브 호출이 없다면, 정상 종료된 뒤에만 이를 복원합니다. 중단되거나 필터링된
+턴에서는 마크업을 텍스트로 남깁니다. Provider API 키는
+[Command Code Studio](https://commandcode.ai/studio/)에서 생성하세요.
 
 **Command Code 할당량:** 대시보드와 `ocx account refresh`는 정규 호스트 `https://api.commandcode.ai`에서 `/alpha/billing/credits` 창(5시간 및 주간)을 조회합니다. OAuth 프리셋(`command-code`)은 저장된 계정 bearer를 사용하고, Provider-API 키 프리셋(`commandcode`)은 현재 설정된 활성 키를 사용합니다. 사용자가 바꾼 유사 base URL은 조회하지 않습니다. Command Code가 기간 사용량을 함께 반환하면 남은 monthly / purchased / free credits가 USD 창으로 표시됩니다.
 

@@ -231,6 +231,9 @@ discovery에 모두 적용됩니다.
 - 요청 구성은 Responses passthrough에 맡깁니다. `baseUrl`에 해석되지 않은 템플릿 placeholder가
   없는지 검증하고 `Authorization`을 `api-key`로 바꿉니다. 설정 URL이 Azure v1 Responses API를
   직접 가리키므로 `api-version`은 덧붙이지 않습니다.
+- 다른 프로바이더가 만든 추론 상태에 대한 Responses 복구를 똑같이 적용합니다.
+  `400 invalid_encrypted_content`를 받으면 그 상태(암호화된 내용과 추론 항목의 `rs_…` id)를 빼고
+  한 번만 다시 보냅니다.
 
 ## 이미지 유틸리티 (`image.ts`)
 
