@@ -603,6 +603,20 @@ function selectedCodexToken(headers: Headers): { accessToken: string; chatgptAcc
   };
 }
 
+/**
+ * The workspace account id a request-owned `main` credential materializes under, or
+ * `undefined` when the caller's headers carry none. This is the `chatgpt-account-id`
+ * `materializeCodexUpstreamAuth` would set for a caller-owned `{ kind: "main" }` context,
+ * read here without touching a credential store so a rotation gate can compare workspace
+ * scope before a send is ever built.
+ */
+export function callerCodexWorkspaceAccountId(headers: Headers): string | undefined {
+  const explicit = headers.get("chatgpt-account-id");
+  if (explicit) return explicit;
+  const bearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim();
+  return bearer ? extractAccountId(undefined, bearer) : undefined;
+}
+
 function assertMaterializedReserve(headers: Headers, ctx: CodexAuthContext, options: CodexAuthMaterializationOptions): void {
   if (!requiresReserveAuthorization(options.config, options.modelId, options.admission)) return;
   assertReserveAdmission(options.config!);

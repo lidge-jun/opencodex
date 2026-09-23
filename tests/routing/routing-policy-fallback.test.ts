@@ -2,10 +2,13 @@ import { describe, expect, test } from "bun:test";
 
 import { formatErrorResponse } from "../../src/bridge";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
+import { fetchWithTransientRetry, isNonReplayableResponse } from "../../src/lib/upstream-retry";
+import { shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core-codex-account";
 import type { OcxConfig } from "../../src/types";
 import { beginRequestAttempt, type RequestLogContext } from "../../src/server/request-log";
 import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
+import { parseSyntheticRowId } from "../../src/server/fast-row";
 import {
   handleResponsesWithPolicyFallback,
   rankPolicyFallbackCandidates,
@@ -49,6 +52,32 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  test.each([false, true])("reset refusal stays terminal across policy and account recovery (replacement=%s)", async replacement => {
+    let sends = 0;
+    let coreCalls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, {} as RequestLogContext, {}, {
+      runCore: async (req, _config, context, options) => {
+        coreCalls += 1;
+        const body = await req.json();
+        options.onRequestBodyParsed?.(body);
+        body.input = "attempt-local recovered text";
+        context.routeDecision = policyTrace();
+        return fetchWithTransientRetry(async () => {
+          sends += 1;
+          if (sends === 1) throw Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+          return new Response("busy", { status: 502 });
+        }, { attempts: 3, claimAmbiguousResend: () => replacement });
+      },
+    });
+
+    expect(response.status).toBe(429);
+    expect(isNonReplayableResponse(response)).toBe(true);
+    await expect(shouldRetryCodexPoolAccountQuota(response)).resolves.toBe(false);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+    expect(coreCalls).toBe(1);
+    expect(sends).toBe(replacement ? 2 : 1);
+  });
+
   test("policy hops retain only the original sidecar snapshot outside primary headers", async () => {
     const authorization = `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "sidecar-account" })}`;
     const initial = request();
@@ -108,6 +137,117 @@ describe("policy candidate fallback", () => {
 
     expect(response.status).toBe(204);
     expect(cloneCalls).toBe(0);
+  });
+
+  test("retries from an immutable snapshot of the initially parsed body", async () => {
+    const trace = policyTrace();
+    const logCtx = { routeDecision: trace } as RequestLogContext;
+    const seenInputs: unknown[] = [];
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, logCtx, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls += 1;
+        const body = await req.json() as { input: unknown; model: string };
+        options.onRequestBodyParsed?.(body);
+        seenInputs.push(body.input);
+        context.routeDecision = trace;
+        if (calls === 1) {
+          body.input = "recovered plaintext";
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        return Response.json({ status: "completed" });
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(seenInputs).toEqual(["hello", "hello"]);
+  });
+
+  test("non-policy requests do not deep-clone their parsed body", async () => {
+    const body = {
+      model: "provider-a/model-a",
+      input: { get content(): string { throw new Error("unexpected deep clone"); } },
+    };
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, {} as RequestLogContext, {}, {
+      runCore: async (_req, _config, _context, options) => {
+        options.onRequestBodyParsed?.(body);
+        return new Response(null, { status: 204 });
+      },
+    });
+    expect(response.status).toBe(204);
+  });
+
+  test.each(["ocx/primary--fast", "ocx/primary--high"])("decorated policy selector %s keeps an immutable candidate-retry body", async selector => {
+    const config = {
+      port: 0, defaultProvider: "provider-a", cursorEffortRows: true,
+      providers: {
+        "provider-a": { adapter: "openai-chat", baseUrl: "https://a.example/v1", apiKey: "a", models: ["model-a"] },
+        "provider-b": { adapter: "openai-chat", baseUrl: "https://b.example/v1", apiKey: "b", models: ["model-b"] },
+      },
+      routingProfiles: { daily: { alias: "ocx/primary", candidates: [{ provider: "provider-a", model: "model-a" }] } },
+    } as OcxConfig;
+    const parsed = parseSyntheticRowId(selector, config);
+    expect(parsed.fastRow?.baseId ?? parsed.effortRow?.baseId).toBe("ocx/primary");
+    const trace = policyTrace();
+    const seen: Array<{ model: string; input: unknown }> = [];
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: selector, input: [{ role: "user", content: "original" }] }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, config, { routeDecision: trace } as RequestLogContext, {}, {
+      runCore: async (attempt, _config, context, options) => {
+        const body = await attempt.json() as { model: string; input: Array<{ role: string; content: string }> };
+        options.onRequestBodyParsed?.(body);
+        seen.push({ model: body.model, input: structuredClone(body.input) });
+        context.routeDecision = trace;
+        if (seen.length === 1) {
+          body.input[0]!.content = "mutated by recovery";
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        return Response.json({ status: "completed" });
+      },
+    });
+    expect(response.status).toBe(200);
+    expect(seen).toEqual([
+      { model: selector, input: [{ role: "user", content: "original" }] },
+      { model: "provider-b/model-b", input: [{ role: "user", content: "original" }] },
+    ]);
+  });
+
+  test("the retry snapshot survives mutation inside the input array", async () => {
+    // The top-level field swap above also passes under a shallow `{...body}` copy. The
+    // real leaks mutate deeper: the sanitizer splices input entries in place and the
+    // assignment injector rewrites inside the same array. Pin a nested mutation so a
+    // shallow-copy regression cannot stay green.
+    const trace = policyTrace();
+    const logCtx = { routeDecision: trace } as RequestLogContext;
+    const seenInputs: unknown[] = [];
+    let calls = 0;
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "policy/daily", input: [{ role: "user", content: "hello" }], stream: false }),
+    });
+    const response = await handleResponsesWithPolicyFallback(req, {} as OcxConfig, logCtx, {}, {
+      runCore: async (req, _config, context, options) => {
+        calls += 1;
+        const body = await req.json() as { input: { role: string; content: string }[]; model: string };
+        options.onRequestBodyParsed?.(body);
+        seenInputs.push(JSON.parse(JSON.stringify(body.input)));
+        context.routeDecision = trace;
+        if (calls === 1) {
+          body.input.splice(0, 1, { role: "assistant", content: "recovered plaintext" });
+          return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
+        }
+        return Response.json({ status: "completed" });
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(seenInputs).toEqual([
+      [{ role: "user", content: "hello" }],
+      [{ role: "user", content: "hello" }],
+    ]);
   });
 
   test("a local input-admission refusal hops instead of ending the chain (#1524)", async () => {

@@ -127,9 +127,19 @@ discarded to manufacture a bare name.
 
 Function-call wrappers around freeform bodies are restored by
 `src/responses/apply-patch-envelope.ts`. The declared `input` field is authoritative. For bare
-`exec` and `apply_patch`, one tool-specific alternate field or one complete outer Markdown fence
+`exec` and `apply_patch` (including their `default.`-prefixed provider aliases), one tool-specific alternate field or one complete outer Markdown fence
 is recoverable because the wrapper is otherwise unusable; two alternate fields are ambiguous and
 therefore remain untouched. Foreign freeform grammars never receive that compatibility rewrite.
+
+For a verified code-mode catalog, `src/responses/code-mode-shell-input.ts` recognizes a
+structured `cmd` or `command` object submitted under `exec` and the canonical `input` wrapper.
+Only known shell options and one command field are accepted, and any command that parses as
+JavaScript remains unchanged, including ambiguous single identifiers. The existing helper
+compiler serializes the recognized arguments into `tools.exec_command(...)` and emits its result
+through `text(...)`; the proxy executes nothing. JSON, native Responses and adapter-event SSE
+use the same completion rule. Possible shell-object previews stay held until completion so raw
+JSON or shell text cannot precede the compiled JavaScript. Ordinary JavaScript stays progressive.
+`tests/responses/responses-code-mode-shell-compile.test.ts` covers those paths and boundaries.
 
 #### Schema-bound flat shell repair
 
@@ -440,12 +450,25 @@ Native Responses participates in the same pre-stream OAuth HTTP-429 account rota
 bridge. It uses the existing account quorum, cooldown and three-rotation request cap, refreshes
 the complete credential/transport/replay identity, and attributes usage to the serving account.
 Single-account installs do not retry; a missing alternate credential preserves the original error.
+Send-budget refusal is attributed as a withheld rotation only when a model-family-aware eligibility
+check, which applies no cooldown and advances no rotation, confirms from the live roster that at
+least two accounts exist and an alternate account is not currently cooled.
 
-`shouldRetryCodexPoolAccountQuota` withholds that rotation when the 429 or 402 body names an
-organization- or project-scoped exhaustion (`codexScopedExhaustionCode` in
-`src/codex/quota-rejection.ts`). Every credential inside the refusing organization meets the same
-counter, so the move would pay a second cold prompt prefix for no new capacity. Withholding the
-move does not withhold the accounting: `src/server/responses/passthrough-delivery.ts` applies the
+`shouldRetryCodexPoolAccountQuota` admits that rotation when the 429 or 402 body names an
+organization- or project-scoped exhaustion because the response does not identify the refusing
+scope. After resolving an alternate — on `/v1/responses` and on the single bounded send the
+native `/responses/compact` path resolves — the rotation path uses `codexScopedExhaustionCode`
+from `src/codex/quota-rejection.ts` to withhold organization-level retries only when both
+credentials have the same known workspace account id. A stored Pool or main-pool alternate
+supplies that id directly; a request-owned `main` alternate is bound by the caller credential's
+own `chatgpt-account-id` via `callerCodexWorkspaceAccountId`. Project exhaustion remains
+retryable because no project identity is available. Credentials in distinct or unknown
+workspaces therefore retain failover, while a proven same-workspace move within the refused
+request cannot pay a second cold prompt prefix for no new capacity. The suppression covers that
+in-request move only: later requests still select by per-account health, so a same-workspace
+sibling that has not itself been refused stays selectable. A suppressed move still records the normalized 429/402
+on the refused account, so a 5xx-wrapped quota body cools it rather than letting its wire
+status record as transient. `src/server/responses/passthrough-delivery.ts` applies the
 response's quota headers to the serving account and records the 429 outcome on the ordinary
 delivery path, so the account still earns its cooldown and leaves the selection pool. The gate
 fails closed — an empty, truncated, unparseable, duplicate-keyed or aborted body keeps the broad
@@ -573,7 +596,9 @@ resumes by expansion rather than by asking the client to replay. Routed custom-t
 custom result has no local call, because its original wire type cannot be established and guessing it
 would send an unmatched result upstream. The check resolves the selected wire protocol and the
 request's own tool declarations after final route selection, so stateful destinations keep their
-upstream-owned native function and native-only custom continuations. Explicit input still receives
+upstream-owned native function and supported native custom continuations. An explicit custom-tool
+denial also requests recovery for unmapped historical results without a live catalog; history never
+adds current tool authorization. The [custom-tool compatibility contract](../providers/chat-compat.md#declared-hosted-tool-denials) owns lowering and final validation. Explicit input still receives
 orphan repair; this path asks the client to replay rather than reconstructing history. Content-channel reasoning stays content in SSE, JSON and stored replay output; native
 summary items and opaque blobs retain their upstream representation. Full-content replay
 fingerprints compare the same client-visible items without content-to-summary conversion.
@@ -630,6 +655,14 @@ Normalization runs on every inbound wire. `normalizeDeclaredToolName` and `decla
 declared bare tool and to rewrite code-mode helper names into the declared `exec`. Both return their
 input unchanged when the set is absent, so the set reaches the bridge on every wire and enforcement
 is expressed by a separate flag rather than by withholding it.
+
+Muse may also wrap an already-flattened namespace identity, for example
+`default.mcp__server__tool`. That form resolves only when the complete suffix is an exact declared
+name containing the flattened `__` delimiter and neither explicit `default.` nor `default__`
+identity exists. It does not let `default.tool` borrow a namespaced tool's manufactured bare alias,
+and an unknown suffix still reaches the undeclared-tool failure.
+
+> Decision record: [ADR-0099](../decisions/ADR-0099-responses-http-sse.md)
 
 The passthrough guard resolves an emitted name through that same `normalizeDeclaredToolName`, so
 whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
@@ -941,6 +974,17 @@ counter rather than holding a second. A replacement never widens a send budget: 
 fit inside the allowance the leg already had, and it is charged to the same counter every other
 send goes through.
 
+OpenCode Go inference POSTs obey this same operator gate; the destination itself does not
+authorize a replay. If the granted pre-header replacement returns a transient 5xx, the reset
+layer cancels that body and returns the non-replayable refusal. Policy fallback and account
+rotation preserve that marker instead of interpreting its 429 as fresh quota evidence.
+
+`src/server/responses/policy-fallback.ts` retains one deep snapshot of the first parsed wire
+body only for a policy selector, including supported synthetic Fast and effort forms. Candidate
+retries serialize that snapshot, so recovery mutations
+from a previous attempt cannot become another provider's input. Object-identity metadata is
+not serialized and must be established independently by each attempt.
+
 The number of replacements is the request's as well. A leg reads it from `route.provider`, which
 credential rotation, OAuth refresh, transport resolution and each combo target reassign inside one
 request, so the grant is held to the smallest ceiling any leg has presented rather than to
@@ -1098,17 +1142,21 @@ combo recall, and do not publish replacement combo/handoff recall. They never ch
 conversation's configured model or any compaction request outside the configured triggers.
 
 `compactionRoutingKeepsProviderIdentity` compares the source model's concrete route with the
-selected route (provider name, Codex account mode and namespace; combos on either side never
-match, and a bare source model the lane remembers as a combo target counts as a combo source,
-recorded as `sourceCombo` when the override is applied, and a configured combo target is recorded as
-`targetCombo` so its concretely routed children stay portable too). A matching identity keeps the caller's credential and may use the native compact
-endpoint. A mismatch marks the credential domain as rewritten, exactly like a shadow
+selected route (provider name, Codex account mode and namespace; policy selectors and combos on
+either side never match, and a bare source model the lane remembers as a combo target counts as a
+combo source, recorded as `sourceCombo` when the override is applied, and a configured combo target
+is recorded as `targetCombo` so its concretely routed children stay portable too). A matching
+identity keeps the caller's credential and may use the native compact endpoint. A mismatch marks
+the credential domain as rewritten, exactly like a shadow
 intercept, and forces the portable summarizer even for a native-capable target: `compact.ts`
 skips `/responses/compact`, and `request-prepare.ts` sets `parsed._portableCompaction`, which
 `request-sidecar-auth.ts` (`routedCompaction`) and the passthrough adapter's compaction body
 build both honor for canonical ChatGPT destinations. Native ciphertext is replayable only by the
 backend that minted it; the conversation model would otherwise resume with an omission marker
 in place of its history.
+
+Identity checks remove synthetic fast/effort suffixes first. A stale selector that only resolves
+through the default provider cannot establish the original serving identity and stays portable.
 
 `tests/responses/responses-compaction-override.test.ts` covers trigger selection, config validation,
 native and routed handlers, same-provider credential retention, cross-provider portable summaries
@@ -1242,10 +1290,12 @@ target's own recovery decision, while the physical-send total is what binds ever
 The request's send budget bounds how many times it may reach upstream; the spend ledger bounds
 what those sends may cost, and it is the only bound here that survives a restart. Its production
 caller is `request-spend.ts`, installed on the execution budget at genuine ingress in `core.ts`
-and parked on the log context so `addFinalRequestLog` can settle it.
+and parked on the log context so `addFinalRequestLog` can settle it. Native Chat installs the
+same tracker before its independent physical-send ladder and charges it immediately before each
+dispatch, so taking that fast path cannot bypass root, identity, or provider-pool ceilings.
 
-It books by observing the budget's own send counter rather than by being called from each
-dispatch site. That counter moves exactly once per physical send — a reservation increments it, a
+The Responses path books by observing its budget's own send counter rather than calling each
+dispatch site; Native Chat directly charges messages, tool definitions and the output ceiling. That counter moves exactly once per physical send — a reservation increments it, a
 refund decrements it, and an externally reported send settles against a booking already counted —
 so one ledger entry per increment is one entry per send, and a dispatch path added later cannot
 forget to book. The previous attempt at this wiring shipped the whole reserve/dispatch/settle

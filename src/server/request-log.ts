@@ -169,8 +169,7 @@ export interface RequestLogContext {
   /** Final-attempt tier summary; attempt rows remain the accounting source of truth. */
   tierOutcome?: AttemptTierOutcome;
   resolvedModel?: string;
-  /** Model the upstream actually served (openai-model header or response body), recorded even
-   * when a route/virtual resolution owns resolvedModel, so an upstream reroute stays visible. */
+  /** Upstream served model, retained beside resolvedModel so an upstream reroute stays visible. */
   servedModel?: string;
   /** The exact model id sent upstream; recorded when a route/virtual rewrite makes it differ
    * from the client-facing `model`, so a served-model mismatch can be judged against the wire. */
@@ -186,6 +185,8 @@ export interface RequestLogContext {
    * is reserved up front and settlement corrects it.
    */
   spendOutputCeilingTokens?: number;
+  /** Pre-send input estimate reserved for spend only; unlike usageLogInputTokens it never enters usage. */
+  spendInputEstimateTokens?: number;
   /** Settles this request's durable spend entries from `addFinalRequestLog`. */
   spendTracker?: RequestSpendSettlement;
   attempts?: PersistedUsageAttempt[];

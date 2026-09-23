@@ -1681,7 +1681,16 @@
     "platform-dialog-guard.test.ts": "gui",
     "api-key-catalog-authority.test.ts": "providers",
     "release-resume-identity.test.ts": "ci-workflows",
-    "update-bun-ownership-lease.test.ts": "update"
+    "update-bun-ownership-lease.test.ts": "update",
+    "cursor-continuation-invariants.test.ts": "providers/cursor",
+    "chat-native-spend.test.ts": "responses",
+    "responses-compaction-policy-identity.test.ts": "responses",
+    "server-auth-scoped-quota.test.ts": "server",
+    "responses-code-mode-shell-compile.test.ts": "responses",
+    "cursor-request-compat.test.ts": "providers/cursor",
+    "responses-xai-request-compat.test.ts": "responses",
+    "responses-continuation-boundaries.test.ts": "responses",
+    "responses-custom-tool-historical-replay.test.ts": "responses"
   },
   "migrated": [
     "adapters",

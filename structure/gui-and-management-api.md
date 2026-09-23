@@ -543,6 +543,16 @@ status, so an unexpected management response cannot add raw upstream material.
 
 > Decision record: [ADR-0078](decisions/ADR-0078-usage-accounting.md)
 
+Requested selectors longer than 130 characters persist as a prefix plus a digest of the complete
+selector; the request-history exact-match filter applies the same idempotent encoding. The
+derived index rebuilds when its projection version changes, encoding older raw-selector rows
+from canonical JSONL so exact filters still find them. Because the encoding is idempotent, a
+literal selector equal to another selector's persisted form shares that
+identity (`tests/usage/request-history-index.test.ts` pins it). Serving-model
+identities remain unchanged. Only historical Codex `openai`, `chatgpt` and `openai-multi` main labels
+collapse for reporting; configured provider names ending in `-main` remain separate. CLI access-key
+usage is unavailable without an ISO-8601 UTC attribution timestamp, rather than a measured zero or
+never-used key.
 `src/usage/log.ts` writes append-only JSONL to `~/.opencodex/usage.jsonl` with file mode `0o600`
 inside an owner-only `0o700` directory. Consecutive appends reuse the directory and permission
 check for at most one second; the first append at or after that boundary attempts to reapply both
@@ -748,6 +758,8 @@ converge the Codex catalog once and return its disposition. The Models UI owns a
 picker data resource so failure cannot erase the ordinary model inventory; Apply publishes through
 the resource's generation fence, and Most used reads usage only on explicit Apply. Stored mode
 survives availability drift, while complete/native custom orders await explicit replacement.
+The Models app-server status read is owned by its API-base/restart effect, not the picker tab;
+switching to Combos preserves a pending read and its existing stale-state banner.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`. Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration and records its isolated owner and support limits.
 

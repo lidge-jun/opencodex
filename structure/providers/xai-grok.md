@@ -24,11 +24,22 @@ retains xAI provider behavior; see
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
 
+## Responses request compatibility
+
+`src/adapters/xai-web-search.ts` omits `auto`/`none` tool selection after normalization if no tools
+remain in either the top-level catalog or `additional_tools`. Cached-only search removal follows
+the same rule. When an omitted `none` selector stated the turn's only client-call prohibition,
+the explicit empty `tools` catalog preserves that denial. Available forced function selectors remain intact.
+`src/adapters/openai-responses/request-strips.ts` preserves valid xAI custom-call item ids and
+repairs missing/invalid ids from a stable digest of the JSON-encoded `(call_id, name, input)`
+string tuple. Incomplete tuples remain unchanged, and call/result pairing uses the original call id.
+Other destinations retain their existing item-id behavior, including OpenAI `store:false`.
+
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grok's Responses path shares `src/responses/apply-patch-envelope.ts` for freeform restoration.
 The declared `input` field remains authoritative; alternate-field and outer-fence recovery is
-limited to unambiguous bare `exec` and `apply_patch` calls and does not rewrite foreign grammars.
+limited to unambiguous bare or `default.`-prefixed `exec` and `apply_patch` calls and does not rewrite foreign grammars.
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
 `devlog/_fin/260716_grok_build_hardening/`.

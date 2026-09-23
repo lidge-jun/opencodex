@@ -10,7 +10,7 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { clearCodexWebSocketRegistry, getTrackedCodexWebSocketCountForAccount } from "../../src/codex/websocket-registry";
+import { getTrackedCodexWebSocketCountForAccount } from "../../src/codex/websocket-registry";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { clearAccountNeedsReauth, clearAccountQuota, getAccountQuota, isAccountNeedsReauth, markAccountNeedsReauth, updateAccountQuota } from "../../src/codex/auth-api";
 import {
@@ -58,6 +58,7 @@ import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debu
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { deferredResetSseUpstream } from "../helpers/deferred-reset-sse-upstream";
+import { POOL_RETRY_TEST_DIR, canonicalDirect, redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
@@ -115,44 +116,10 @@ function managementHeaders(initial?: HeadersInit): Headers {
   return headers;
 }
 
-const canonicalDirect = {
-  adapter: "openai-responses",
-  baseUrl: "https://chatgpt.com/backend-api/codex",
-  authMode: "forward",
-  codexAccountMode: "direct",
-} as const;
-
 function poolProviders(): OcxConfig["providers"] {
   return {
     openai: { ...canonicalDirect, codexAccountMode: "pool" },
   };
-}
-
-function redirectCanonicalCodexTo(baseUrl: string): void {
-  const prefix = "/backend-api/codex";
-  const currentWebSocket = globalThis.WebSocket;
-  // These fixtures serve HTTP/SSE only. Refuse the native upstream upgrade
-  // deterministically so its existing SSE fallback stays on the mocked fetch;
-  // downstream loopback WebSockets and other destinations remain real.
-  globalThis.WebSocket = new Proxy(currentWebSocket, {
-    construct(target, args, newTarget) {
-      const url = new URL(String(args[0]));
-      if (url.protocol === "wss:" && url.hostname === "chatgpt.com"
-        && (url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))) {
-        throw new Error("HTTP-only Codex fixture rejects native upstream WebSocket");
-      }
-      return Reflect.construct(target, args, newTarget);
-    },
-  });
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const url = new URL(requestUrl);
-    if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
-      const target = new URL(`${url.pathname.slice(prefix.length)}${url.search}`, baseUrl);
-      return originalGlobalFetch(target, init);
-    }
-    return originalGlobalFetch(input, init);
-  }) as typeof fetch;
 }
 
 function stubModelDiscoveryFor(...origins: string[]): void {
@@ -189,10 +156,11 @@ afterEach(() => {
   resetDebugSettingsForTests();
   resetDebugLogBufferForTests();
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  if (existsSync(POOL_RETRY_TEST_DIR)) removeTreeWithRetry(POOL_RETRY_TEST_DIR);
 });
 
 const { startPoolRetryHarness, stopPoolRetryHarness, rejectionResponse, expectOriginal400, unsupportedModelBody } =
-  createPoolRetryHarness({ testDir: TEST_DIR, originalFetch: originalGlobalFetch,
+  createPoolRetryHarness({ testDir: POOL_RETRY_TEST_DIR, originalFetch: originalGlobalFetch,
     redirectCanonicalCodexTo, canonicalDirect });
 
 describe("Responses request identity handoff", () => {
@@ -3533,7 +3501,7 @@ describe("server local API auth", () => {
 
   test("valid JSON wrong top-level shape never authorizes a pool retry", async () => {
     // One harness, five bodies — same reason as the sibling above. Each
-    // startPoolRetryHarness() wipes and recreates TEST_DIR, binds a server, and
+    // startPoolRetryHarness() wipes and recreates its OPENCODEX_HOME directory, binds a server, and
     // redirects global fetch; five of those did not fit Bun's 5s default on a
     // Windows runner, and the request still in flight when the budget expired
     // raced the next test through that same global fetch.

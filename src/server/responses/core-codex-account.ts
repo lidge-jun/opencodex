@@ -41,6 +41,7 @@ import { isNativeMainTrafficBlocked } from "../../codex/native-profile-startup";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { slugsEquivalent } from "../../providers/slug-codec";
 import {
+  callerCodexWorkspaceAccountId,
   codexProbeLeaseId,
   codexTransientProbeGrant,
   codexProbeQuotaScope,
@@ -292,15 +293,11 @@ export async function shouldRetryCodexPoolAccountQuota(
   // body carries no quota evidence either, but the marker is the contract, not the prose.
   if (isNonReplayableResponse(response)) return false;
   if (response.status === 402 || response.status === 429) {
-    // Status alone used to authorize the move, which is right for a limit the ACCOUNT owns and
-    // wrong for one it merely belongs to. An organization- or project-scoped exhaustion refuses
-    // every credential inside that organization, so the second account meets the same counter
-    // and the only thing the rotation buys is a second cold prompt prefix (#4546). Positive
-    // evidence is required to withhold it: the helper fails closed, so an unreadable or
-    // ambiguous body keeps the broad #584 behaviour unchanged, and `rate_limit_exceeded`,
-    // `slow_down` and plan-level exhaustion still rotate exactly as before.
-    const { codexScopedExhaustionCode } = await import("../../codex/quota-rejection");
-    return await codexScopedExhaustionCode(response, { signal }) === undefined;
+    // The response does not identify the organization or project whose quota was exhausted.
+    // Resolve the alternate before deciding whether its known workspace identity proves that an
+    // organization-scoped retry would be futile. Until then, preserve the broad #584 behaviour.
+    void signal;
+    return true;
   }
   if (response.status < 500 || response.status >= 600) return false;
   try {
@@ -314,6 +311,20 @@ export async function shouldRetryCodexPoolAccountQuota(
   } catch {
     return false;
   }
+}
+
+
+export async function shouldRetryCodexScopedQuotaOnAlternate(
+  response: Response,
+  firstWorkspaceAccountId: string,
+  alternateWorkspaceAccountId: string | undefined,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (!firstWorkspaceAccountId || firstWorkspaceAccountId !== alternateWorkspaceAccountId) return true;
+  const { codexScopedExhaustionCode } = await import("../../codex/quota-rejection");
+  const code = await codexScopedExhaustionCode(response, { signal });
+  // Workspace identity binds organization-level limits, but the response supplies no project id.
+  return code === undefined || code === "project_spend_limit_exceeded";
 }
 
 
@@ -545,6 +556,22 @@ export async function retryCodexPoolOnAlternateAccount(
       writerGeneration: firstAuthCtx.writerGeneration,
     });
   };
+  // A body-confirmed quota response may arrive under HTTP 5xx. A path that returns the
+  // first response without a move must still record the NORMALIZED outcome: the ordinary
+  // terminal recorder sees only that wire status and would misclassify it as transient,
+  // leaving the exhausted account immediately selectable next turn.
+  const recordWrappedQuotaOutcome = (): void => {
+    if (outcomeStatus === firstResponse.status || (outcomeStatus !== 429 && outcomeStatus !== 402)) return;
+    recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
+      ...codexQuotaOutcomeMeta(firstResponse),
+      threadId: firstAuthCtx.affinityKey,
+      modelId: route.modelId,
+      probeLeaseId: codexProbeLeaseId(firstAuthCtx),
+      probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
+      transientProbe: codexTransientProbeGrant(firstAuthCtx),
+      writerGeneration: firstAuthCtx.writerGeneration,
+    });
+  };
   if (outcomeStatus === 400 && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(route.modelId)) {
     invalidateCodexModelEntitlementsForAccount(firstAuthCtx.accountId);
     let refreshed;
@@ -641,23 +668,42 @@ export async function retryCodexPoolOnAlternateAccount(
     && retryAuthCtx?.kind !== "main-pool"
     && retryAuthCtx?.kind !== "main"
   ) {
-    // A body-confirmed quota response may arrive under HTTP 5xx. Without an alternate,
-    // the ordinary terminal recorder sees only that wire status and would misclassify it
-    // as transient, leaving the exhausted account immediately selectable next turn.
-    if (outcomeStatus !== firstResponse.status && (outcomeStatus === 429 || outcomeStatus === 402)) {
-      recordCodexUpstreamOutcome(config, firstAuthCtx.accountId, outcomeStatus, {
-        ...codexQuotaOutcomeMeta(firstResponse),
-        threadId: firstAuthCtx.affinityKey,
-        modelId: route.modelId,
-        probeLeaseId: codexProbeLeaseId(firstAuthCtx),
-        probeQuotaScope: codexProbeQuotaScope(firstAuthCtx),
-        transientProbe: codexTransientProbeGrant(firstAuthCtx),
-        writerGeneration: firstAuthCtx.writerGeneration,
-      });
-    }
+    recordWrappedQuotaOutcome();
     // No usable alternate was resolved, so the reserved move never becomes a send.
     accountMovePermit?.release();
     recordUnmovedTransientOutcome();
+    return { kind: "no-alternate" };
+  }
+
+  if (
+    (outcomeStatus === 429 || outcomeStatus === 402)
+    && !await shouldRetryCodexScopedQuotaOnAlternate(
+      firstResponse,
+      firstAuthCtx.chatgptAccountId,
+      retryAuthCtx.kind === "pool" || retryAuthCtx.kind === "main-pool"
+        ? retryAuthCtx.chatgptAccountId
+        // A request-owned `main` alternate has no stored account id; its workspace
+        // identity is what the caller's own credential materializes upstream.
+        : callerCodexWorkspaceAccountId(callerAuthHeaders),
+      options.abortSignal,
+    )
+  ) {
+    // Suppressing the move is not suppressing the evidence: a same-workspace refusal
+    // still records its normalized quota outcome on the account that produced it.
+    recordWrappedQuotaOutcome();
+    accountMovePermit?.release();
+    releaseCodexAuthContextProbeLease(retryAuthCtx);
+    return { kind: "no-alternate" };
+  }
+
+  // The scope classification above reads the rejection body asynchronously, so the
+  // request may have been cancelled while it ran. Re-check before the send below
+  // mutates routing state or spends the alternate on a caller that is gone.
+  if (options.abortSignal?.aborted) {
+    recordWrappedQuotaOutcome();
+    recordUnmovedTransientOutcome();
+    accountMovePermit?.release();
+    releaseCodexAuthContextProbeLease(retryAuthCtx);
     return { kind: "no-alternate" };
   }
 

@@ -114,6 +114,8 @@ export interface HandleResponsesOptions {
   callerDirectAuth?: CallerDirectAuth | null;
   /** Internal recursion guard; callers outside this module must not set it. */
   comboAttempt?: boolean;
+  /** Internal handoff: this combo was selected by shadow-call interception. */
+  shadowCallIntercepted?: boolean;
   compactionRoutingOverride?: CompactionRoutingOverride | null;
   /** Internal combo handoff for one parent-validated continuation snapshot. */
   comboReplaySnapshot?: {

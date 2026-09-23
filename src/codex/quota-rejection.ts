@@ -349,9 +349,10 @@ export async function codexScopedExhaustionCode(
  * Status alone and message text are intentionally insufficient. The broad
  * alternate-account retry remains eligible for 429/402 to preserve #584.
  *
- * The one carve-out from that breadth is an organization- or project-scoped exhaustion
- * ({@link SCOPED_EXHAUSTION_CODE_VALUES}), which reports `alternateRetryEligible: false`
- * because every credential inside the refusing limit would be refused by the same counter.
+ * Organization- or project-scoped exhaustion ({@link SCOPED_EXHAUSTION_CODE_VALUES}) remains
+ * alternate-retry eligible here because the response does not identify the refusing scope. The
+ * account-rotation path may suppress the send later when the resolved alternate carries binding
+ * evidence that it shares an organization-level counter.
  */
 export async function classifyCodexPreStreamRejection(
   response: Response,
@@ -377,7 +378,10 @@ export async function classifyCodexPreStreamRejection(
     });
   }
   if (scoped) {
-    return rejection(status, "scoped-quota-exhaustion", { scopedExhaustionCode: scoped });
+    return rejection(status, "scoped-quota-exhaustion", {
+      alternateRetryEligible: true,
+      scopedExhaustionCode: scoped,
+    });
   }
   return rejection(
     status,

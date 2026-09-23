@@ -173,7 +173,10 @@ the configured entry, reference, revision, resolved key, authentication mode, an
 disabled or removed provider fails the same check. Drift produces the bridge's failed terminal
 without another provider request, and an unchanged binding resends the built request with its
 executed search result appended, never re-entering the initial reselection/rebuild path. Initial
-dispatch keeps its normal reselection policy. `tests/web-search/web-search-passthrough-bridge.test.ts`
+dispatch keeps its normal reselection policy. When the route's registry policy carries a
+terminal-repair grace (`modelResponsesTerminalRepair`), the response body of every successful
+continuation is wrapped by the same repair that saw the raw first leg, so a complete leg the
+destination leaves open still ends that leg on schedule instead of stalling the turn. `tests/web-search/web-search-passthrough-bridge.test.ts`
 covers drift during search, while pacing, and before first-leg headers return, plus successful
 first-dispatch reselection and result preservation.
 

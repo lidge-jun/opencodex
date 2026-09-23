@@ -149,11 +149,12 @@ and credential/transport failures retain their ordinary handling.
 `credit_balance_exhausted`, `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` and
 `organization_usage_limit_exceeded` name a balance or cap held by the organization or project, so
 `classifyCodexPreStreamRejection` reports `scoped-quota-exhaustion` with `alternateRetryEligible`
-false and `scopedExhaustionCode` set, and never `resetCreditEligible` — a reset credit reconciles a
+true and `scopedExhaustionCode` set, and never `resetCreditEligible` — a reset credit reconciles a
 ChatGPT plan window and cannot pay an organization's bill. The two sets are disjoint and share one
 parser, so a `code`/`type` pair that disagrees, a duplicate key at any depth, or a case or
 whitespace near-miss yields no code at all. `codexScopedExhaustionCode` exposes the scoped answer
-alone for the rotation gate and fails closed, so only positive evidence changes a routing decision.
+alone for the post-resolution rotation gate and fails closed. A code by itself cannot bind the
+refusal to every credential in a heterogeneous pool.
 
 `pausedCodexAccountIds` is a persisted Pool eligibility boundary. A paused added account or the
 stable `__main__` alias remains visible for maintenance and quota reads, but is excluded from new
