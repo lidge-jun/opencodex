@@ -26,6 +26,19 @@ const RECORDED_CURSOR_GROK_46_DISCOVERY_IDS = [
   "cursor-grok-4.6-xhigh-fast",
 ] as const;
 
+// Live GetUsableModels roster (live calls accepted grok-4.7-low and grok-4.7-xhigh-fast):
+// devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+const RECORDED_CURSOR_GROK_47_DISCOVERY_IDS = [
+  "grok-4.7-low",
+  "grok-4.7-medium",
+  "grok-4.7-high",
+  "grok-4.7-xhigh",
+  "grok-4.7-low-fast",
+  "grok-4.7-medium-fast",
+  "grok-4.7-high-fast",
+  "grok-4.7-xhigh-fast",
+] as const;
+
 function modelIdFor(modelId: string, reasoning?: string): string {
   const parsed: OcxParsedRequest = {
     modelId,
@@ -186,6 +199,24 @@ describe("Cursor per-model reasoning-effort suffix", () => {
       expect(RECORDED_CURSOR_GROK_46_DISCOVERY_IDS).toContain(requestModelId);
     }
     expect(RECORDED_CURSOR_GROK_46_DISCOVERY_IDS).toContain("cursor-grok-4.6-xhigh-fast");
+  });
+
+  test("grok-4.7 regular and Fast requests use the unprefixed live ids", () => {
+    for (const effort of ["low", "medium", "high", "xhigh"] as const) {
+      const regular = selectionFor("cursor/grok-4.7", effort);
+      const fast = selectionFor("cursor/grok-4.7-fast", effort);
+      expect(regular).toEqual({ modelId: `grok-4.7-${effort}`, parameters: undefined });
+      expect(fast).toEqual({ modelId: `grok-4.7-${effort}-fast`, parameters: undefined });
+      expect(RECORDED_CURSOR_GROK_47_DISCOVERY_IDS).toContain(regular.modelId);
+      expect(RECORDED_CURSOR_GROK_47_DISCOVERY_IDS).toContain(fast.modelId);
+      expect(cursorWireModelIdWithEffort("grok-4.7-fast", effort)).toBe(fast.modelId);
+    }
+    expect(modelIdFor("cursor/grok-4.7", "max")).toBe("grok-4.7-xhigh");
+    expect(modelIdFor("cursor/grok-4.7-fast", "max")).toBe("grok-4.7-xhigh-fast");
+    expect(modelIdFor("cursor/grok-4.7-fast")).toBe("grok-4.7-xhigh-fast");
+    expect(RECORDED_CURSOR_GROK_47_DISCOVERY_IDS).not.toContain("grok-4.7-fast");
+    expect(cursorModelEffortLadder("grok-4.7")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(cursorModelEffortLadder("grok-4.7-fast")).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
   test("kimi-k3 maps to its live effort-suffixed variants", () => {

@@ -1,10 +1,12 @@
+import { CODEX_PRIORITY_FAILBACK_REFRESH_MS } from "../account-priority";
+import { codexQuotaHasFreshUsage } from "../quota-observation-freshness";
 import { getCodexAccountCredential, getValidCodexToken, readCodexAccountRecord } from "../account-store";
 import { getAccountQuota, isCompleteCodexQuotaRecoverySnapshot } from "../quota";
 import { reconcileMainCodexAccountRuntimeState } from "../account-lifecycle";
 import { claimDueCodexQuotaRecoveryProbes, settleCodexQuotaRecoveryProbe } from "../routing";
 import { readCodexTokens } from "../auth-collision";
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
-import { getValidMainAccountToken, MainAccountTokenRefreshError, MAIN_CODEX_ACCOUNT_ID } from "../main-account";
+import { getValidMainAccountToken, MainAccountTokenRefreshError, MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan } from "../main-account";
 import { captureConfigGeneration, registerStateSweepAfterTick } from "../../lib/state-store-sweeper";
 import { captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "../main-account-cache";
 import { getMainAccountHardLockStatus } from "../main-account-hard-lock";
@@ -16,11 +18,12 @@ import type { AdmissionLease } from "../../lib/admission";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { withNativeMainCredentialClaim, isNativeMainClaimUnavailable } from "./http";
 import type { PoolQuotaResult } from "./pool-quota-probe";
-import { fetchMainAccountInfoAttempt, fetchMainAccountInfo } from "./main-account-probe";
+import { fetchMainAccountInfoAttempt, fetchMainAccountInfo, MAIN_CACHE_TTL } from "./main-account-probe";
 import { fetchPoolAccountQuota, PoolQuotaProbeBusyError, POOL_CACHE_TTL, POOL_QUOTA_REFRESH_CONCURRENCY } from "./pool-quota-probe";
 import { getRuntimeConfig, configuredPoolAccount, mapWithConcurrency } from "./runtime-config";
 
 let primeInFlight: Promise<void> | null = null;
+let lastPriorityFailbackPrimeAt: number | undefined;
 /**
  * Last prime attempt per pool account. A failed WHAM lookup stores no quota, so
  * without this the account stays "unknown" and every later prime trigger re-selects
@@ -176,11 +179,20 @@ export async function primeCodexPoolQuotas(
     || providerCodexAccountMode(OPENAI_CODEX_PROVIDER_ID, openai) !== "pool"
   ) return;
   if (primeInFlight) return primeInFlight;
+  // Count attempted passes, including failed reads; incoming traffic must not flood WHAM.
+  if (reason === "priority-failback") {
+    const now = Date.now();
+    if (lastPriorityFailbackPrimeAt !== undefined
+      && now - lastPriorityFailbackPrimeAt < CODEX_PRIORITY_FAILBACK_REFRESH_MS) return;
+    lastPriorityFailbackPrimeAt = now;
+  }
   primeInFlight = (async () => {
     const pool = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
     const stale = pool.filter(a => {
       const q = getAccountQuota(a.id);
-      if (q) return Date.now() - q.updatedAt >= POOL_CACHE_TTL;
+      const observationStale = reason === "priority-failback" && q
+        && !codexQuotaHasFreshUsage(q, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
+      if (q && !observationStale) return Date.now() - q.updatedAt >= POOL_CACHE_TTL;
       // No stored quota: either never primed, or the last attempt failed. Retry only
       // once per TTL window so an unreachable or rejecting account cannot turn every
       // prime trigger into another upstream request.
@@ -199,10 +211,16 @@ export async function primeCodexPoolQuotas(
             // Keep one local owner and one cross-process reader from physical
             // identity reconciliation through WHAM and all quota publication.
             (options.reconcileMainAccount ?? reconcileMainCodexAccountRuntimeState)();
-            if (getAccountQuota(MAIN_CODEX_ACCOUNT_ID)) return;
+            const quota = getAccountQuota(MAIN_CODEX_ACCOUNT_ID);
+            const observationStale = reason === "priority-failback" && quota
+              && !codexQuotaHasFreshUsage(quota, getMainAccountPlan(), Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
+            if (quota && (reason !== "priority-failback"
+              || (!observationStale && Date.now() - quota.updatedAt < MAIN_CACHE_TTL))) return;
             if (!(options.readMainTokens ?? readCodexTokens)()) return;
-            if (options.fetchMainInfo) await options.fetchMainInfo(false);
-            else await fetchMainAccountInfoAttempt(false, 1, mainLease, true);
+            const bypassCachedQuota = !!observationStale;
+            if (options.fetchMainInfo) await options.fetchMainInfo(bypassCachedQuota);
+            // Cache bypass is passive observation, never an explicit reauthentication recovery.
+            else await fetchMainAccountInfoAttempt(bypassCachedQuota, 1, mainLease, true, false);
           });
         } catch (error) {
           if (!isNativeMainClaimUnavailable(error)) throw error;
@@ -218,7 +236,10 @@ export async function primeCodexPoolQuotas(
           if (!getCodexAccountCredential(a.id)) return;
           let result: PoolQuotaResult;
           try {
-            result = await fetchPoolAccountQuota(a.id, false, a.plan, getValidPoolTokenForPrime);
+            const quota = getAccountQuota(a.id);
+            const bypassCachedQuota = reason === "priority-failback" && quota !== null
+              && !codexQuotaHasFreshUsage(quota, a.plan, Date.now(), CODEX_PRIORITY_FAILBACK_REFRESH_MS);
+            result = await fetchPoolAccountQuota(a.id, bypassCachedQuota, a.plan, getValidPoolTokenForPrime);
           } catch (error) {
             // Local quota-flight saturation proves no WHAM request existed for this account.
             // Consume it per item so sibling workers remain inside the shared prime lifetime.
@@ -257,6 +278,7 @@ export async function primeCodexPoolQuotas(
  * from another suite cannot coalesce into the next prime. */
 export function clearCodexQuotaPrimeState(): void {
   primeInFlight = null;
+  lastPriorityFailbackPrimeAt = undefined;
   poolQuotaPrimeAttemptedAt.clear();
   getValidPoolTokenForPrime = getValidCodexToken;
 }
@@ -266,6 +288,7 @@ export function clearCodexQuotaPrimeState(): void {
  * the throttle a production caller would see. */
 export function clearCodexQuotaPrimeSingleFlightForTests(): void {
   primeInFlight = null;
+  lastPriorityFailbackPrimeAt = undefined;
 }
 
 /** Test-only reset for the worker-level single-flight. */

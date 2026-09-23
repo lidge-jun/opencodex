@@ -54,7 +54,7 @@ Authorization: Bearer <admin-token>
 
 ### 에이전트 및 클라이언트 설정
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET, PUT /api/v2` | native multi-agent v2 모드와 thread 설정을 읽거나 변경합니다 | 400 잘못된 설정; 502 전환 또는 영속화 실패 |
 | `GET, PUT /api/injection-model` | 주입된 sub-agent 모델, effort, prompt, guidance 설정을 읽거나 설정합니다 | 400 잘못된 모델, effort, 또는 본문 |
@@ -133,7 +133,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### 콤보
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/combos` | 정규화된 combo와 공개 model id를 나열합니다 | catalog 작업이 `catalog_busy`를 반환할 수 있습니다 |
 | `PUT /api/combos` | 하나의 combo를 생성, 대체, 또는 이름 변경합니다 | 400 잘못된 id, target, config, rename, 또는 일반 충돌; 409 Codex-account namespace 충돌 |
@@ -141,9 +141,24 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 대상 전략, cooldown, alias, 라우팅 실패는 [Combos](/guides/combos/)를 참고하십시오.
 
+### Codex 프롬프트 레이어
+
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | 프롬프트 레이어 스냅샷(레이어, 기본 변형, 선택, drift 상태)을 읽습니다 | — |
+| `GET /api/codex-prompt/text` | `codex debug prompt-input`으로 모델에 표시되는 프롬프트 텍스트를 조사합니다 | fail-soft: 사용할 수 없는 probe는 HTTP 오류가 아니라 본문의 상태로 저하됩니다 |
+| `PUT /api/codex-prompt/toggle` | 전환 가능한 레이어 하나를 켜거나 끕니다 | 400 잘못된 본문 또는 알 수 없는 레이어; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | 사용자 지정 레이어 집합을 교체합니다 | 400 잘못된 본문, `invalid_characters`, 정규화된 UTF-8 레이어가 65,536바이트를 넘으면 `body_too_large`, 131,072바이트를 넘으면 `composed_too_large`; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | 기본 프롬프트 또는 저장된 변형 하나를 선택합니다 | 400 잘못된 본문, 저장된 변형과 일치하지 않는 id에는 `unknown_layer`; 409 `stale_revision`, 현재 base가 외부이면 `developer_instructions_not_owned` |
+| `PUT /api/codex-prompt/base` | 기본 변형 하나를 생성(`id` 생략 또는 `id: null`), 편집 또는 삭제(`delete: true`)합니다. 제공된 `id`는 편집 전용이며 저장된 변형을 참조해야 합니다. `body`는 측정·저장 전에 정규화됩니다(탭 확장, CR/CRLF를 LF로 변환) | 400 잘못된 본문, `default` id 또는 저장된 변형과 일치하지 않는 id에는 `unknown_layer`, 정규화된 UTF-8 본문이 65,536바이트를 넘으면 `body_too_large`; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | `config.toml`의 `developer_instructions`를 사용자 지정 레이어로 가져옵니다 | 400 잘못된 본문, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | `config.toml`과 소유 projection 사이의 drift를 복구합니다 | 400 잘못된 본문; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+레이어 모델과 각 레이어가 쓰는 키는 [Codex 프롬프트 레이어](/ko/guides/codex-prompt/)를 참고하십시오.
+
 ### 구성, 시작, 동기화, 업데이트
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/config` | redacted된 management-safe configuration DTO를 반환합니다 | — |
 | `PUT /api/config` | 전체 구성 교체 방지 기능이 비활성화되어 있습니다 | 405; 대신 집중된 엔드포인트를 사용하십시오 |
@@ -161,7 +176,12 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### 로그, 사용량, 저장소
 
-| Method and path | 목적 | 주요 오류 |
+요청 로그는 상위 서비스가 실제로 응답한 모델을 알려주면 `servedModel`을 기록하고, 상위 서비스로 보낸 모델이
+클라이언트에 표시된 모델과 다르면 `wireModel`을 기록합니다. 두 모델이 다를 때 대시보드는 `wire → served`로
+표시하고 툴팁에는 두 값을 모두 남깁니다. 상위 서비스가 응답 모델을 알려주지 않았다면 요청한 모델에서
+추정하지 않고 해당 정보를 비워 둡니다.
+
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/logs` | 필터링된 인메모리 요청 로그를 조회합니다 | — |
 | `GET, PUT /api/debug` | debug 플래그를 읽거나, capture 범주를 설정, 해제, 초기화합니다 | 400 잘못되었거나 비어 있는 업데이트 |
@@ -194,7 +214,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### 모델 및 catalog
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/catalog` | 설치된 Codex catalog 문서를 반환합니다 | 404 catalog 없음 |
 | `GET /api/models` | 대시보드/CLI model 행을 반환합니다 | 수집이 포화 상태이면 `catalog_busy` |
@@ -213,7 +233,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### OAuth 계정, provider key, 데이터 평면 키
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/oauth/providers` | 공개 OAuth 로그인 흐름이 있는 provider를 나열합니다 | — |
 | `GET /api/key-providers` | API-key 로그인으로 구성된 provider를 나열합니다 | — |
@@ -237,7 +257,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 
 ### 제공자
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/providers` | redacted된 provider 구성과 discovery 상태를 나열합니다 | — |
 | `POST /api/providers` | 검증된 provider 하나를 추가하거나 교체하고, 선택적으로 기본 provider로 설정합니다 | 400 잘못되었거나 위험한 대상 또는 구성; 409 namespace 충돌 |
@@ -261,7 +281,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 
 ### 사이드바 및 동의가 필요한 작업
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/github/star` | 사용자의 `gh` 세션을 통해 저장소 star 상태를 읽습니다 | 상태별 고정 결과 코드 |
 | `POST /api/github/star` | 인증된 사람의 작업에서만 저장소를 star합니다 | 대시보드 세션 증거가 없는 agent-driven 호출에는 403 `agent_consent_required` |
@@ -273,7 +293,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 
 ### 시스템 수명 주기
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET /api/system/memory` | 프로세스, heap, stream, response-state, watchdog, active-turn의 스칼라 메트릭을 반환합니다 | — |
 | `POST /api/system/restart` | 클라이언트 injection을 제거하지 않고 drain-aware 프로세스 재시작을 시작합니다 | 202 반환; 반복 호출은 기존 drain을 보고합니다 |
@@ -288,7 +308,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 
 루트 management dispatcher는 모든 `/api/codex-auth/*` 요청을 Codex account manager에 위임합니다. 해당 route는 다음과 같습니다.
 
-| Method and path | 목적 | 주요 오류 |
+| HTTP 메서드와 경로 | 목적 | 주요 오류 |
 | --- | --- | --- |
 | `GET, POST, DELETE /api/codex-auth/accounts` | Codex account를 나열/갱신하거나 삭제합니다. POST는 비활성화된 호환성 endpoint로만 유지되며, 성공한 DELETE는 `catalogRefreshPending`를 포함합니다. | POST는 항상 403 `manual_import_disabled`; DELETE 입력이 잘못되면 400 |
 | `PUT /api/codex-auth/accounts/alias` | 계정 alias를 설정하거나 지웁니다 | 400 잘못된 account/alias |
@@ -296,7 +316,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | `PUT /api/codex-auth/accounts/pause-exhausted` | quota가 소진된 account를 일시 중지합니다 | mutation-lock 실패는 503이 됩니다 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | account 하나 또는 모든 account의 runtime cooldown을 지웁니다 | 400 잘못된 id |
 | `GET, PUT /api/codex-auth/active` | 활성 account를 읽거나 선택합니다 | 400 잘못되었거나 누락된 account; 409 paused/legacy-row 충돌 |
-| `PUT /api/codex-auth/auto-switch` | 자동 account 전환을 위한 quota threshold를 설정합니다 | 400 잘못된 threshold |
+| `PUT /api/codex-auth/auto-switch` | `id`를 생략한 `{ threshold }`로 전역 임계값을, `{ id, threshold }`로 계정별 재정의 값을 설정합니다. `id: '__main__'`은 Codex Desktop 계정을 지정합니다. `id`가 지정된 경우 `threshold: null`은 재정의 값을 삭제하고 전역 임계값 상속을 복원합니다 | 400 잘못된 ID/임계값, 404 계정 없음 |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex account-pool 선택 전략을 업데이트합니다 | 400 잘못된 전략/구성 |
 | `PUT /api/codex-auth/failover` | account failover threshold를 설정합니다 | 400 잘못된 threshold |
 | `GET /api/codex-auth/quota` | 계정별 캐시된 quota 상태를 읽습니다 | — |

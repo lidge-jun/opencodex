@@ -40,6 +40,7 @@ const legacyAccount: LegacyCodexAccountEntry = {
   isMain: false,
   paused: false,
   priority: 0,
+  autoSwitchThresholdOverride: null,
   hasCredential: true,
   quota: { resetCredits: 2, updatedAt: 1 },
 };
@@ -78,6 +79,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchingId: null,
     pauseUpdatingId: null,
     priorityUpdatingId: null,
+    autoSwitchUpdatingId: null,
     pausingExhausted: false,
     activeNeedsReauth: false,
     activePinnedId: null,
@@ -88,6 +90,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchAccount: async () => ({ ok: true, activeId: null }),
     setAccountPaused: async () => ({ ok: true }),
     setAccountPriority: async () => ({ ok: true }),
+    setAccountAutoSwitchThreshold: async () => ({ ok: true }),
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: false, reason: "request" }),

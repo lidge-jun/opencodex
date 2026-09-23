@@ -38,6 +38,7 @@ describe("global fast switch lists -fast identities outside Codex", () => {
   test("a thinking-default base lists its thinking-fast id, a regular-default base its fast id", () => {
     expect(cursorFastIdFor("claude-opus-5")).toBe("claude-opus-5-thinking-fast");
     expect(cursorFastIdFor("grok-4.6")).toBe("grok-4.6-fast");
+    expect(cursorFastIdFor("grok-4.7")).toBe("grok-4.7-fast");
   });
 
   test("a base with no fast variant yields no fast id at all", () => {
@@ -58,6 +59,8 @@ describe("global fast switch lists -fast identities outside Codex", () => {
       .toContain("claude-ocx-cursor--claude-opus-5-thinking-fast");
     expect(listIds([cursorModel("grok-4.6", 500_000)], true))
       .toContain("claude-ocx-cursor--grok-4.6-fast");
+    expect(listIds([cursorModel("grok-4.7", 500_000)], true))
+      .toContain("claude-ocx-cursor--grok-4.7-fast");
   });
 
   test("the switch leaves a base without a fast variant alone", () => {
@@ -79,6 +82,7 @@ describe("global fast switch lists -fast identities outside Codex", () => {
 
     expect(decide("claude-opus-5", true)).toEqual({ kind: "set", value: "fast" });
     expect(decide("grok-4.6", true)).toEqual({ kind: "set", value: "fast" });
+    expect(decide("grok-4.7", true)).toEqual({ kind: "set", value: "fast" });
     expect(decide("kimi-k3", true)).toEqual({ kind: "drop" });
     // And the switch off must not promote.
     expect(decide("claude-opus-5", false)).toEqual({ kind: "drop" });

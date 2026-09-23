@@ -73,12 +73,15 @@ import {
 } from "../../src/codex/account-lifecycle";
 import {
   ConfigMutationLockError,
+  armClaudeCodeBaseline,
   getConfigPath,
   loadConfig,
   saveConfig,
   setPersistedConfigMutationBeforeCommitForTests,
 } from "../../src/config";
 import * as configModule from "../../src/config";
+import { setCodexAccountAutoSwitchThresholdOverride } from "../../src/codex/account-auto-switch";
+import { prepareConfigObjectChildDeletionRebase } from "../../src/config/rebase-provenance";
 import type { CatalogDisposition } from "../../src/codex/convergence-types";
 import { captureConfigGeneration, registerStateStore } from "../../src/lib/state-store-sweeper";
 import {
@@ -4011,6 +4014,7 @@ describe("codex-auth API", () => {
     expect(accounts.find(a => a.id === "side")?.priority).toBe(0);
     expect(accounts.find(a => a.isMain)?.priority).toBe(0);
   });
+
 
   test("GET /api/codex-auth/active reports an operator pin but not an automatic pick", async () => {
     const config = makeConfig({ activeCodexAccountId: "work" });

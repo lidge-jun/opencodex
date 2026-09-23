@@ -26,6 +26,7 @@ import {
   isUsableApiKeySecret,
   managementIngressSchema,
   codexPoolSchema,
+  codexAccountAutoSwitchThresholdsSchema,
   providerModelCostsConfigError,
   credentialGroupsSchema,
   hubConfigSchema,
@@ -388,6 +389,12 @@ export function degradedCodexAccountPriorityWarnings(rawParsed: unknown, validat
   const raw = record?.codexAccountPriorities;
   if (raw !== undefined && validated.codexAccountPriorities === undefined) {
     warnings.push("codexAccountPriorities is invalid (expected account ids mapped to integers between -100 and 100) — account selection order is disabled");
+  }
+  const rawThresholds = record?.codexAccountAutoSwitchThresholds;
+  if (rawThresholds !== undefined && !codexAccountAutoSwitchThresholdsSchema.safeParse(rawThresholds).success) {
+    warnings.push(validated.codexAccountAutoSwitchThresholds === undefined
+      ? "codexAccountAutoSwitchThresholds is invalid (expected account ids mapped to integers between 0 and 100) — per-account usage thresholds are disabled"
+      : "codexAccountAutoSwitchThresholds contains invalid entries (expected account ids mapped to integers between 0 and 100) — invalid entries were ignored");
   }
   return warnings;
 }

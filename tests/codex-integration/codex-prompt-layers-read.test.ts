@@ -232,6 +232,26 @@ describe("model_instructions_file", () => {
   test("is null when absent", () => {
     expect(readPromptLayers(fixture("model = \"x\"\n")).modelInstructionsFile).toBeNull();
   });
+
+  test("fallback decodes every TOML basic-string escape when another integer defeats Bun", () => {
+    const literal = String.raw`"\b\t\n\f\r\"\\\u0041\U0001F680"`;
+    const config = `model_context_window = 9223372036854775807\nmodel_instructions_file = ${literal}\n`;
+    expect(readPromptLayers(fixture(config)).modelInstructionsFile).toBe("\b\t\n\f\r\"\\A🚀");
+  });
+
+  test("fallback refuses malformed escapes and invalid Unicode scalars", () => {
+    for (const literal of [
+      String.raw`"bad\q"`,
+      String.raw`"bad\u12"`,
+      String.raw`"bad\uD800"`,
+      String.raw`"bad\U00110000"`,
+    ]) {
+      const config = `model_context_window = 9223372036854775807\nmodel_instructions_file = ${literal}\n`;
+      const snap = readPromptLayers(fixture(config));
+      expect(snap.modelInstructionsFile).toBe("<unreadable model_instructions_file>");
+      expect(snap.baseSelection).toEqual({ kind: "external", path: "<unreadable model_instructions_file>" });
+    }
+  });
 });
 
 describe("unreadable config", () => {
