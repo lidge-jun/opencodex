@@ -158,7 +158,9 @@ function extractRow(entry: PersistedUsageEntry): Array<string | number | null> {
     entry.timestamp,
     entry.provider,
     entry.model,
-    entry.requestedModel ?? null,
+    // Old canonical JSONL rows can predate bounded selector persistence. Encode
+    // the disposable projection on rebuild so exact filters match across versions.
+    typeof entry.requestedModel === "string" ? encodePersistedRequestedModel(entry.requestedModel) : null,
     entry.status,
     entry.surface ?? null,
     entry.inboundProtocol ?? null,

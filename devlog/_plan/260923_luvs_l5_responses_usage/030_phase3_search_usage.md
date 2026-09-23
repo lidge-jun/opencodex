@@ -13,12 +13,12 @@ helper twice; it is dropped from this lane and reported to the maintainer for a 
 2. `git cherry-pick -x 8d46989165 3f3fdf17f4`. Once the two already-landed commits are skipped,
    both apply cleanly (dry run on `a4bdc03054`): `request-prepare.ts` keeps dev's caller-principal
    block from #5575 and gains only the early combo intersection and shadow marker.
-4. `git cherry-pick -x 973a4ac702 bb49c9f582`, then a follow-up commit (luvs01 co-author) adapts
+3. `git cherry-pick -x 973a4ac702 bb49c9f582`, then a follow-up commit (luvs01 co-author) adapts
    `tests/web-search/web-search-passthrough-bridge.test.ts` (the `clientPrincipalId: "loopback"`
    expectation) to dev's documented rule that keyless callers get no bridged replay: configure an
    inbound API key, assert the derived principal, keep a keyless miss control.
-5. `ae52669293`: cherry-pick.
-6. Keep dev's `src/web-search/executor.ts`, `tests/web-search/web-search-sidecar-429.test.ts`, the
+4. `ae52669293`: cherry-pick.
+5. Keep dev's `src/web-search/executor.ts`, `tests/web-search/web-search-sidecar-429.test.ts`, the
    negative controls in `tests/web-search/web-search-bridge-replay.test.ts`, and the single
    physical-send budget wording in `structure/runtime.md` and `structure/providers-and-adapters.md`.
 

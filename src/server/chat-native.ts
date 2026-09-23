@@ -32,6 +32,7 @@ import {
   REPLAY_REFUSAL_CLIENT_HEADERS,
   REPLAY_REFUSED_STATUS,
   retainReplayRefusal,
+  UpstreamRetryEvidenceError,
   type UpstreamSendRecovery,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
@@ -453,7 +454,8 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     cleanupAbort();
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "client_cancelled");
-    if (error instanceof NativeChatSpendRefusal) {
+    const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendError instanceof NativeChatSpendRefusal) {
       const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);
       finishLog(429);
       return refusal;

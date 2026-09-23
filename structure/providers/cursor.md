@@ -115,7 +115,9 @@ standalone ambient-browser wrappers stay in history without being promoted to th
 Those wrappers are recognized by their exact canonical shape, the same prefix rule the Codex
 client uses to detect a stored summary; the wire carries no other provenance, so a user message
 that is itself an exact wrapper is treated as host context and the preceding real request stays
-the labeled one. Quoting a marker inside other text keeps the message as the request.
+the labeled one. Quoting a marker inside other text keeps the message as the request; an
+ambient wrapper followed by user text also remains the request. On an external-model echo retry,
+the active action carries the replayed tool-result provenance warning even with a checkpoint.
 Blank or image-only user input stops the search instead of reviving an older goal.
 Grok 4.6 code-mode continuations distinguish emitted observations from an empty completed cell:
 the latter is not proof of failure and never authorizes replay of a completed side effect.

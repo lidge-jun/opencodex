@@ -967,7 +967,7 @@ layer cancels that body and returns the non-replayable refusal. Policy fallback 
 rotation preserve that marker instead of interpreting its 429 as fresh quota evidence.
 
 `src/server/responses/policy-fallback.ts` retains one deep snapshot of the first parsed wire
-body. Candidate retries serialize that snapshot, so in-place recovery or sanitizer mutations
+body only for a policy selector. Candidate retries serialize that snapshot, so recovery mutations
 from a previous attempt cannot become another provider's input. Object-identity metadata is
 not serialized and must be established independently by each attempt.
 

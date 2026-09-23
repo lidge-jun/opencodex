@@ -12,6 +12,8 @@ import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-s
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
+import { estimateTokens } from "../../src/lib/token-estimate";
+import { getRequestLogEntries } from "../../src/server/request-log";
 
 let previousHome: string | undefined;
 let testDir = "";
@@ -110,6 +112,37 @@ test("native Chat refuses a physical send that exceeds the configured pool spend
   } finally {
     await stopFixtureServers();
   }
+});
+
+test("native Chat reports a spend refusal on a transient retry leg as local 429", async () => {
+  const messages = [{ role: "user", content: "hello" }];
+  let upstreamSends = 0;
+  const upstream = Bun.serve({
+    port: 0,
+    fetch() {
+      upstreamSends += 1;
+      return Response.json({ error: { message: "temporarily unavailable" } }, { status: 503 });
+    },
+  });
+  activeUpstream = upstream;
+  const config = mockConfig(`${upstream.url.toString().replace(/\/$/, "")}/v1`, {
+    transientRetryOn5xx: { attempts: 2 },
+  });
+  config.spend = { pool: { maxTokens: estimateTokens(JSON.stringify(messages), "mock/test-model") + 1 } };
+  saveConfig(config);
+  const server = startServer(0);
+  activeServer = server;
+  const response = await fetch(new URL("/v1/chat/completions", server.url), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "mock/test-model", messages, max_tokens: 1 }),
+  });
+  expect(response.status).toBe(429);
+  expect(response.headers.get("x-opencodex-local-refusal")).toBe("workflow_spend_exhausted");
+  expect(upstreamSends).toBe(1);
+  expect(getRequestLogEntries().findLast(row => row.inboundProtocol === "chat")).toMatchObject({
+    status: 429, errorCode: "workflow_spend_exhausted",
+  });
 });
 
 test("native Chat includes tool definitions in its pre-dispatch spend reservation", async () => {

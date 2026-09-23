@@ -294,6 +294,7 @@ export function spawnModuleGraphWarmupChild(
     child.once("exit", (code, exitSignal) => {
       exitCode = code;
       signal = exitSignal;
+      clearTimeout(deadline);
       // A descendant retaining a pipe must not turn a clean exit into a wait for EOF.
       beginReapGrace();
     });

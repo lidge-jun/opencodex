@@ -43,7 +43,7 @@ Cap checks after the phase: `src/server/responses/core.ts` 210,
 
 ## Outcome (wp3)
 
-All planned commits applied without conflict on `a077087b74`. Review follow-ups:
+All planned commits applied on `a077087b74` after resolving the conflicts above. Review follow-ups:
 `test(cursor): pin exact host-wrapper classification in continuation scope` (exact summary and
 ambient wrappers are classified by shape, matching the Codex client; documented in
 `structure/providers/cursor.md`) and `test(server): prove a suppressed same-workspace alternate is

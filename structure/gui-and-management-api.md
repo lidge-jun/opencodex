@@ -541,8 +541,10 @@ status, so an unexpected management response cannot add raw upstream material.
 > Decision record: [ADR-0078](decisions/ADR-0078-usage-accounting.md)
 
 Requested selectors longer than 130 characters persist as a prefix plus a digest of the complete
-selector; the request-history exact-match filter applies the same idempotent encoding. Because the
-encoding is idempotent, a literal selector equal to another selector's persisted form shares that
+selector; the request-history exact-match filter applies the same idempotent encoding. The
+derived index rebuilds when its projection version changes, encoding older raw-selector rows
+from canonical JSONL so exact filters still find them. Because the encoding is idempotent, a
+literal selector equal to another selector's persisted form shares that
 identity (`tests/usage/request-history-index.test.ts` pins it). Serving-model
 identities remain unchanged. Only historical Codex `openai`, `chatgpt` and `openai-multi` main labels
 collapse for reporting; configured provider names ending in `-main` remain separate. CLI access-key

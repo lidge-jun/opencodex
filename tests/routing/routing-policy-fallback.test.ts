@@ -162,6 +162,20 @@ describe("policy candidate fallback", () => {
     expect(seenInputs).toEqual(["hello", "hello"]);
   });
 
+  test("non-policy requests do not deep-clone their parsed body", async () => {
+    const body = {
+      model: "provider-a/model-a",
+      input: { get content(): string { throw new Error("unexpected deep clone"); } },
+    };
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, {} as RequestLogContext, {}, {
+      runCore: async (_req, _config, _context, options) => {
+        options.onRequestBodyParsed?.(body);
+        return new Response(null, { status: 204 });
+      },
+    });
+    expect(response.status).toBe(204);
+  });
+
   test("the retry snapshot survives mutation inside the input array", async () => {
     // The top-level field swap above also passes under a shallow `{...body}` copy. The
     // real leaks mutate deeper: the sanitizer splices input entries in place and the

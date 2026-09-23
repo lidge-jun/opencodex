@@ -30,7 +30,7 @@ import {
   REQUEST_HISTORY_READ_CHUNK_BYTES,
 } from "../../src/routing/history/indexer";
 import { InvalidCursorError } from "../../src/routing/history/cursor";
-import { HISTORY_DB_FILENAME } from "../../src/routing/history/schema";
+import { HISTORY_DB_FILENAME, HISTORY_SCHEMA_VERSION } from "../../src/routing/history/schema";
 import { getConfigDir } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
@@ -108,7 +108,7 @@ describe("request-history index (RI-02)", () => {
     expect(page.rows).toEqual([]);
     expect(page.hasMore).toBe(false);
     expect(page.meta.indexedRows).toBe(0);
-    expect(page.meta.schemaVersion).toBe(1);
+    expect(page.meta.schemaVersion).toBe(HISTORY_SCHEMA_VERSION);
     expect(existsSync(join(getConfigDir(), HISTORY_DB_FILENAME))).toBe(true);
   });
 
@@ -213,7 +213,25 @@ describe("request-history index (RI-02)", () => {
     db.close();
     const page = await queryRequestHistory({}, undefined, 10);
     expect(page.rows.length).toBe(4);
-    expect(page.meta.schemaVersion).toBe(1);
+    expect(page.meta.schemaVersion).toBe(HISTORY_SCHEMA_VERSION);
+  });
+
+  test("upgrading a version-one index reprojects long requested selectors from canonical JSONL", async () => {
+    const selector = `policy/${"long-selector".repeat(20)}`;
+    // Model a pre-encoding ledger and index: both originally carried the raw selector.
+    appendFileSync(usageLogPath(), `${JSON.stringify(entry("legacy-selector", 1234, "a", "m1", { requestedModel: selector }))}\n`);
+    await queryRequestHistory({}, undefined, 10);
+    closeRequestHistoryIndex();
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(join(getConfigDir(), HISTORY_DB_FILENAME));
+    db.query("UPDATE requests SET requested_model = ? WHERE request_id = 'legacy-selector'").run(selector);
+    db.query("UPDATE schema_meta SET value = '1' WHERE key = 'schema_version'").run();
+    db.close();
+
+    const page = await queryRequestHistory({ requestedModel: selector }, undefined, 10);
+    expect(page.rows.map(row => row.requestId)).toEqual(["legacy-selector"]);
+    expect(page.meta.schemaVersion).toBe(HISTORY_SCHEMA_VERSION);
+    expect(page.meta.lastError).toContain("rebuilt");
   });
 
   test("partial final JSONL line is skipped until it completes", async () => {
@@ -371,7 +389,7 @@ describe("request-history index (RI-02)", () => {
     expect(body.entries.length).toBe(2);
     expect(body.hasMore).toBe(true);
     expect(typeof body.nextCursor).toBe("string");
-    expect(body.index.schemaVersion).toBe(1);
+    expect(body.index.schemaVersion).toBe(HISTORY_SCHEMA_VERSION);
     expect(body.index.indexedRows).toBe(5);
   });
 

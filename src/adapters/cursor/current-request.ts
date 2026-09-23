@@ -10,9 +10,10 @@ import { OPAQUE_COMPACTION_NOTE, SUMMARY_PREFIX } from "../../responses/compacti
  * its exact canonical shape, the same prefix rule the Codex client uses to detect a stored summary.
  */
 function isAmbientBrowserContext(text: string): boolean {
-  if (!/^<in-app-browser-context\s/.test(text) || !text.endsWith("</in-app-browser-context>")) return false;
+  if (!/^<in-app-browser-context\s/.test(text)) return false;
   const openingEnd = text.indexOf(">");
   if (openingEnd < 0) return false;
+  if (text.indexOf("</in-app-browser-context>", openingEnd + 1) !== text.length - "</in-app-browser-context>".length) return false;
   // Inspect one opening tag, not overlapping greedy scans over arbitrary user text.
   return /\ssource=(["'])ambient-ui-state\1(?=\s|>)/.test(text.slice(0, openingEnd + 1));
 }

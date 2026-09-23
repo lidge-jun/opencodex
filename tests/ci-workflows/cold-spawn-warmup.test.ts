@@ -294,12 +294,14 @@ describe("warm-up failure policy", () => {
       "process.exit(0);",
     ].join("\n");
     const startedAt = performance.now();
-    const result = await spawnModuleGraphWarmupChild(script, repoRoot(), undefined, INTERNAL_DEADLINE_MS);
+    // The parent exits before its short deadline; the descendant keeps the pipe open
+    // past that deadline, so only reap grace should settle the completed child.
+    const result = await spawnModuleGraphWarmupChild(script, repoRoot(), undefined, 1_000);
     expect(performance.now() - startedAt).toBeLessThan(INTERNAL_DEADLINE_MS);
     expect(result.exitCode).toBe(0);
     expect(result.timedOut).toBe(false);
     expect(result.stdout).toContain("ok");
-  });
+  }, INTERNAL_DEADLINE_MS);
 
   test("a real module graph loads, and reports what it loaded", async () => {
     resetColdSpawnWarmupForTests();
