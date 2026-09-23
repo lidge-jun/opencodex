@@ -902,8 +902,8 @@ describe("Command Code provider", () => {
     const page = `<script>window.__reactRouterContext.streamController.enqueue(${JSON.stringify(JSON.stringify(values))});</script>`;
     const fetch = (async () => new Response(page)) as typeof globalThis.fetch;
     expect(await refreshCommandCodeReasoningEfforts("Qwen/Qwen3.8-Flash", fetch))
-      .toEqual(["low", "medium", "xhigh"]);
-    expect(commandCodeReasoningEfforts("Qwen/Qwen3.8-Flash")).toEqual(["low", "medium", "xhigh"]);
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(commandCodeReasoningEfforts("Qwen/Qwen3.8-Flash")).toEqual(["low", "medium", "high", "xhigh", "max"]);
     resetCommandCodeReasoningEffortsForTest();
 
     // Incomplete and conflicting records never replace the static row.
@@ -935,7 +935,8 @@ describe("Command Code provider", () => {
     const page = `<html><!--${padding}--><script>window.__reactRouterContext.streamController.enqueue(${JSON.stringify(JSON.stringify(values))});</script></html>`;
     expect(page.length).toBeGreaterThan(256 * 1024);
     expect(page.length).toBeLessThan(PROFILE_PAGE_MAX_BYTES);
-    expect(await refreshCommandCodeReasoningEfforts("Qwen/Qwen3.8-Flash", async () => new Response(page))).toEqual(["low", "medium"]);
+    expect(await refreshCommandCodeReasoningEfforts("Qwen/Qwen3.8-Flash", async () => new Response(page)))
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   test("uses the 2026-09-23 profile ladders for newly cataloged models", async () => {

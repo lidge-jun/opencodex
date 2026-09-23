@@ -629,8 +629,9 @@ Bearer header, while `claude-*` ids use Anthropic Messages with `x-api-key`, bec
 serves them only on `/provider/v1/messages`. A provider that reuses the `commandcode` name for a
 different endpoint keeps its own wire. The OAuth preset (`command-code`) uses the stored account bearer for
 authenticated discovery and streams generation from `/alpha/generate` as NDJSON. MiMo tool-call
-markup echoed by the gateway as text is removed when it duplicates a real call, or restored as a
-real call when a complete declared-tool call has no native counterpart. Create Provider-API keys at
+markup echoed by the gateway as text is removed when it duplicates a real call. On the observed
+MiMo 2.6 models, a complete declared-tool call with no native counterpart is restored only after a
+clean finish; interrupted or filtered turns leave the markup as text. Create Provider-API keys at
 [Command Code Studio](https://commandcode.ai/studio/).
 
 **OrcaRouter authentication and discovery.** Choose either `ocx login orcarouter-oauth` for

@@ -254,6 +254,7 @@ function parsedProfileEfforts(page: string, modelId: string): string[] | undefin
 export async function refreshCommandCodeReasoningEfforts(
   modelId: string,
   fetchFn: typeof globalThis.fetch = globalThis.fetch,
+  rejectedEffort?: string,
 ): Promise<readonly string[] | undefined> {
   const key = keyFor(modelId);
   let profile: { efforts: readonly string[]; profileUrl: string } | undefined;
@@ -278,8 +279,11 @@ export async function refreshCommandCodeReasoningEfforts(
     if (!observed.displaySafe) return undefined;
     const efforts = parsedProfileEfforts(observed.text, modelId);
     if (efforts === undefined) return undefined;
-    refreshedEfforts.set(key, efforts);
-    return efforts;
+    const accepted = commandCodeReasoningEfforts(modelId) ?? [];
+    const merged = [...new Set([...accepted, ...efforts])]
+      .filter(effort => effort !== rejectedEffort);
+    refreshedEfforts.set(key, merged);
+    return merged;
   } catch {
     return undefined;
   }

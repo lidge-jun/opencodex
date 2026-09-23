@@ -28,6 +28,7 @@ only canonical Fable, Opus, or Sonnet labels after removing terminal controls; u
 | `src/adapters/devin.ts`, `src/adapters/devin/cloud-direct/` | Devin runTurn transport over Cognition Connect-RPC. `GetChatMessage` uses the Responses provider executor and shared physical-send budget; catalog and JWT support RPCs remain outside inference-send accounting. Provider-stated 429 reset delays are surfaced to the client rather than slept inside an admitted turn, so they cannot retain shared active-turn capacity. A recorded tenant host is used only for the stored account whose credential owns the transmitted key, searched in the configured provider id and then its deprecated alias; a configured, forwarded, or unmatched key uses the configured base URL or the US default. |
 | `src/adapters/kiro.ts` and `src/adapters/kiro/` | Kiro event/tool/thinking/truncation/retry handling. The original path is a facade over leaves for wire identity, reasoning, conversation state, token estimation, payload assembly, streaming, and the adapter. |
 | `src/adapters/mimo-free.ts` | Mimo Free transport (client identity + JWT). |
+| `src/adapters/command-code.ts`, `src/adapters/command-code-tool-text.ts` | Command Code OAuth NDJSON translation. MiMo 2.6 markup is deduplicated against matching native calls. Text-only restoration is limited to the observed MiMo 2.6 ids, a declared tool with validated arguments, and a clean finish. Later text waits behind unresolved markup within a bounded queue; failed, filtered, truncated, and unterminated turns release it as text. |
 | `src/adapters/image.ts`, `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts`, `src/adapters/anthropic-image-codec.ts` | Image conversion for adapter ingress and Anthropic-specific normalization/limits. An image's ladder position is pinned to its own identity (content hash + media type), so appending a newer image cannot re-encode older ones and bust Anthropic's prompt prefix cache (#4532). |
 | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/upstream-http-error.ts` | Shared adapter execution support: turn queueing, tool-catalog nudging, client identity, upstream error normalization. |
 
@@ -146,8 +147,10 @@ behavior-preserving only because it gates on `providerMatchesRegistryTransport` 
 rewrites rows the router already canonicalizes, which a Volcengine Chat row is not.
 
 Command Code ships its own per-model `reasoning_effort` table in
-`src/providers/command-code-efforts.ts`, and that table decides the wire effort. Configuration can
-take precedence, but only when the provider declares `modelReasoningEffortsAuthoritative`:
+`src/providers/command-code-efforts.ts`, and that table decides the wire effort. Profile refresh
+adds newly listed efforts while retaining accepted rungs; an upstream rejection removes only the
+rejected rung. Configuration can take precedence, but only when the provider declares
+`modelReasoningEffortsAuthoritative`:
 `providerConfigSeed` copies the shipped table into every materialized preset and both enrichment
 and routing keep a persisted row over the current seed, so neither the presence of a configured
 row nor its difference from today's table establishes that a human wrote it. With the flag the

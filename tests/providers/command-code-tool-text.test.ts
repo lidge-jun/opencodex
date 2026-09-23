@@ -66,9 +66,9 @@ function parsed(tools = [EXEC_TOOL, READ_TOOL]): OcxParsedRequest {
 }
 
 /** Run events through one adapter instance the way the server does: buildRequest, fetchResponse, parseStream. */
-async function adapterEvents(events: unknown[], tools = [EXEC_TOOL, READ_TOOL]): Promise<AdapterEvent[]> {
+async function adapterEvents(events: unknown[], tools = [EXEC_TOOL, READ_TOOL], modelId = "xiaomi/mimo-v2.6-flash"): Promise<AdapterEvent[]> {
   const adapter = createCommandCodeAdapter({ ...provider, fetch: (async () => ndjson(events)) as typeof fetch } as OcxProviderConfig);
-  const request = await adapter.buildRequest(parsed(tools));
+  const request = await adapter.buildRequest({ ...parsed(tools), modelId });
   const response = await adapter.fetchResponse!(request);
   const out: AdapterEvent[] = [];
   for await (const event of adapter.parseStream(response, createTestTranslatorBudget())) out.push(event);
@@ -212,6 +212,68 @@ describe("Command Code MiMo tool-call text", () => {
     expect(calls(events)).toMatchObject([{ name: "read_file", args: JSON.stringify({ path: "src/a.ts", limit: 40 }) }]);
   });
 
+  test("a declared tool stays literal text outside the affected MiMo models", async () => {
+    const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    const events = await adapterEvents([
+      { type: "text-delta", id: "t", text: markup },
+      { type: "tool-call", toolCallId: "native", toolName: "exec", input: JS },
+      { type: "finish", rawFinishReason: "stop" },
+    ], [EXEC_TOOL], "claude-opus-5-5");
+    expect(texts(events)).toBe(markup);
+    expect(calls(events)).toEqual([{ id: "native", name: "exec", args: JS }]);
+  });
+
+  test("truncated, filtered and unterminated turns never restore markup", async () => {
+    const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    for (const reason of ["length", "content_filter", undefined]) {
+      const events = await adapterEvents([
+        { type: "text-delta", id: "t", text: markup },
+        ...(reason ? [{ type: "finish", rawFinishReason: reason }] : []),
+      ]);
+      expect(texts(events)).toBe(markup);
+      expect(calls(events)).toEqual([]);
+      expect(done(events)?.stopReason).toBe(reason);
+    }
+  });
+
+  test("later text waits for an earlier held block and keeps wire order", async () => {
+    const markup = "<tool_call><function=exec>incomplete";
+    const events = await adapterEvents([
+      { type: "text-start", id: "a" }, { type: "text-delta", id: "a", text: markup }, { type: "text-end", id: "a" },
+      { type: "text-start", id: "b" }, { type: "text-delta", id: "b", text: "explanation" }, { type: "text-end", id: "b" },
+      { type: "finish", rawFinishReason: "stop" },
+    ]);
+    expect(events.filter(event => event.type === "text_delta")).toEqual([
+      { type: "text_delta", text: markup }, { type: "text_delta", text: "explanation" },
+    ]);
+  });
+
+  test("a restored call stays ahead of later text", async () => {
+    const events = await adapterEvents([
+      { type: "text-start", id: "a" },
+      { type: "text-delta", id: "a", text: `<tool_call><function=exec>${JS}</function></tool_call>` },
+      { type: "text-end", id: "a" },
+      { type: "text-start", id: "b" }, { type: "text-delta", id: "b", text: "after" }, { type: "text-end", id: "b" },
+      { type: "finish", rawFinishReason: "stop" },
+    ]);
+    expect(events.findIndex(event => event.type === "tool_call_start"))
+      .toBeLessThan(events.findIndex(event => event.type === "text_delta"));
+    expect(texts(events)).toBe("after");
+  });
+
+  test("the ordered queue releases as text when its byte bound is exceeded", () => {
+    const budget = createTestTranslatorBudget();
+    const filter = new CommandCodeToolTextFilter(budget, new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]]));
+    const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    filter.textDelta("a", markup);
+    const later = "x".repeat(MAX_HELD_TOOL_TEXT_BYTES);
+    expect(filter.textDelta("b", later)).toEqual([
+      { type: "text_delta", text: markup }, { type: "text_delta", text: later },
+    ]);
+    expect(filter.finish()).toEqual({ events: [], salvaged: false });
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
   test("leaves markup as text when it names an undeclared tool or does not fit", async () => {
     for (const markup of [
       "<tool_call><function=delete_everything><parameter=path>/</parameter></function></tool_call>",
@@ -297,6 +359,19 @@ describe("Command Code MiMo tool-call text", () => {
     expect(salvagedArguments(markup("<parameter=mode>read</parameter><parameter=count>0</parameter>"), tool)).toBeUndefined();
     expect(salvagedArguments(markup("<parameter=mode>read</parameter><parameter=count>" + "9".repeat(400) + "</parameter>"), tool)).toBeUndefined();
     expect(salvagedArguments(markup("<parameter=mode>read</parameter><parameter=count>9007199254740993</parameter>"), tool)).toBeUndefined();
+  });
+
+  test("restored union arguments satisfy a complete alternative", () => {
+    const tool = { freeform: false, schema: { type: "object", required: ["mode"], properties: {
+      mode: { anyOf: [{ type: "string", enum: ["read"] }, { type: "null" }] },
+    } } };
+    const markup = (mode: string) => parseToolCallMarkup(`<tool_call><function=t><parameter=mode>${mode}</parameter></function></tool_call>`)!;
+    expect(salvagedArguments(markup("read"), tool)).toBe('{"mode":"read"}');
+    expect(salvagedArguments(markup("null"), tool)).toBe('{"mode":null}');
+    expect(salvagedArguments(markup("delete"), tool)).toBeUndefined();
+    tool.schema.properties.mode = { oneOf: [{ type: "string", const: "read" }, { type: "string", const: "write" }] };
+    expect(salvagedArguments(markup("write"), tool)).toBe('{"mode":"write"}');
+    expect(salvagedArguments(markup("delete"), tool)).toBeUndefined();
   });
 
   test("releases held text when the turn fails", () => {

@@ -16,10 +16,9 @@ import type { TranslatorBudget } from "../lib/translator-budget";
  * assistant text (captured 2026-09-23 from `codex exec` on `xiaomi/mimo-v2.6-flash`).
  *
  * A text block that opens with `<tool_call>` is therefore held instead of streamed. It is dropped
- * when a native call proves it is a duplicate, restored as a call when no native call arrives and
- * it names a tool this request declared with arguments that fit that tool, and otherwise released
- * unchanged. Nothing else is held: a block whose opening bytes stop matching the marker streams at
- * once.
+ * when a native call proves it is a duplicate, or restored on an eligible clean MiMo finish when
+ * it names a declared tool with arguments that fit its schema. Other markup is released unchanged.
+ * Later text waits behind unresolved markup within the same byte bound.
  */
 
 export const TOOL_CALL_MARKER = "<tool_call>";
@@ -169,13 +168,13 @@ function decodeParameter(raw: string, schema: unknown): unknown {
 }
 
 /**
- * The value constraints a restored call must honour at the top level: `enum`, `const` and numeric
- * bounds. A restored call is one the model never successfully sent, so it is held to the declared
- * shape rather than left for the tool to reject; nested schemas are not walked.
+ * The supported value constraints a restored call must honour: types, `enum`, `const`, numeric
+ * bounds, and complete anyOf/oneOf alternatives. Nested object properties are not walked.
  */
 function satisfiesConstraints(value: unknown, schema: unknown): boolean {
   if (!schema || typeof schema !== "object") return true;
   const record = schema as Record<string, unknown>;
+  if (schemaTypes({ type: record.type })?.every(type => !matchesType(value, type))) return false;
   if (Array.isArray(record.enum) && !record.enum.some(option => deepEqual(option, value))) return false;
   if (Object.hasOwn(record, "const") && !deepEqual(record.const, value)) return false;
   if (typeof value === "number") {
@@ -184,7 +183,22 @@ function satisfiesConstraints(value: unknown, schema: unknown): boolean {
     if (typeof record.exclusiveMinimum === "number" && value <= record.exclusiveMinimum) return false;
     if (typeof record.exclusiveMaximum === "number" && value >= record.exclusiveMaximum) return false;
   }
+  if (Array.isArray(record.anyOf) && !record.anyOf.some(branch => satisfiesConstraints(value, branch))) return false;
+  if (Array.isArray(record.oneOf) && record.oneOf.filter(branch => satisfiesConstraints(value, branch)).length !== 1) return false;
   return true;
+}
+
+function matchesType(value: unknown, type: string): boolean {
+  switch (type) {
+    case "string": return typeof value === "string";
+    case "integer": return typeof value === "number" && Number.isSafeInteger(value);
+    case "number": return typeof value === "number" && Number.isFinite(value);
+    case "boolean": return typeof value === "boolean";
+    case "null": return value === null;
+    case "object": return value !== null && typeof value === "object" && !Array.isArray(value);
+    case "array": return Array.isArray(value);
+    default: return false;
+  }
 }
 
 /**
@@ -220,7 +234,7 @@ export function salvagedArguments(markup: ToolCallMarkup, tool: CommandCodeDecla
 interface TextBlock {
   text: string;
   bytes: number;
-  state: "probing" | "held" | "streaming";
+  state: "probing" | "held" | "queued" | "dropped" | "streaming";
   ended: boolean;
   /** Tool inputs open when the block started; the native call that duplicates it is one of them. */
   candidates: Set<string>;
@@ -235,6 +249,8 @@ export class CommandCodeToolTextFilter {
   private readonly blocks = new Map<string, TextBlock>();
   /** Held blocks in arrival order, including ended ones awaiting a verdict. */
   private held: TextBlock[] = [];
+  /** Held blocks and later text in wire order; bounded together by MAX_HELD_TOOL_TEXT_BYTES. */
+  private pending: TextBlock[] = [];
 
   constructor(
     private readonly budget: TranslatorBudget,
@@ -248,7 +264,9 @@ export class CommandCodeToolTextFilter {
   textStart(id: unknown): AdapterEvent[] {
     const key = typeof id === "string" ? id : DEFAULT_TEXT_ID;
     const events = this.blocks.has(key) ? this.textEnd(key) : [];
-    this.blocks.set(key, { text: "", bytes: 0, state: "probing", ended: false, candidates: new Set(this.openInputs.keys()) });
+    const block: TextBlock = { text: "", bytes: 0, state: "probing", ended: false, candidates: new Set(this.openInputs.keys()) };
+    this.blocks.set(key, block);
+    if (this.pending.length > 0) this.pending.push(block);
     return events;
   }
 
@@ -258,22 +276,28 @@ export class CommandCodeToolTextFilter {
     if (!block) {
       block = { text: "", bytes: 0, state: "probing", ended: false, candidates: new Set(this.openInputs.keys()) };
       this.blocks.set(key, block);
+      if (this.pending.length > 0) this.pending.push(block);
     }
-    if (block.state === "streaming") return [{ type: "text_delta", text }];
+    if (block.state === "streaming") {
+      if (this.pending.length === 0) return [{ type: "text_delta", text }];
+      block.state = "queued";
+      this.pending.push(block);
+    }
     this.retain(block, text);
+    if (block.state === "queued") return this.limitPending();
     const lead = block.text.trimStart();
     if (block.state === "probing") {
-      if (lead.length > 0 && !lead.startsWith(TOOL_CALL_MARKER) && !TOOL_CALL_MARKER.startsWith(lead)) return this.stream(block);
+      if (lead.length > 0 && !lead.startsWith(TOOL_CALL_MARKER) && !TOOL_CALL_MARKER.startsWith(lead)) {
+        if (this.pending.includes(block)) { block.state = "queued"; return this.limitPending(); }
+        return this.stream(block);
+      }
       if (lead.startsWith(TOOL_CALL_MARKER)) {
         block.state = "held";
         this.held.push(block);
+        if (!this.pending.includes(block)) this.pending.push(block);
       }
     }
-    if (block.bytes > MAX_HELD_TOOL_TEXT_BYTES) {
-      this.held = this.held.filter(entry => entry !== block);
-      return this.stream(block);
-    }
-    return [];
+    return this.limitPending();
   }
 
   textEnd(id: unknown): AdapterEvent[] {
@@ -283,14 +307,17 @@ export class CommandCodeToolTextFilter {
     this.blocks.delete(key);
     block.ended = true;
     // A block that never committed to the marker (whitespace, or a marker prefix) is ordinary text.
-    if (block.state === "probing") return this.release(block);
+    if (block.state === "probing") {
+      if (this.pending.includes(block)) { block.state = "queued"; return this.drain(); }
+      return this.release(block);
+    }
+    if (block.state === "queued") return this.drain();
     return [];
   }
 
   /** Called before a native call is relayed; returns text that must precede it. */
   toolCall(id: string, name: string, input: unknown): AdapterEvent[] {
     this.openInputs.delete(id);
-    const events: AdapterEvent[] = [];
     const remaining: TextBlock[] = [];
     for (const block of this.held) {
       const pairs = block.candidates.size === 0 || block.candidates.has(id);
@@ -301,26 +328,25 @@ export class CommandCodeToolTextFilter {
       const markup = parseToolCallMarkup(block.text);
       if (markup && markup.name === name && markupMatchesInput(markup, input)) {
         this.drop(block);
-        // A block still open keeps streaming whatever else it carries; nothing more is held.
-        block.state = "streaming";
+        block.state = "dropped";
         continue;
       }
       block.candidates.delete(id);
       if (block.candidates.size === 0) {
-        events.push(...this.release(block));
-        block.state = "streaming";
+        block.state = "queued";
       } else {
         remaining.push(block);
       }
     }
     this.held = remaining;
-    return events;
+    return this.drain();
   }
 
   /** Release every held block as text, without restoring any call (used when the turn failed). */
   releaseAll(): AdapterEvent[] {
-    const pending = [...this.held, ...[...this.blocks.values()].filter(block => block.state === "probing")];
+    const pending = [...this.pending, ...[...this.blocks.values()].filter(block => block.state === "probing" && !this.pending.includes(block))];
     this.held = [];
+    this.pending = [];
     this.blocks.clear();
     return pending.flatMap(block => this.release(block));
   }
@@ -329,11 +355,12 @@ export class CommandCodeToolTextFilter {
   finish(): { events: AdapterEvent[]; salvaged: boolean } {
     const events: AdapterEvent[] = [];
     let salvaged = false;
-    const pending = [...this.held, ...[...this.blocks.values()].filter(block => block.state === "probing")];
+    const pending = [...this.pending, ...[...this.blocks.values()].filter(block => block.state === "probing" && !this.pending.includes(block))];
     this.held = [];
+    this.pending = [];
     this.blocks.clear();
     for (const block of pending) {
-      const markup = parseToolCallMarkup(block.text);
+      const markup = block.state === "held" ? parseToolCallMarkup(block.text) : undefined;
       const tool = markup ? this.declared?.get(markup.name) : undefined;
       const args = markup && tool ? salvagedArguments(markup, tool) : undefined;
       if (markup && args !== undefined) {
@@ -380,5 +407,25 @@ export class CommandCodeToolTextFilter {
   private stream(block: TextBlock): AdapterEvent[] {
     block.state = "streaming";
     return this.release(block);
+  }
+
+  private drain(): AdapterEvent[] {
+    const events: AdapterEvent[] = [];
+    while (this.pending.length > 0) {
+      const block = this.pending[0]!;
+      if (block.state === "held" || block.state === "probing") break;
+      this.pending.shift();
+      if (block.state === "queued") events.push(...this.stream(block));
+      else block.state = "streaming";
+    }
+    return events;
+  }
+
+  private limitPending(): AdapterEvent[] {
+    if (this.pending.reduce((sum, block) => sum + block.bytes, 0) <= MAX_HELD_TOOL_TEXT_BYTES) return [];
+    // Drop restoration once the ordered queue fills, then release all text in arrival order.
+    this.held = [];
+    for (const block of this.pending) if (block.state === "held" || block.state === "probing") block.state = "queued";
+    return this.drain();
   }
 }

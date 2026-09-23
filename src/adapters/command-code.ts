@@ -568,10 +568,12 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
   // rather than the Response fetchResponse returned, so the stream reads the declared catalog of
   // the request this instance last built. A parser with no built request restores nothing.
   let lastDeclaredTools: CommandCodeDeclaredTools | undefined;
+  let restoreMiMoTools = false;
   return {
     name: "command-code",
     async buildRequest(parsed: OcxParsedRequest): Promise<AdapterRequest> {
       if (!provider.apiKey) throw new Error("Command Code credential missing — run ocx login command-code");
+      restoreMiMoTools = /^xiaomi\/mimo-v2\.6-(?:flash|pro|pro-ultraspeed)$/i.test(canonicalCommandCodeModelId(parsed.modelId));
       const cwd = currentWorkingDirectory();
       const tools = visibleTools(parsed);
       const toolNudge = buildNonOpenAIToolCatalogNudgeForTools(tools, parsed.options.toolChoice);
@@ -641,7 +643,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       // successful-looking response, so the upstream rejection is what the caller gets. The
       // downgrade below stays for the shipped table, where the rung was never the caller's idea.
       if (operatorChoseCommandCodeLadder(provider, canonicalCommandCodeModelId(modelId))) return response;
-      const refreshed = await refreshCommandCodeReasoningEfforts(modelId, executor);
+      const refreshed = await refreshCommandCodeReasoningEfforts(modelId, executor, currentEffort);
       if (!refreshed || refreshed.includes(currentEffort)) return response;
       const retry = requestWithoutReasoningEffort(request);
       if (!retry) return response;
@@ -659,17 +661,20 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       const toolText = new CommandCodeToolTextFilter(budget, lastDeclaredTools);
       for await (const event of ndjson(response, budget)) {
         switch (event.type) {
-          case "text-start": yield* toolText.textStart(event.id); break;
-          case "text-delta": if (typeof event.text === "string") yield* toolText.textDelta(event.id, event.text); break;
-          case "text-end": yield* toolText.textEnd(event.id); break;
-          case "tool-input-start": toolText.toolInputStart(event.id, event.toolName); break;
+          case "text-start": if (restoreMiMoTools) yield* toolText.textStart(event.id); break;
+          case "text-delta": if (typeof event.text === "string") {
+            if (restoreMiMoTools) yield* toolText.textDelta(event.id, event.text);
+            else yield { type: "text_delta", text: event.text };
+          } break;
+          case "text-end": if (restoreMiMoTools) yield* toolText.textEnd(event.id); break;
+          case "tool-input-start": if (restoreMiMoTools) toolText.toolInputStart(event.id, event.toolName); break;
           case "reasoning-delta": if (typeof event.text === "string") yield { type: "thinking_delta", thinking: event.text }; break;
           case "tool-call": {
             const id = typeof event.toolCallId === "string" ? event.toolCallId : randomUUID();
             const name = typeof event.toolName === "string" ? event.toolName : "tool";
             const input = event.input ?? event.args ?? {};
             // MiMo markup the gateway echoed as text for this same call must not reach the client.
-            yield* toolText.toolCall(id, name, input);
+            if (restoreMiMoTools) yield* toolText.toolCall(id, name, input);
             const argumentsText = typeof input === "string" ? input : JSON.stringify(input);
             yield { type: "tool_call_start", id, name };
             budget.openCall(id);
@@ -710,7 +715,8 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
               };
               break;
             }
-            const restored = toolText.finish();
+            const restored = (stopReason === "stop" || isToolCallFinishReason(stopReason)) && restoreMiMoTools
+              ? toolText.finish() : { events: toolText.releaseAll(), salvaged: false };
             yield* restored.events;
             // Markup restored as a call ends the step on a tool call even when the model's own
             // finish reason says it stopped, because the call is what it meant to send.
@@ -736,9 +742,8 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       // A stream that ends without a finish event still needs a terminal done so the
       // server does not wait on an adapter that silently stopped emitting.
       if (!sawFinish) {
-        const restored = toolText.finish();
-        yield* restored.events;
-        yield { type: "done", usage: undefined, stopReason: restored.salvaged ? "tool_calls" : undefined };
+        yield* toolText.releaseAll();
+        yield { type: "done", usage: undefined, stopReason: undefined };
       }
     },
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
