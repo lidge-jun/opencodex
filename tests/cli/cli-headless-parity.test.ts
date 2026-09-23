@@ -30,6 +30,9 @@ describe("ocx system codex-restart confirmation", () => {
       const warning = errors.mock.calls.flat().join(" ");
       expect(warning).toContain("requires --yes");
       expect(warning).toContain("fully quits and relaunches the Codex desktop app");
+      expect(warning).toContain("unsaved composer drafts");
+      expect(warning).toContain("model-picker selections");
+      expect(warning).toContain("pending approval prompts");
     } finally { errors.mockRestore(); }
   });
 
@@ -48,6 +51,9 @@ describe("ocx system codex-restart confirmation", () => {
       else {
         expect(text).toContain("Codex desktop app");
         expect(text).toContain("restart requested.");
+        expect(text).toContain("Unsaved composer drafts");
+        expect(text).toContain("model-picker selections");
+        expect(text).toContain("pending approval prompts");
         expect(text).not.toContain("restarted");
       }
     } finally { output.mockRestore(); }

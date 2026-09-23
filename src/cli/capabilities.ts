@@ -784,7 +784,7 @@ export const CAPABILITIES: readonly Capability[] = [
     summary: "Restart the Codex desktop app and app-servers.",
     routes: [{ method: "POST", path: "/api/system/codex-restart" }],
     flags: [
-      { name: "--yes", value: "boolean", summary: "Required: fully quits and relaunches the operator's Codex desktop app and restarts its app-servers." },
+      { name: "--yes", value: "boolean", summary: "Required: fully quits and relaunches the operator's Codex desktop app, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts; also restarts its app-servers." },
       { name: "--json", value: "boolean", summary: "Emit the restart result as JSON." },
     ],
     mutates: true,
@@ -792,7 +792,7 @@ export const CAPABILITIES: readonly Capability[] = [
     details: [
       "`sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.",
       "Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.",
-      "--yes is mandatory because this interrupts a running editor session, which must never happen because an agent guessed a subcommand.",
+      "--yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.",
     ],
   },
   {
