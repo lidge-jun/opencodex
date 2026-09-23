@@ -335,6 +335,7 @@
     "ci-crash-disposition.test.ts": "ci-workflows",
     "ci-review-lanes.test.ts": "ci-workflows",
     "ci-scope-reduction.test.ts": "ci-workflows",
+    "ci-scope-gaps.test.ts": "ci-workflows",
     "ci-shard-balance.test.ts": "ci-workflows",
     "ci-structure-gate.test.ts": "ci-workflows",
     "ci-workflows.test.ts": "ci-workflows",

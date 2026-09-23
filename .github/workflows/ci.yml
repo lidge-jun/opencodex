@@ -191,6 +191,11 @@ jobs:
       packaging: ${{ steps.filter.outputs.packaging }}
       docs: ${{ steps.filter.outputs.docs }}
       structure: ${{ steps.filter.outputs.structure }}
+      # Narrow scopes for two paths the ci filter leaves out on purpose. Both are re-emitted by the
+      # validation step below, so a malformed filter output fails this job instead of silently
+      # skipping the check it selects.
+      setup_action: ${{ steps.narrow.outputs.setup_action }}
+      remote_helper: ${{ steps.narrow.outputs.remote_helper }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -298,6 +303,20 @@ jobs:
             structure:
               - 'structure/**'
               - '.github/workflows/ci.yml'
+            # The composite action every Bun job runs. `ci` omits .github/actions/** for the same
+            # reason it omits docs-site/** and structure/**: a change that touches only the action
+            # would otherwise start the full matrix. Without this filter it started nothing, and the
+            # aggregate reported success over skips. The job it feeds runs the action on the three
+            # runner families and checks what it installed. Pull-request scope, like docs and
+            # structure; ci.yml is listed so an edit here verifies itself.
+            setup_action:
+              - '.github/actions/**'
+              - '.github/workflows/ci.yml'
+            # The Rust remote-workspace helper. Nothing else in CI builds it, and its sandbox is
+            # real only on macOS and Windows, so its job lints and tests the crate on all three.
+            remote_helper:
+              - 'native/remote-workspace-helper/**'
+              - '.github/workflows/ci.yml'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -383,6 +402,26 @@ jobs:
 
           printf 'keyring_matrix=%s\n' "$keyring_matrix" >> "$GITHUB_OUTPUT"
           printf 'npm_global_matrix=%s\n' "$npm_global_matrix" >> "$GITHUB_OUTPUT"
+
+      - name: Assert the narrow scope outputs are usable
+        id: narrow
+        shell: bash
+        env:
+          SETUP_ACTION: ${{ steps.filter.outputs.setup_action }}
+          REMOTE_HELPER: ${{ steps.filter.outputs.remote_helper }}
+        run: |
+          set -euo pipefail
+          for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER"; do
+            case "${pair#*=}" in
+              true|false)
+                printf '%s\n' "$pair" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                printf '::error::changes.outputs.%s was %q, expected true or false\n' "${pair%%=*}" "${pair#*=}"
+                exit 1
+                ;;
+            esac
+          done
 
   # The suite, split by file across four Linux runners.
   #
@@ -1053,6 +1092,78 @@ jobs:
       - name: Structure doc-map, ownership, and invariant bindings
         run: bun run structure:check
 
+  # The composite Bun setup, run on each runner family it serves, when a change touches only the
+  # action (see the setup_action filter). One step past the action proves it installed the runtime
+  # package.json declares; nothing else runs, so this never grows into a suite.
+  setup-action:
+    name: setup action ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.setup_action == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        id: bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Require the runtime package.json declares
+        shell: bash
+        env:
+          RESOLVED: ${{ steps.bun.outputs.version }}
+        run: |
+          set -euo pipefail
+          declared="$(node -p "require('./package.json').dependencies.bun")"
+          installed="$(bun --version)"
+          echo "declared=$declared resolved=$RESOLVED installed=$installed"
+          if [ "$RESOLVED" != "$declared" ] || [ "$installed" != "$declared" ]; then
+            echo "::error::setup-project-bun resolved '$RESOLVED' and installed '$installed', but package.json declares '$declared'"
+            exit 1
+          fi
+
+  # The Rust remote-workspace helper, when a change touches it (see the remote_helper filter).
+  # Formatting once, then clippy and the crate's tests on each platform: the sandbox and the live
+  # confinement tests compile only on macOS and Windows, and Linux covers the protocol and stub.
+  remote-helper:
+    name: remote helper ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.remote_helper == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --manifest-path native/remote-workspace-helper/Cargo.toml --check
+
+      - name: Run Rust clippy
+        run: cargo clippy --locked --manifest-path native/remote-workspace-helper/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --locked --manifest-path native/remote-workspace-helper/Cargo.toml
+
   npm-global-smoke:
     name: npm-global ${{ matrix.os }}
     needs: changes
@@ -1256,7 +1367,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped`, which is the shape the step below is written to catch.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, npm-global-smoke, widget, desktop-shell]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, npm-global-smoke, widget, desktop-shell, setup-action, remote-helper]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1275,6 +1386,8 @@ jobs:
           CHANGES_PACKAGING: ${{ needs.changes.outputs.packaging }}
           CHANGES_DOCS: ${{ needs.changes.outputs.docs }}
           CHANGES_STRUCTURE: ${{ needs.changes.outputs.structure }}
+          CHANGES_SETUP_ACTION: ${{ needs.changes.outputs.setup_action }}
+          CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -1317,6 +1430,14 @@ jobs:
           if [ "$CHANGES_STRUCTURE" = "true" ]; then
             structure=requested
           fi
+          setup_action=not-requested
+          if [ "$CHANGES_SETUP_ACTION" = "true" ]; then
+            setup_action=requested
+          fi
+          remote_helper=not-requested
+          if [ "$CHANGES_REMOTE_HELPER" = "true" ]; then
+            remote_helper=requested
+          fi
           dispatch=not-requested
           windows=not-requested
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
@@ -1337,6 +1458,7 @@ jobs:
           GATED_JOBS="$GATED_JOBS macos-control platform-windows docs-site-build"
           GATED_JOBS="$GATED_JOBS structure-gate widget"
           GATED_JOBS="$GATED_JOBS desktop-shell"
+          GATED_JOBS="$GATED_JOBS setup-action remote-helper"
 
           expected_for() {
             case "$1" in
@@ -1348,6 +1470,8 @@ jobs:
               npm-global-smoke) echo "$packaging" ;;
               docs-site-build) echo "$docs" ;;
               structure-gate) echo "$structure" ;;
+              setup-action) echo "$setup_action" ;;
+              remote-helper) echo "$remote_helper" ;;
               macos-control) echo "$dispatch" ;;
               platform-windows) echo "$windows" ;;
               *) echo undeclared ;;

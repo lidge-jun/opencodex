@@ -20,6 +20,15 @@ the Rust toolchain, or the app bundle. Those regressions are caught at the promo
 `preview` or `main`, before publication, and on demand by explicit dispatch — a pull request
 that is green is not full-platform proof.
 
+Two paths sit outside the `ci` filter on purpose and get narrow jobs instead of the full matrix.
+A change under `.github/actions/` runs `setup-action` on Linux, Windows and macOS: it runs the
+composite Bun setup and requires the installed runtime to equal the version `package.json`
+declares. A change under `native/remote-workspace-helper/` runs `remote-helper` on the same three
+runners: `cargo fmt` on Linux, then `cargo clippy -D warnings` and `cargo test` everywhere, where
+the live confinement tests compile only on macOS and Windows. Both filters also list `ci.yml`,
+both stay pull-request scope like `docs` and `structure`, their outputs are validated before any
+job reads them, and the aggregate gate expects each job exactly when its filter output is `true`.
+
 No recovery retry can turn a failed workflow green. Linux, Windows, macOS shards and macOS control use
 `scripts/ci/run-bun-test-batches.sh`, but
 each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
