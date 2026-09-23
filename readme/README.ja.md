@@ -90,14 +90,43 @@ ocx start                         # プロキシとダッシュボードが loca
 **http://localhost:10100** を開き、Web ダッシュボードですべて設定します。プロバイダーの追加（40 以上の
 組み込み、または任意の OpenAI 互換エンドポイント）、モデルの選択、アカウントの管理はここで行います。
 `ocx gui` でいつでもダッシュボードを開き直せます。
-Codex 認証用の **ChatGPT アカウントプール**も管理できます。ChatGPT / Codex のアカウントを複数追加し、
-5 時間 / 週間 / 30 日のクォータをダッシュボードで更新します。クォータルーティングでは、新しいセッション
-が使用量の最も少ない健全なアカウントを使えます。ラウンドロビンと fill-first はそれぞれの方針に従います。
-既存の Codex スレッドは通常、開始したアカウントとの affinity を保つので、長い SSH・tmux・モバイル接続
-のセッションが会話の途中でアカウントを乗り換えることはありません。ただしクォータの再評価、failover、
-アカウントの除外、affinity の失効、401/403 や 429 からの復帰では再バインドされることがあります。ふだん
-は使わず他が尽きたときだけ回したいアカウント（多くは Codex Desktop のログイン）があるなら、アカウント
-に選択順を指定してください。
+
+<details>
+<summary><b>デスクトップアプリと macOS ウィジェット — ベータ版</b></summary>
+
+同じダッシュボードを包むネイティブアプリに、ブラウザーを開かなくてもプロキシの状態、今日の使用量、
+プロバイダーのクォータを確認できる WidgetKit 拡張を加えたものです。プロキシ自体は変わりません。アプリは
+起動中のプロキシを見つけるか、同梱の `ocx` サイドカーを起動します。ダッシュボードはプロキシの
+ポートで開きます（別のポートを設定していなければ **http://localhost:10100**）。
+
+現在はベータ版です。macOS アプリのリリースビルドは Developer ID で署名され、公証されています
+（ローカルビルドはアドホック署名）。Windows インストーラーはまだコード署名されていないため、
+初回起動時に SmartScreen の警告が表示されます。ウィジェットには macOS 14 以降が必要です。
+表示に使うスナップショットモデルは
+[`app/`](../app)（`MenuBarCore`）にあります。
+
+[最新リリース](https://github.com/lidge-jun/opencodex/releases)からダウンロードするか、
+ローカルでビルドできます。リポジトリのルートで `bun install && bun run build:gui` を実行し、
+`desktop/` で `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` を実行します。
+
+インストール先、サービスファイルなどディスクに書き込まれるものは
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) にまとめています。
+[デスクトップアプリガイド](https://opencodex.me/ja/guides/desktop-app/)と
+[macOS メニューバーアプリガイド](https://opencodex.me/ja/guides/macos-menu-bar/)では、
+プラットフォーム別のインストール手順と初回起動について説明しています。
+
+</details>
+
+### ChatGPT アカウントプール
+
+opencodex では、Codex 認証用の **ChatGPT アカウントプール**も管理できます。ChatGPT / Codex のアカウントを
+複数追加し、5 時間 / 週間 / 30 日のクォータをダッシュボードで更新します。クォータルーティングでは、新しい
+セッションが使用量の最も少ない健全なアカウントを使えます。ラウンドロビンと fill-first はそれぞれの方針に
+従います。既存の Codex スレッドは通常、開始したアカウントとの affinity を保つので、長い SSH・tmux・
+モバイル接続のセッションが会話の途中でアカウントを乗り換えることはありません。ただしクォータの再評価、
+failover、アカウントの除外、affinity の失効、401/403 や 429 からの復帰では再バインドされることがあります。
+ふだんは使わず他が尽きたときだけ回したいアカウント（多くは Codex Desktop のログイン）があるなら、
+アカウントに選択順を指定してください。
 
 ### スポンサー
 
@@ -125,14 +154,14 @@ Codex 認証用の **ChatGPT アカウントプール**も管理できます。C
 <details>
 <summary>Docker Compose</summary>
 
-このリポジトリには、digest 固定で非 root の Compose ビルドが入っています。ホストに Git と Bun があれば、
-イメージをビルドするたびに正式な互換性マニフェストを生成し、データプレーンのトークンを stdin から一度
-だけ初期化してハブを起動します:
+このリポジトリには、digest 固定で非 root の Compose ビルドが入っています。ビルドは、選択した Git
+スナップショットから正式な互換性マニフェストを生成して検証します。ローカルクローンには Git と Docker
+Compose、リモート Git コンテキストには Docker Compose が必要です。どちらの方法でも、ホスト上の Bun や
+準備手順は不要です。データプレーンのトークンを stdin から一度だけ初期化してハブを起動します:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -143,12 +172,30 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 既定のホストバインドは `127.0.0.1:10100` です。リモートへ公開するには
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d` を明示する必要があり、
 `0.0.0.0` はホストのすべてのインターフェースを開きます。ファイアウォールと、認証付きの TLS または
-tailnet のフロントエンドでアクセスを制限してください。生成された JSON は追跡されず、`.git` を含めずに
-イメージへコピーされます。ソースを変更したら再生成し、生成からビルドまでの間はソースを触らないで
-ください。ビルドは古いマニフェスト、欠けているファイルや不一致のファイル、余分なソースファイル、
-シンボリックリンクを拒否します。記録された SHA-256 は、ビルドコンテキストとコピーされたランタイム
+tailnet のフロントエンドでアクセスを制限してください。生成された JSON は追跡されません。ビルド
+コンテキストが受け入れるのは `.git/index` と `.git/HEAD`、つまり `git ls-files` が読み取るインベントリ
+だけです。オブジェクトストア全体ではなく約 1 MB であり、読み取り専用マウントを通じてビルド専用の
+マニフェストステージからのみ参照できるため、`.git` を含む `COPY` はありません。ホストで生成済みの
+マニフェストは検証後にのみ受け入れられ、それ以外の場合はビルドが自動生成します。ビルドは古い
+マニフェスト、欠けているファイルや不一致のファイル、余分なソースファイル、シンボリックリンクを
+拒否します。記録された SHA-256 は、ビルドコンテキストとコピーされたランタイム
 ファイル（`package.json`、`bun.lock`、明示的に含めた `scripts/model-metadata.source.json`）の
 すべてと照合されます。
+
+リモート Git コンテキストでは、BuildKit が Git メタデータを保持する必要があります。次の Compose
+ビルド断片はリモートスナップショットを選択し、必要な組み込み引数を渡します:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 トークンと可変状態は `ocx-state` という named volume に残り、イメージ、Compose ファイル、環境変数、
 シェル引数のどこにも認証情報は置かれません。プロバイダーの設定、認証付きの受け入れ確認、リモート管理、
@@ -164,8 +211,9 @@ tailnet のフロントエンドでアクセスを制限してください。生
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -173,8 +221,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

@@ -1,6 +1,5 @@
 import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
-import { parseCallbackInput } from "./callback-server";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
 import { ConfigMutationLockError, loadConfig, mutatePersistedConfig, saveConfig } from "../config";
 import { resolveProviderApiKey } from "../providers/key-store";
@@ -39,6 +38,7 @@ import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chat
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginDevin, refreshDevinToken } from "./devin";
+import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
@@ -51,8 +51,9 @@ import { providerModelsUrl, resolveProviderModelDiscoveryUrl } from "../provider
 import { resolveProviderTransport } from "../providers/xai-transport";
 import { detectClaudeCodeToken, detectGrokCliToken, hasComparableGrokIdentity, isSameGrokIdentity, shouldAdoptGrokGeneration } from "./local-token-detect";
 import { logOAuthEvent } from "./log";
-import { captureConfigGeneration, sweepExpiredOnWrite, type GenerationContext } from "../lib/state-store-sweeper";
-import { retainedUtf8Bytes } from "../lib/admission";
+import { captureConfigGeneration, sweepExpiredOnWrite } from "../lib/state-store-sweeper";
+import { clearManualCodeSlot, ensureManualCodeSlot, kiroLoginSettling, loginAbort, loginState, waitForManualLoginCode } from "./login-flow-state";
+export { reconcileOAuthFlowState, submitManualLoginCode } from "./login-flow-state";
 import { randomUUID } from "node:crypto";
 export {
   CODEX_HEALTH_AUTH_FAILED_NOTE,
@@ -89,11 +90,12 @@ export interface OAuthAccessSnapshot {
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion" | "authType">;
   /**
-   * Allowlisted GitHub Copilot API origin belonging to THIS account.
+   * Allowlisted API origin belonging to THIS account.
    *
-   * Copilot pins its bearer to an account-scoped regional host. Initial routing, 401 refresh, and
-   * account failover must resolve transport from this same snapshot; rereading the active account
-   * can pair account A's token with account B's origin during a concurrent switch (#2568d).
+   * Copilot and Devin pin credentials to account-scoped regional or tenant hosts. Initial routing,
+   * discovery, refresh, and account failover must resolve transport from this same snapshot;
+   * rereading the active account can pair account A's token with account B's origin during a
+   * concurrent switch (#2568d).
    */
   apiBaseUrl?: string;
 }
@@ -177,6 +179,7 @@ export interface LoginOpts {
 }
 
 export interface LoginFlowLifecycle {
+  flowId?: string;
   /** Runs after background credential/config persistence settles, before status becomes done. */
   onSettled?: () => void | Promise<void>;
 }
@@ -480,16 +483,18 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
   // Validated here, not at the call site: an unvalidated origin from a legacy or crafted
   // credential must never travel with a bearer, and dropping it makes the transport fall back to
   // the canonical host rather than to whatever the previous account was using.
-  const copilotApiBaseUrl = provider === "github-copilot"
+  const accountApiBaseUrl = provider === "github-copilot"
     ? validateCopilotApiBaseUrl(cred.apiBaseUrl)
-    : undefined;
+    : provider === "devin" || provider === "devin-cli"
+      ? validateDevinApiBaseUrl(cred.apiBaseUrl)
+      : undefined;
   return {
     provider,
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
-    ...(copilotApiBaseUrl ? { apiBaseUrl: copilotApiBaseUrl } : {}),
+    ...(accountApiBaseUrl ? { apiBaseUrl: accountApiBaseUrl } : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"
@@ -527,7 +532,9 @@ export function observeActiveOAuthAccessToken(
   if (account.credential.expires <= now) return { kind: "expired" };
   if (account.credential.expires <= now + REFRESH_SKEW_MS) return { kind: "near-expiry" };
 
-  const apiBaseUrl = validateCopilotApiBaseUrl(account.credential.apiBaseUrl);
+  const apiBaseUrl = provider === "github-copilot"
+    ? validateCopilotApiBaseUrl(account.credential.apiBaseUrl)
+    : undefined;
   return {
     kind: "available",
     snapshot: {
@@ -1273,6 +1280,29 @@ const OAUTH_RECONCILE_FIELDS: (keyof OcxProviderConfig)[] = [
 // existing rows through enrichProviderFromRegistry, which is fill-only and
 // preserves explicit saved values.
 
+/**
+ * Output-budget fields an OAuth preset may refresh but must never erase.
+ *
+ * These stay on the reconcile list so a preset that does declare a budget still
+ * refreshes the saved row. What changes is the other branch: when the preset
+ * declares nothing, the operator's value survives instead of being deleted.
+ *
+ * Without that, the fields behaved as if they could not be configured at all.
+ * No OAuth preset seeds either one, so the delete branch was the only branch
+ * these two ever took, and a hand-edited `defaultMaxOutputTokens` was gone
+ * before the first turn of the next startup — leaving the adapter's own
+ * fallback as the only reachable output cap (#5190).
+ *
+ * Scoped to the output budget on purpose. The input side (`contextWindow`,
+ * `modelContextWindows`) describes what the account's models are, which the
+ * preset and live discovery do own; an output budget is a spend decision the
+ * operator makes.
+ */
+const OAUTH_PRESERVE_WHEN_PRESET_UNSET: ReadonlySet<keyof OcxProviderConfig> = new Set([
+  "defaultMaxOutputTokens",
+  "modelMaxOutputTokens",
+]);
+
 const GOOGLE_ANTIGRAVITY_PROVIDER = "google-antigravity";
 const GOOGLE_ANTIGRAVITY_LIVE_DISCOVERY_VERSION = 2 as const;
 
@@ -1312,7 +1342,7 @@ function applyOAuthPresetCatalog(
     if (JSON.stringify(provider[field]) === JSON.stringify(preset[field])) continue;
     if (preset[field] !== undefined) {
       provider[field] = cloneProviderField(preset[field]) as never;
-    } else {
+    } else if (!OAUTH_PRESERVE_WHEN_PRESET_UNSET.has(field)) {
       delete provider[field];
     }
   }
@@ -1710,110 +1740,6 @@ export async function runLogin(
  * localhost), the GUI can POST the final redirect URL or authorization code via
  * submitManualLoginCode(), which feeds OAuthController.onManualCodeInput.
  */
-const loginState = new Map<string, { error?: string; done: boolean }>();
-const loginAbort = new Map<string, AbortController>();
-const kiroLoginSettling = new Set<string>();
-
-/** Pending paste for a login in progress: either a waiter or a stashed early submission. */
-interface ManualCodeSlot {
-  pendingInput?: string;
-  resolve?: (value: string) => void;
-  /** Registered by the callback flow so submits can validate state synchronously. */
-  expectedState?: string;
-}
-const loginManual = new Map<string, ManualCodeSlot>();
-const OAUTH_PENDING_CODE_MAX_BYTES = 4 * 1024;
-let lastOAuthFlowReconciledGeneration = 0;
-
-export function reconcileOAuthFlowState(context: GenerationContext): number {
-  if (context.generation <= lastOAuthFlowReconciledGeneration) return 0;
-  let removed = 0;
-  for (const [provider, state] of loginState) {
-    if (context.providerNames.has(provider) || !state.done || loginAbort.has(provider)) continue;
-    if (loginState.delete(provider)) removed += 1;
-    if (loginManual.delete(provider)) removed += 1;
-    if (loginAbort.delete(provider)) removed += 1;
-  }
-  lastOAuthFlowReconciledGeneration = context.generation;
-  return removed;
-}
-
-function clearManualCodeSlot(provider: string): void {
-  loginManual.delete(provider);
-}
-
-function ensureManualCodeSlot(provider: string): ManualCodeSlot {
-  let slot = loginManual.get(provider);
-  if (!slot) {
-    slot = {};
-    loginManual.set(provider, slot);
-  }
-  return slot;
-}
-
-/** Wait for a GUI/CLI paste of the OAuth redirect URL or code (or return a stashed early submit). */
-function waitForManualLoginCode(provider: string, signal: AbortSignal, expectedState?: string): Promise<string> {
-  if (signal.aborted) {
-    return Promise.reject(new Error(`OAuth callback cancelled: ${signal.reason}`));
-  }
-  const slot = ensureManualCodeSlot(provider);
-  if (expectedState !== undefined) slot.expectedState = expectedState;
-  if (slot.pendingInput !== undefined) {
-    const value = slot.pendingInput;
-    slot.pendingInput = undefined;
-    return Promise.resolve(value);
-  }
-  return new Promise<string>((resolve, reject) => {
-    const onAbort = () => {
-      if (slot.resolve === resolve) slot.resolve = undefined;
-      reject(new Error(`OAuth callback cancelled: ${signal.reason}`));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    slot.resolve = (value: string) => {
-      signal.removeEventListener("abort", onAbort);
-      if (slot.resolve === resolve) slot.resolve = undefined;
-      resolve(value);
-    };
-  });
-}
-
-/**
- * Feed a pasted redirect URL or authorization code into an in-progress GUI login.
- * Returns ok:false when no login is waiting (or input is empty). Invalid pastes are accepted
- * here and re-prompted by the OAuth callback loop if they cannot be parsed / fail state checks.
- */
-export function submitManualLoginCode(provider: string, input: string): { ok: true } | { ok: false; error: string } {
-  const trimmed = input.trim();
-  if (!trimmed) return { ok: false, error: "empty code" };
-  if (retainedUtf8Bytes(trimmed) > OAUTH_PENDING_CODE_MAX_BYTES) return { ok: false, error: "code too large" };
-  const st = loginState.get(provider);
-  if (!st || st.done) return { ok: false, error: "no login in progress" };
-  const slot = ensureManualCodeSlot(provider);
-  // Synchronous validation (validated request/ack): reject un-parseable input and
-  // authorization responses (url/query kind) whose state is missing or mismatched
-  // once the flow has registered its expected state. Raw codes stay in-session-PKCE
-  // protected. Early posts (flow not yet waiting, no expectedState) are stashed and
-  // re-validated by the callback loop.
-  const parsed = parseCallbackInput(trimmed);
-  // Command Code's manual fallback accepts a pasted JSON callback payload
-  // (`{ apiKey, state, ... }`) which has no `code` param. Let it through the
-  // shared gate so the provider-specific parser can validate it.
-  const isCommandCodeJson = provider === "command-code" && trimmed.startsWith("{") && !parsed.code;
-  if (!parsed.code && !isCommandCodeJson) return { ok: false, error: "no authorization code found in input" };
-  if (parsed.kind !== "raw" && slot.expectedState !== undefined) {
-    if (parsed.state === undefined) return { ok: false, error: "redirect URL is missing the state parameter" };
-    if (parsed.state !== slot.expectedState) return { ok: false, error: "state mismatch — paste the redirect URL from THIS login attempt" };
-  }
-  if (slot.resolve) {
-    const resolve = slot.resolve;
-    slot.resolve = undefined;
-    resolve(trimmed);
-  } else {
-    // Race: GUI may POST before the flow reaches onManualCodeInput — stash for the waiter.
-    slot.pendingInput = trimmed;
-  }
-  return { ok: true };
-}
 
 export interface OAuthAccountSummary {
   id: string;
@@ -1894,17 +1820,18 @@ export function oauthLoginSummary(maskEmails = true): Array<{ provider: string; 
 }
 
 export function clearLoginState(provider: string): void {
-  loginAbort.get(provider)?.abort("cleared");
+  loginAbort.get(provider)?.controller.abort("cleared");
   loginAbort.delete(provider);
   clearManualCodeSlot(provider);
   loginState.delete(provider);
 }
 
-export function cancelLoginFlow(provider: string): boolean {
-  const ctrl = loginAbort.get(provider);
+export function cancelLoginFlow(provider: string, flowId?: string): boolean {
+  const active = loginAbort.get(provider);
   const existing = loginState.get(provider);
-  if (!ctrl && (!existing || existing.done)) return false;
-  ctrl?.abort("cancelled");
+  if (flowId !== undefined && active?.flowId !== flowId) return false;
+  if (!active && (!existing || existing.done)) return false;
+  active?.controller.abort("cancelled");
   loginAbort.delete(provider);
   clearManualCodeSlot(provider);
   loginState.set(provider, { done: true, error: "Login cancelled" });
@@ -1925,7 +1852,7 @@ export async function startLoginFlow(
   clearManualCodeSlot(provider);
   loginState.set(provider, { done: false });
   const abort = new AbortController();
-  loginAbort.set(provider, abort);
+  loginAbort.set(provider, { controller: abort, flowId: lifecycle?.flowId });
   if (provider === "kiro") kiroLoginSettling.add(provider);
   return new Promise((resolve, reject) => {
     let urlResolved = false;
@@ -1940,7 +1867,7 @@ export async function startLoginFlow(
       signal: abort.signal,
     };
     const abandonIfNotOwner = (error?: unknown): boolean => {
-      if (loginAbort.get(provider) === abort) return false;
+      if (loginAbort.get(provider)?.controller === abort) return false;
       if (!urlResolved) reject(error ?? new Error("OAuth login was superseded"));
       return true;
     };
@@ -1978,7 +1905,7 @@ export async function startLoginFlow(
     // Background: runLogin persists the credential + provider entry to disk. The lifecycle hook
     // lets a long-lived server config adopt that settled state before clients observe done=true.
     const assertCurrentOwner = (): void => {
-      if (loginAbort.get(provider) !== abort) throw new OAuthLoginSupersededError();
+      if (loginAbort.get(provider)?.controller !== abort) throw new OAuthLoginSupersededError();
     };
     void runLogin(provider, ctrl, opts, { assertCurrentOwner }).then(
       () => settle(),

@@ -84,6 +84,19 @@ describe("xAI effective wire control state", () => {
     expect(xaiResponsesOptInState({ ...provider("oauth"), modelAdapters: { "grok-4.6": "invalid" } })).toBe(true);
     expect(xaiResponsesOptInState({ ...provider("oauth"), modelAdapters: { "grok-4.6": "openai-chat", "grok-4.5": "openai-chat" } })).toBe(false);
   });
+
+  test("grok-4.7 defaults OAuth Responses inbound and honors explicit Chat", () => {
+    const oauth = provider("oauth");
+    expect(resolveWireProtocolOverride("xai", "grok-4.7", oauth, "responses").adapter)
+      .toBe("openai-responses");
+    expect(resolveWireProtocolOverride("xai", "grok-4.7", provider("key"), "responses").adapter)
+      .toBe("openai-chat");
+    expect(resolveWireProtocolOverride("xai", "grok-4.7", {
+      ...oauth,
+      modelAdapters: { "grok-4.7": "openai-chat" },
+    }, "responses").adapter).toBe("openai-chat");
+    expect(XAI_RESPONSES_OPT_IN_MODELS).not.toContain("grok-4.7");
+  });
 });
 
 describe("xAI auth-mode transport selection", () => {
@@ -620,6 +633,7 @@ describe("xAI reasoning_content cache preservation", () => {
   test("registry preset exposes multi-agent only on Responses without claiming replay material", () => {
     const entry = getProviderRegistryEntry("xai");
     expect(entry?.preserveReasoningContentModels).toEqual([
+      "grok-4.7",
       "grok-4.6",
       "grok-4.5",
       "grok-4.3",

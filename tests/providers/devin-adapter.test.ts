@@ -483,9 +483,8 @@ describe("devin adapter api-server host resolution (#4503)", () => {
     home = mkdtempSync(join(tmpdir(), "ocx-devin-host-"));
     process.env.OPENCODEX_HOME = home;
     seenUrls = [];
-    // This adapter's transport fetches through the global fetch — it does not
-    // consume IncomingMeta.providerFetch — so the stub observes every upstream
-    // URL the turn dispatches to.
+    // No providerFetch is supplied by this direct adapter test, so inference falls back to the
+    // global fetch alongside catalog/JWT RPCs and this stub observes every upstream URL.
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       seenUrls.push(String(input));
       return new Response("down", { status: 500 });
@@ -501,10 +500,10 @@ describe("devin adapter api-server host resolution (#4503)", () => {
 
   // Drive one real runTurn. The stubbed 500 ends the turn in an upstream error
   // only after every outbound URL has been recorded.
-  async function runOneTurn(apiKey: string): Promise<AdapterEvent[]> {
+  async function runOneTurn(apiKey: string, providerId = "devin"): Promise<AdapterEvent[]> {
     const adapter = createDevinAdapter(
       { adapter: "devin", baseUrl: CONFIGURED_BASE_URL, apiKey },
-      { providerId: "devin" },
+      { providerId },
     );
     const parsed: OcxParsedRequest = {
       modelId: "swe-2-high",
@@ -535,7 +534,7 @@ describe("devin adapter api-server host resolution (#4503)", () => {
       apiBaseUrl: EU_TENANT_HOST,
     });
 
-    const events = await runOneTurn("ocx-test-alias-slot-key");
+    const events = await runOneTurn("devin-cli-session");
 
     expectDispatchedTo(EU_TENANT_HOST);
     expect(seenUrls.some((url) => url.startsWith(DEVIN_DEFAULT_API_SERVER))).toBe(false);
@@ -543,6 +542,21 @@ describe("devin adapter api-server host resolution (#4503)", () => {
     // The turn reached the transport and failed there on the stubbed 500 —
     // proof the recorded URLs came from a real dispatch, not an early return.
     expect(events.some((event) => event.type === "error")).toBe(true);
+  });
+
+  test("an independently configured key does not borrow an alias credential's tenant host", async () => {
+    await saveCredential("devin", {
+      access: "different-account-session",
+      refresh: "different-account-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "local-cli",
+      apiBaseUrl: EU_TENANT_HOST,
+    });
+
+    await runOneTurn("configured-provider-key", "devin-cli");
+
+    expectDispatchedTo(CONFIGURED_BASE_URL);
+    expect(seenUrls.some((url) => url.startsWith(EU_TENANT_HOST))).toBe(false);
   });
 
   test("a usable literal devin slot still wins over the aliased devin-cli slot", async () => {
@@ -561,9 +575,24 @@ describe("devin adapter api-server host resolution (#4503)", () => {
       apiBaseUrl: EU_TENANT_HOST,
     });
 
-    await runOneTurn("ocx-test-literal-slot-key");
+    await runOneTurn("devin-session");
 
     expectDispatchedTo(FEDSTART_TENANT_HOST);
+  });
+
+  test("a configured key does not borrow the literal devin slot's tenant host", async () => {
+    await saveCredential("devin", {
+      access: "devin-session",
+      refresh: "devin-session",
+      expires: Number.MAX_SAFE_INTEGER,
+      source: "oauth",
+      apiBaseUrl: FEDSTART_TENANT_HOST,
+    });
+
+    await runOneTurn("configured-provider-key");
+
+    expectDispatchedTo(CONFIGURED_BASE_URL);
+    expect(seenUrls.some((url) => url.startsWith(FEDSTART_TENANT_HOST))).toBe(false);
   });
 
   test("with neither credential slot populated the configured baseUrl still applies", async () => {

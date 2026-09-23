@@ -345,6 +345,29 @@ describe("PATCH /api/keys", () => {
     }
   });
 
+  test.each([
+    { name: "must-not-stick", allowedProviders: "invalid" },
+    { name: "must-not-stick", allowedProviders: ["replacement"], allowedModels: [42] },
+    { allowedProviders: null, allowedModels: "invalid" },
+  ])("rejects the whole patch without live or later persisted mutation: %j", async patch => {
+    const config = baseConfig();
+    config.apiKeys = [{ id: "kept", name: "original", key: "fixture-key", createdAt: "2026-01-01T00:00:00Z", allowedProviders: ["test"], allowedModels: ["gpt-test"] }];
+    saveConfig(config);
+    const before = readRawConfig().apiKeys;
+    const server = startServer(0);
+    try {
+      expect((await keysRequest(server, "PATCH", { id: "kept", ...patch })).status).toBe(400);
+      const listed = await keysRequest(server, "GET");
+      expect((listed.json.keys as Array<Record<string, unknown>>)[0]).toMatchObject({ name: "original", allowedProviders: ["test"], allowedModels: ["gpt-test"] });
+      expect(readRawConfig().apiKeys).toEqual(before);
+      // A subsequent unrelated write must not persist a rejected partial edit.
+      expect((await keysRequest(server, "POST", { name: "another" })).status).toBe(201);
+      expect((readRawConfig().apiKeys as Array<unknown>)[0]).toEqual((before as Array<unknown>)[0]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("an unknown id is 404 and changes nothing", async () => {
     saveConfig(baseConfig());
     const server = startServer(0);

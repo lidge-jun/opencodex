@@ -707,7 +707,11 @@ test("Claude Desktop profile GET, PUT and apply round-trip four-family assignmen
     const discovery = await fetch(new URL("/v1/models?flavor=anthropic", server.url)).then(r => r.json()) as { data: Array<{ id: string }> };
     expect(discovery.data.some(model => model.id === alias)).toBe(true);
 
-    const apply = await fetch(new URL("/api/claude-desktop/apply", server.url), { method: "POST" });
+    const apply = await fetch(new URL("/api/claude-desktop/apply", server.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "gateway" }),
+    });
     expect(apply.status).toBe(200);
     const result = await apply.json() as { path: string; applied: boolean };
     expect(result.applied).toBe(true);
@@ -813,6 +817,14 @@ test("Claude Desktop apply validates the mode body", async () => {
       body: JSON.stringify({ profile: { version: 2 } }),
     });
     expect(badProfile.status).toBe(400);
+    expect(loadConfig()).toEqual(beforeBadProfile);
+
+    const badGatewayProfile = await fetch(new URL("/api/claude-desktop/apply", server.url), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "gateway", profile: { version: 2 } }),
+    });
+    expect(badGatewayProfile.status).toBe(400);
     expect(loadConfig()).toEqual(beforeBadProfile);
 
     const hybrid = await fetch(new URL("/api/claude-desktop/apply", server.url), {

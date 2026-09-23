@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -11,6 +11,7 @@ import { createIntegrationStateStore, type IntegrationStateStore } from "../../s
 import { applyIntegration } from "../../src/integrations/writer";
 import type { IntegrationWriterLockSeams } from "../../src/integrations/writer-lock";
 import { handleManagementAPI } from "../../src/server/management-api";
+import { loadExportModels, resetExportSnapshotForTests } from "../../src/server/management/model-rows";
 import {
   setIntegrationMutationFlightTestHooks,
   setIntegrationPathTestHooks,
@@ -139,6 +140,28 @@ function installMcode(): string {
 
 function hermesConfigPath(): string {
   return INTEGRATION_CLIENTS.hermes.configPath(routeEnv, home);
+}
+
+/** Whole-store content, so an append or an overwrite cannot hide behind an unchanged file list. */
+function storeContentWitness(root: string): string {
+  if (!existsSync(root)) return "";
+  return readdirSync(root, { recursive: true })
+    .map(entry => String(entry))
+    .sort()
+    .map(entry => {
+      const full = join(root, entry);
+      if (!existsSync(full) || statSync(full).isDirectory()) return `${entry}/`;
+      return `${entry}:${readFileSync(full, "utf8")}`;
+    })
+    .join("\u0000");
+}
+
+async function previewApi(path: string, body: unknown): Promise<Response> {
+  return api(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 async function rawApi(path: string, init: RequestInit = {}): Promise<Response | null> {
@@ -1210,5 +1233,309 @@ describe("admission", () => {
       else process.env.OPENCODEX_HOME = previousOpencodexHome;
       if (previousAdmin !== undefined) process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdmin;
     }
+  });
+});
+
+describe("integration previews are reads", () => {
+  test("planning without a cached roster refuses rather than gathering one", async () => {
+    const configPath = installHermes();
+    const before = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
+
+    const response = await previewApi("/api/client-integrations/preview", { clientId: "hermes", operation: "apply" });
+    // Discovery refreshes credentials and writes the provider cache, so a preview may not perform
+    // one to manufacture a roster. With nothing cached there is no honest snapshot to plan
+    // against, and saying so is the correct answer.
+    expect(response.status).toBe(409);
+    const body = await response.json() as { code: string };
+    expect(body.code).toBe("integration_preview_unavailable");
+    expect(JSON.stringify(body)).not.toContain(home);
+
+    const after = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
+    expect(after).toBe(before);
+  });
+
+  test("a previewed change commits exactly once and then reports itself stale", async () => {
+    const configPath = installHermes();
+    resetExportSnapshotForTests();
+    // A preview reads only a roster an authoritative load already finished, so give it one.
+    await loadExportModels(config, []);
+
+    const preview = await previewApi("/api/client-integrations/preview", { clientId: "hermes", operation: "apply" });
+    expect(preview.status).toBe(200);
+    const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+    expect(plan.canApply).toBe(true);
+
+    const commit = await api("/api/client-integrations/hermes", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, operation: "apply", planFingerprint: plan.fingerprint }),
+    });
+    expect(commit.status).toBe(200);
+    const committed = readFileSync(configPath, "utf8");
+
+    // The same confirmation replayed now describes a file that no longer exists in that state.
+    // Without a real fingerprint comparison this would apply a second time.
+    const replay = await api("/api/client-integrations/hermes", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, operation: "apply", planFingerprint: plan.fingerprint }),
+    });
+    expect(replay.status).toBe(409);
+    expect((await replay.json() as { code: string }).code).toBe("integration_preview_stale");
+    expect(readFileSync(configPath, "utf8")).toBe(committed);
+  });
+
+  test("a roster replaced while the lock is taken refuses instead of writing", async () => {
+    const configPath = installDsh();
+    resetExportSnapshotForTests();
+    await loadExportModels(config, []);
+
+    const preview = await previewApi("/api/client-integrations/preview", { clientId: "dsh", operation: "apply" });
+    expect(preview.status).toBe(200);
+    const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+    expect(plan.canApply).toBe(true);
+    const before = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
+    const storeBefore = storeContentWitness(storeRoot);
+
+    /*
+     * Publishing a new roster as the lock is acquired puts the replacement exactly where it is
+     * hardest to notice: after the request captured its input and before the guard runs under the
+     * lock. A check that re-read the roster at that moment would validate the new one and write
+     * the old, which is the failure this ordering exists to make impossible.
+     *
+     * The replacement has to be a different roster. Reloading the same rows publishes nothing an
+     * operator could see, and a confirmation is not stale because an unrelated read rebuilt the
+     * list it was already holding.
+     */
+    const lockSeams: IntegrationWriterLockSeams = {
+      writeFile: async () => {
+        await loadExportModels(config, [{ id: "published-under-the-lock", provider: "a" }]);
+      },
+      removeFile: async () => {},
+      now: () => 0,
+      delay: async () => {},
+      pid: 12,
+    };
+    setIntegrationMutationFlightTestHooks({ store, lockSeams });
+
+    const commit = await api("/api/client-integrations/dsh", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, operation: "apply", planFingerprint: plan.fingerprint }),
+    });
+    expect(commit.status).toBe(409);
+    expect((await commit.json() as { code: string }).code).toBe("integration_preview_stale");
+    expect(existsSync(configPath) ? readFileSync(configPath, "utf8") : null).toBe(before);
+    // The race has to leave the store alone too: a snapshot or journal row written before the
+    // guard refused would be invisible to a target-bytes check.
+    expect(storeContentWitness(storeRoot)).toBe(storeBefore);
+  });
+
+  test("a roster rebuilt unchanged while the lock is taken is not a replacement", async () => {
+    const configPath = installDsh();
+    resetExportSnapshotForTests();
+    await loadExportModels(config, []);
+
+    const preview = await previewApi("/api/client-integrations/preview", { clientId: "dsh", operation: "apply" });
+    const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+    expect(plan.canApply).toBe(true);
+
+    // The Integrations collection performs an ordinary load on every visit, and one can land in
+    // this window. It rebuilds the same rows, so the confirmation an operator is submitting still
+    // describes what they were shown, and refusing it would be a conflict they cannot act on.
+    const lockSeams: IntegrationWriterLockSeams = {
+      writeFile: async () => { await loadExportModels(config, []); },
+      removeFile: async () => {},
+      now: () => 0,
+      delay: async () => {},
+      pid: 12,
+    };
+    setIntegrationMutationFlightTestHooks({ store, lockSeams });
+
+    const commit = await api("/api/client-integrations/dsh", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, operation: "apply", planFingerprint: plan.fingerprint }),
+    });
+    expect(commit.status).toBe(200);
+    expect(existsSync(configPath)).toBe(true);
+  });
+
+  test("a previewed undo commits with its binding", async () => {
+    const configPath = installHermes();
+    resetExportSnapshotForTests();
+    await loadExportModels(config, []);
+
+    const applied = await api("/api/client-integrations/hermes", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(applied.status).toBe(200);
+    expect(existsSync(configPath)).toBe(true);
+
+    const opId = store.listOperations("hermes")[0]?.opId;
+    expect(opId).toBeDefined();
+
+    const preview = await previewApi("/api/client-integrations/restore/preview", { opId });
+    expect(preview.status).toBe(200);
+    const plan = await preview.json() as { canApply: boolean; fingerprint: string };
+    expect(plan.canApply).toBe(true);
+
+    // The binding has to carry a bound undo all the way through, not just refuse a bad one.
+    const undo = await api("/api/client-integrations/restore", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ opId, operation: "restore", planFingerprint: plan.fingerprint }),
+    });
+    expect(undo.status).toBe(200);
+    /*
+     * Hermes has no config file before the apply, so the snapshot that apply took is "none" and a
+     * successful undo DELETES the file rather than rewriting it. Reading bytes back here was
+     * wrong: the file is gone, and the evidence that the undo happened lives in the journal.
+     */
+    expect(existsSync(configPath)).toBe(false);
+    const rows = store.listOperations("hermes");
+    expect(rows.some(row => row.kind === "restore")).toBe(true);
+    expect(rows.some(row => row.opId === opId)).toBe(true);
+  });
+
+  test("a plan is refused before any planning when the request does not name a real operation", async () => {
+    const badOperation = await previewApi("/api/client-integrations/preview", { clientId: "hermes", operation: "launch" });
+    expect(badOperation.status).toBe(400);
+    expect((await badOperation.json() as { code: string }).code).toBe("invalid_preview_operation");
+
+    const badClient = await previewApi("/api/client-integrations/preview", { clientId: "not-a-client", operation: "apply" });
+    expect(badClient.status).toBeGreaterThanOrEqual(400);
+  });
+
+  test("planning an undo for an operation that is not there declines to read the journal back", async () => {
+    const response = await previewApi("/api/client-integrations/restore/preview", { opId: "no-such-operation" });
+    expect(response.status).toBe(404);
+    const body = await response.json() as { code: string };
+    expect(body.code).toBe("integration_operation_not_found");
+  });
+
+  test("a half-bound confirmation is rejected rather than quietly treated as unbound", async () => {
+    installHermes();
+    // Dropping one half would answer 200 to a caller who believed their confirmation was being
+    // checked, which is worse than refusing the request.
+    const onlyOperation = await api("/api/client-integrations/hermes", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, operation: "apply" }),
+    });
+    expect(onlyOperation.status).toBe(400);
+    expect((await onlyOperation.json() as { code: string }).code).toBe("invalid_preview_binding");
+
+    const onlyFingerprint = await api("/api/client-integrations/hermes", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, planFingerprint: "p1:whatever" }),
+    });
+    expect(onlyFingerprint.status).toBe(400);
+    expect((await onlyFingerprint.json() as { code: string }).code).toBe("invalid_preview_binding");
+  });
+
+  test("a confirmation naming a different operation than the request is not a confirmation of it", async () => {
+    installHermes();
+    const response = await api("/api/client-integrations/hermes", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: false, operation: "apply", planFingerprint: "p1:whatever" }),
+    });
+    expect(response.status).toBe(400);
+    expect((await response.json() as { code: string }).code).toBe("invalid_preview_operation");
+  });
+
+  test("a bound change cannot commit without a plan that still validates", async () => {
+    const configPath = installHermes();
+    const before = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
+    // Content, not names. A journal append, an overwritten ownership record and a replaced
+    // snapshot all leave the file list identical, and every one of them is a write.
+    const storeContents = (): string => {
+      if (!existsSync(storeRoot)) return "";
+      return readdirSync(storeRoot, { recursive: true })
+        .map(entry => String(entry))
+        .sort()
+        .map(entry => {
+          const full = join(storeRoot, entry);
+          if (!existsSync(full) || statSync(full).isDirectory()) return `${entry}/`;
+          return `${entry}:${readFileSync(full, "utf8")}`;
+        })
+        .join("\u0000");
+    };
+    resetExportSnapshotForTests();
+    await loadExportModels(config, []);
+    const storeBefore = storeContents();
+
+    const response = await api("/api/client-integrations/hermes", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true, operation: "apply", planFingerprint: "p1:not-the-current-plan" }),
+    });
+
+    // Whatever the reason the plan does not validate, the mutation does not happen. This is the
+    // case that would catch a refactor quietly dropping the binding on the way to the writer.
+    // With a roster present this can only be a fingerprint comparison, so the reason is exact.
+    expect(response.status).toBe(409);
+    const body = await response.json() as { code: string };
+    expect(body.code).toBe("integration_preview_stale");
+
+    const after = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
+    expect(after).toBe(before);
+    expect(storeContents()).toBe(storeBefore);
+  });
+});
+
+describe("the generic preview routes are not an unscoped door into Aside", () => {
+  /*
+   * Aside is a set of profiles, not one file. A plan built through the generic routes would
+   * describe the legacy single-account location, and no bound mutation accepts that: the mutation
+   * routes already refuse the unscoped spelling. Answering it here would hand an operator a
+   * confirmation nothing can carry out.
+   */
+  test("planning apply for aside without a profile is refused, and writes nothing", async () => {
+    const homeBefore = storeContentWitness(home);
+    const storeBefore = storeContentWitness(storeRoot);
+
+    const response = await previewApi("/api/client-integrations/preview", { clientId: "aside", operation: "apply" });
+
+    expect(response.status).toBe(400);
+    expect((await response.json() as { code: string }).code).toBe("invalid_aside_profile_path");
+    expect(storeContentWitness(home)).toBe(homeBefore);
+    expect(storeContentWitness(storeRoot)).toBe(storeBefore);
+  });
+
+  test("planning an undo of an aside operation without a profile is refused for what it is", async () => {
+    // The row is found first, so the answer names the unscoped path rather than reporting an
+    // operation that is plainly there as missing.
+    store.appendJournal({
+      opId: "aside-unscoped-op",
+      clientId: "aside",
+      kind: "apply",
+      at: new Date(0).toISOString(),
+      configPath: join(home, ".aside", "u", "1", "models.json"),
+      snapshot: { kind: "none" },
+      resultFingerprint: "0123456789abcdef",
+      resultAbsent: false,
+      priorRecord: null,
+    });
+    const homeBefore = storeContentWitness(home);
+    const storeBefore = storeContentWitness(storeRoot);
+
+    const response = await previewApi("/api/client-integrations/restore/preview", { opId: "aside-unscoped-op" });
+
+    expect(response.status).toBe(400);
+    expect((await response.json() as { code: string }).code).toBe("invalid_aside_profile_path");
+    expect(storeContentWitness(home)).toBe(homeBefore);
+    expect(storeContentWitness(storeRoot)).toBe(storeBefore);
+
+    // Narrow: an operation belonging to any other client still plans here.
+    installHermes();
+    resetExportSnapshotForTests();
+    await loadExportModels(config, []);
+    const ok = await previewApi("/api/client-integrations/preview", { clientId: "hermes", operation: "apply" });
+    expect(ok.status).toBe(200);
   });
 });

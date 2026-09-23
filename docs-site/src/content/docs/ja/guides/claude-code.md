@@ -25,6 +25,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (任意、従来の `ANTHROPIC_SMALL_FAST_MODEL` もサポート) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (任意) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定はオフ) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
 直接 export した変数が常に優先します。追加引数はそのまま渡されます: `ocx claude -p "hello"`。
 
@@ -93,6 +94,29 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 
 `claudeCode.nativePassthrough: false` でオフにでき、`claudeCode.anthropicBaseUrl` で別のアドレスを
 指定できます。
+
+## Claude Desktop のモード: 1P（デフォルト）とゲートウェイ
+
+Claude Desktop は排他的な 2 つのモードのどちらかで OpenCodex を使います。ダッシュボードの
+**Claude → Desktop → 接続モード**、または `ocx claude desktop apply --first-party|--gateway` で選びます。
+
+- **1P（ファーストパーティ、デフォルト）**: Desktop 本体は変更しません。claude.ai のログイン、
+  チャットタブ、コネクタ、リモート操作はそのまま動きます。OpenCodex は `~/.claude/settings.json` の
+  `env` に `HTTPS_PROXY=http://127.0.0.1:<公開ポート+100>` と
+  `NODE_EXTRA_CA_CERTS=~/.opencodex/claude-intercept/ca.pem` の 2 つだけを書きます。Desktop が
+  Code タブ用に起動する Claude Code（サブエージェント含む）とターミナルの `claude` CLI だけがこれを読み、
+  ローカルのインターセプトプロキシを通ります。`POST /v1/messages` と `count_tokens` のみ OpenCodex が
+  処理し、他の `api.anthropic.com` パスはそのまま Anthropic に中継されます。CA は OS の信頼ストアには
+  インストールされません。
+- **ゲートウェイ（3P）**: 従来の方式で、下記のプロファイルによりアプリ全体が OpenCodex を
+  ゲートウェイとして使います。`--gateway`（または従来の `--static`/`--hybrid`/`--discovery-only`）で
+  明示的に選びます。
+
+モードは `claudeCode.desktopMode` に保存されます。すでにゲートウェイプロファイルを適用済みの環境は
+更新後もゲートウェイのままで、新規インストールだけが 1P になります。切り替えると他方のモードの設定
+（OpenCodex が書いた値のみ）が削除され、社内プロキシなど外部の `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS`
+は上書きせず適用を拒否します。切り替え後は Desktop を完全に終了して再起動してください。詳細と
+Claude Code CLI 互換性は英語版ドキュメントを参照してください。
 
 ## リモートハブに接続した Claude Desktop
 
@@ -346,7 +370,7 @@ ChatGPT bearer はメインルーティングプロバイダーには転送し�
 モデル、detail、画像バイト、リクエストコンテキストを基準にキャッシュし、同じ画像とコンテキストを毎回再説明
 しません。内容が変わり得るリモート `https:` 画像はキャッシュしません。
 
-全設定キーは[設定リファレンス](/ja/reference/configuration/#sidecars)で確認できます。
+全設定キーは[設定リファレンス](/ja/reference/configuration/server/#サイドカー)で確認できます。
 Anthropic OAuth のウェブ検索と画像説明は保存所ですでに使っている Claude Code OAuth
 fingerprint 方式をそのまま踏襲しますが、長時間の無人作業に使う前に自身のアカウントと実際の作業で
 十分 soak test するのが無難です。
@@ -497,4 +521,4 @@ Anthropic バックエンドを明示すると意図的に失敗後停止しま�
 
 `config.json` の `claudeCode.stabilizePromptCache` を `true` にすると、変換ルートのシステム指示末尾にある対応済み Claude 通知を最後のユーザーメッセージへ移します。既定値は `false` です。このロール変更が適切なクライアントでのみ有効にしてください。コードフェンス内の例と一致しない本文は保持され、Anthropic のネイティブ転送は変わりません。メタデータがない場合のキャッシュキーは安定化した指示から計算されます。会話 ID の生成やキャッシュヒットの保証は行いません。
 
-OpenCode Go の `deepseek-v4.1-flash` Chat ルートでは、変換されたタイムライン上のシステムリマインダーは、保留中のツール結果の後で位置と system ロールを自動的に維持します。これにより、新しいリマインダーを追加しても先頭のシステムプロンプトが書き換わりません。`stabilizePromptCache` の設定にかかわらず適用され、他のモデルや接続先の変換、および Anthropic のネイティブ転送は変わりません。キャッシュの再利用には、安定したセッション ID と上流キャッシュの利用可能性が引き続き必要です。過去の指示やツールの変更、会話の圧縮もキャッシュヒットに影響します。リマインダーの順序を保つだけで再利用が保証されるわけではありません。
+変換されたすべての Chat ルートで、タイムライン上のリマインダーは保留中のツール結果の後、会話内の元の位置を保ちます。これにより、新しいリマインダーを追加しても先頭のシステムプロンプトが書き換わらず、会話の途中に置かれた指示がそれより前のターンの前に移動することもありません。そのスロットが運ぶロールは別に決まります。プロバイダーが `foldDeveloperRoleToSystem: false` を記録していないかぎり、リマインダーは `system` として送られます。この記録は上流が `developer` ロールを受け付けることを表し、その場合は同じ位置のまま転送します。受け付けない上流は `400 role 'developer' is not allowed` を返してターンが始まらないため、記録のない宛先は畳む側になります。`stabilizePromptCache` の設定にかかわらず適用され、Anthropic のネイティブ転送は変わりません。キャッシュの再利用には、安定したセッション ID と上流キャッシュの利用可能性が引き続き必要です。過去の指示やツールの変更、会話の圧縮もキャッシュヒットに影響します。リマインダーの順序を保つだけで再利用が保証されるわけではありません。

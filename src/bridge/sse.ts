@@ -16,9 +16,15 @@ import {
   type OcxErrorPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
-import { mayBecomePatchEnvelope, repairFreeformToolInput } from "../responses/apply-patch-envelope";
+import { attemptDeliveryRecorder, classifyRelayedResponseEvent } from "../usage/attempt-delivery";
+import {
+  mayBecomePatchEnvelope,
+  repairFreeformToolInput,
+} from "../responses/apply-patch-envelope";
+import { progressiveFreeformInput } from "../responses/progressive-freeform-input";
 import { encodeCompactionSummary } from "../responses/compaction";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
+import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
 import { isTruncatedStopReason, truncationReasonFor } from "../responses/truncated-stop-reason";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "../responses/reasoning-envelope";
 import { rememberReasoningForCall } from "../responses/reasoning-replay-cache";
@@ -42,7 +48,7 @@ import {
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "../lib/translator-budget";
-import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
+import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 
 function sseEvent(name: string, data: Record<string, unknown>): string {
@@ -145,36 +151,8 @@ export function bridgeToResponsesSSE(
   ): string => {
     const helper = resolveCodeModeHelperName(codeModeHelperName, toolName, args, namespace, options?.declaredToolNames);
     return helper
-      ? compileCodeModeHelperInput(args, helper)
+      ? compileCodeModeHelperInput(args, helper, codeModeHelperName ?? toolName)
       : repairFreeformToolInput(args, toolName, namespace);
-  };
-  // Best-effort unwrap of a PARTIAL freeform arg buffer for live input streaming
-  // (`response.custom_tool_call_input.delta` — codex-rs uses it for UI preview only;
-  // the completed custom_tool_call item stays authoritative). Compact `{"input":"...`
-  // buffers get their string value progressively unescaped; anything else streams raw.
-  const FREEFORM_WRAP_PREFIX = '{"input":"';
-  const freeformPartialInput = (args: string): string => {
-    if (!args.startsWith(FREEFORM_WRAP_PREFIX)) return args;
-    const body = args.slice(FREEFORM_WRAP_PREFIX.length);
-    let out = "";
-    for (let i = 0; i < body.length; i++) {
-      const c = body[i];
-      if (c === '"') break; // unescaped closing quote: value complete
-      if (c === "\\") {
-        const n = body[i + 1];
-        if (n === undefined) break; // escape split across chunks: wait for more
-        i++;
-        if (n === "n") out += "\n";
-        else if (n === "t") out += "\t";
-        else if (n === "r") out += "\r";
-        else if (n === "u") {
-          const hex = body.slice(i + 1, i + 5);
-          if (hex.length === 4 && /^[0-9a-fA-F]{4}$/.test(hex)) { out += String.fromCharCode(parseInt(hex, 16)); i += 4; }
-          else break; // incomplete \uXXXX: wait for more
-        } else out += n; // \" \\ \/ etc.
-      } else out += c;
-    }
-    return out;
   };
   // tool_search_call carries arguments as a JSON object ({query, limit}); parse the model's arg string.
   const parseArgsObj = (args: string): Record<string, unknown> => {
@@ -186,6 +164,10 @@ export function bridgeToResponsesSSE(
   // at terminal/cancel below.
   const ownsBudget = !options?.translatorBudget;
   const budget = options?.translatorBudget ?? createTranslatorBudget();
+  // Resolved from the CALLER's budget only. A bridge that owns its budget is not serving a
+  // logged request -- there is no attempt to count against, and a locally created scope would
+  // never have had a recorder bound to it.
+  const delivery = attemptDeliveryRecorder(options?.translatorBudget);
   // Idempotent: safe to call at every stream-death path; disposal must come
   // AFTER the final charges (emitDone), never inside reportTerminal.
   const disposeOwnedBudget = () => { if (ownsBudget) budget.dispose(); };
@@ -302,6 +284,11 @@ export function bridgeToResponsesSSE(
           controller.enqueue(frame);
           budget?.releaseRetained(frameBytes, { kind: "live_transient" });
           emittedFrames++;
+          // After a SUCCESSFUL enqueue, never before it. A frame that threw on the way to the
+          // transport did not reach the caller, and counting it here would make the relayed
+          // total equal the adapter total by construction -- erasing the one discrepancy these
+          // counters exist to expose (#3983).
+          delivery?.noteRelayedEvent(classifyRelayedResponseEvent(name, data));
         } catch (error) {
           if (isTranslatorBudgetExceededError(error)) {
             terminateForTranslatorOverflow?.(error);
@@ -1069,16 +1056,34 @@ export function bridgeToResponsesSSE(
                   currentToolCall.callId,
                 ));
                 if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
-                  emit("response.function_call_arguments.delta", {
-                    item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
-                    delta: event.arguments,
-                  });
+                  // Hold fragments whose accumulated buffer can never parse as JSON. Fragments
+                  // already streamed are retained by the client as history even when the item
+                  // fails at completion (the poisoned-replay loop behind inbound "non-JSON
+                  // arguments" warnings); holding costs nothing for healthy streams because the
+                  // completed item still carries the full arguments.
+                  if (toolCallArgumentsCouldBeJson(currentToolCall.args)) {
+                    emit("response.function_call_arguments.delta", {
+                      item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
+                      delta: event.arguments,
+                    });
+                  }
                 }
                 if (currentToolCall.freeform && !currentToolCall.codeModeHelperName) {
-                  // Hold while the buffer is still an ambiguous prefix of the JSON wrapper,
-                  // then stream only the unwrapped input suffix (never rewind on mode flips).
-                  if (!FREEFORM_WRAP_PREFIX.startsWith(currentToolCall.args)) {
-                    const full = freeformPartialInput(currentToolCall.args);
+                  // `progressiveFreeformInput` holds while the buffer is still an ambiguous prefix
+                  // of a JSON wrapper; otherwise stream only the unwrapped input suffix, never
+                  // rewinding on a mode flip.
+                  //
+                  // The name is dropped for a namespaced tool that does not own the apply-patch
+                  // grammar, because `repairFreeformToolInput` drops it at completion for the
+                  // same reason. Streaming under a vocabulary the completed item does not use
+                  // is the same disagreement in the other direction.
+                  const ownsFreeformGrammar = currentToolCall.namespace === undefined
+                    || currentToolCall.namespace === "functions";
+                  const full = progressiveFreeformInput(
+                    currentToolCall.args,
+                    ownsFreeformGrammar ? currentToolCall.name : "",
+                  );
+                  if (full !== null) {
                     const emitted = currentToolCall.inputEmitted ?? "";
                     // Also hold a buffer that could still become a complete patch envelope:
                     // at completion such a body is recompiled into an apply_patch helper call,
@@ -1086,7 +1091,14 @@ export function bridgeToResponsesSSE(
                     const mayCompile = declaresCodeModeExec(options?.declaredToolNames)
                       && !currentToolCall.namespace
                       && currentToolCall.name === "exec";
-                    if (!(mayCompile && mayBecomePatchEnvelope(full)) && full.startsWith(emitted) && full.length > emitted.length) {
+                    // `apply_patch` holds for a different reason with the same shape:
+                    // `normalizeApplyPatchDelimiters` rewrites a decorated `*** Begin Patch ***`
+                    // envelope at completion, so streaming the decorated markers would be
+                    // replaced by the normalized ones.
+                    const mayNormalize = ownsFreeformGrammar && currentToolCall.name === "apply_patch";
+                    if (!((mayCompile || mayNormalize) && mayBecomePatchEnvelope(full))
+                      && !(mayCompile && mayBecomeCodeModeShellInput(currentToolCall.args, full))
+                      && full.startsWith(emitted) && full.length > emitted.length) {
                       emit("response.custom_tool_call_input.delta", {
                         item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
                         delta: full.slice(emitted.length),

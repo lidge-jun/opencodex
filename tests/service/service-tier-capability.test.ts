@@ -26,6 +26,11 @@ import {
 import { candidateCapabilityEvidence } from "../../src/routing/capability";
 import { resolveProductionBehaviorValues } from "../../src/routing/compatibility/behavior";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
+// Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 describe("registry capability reaches saved configs without overriding them", () => {
   test("the registry holds the defaults; the seed stays free of them so explicit config stays distinguishable", () => {
@@ -34,6 +39,7 @@ describe("registry capability reaches saved configs without overriding them", ()
     expect(entry.preserveResponsesReasoningContent).toBe(true);
     expect(getProviderRegistryEntry("openai-apikey")!.supportsServiceTier).toBe(true);
     expect(getProviderRegistryEntry("volcengine-agent-plan")!.supportsServiceTier).toBe(false);
+    expect(getProviderRegistryEntry("volcengine-coding-plan")!.supportsServiceTier).toBe(false);
     // Registry-only metadata (same philosophy as modelWireDefaults): NOT seeded.
     const seed = providerConfigSeed(entry);
     expect(seed.supportsServiceTier).toBeUndefined();
@@ -56,7 +62,7 @@ describe("registry capability reaches saved configs without overriding them", ()
     expect(optedIn.supportsServiceTier).toBe(true);
   });
 
-  test("OpenRouter stays provider-unclassified and declares only its three OpenAI-backed slugs", () => {
+  test("OpenRouter stays provider-unclassified and declares only its OpenAI-backed slugs", () => {
     const entry = getProviderRegistryEntry("openrouter")!;
     expect(entry.supportsServiceTier).toBeUndefined();
     expect(entry.chatServiceTier).toBeUndefined();
@@ -64,6 +70,8 @@ describe("registry capability reaches saved configs without overriding them", ()
       "openai/gpt-5.6-sol": true,
       "openai/gpt-5.6-terra": true,
       "openai/gpt-5.6-luna": true,
+      "openai/gpt-6-sol": true,
+      "openai/gpt-6-luna": true,
     });
     expect(entry.modelSupportsServiceTier).not.toHaveProperty("anthropic/claude-sonnet-5");
     expect(providerConfigSeed(entry).modelSupportsServiceTier).toBeUndefined();
@@ -115,6 +123,7 @@ describe("xAI Fast capability follows the captured authentication transport", ()
     // (devlog/_fin/260913_xai_oauth_fast/020_probe-evidence.md), never provider-wide.
     expect(entry.chatServiceTier).toBe(true);
     expect(entry.modelSupportsServiceTier).toEqual({
+      "grok-4.7": true,
       "grok-4.6": true,
       "grok-4.5": true,
       "grok-4.3": true,
@@ -134,6 +143,11 @@ describe("xAI Fast capability follows the captured authentication transport", ()
 
     const oauthPolicy = fastPolicyForModel(xaiProvider("oauth"), "grok-4.6", "xai");
     expect(oauthPolicy).toMatchObject({
+      capability: true,
+      eligibility: "eligible",
+      forwardCallerTier: true,
+    });
+    expect(fastPolicyForModel(xaiProvider("oauth"), "grok-4.7", "xai")).toMatchObject({
       capability: true,
       eligibility: "eligible",
       forwardCallerTier: true,
@@ -389,7 +403,12 @@ describe("routing evidence uses the final model adapter", () => {
 
 describe("the gate fires on the live handleResponses path", () => {
   const originalFetch = globalThis.fetch;
-  afterEach(() => { globalThis.fetch = originalFetch; });
+  afterEach(() => {
+    // Release the lease before later teardown can replace the preload sandbox home.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+  });
 
   function captureBody(): { bodies: Record<string, unknown>[] } {
     const bodies: Record<string, unknown>[] = [];
@@ -409,7 +428,8 @@ describe("the gate fires on the live handleResponses path", () => {
   ): Promise<Record<string, unknown>> {
     const { bodies } = captureBody();
     const config = { providers: { [providerName]: provider }, ...(fastMode === undefined ? {} : { fastMode }) } as unknown as OcxConfig;
-    await handleResponses(
+    takeSpendHome();
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -419,6 +439,9 @@ describe("the gate fires on the live handleResponses path", () => {
       { model: "", provider: "" },
       {},
     );
+    // The turn's body is a live stream. Releasing it here means no reader is still attached
+    // when the lease is dropped, which is what turns a finished case into a pending one.
+    await turn.body?.cancel();
     return bodies[0] ?? {};
   }
 
@@ -458,7 +481,8 @@ describe("the gate fires on the live handleResponses path", () => {
   test("DeepSeek clears a stripped caller tier from request logging", async () => {
     const { bodies } = captureBody();
     const logCtx: RequestLogContext = { model: "", provider: "" };
-    await handleResponses(
+    takeSpendHome();
+    const turn = await handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -473,6 +497,7 @@ describe("the gate fires on the live handleResponses path", () => {
       logCtx,
       {},
     );
+    await turn.body?.cancel();
 
     const upstreamBody = bodies[0];
     expect(upstreamBody).toBeDefined();

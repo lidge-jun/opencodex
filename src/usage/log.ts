@@ -5,13 +5,38 @@ import { getConfigDir } from "../config";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { sanitizeLogMetadataString } from "../lib/redact";
+import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { normalizeAttemptDeliverySummary } from "./attempt-delivery";
+import {
+  isRequestCloseReason,
+  isRequestTerminalStatus,
+  type RequestCloseReason,
+  type RequestTerminalStatus,
+} from "./request-outcome";
 import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
 import type { CodexWsStageRecord } from "../server/responses/codex-ws-wire";
+import {
+  ATTEMPT_RECOVERY_KIND_ROSTER,
+  ATTEMPT_RECOVERY_WITHHELD_ROSTER,
+  REQUEST_FAILURE_CAUSES,
+  REQUEST_FAILURE_STAGES,
+  REQUEST_TRANSPORT_PHASES,
+  type AttemptRecoveryKind,
+  type AttemptRecoveryWithheld,
+  type AttemptDeliverySummary,
+  type RequestFailureCause,
+  type RequestFailureStage,
+  type RequestSpendTotals,
+} from "./telemetry-contract";
+
+// Re-exported so every existing importer keeps its path. The declarations moved to a leaf the
+// dashboard can import without pulling node:fs and the config barrel into the browser build.
+export { ATTEMPT_RECOVERY_KIND_ROSTER, ATTEMPT_RECOVERY_WITHHELD_ROSTER, REQUEST_FAILURE_CAUSES, REQUEST_FAILURE_STAGES };
+export type { AttemptRecoveryKind, AttemptRecoveryWithheld, RequestFailureCause, RequestFailureStage, RequestSpendTotals };
 
 export interface PersistedClaudeCompatibilityLog {
   decision: "shadow";
@@ -57,25 +82,6 @@ export function isCodexUsageAccountLogLabel(value: unknown): value is UsageAccou
 export function isCodexPoolAccountLogLabel(value: unknown): value is "main" | `p${string}` {
   return value === "main" || (typeof value === "string" && CODEX_ACCOUNT_LOG_LABEL_RE.test(value));
 }
-
-/**
- * Recovery kinds recorded per attempt in the usage log; the GUI renders localized labels
- * for these wire values.
- */
-export type AttemptRecoveryKind =
-  | "transient-5xx"
-  | "connection-reset"
-  | "oauth-401"
-  | "key-401"
-  | "key-429"
-  | "rate-limit-429"
-  | "anthropic-oauth-429"
-  | "oauth-account-429"
-  | "image-413"
-  | "console-go-upload-retry"
-  | "opaque-blob-rejection"
-  | "empty-completion"
-  | "reasoning-effort-downgrade";
 
 /** Request-time upstream credential class, never a credential or account identifier. */
 export type UsageCredentialSource = "grok-oauth" | "xai-api-key";
@@ -139,6 +145,11 @@ export interface PersistedUsageAttempt {
   firstOutputMs?: number;
   sendCount: number;
   recoveryKinds: AttemptRecoveryKind[];
+  /**
+   * Recoveries this attempt was eligible for and did not make. Absent on ordinary attempts so
+   * old rows keep their exact shape.
+   */
+  recoveryWithheld?: AttemptRecoveryWithheld[];
   usageStatus: UsageStatus;
   /**
    * True when the proxy answered this turn locally and issued no upstream request. It travels on
@@ -175,6 +186,21 @@ export interface PersistedUsageAttempt {
    * account identifiers.
    */
   codexWsStage?: CodexWsStageRecord;
+  /**
+   * What this attempt delivered, as five bounded counts (#3983). Absent on attempts whose
+   * transport does not pass through the Responses bridge and on pre-instrumentation rows.
+   */
+  deliverySummary?: AttemptDeliverySummary;
+  /**
+   * How far this attempt's exchange got and why it failed, in the shared vocabulary (#2366).
+   *
+   * Both values are closed roster members, so the pair can be a metric label and a grouping key
+   * without a masking pass. Absent on a completed attempt and on every row written before the
+   * attribution existed. The resend verdict these two imply is NOT stored: it is derived at read
+   * time, so a stored row can never carry a verdict the current table would no longer reach.
+   */
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
 }
 
 /**
@@ -185,19 +211,7 @@ export interface PersistedUsageAttempt {
  * operator needs is the total that reached upstream carrying the full prompt. These fields are
  * that total, decomposed by how much of it is explained.
  */
-export interface PersistedRequestSpend {
-  /** Physical upstream sends summed across every attempt of this logical request, combo children included. */
-  sends: number;
-  /** Sends whose attempt reached a terminal status, so the spend has a known outcome. */
-  settled: number;
-  /**
-   * Sends charged with no terminal outcome behind them: an attempt abandoned mid-flight, or a
-   * budget charge no attempt row ever accounted for. Never folded into `settled` — an unexplained
-   * send is the exact quantity this record exists to make visible.
-   */
-  unresolved: number;
-  /** Model sends the request execution budget charged. Absent when no budget was attached. */
-  reserved?: number;
+export interface PersistedRequestSpend extends RequestSpendTotals {
   /** Budget profile that produced `reserved`, so a count can be read against the policy it obeyed. */
   policyVersion?: string;
   /**
@@ -208,7 +222,38 @@ export interface PersistedRequestSpend {
 }
 
 const MAX_PERSISTED_MOVE_REASONS = 8;
+// Model selectors are NOT length-bound at admission: configured and discovered
+// model ids reach MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, and the wire `model`
+// field is raw client input. Persisting a plain prefix would merge selectors
+// that share it, so over-long selectors persist as prefix + a digest of the
+// FULL selector — bounded, deterministic, and still exact-matchable.
+const MAX_PERSISTED_REQUESTED_MODEL_LEN = 130;
+const REQUESTED_MODEL_DIGEST_HEX_LEN = 16;
 const LOGICAL_REQUEST_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/**
+ * Persisted form of the wire model selector. Selectors within the bound persist
+ * verbatim; longer selectors persist as a prefix plus a short digest of the full
+ * value, so two distinct selectors that share the prefix never collapse into one
+ * persisted identity. Exact-match readers (`requested_model = ?`) must encode
+ * lookup input through this same function. Idempotent — encoded forms fit the
+ * bound — which matters because rows are normalized again on read.
+ *
+ * Idempotence has one cost: a literal selector that equals another selector's
+ * persisted form is indistinguishable from it, so both rows share one display
+ * value and one exact-match filter. Reaching that needs the caller to send the
+ * exact prefix-and-digest string; keeping them apart would need a separate
+ * full-selector digest column.
+ */
+export function encodePersistedRequestedModel(selector: string): string {
+  if (selector.length <= MAX_PERSISTED_REQUESTED_MODEL_LEN) return selector;
+  const digest = createHash("sha256")
+    .update(selector)
+    .digest("hex")
+    .slice(0, REQUESTED_MODEL_DIGEST_HEX_LEN);
+  const prefixLen = MAX_PERSISTED_REQUESTED_MODEL_LEN - REQUESTED_MODEL_DIGEST_HEX_LEN - 1;
+  return `${selector.slice(0, prefixLen)}~${digest}`;
+}
 
 export function isLogicalRequestId(value: unknown): value is string {
   return typeof value === "string" && LOGICAL_REQUEST_ID_RE.test(value);
@@ -270,6 +315,10 @@ export interface PersistedUsageEntry {
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   resolvedModel?: string;
+  /** Model the upstream actually served (openai-model header or response body). */
+  servedModel?: string;
+  /** The exact model id sent upstream when it differs from the client-facing `model`. */
+  wireModel?: string;
   requestedModel?: string;
   /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
   shadowCallRewrittenFrom?: string;
@@ -304,8 +353,13 @@ export interface PersistedUsageEntry {
   // Failure diagnostics (devlog/_plan/260716_claudecode_hardening/030): persisted for
   // status>=400 or non-completed terminals so incidents survive the in-memory ring buffer.
   errorCode?: string;
-  terminalStatus?: string;
-  closeReason?: "terminal" | "client_cancel" | "non_stream" | "body_stall" | "body_overflow";
+  /**
+   * Closed, like `closeReason` beside it has always been. It was `string` while it was only
+   * rendered; it is a grouping-key slot now, and the value is assembled from an upstream
+   * terminal frame, so an open type here is the one way upstream text could reach that key.
+   */
+  terminalStatus?: RequestTerminalStatus;
+  closeReason?: RequestCloseReason;
   /** Already redacted + capped at capture (request-log.ts redactSecretString().slice(0,500)). */
   upstreamError?: string;
   /** Where the terminal/failure was observed; absent on historic rows. */
@@ -332,6 +386,53 @@ export interface PersistedUsageEntry {
   routeDecision?: RouteDecisionTraceV1;
   /** Closed Claude protocol codes only; absent on older rows. */
   claudeCompatibility?: PersistedClaudeCompatibilityLog;
+  /**
+   * How far this request got and why it failed (#2366). Projected from the attempt that ended
+   * the request so every surface reads the answer off the same row. Absent on a completed
+   * request and on rows written before the attribution existed.
+   */
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
+}
+
+/**
+ * Attribution for the logical request, projected from the attempt that ended it (#2366).
+ *
+ * Carried on the entry as well as the attempt because the three surfaces that have to agree read
+ * the entry: a projection that had to reach into `attempts` to answer "why did this fail" would
+ * be reading a different row from the exporter, which is the disagreement the landed terminal
+ * classifier already removed once.
+ */
+export interface PersistedRequestFailureAttribution {
+  failureStage?: RequestFailureStage;
+  failureCause?: RequestFailureCause;
+}
+
+const KNOWN_REQUEST_FAILURE_STAGES: ReadonlySet<string> = new Set(REQUEST_FAILURE_STAGES);
+const KNOWN_REQUEST_FAILURE_CAUSES: ReadonlySet<string> = new Set(REQUEST_FAILURE_CAUSES);
+
+/**
+ * Same closed-set discipline as `isKnownTransportPhase`, with the set DERIVED from the roster
+ * rather than restated. The recovery vocabulary was written twice once -- as a union and as the
+ * read-back whitelist -- and a member present in only one of them is written to disk and dropped
+ * on the next read, which loses exactly the field that says why the row failed.
+ */
+export function isKnownRequestFailureStage(value: unknown): value is RequestFailureStage {
+  return typeof value === "string" && KNOWN_REQUEST_FAILURE_STAGES.has(value);
+}
+
+export function isKnownRequestFailureCause(value: unknown): value is RequestFailureCause {
+  return typeof value === "string" && KNOWN_REQUEST_FAILURE_CAUSES.has(value);
+}
+
+/** The stage/cause pair a normalizer keeps, dropping either half that is not a roster member. */
+export function normalizeRequestFailureAttribution(
+  raw: { failureStage?: unknown; failureCause?: unknown },
+): PersistedRequestFailureAttribution {
+  return {
+    ...(isKnownRequestFailureStage(raw.failureStage) ? { failureStage: raw.failureStage } : {}),
+    ...(isKnownRequestFailureCause(raw.failureCause) ? { failureCause: raw.failureCause } : {}),
+  };
 }
 
 const KNOWN_USAGE_SURFACES = new Set<NonNullable<PersistedUsageEntry["surface"]>>([
@@ -369,12 +470,10 @@ export function isKnownInboundProtocol(value: unknown): value is NonNullable<Per
   return typeof value === "string" && KNOWN_INBOUND_PROTOCOLS.has(value as NonNullable<PersistedUsageEntry["inboundProtocol"]>);
 }
 
-const KNOWN_TRANSPORT_PHASES = new Set<NonNullable<PersistedUsageEntry["transportPhase"]>>([
-  "pre_headers", "mid_stream", "terminal_sse",
-]);
+const KNOWN_TRANSPORT_PHASES: ReadonlySet<string> = new Set(REQUEST_TRANSPORT_PHASES);
 
 export function isKnownTransportPhase(value: unknown): value is NonNullable<PersistedUsageEntry["transportPhase"]> {
-  return typeof value === "string" && KNOWN_TRANSPORT_PHASES.has(value as NonNullable<PersistedUsageEntry["transportPhase"]>);
+  return typeof value === "string" && KNOWN_TRANSPORT_PHASES.has(value);
 }
 
 const KNOWN_TERMINAL_SOURCES = new Set<NonNullable<PersistedUsageEntry["terminalSource"]>>([
@@ -472,21 +571,8 @@ function normalizeUsageValue(usage: OcxUsage | undefined): OcxUsage | undefined 
   };
 }
 
-const ATTEMPT_RECOVERY_KINDS = new Set<AttemptRecoveryKind>([
-  "transient-5xx",
-  "connection-reset",
-  "oauth-401",
-  "key-401",
-  "key-429",
-  "rate-limit-429",
-  "anthropic-oauth-429",
-  "oauth-account-429",
-  "image-413",
-  "console-go-upload-retry",
-  "opaque-blob-rejection",
-  "empty-completion",
-  "reasoning-effort-downgrade",
-]);
+const ATTEMPT_RECOVERY_KINDS: ReadonlySet<AttemptRecoveryKind> = new Set(ATTEMPT_RECOVERY_KIND_ROSTER);
+const ATTEMPT_RECOVERY_WITHHELD: ReadonlySet<AttemptRecoveryWithheld> = new Set(ATTEMPT_RECOVERY_WITHHELD_ROSTER);
 const USAGE_STATUSES = new Set<UsageStatus>([
   "reported",
   "unreported",
@@ -614,10 +700,21 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
   const codexWsStage = "codexWsStage" in attempt
     ? normalizeCodexWsStageRecord(attempt.codexWsStage)
     : undefined;
+  const deliverySummary = "deliverySummary" in attempt
+    ? normalizeAttemptDeliverySummary(attempt.deliverySummary)
+    : undefined;
   const recoveryKinds = Array.isArray(attempt.recoveryKinds)
     ? [...new Set(attempt.recoveryKinds.filter(
       (value): value is AttemptRecoveryKind => typeof value === "string"
         && ATTEMPT_RECOVERY_KINDS.has(value as AttemptRecoveryKind),
+    ))]
+    : [];
+  // Same shape as `recoveryKinds`: unknown values are dropped rather than failing the row, so a
+  // log written by a newer build stays readable by an older one.
+  const recoveryWithheld = Array.isArray(attempt.recoveryWithheld)
+    ? [...new Set(attempt.recoveryWithheld.filter(
+      (value): value is AttemptRecoveryWithheld => typeof value === "string"
+        && ATTEMPT_RECOVERY_WITHHELD.has(value as AttemptRecoveryWithheld),
     ))]
     : [];
   return {
@@ -639,6 +736,7 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       : {}),
     sendCount: attempt.sendCount as number,
     recoveryKinds,
+    ...(recoveryWithheld.length ? { recoveryWithheld } : {}),
     usageStatus: attempt.usageStatus as UsageStatus,
     ...(isCodexUsageAccountLogLabel(attempt.accountLogLabel)
       ? { accountLogLabel: attempt.accountLogLabel }
@@ -673,6 +771,8 @@ function normalizeUsageAttempt(raw: unknown): PersistedUsageAttempt | null {
       : {}),
     ...(tierOutcome ? { tierOutcome } : {}),
     ...(codexWsStage ? { codexWsStage } : {}),
+    ...(deliverySummary ? { deliverySummary } : {}),
+    ...normalizeRequestFailureAttribution(attempt),
   };
 }
 
@@ -741,6 +841,39 @@ function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
 }
 
+const MAX_SERVED_MODEL_LENGTH = 200;
+/**
+ * An upstream model is an identifier, never free-form text to truncate into one. A value the
+ * secret redactor would change is dropped rather than logged, because credential-shaped text can
+ * fit the identifier alphabet.
+ */
+export function sanitizeServedModel(value: unknown): string | undefined {
+  return typeof value === "string"
+    && value.length <= MAX_SERVED_MODEL_LENGTH
+    && /^[A-Za-z0-9._:/@+-]+$/.test(value)
+    && redactSecretString(value) === value
+    ? value
+    : undefined;
+}
+
+/**
+ * Model identity fields for a log row. The served model is sanitized, and a resolvedModel that
+ * only echoed a dropped served model is dropped with it, so the rejected value cannot survive
+ * under the other name.
+ */
+export function modelIdentityLogFields(source: { resolvedModel?: string; servedModel?: unknown; wireModel?: string }): {
+  resolvedModel?: string; servedModel?: string; wireModel?: string;
+} {
+  const servedModel = sanitizeServedModel(source.servedModel);
+  const resolvedModel = source.servedModel !== undefined && source.resolvedModel === source.servedModel && !servedModel
+    ? undefined : source.resolvedModel;
+  return {
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
+    ...(source.wireModel ? { wireModel: source.wireModel } : {}),
+  };
+}
+
 /** Test seam: the normalization branch old rows take is worth asserting directly. */
 export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): PersistedUsageEntry {
   return normalizeUsageEntry(entry);
@@ -752,6 +885,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const callerServiceTier = sanitizeLogMetadataString(entry.callerServiceTier);
   const responseServiceTier = sanitizeLogMetadataString(entry.responseServiceTier);
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const servedModel = sanitizeServedModel(entry.servedModel);
+  const resolvedModel = entry.servedModel !== undefined && entry.resolvedModel === entry.servedModel && !servedModel
+    ? undefined : entry.resolvedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const transportPhase = isKnownTransportPhase(entry.transportPhase) ? entry.transportPhase : undefined;
   const terminalSource = isKnownTerminalSource(entry.terminalSource) ? entry.terminalSource : undefined;
@@ -790,8 +926,12 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.conversationId === "string" && entry.conversationId.trim()
       ? { conversationId: entry.conversationId.trim().slice(0, 128) }
       : {}),
-    ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
-    ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
+    ...(entry.wireModel ? { wireModel: entry.wireModel } : {}),
+    ...(typeof entry.requestedModel === "string" && entry.requestedModel
+      ? { requestedModel: encodePersistedRequestedModel(entry.requestedModel) }
+      : {}),
     ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
       ? { requestedEffort: capMetadataString(entry.requestedEffort) }
@@ -844,11 +984,15 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(affinityReason ? { affinityReason } : {}),
     ...(conversationStateScrub ? { conversationStateScrub } : {}),
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
-    ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),
-    ...(entry.closeReason ? { closeReason: entry.closeReason } : {}),
+    // Validated rather than copied on truthiness, like the inbound protocol and transport phase
+    // above. Harmless while these were only rendered; not harmless once the terminal status is
+    // a grouping-key slot, because the string is assembled from an upstream frame.
+    ...(isRequestTerminalStatus(entry.terminalStatus) ? { terminalStatus: entry.terminalStatus } : {}),
+    ...(isRequestCloseReason(entry.closeReason) ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...normalizeRequestFailureAttribution(entry),
   };
 }
 
@@ -883,6 +1027,20 @@ function ensureUsageLogDir(now: number): void {
   ensuredUsageLogDir = { path: dir, checkedAt: now };
 }
 
+/**
+ * One owner hook, run after an append lands.
+ *
+ * A slot rather than a direct call, because the only consumer -- ledger retention -- reads this
+ * module's revision helpers, and importing it back here would be a static cycle. The hook runs
+ * INSIDE the synchronous append call stack on purpose: that is what makes "no in-process append
+ * can interleave with a compaction" true rather than merely likely.
+ */
+let afterUsageLedgerAppend: (() => void) | null = null;
+
+export function setUsageLedgerAppendHook(hook: (() => void) | null): void {
+  afterUsageLedgerAppend = hook;
+}
+
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
   const line = `${JSON.stringify(normalizeUsageEntry(entry))}\n`;
   const path = usageLogPath();
@@ -903,10 +1061,12 @@ export function appendUsageEntry(entry: PersistedUsageEntry): void {
       ensuredUsageLogDir = null;
       ensuredUsageLogFile = null;
       doAppend();
+      afterUsageLedgerAppend?.();
       return;
     }
     throw error;
   }
+  afterUsageLedgerAppend?.();
 }
 
 export type UsageLogRevision = {

@@ -4,10 +4,28 @@ import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { windowsEnvIndirectBatchValue } from "../lib/win-paths";
 
 const SHIM_MARKER = "opencodex codex autostart shim";
-const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 2";
+const UNIX_SHIM_REVISION_MARKER = "opencodex unix codex shim revision 3";
 
 const CODEX_SHIM_REENTRY_EXIT_CODE = 126;
 const CODEX_SHIM_REENTRY_DIAGNOSTIC = "opencodex: saved Codex launcher resolved back to the autostart shim; run ocx codex-shim uninstall and reinstall Codex before enabling codexAutoStart.";
+
+/**
+ * Said once, on stderr, when `ocx ensure` could not bring the proxy up (#5261).
+ *
+ * The shim used to discard both of ensure's streams and ignore its exit status, so a failed
+ * autostart was completely silent: Codex launched against injected routing pointing at a port
+ * nothing was listening on, and every request — sign-in included — failed with no mention of
+ * opencodex anywhere.
+ *
+ * Ensure's own streams stay discarded rather than being let through. Ensure prints progress and
+ * warnings on exit-zero runs too, and a wrapper that leaked those would put noise in front of
+ * every ordinary Codex launch, which is how a diagnostic gets ignored. The exit status is the
+ * signal; this line is the whole message.
+ *
+ * It names `ocx restore` because bringing the proxy back is only half the choice. A user who
+ * cannot sign in needs the way out that does not require the proxy at all.
+ */
+export const CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC = "opencodex: proxy autostart failed; launching Codex anyway. Run 'ocx doctor' for details, or 'ocx restore' to hand Codex back to its own account.";
 
 const CODEX_INTERNAL_COMMANDS = [
   "app-server",
@@ -136,7 +154,9 @@ case "$ocx_subcommand" in
     ;;
   *)
     if [ -z "$OCX_SHIM_BYPASS" ]; then
-      ${BUN_RUNTIME_SOURCE_ENV}=${shQuote(bunRuntimeSource)} ${BUN_RUNTIME_PATH_ENV}=${shQuote(bunPath)} ${shQuote(bunPath)} ${shQuote(cliPath)} ensure >/dev/null 2>&1 || true
+      if ! ${BUN_RUNTIME_SOURCE_ENV}=${shQuote(bunRuntimeSource)} ${BUN_RUNTIME_PATH_ENV}=${shQuote(bunPath)} ${shQuote(bunPath)} ${shQuote(cliPath)} ensure >/dev/null 2>&1; then
+        printf '%s\\n' ${shQuote(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC)} >&2
+      fi
     fi
     ;;
 esac
@@ -197,6 +217,7 @@ setlocal\r
 ${windowsBatchSet(BUN_RUNTIME_SOURCE_ENV, bunRuntimeSource)}\r
 ${windowsBatchSet(BUN_RUNTIME_PATH_ENV, bunPath)}\r
 "%OCX_BUN%" "%OCX_CLI%" ensure >nul 2>nul\r
+if errorlevel 1 echo ${CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC} 1>&2\r
 endlocal\r
 :run_codex\r
 "%OCX_REAL_CODEX%" %*\r
@@ -239,13 +260,18 @@ if (-not $skipEnsure) {
   $priorRuntimePath = $env:${BUN_RUNTIME_PATH_ENV}
   $env:${BUN_RUNTIME_SOURCE_ENV} = ${psString(bunRuntimeSource)}
   $env:${BUN_RUNTIME_PATH_ENV} = ${psString(bunPath)}
-  try { & ${psString(bunPath)} ${psString(cliPath)} ensure *> $null }
+  $ocxEnsureFailed = $false
+  # Caught, not propagated: a throwing ensure used to escape this wrapper and Codex never
+  # launched at all, which is a lockout produced by the autostart helper itself (#5261).
+  try { & ${psString(bunPath)} ${psString(cliPath)} ensure *> $null; if ($LASTEXITCODE -ne 0) { $ocxEnsureFailed = $true } }
+  catch { $ocxEnsureFailed = $true }
   finally {
     if ($null -eq $priorRuntimeSource) { Remove-Item Env:\\${BUN_RUNTIME_SOURCE_ENV} -ErrorAction SilentlyContinue }
     else { $env:${BUN_RUNTIME_SOURCE_ENV} = $priorRuntimeSource }
     if ($null -eq $priorRuntimePath) { Remove-Item Env:\\${BUN_RUNTIME_PATH_ENV} -ErrorAction SilentlyContinue }
     else { $env:${BUN_RUNTIME_PATH_ENV} = $priorRuntimePath }
   }
+  if ($ocxEnsureFailed) { [Console]::Error.WriteLine(${psString(CODEX_SHIM_ENSURE_FAILED_DIAGNOSTIC)}) }
 }
 & ${psString(realCodexPath)} @args
 $codexExitCode = $LASTEXITCODE

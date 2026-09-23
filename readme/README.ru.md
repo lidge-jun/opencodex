@@ -92,7 +92,37 @@ ocx start                         # прокси + панель управлен
 Откройте **http://localhost:10100** и настройте всё в веб-панели: добавьте провайдеров
 (40+ встроенных или любой OpenAI-совместимый endpoint), выберите модели, управляйте
 аккаунтами. `ocx gui` в любой момент снова откроет панель.
-Кроме того, он умеет управлять **пулом аккаунтов ChatGPT** для аутентификации Codex. Добавьте
+
+<details>
+<summary><b>Настольное приложение и виджет macOS — бета-версия</b></summary>
+
+Это нативная оболочка вокруг той же панели управления с расширением WidgetKit, которое
+показывает состояние прокси, расход за сегодня и квоты провайдеров без открытия браузера.
+Сам прокси не меняется: приложение находит уже запущенный экземпляр либо запускает встроенный
+сайдкар `ocx`, а панель остаётся доступной на порту прокси (**http://localhost:10100**,
+если вы не настроили другой порт).
+
+Это бета-версия. Релизные сборки приложения для macOS подписаны сертификатом Developer ID и
+нотариализованы (локальные сборки подписаны ad-hoc); установщик Windows пока не подписан
+цифровой подписью, поэтому SmartScreen предупреждает при первом запуске. Для виджета нужна
+macOS 14 или новее; его модель снимков находится в [`app/`](../app) (`MenuBarCore`).
+
+Скачайте приложение из [последнего релиза](https://github.com/lidge-jun/opencodex/releases) или
+соберите локально: выполните `bun install && bun run build:gui` в корне репозитория, затем
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` в
+`desktop/`.
+
+Пути установки, файлы служб и всё остальное, что записывается на диск, перечислены в
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed). В
+[руководстве по настольному приложению](https://opencodex.me/ru/guides/desktop-app/) и
+[руководстве по приложению macOS в строке меню](https://opencodex.me/ru/guides/macos-menu-bar/)
+описаны установка на каждой платформе и первый запуск.
+
+</details>
+
+### Пул аккаунтов ChatGPT
+
+opencodex также умеет управлять **пулом аккаунтов ChatGPT** для аутентификации Codex. Добавьте
 несколько аккаунтов ChatGPT / Codex и обновляйте их квоты за 5 ч / неделю / 30 дней в панели.
 При маршрутизации по квоте новые сессии могут использовать работоспособный аккаунт с наименьшим
 использованием; round-robin и fill-first применяют свои политики. Существующие треды Codex
@@ -129,14 +159,15 @@ ocx start                         # прокси + панель управлен
 <details>
 <summary>Docker Compose</summary>
 
-Репозиторий поставляет сборку Compose с закреплённым дайджестом и без root. Если на хосте
-установлены Git и Bun, перед каждой сборкой образа сгенерируйте канонический манифест
-совместимости, один раз инициализируйте токен плоскости данных через stdin и запустите хаб:
+Репозиторий поставляет сборку Compose с закреплённым дайджестом и без root. Сборка сама создаёт
+и проверяет канонический манифест совместимости из выбранного снимка Git. Для локального клона
+нужны Git и Docker Compose, для удалённого Git-контекста — Docker Compose. Ни одному варианту
+не нужны Bun на хосте или подготовительный шаг. Один раз инициализируйте токен плоскости данных
+через stdin и запустите хаб:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -147,12 +178,30 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 Привязка по умолчанию — `127.0.0.1:10100`. Удалённый доступ требует явного
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d`; `0.0.0.0` открывает
 все интерфейсы хоста. Ограничьте доступ файрволом и аутентифицированным TLS/tailnet-фронтендом.
-Сгенерированный JSON остаётся неотслеживаемым; он копируется в образ без включения `.git`.
-Перегенерируйте его после изменений исходников и не меняйте исходники между генерацией и сборкой.
-Сборка отклоняет устаревшие манифесты, отсутствующие или несовпадающие файлы, лишние исходники
+Сгенерированный JSON остаётся неотслеживаемым. В контекст сборки допускаются только `.git/index`
+и `.git/HEAD` — инвентарь, который читает `git ls-files`, объёмом около 1 МБ вместо полного хранилища
+объектов. Они видны только этапу манифеста, используемому при сборке, через монтирование только для
+чтения, поэтому ни один `COPY` не включает `.git`. Манифест, ранее созданный на хосте, принимается
+только после проверки; иначе сборка создаёт его сама. Сборка отклоняет устаревшие манифесты,
+отсутствующие или несовпадающие файлы, лишние исходники
 и символические ссылки. Она сверяет каждый записанный SHA-256 с контекстом сборки и скопированными
 рантайм-файлами, включая `package.json`, `bun.lock` и явно включённый
 `scripts/model-metadata.source.json`.
+
+Для удалённого Git-контекста BuildKit должен сохранять метаданные Git. Этот фрагмент сборки Compose
+выбирает удалённый снимок и передаёт требуемый встроенный аргумент:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 Токен и изменяемое состояние живут в именованном томе `ocx-state`; ни одно учётное данное не
 попадает в образ, Compose-файл, окружение или аргументы оболочки. См.
@@ -168,8 +217,9 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -177,8 +227,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

@@ -228,8 +228,9 @@ export function hubInviteCommand(
   managementUrl: string,
   clients: OcxConnectedClientId[],
 ): string {
-  const clientsFlag = clients.length > 0 ? ` --clients ${clients.join(",")}` : "";
-  return `echo '${code}' | ocx connect ${dataUrl} --management-url ${managementUrl}${clientsFlag} --pairing-code-stdin`;
+  const shellQuote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
+  const clientsFlag = clients.length > 0 ? ` --clients ${shellQuote(clients.join(","))}` : "";
+  return `echo ${shellQuote(code)} | ocx connect ${shellQuote(dataUrl)} --management-url ${shellQuote(managementUrl)}${clientsFlag} --pairing-code-stdin`;
 }
 
 async function runInvite(args: string[], deps: HubCommandDeps): Promise<number> {

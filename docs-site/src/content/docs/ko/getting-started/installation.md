@@ -43,6 +43,19 @@ ocx --version
 opencodex --version
 ```
 
+## 독립 실행형 바이너리(npm 없음)
+
+릴리스에는 지원되는 macOS, Linux, Windows용 독립 실행형 `ocx` 바이너리도 포함됩니다.
+Bun 런타임과 대시보드가 포함되어 있으므로 npm, Node 또는 별도의 Bun 설치가 필요하지 않습니다.
+플랫폼에 맞는 아카이브를 다운로드해 압축을 풀고 다음과 같이 실행하세요.
+
+```bash
+./ocx --version
+./ocx start
+```
+
+대시보드를 제공하려면 압축을 푼 `gui/dist` 디렉터리를 바이너리 옆에 그대로 두어야 합니다.
+
 ### 배포 채널
 
 안정화 채널인 `latest`에도 ChatGPT, OpenAI API 키, OpenRouter, 실험 단계의 Cursor 경로를 위한

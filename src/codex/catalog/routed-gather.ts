@@ -113,6 +113,15 @@ export interface GatherRoutedModelsOptions {
   providerModelOutcomes?: CatalogGatherProviderModelOutcome[];
   /** Internal convergence sink for the immutable policy that produced the returned rows. */
   discoveryPolicySnapshots?: CatalogProviderDiscoveryPolicySnapshot[];
+  /**
+   * Each provider's cache content revision as of the moment its rows were chosen.
+   *
+   * A caller that derives something from these rows and wants to know later whether the rows are
+   * still current must use this, not a revision sampled after the gather returns: another flight
+   * can publish between the choice and the sample, and the derived value would then carry that
+   * flight's identity while holding these rows.
+   */
+  providerContentRevisions?: Map<string, string>;
 }
 
 interface GatherFlightResult {
@@ -121,6 +130,7 @@ interface GatherFlightResult {
   providerAuthOutcomes: readonly CatalogGatherProviderAuthOutcome[];
   providerModelOutcomes: readonly CatalogGatherProviderModelOutcome[];
   discoveryPolicySnapshots: readonly CatalogProviderDiscoveryPolicySnapshot[];
+  providerContentRevisions: ReadonlyMap<string, string>;
 }
 interface GatherInflightEntry {
   readonly discoveryPolicyIdentity: string;
@@ -256,6 +266,7 @@ async function gatherRoutedModelsWithAuth(
     providerAuthOutcomes,
     providerModelOutcomes,
     discoveryPolicySnapshots,
+    providerContentRevisions,
   } = await entry.promise;
   if (options?.comboOmissions) {
     options.comboOmissions.length = 0;
@@ -268,6 +279,12 @@ async function gatherRoutedModelsWithAuth(
   if (options?.providerModelOutcomes) {
     options.providerModelOutcomes.length = 0;
     options.providerModelOutcomes.push(...providerModelOutcomes);
+  }
+  if (options?.providerContentRevisions) {
+    options.providerContentRevisions.clear();
+    for (const [provider, revision] of providerContentRevisions) {
+      options.providerContentRevisions.set(provider, revision);
+    }
   }
   if (options?.discoveryPolicySnapshots) {
     options.discoveryPolicySnapshots.length = 0;
@@ -763,6 +780,8 @@ async function gatherRoutedModelsUncached(
     providerAuthOutcomes: localProviderAuthOutcomes,
     providerModelOutcomes,
     discoveryPolicySnapshots: capture.discoveryPolicySnapshots,
+    // Stamped by each provider at the moment it chose its rows, not sampled here.
+    providerContentRevisions: new Map(providerResults.map(result => [result.outcome.provider, result.contentRevision])),
   };
 }
 
@@ -850,6 +869,26 @@ function augmentRoutedModelsWithCapturedOpenAiApiRows(
   ];
 }
 
+/**
+ * Add generated-registry rows the live provider list did not return, and backfill a
+ * published context window onto a live row that arrived without one.
+ *
+ * The backfill is the reason this function has a merge branch at all. It used to skip every
+ * id the live list returned, which is correct for a row that already knows its window and
+ * wrong for the normal OpenCode Go case, where discovery returns an id with no context
+ * field at all. The serialized Codex catalog was unaffected, because
+ * `applyCatalogMetadata` writes `context_window` onto the entry straight from the generated
+ * table; the absence was only visible to consumers that read `CatalogModel.contextWindow`
+ * (#4971). Those are not cosmetic: `buildClaudeContextWindows` drops a routed row with no
+ * window from the map that decides the `[1m]` marker, so a published 1M model could not be
+ * recognized as one, and the Grok config writer and several client exporters omit the field
+ * entirely rather than emit a known value.
+ *
+ * It is a missing-value fill, never an override: a live positive window still wins, because
+ * the upstream is the authority on its own model. The seeded row is re-hinted so operator
+ * precedence is unchanged — a configured window still lowers it and `providerContextCaps`
+ * still caps it, exactly as for an appended row.
+ */
 export function augmentRoutedModelsWithMetadata(
   models: CatalogModel[],
   providerNames: string[],
@@ -858,7 +897,7 @@ export function augmentRoutedModelsWithMetadata(
   metadataModelIdCaseFoldByProvider?: ReadonlyMap<string, boolean>,
 ): CatalogModel[] {
   const out = [...models];
-  const seen = new Set(out.map(m => `${m.provider}/${m.id}`));
+  const indexByKey = new Map(out.map((model, index) => [`${model.provider}/${model.id}`, index]));
   for (const provider of providerNames) {
     if (!JAWCODE_CATALOG_AUGMENT_PROVIDERS.has(provider)) continue;
     if (providers?.[provider]?.liveModels === false) continue;
@@ -866,9 +905,28 @@ export function augmentRoutedModelsWithMetadata(
     if (!jawcodeProvider) continue;
     for (const meta of listModelMetadata(jawcodeProvider)) {
       const key = `${provider}/${meta.id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
       const contextCap = caps ? providerContextCap(caps, provider) : undefined;
+      const existingIndex = indexByKey.get(key);
+      if (existingIndex !== undefined) {
+        const existing = out[existingIndex]!;
+        const publishedWindow = typeof meta.contextWindow === "number" && meta.contextWindow > 0
+          ? meta.contextWindow
+          : undefined;
+        const liveWindow = typeof existing.contextWindow === "number" && existing.contextWindow > 0;
+        if (liveWindow || publishedWindow === undefined) continue;
+        const seeded: CatalogModel = { ...existing, contextWindow: publishedWindow };
+        out[existingIndex] = providers?.[provider]
+          ? applyProviderConfigHints(
+            provider,
+            providers[provider],
+            seeded,
+            contextCap,
+            metadataModelIdCaseFoldByProvider?.get(provider),
+          )
+          : seeded;
+        continue;
+      }
+      indexByKey.set(key, out.length);
       const model: CatalogModel = {
         provider,
         id: meta.id,

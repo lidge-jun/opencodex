@@ -90,14 +90,44 @@ Arka planda çalıştırmak için `ocx service` kullanın.
 **http://localhost:10100** adresini açın ve her şeyi web kontrol panelinden yapılandırın: sağlayıcı
 ekleyin (40'tan fazla hazır sağlayıcı ya da herhangi bir OpenAI uyumlu uç nokta), model seçin, hesap
 yönetin. `ocx gui` paneli istediğiniz zaman yeniden açar.
-Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** da yönetebilir. Birden fazla ChatGPT / Codex
-hesabı ekleyin, 5 saatlik / haftalık / 30 günlük kotalarını panelden tazeleyin. Kota yönlendirmesinde
-yeni oturumlar en az kullanılan sağlıklı hesabı kullanabilir; round-robin ve fill-first kendi
-politikalarını izler. Mevcut Codex dizileri normalde onları başlatan hesaba bağlı kalır, böylece uzun
-SSH, tmux ya da mobil oturumlar konuşmanın ortasında hesap değiştirmez — ancak kota yeniden
-değerlendirmesi, failover, hesabın devre dışı bırakılması, bağlılığın süresinin dolması ya da 401/403 ve
-429 toparlanması bu bağı yeniden kurabilir. Yalnızca diğerleri tükendiğinde kullanılmasını istediğiniz
-bir hesap varsa — genellikle Codex Desktop girişiniz — hesaplara bir seçim sırası verin.
+
+<details>
+<summary><b>Masaüstü uygulaması ve macOS widget'ı — beta</b></summary>
+
+Aynı kontrol panelini sarmalayan yerel uygulamaya ek olarak, tarayıcı açmadan proxy durumunu,
+bugünkü kullanımı ve sağlayıcı kotalarını gösteren bir WidgetKit uzantısı sunulur. Proxy'nin çalışma
+şekli değişmez: uygulama çalışan bir proxy bulur ya da paketlenmiş `ocx` sidecar'ını başlatır;
+kontrol paneli proxy'nin bağlantı noktasında kalır (başka bir bağlantı noktası yapılandırmadıysanız
+**http://localhost:10100**).
+
+Bu bir beta sürümüdür. macOS uygulamasının sürüm derlemeleri Developer ID ile imzalanır ve Apple
+tarafından noter onayından geçer (yerel derlemeler ad-hoc imzalanır); Windows yükleyicisi henüz kod
+imzalı değildir, bu nedenle SmartScreen ilk çalıştırmada uyarı gösterir. Widget için macOS 14 veya
+üzeri gerekir; görüntülediği anlık görüntü modeli [`app/`](../app) dizinindedir (`MenuBarCore`).
+
+Uygulamayı [en güncel sürümden](https://github.com/lidge-jun/opencodex/releases) indirin veya
+yerel olarak derleyin: depo kökünde `bun install && bun run build:gui`, ardından `desktop/` içinde
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` çalıştırın.
+
+Kurulum konumları, servis dosyaları ve diske yazılan diğer her şey
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) dosyasında listelenir.
+[Masaüstü uygulaması kılavuzu](https://opencodex.me/tr/guides/desktop-app/) ve
+[macOS menü çubuğu uygulaması kılavuzu](https://opencodex.me/tr/guides/macos-menu-bar/),
+platforma göre kurulumu ve ilk açılışı açıklar.
+
+</details>
+
+### ChatGPT hesap havuzu
+
+opencodex, Codex kimlik doğrulaması için bir **ChatGPT hesap havuzu** da yönetebilir. Birden fazla
+ChatGPT / Codex hesabı ekleyin, 5 saatlik / haftalık / 30 günlük kotalarını panelden tazeleyin. Kota
+yönlendirmesinde yeni oturumlar en az kullanılan sağlıklı hesabı kullanabilir; round-robin ve
+fill-first kendi politikalarını izler. Mevcut Codex dizileri normalde onları başlatan hesaba bağlı
+kalır, böylece uzun SSH, tmux ya da mobil oturumlar konuşmanın ortasında hesap değiştirmez — ancak
+kota yeniden değerlendirmesi, failover, hesabın devre dışı bırakılması, bağlılığın süresinin dolması
+ya da 401/403 ve 429 toparlanması bu bağı yeniden kurabilir. Yalnızca diğerleri tükendiğinde
+kullanılmasını istediğiniz bir hesap varsa — genellikle Codex Desktop girişiniz — hesaplara bir seçim
+sırası verin.
 
 ### Sponsorlar
 
@@ -125,14 +155,14 @@ Her yukarı akış protokol değişiminde opencodex'in bakımını sürdürebilm
 <details>
 <summary>Docker Compose</summary>
 
-Depo, digest ile sabitlenmiş, root olmayan bir Compose derlemesi içerir. Ana makinede Git ve Bun kuruluysa,
-her imaj derlemesinden önce standart uyumluluk manifestosunu üretin, ardından veri düzlemi belirtecini
-stdin üzerinden bir kez ilklendirip hub'ı başlatın:
+Depo, digest ile sabitlenmiş, root olmayan bir Compose derlemesi içerir. Derleme, seçilen Git anlık
+görüntüsünden standart uyumluluk manifestosunu üretip doğrular. Yerel klon için Git ve Docker Compose,
+uzak Git bağlamı için Docker Compose gerekir. İki yöntemde de ana makinede Bun veya bir hazırlık adımı
+gerekmez. Veri düzlemi belirtecini stdin üzerinden bir kez ilklendirip hub'ı başlatın:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -143,11 +173,29 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 Varsayılan ana makine bağlaması `127.0.0.1:10100`. Uzaktan erişime açmak için
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d` gerekir; `0.0.0.0` tüm ana
 makine arayüzlerini açar. Erişimi bir güvenlik duvarı ve kimlik doğrulamalı bir TLS/tailnet ön yüzüyle
-kısıtlayın. Üretilen JSON izlenmez; imaja `.git` olmadan kopyalanır. Kaynak değiştiğinde yeniden
-üretin ve üretimle derleme arasında kaynağa dokunmayın. Derleme; eski manifestoları, eksik ya da uyuşmayan
+kısıtlayın. Üretilen JSON izlenmez. Derleme bağlamına yalnızca `git ls-files` envanterinin okuduğu
+`.git/index` ve `.git/HEAD` alınır; tam nesne deposu yerine yaklaşık 1 MB tutar. Bunlar salt okunur bir
+bağlama üzerinden yalnızca derlemeye özel manifesto aşamasında görünür, dolayısıyla hiçbir `COPY` `.git`
+içermez. Ana makinede önceden üretilmiş bir manifesto yalnızca doğrulandıktan sonra kabul edilir; aksi
+halde derleme manifestoyu kendisi üretir. Derleme; eski manifestoları, eksik ya da uyuşmayan
 dosyaları, fazladan kaynak dosyalarını ve sembolik bağlantıları reddeder. Kayıtlı her SHA-256 değerini
 derleme bağlamıyla ve kopyalanan çalışma zamanı dosyalarıyla karşılaştırır: `package.json`,
 `bun.lock` ve özellikle dahil edilen `scripts/model-metadata.source.json`.
+
+Uzak Git bağlamında BuildKit'in Git meta verilerini koruması gerekir. Bu Compose derleme parçası uzak
+anlık görüntüyü seçer ve gereken yerleşik argümanı iletir:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 Belirteç ve değişken durum `ocx-state` adlı volume içinde kalır; imaja, Compose dosyasına, ortama ya da
 kabuk argümanlarına hiçbir kimlik bilgisi konmaz. Sağlayıcı kurulumu, kimlik doğrulamalı kabul kontrolleri,
@@ -163,8 +211,9 @@ uzaktan yönetim ve geri alma için
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -172,8 +221,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

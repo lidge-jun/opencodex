@@ -3,6 +3,12 @@ export interface OcxTool {
   description: string;
   parameters: Record<string, unknown>;
   strict?: boolean;
+  /**
+   * Anthropic `tools[*].allowed_callers`: which callers may invoke this tool. Carried rather
+   * than diagnosed, because rebuilding the declaration without it hands the model a tool the
+   * caller had restricted and returns a normal response (#5210).
+   */
+  allowedCallers?: string[];
   /** MCP namespace (e.g. "mcp__context7") for tools flattened out of a Responses "namespace" tool. */
   namespace?: string;
   /** Freeform/custom tool (e.g. apply_patch): the model's call must be relayed as a custom_tool_call. */
@@ -29,6 +35,19 @@ export interface OcxTool {
  */
 export function namespacedToolName(namespace: string | undefined, name: string): string {
   return namespace ? `${namespace}__${name}` : name;
+}
+
+/**
+ * Whether a declaration actually narrows who may call the tool.
+ *
+ * `["direct"]` is the state every unrestricted tool is already in, so treating it as a
+ * restriction would refuse ordinary traffic. Mirrors the `caller_mode` predicate in
+ * src/claude/compatibility.ts, which draws the same line.
+ */
+export function toolRestrictsCallers(tool: Pick<OcxTool, "allowedCallers">): boolean {
+  const callers = tool.allowedCallers;
+  if (callers === undefined) return false;
+  return !(callers.length === 1 && callers[0] === "direct");
 }
 
 /**
@@ -68,6 +87,20 @@ const CODE_MODE_HELPER_TOOL_NAMES = [
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 
 /**
+ * The nested-helper spellings, as a membership view of the same list.
+ *
+ * A code-mode catalog never DECLARES any of them — they exist only as `tools.<helper>(...)` inside
+ * `exec` — so a recorded call under one of these names can only have come from a provider echoing
+ * the helper, which is what makes the set usable as a bounded recovery vocabulary for stored
+ * history (#5095). Kept beside the tuple it is built from so the two can never drift; this is a
+ * different question from `NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES` below, which also covers `exec`
+ * itself because declaring THAT name is what turns normalization on.
+ */
+export const CODE_MODE_HELPER_WIRE_NAMES: ReadonlySet<string> = new Set<string>(
+  CODE_MODE_HELPER_TOOL_NAMES,
+);
+
+/**
  * Spellings that may never be MANUFACTURED as a bare alias for a namespaced tool.
  *
  * A bare alias is an ordinary compatibility affordance -- providers echo a namespaced tool
@@ -96,6 +129,8 @@ export const NAMESPACED_BARE_ALIAS_EXCLUDED_NAMES: ReadonlySet<string> = new Set
  *
  * Rewrites invented `default.<name>` prefixes back to a declared bare tool when that bare tool
  * is declared and neither `default.<name>` nor `default__<name>` was explicitly declared (#4176).
+ * The same wrapper may surround an already-flattened namespace identity; accept that exact
+ * declared suffix without treating its child name as a bare declaration.
  * Also normalizes legacy helper names (`exec_command`, `shell_command`, `apply_patch`, `view_image`) to
  * `exec` when code-mode `exec` is declared in the request catalog.
  *
@@ -118,7 +153,13 @@ export function normalizeDeclaredToolName(
     const bareDeclared = declaredBare ?? declared;
     if (
       bare.length > 0
-      && bareDeclared.has(bare)
+      && (
+        bareDeclared.has(bare)
+        // Muse can wrap the complete `namespace__tool` identity in `default.`. Requiring the
+        // exact flattened identity to be declared preserves the #4176 provenance boundary:
+        // `default.tool` still cannot borrow a namespaced tool's manufactured bare alias.
+        || (bare.includes("__") && declared.has(bare))
+      )
       && !declared.has("default." + bare)
       && !declared.has("default__" + bare)
     ) {

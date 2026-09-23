@@ -19,8 +19,12 @@ import {
   type JournalRecord,
 } from "../../src/codex/prompt-journal";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { OCX_SECTION_MARKER } from "../../src/codex/injected-marker";
 
-const MARKER = "# Auto-injected by opencodex";
+// Prompt layers deliberately keep the BARE ownership marker: 'ocx restore' is not their undo,
+// so the recovery hint that routing keys carry (#5261) does not belong here. Derived from the
+// constant rather than restated, so the two scopes cannot drift apart silently.
+const MARKER = OCX_SECTION_MARKER;
 const roots: string[] = [];
 
 function fixture(config?: string, store?: string) {

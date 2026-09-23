@@ -10,11 +10,19 @@
  */
 import { describe, expect, test } from "bun:test";
 import {
+  CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
   buildCatalogEntries,
+  mergeCatalogEntriesFromObservedState,
   mergeCatalogEntriesForSync,
   nativeEffortClamp,
   shouldApplyNativeEffortClamp,
 } from "../../src/codex/catalog";
+import type { ObservedCatalogMergeInput } from "../../src/codex/catalog";
+import {
+  applyConfigHintsToCachedModels,
+  applyProviderConfigHints,
+  suppressedSyntheticMaxCatalogSlugs,
+} from "../../src/codex/catalog/model-hints";
 
 function template(): Record<string, unknown> {
   return {
@@ -37,6 +45,136 @@ function template(): Record<string, unknown> {
 function efforts(entry: { supported_reasoning_levels?: unknown }): string[] {
   return (entry.supported_reasoning_levels as Array<{ effort: string }> ?? []).map(l => l.effort);
 }
+
+function mergeObserved(
+  input: Pick<ObservedCatalogMergeInput, "catalogModels" | "routedEntries">
+    & Partial<ObservedCatalogMergeInput>,
+): Record<string, unknown>[] {
+  return mergeCatalogEntriesFromObservedState({
+    baselineCatalogModels: [],
+    baseline: new Map(),
+    featured: [],
+    wsEnabled: false,
+    template: template(),
+    disabledModels: new Set(),
+    selectedModelsByProvider: new Map(),
+    gatheredProviderNames: new Set(),
+    degradedProviderNames: new Set(),
+    legacyCustomModelSlugs: new Set(),
+    multiAgentMode: "default",
+    multiAgentV2Enabled: false,
+    exactComboSlugs: new Set(),
+    hasPhysicalComboProvider: false,
+    includeNativeOpenAi: true,
+    accountBoundEntries: [],
+    policy: {
+      ...CANONICAL_NATIVE_CATALOG_CONTENT_POLICY,
+      warningPolicy: "emit",
+    },
+    ...input,
+  });
+}
+
+describe("synthetic max suppression", () => {
+  test("resolves discovered, cached, case-folded, and family-key model settings", () => {
+    const provider = {
+      adapter: "openai-chat",
+      baseUrl: "https://relay.example.test/v1",
+      modelSuppressSyntheticMax: { "MODEL-A": true, family: true },
+    };
+    expect(applyProviderConfigHints("relay", provider, {
+      id: "model-a",
+      provider: "relay",
+    }).suppressSyntheticMax).toBe(true);
+    expect(applyConfigHintsToCachedModels("relay", provider, [{
+      id: "family:latest",
+      provider: "relay",
+    }])[0]?.suppressSyntheticMax).toBe(true);
+    expect([...suppressedSyntheticMaxCatalogSlugs(
+      { providers: { relay: provider } },
+      [],
+      [{ slug: "relay/family:latest" }],
+    )]).toContain("relay/family:latest");
+  });
+
+  test("suppresses only missing routed max, retains ultra and declared max, and clamps a missing max default", () => {
+    const routed = [
+      { id: "ordinary", provider: "relay", reasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      {
+        id: "suppressed",
+        provider: "relay",
+        reasoningEfforts: ["low", "medium", "high", "xhigh"],
+        defaultReasoningEffort: "max",
+        suppressSyntheticMax: true,
+      },
+      {
+        id: "declared-max",
+        provider: "relay",
+        reasoningEfforts: ["low", "high", "max"],
+        defaultReasoningEffort: "max",
+        suppressSyntheticMax: true,
+      },
+    ];
+    const entries = buildCatalogEntries(template(), ["gpt-5.5"], routed as never, [], false);
+    const ordinary = entries.find(entry => entry.slug === "relay/ordinary")!;
+    const suppressed = entries.find(entry => entry.slug === "relay/suppressed")!;
+    const declared = entries.find(entry => entry.slug === "relay/declared-max")!;
+    const native = entries.find(entry => entry.slug === "gpt-5.5")!;
+
+    expect(efforts(ordinary)).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(efforts(suppressed)).toEqual(["low", "medium", "high", "xhigh", "ultra"]);
+    expect(suppressed.default_reasoning_level).toBe("xhigh");
+    expect(efforts(declared)).toEqual(["low", "high", "max", "ultra"]);
+    expect(declared.default_reasoning_level).toBe("max");
+    expect(efforts(native)).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+  });
+
+  test("observed-state repair does not re-add max to a suppressed preserved routed row", () => {
+    const disk = {
+      ...template(),
+      slug: "relay/suppressed",
+      display_name: "relay/suppressed",
+      supported_reasoning_levels: [
+        { effort: "low", description: "l" },
+        { effort: "high", description: "h" },
+        { effort: "xhigh", description: "x" },
+        { effort: "ultra", description: "u" },
+      ],
+      default_reasoning_level: "max",
+    };
+    const diskWithMax = {
+      ...disk,
+      slug: "relay/preserved-max",
+      display_name: "relay/preserved-max",
+      supported_reasoning_levels: [
+        ...disk.supported_reasoning_levels,
+        { effort: "max", description: "m" },
+      ],
+    };
+    const merged = mergeObserved({
+      catalogModels: [disk, diskWithMax],
+      routedEntries: [],
+      gatheredProviderNames: new Set(["relay"]),
+      degradedProviderNames: new Set(["relay"]),
+      suppressedSyntheticMaxSlugs: suppressedSyntheticMaxCatalogSlugs({
+        providers: {
+          relay: {
+            adapter: "openai-chat",
+            baseUrl: "https://relay.example.test/v1",
+            modelSuppressSyntheticMax: { suppressed: true, "preserved-max": true },
+          },
+        },
+      }, [], [disk, diskWithMax]),
+    });
+    const preserved = merged.find(entry => entry.slug === "relay/suppressed")!;
+    const preservedMax = merged.find(entry => entry.slug === "relay/preserved-max")!;
+
+    expect(efforts(preserved)).toEqual(["low", "high", "xhigh", "ultra"]);
+    expect(preserved.default_reasoning_level).toBe("xhigh");
+    expect(efforts(preservedMax)).toContain("max");
+    expect(preservedMax.default_reasoning_level).toBe("max");
+  });
+});
 describe("catalog ultra (always-on)", () => {
   const routed = [{ id: "glm-5.2", provider: "opencode-go", reasoningEfforts: ["low", "medium", "high", "xhigh"] }];
 

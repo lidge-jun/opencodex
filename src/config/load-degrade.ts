@@ -26,13 +26,16 @@ import {
   isUsableApiKeySecret,
   managementIngressSchema,
   codexPoolSchema,
+  codexAccountAutoSwitchThresholdsSchema,
   providerModelCostsConfigError,
   credentialGroupsSchema,
   hubConfigSchema,
   quotaResetNotifySchema,
   remoteGuiConfigSchema,
   retryOn429PolicySchema,
+  retryOnResetPolicySchema,
   runtimeRoleSchema,
+  spendSchema,
 } from "./schema/leaf-validators";
 import { hasWarnedInheritedFastWireConflict, markWarnedInheritedFastWireConflict } from "./warn-memo";
 
@@ -98,6 +101,24 @@ export function warnDegradedStreamMode(rawParsed: unknown, validated: OcxConfig)
   if (raw !== undefined && validated.streamMode === undefined) {
     console.warn(`⚠️  config.json streamMode ${JSON.stringify(raw)} is invalid (expected "auto", "legacy-tee", or "eager-relay") — falling back to "auto"`);
   }
+}
+
+export function warnDegradedCompactionRouting(rawParsed: unknown, validated: OcxConfig): void {
+  if (!rawParsed || typeof rawParsed !== "object") return;
+  const raw = (rawParsed as Record<string, unknown>).compactionRouting;
+  if (raw !== undefined && validated.compactionRouting === undefined) {
+    console.warn("⚠️  config.json compactionRouting is invalid (expected { model, reasoningEffort?, triggers? } with a nonblank model, a declared effort, and triggers drawn without repetition from \"manual\" and \"auto\") — compaction keeps the conversation model");
+  }
+}
+
+/**
+ * Top-level opt-in blocks whose hand-edited form degrades to "off" instead of failing the whole
+ * schema. Grouped behind one entry point because `src/config.ts` sits at its file-size cap, and
+ * the ratchet only ever moves down: a per-block call there costs a line the file does not have.
+ */
+export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
+  warnDegradedStreamMode(rawParsed, validated);
+  warnDegradedCompactionRouting(rawParsed, validated);
 }
 
 /**
@@ -176,18 +197,44 @@ export function sanitizeRetryOn429ForLoad(parsed: unknown): void {
  * redacted (a malformed write can place a secret in a property name).
  */
 export function retryOn429PolicyConfigError(policy: unknown): string | null {
+  return strictPolicyConfigError("retryOn429", retryOn429PolicySchema, policy);
+}
+
+/**
+ * Management write-boundary validation for `retryOnReset`, with the same fail-closed contract
+ * as `retryOn429PolicyConfigError`: the load-time schema degrades a malformed block to
+ * "absent", so this is the one place a bad value is refused instead of silently dropped.
+ */
+export function retryOnResetPolicyConfigError(policy: unknown): string | null {
+  return strictPolicyConfigError("retryOnReset", retryOnResetPolicySchema, policy);
+}
+
+/**
+ * The shared body of both. Written once because the two differ only in the field name they
+ * report, and a second hand-copied formatter is a second place for the redaction to be
+ * forgotten.
+ */
+function strictPolicyConfigError(
+  field: string,
+  schema: {
+    safeParse: (value: unknown) => { success: true } | {
+      success: false;
+      error: { issues: Array<{ code: string; message: string; path: PropertyKey[]; keys?: string[] }> };
+    };
+  },
+  policy: unknown,
+): string | null {
   if (policy === undefined) return null;
-  const result = retryOn429PolicySchema.safeParse(policy);
+  const result = schema.safeParse(policy);
   if (result.success) return null;
   const first = result.error.issues[0];
-  if (!first) return "retryOn429 is invalid";
-  if (first.code === "unrecognized_keys") {
+  if (!first) return `${field} is invalid`;
+  if (first.code === "unrecognized_keys" && first.keys) {
     const names = first.keys.map(key => JSON.stringify(redactSecretString(key))).join(", ");
-    return `retryOn429 has unrecognized field${first.keys.length > 1 ? "s" : ""}: ${names}`;
+    return `${field} has unrecognized field${first.keys.length > 1 ? "s" : ""}: ${names}`;
   }
-  if (first.path.length === 0) return `retryOn429 is invalid (${first.message})`;
-  const field = String(first.path[first.path.length - 1]);
-  return `retryOn429.${field} is invalid (${first.message})`;
+  if (first.path.length === 0) return `${field} is invalid (${first.message})`;
+  return `${field}.${String(first.path[first.path.length - 1])} is invalid (${first.message})`;
 }
 
 export function sanitizeCapabilityDeclarationsForLoad(parsed: unknown): void {
@@ -343,6 +390,12 @@ export function degradedCodexAccountPriorityWarnings(rawParsed: unknown, validat
   if (raw !== undefined && validated.codexAccountPriorities === undefined) {
     warnings.push("codexAccountPriorities is invalid (expected account ids mapped to integers between -100 and 100) — account selection order is disabled");
   }
+  const rawThresholds = record?.codexAccountAutoSwitchThresholds;
+  if (rawThresholds !== undefined && !codexAccountAutoSwitchThresholdsSchema.safeParse(rawThresholds).success) {
+    warnings.push(validated.codexAccountAutoSwitchThresholds === undefined
+      ? "codexAccountAutoSwitchThresholds is invalid (expected account ids mapped to integers between 0 and 100) — per-account usage thresholds are disabled"
+      : "codexAccountAutoSwitchThresholds contains invalid entries (expected account ids mapped to integers between 0 and 100) — invalid entries were ignored");
+  }
   return warnings;
 }
 
@@ -374,10 +427,9 @@ export function degradedCredentialGroupsWarning(rawParsed: unknown): string | nu
   if (!pool || pool.credentialGroups === undefined) return null;
   const parsed = credentialGroupsSchema.safeParse(pool.credentialGroups);
   if (parsed.success) return null;
-  // Every issue message is redacted before it is joined. The custom messages embed the
-  // offending member through `JSON.stringify`, so a malformed credential string that
-  // happens to carry secret material would otherwise be printed verbatim at config load
-  // — a config file is exactly where a pasted token ends up in the wrong field.
+  // Every issue message is redacted before it is joined. The custom messages now name
+  // group/member positions instead of the offending strings; the redaction stays as a
+  // second layer for any schema default message that still embeds a value.
   const details = parsed.error.issues.map(issue => redactSecretString(issue.message)).join("; ");
   return `pool.credentialGroups is invalid (${details}) — declared quota grouping is disabled; other pool settings were preserved`;
 }
@@ -634,6 +686,20 @@ export function malformedCatalogAutoRefreshWarning(rawParsed: unknown): string |
   if (result.success) return null;
   const field = result.error.issues[0]?.path.join(".");
   return `catalogAutoRefresh${field ? `.${field}` : ""} ignored: invalid catalog auto-refresh configuration`;
+}
+
+/**
+ * The same silent-in-the-wrong-direction failure, and the most expensive instance of it here:
+ * a dropped spend section means the ceilings are not enforced, and an unenforced ceiling is
+ * indistinguishable from one nothing has reached. The operator finds out from the bill.
+ */
+export function malformedSpendWarning(rawParsed: unknown): string | null {
+  const raw = rawConfigRecord(rawParsed);
+  if (!raw || !Object.hasOwn(raw, "spend")) return null;
+  const result = spendSchema.safeParse(raw.spend);
+  if (result.success) return null;
+  const field = result.error.issues[0]?.path.join(".");
+  return `spend${field ? `.${field}` : ""} ignored: invalid spend ceiling configuration, so no token ceiling is enforced`;
 }
 
 /**

@@ -7,8 +7,12 @@ import {
 } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
+let releaseSpendHome: (() => void) | undefined;
+// Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 /**
  * Structurally faithful Fernet fixture: version + timestamp + IV + one AES-CBC
@@ -49,6 +53,9 @@ const FINAL_ANSWER_ENVELOPE = [
 ].join("\n");
 
 afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
 });
 
@@ -135,6 +142,16 @@ async function post(
     },
     body: JSON.stringify({ model, input, stream: false }),
   }), config, { model: "", provider: "" });
+}
+
+async function dispatchPost(
+  config: OcxConfig,
+  model: string,
+  input: unknown[],
+  headers: HeadersInit = {},
+): Promise<Response> {
+  takeSpendHome();
+  return post(config, model, input, headers);
 }
 
 describe("V2 routed agent-message ciphertext guard", () => {
@@ -275,7 +292,7 @@ describe("V2 routed agent-message ciphertext guard", () => {
       });
     }) as typeof fetch;
 
-    const response = await post(
+    const response = await dispatchPost(
       mixedComboConfig(),
       "combo/mixed",
       agentMessage([
@@ -355,7 +372,7 @@ describe("V2 routed agent-message ciphertext guard", () => {
       });
     }) as typeof fetch;
 
-    const response = await post(
+    const response = await dispatchPost(
       config,
       "combo/mixed",
       agentMessage([
@@ -542,7 +559,7 @@ describe("V2 routed agent-message ciphertext guard", () => {
       { type: "input_text", text: ROUTING_ENVELOPE },
       { type: "encrypted_content", encrypted_content: FERNET_TASK },
     ]);
-    const response = await post(nativeConfig(), "gpt-5.5", input, {
+    const response = await dispatchPost(nativeConfig(), "gpt-5.5", input, {
       authorization: "Bearer caller-codex-token",
     });
 
@@ -627,7 +644,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
   test("repairs a mixed child result replayed behind a later user turn", async () => {
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [mixedChildResult(), userTurn]);
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [mixedChildResult(), userTurn]);
 
     expect(response.status).toBe(200);
     expect(outbound()).toHaveLength(1);
@@ -646,7 +663,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     expect(hasUnreadableEncryptedAgentTask(input)).toBe(false);
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", input);
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", input);
 
     expect(response.status).toBe(200);
     expect(outbound()[0]).not.toContain(FERNET_TASK);
@@ -660,7 +677,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     expect(hasUnreadableEncryptedAgentTask(input)).toBe(false);
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", input);
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", input);
 
     expect(response.status).toBe(200);
     expect(outbound()[0]).not.toContain(FERNET_TASK);
@@ -680,7 +697,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
   test("leaves a fully readable child result exactly as the adapter already lowered it", async () => {
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [{
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
       type: "agent_message",
       author: "/root/child",
       recipient: "/root",
@@ -708,7 +725,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
       });
     }) as typeof fetch;
 
-    const response = await post(routedConfig(), "xai/grok-4.5", [mixedChildResult(), userTurn]);
+    const response = await dispatchPost(routedConfig(), "xai/grok-4.5", [mixedChildResult(), userTurn]);
 
     expect(response.status).toBe(200);
     expect(forwardedBody).toContain("the child finished the migration");
@@ -730,7 +747,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
       });
     }) as typeof fetch;
 
-    const response = await post(nativeConfig(), "gpt-5.5", [mixedChildResult(), userTurn], {
+    const response = await dispatchPost(nativeConfig(), "gpt-5.5", [mixedChildResult(), userTurn], {
       authorization: "Bearer caller-codex-token",
     });
 
@@ -752,7 +769,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     } as OcxConfig;
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(config, "relayfwd/child-model", [mixedChildResult(), userTurn]);
+    const response = await dispatchPost(config, "relayfwd/child-model", [mixedChildResult(), userTurn]);
 
     expect(response.status).toBe(200);
     expect(outbound()[0]).not.toContain(FERNET_TASK);
@@ -778,7 +795,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     } as OcxConfig;
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(config, "combo/routed", [mixedChildResult(), userTurn]);
+    const response = await dispatchPost(config, "combo/routed", [mixedChildResult(), userTurn]);
 
     expect(response.status).toBe(200);
     expect(outbound()).toHaveLength(1);
@@ -797,7 +814,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     expect(structurallyValidFernetTokens(`${first}${second}`)).toEqual([FERNET_TASK]);
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [{
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
       type: "agent_message",
       author: "/root/child",
       recipient: "/root",
@@ -818,7 +835,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
   test("repairs a token embedded inside a text part and keeps the prose around it", async () => {
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [{
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
       type: "agent_message",
       author: "/root/child",
       recipient: "/root",
@@ -843,7 +860,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     for (const [name, text] of Object.entries(readable)) {
       const outbound = captureOutbound("relay-model");
 
-      const response = await post(routedResponsesConfig(), "relay/child-model", [{
+      const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
         type: "agent_message",
         author: "/root/child",
         recipient: "/root",
@@ -861,7 +878,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
     // two ordinary encoded fragments do not become a marker merely by being adjacent.
     const outbound = captureOutbound("relay-model");
 
-    const response = await post(routedResponsesConfig(), "relay/child-model", [{
+    const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
       type: "agent_message",
       author: "/root/child",
       recipient: "/root",
@@ -889,7 +906,7 @@ describe("routed Responses agent-message ciphertext repair", () => {
       expect(structurallyValidFernetTokens(blob)).toEqual([]);
       const outbound = captureOutbound("relay-model");
 
-      const response = await post(routedResponsesConfig(), "relay/child-model", [{
+      const response = await dispatchPost(routedResponsesConfig(), "relay/child-model", [{
         type: "agent_message",
         author: "/root/child",
         recipient: "/root",

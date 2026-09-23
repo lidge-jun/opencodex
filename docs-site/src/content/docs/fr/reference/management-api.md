@@ -80,6 +80,8 @@ résultats propres à chaque route, sans répéter ce tableau.
 | `POST /api/grok/apply` | Appliquer la configuration Grok persistante par la synchronisation gérée | 409 `grok_apply_busy` ; 400/500 échec de l'application |
 | `GET /api/grok/reset-coupons?accountId=...` | Lire les jetons de réinitialisation de facturation Grok restants et leurs fenêtres de validité pour le compte xAI actif ou spécifié | 400 compte manquant ; 401 non authentifié ; 502 erreur gRPC-Web en amont |
 | `POST /api/grok/reset-coupons/consume` | Échanger un coupon de réinitialisation éligible. Corps `{ accountId?, tokenId?, operationId? }`. L'`operationId` facultatif (UUIDv4) rend l'échange idempotent : répéter le même identifiant rejoue le résultat durable sans double échange. | 400 JSON/UUID invalide ; 401 non authentifié ; 409 `identity_mismatch` ; 502 erreur en amont ; 503 capacité du registre |
+| `GET /api/anthropic/reset-grants?accountId=...` | Lire les réinitialisations des limites d’utilisation de Claude pour un compte OAuth Anthropic : son admissibilité, le nombre de réinitialisations restantes pour chaque attribution, sa période de validité et les fenêtres qu’elle remet à zéro, ainsi que toute tentative non confirmée pouvant encore être relancée | 400 aucun compte correspondant ; 401 nouvelle authentification requise ; 502 service en amont indisponible |
+| `POST /api/anthropic/reset-grants/consume` | Utiliser une réinitialisation. Corps `{ accountId, grantId, operationId }` ; `operationId` est un UUIDv4 envoyé en amont comme identifiant de requête : le répéter relance la même demande. Nécessite une session du tableau de bord. | 400 corps invalide ; 401 nouvelle authentification requise ; 403 `session_required` ; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch` ; 500 `journal_write_failed` ; 502 `unknown_outcome` ; 503 journal occupé, indisponible ou saturé |
 | `GET, PUT /api/claude-desktop` | Lire ou enregistrer le profil Claude Desktop routé ou natif | 400 affectation invalide ou indisponible |
 | `POST /api/claude-desktop/apply` | Écrire le profil enregistré dans la configuration gérée de Claude Desktop | 400/500 échec d'écriture |
 | `GET /api/claude-desktop/status` | Inspecter le profil enregistré par rapport à celui appliqué et l'état du bureau | 400 échec de lecture de l'état |
@@ -93,6 +95,8 @@ d'envoyer après un délai d'attente au lieu de réessayer, car un échange dont
 journal est encore ouvert s'exécuterait de nouveau. `ocx account grok-reset-coupons` reste l'équivalent
 en terminal.
 
+Les réinitialisations de l’utilisation de Claude fonctionnent de la même manière depuis **Providers > Anthropic > Accounts**. Chaque ligne de compte connecté porte un badge de ticket indiquant le nombre de réinitialisations restantes, et la boîte de dialogue en utilise une après une seconde confirmation. Une réinitialisation recharge les limites sur 5 heures et sur une semaine sans déplacer le jour de réinitialisation hebdomadaire. Si une demande ne reçoit pas de réponse, la boîte de dialogue conserve son `operationId` et propose de réessayer avec le même identifiant pendant dix minutes, comme le fait le client Claude Code pour reprendre une demande ; toute nouvelle opération pour la même attribution est refusée jusque-là. L’utilisation est réservée au tableau de bord : le jeton administrateur seul reçoit `403 session_required`.
+
 Pour comprendre la liste de modèles et le comportement chiffré des tâches confiées aux agents d'exécution, voir
 [Surface des sous-agents](/fr/guides/sub-agent-surface/).
 
@@ -102,6 +106,53 @@ Pour comprendre la liste de modèles et le comportement chiffré des tâches con
 | --- | --- | --- |
 | `GET /api/client-integrations/journal?client=...` | Lister les opérations de restauration, éventuellement pour un seul client. Chaque ligne contient le champ `deletable` calculé par le serveur. | 400 client invalide |
 | `DELETE /api/client-integrations/journal?opId=...` | Retirer une ancienne opération et supprimer son instantané si possible. La réponse contient `snapshotRemoved` ; `false` conserve le nettoyage pour une nouvelle tentative de maintenance. | 400 `opId` absent ; 404 opération absente ou déjà retirée ; 409 opération la plus récente du client |
+
+## Prévisualiser une modification d'intégration
+
+Une prévisualisation montre ce qu'une modification ferait sans la faire. Ces routes n'écrivent
+rien : ni instantané, ni enregistrement de propriété, ni ligne de journal, ni verrou, ni
+maintenance, ni récupération.
+
+| Méthode et chemin | Objet | Erreurs notables |
+| --- | --- | --- |
+| `POST /api/client-integrations/preview` | Planifier `apply`, `overwrite` ou `disable` pour un client ; corps `{ "clientId": "...", "operation": "..." }` | 400 client ou opération invalide ; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/restore/preview` | Planifier une annulation ; corps `{ "opId": "...", "confirmDrift": false }` | 404 opération inconnue ; 400 `invalid_aside_profile_path`; 409 `integration_preview_unavailable` |
+| `POST /api/client-integrations/aside/profiles/{profileId}/preview` | Planifier la modification d'un seul profil Aside ; `restore` exige un `opId` | 400 corps invalide ou profil non précisé ; 404 profil ou opération inconnus; 409 `integration_preview_unavailable` |
+
+Un plan contient `version`, `clientId`, `operation`, `state`, `foreignEdit`, une liste `changes`
+de paires `kind` et `path`, une empreinte `fingerprint` opaque, `canApply`, `willChange`, ainsi
+que `refusalReason` et `profileId` facultatifs. Les chemins sont des chemins de schéma gérés ou
+les marqueurs fixes `$snapshot`, `$ownership` et `$journal` ; une position déterminée à
+l'exécution apparaît comme `*`. Aucune valeur de configuration, aucun emplacement de fichier et
+aucune identité d'élément sélectionné n'est renvoyé.
+
+`canApply` à vrai avec `willChange` à faux signifie que l'opération réussit sans rien changer
+dans le document client géré, par exemple appliquer ce qui est déjà appliqué.
+
+Une modification de profil Aside enregistre tout de même une chose dans ce cas : la confirmation
+enregistre la préférence de synchronisation du profil avant de toucher au moindre document client.
+Désactiver un profil dont le bloc géré est déjà absent enregistre donc la préférence et laisse le
+document et son historique intacts.
+
+`integration_preview_unavailable` indique qu'aucune liste de modèles utilisable n'est actuellement
+conservée : un proxy qui vient de démarrer est un cas, une liste abandonnée parce que la
+configuration ou le cache de fournisseurs a changé en est un autre. Lire
+`GET /api/client-integrations` en établit une lorsque la découverte réussit et que la
+configuration peut être identifiée ; c'est le remède habituel, pas une garantie.
+
+## Confirmer une modification prévisualisée
+
+Les routes de modification acceptent `operation` et `planFingerprint` à côté de leur corps
+habituel. Envoyez les deux ou aucun : une requête n'en portant qu'un est rejetée, tout comme une
+requête dont l'`operation` contredit la modification demandée. Une liaison Aside porte sur un seul
+profil, car une empreinte ne peut pas décrire plusieurs fichiers qui changent indépendamment.
+
+Le serveur replanifie avant d'écrire et renvoie `409 integration_preview_stale` avec un `plan`
+recalculé lorsque la confirmation ne décrit plus ce qui se produirait. Décidez de nouveau d'après
+ce plan ; la requête n'est pas réessayée automatiquement.
+
+Une empreinte est une vérification optimiste, jamais une autorisation. L'authentification de l'API
+d'administration et les règles de propriété décident seules si une modification peut avoir lieu.
 
 La suppression ajoute une pierre tombale au lieu de réécrire le journal. Le serveur protège
 l'opération la plus récente de chaque client afin de conserver le point d'annulation actuel.
@@ -115,6 +166,21 @@ l'opération la plus récente de chaque client afin de conserver le point d'annu
 | `DELETE /api/combos?id=...` | Supprimer une combinaison et effacer son état de sélection et de temporisation | 400 identifiant manquant ; 404 combinaison inconnue |
 
 Voir [Combos](/fr/guides/combos/) pour les stratégies cibles, les temps de recharge, les alias et les échecs de routage.
+
+### Couches de prompt Codex
+
+| Méthode et chemin | Objectif | Erreurs notables |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | Lire l'instantané des couches de prompt : couches, variantes de base, sélection et état de drift | — |
+| `GET /api/codex-prompt/text` | Sonder le texte du prompt visible par le modèle via `codex debug prompt-input` | Fail-soft : une sonde indisponible se dégrade en statut dans le corps, pas en erreur HTTP |
+| `PUT /api/codex-prompt/toggle` | Activer ou désactiver une couche commutable | 400 corps invalide ou couche inconnue ; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | Remplacer l'ensemble des couches personnalisées | 400 corps invalide, `invalid_characters`, `body_too_large` quand une couche UTF-8 normalisée dépasse 65 536 octets, `composed_too_large` au-delà de 131 072 octets ; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | Sélectionner le prompt de base par défaut ou une variante enregistrée | 400 corps invalide, `unknown_layer` pour un id qui ne correspond à aucune variante enregistrée ; 409 `stale_revision`, `developer_instructions_not_owned` quand la base actuelle est externe |
+| `PUT /api/codex-prompt/base` | Créer (`id` omis ou `id: null`), modifier ou supprimer (`delete: true`) une variante de base. Un `id` fourni est réservé à la modification et doit référencer une variante enregistrée. `body` est normalisé (tabulations expansées, CR/CRLF convertis en LF) avant d'être mesuré ou stocké | 400 corps invalide, `unknown_layer` pour l'id `default` ou un id qui ne correspond à aucune variante enregistrée, `body_too_large` quand le corps UTF-8 normalisé dépasse 65 536 octets ; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | Importer `developer_instructions` de `config.toml` comme couche personnalisée | 400 corps invalide, `invalid_characters`, `body_too_large`, `composed_too_large` ; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | Réparer le drift entre `config.toml` et la projection possédée | 400 corps invalide ; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+Voir [Couches de prompt Codex](/fr/guides/codex-prompt/) pour le modèle de couches et les clés écrites par chacune.
 
 ### Configuration, démarrage, synchronisation et mises à jour
 
@@ -136,6 +202,11 @@ Voir [Combos](/fr/guides/combos/) pour les stratégies cibles, les temps de rech
 
 ### Journaux, utilisation et stockage
 
+Les journaux de requêtes conservent `servedModel` lorsque le fournisseur en amont indique le modèle qui a répondu, et
+`wireModel` lorsque le modèle envoyé en amont diffère de celui présenté au client. Le tableau de bord affiche
+`wire → served` si ces modèles diffèrent ; l'infobulle conserve les deux valeurs. En l'absence d'indication du modèle
+par le fournisseur en amont, cette information reste absente : elle n'est pas déduite du modèle demandé.
+
 | Méthode et chemin | Objectif | Erreurs notables |
 | --- | --- | --- |
 | `GET /api/logs` | Requête filtrée dans les journaux de requêtes en mémoire | — |
@@ -145,6 +216,7 @@ Voir [Combos](/fr/guides/combos/) pour les stratégies cibles, les temps de rech
 | `GET /api/debug/injection-logs` | Lire un nombre limité d'entrées de débogage de l'injection du guidage | — |
 | `GET /api/claude/inbound-debug` | Lire l'état et les entrées du débogage entrant | — |
 | `GET /api/usage` | Résumer l'utilisation par période et par interface cliente ; les réponses Codex comprennent aussi une ventilation `accounts` indexée par des libellés de journalisation stables ne contenant aucune donnée personnelle | Renvoie un résumé `error: "read_failed"` si le stockage ne peut pas être lu |
+| `GET /api/metrics` | Renvoyer les métriques texte Prometheus locales au processus : requêtes logiques, envois physiques, types de récupération, durée et TTFT. Les libellés sont limités au protocole, au résultat et à la classe de récupération ; aucun identifiant de requête ou d'identifiant secret n'est exporté. | 404 si `metricsExport.enabled` n'était pas vrai au démarrage ; l'authentification de gestion est obligatoire et les identifiants du plan de données ne donnent aucun accès |
 | `GET /api/storage` | Analyser l'utilisation du stockage Codex par catégorie | Renvoie une charge utile `error: "scan_failed"` en cas d'échec de l'analyse |
 | `POST /api/storage/cleanup/preview` | Prévisualiser le nettoyage des sessions archivées et renvoyer une empreinte contraignante | 400 `invalid_json` ou `invalid_percent` |
 | `POST /api/storage/cleanup` | Mettre en quarantaine ou supprimer définitivement l'ensemble archivé prévisualisé | 400 saisie invalide ; 409 état obsolète, occupé ou référencé ; 500 échec du système de fichiers ou de la base de données |
@@ -293,7 +365,7 @@ Codex. Ses routes sont les suivantes :
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Suspendre les comptes dont le quota est épuisé | Les échecs de verrouillage de mutation deviennent 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Effacer le temps de recharge d'exécution pour un compte ou tous les comptes | 400 identifiant invalide |
 | `GET, PUT /api/codex-auth/active` | Lire ou sélectionner le compte actif | 400 compte invalide ou manquant ; 409 conflit avec un compte suspendu ou une ancienne ligne |
-| `PUT /api/codex-auth/auto-switch` | Définir le seuil de quota pour le changement automatique de compte | 400 seuil invalide |
+| `PUT /api/codex-auth/auto-switch` | Définir le seuil global avec `{ threshold }` sans `id`, ou la valeur spécifique à un compte avec `{ id, threshold }` ; `id: '__main__'` désigne le compte Codex Desktop. Avec un `id`, `threshold: null` supprime la valeur spécifique et rétablit l'héritage du seuil global | 400 id/seuil invalide ; 404 compte absent |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Mettre à jour la stratégie de sélection du groupe de comptes Codex | 400 stratégie ou configuration invalide |
 | `PUT /api/codex-auth/failover` | Définir le seuil de basculement du compte | 400 seuil invalide |
 | `GET /api/codex-auth/quota` | Lire l'état du quota mis en cache par compte | — |
@@ -301,7 +373,7 @@ Codex. Ses routes sont les suivantes :
 | `POST /api/codex-auth/reset-credits/consume` | Consommer un crédit de réinitialisation éligible. L'`operationId` facultatif (UUIDv4) rend la consommation idempotente : le même id rejoue un unique résultat durable au lieu de consommer un second crédit. | 400 identifiant de compte manquant ou `operationId` invalide ; 409 `identity_mismatch` si l'id appartient à un autre compte ; transmission du statut en amont ; 503 `server_busy`, `capacity` ou `unavailable` ; 500 consommer l'échec |
 | `POST /api/codex-auth/login` | Démarrer une connexion ou une réauthentification Codex | 400 requête invalide ; état de connexion en conflit ou occupé |
 | `POST /api/codex-auth/login/code` | Soumettre manuellement un code pour un flux de connexion Codex | 400 flux ou code invalide |
-| `POST /api/codex-auth/login/cancel` | Annuler un flux de connexion Codex | — |
+| `POST /api/codex-auth/login/cancel` | Annuler uniquement la connexion Codex en attente identifiée par `{ "flowId": "..." }` | 400 identifiant de flux absent, inconnu ou non en attente |
 | `GET /api/codex-auth/login-status` | Interrogez un flux ou un état de connexion à un compte. Un flux de nouveau compte terminé inclut `catalogRefreshPending: true` uniquement lorsque la récupération est nécessaire. | Rapport de flux inconnus `expired` ; aucun rapport de flux actif `idle` |
 
 Si une nouvelle ligne de configuration de compte est enregistrée, mais que la mise en place des identifiants ne peut pas aboutir, le `login-status` OAuth indique

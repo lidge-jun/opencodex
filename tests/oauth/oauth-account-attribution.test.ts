@@ -14,6 +14,7 @@ import { summarizeUsage } from "../../src/usage/summary";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -66,9 +67,13 @@ async function withHome<T>(run: (home: string) => Promise<T>): Promise<T> {
   const prevCodex = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = home;
   process.env.CODEX_HOME = home;
+  // Take the writer lease after this helper installs its home so direct handler dispatch can open the spend journal.
+  const releaseSpendHome = acquireOwnedSpendHome();
   try {
     return await run(home);
   } finally {
+    // Release before restoring or removing the home to prevent Windows removal failures and POSIX unlinked databases.
+    releaseSpendHome();
     globalThis.fetch = originalFetch;
     removeTreeWithRetry(home);
     if (prevOpencodex === undefined) delete process.env.OPENCODEX_HOME;

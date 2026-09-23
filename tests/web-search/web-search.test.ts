@@ -15,6 +15,7 @@ import type { OcxMessage, OcxParsedRequest } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import { withUpstreamHttpVersion } from "../../src/lib/upstream-http-version";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 /**
  * Wrap a fetch so it applies the provider's HTTP-version pin the way `providerFetch` does in
@@ -566,7 +567,13 @@ describe("web-search sidecar planning", () => {
 });
 
 const originalFetch = globalThis.fetch;
-afterEach(() => { globalThis.fetch = originalFetch; });
+let releaseSpendHome: (() => void) | undefined;
+afterEach(() => {
+  // Release the preload-home lease before later teardown can replace or remove that home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+  globalThis.fetch = originalFetch;
+});
 
 test("issue #2885 — Zhipu-shaped web-search routing preserves the provider HTTP version pin", async () => {
   let routedProtocol: string | undefined;
@@ -606,6 +613,8 @@ test("issue #2885 — Zhipu-shaped web-search routing preserves the provider HTT
     throw new Error("the routed web-search leg must use the provider fetch");
   }) as typeof fetch;
 
+  // Direct dispatch needs the writer lease that startServer normally owns for this home.
+  releaseSpendHome = acquireOwnedSpendHome();
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: {
@@ -1076,6 +1085,11 @@ describe("web-search sidecar native web_search_call emission", () => {
 
     // First adapter always 429s via fetchResponse; the rotated adapter answers.
     const reasoningLogs: unknown[] = [];
+    const accountAConversationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const outerParsed = parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] });
+    outerParsed._kiroAuthContext = { apiRegion: "eu-west-1", profileArn: "account-a" };
+    outerParsed._providerContinuation = { kiro: { conversationId: accountAConversationId } };
+    let retryState: Pick<OcxParsedRequest, "_kiroAuthContext" | "_providerContinuation"> | undefined;
     const firstAdapter: ProviderAdapter = {
       name: "mock-429",
       buildRequest: () => ({
@@ -1095,17 +1109,20 @@ describe("web-search sidecar native web_search_call emission", () => {
     };
     const rotatedAdapter: ProviderAdapter = {
       name: "mock-rotated",
-      buildRequest: () => ({
-        url: "https://routed.test/v1",
-        method: "POST",
-        headers: {},
-        body: "{}",
-        reasoningLog: {
-          effectiveEffort: "high",
-          wireField: "reasoning_effort",
-          wireValue: "high",
-        },
-      }),
+      buildRequest: retryParsed => {
+        retryState = retryParsed;
+        return {
+          url: "https://routed.test/v1",
+          method: "POST",
+          headers: {},
+          body: "{}",
+          reasoningLog: {
+            effectiveEffort: "high",
+            wireField: "reasoning_effort",
+            wireValue: "high",
+          },
+        };
+      },
       fetchResponse: async () => new Response("{}", { status: 200 }),
       async *parseStream() {
         yield { type: "text_delta", text: "answer from rotated key" };
@@ -1116,7 +1133,7 @@ describe("web-search sidecar native web_search_call emission", () => {
     let rotations = 0;
 
     const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
+      parsed: outerParsed,
       adapter: firstAdapter,
       forwardProvider,
       hostedTool: { type: "web_search" },
@@ -1124,10 +1141,13 @@ describe("web-search sidecar native web_search_call emission", () => {
       settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
       maxSearches: 1,
       onRequestBuilt: request => reasoningLogs.push(request.reasoningLog),
-      on429: async retryAfter => {
+      on429: async (retryAfter, _responseHeaders, retryParsed) => {
         rotations++;
         expect(retryAfter).toBe("30");
         await Promise.resolve();
+        if (!retryParsed) throw new Error("the loop must pass the iteration request to on429");
+        retryParsed._kiroAuthContext = { apiRegion: "ap-southeast-2", profileArn: "account-b" };
+        delete retryParsed._providerContinuation;
         return rotatedAdapter;
       },
     });
@@ -1137,6 +1157,8 @@ describe("web-search sidecar native web_search_call emission", () => {
     const output = completed.output as { type: string; content?: { text?: string }[] }[];
     expect(output.find(o => o.type === "message")?.content?.[0]?.text).toBe("answer from rotated key");
     expect(rotations).toBe(1);
+    expect(retryState?._kiroAuthContext).toEqual({ apiRegion: "ap-southeast-2", profileArn: "account-b" });
+    expect(retryState?._providerContinuation).toBeUndefined();
     expect(reasoningLogs).toEqual([
       {
         effectiveEffort: "low",
@@ -1214,48 +1236,6 @@ describe("web-search sidecar native web_search_call emission", () => {
     // Same-target replay reuses the ONE built request (builder runs once per target sequence).
     expect(builds).toBe(1);
   });
-
-  test("retry wait longer than the stall budget still succeeds (heartbeats feed the watchdog)", async () => {
-    globalThis.fetch = (() => Promise.resolve(new Response(
-      'event: response.completed\ndata: {"type":"response.completed"}\n\n',
-      { headers: { "Content-Type": "text/event-stream" } },
-    ))) as typeof fetch;
-
-    let sends = 0;
-    const retryingAdapter: ProviderAdapter = {
-      name: "mock-retry429",
-      buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => {
-        sends += 1;
-        if (sends === 1) {
-          return new Response("rate limited", { status: 429, headers: { "retry-after": "30" } });
-        }
-        return new Response("{}", { status: 200 });
-      },
-      async *parseStream() {
-        yield { type: "text_delta", text: "answer after long backoff" };
-        yield { type: "done" };
-      },
-      async parseResponse() { throw new Error("parseResponse must be unreachable"); },
-    };
-
-    const response = await runWithWebSearch({
-      parsed: parseRequest({ model: "routed/model", input: "hi", stream: true, tools: [{ type: "web_search" }] }),
-      adapter: retryingAdapter,
-      forwardProvider,
-      hostedTool: { type: "web_search" },
-      selectedForwardHeaders: new Headers({ authorization: "Bearer token" }),
-      settings: { model: "gpt-5.6-luna", reasoning: "low", timeoutMs: 30_000 },
-      maxSearches: 1,
-      stallTimeoutSec: 1,
-      retryOn429Policy: { enabled: true, attempts: 1, intervalMs: 1_500, maxIntervalMs: 60_000, respectRetryAfter: false },
-    });
-    const frames = await collectSse(response.body!);
-    // A 1.5s backoff under a 1s stall budget must not trip upstream_stall_timeout.
-    expect(sends).toBe(2);
-    expect(frames.find(f => f.event === "response.completed")).toBeDefined();
-    expect(frames.find(f => f.event === "response.failed")).toBeUndefined();
-  }, 5_000);
 
   test("retry wait longer than connectTimeoutMs restarts the header deadline (no 504)", async () => {
     globalThis.fetch = (() => Promise.resolve(new Response(

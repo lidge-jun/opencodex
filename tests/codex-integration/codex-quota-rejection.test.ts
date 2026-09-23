@@ -4,6 +4,7 @@ import { BOUNDED_BODY_MAX_BYTES } from "../../src/lib/bounded-body";
 import {
   consumeComboFailure,
   shouldRetryCodexPoolAccountQuota,
+  shouldRetryCodexScopedQuotaOnAlternate,
   shouldRetryCodexPoolAccountTransient,
 } from "../../src/server/responses/core";
 import { markResponseNonReplayable } from "../../src/lib/upstream-retry";
@@ -488,7 +489,8 @@ describe("Codex pre-stream quota rejection classification", () => {
 });
 
 /**
- * Rotating inside the limit that refused is the send amplification #4546 exists to stop.
+ * Rotating inside a proven-shared limit is the send amplification #4546 exists to stop. A code
+ * alone cannot prove that a prospective alternate belongs to the same organization or project.
  *
  * openai/codex #44492 and #45602 reclassified exactly these HTTP 429 codes as terminal quota
  * exhaustion while deliberately keeping `rate_limit_exceeded` and `slow_down` retryable, and
@@ -499,7 +501,7 @@ describe("Codex pre-stream quota rejection classification", () => {
  * user-level rate limit stops failing over, and that regression would be invisible until a pool
  * stopped rotating in production.
  */
-describe("organization-scoped quota exhaustion withholds the account rotation (#4546)", () => {
+describe("scoped quota exhaustion preserves unbound account rotation (#4546)", () => {
   const SCOPED_CODES = [
     "credit_balance_exhausted",
     "organization_spend_limit_exceeded",
@@ -512,7 +514,7 @@ describe("organization-scoped quota exhaustion withholds the account rotation (#
     expect(result).toEqual({
       kind: "scoped-quota-exhaustion",
       status: 429,
-      alternateRetryEligible: false,
+      alternateRetryEligible: true,
       resetCreditEligible: false,
       scopedExhaustionCode: code,
     });
@@ -520,18 +522,33 @@ describe("organization-scoped quota exhaustion withholds the account rotation (#
     expect(result).not.toHaveProperty("semanticCode");
   });
 
-  test.each(SCOPED_CODES)("%s withholds the alternate-account send", async code => {
+  test.each(SCOPED_CODES)("%s keeps an unresolved alternate-account send eligible", async code => {
     await expect(shouldRetryCodexPoolAccountQuota(jsonRejection(429, { code })))
-      .resolves.toBe(false);
+      .resolves.toBe(true);
   });
 
   test("a root-level code and a 402 are read the same way", async () => {
     await expect(shouldRetryCodexPoolAccountQuota(
       jsonPayload(429, { code: "organization_spend_limit_exceeded" }),
-    )).resolves.toBe(false);
+    )).resolves.toBe(true);
     await expect(shouldRetryCodexPoolAccountQuota(
       jsonRejection(402, { code: "credit_balance_exhausted" }),
-    )).resolves.toBe(false);
+    )).resolves.toBe(true);
+  });
+
+  test("only proven shared organization scope withholds the resolved alternate", async () => {
+    const rejection = () => jsonRejection(429, { code: "organization_spend_limit_exceeded" });
+    await expect(shouldRetryCodexScopedQuotaOnAlternate(rejection(), "workspace-a", "workspace-b"))
+      .resolves.toBe(true);
+    await expect(shouldRetryCodexScopedQuotaOnAlternate(rejection(), "workspace-a", undefined))
+      .resolves.toBe(true);
+    await expect(shouldRetryCodexScopedQuotaOnAlternate(rejection(), "workspace-a", "workspace-a"))
+      .resolves.toBe(false);
+    await expect(shouldRetryCodexScopedQuotaOnAlternate(
+      jsonRejection(429, { code: "project_spend_limit_exceeded" }),
+      "workspace-a",
+      "workspace-a",
+    )).resolves.toBe(true);
   });
 
   test.each([

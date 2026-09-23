@@ -9,8 +9,11 @@ import {
 } from "../../src/adapters/cursor/thread-continuity";
 import type { CursorTransport } from "../../src/adapters/cursor/transport";
 import { createKiroAdapter } from "../../src/adapters/kiro";
+import { createDevinAdapter, DEVIN_API_SERVER } from "../../src/adapters/devin";
+import { setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
 import { resetKiroThrottleStateForTests } from "../../src/adapters/kiro-retry";
 import type { AdapterFetchContext } from "../../src/adapters/base";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import { encodeMessage } from "../../src/lib/eventstream-decoder";
 import { createRequestExecutionBudget, type RequestExecutionBudgetPolicy } from "../../src/lib/request-execution-budget";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
@@ -119,6 +122,127 @@ describe("Cursor runTurn and the request send budget", () => {
     // unit test that builds a bare meta, behaves exactly as it did.
     expect(transports).toBe(3);
     expect(events.at(-1)?.type).toBe("error");
+  });
+});
+
+describe("Devin runTurn execution wiring", () => {
+  test("forwards the provider executor, shared budget, and physical-send observer", async () => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const previousJwtFlag = process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+    const home = mkdtempSync(join(tmpdir(), "devin-send-wiring-"));
+    process.env.OPENCODEX_HOME = home;
+    delete process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+    const apiKey = "devin-test-key";
+    setCachedCatalogForTests({
+      apiKey,
+      host: DEVIN_API_SERVER,
+      fetchedAt: Date.now(),
+      byUid: new Map([["swe-2", { modelUid: "swe-2", label: "SWE-2", disabled: false }]]),
+    });
+    const budget = budgetOf(1);
+    const observed: Array<{ ordinal: number; recovery?: string }> = [];
+    const urls: string[] = [];
+    const events: AdapterEvent[] = [];
+    const adapter = createDevinAdapter({
+      adapter: "devin", baseUrl: DEVIN_API_SERVER, apiKey,
+    } as unknown as OcxProviderConfig);
+
+    try {
+      await adapter.runTurn?.(
+        {
+          modelId: "swe-2", stream: true, options: {},
+          context: { messages: [{ role: "user", content: "hi" }] },
+        } as unknown as OcxParsedRequest,
+        {
+          headers: new Headers(),
+          translatorBudget: createTestTranslatorBudget(),
+          sendBudget: budget,
+          providerFetch: (async input => {
+            urls.push(String(input));
+            return new Response("busy", { status: 500 });
+          }) as typeof fetch,
+          onPhysicalSend: send => { observed.push(send); },
+        },
+        event => events.push(event),
+      );
+    } finally {
+      setCachedCatalogForTests(null);
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousJwtFlag === undefined) delete process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+      else process.env.OPENCODEX_DEVIN_SEND_USER_JWT = previousJwtFlag;
+      removeTreeWithRetry(home);
+    }
+
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("GetChatMessage");
+    expect(budget.used).toBe(1);
+    expect(observed).toEqual([{ ordinal: 1 }]);
+    expect(events.at(-1)).toMatchObject({ type: "error", status: 500 });
+  });
+
+  test("a first send the budget refuses makes no request and reports no send", async () => {
+    // The accounting defect this pins: the caller used to log this turn's first send before the
+    // adapter ran, so an allowance already spent by earlier recovery produced a logged send the
+    // wire never made. Nothing is dispatched here, so nothing may be observed either.
+    const previousHome = process.env.OPENCODEX_HOME;
+    const previousJwtFlag = process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+    const home = mkdtempSync(join(tmpdir(), "devin-send-denied-"));
+    process.env.OPENCODEX_HOME = home;
+    delete process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+    const apiKey = "devin-denied-key";
+    setCachedCatalogForTests({
+      apiKey,
+      host: DEVIN_API_SERVER,
+      fetchedAt: Date.now(),
+      byUid: new Map([["swe-2", { modelUid: "swe-2", label: "SWE-2", disabled: false }]]),
+    });
+    // Nothing left to spend: the same state an earlier combo fan-out or empty-response recovery
+    // leaves behind before this turn starts.
+    const budget = budgetOf(0);
+    const observed: Array<{ ordinal: number; recovery?: string }> = [];
+    const urls: string[] = [];
+    const events: AdapterEvent[] = [];
+    const adapter = createDevinAdapter({
+      adapter: "devin", baseUrl: DEVIN_API_SERVER, apiKey,
+    } as unknown as OcxProviderConfig);
+
+    let refusal: unknown;
+    try {
+      await adapter.runTurn?.(
+        {
+          modelId: "swe-2", stream: true, options: {},
+          context: { messages: [{ role: "user", content: "hi" }] },
+        } as unknown as OcxParsedRequest,
+        {
+          headers: new Headers(),
+          translatorBudget: createTestTranslatorBudget(),
+          sendBudget: budget,
+          providerFetch: (async input => {
+            urls.push(String(input));
+            return new Response("busy", { status: 500 });
+          }) as typeof fetch,
+          onPhysicalSend: send => { observed.push(send); },
+        },
+        event => events.push(event),
+      ).catch((error: unknown) => { refusal = error; });
+    } finally {
+      setCachedCatalogForTests(null);
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      if (previousJwtFlag === undefined) delete process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+      else process.env.OPENCODEX_DEVIN_SEND_USER_JWT = previousJwtFlag;
+      removeTreeWithRetry(home);
+    }
+
+    // The refusal escapes the adapter for the caller to map, and WHICH error escapes is the
+    // contract: a bare catch here passed even when the adapter threw something else entirely,
+    // which would have left the turn reported as an ordinary upstream failure instead of a
+    // budget refusal.
+    expect(refusal).toBeInstanceOf(SendBudgetExhaustedError);
+    expect(urls.filter(url => url.includes("GetChatMessage"))).toHaveLength(0);
+    expect(observed).toEqual([]);
+    expect(budget.used).toBe(0);
   });
 });
 

@@ -6,10 +6,18 @@ import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { handleResponses } from "../../src/server/responses";
 import { isEagerRelaySseResponse } from "../../src/server/relay";
-import { createGrokResponsesControlFrameBlockRewrite } from "../../src/server/grok-responses-control-frame";
+import {
+  createGrokResponsesControlFrameBlockRewrite,
+  createGrokResponsesTimestampBlockRewrite,
+} from "../../src/server/grok-responses-control-frame";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+// Case-local, never file-wide: the other rows start a real server that takes the same lease.
+let releaseSpendHome: (() => void) | undefined;
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 setDefaultTimeout(30_000);
 
@@ -70,15 +78,16 @@ const GROK_CONTROL_FRAME_EVENTS = [
 ];
 
 function sparseSseBody(
-  events: readonly Record<string, unknown>[] = SPARSE_EVENTS,
+  events: readonly (Record<string, unknown> | string)[] = SPARSE_EVENTS,
   includeEventNames = false,
 ): ReadableStream<Uint8Array> {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       const encoder = new TextEncoder();
       for (const event of events) {
-        const eventLine = includeEventNames ? `event: ${event.type}\n` : "";
-        controller.enqueue(encoder.encode(`${eventLine}data: ${JSON.stringify(event)}\n\n`));
+        const eventLine = includeEventNames && typeof event !== "string" ? `event: ${event.type}\n` : "";
+        const payload = typeof event === "string" ? event : JSON.stringify(event);
+        controller.enqueue(encoder.encode(`${eventLine}data: ${payload}\n\n`));
       }
       controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       controller.close();
@@ -88,7 +97,7 @@ function sparseSseBody(
 
 function stubSparseGateway(
   origin: string,
-  events: readonly Record<string, unknown>[] = SPARSE_EVENTS,
+  events: readonly (Record<string, unknown> | string)[] = SPARSE_EVENTS,
   includeEventNames = false,
 ): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -114,6 +123,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   await isolated.restore();
   removeTreeWithRetry(TEST_DIR);
@@ -174,6 +185,59 @@ for (const controlType of ["codex.rate_limits", "codex.response.metadata"]) {
   });
 }
 
+test("Grok receives integer response timestamps from Responses streams", () => {
+  const block = "event: response.created\ndata: { \"type\": \"response.created\", \"response\": {\"id\":\"resp_float_timestamp\",\"created_at\":1789740485.0}, \"unrelated\": 9007199254740993 }";
+  expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([
+    "event: response.created\ndata: { \"type\": \"response.created\", \"response\": {\"id\":\"resp_float_timestamp\",\"created_at\":1789740485}, \"unrelated\": 9007199254740993 }",
+  ]);
+});
+
+test("Grok normalizes timestamps in JSON split across data fields", () => {
+  const block = [
+    "event: response.created",
+    'data: {"type":"response.created","response":{"id":"resp_split",',
+    'data: "created_at":1789740485.0},"unrelated":9007199254740993}',
+    "id: split",
+  ].join("\r\n");
+  expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([[
+    "event: response.created",
+    'data: {"type":"response.created","response":{"id":"resp_split",',
+    'data: "created_at":1789740485},"unrelated":9007199254740993}',
+    "id: split",
+  ].join("\r\n")]);
+});
+
+test("Grok leaves an unrelated same-valued floating timestamp unchanged", () => {
+  const block = 'data: {"type":"response.created","response":{"created_at":1789740485},"metadata":{"created_at":1789740485.0}}';
+  expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([block]);
+});
+
+test("Grok normalizes only the direct timestamp when a nested timestamp shares its value", () => {
+  const block = 'data: {"type":"response.created","response":{"created_at":1789740485.0,"metadata":{"created_at":1789740485.0}}}';
+  expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([
+    'data: {"type":"response.created","response":{"created_at":1789740485,"metadata":{"created_at":1789740485.0}}}',
+  ]);
+});
+
+test.each([
+  "data: not-json",
+  "data: {\"type\":\"response.output_text.delta\",\"delta\":\"1789740485.0\"}",
+  "data: {\"type\":\"response.created\",\"response\":{\"created_at\":1789740485}}",
+  "data: {\"type\":\"response.created\",\"response\":{\"created_at\":1789740485.5}}",
+  "data: {\"type\":\"response.created\",\"response\":{\"created_at\":-1.0}}",
+  "data: {\"type\":\"response.created\",\"response\":{\"created_at\":9007199254740992.0}}",
+  "data: {\"type\":\"response.created\",\"response\":{\"created_at\":1789740485},\"text\":\"\\\"created_at\\\":1789740485.0\"}",
+])("Grok timestamp normalization preserves unsupported payload %s", block => {
+  expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([block]);
+});
+
+test("Grok receives an integer completed_at timestamp", () => {
+  const block = 'data: {"type":"response.completed","response":{"created_at":1789740485,"completed_at":1789740486.0}}';
+  expect(createGrokResponsesTimestampBlockRewrite()(block)).toEqual([
+    'data: {"type":"response.completed","response":{"created_at":1789740485,"completed_at":1789740486}}',
+  ]);
+});
+
 describe("responsesSnapshotRepair through /v1/responses", () => {
   test.skipIf(process.platform !== "darwin")(
     "Darwin eager-relay applies snapshot repair inline before bytes reach the client",
@@ -195,6 +259,9 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
         },
       } as OcxConfig;
 
+      // This row calls the handler directly instead of going through the server the other rows
+      // start, so it takes the writer lease itself. Dropped in the file's own teardown.
+      takeSpendHome();
       const response = await handleResponses(
         new Request("http://localhost/v1/responses", {
           method: "POST",
@@ -399,7 +466,12 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
   });
   test.each([true, false])("the Grok marker filters Codex control frames at the client boundary (event names: %s)", async includeEventNames => {
     const gateway = "https://grok-control-frame.example.test";
-    stubSparseGateway(gateway, GROK_CONTROL_FRAME_EVENTS, includeEventNames);
+    const floatTimestampEvent = '{"type":"response.created","response":{"id":"resp_float_timestamp","created_at":1789740485.0}}';
+    stubSparseGateway(gateway, [
+      ...GROK_CONTROL_FRAME_EVENTS.slice(0, -1),
+      floatTimestampEvent,
+      GROK_CONTROL_FRAME_EVENTS.at(-1)!,
+    ], includeEventNames);
     saveConfig({
       port: 0,
       defaultProvider: "sparse",
@@ -430,12 +502,14 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
       expect(grokText).not.toContain("codex.rate_limits");
       expect(grokText).not.toContain("codex.response.metadata");
       expect(grokText).toContain('"type":"response.completed"');
+      expect(grokText).toContain('"created_at":1789740485}');
 
       const ordinaryResponse = await request(false);
       expect(ordinaryResponse.status).toBe(200);
       const ordinaryText = await ordinaryResponse.text();
       expect(ordinaryText).toContain("codex.rate_limits");
       expect(ordinaryText).toContain("codex.response.metadata");
+      expect(ordinaryText).toContain('"created_at":1789740485.0}');
     } finally {
       await server.stop(true);
     }
@@ -444,6 +518,8 @@ describe("responsesSnapshotRepair through /v1/responses", () => {
 
 test("sparse JSON completion inference precedes function repair in client output and replay", async () => {
   const expected = '{"cell_id":"4","yield_time_ms":120000}';
+  // Dispatches directly rather than through a server, so it takes the lease itself.
+  takeSpendHome();
   const item = { type: "function_call", id: "fc_sparse_wait", call_id: "call_sparse_wait", name: "wait", arguments: '{"cell_id":4,"yield_time_ms":120000.0}' };
   let responseId = `resp_sparse_${crypto.randomUUID()}`;
   let capturedInput: Array<Record<string, unknown>> = [];

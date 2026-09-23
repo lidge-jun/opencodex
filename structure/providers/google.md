@@ -72,3 +72,81 @@ a claim about what the upstream can do); an image-capable model, whose `response
 configuration contradicts JSON-constrained text; and a `json_schema` format carrying
 no schema, which would otherwise downgrade to bare JSON mode. An image-capable model
 with no structured-output request keeps its existing `responseModalities` behavior.
+
+## Google tool-schema loss reporting
+
+`src/adapters/google-tool-schema.ts` compiles tool declarations against an explicit `ai-studio`,
+`vertex`, or `cloud-code-assist` endpoint profile. All three profiles currently use the same
+conservative documented subset. Compilation returns the compatible parameters plus a versioned
+loss report with exactly six fields: `version`, `endpointClass`, `lossy`, `truncated`,
+`uncertainComparisons`, and `categories`. Category values and the content-free uncertainty count
+saturate at 255; saturation beyond either cap sets `truncated`. Bounded structural comparisons that
+exhaust their 24-level or 1,024-node allowance increment `uncertainComparisons` rather than
+`lossy` or a proven-loss category. The report never retains tool or property names, paths, descriptions,
+schema or enum values, references, hashes, request ids, project ids, or account ids.
+Every sanitizer branch that widens or drops an accepted-value constraint has a closed category,
+including type unions and unsupported types, conditional and tuple constraints, reference-overlay
+replacement, and root object coercion. Lossless normalization does not set `lossy`: accepted type
+case folding, duplicate enum/required removal, nullable-union collapse, and string-const conversion
+preserve the accepted value set. Annotation-only fields such as title, default, examples, comments,
+deprecated, read-only/write-only, external documentation and examples are omitted without loss.
+Local-reference siblings use 2020-12-style conjunctive semantics for loss accounting, while the
+wire transform retains its implemented overlay-wins merge; enum reports compare that intersection
+with the post-filter set actually emitted.
+
+This layer observes loss and does not reject it. The emitted request body remains the same as
+before reporting. The existing limits remain 24 schema levels, 16 local-reference dereferences,
+and 1,024 visited nodes; reporting stops with those limits and does not inspect omitted content.
+`src/adapters/google-wire-compiler.ts` aggregates reports across declarations, and
+`src/adapters/google.ts` emits a `google-tool-schema-loss` provider diagnostic only when provider
+debug is enabled. `generationConfig.responseMimeType` and `generationConfig.responseJsonSchema`
+are output-schema fields and never enter tool-schema sanitation or loss accounting.
+
+`googleToolSchemaPolicy` is provider-scoped. Omission and `compatible` retain the report-only body
+and existing repair replay. `reject-lossy` refuses an initially lossy or comparison-indeterminate
+compilation before `buildRequest` returns, so no physical send exists. Vertex and Cloud Code Assist carry the same
+resolved policy into their 400 compatibility repair: indexed repair reports one opened declaration,
+unindexed repair reports every declaration it would open, and strict policy returns the original
+400 without a changed repair send. The `google-tool-schema-repair` diagnostic inherits the complete
+bounded report shape — version, endpoint class, `lossy`, `uncertainComparisons`, truncation flag,
+and saturating fixed category counts — and adds only the `repair` phase, the declaration count, and whether the changed
+send was allowed.
+AI Studio direct mode continues to disable 400 repair entirely. Output schemas remain outside both
+initial and repair policy.
+
+## Google wire-shape projection
+
+`src/adapters/google-wire-shape.ts` describes a compiled Google request without carrying any of
+it. `summarizeGoogleWireShape` reads the body after `compileGoogleWireBody` and after Antigravity
+replay and signature adjustment, which is the object the envelope sends, and returns per-role turn
+counts, function call and response counts and their pairing, the position and class of the first
+ordering violation, signature presence and sentinel-only signing, the session anchor class, and a
+bounded upstream error class. Tool-call identity survives only as a request-internal ordinal in
+first-appearance order.
+
+What it must never retain is the point of the module: prompt or system text, tool arguments and
+results, tool and function names, original or wire call ids, signature text or any hash of it,
+inline file bytes, project and account identifiers, the request id, the Cloud Code Assist session
+id, Codex thread and session ids, and the first user message. Totals stay exact for the whole
+request while per-turn detail stops at a fixed ceiling and sets `truncated`, so a long agentic
+session still reports its real counts.
+
+It is a projection, not a validator. Nothing in the request path consults its output.
+`antigravitySessionAnchor` in `google-antigravity-wire.ts` is the matching content-free read of
+the session boundary: it reports which of the four anchor classes produced the session id without
+reporting the id, and it reads the same decision the id derivation reads, so the two cannot
+disagree about which regime a request is in.
+
+The adapter passes a builder to `debugProviderDiagnosticLazy`, never a built object. That gates
+before invoking it, so a request with provider debug off never pays the walk, and it evaluates
+the projection inside the logger's own try/catch, so a throw in a diagnostic cannot turn a built
+request into a rejected one. With provider debug ON the projection runs synchronously on the
+dispatch path before the request is sent, and its cost is linear in history length — largest for
+exactly the long sessions it exists to describe. Observing the real outbound body rather than a
+reconstruction is what that buys.
+
+Two ceilings bound the output, and both are needed. The item ceilings cap retained turns and the
+per-turn ordinal lists; the serialized ceiling, held at half `MAX_DEBUG_LINE_BYTES`, then trims
+turn detail from the tail until the summary fits. Without the second, a worst case inside the
+first serializes past the debug buffer's per-line cap, and the buffer truncates at a byte
+boundary: the consumer gets unparseable JSON whose retained prefix still reads `truncated: false`.

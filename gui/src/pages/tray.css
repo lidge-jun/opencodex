@@ -1,0 +1,188 @@
+/* Tray usage popup.
+ *
+ * The popup sits next to the WidgetKit widget in the menu bar, so it borrows that
+ * vocabulary: the system material behind a thin scrim, rounded tabular numerals for
+ * figures, secondary-tone labels, and a separator only where the subject changes.
+ *
+ * The native shell decides whether this window is translucent and tells the page by
+ * setting data-tray-vibrancy on <html>. Only the glass branch may make the surface
+ * transparent: on Linux the window is opaque and a transparent background would show
+ * nothing but a hole. Every rule below therefore has an opaque default and the glass
+ * treatment is layered on top of it.
+ */
+
+html.tray-document {
+  height: 100%;
+  overflow: hidden;
+  color-scheme: dark;
+  background: #1d1d1f;
+
+  --tray-surface: #1d1d1f;
+  --tray-label: #f2f2f5;
+  --tray-label-secondary: rgba(235, 235, 245, 0.62);
+  --tray-label-tertiary: rgba(235, 235, 245, 0.38);
+  --tray-separator: rgba(235, 235, 245, 0.13);
+  --tray-fill: rgba(235, 235, 245, 0.11);
+  --tray-fill-strong: rgba(235, 235, 245, 0.18);
+  --tray-accent: #32d74b;
+  --tray-alert: #ff9f8f;
+  --tray-radius: 12px;
+  --tray-numerals: ui-rounded, 'SF Pro Rounded', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+html.tray-document[data-tray-vibrancy='on'] {
+  background: transparent;
+  /* A thin scrim over the material keeps contrast constant across wallpapers; the
+   * material still reads through it. Without it, light desktops wash the labels out. */
+  --tray-surface: rgba(28, 28, 30, 0.52);
+  --tray-separator: rgba(235, 235, 245, 0.16);
+}
+
+.tray-document body {
+  height: 100%;
+  overflow: hidden;
+  margin: 0;
+  min-width: 0;
+  background: var(--tray-surface);
+  color: var(--tray-label);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.tray-document[data-tray-vibrancy='on'] body {
+  /* The native effect rounds the window; the page has to stop painting square corners
+   * over it, and clip its own scrim to the same radius. */
+  border-radius: var(--tray-radius);
+  overflow: hidden;
+}
+
+.tray-document #root { height: 100%; min-height: 0; }
+
+.tray-page {
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  width: 100%;
+  max-width: 440px;
+  min-width: 0;
+  margin: 0 auto;
+  padding: 14px 18px 12px;
+  box-sizing: border-box;
+  font-size: 12px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.tray-page header,
+.tray-page footer { display: flex; align-items: center; justify-content: space-between; }
+.tray-page header { padding-bottom: 12px; }
+.tray-page header strong { font-size: 13px; font-weight: 600; letter-spacing: 0.01em; }
+
+.tray-page a { color: var(--tray-label-secondary); text-decoration: none; }
+.tray-page header a {
+  font-size: 15px;
+  line-height: 24px;
+  width: 26px;
+  height: 24px;
+  text-align: center;
+  border-radius: 6px;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.tray-page a:hover,
+.tray-page button:hover { color: var(--tray-label); background: var(--tray-fill); }
+.tray-page :focus-visible { outline: 2px solid #9fb4ff; outline-offset: 2px; border-radius: 4px; }
+
+.tray-page h2 {
+  font-size: 11px;
+  font-weight: 590;
+  margin: 0 0 7px;
+  color: var(--tray-label-secondary);
+  letter-spacing: 0.02em;
+}
+
+.tray-totals { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+.tray-totals > div + div { border-left: 1px solid var(--tray-separator); padding-left: 16px; }
+
+.tray-page dl { margin: 0; }
+.tray-page dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: 6px; margin-bottom: 5px; }
+.tray-page dt { color: var(--tray-label-secondary); font-size: 11px; white-space: nowrap; }
+.tray-page dd {
+  margin: 0;
+  font-family: var(--tray-numerals);
+  font-size: 12px;
+  font-weight: 590;
+  text-align: right;
+  white-space: nowrap;
+}
+/* The headline figure carries the section, the way the widget token count does. */
+.tray-page dl > div:first-child dd { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+.tray-page small { display: block; font-size: 10px; color: var(--tray-label-tertiary); font-weight: 400; }
+
+.tray-chart,
+.tray-models,
+.tray-providers { border-top: 1px solid var(--tray-separator); margin-top: 12px; padding-top: 12px; }
+.tray-chart .usage-companion-chart { margin: 0; }
+.tray-chart svg { display: block; width: 100%; height: 110px; }
+.tray-chart .usage-companion-axis { stroke: var(--tray-fill-strong); }
+.tray-chart .usage-companion-axis-label { fill: var(--tray-label-tertiary); font-size: 14px; }
+.tray-chart .usage-companion-legend { display: flex; flex-wrap: wrap; gap: 3px 10px; font-size: 10px; color: var(--tray-label-secondary); }
+.tray-chart .usage-companion-legend-item { display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 100%; }
+.tray-chart .usage-companion-legend-item > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tray-chart .usage-companion-swatch { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.tray-chart .usage-companion-chart-skeleton { height: 110px; background: var(--tray-fill); border-radius: 6px; }
+.tray-chart .usage-companion-chart-state { padding: 12px 0; color: var(--tray-label-secondary); font-size: 11px; }
+
+.tray-models > div { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.tray-models > div > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tray-models > div > span:last-child { flex-shrink: 0; color: var(--tray-label-secondary); }
+.tray-model-metrics { display: flex; align-items: baseline; gap: 10px; font-size: 10px; }
+.tray-model-metrics,
+.tray-model-metrics > span { white-space: nowrap; flex-shrink: 0; }
+.tray-model-metrics > span:last-child {
+  min-width: 38px;
+  text-align: right;
+  font-family: var(--tray-numerals);
+  font-size: 12px;
+  color: var(--tray-label);
+}
+
+.tray-provider + .tray-provider { margin-top: 12px; }
+.tray-provider h2 { margin-bottom: 4px; }
+.tray-account { padding-left: 10px; border-left: 1px solid var(--tray-separator); margin-top: 7px; }
+.tray-account-name {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--tray-label);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+.tray-account-meta { flex-shrink: 0; color: var(--tray-label-tertiary); font-size: 10px; }
+.tray-account-email { color: var(--tray-label-tertiary); font-size: 10px; margin: -2px 0 4px; }
+
+.tray-quota { display: grid; grid-template-columns: 94px 32px minmax(35px, 1fr) 78px; align-items: center; gap: 7px; margin-top: 4px; font-size: 10px; }
+.tray-quota > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tray-label-secondary); }
+.tray-quota > span:nth-child(2) { text-align: right; white-space: nowrap; font-family: var(--tray-numerals); color: var(--tray-label); }
+.tray-quota time { text-align: right; white-space: nowrap; color: var(--tray-label-tertiary); overflow: hidden; text-overflow: ellipsis; }
+.tray-bar { height: 4px; background: var(--tray-fill-strong); overflow: hidden; border-radius: 2px; }
+.tray-bar i { display: block; height: 100%; background: var(--tray-accent); border-radius: inherit; }
+
+.tray-missing { color: var(--tray-label-tertiary); font-size: 11px; }
+.tray-error { color: var(--tray-alert); font-size: 11px; }
+
+.tray-page button { border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; text-decoration: underline; border-radius: 4px; }
+
+.tray-refresh { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 12px; font-size: 10px; }
+.tray-refresh > span { color: var(--tray-label-tertiary); font-size: 10px; }
+.tray-refresh button { padding: 0 2px; text-decoration: none; color: var(--tray-label-secondary); }
+.tray-refresh button:disabled { opacity: 0.5; cursor: default; }
+
+.tray-page footer { border-top: 1px solid var(--tray-separator); margin-top: 8px; padding-top: 10px; }
+.tray-page footer a { display: flex; width: 100%; justify-content: space-between; font-size: 11px; }
+
+@media (prefers-reduced-transparency: reduce) {
+  html.tray-document[data-tray-vibrancy='on'] { background: #1d1d1f; --tray-surface: #1d1d1f; }
+}

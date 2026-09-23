@@ -1,9 +1,13 @@
 import type { ResponsesRequestContext } from "./core-options";
 import { createRequestExecutionBudget, isRequestExecutionBudget } from "../../lib/request-execution-budget";
-import { chargeWorkflowSends, workflowSendCeilingReached } from "../../lib/workflow-budget";
+import {
+  chargeWorkflowSends,
+  workflowSendCeilingReached,
+  workflowSpendCeilingReached,
+} from "../../lib/workflow-budget";
 import { workflowRefusalResponse } from "../workflow-refusal";
-import type { AttemptRecoveryKind } from "../../usage/log";
-import { noteAttemptSend } from "../request-log";
+import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
+import { noteAttemptRecoveryWithheld, noteAttemptSend } from "../request-log";
 import { TRANSIENT_RETRY_MAX_ATTEMPTS } from "../../lib/upstream-retry";
 import type {
   DispatchDecision,
@@ -67,6 +71,22 @@ export function createResponsesSendBudget(
     // marked synthetic rather than reading as a request that vanished with zero sends.
     return workflowRefusalResponse("workflow-sends-exhausted", logCtx, undefined, workflowRootId);
   }
+  // The token ceiling asked at the same seam, for the same reason the count one is asked here.
+  // Without it a spent root reaches the dispatch ladder, is refused by the ledger at the first
+  // physical send, and answers with the generic send-budget error every exhausted request
+  // returns -- a refusal an operator cannot tell from an ordinary budget exhaustion, on a
+  // ceiling they configured themselves. Asked before dispatch, it names the scope and the
+  // number instead. Returns undefined and touches no ledger when no ceiling is configured.
+  const spentCeiling = workflowSpendCeilingReached(workflowRootId);
+  if (spentCeiling) {
+    return workflowRefusalResponse(
+      "workflow-spend-exhausted",
+      logCtx,
+      undefined,
+      workflowRootId,
+      spentCeiling,
+    );
+  }
   // No floor. Math.max(1, ...) meant an exhausted request still funded one send on every
   // recovery leg, so a bounded per-leg allowance never became a bounded per-request one.
   const remainingTransientSendBudget = (budget: number): number =>
@@ -89,9 +109,23 @@ export function createResponsesSendBudget(
   const noteAdapterPhysicalSend = (
     inputTokens: number | undefined,
     send: { ordinal: number; recovery?: AttemptRecoveryKind },
+    options: { readonly includeFirst?: boolean } = {},
   ): void => {
-    if (send.ordinal <= 1) return;
+    // Ordinal 1 is skipped because the caller normally records it before dispatch. An adapter
+    // that reports every send asks for it to be counted here instead, so that the first send is
+    // logged where it actually happens rather than before admission could still refuse it.
+    if (send.ordinal <= 1 && options.includeFirst !== true) return;
     noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
+  };
+  /**
+   * Records a recovery an adapter was ready to make and the budget refused.
+   *
+   * No send happened, so this deliberately does not touch `sendCount`. It is the other half of
+   * the pair that makes a one-send log readable: no recovery kind AND no withheld reason means
+   * nothing was eligible; a withheld reason means something was (#5044).
+   */
+  const noteAdapterRecoveryWithheld = (withheld: { reason: AttemptRecoveryWithheld }): void => {
+    noteAttemptRecoveryWithheld(logCtx.activeAttempt, withheld.reason);
   };
   /**
    * Whether this request has any base send left under `cap`.
@@ -105,6 +139,16 @@ export function createResponsesSendBudget(
    */
   const sendBudgetExhausted = (cap: number = TRANSIENT_RETRY_MAX_ATTEMPTS): boolean =>
     remainingTransientSendBudget(cap) === 0;
+  /**
+   * Spend one operator-granted replacement for an ambiguous failure of THIS logical request.
+   *
+   * The counter is the execution budget's, so a combo child that derives its own scope draws on
+   * the same grant. A budget that predates it -- a stub, or a caller that passed the narrow
+   * holder -- cannot grant anything, and refusing is the fail-closed answer for a send whose
+   * upstream state is unknown.
+   */
+  const claimAmbiguousResend = (limit: number): boolean =>
+    isRequestExecutionBudget(sendBudget) && sendBudget.claimAmbiguousResend?.(limit) === true;
   /**
    * A credential hop reserves the send its own replay will make, and that replay is a recovery
    * leg. The leg must SPEND the hop's reservation instead of taking a second one: the
@@ -227,7 +271,9 @@ export function createResponsesSendBudget(
     adapterSendBudget,
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
+    noteAdapterRecoveryWithheld,
     sendBudgetExhausted,
+    claimAmbiguousResend,
     get pendingHopPermit(): SingleUseDispatchPermit | undefined {
       return pendingHopPermit;
     },
@@ -266,6 +312,7 @@ function adapterDispatchBudgetView(
     get targetTransitions(): number { return budget.targetTransitions; },
     get lastTargetKey(): string | undefined { return budget.lastTargetKey; },
     remainingBaseSends: (cap: number): number => budget.remainingBaseSends(cap),
+    claimAmbiguousResend: (limit: number): boolean => budget.claimAmbiguousResend?.(limit) === true,
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       // A dispatch whose upstream state is unknown is refused on its own merits. A hop that
       // already paid does not make an unsafe replay safe, so that check stays with the budget.

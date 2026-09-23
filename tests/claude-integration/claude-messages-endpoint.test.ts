@@ -31,6 +31,7 @@ import { estimateTokens } from "../../src/lib/token-estimate";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import {
@@ -382,11 +383,18 @@ test("fetchWithHeaderDeadline classifies expiry as timeout and still clears exac
 });
 
 test("native Anthropic passthrough returns 502 when the upstream connection is refused (reject-path activation)", async () => {
-  const closed = Bun.serve({ port: 0, fetch: () => new Response() });
-  const closedOrigin = closed.url.toString().replace(/\/$/, "");
-  closed.stop(true);
+  const refusedOrigin = "http://127.0.0.1:1";
+  let rejected = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    if (url.origin === refusedOrigin) {
+      rejected += 1;
+      throw Object.assign(new TypeError("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    }
+    return originalFetch(input, init);
+  }) as typeof globalThis.fetch;
   const config = mockConfig("http://127.0.0.1:1/v1", {
-    anthropicBaseUrl: closedOrigin,
+    anthropicBaseUrl: refusedOrigin,
   });
   config.connectTimeoutMs = 60_000;
   saveConfig(config);
@@ -402,10 +410,12 @@ test("native Anthropic passthrough returns 502 when the upstream connection is r
       }),
     });
     expect(response.status).toBe(502);
+    expect(rejected).toBe(1);
     const json = await response.json() as Record<string, any>;
     expect(json.error?.type).toBe("api_error");
     expect(String(json.error?.message)).toContain("anthropic passthrough failed");
   } finally {
+    globalThis.fetch = originalFetch;
     await server.stop(true);
   }
 });
@@ -1132,6 +1142,10 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
       turnAdmissionLease.release();
     }
   };
+  // One lease for the whole case rather than one per invocation: both turns run against the same
+  // home, and re-taking it between them would discard the ledger this case is still accounting
+  // into. File-wide would be wrong the other way, since most cases here start a real server.
+  const releaseSpendHome = acquireOwnedSpendHome();
   try {
     expect(await invokeMessages()).toBe(200);
 
@@ -1161,6 +1175,8 @@ test("routed Claude requests give OpenAI sidecars main auth without leaking it t
   } finally {
     await forward.stop(true);
     await routed.stop(true);
+    // After both upstreams are down, so nothing is still settling against the journal.
+    releaseSpendHome();
   }
 });
 

@@ -260,7 +260,10 @@ export async function syncCodexOnStartIfEnabled(
   // The `.catch` is deliberate and stays: a failure to APPLY must not stop the
   // proxy from coming up. A failed sync simply reports no writes. The readiness
   // gate observes the real outcome so /readyz reflects the sync state exactly as
-  // the PR contract defines (ready only on ok=true with no warning).
+  // the contract defines: ready on ok=true once the sync has settled. A nonempty
+  // `warning` is a local-Codex-artifact degradation the sync chose to continue
+  // past, and #5181 is what it cost to treat it as terminal — a healthy
+  // multi-provider proxy reported itself permanently unready.
   const outcome = readinessGate
     ? await runStartupReadinessSync(readinessGate, async () => (await sync(port)) ?? null)
     : await sync(port).catch(() => undefined);

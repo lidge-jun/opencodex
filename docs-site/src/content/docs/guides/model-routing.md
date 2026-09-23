@@ -91,6 +91,10 @@ Routing and catalog visibility are separate controls:
   deliberately inert for them.
 - `provider.disabled: true` removes that provider from catalog discovery. Explicit
   `provider/model` requests fail, and `defaultModel` / `models[]` scans skip it.
+- Routed catalog rows are cloned from the Codex-native template, so native-only delivery flags are
+  stripped during normalization: `supports_websockets`, `supports_reasoning_summaries`, and
+  `supports_experimental_context`. A routed provider never inherits the experimental-context
+  contract; inheriting it made Codex compact after nearly every step on long routed threads.
 - `providerContextCaps` applies per-provider Codex-visible context caps. `contextCapValue` is the
   dashboard default (350,000 by default), but it does nothing by itself until a provider is
   present in `providerContextCaps`. Changing the dashboard value updates every enabled cap

@@ -29,7 +29,6 @@ import {
 import { formatErrorResponse } from "../../bridge";
 import {
   expandPreviousResponseInput,
-  previousResponseScopeMismatch,
   previousResponseReplayFailure,
   previousResponseProviderState,
 } from "../../responses/state";
@@ -201,11 +200,12 @@ export async function executeComboResponses(
   // imageInput is disabled (and so targets see the full replayed input).
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
   const body = expandPreviousResponseInput(rawBody, inboundClientThreadId);
-  const scopeMismatch = previousResponseScopeMismatch(body);
-  if (scopeMismatch) {
-    console.warn("[opencodex] dropped a previous_response_id with a mismatched client task scope; continuing fresh");
+  const replayFailure = previousResponseReplayFailure(body);
+  if (replayFailure?.reason === "scope_mismatch") {
+    console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
   }
-  if (previousResponseReplayFailure(body)) {
+  // Local replay failures require full client replay.
+  if (replayFailure) {
     return formatErrorResponse(
       400,
       "previous_response_not_found",
@@ -235,7 +235,7 @@ export async function executeComboResponses(
     sourceBody: body,
     previousResponseInputExpanded: body !== rawBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string",
-    providerContinuation: !scopeMismatch && body !== rawBody && requestedPreviousId
+    providerContinuation: body !== rawBody && requestedPreviousId
       ? previousResponseProviderState(requestedPreviousId)
       : undefined,
     recoveredPlaintext: false,
@@ -521,7 +521,7 @@ export async function executeComboResponses(
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
         const provider = config.providers[completedTarget.provider];
-        if (Object.hasOwn(config.providers, completedTarget.provider)
+        if (!options.compactionRoutingOverride && Object.hasOwn(config.providers, completedTarget.provider)
           && provider && provider.disabled !== true
           && currentCombo?.targets.some(target => targetKey(target) === targetKey(completedTarget))) {
           rememberComboForLane(sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration);
@@ -678,9 +678,13 @@ export async function executeComboResponses(
     attemptRetained = true;
     lastFailure = failure.response;
     lastFailedChildLog = childLog;
-    const failureDecision = comboFailureDecision(failure.response.status, failure.classificationText, {
-      code: failure.upstreamCode,
-    });
+    // A non-replayable failure (the answer to a spent ambiguous-reset replacement) may follow a
+    // send that already ran the turn, so no later target may receive it, whatever its status says.
+    const failureDecision = failure.nonReplayable
+      ? "stop"
+      : comboFailureDecision(failure.response.status, failure.classificationText, {
+        code: failure.upstreamCode,
+      });
     const wantsStream = (rawBody as { stream?: unknown } | null)?.stream === true;
     // Local byte admission has its own diagnostic; do not relabel it as an upstream refusal.
     const classifyOverflow = failure.response.status === 413

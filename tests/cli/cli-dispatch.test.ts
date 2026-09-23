@@ -72,6 +72,31 @@ describe("CLI dispatch aliases", () => {
 });
 
 describe("dispatchCommand exit codes", () => {
+  test("Aside sync refuses a marker-only configured-port listener before sending credentials", async () => {
+    const { refreshAsideProfilesThroughServer } = await import("../../src/cli/aside-profiles");
+    const requests: Array<{ input: string; headers: Headers }> = [];
+    const directRequests: string[] = [];
+    const http = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      requests.push({ input: String(input), headers: new Headers(init?.headers) });
+      return new Response(JSON.stringify({ service: "opencodex", status: "ok" }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    try {
+      await expect(refreshAsideProfilesThroughServer({
+        findLiveProxy: async () => ({ pid: null, port: 10100, hostname: "127.0.0.1", source: "config" }),
+        directLocalFetch: async input => {
+          directRequests.push(String(input));
+          throw new Error("marker-only listener must not be contacted");
+        },
+      })).rejects.toMatchObject({ status: 503 });
+      expect(requests).toEqual([]);
+      expect(directRequests).toEqual([]);
+    } finally {
+      http.mockRestore();
+    }
+  });
+
   test("invalid client state refuses sync before local proxy discovery", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-dispatch-client-invalid-"));
     const previous = process.env.OPENCODEX_HOME;
@@ -407,13 +432,12 @@ describe("a busy preferred port never becomes a second proxy (#5004)", () => {
     // One 750ms probe is what produced the duplicate; the guard spends the larger budget.
     expect(fn).toContain("START_OWNERSHIP_LIVENESS");
 
-    // Both refusals end the process, and the refusal a user sees is the one they already
-    // know from the owner path.
-    expect(fn).toMatch(/decision === "refuse-live-proxy"[\s\S]{0,400}?process\.exit\(1\)/);
+    // Both refusals preserve the exit code through the caller's lease-cleanup boundary.
+    expect(fn).toMatch(/decision === "refuse-live-proxy"[\s\S]{0,400}?StartCommandExit\(1\)/);
     expect(fn).toContain("Use 'ocx stop' first.");
-    expect(fn).toMatch(/decision === "refuse-unidentified-holder"[\s\S]{0,700}?process\.exit\(1\)/);
+    expect(fn).toMatch(/decision === "refuse-unidentified-holder"[\s\S]{0,700}?StartCommandExit\(1\)/);
     // The wrapper's `if %ERRORLEVEL% NEQ 0` loop still terminates on a served port.
-    expect(fn).toMatch(/decision === "service-stay-out"[\s\S]{0,500}?process\.exit\(0\)/);
+    expect(fn).toMatch(/decision === "service-stay-out"[\s\S]{0,500}?StartCommandExit\(0\)/);
   });
 
   test("the pre-bind owner probe spends the same budget before it deletes state", () => {

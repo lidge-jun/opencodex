@@ -1,8 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { Notice } from "../../ui";
-import { describeRefusal, refusalOf } from "./refusal-copy";
-import { restoreIntegration, type IntegrationJournalRow } from "./integration-api";
+import { describeRefusal } from "./refusal-copy";
+import IntegrationPlanDetails from "./IntegrationPlanDetails";
+import {
+  bindingFor,
+  IntegrationApiError,
+  isIntegrationPreviewUnavailable,
+  previewIntegrationRestore,
+  restoreIntegration,
+  type IntegrationJournalRow,
+  type IntegrationMutationPlan,
+} from "./integration-api";
+
+interface BoundRestorePlan {
+  plan: IntegrationMutationPlan;
+  confirmDrift: boolean;
+}
 
 /**
  * Restore confirmation, including the drift second step.
@@ -38,9 +52,36 @@ export default function RestoreDialog({
   const restoreFocusRef = useRef<HTMLElement | null>(null);
   const restoreFallbackRef = useRef<HTMLElement | null>(null);
   const restoredRef = useRef(false);
-  const [drift, setDrift] = useState(false);
+  const onCloseRef = useRef(onClose);
+  const onRestoredRef = useRef(onRestored);
+  const onReconcileRef = useRef(onReconcile);
+  const tRef = useRef(t);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const previewGenerationRef = useRef(0);
+  const [boundPlan, setBoundPlan] = useState<BoundRestorePlan | null>(null);
+  const [previewPending, setPreviewPending] = useState(true);
+  const [stale, setStale] = useState(false);
   const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [previewFailure, setPreviewFailure] = useState<string | null>(null);
+  const [mutationFailure, setMutationFailure] = useState<string | null>(null);
+  const scopedProfileId = row.clientId === "aside" ? profileId ?? row.profileId : undefined;
+  const plan = boundPlan?.plan ?? null;
+  const drift = plan?.foreignEdit === "drift";
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+    onRestoredRef.current = onRestored;
+    onReconcileRef.current = onReconcile;
+    tRef.current = t;
+  }, [onClose, onReconcile, onRestored, t]);
+
+  const dismiss = useCallback(() => {
+    if (pending) return;
+    previewGenerationRef.current += 1;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = null;
+    onCloseRef.current();
+  }, [pending]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -86,33 +127,116 @@ export default function RestoreDialog({
     };
   }, []);
 
+  const loadPreview = useCallback(async () => {
+    const controller = new AbortController();
+    const generation = previewGenerationRef.current + 1;
+    previewGenerationRef.current = generation;
+    previewAbortRef.current?.abort();
+    previewAbortRef.current = controller;
+    setPreviewPending(true);
+    setPreviewFailure(null);
+    setMutationFailure(null);
+    setBoundPlan(null);
+    setStale(false);
+    try {
+      let confirmDrift = false;
+      let next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
+      if (next.refusalReason === "drift_requires_confirm") {
+        confirmDrift = true;
+        next = await previewIntegrationRestore(apiBase, row.opId, confirmDrift, controller.signal, scopedProfileId);
+      }
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      setBoundPlan({ plan: next, confirmDrift });
+    } catch (error) {
+      if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+      if (isIntegrationPreviewUnavailable(error)) {
+        onReconcileRef.current?.();
+        onCloseRef.current();
+        return;
+      }
+      setPreviewFailure(tRef.current("integrations.preview.failed"));
+    } finally {
+      if (!controller.signal.aborted && generation === previewGenerationRef.current) {
+        previewAbortRef.current = null;
+        setPreviewPending(false);
+      }
+    }
+  }, [apiBase, row.opId, scopedProfileId]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => { void loadPreview(); }, 0);
+    return () => {
+      window.clearTimeout(timeout);
+      previewGenerationRef.current += 1;
+      previewAbortRef.current?.abort();
+      previewAbortRef.current = null;
+    };
+  }, [loadPreview]);
+
   const handleCancel = useCallback((event: React.SyntheticEvent) => {
     event.preventDefault();
-    if (!pending) onClose();
-  }, [onClose, pending]);
+    dismiss();
+  }, [dismiss]);
 
   const submit = async () => {
-    if (pending) return;
+    if (pending || previewPending || !boundPlan || !boundPlan.plan.canApply) return;
+    const attemptedConfirmDrift = boundPlan.confirmDrift;
     setPending(true);
-    setFailure(null);
+    setMutationFailure(null);
     try {
-      await restoreIntegration(apiBase, row.opId, drift, undefined, row.clientId === "aside" ? profileId ?? row.profileId : undefined);
+      await restoreIntegration(apiBase, {
+        opId: row.opId,
+        confirmDrift: attemptedConfirmDrift,
+        profileId: scopedProfileId,
+        binding: bindingFor(boundPlan.plan),
+      });
       restoredRef.current = true;
-      onRestored();
-      onClose();
+      onRestoredRef.current();
+      onCloseRef.current();
     } catch (error) {
       // Aside may have saved target intent before the writer refused. Reconcile
       // without closing the dialog or announcing a successful restore.
-      if (row.clientId === "aside") onReconcile?.();
-      if (refusalOf(error)?.reason === "drift_requires_confirm") {
-        // Not a failure: the user has not been asked yet. Ask now.
-        setDrift(true);
+      if (row.clientId === "aside") onReconcileRef.current?.();
+      if (error instanceof IntegrationApiError && error.stalePlan) {
+        let fresh = error.stalePlan;
+        let freshConfirmDrift = attemptedConfirmDrift;
         setPending(false);
+        try {
+          if (fresh.refusalReason === "drift_requires_confirm") {
+            const controller = new AbortController();
+            const generation = previewGenerationRef.current + 1;
+            previewGenerationRef.current = generation;
+            previewAbortRef.current?.abort();
+            previewAbortRef.current = controller;
+            setPreviewPending(true);
+            freshConfirmDrift = true;
+            try {
+              fresh = await previewIntegrationRestore(apiBase, row.opId, freshConfirmDrift, controller.signal, scopedProfileId);
+            } finally {
+              if (!controller.signal.aborted && generation === previewGenerationRef.current) {
+                previewAbortRef.current = null;
+                setPreviewPending(false);
+              }
+            }
+            if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
+          }
+        } catch (previewError) {
+          if (previewError instanceof Error && previewError.name === "AbortError") return;
+          if (isIntegrationPreviewUnavailable(previewError)) {
+            onReconcileRef.current?.();
+            onCloseRef.current();
+            return;
+          }
+          setPreviewFailure(tRef.current("integrations.preview.failed"));
+          return;
+        }
+        setBoundPlan({ plan: fresh, confirmDrift: freshConfirmDrift });
+        setStale(true);
         return;
       }
       // Shared formatter so a residual write — compensation itself failed, the
       // file may be intermediate — is disclosed here too, not only its path.
-      setFailure(describeRefusal(t, error));
+      setMutationFailure(describeRefusal(t, error));
       setPending(false);
     }
   };
@@ -122,6 +246,7 @@ export default function RestoreDialog({
       ref={dialogRef}
       className="modal-overlay"
       aria-labelledby="integration-restore-title"
+      aria-busy={pending}
       onCancel={handleCancel}
     >
       <button
@@ -129,7 +254,7 @@ export default function RestoreDialog({
         className="modal-backdrop-dismiss"
         aria-label={t("common.close")}
         tabIndex={-1}
-        onClick={() => { if (!pending) onClose(); }}
+        onClick={dismiss}
       />
       <div className="modal-card integration-restore-dialog" role="document">
         <div className="modal-head">
@@ -140,13 +265,19 @@ export default function RestoreDialog({
         <div className="modal-desc">
           {drift ? t("integrations.restore.driftBody") : t("integrations.restore.body")}
         </div>
-        <p className="integration-path">{row.configPath}</p>
-        {failure && <Notice tone="err">{failure}</Notice>}
+        <div role="status" aria-live="polite" aria-atomic="true">
+          {previewPending && <p>{t("integrations.preview.loading")}</p>}
+          {pending && <p>{t("integrations.mutation.pending")}</p>}
+          {stale && <Notice tone="err">{t("integrations.preview.stale")}</Notice>}
+        </div>
+        <IntegrationPlanDetails plan={plan} />
+        {previewFailure && <Notice tone="err">{previewFailure}</Notice>}
+        {mutationFailure && <Notice tone="err">{mutationFailure}</Notice>}
         <div className="modal-actions">
-          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={pending}>
+          <button type="button" className="btn btn-ghost" onClick={dismiss} disabled={pending}>
             {t("common.cancel")}
           </button>
-          <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={pending}>
+          <button type="button" className="btn btn-primary" onClick={() => void submit()} disabled={pending || previewPending || !plan?.canApply || Boolean(previewFailure)}>
             {pending
               ? t("integrations.restore.pending")
               : drift

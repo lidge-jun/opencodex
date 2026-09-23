@@ -15,7 +15,7 @@ Assistant de configuration interactif (`setup` est un alias de `init`). Il deman
 
 ### `ocx start [--port <port>] [--socks5 [host:port] | --socks5-off]`
 
-Démarre le serveur proxy, de préférence sur le port `10100`. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Lorsque le port préféré est occupé, `start` interroge le processus qui l’occupe puis s’arrête dans tous les cas : elle refuse de démarrer si un processus opencodex y répond et signale sinon que le processus est inconnu. Elle ne déplace jamais l’écouteur vers un autre port d’elle-même, car cela laisserait le premier proxy en cours d’exécution et redirigerait Codex vers le second. Indiquez un autre port avec `--port`, ou définissez `port: 0` dans la configuration pour demander au système d’exploitation d’en attribuer un. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`).
+Démarre le serveur proxy, de préférence sur le port `10100`. La commande écrit l’état du PID et du port d’exécution, et refuse de démarrer une deuxième instance active. Lorsque le port préféré est occupé, `start` interroge le processus qui l’occupe puis s’arrête dans tous les cas : elle refuse de démarrer si un processus opencodex y répond et signale sinon que le processus est inconnu. Elle ne déplace jamais l’écouteur vers un autre port d’elle-même, car cela laisserait le premier proxy en cours d’exécution et redirigerait Codex vers le second. Un autre `--port` explicite est également refusé avec le même `OPENCODEX_HOME`, car les modes d’observation et de plafond écrivent tous deux dans le même journal de dépenses. Utilisez un `OPENCODEX_HOME` distinct pour une instance sœur indépendante ; `port: 0` ne sépare que l’attribution du port, pas l’état. Au démarrage, elle synchronise dans le catalogue Codex les modèles de chaque fournisseur. À l’arrêt, elle rétablit le fonctionnement natif de Codex, sauf si le proxy a été lancé comme service géré (`OCX_SERVICE=1`).
 
 `--socks5` (par défaut `127.0.0.1:10808`) enregistre l’URL SOCKS5 dans `config.proxy` et achemine
 les requêtes HTTP(S) sortantes dans un véritable tunnel SOCKS5. `--socks5-off` supprime uniquement
@@ -303,6 +303,7 @@ Utilisez `ocx service` pour maintenir un proxy d’arrière-plan toujours actif,
 ### `ocx tray <install|start|stop|status|uninstall|remove> [--json] [--no-start]`
 
 Installe et contrôle l’icône OpenCodex dans la zone de notification Windows. Elle démarre à l’ouverture de session et fournit des commandes du proxy accessibles en un clic. `start` et `stop` contrôlent uniquement l’icône ; utilisez son menu pour contrôler le proxy. `--no-start` s’applique à `install` et installe l’icône sans la lancer immédiatement.
+Obsolète : l’application OpenCodex fournit la zone de notification sous Windows, macOS et Linux ; `ocx tray` reste disponible pour les installations sans l’application de bureau.
 
 ## Tableau de bord
 

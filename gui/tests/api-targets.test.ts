@@ -38,6 +38,7 @@ const status = (transport: "direct" | "relay"): MachineStatusV1 => ({
   apiKeyId: "client-key-a",
   protocolVersion: 1,
   connectedAt: "2026-08-28T00:00:00.000Z",
+  catalogSyncedAt: "2026-08-28T00:05:00.000Z",
   hubReachability: "unknown",
 });
 
@@ -71,6 +72,7 @@ describe("two-plane API targets", () => {
   test("constructs exact direct and fixed relay shared bases", () => {
     const direct = targetsFromMachineStatus("", status("direct"));
     expect(direct.shared).toMatchObject({ baseUrl: "https://hub.example.test", serverOrigin: "https://hub.example.test", transport: "direct" });
+    expect(direct.catalogSyncedAt).toBe("2026-08-28T00:05:00.000Z");
     const relay = targetsFromMachineStatus("", status("relay"));
     expect(relay.machine.baseUrl).toBe("");
     expect(relay.shared).toMatchObject({ baseUrl: "/api/machine/hub-relay", serverOrigin: "https://hub.example.test", transport: "relay" });
@@ -83,6 +85,13 @@ describe("two-plane API targets", () => {
     setRuntimeRole("client");
     globalThis.fetch = (async () => { throw new TypeError("offline"); }) as typeof fetch;
     await expect(discoverApiTargets("")).rejects.toThrow("local machine plane unavailable");
+  });
+
+  test("rejects a non-string catalog fetch timestamp", async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ...status("direct"), catalogSyncedAt: 42 }), {
+      headers: { "content-type": "application/json" },
+    })) as typeof fetch;
+    await expect(discoverApiTargets("")).rejects.toThrow("local machine plane returned invalid status");
   });
 
   test("standalone discovers nothing and sends no request", async () => {

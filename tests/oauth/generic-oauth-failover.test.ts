@@ -7,6 +7,7 @@ import {
   clearGenericFailoverHealth,
   eligibleFailoverAccounts,
   genericFailoverRetryAfterSeconds,
+  hasEligibleGenericOAuthFailoverTarget,
   hasFailoverAccountQuorum,
   isGenericFailoverProvider,
   isGenericOAuthFailoverEnabled,
@@ -241,11 +242,34 @@ describe("#2568 generic OAuth account failover", () => {
     const ids = await seed(2);
     const cfg = config();
     expect(rotateGenericOAuthAccountOn429(cfg, "xai", ids[0]!, "120")).toBe(ids[1]);
+    // The durable roster quorum remains active, but the only alternate is cooled. A denied
+    // request budget must not describe this state as an otherwise available rotation.
+    expect(isGenericOAuthFailoverEnabled(cfg, "xai")).toBe(true);
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", ids[1]!)).toBe(false);
     expect(rotateGenericOAuthAccountOn429(cfg, "xai", ids[1]!, "30")).toBeNull();
     const retryAfter = genericFailoverRetryAfterSeconds("xai");
     // The earliest window wins: a client must not be told to wait for the longest cooldown.
     expect(retryAfter).toBeGreaterThan(0);
     expect(retryAfter!).toBeLessThanOrEqual(30);
+  });
+
+  test("an uncooled alternate reports an eligible target", async () => {
+    const ids = await seed(2);
+    // The negative case above proves cooled accounts are excluded; without this positive
+    // side an always-false implementation would also pass, silently deleting the
+    // rotation-send-budget attribution for the normal case it exists to describe.
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", ids[0]!)).toBe(true);
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", ids[1]!)).toBe(true);
+  });
+
+  test("a one-account roster reports no eligible target even for a stale failed id", async () => {
+    const [solo] = await seed(1);
+    // The failed account can be removed after the request was sent, leaving one stored account
+    // whose id differs from the failed one. Rotation refuses a roster under two accounts, so the
+    // probe must not describe that state as a rotation the send budget withheld.
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", "removed-account")).toBe(false);
+    expect(hasEligibleGenericOAuthFailoverTarget("xai", solo!)).toBe(false);
+    expect(rotateGenericOAuthAccountOn429(config(true), "xai", "removed-account", null)).toBeNull();
   });
 
   test("Retry-After drives the cooldown length", async () => {
@@ -281,6 +305,15 @@ describe("#2568 generic OAuth account failover", () => {
  */
 describe("sidecar on429 wiring", () => {
   const coreSource = readResponsesCoreSource();
+
+  test("budget-withheld attribution proves a cooldown-eligible generic OAuth target", () => {
+    // Continuation, native passthrough and run-turn each have their own budget-denial branch.
+    // A durable two-account quorum is insufficient because it intentionally ignores cooldowns.
+    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\(/g)).toHaveLength(3);
+    // The check must GATE the log, not merely run beside it: every call site wraps
+    // noteAttemptRecoveryWithheld in the eligibility condition.
+    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\([\s\S]*?\)\s*\)\s*noteAttemptRecoveryWithheld/g)).toHaveLength(3);
+  });
 
   test("both sidecar loops receive the SAME hook, so neither can drift key-pool-only", () => {
     const hooks = coreSource.match(/^\s*on429: (\w+),$/gm)?.map(line => line.trim()) ?? [];
@@ -332,8 +365,24 @@ describe("sidecar on429 wiring", () => {
     // inline. Inlining is what produced the original defect: three sites each swapped `apiKey`
     // and only two of them remembered the routing metadata paired with it.
     expect(body).toContain("failoverAccountSnapshot(");
-    expect(body).toContain("applyFailoverSnapshot(snapshot)");
+    // The helper must also receive the iteration-local request the loop retries with — a bare
+    // `snapshot` call rebinds only the outer parsed, and the rotated Kiro context dies there.
+    expect(body).toContain("applyFailoverSnapshot(snapshot, retryParsed)");
     expect(body).not.toContain("apiKey: snapshot.accessToken");
+  });
+
+  test("the shared hook rebinds the exact sidecar retry request", () => {
+    const start = coreSource.indexOf("const rotateSidecarProviderOn429 =");
+    expect(start).toBeGreaterThan(-1);
+    const body = coreSource.slice(start, coreSource.indexOf("\n  };", start));
+
+    // Both loops send the retry from an iteration-local shallow copy (iterParsed), so the hook
+    // must receive and rebind THAT request: the Kiro auth context through the shared snapshot
+    // helper, and the reasoning-replay/continuation scope through a second bind. Rebinding only
+    // the outer parsed leaves the rotated bearer paired with the failed account's metadata.
+    expect(body).toContain("retryParsed?: OcxParsedRequest");
+    expect(body).toContain("applyFailoverSnapshot(snapshot, retryParsed)");
+    expect(body).toContain("parsed: retryParsed");
   });
 
   test("every rotation site applies the credential through the one shared helper", () => {
@@ -341,7 +390,7 @@ describe("sidecar on429 wiring", () => {
     // Kiro's routing metadata) live in exactly one place. A fourth rotation site that swaps the
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
-    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, nextParsed)?\)/g) ?? [];
+    const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, (?:next|retry)Parsed)?\)/g) ?? [];
     // Five includes native Responses passthrough, which returns before the Chat bridge loop.
     // The explicit count keeps a newly added rotation site from skipping identity pairing.
     expect(snapshotUses.length).toBe(5);
@@ -352,6 +401,25 @@ describe("sidecar on429 wiring", () => {
     expect(bearerWrites.length).toBe(1);
     const helperStart = coreSource.indexOf("const applyFailoverSnapshot =");
     expect(coreSource.indexOf("apiKey: snapshot.accessToken")).toBeGreaterThan(helperStart);
+  });
+
+  test("terminal continuation rotation rebinds both OAuth replay owners", () => {
+    // The continuation loop's generic OAuth arm rotates the credential through
+    // applyFailoverSnapshot, but until now it never rebound the reasoning replay scope. The
+    // terminal-guard clone (nextParsed) and the outer request (parsed) kept the FAILED
+    // account's replay identity, so the replayed turn could disclose or cache reasoning under
+    // the previous account's scope. The key-pool arm right above rebinds both owners; this
+    // arm must do the same.
+    const armStart = coreSource.indexOf("// Generic OAuth rotation for the continuation loop.");
+    expect(armStart).toBeGreaterThan(-1);
+    const armEnd = coreSource.indexOf("if (shouldAttemptImageTierRetry", armStart);
+    const arm = coreSource.slice(armStart, armEnd);
+
+    expect(arm).toContain("applyFailoverSnapshot(snapshot, nextParsed)");
+    expect(arm.match(/bindRouteReasoningReplayScope\(\{/g)).toHaveLength(2);
+    expect(arm).toContain("parsed: nextParsed");
+    expect(arm).toMatch(/bindRouteReasoningReplayScope\(\{\s*parsed,/);
+    expect(arm.match(/oauthCredentialSnapshot: transportState\.replayOAuthCredentialSnapshot/g)).toHaveLength(2);
   });
 
   test("every 429 recovery loop carries all three rotators (#3495 follow-up)", () => {
@@ -588,6 +656,16 @@ describe("#695 the generic pool consumes its persisted strategy behind pool.kern
     // Over threshold: it advances, and to the NEXT account in the sorted roster rather than
     // to whichever id the login order happened to put first.
     expect(preferredInitialAccount(cfg, "xai")).toBe(sorted[1]!);
+  });
+
+  test("fill-first treats a zero threshold as disabling proactive switching", async () => {
+    const ids = await seed(2);
+    const active = [...ids].sort((left, right) => left.localeCompare(right))[0]!;
+    await setActiveAccount("xai", active);
+    const cfg = kernelConfig("fill-first", { autoSwitchThreshold: 0 });
+
+    setCachedProviderAccountQuotaForTests("xai", active, { weeklyPercent: 100, updatedAt: Date.now() });
+    expect(preferredInitialAccount(cfg, "xai")).toBeNull();
   });
 
   test("fill-first advances through the sorted roster, not the eligible subset", async () => {

@@ -12,13 +12,16 @@ Bun runtime for users, but this checkout's scripts run through your local Bun in
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
+bun run setup:hooks  # install post-merge; retire the managed pre-push hook
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
 bun run typecheck    # bun x tsc --noEmit
-bun run test:changed              # routine import-graph test selection
-bun test tests/routing/router.test.ts     # routine focused test
-bun run test                      # complete suite (PR-ready / explicit ask)
+bun run test        # full suite (default)
 ```
+
+`bun run setup:hooks` installs only `post-merge` and removes an unmodified retired managed
+`pre-push` hook, preserving custom hooks. A pre-push hook is no longer required.
+`bun run prepush` remains an optional manual check.
 
 `bun run dev` remains an alias for `bun run dev:proxy`. The dashboard dev server is `bun run dev:gui`;
 the packaged dashboard at `GET /` is produced by `bun run build:gui` (`gui/dist`).
@@ -31,12 +34,20 @@ scripts so local commands match CI:
 ```bash
 bun run typecheck                 # strict TypeScript check
 bun run test:changed              # import-graph tests against the resolved dev merge base
-bun run test                      # complete tests/ suite (PR-ready / explicit ask)
+bun run test                      # full suite (default)
 bun test tests/routing/router.test.ts     # focused test file
 bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
+
+Run `bun run test` by default. If a full run is disproportionately expensive for the task size,
+available machine resources, or concurrent worktrees, you must at least run focused regression tests
+that exercise the changed behavior, such as `bun test tests/<domain>/<name>.test.ts`. Explain the
+reason for narrowing the run and report the exact commands, results, and untested scope.
+`bun run test:changed` can supplement this coverage, but it cannot detect every indirect dependency.
+Neither relying only on CI nor skipping local testing is a blanket exemption. Before merge, all
+required CI checks must pass for the exact current PR head.
 
 `test:changed` selects the first comparison ref that exists, in order: `upstream/dev`,
 `origin/dev`, then local `dev`. It reports that ref and the exact `git merge-base HEAD <ref>`
@@ -54,8 +65,7 @@ and `tests/test-layout.test.ts` enforces it, so a new test goes into its domain 
 an entry in the map (the tooling test tells you which one is missing). `tests/helpers/` holds
 shared fixtures and `tests/helpers/repo-root.ts` is how a test reaches repository files;
 `tests/e2e-style/` holds broader native-parity scenarios. Keep a focused regression near the
-existing tests for the subsystem you change (`bun test tests/<domain>` runs one subsystem); run
-the full suite for shared routing, adapters, config, or server behavior.
+existing tests for the subsystem you change (`bun test tests/<domain>` runs one subsystem).
 
 The docs site you're reading lives in `docs-site/` (Astro + Starlight):
 
@@ -144,7 +154,7 @@ description.
 - Target **`dev`**. Do not open feature or fix pull requests against **`main`**.
 - Branch from the current **`dev`** tip, not from **`main`**. The required **`enforce-target`** check rejects heads whose merge base sits on the **`main`** tip while the branch is far behind the pull request base (the failure mode seen in #644).
 - Write a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance). Empty bodies, placeholder-only text, and descriptions that use escaped `\n` instead of real line breaks fail the check.
-- If the title or description mentions `gui`, include a screenshot of the UI change in the description; the `enforce-target` check re-runs on description edits until the screenshot is present.
+- If the pull request changes files under `gui/`, include a screenshot of the UI change in the description; the `enforce-target` check re-runs on description edits until the screenshot is present. Drag the image into the description editor rather than committing it: an image on your branch rides the squash merge into `dev`. Maintainers uploading from the command line use the `pr-assets` branch and link by commit SHA.
 - Workflow changes in this repository use **`pull_request_target`**. Updated enforcement logic applies only after the workflow is promoted to the repository default branch — the same operational caveat documented in #631.
 
 ## Project maintainers
@@ -167,7 +177,7 @@ does not change `main`/`preview` review rules or allow direct pushes, force-push
 - **Handle async errors at boundaries** — sidecars never throw into the request path; they degrade to
   a graceful marker.
 - **Structure SOT** — current maintainer invariants live in `structure/`. Keep public user workflows
-  in `docs-site/` and historical investigation notes in `docs/`.
+  in `docs-site/` and planning and investigation notes in `devlog/`.
 - **Preserve exports** — other modules may depend on them.
 
 ## Adding a provider to the catalog
@@ -250,6 +260,6 @@ startup path must not import the manifest catalog or activate Compatibility Lab.
 
 ## Verify before you claim done
 
-Run the narrowest command that proves your change — `bun run typecheck` for types, a focused
-`bun test tests/<domain>/<name>.test.ts` or runtime probe for behavior, then the broader gates appropriate to
-the affected surface. opencodex favors small, verifiable commits over large batches.
+Follow the testing policy above and run `bun run typecheck` for type changes, plus the checks
+required for the affected surface. Report the commands, results, and remaining untested scope;
+only claim the validation you actually completed.

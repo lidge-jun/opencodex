@@ -11,6 +11,7 @@ import {
   providerWebSearchBridgeConfigError,
   requestPacingConfigError,
   retryOn429PolicyConfigError,
+  retryOnResetPolicyConfigError,
   sanitizeModelCostsForDisplay,
 } from "../config";
 import {
@@ -29,7 +30,9 @@ import {
   upstreamHttpVersionConfigError,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
+import { providerEgressConfigError } from "../lib/provider-egress";
 import { redactSecretString } from "../lib/redact";
+import { DECLARABLE_HOSTED_TOOL_TYPES } from "../responses/hosted-tool-policy";
 import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode, providerMatchesRegistryTransport, registryEntryForProviderDestination } from "../providers/registry";
 import { providerConfigSeed } from "../providers/derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -721,6 +724,10 @@ export function providerManagementConfigError(
     delete canonicalCandidate.modelCosts;
     // requestPacing is a user-owned transport overlay, not part of the canonical seed.
     delete canonicalCandidate.requestPacing;
+    // retryOnReset is the same kind of overlay: it tunes how this provider's own Responses
+    // sends recover, not what the canonical forward seed is. Validated below
+    // (retryOnResetPolicyConfigError).
+    delete canonicalCandidate.retryOnReset;
     // Context windows are the same kind of user-owned overlay as requestPacing: the operator
     // narrowing what their own native rows advertise. They can only ever LOWER the measured
     // window (see nativeOpenAiContextWindow), so admitting them cannot widen what the proxy
@@ -767,6 +774,10 @@ export function providerManagementConfigError(
     // it before it reaches the management API response.
     return `provider ${JSON.stringify(redactSecretString(name))} ${retryOn429Error}`;
   }
+  const retryOnResetError = retryOnResetPolicyConfigError(raw.retryOnReset);
+  if (retryOnResetError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${retryOnResetError}`;
+  }
   const requestPacingError = requestPacingConfigError(raw.requestPacing);
   if (requestPacingError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${requestPacingError}`;
@@ -778,6 +789,13 @@ export function providerManagementConfigError(
   const upstreamHttpVersionError = upstreamHttpVersionConfigError(raw.upstreamHttpVersion);
   if (upstreamHttpVersionError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${upstreamHttpVersionError}`;
+  }
+  // Per-provider egress shares one definition with the transports and the config loader, so a
+  // value the dashboard accepts is one a request can actually leave by. The message never
+  // echoes the value: a proxy URL routinely embeds `user:password@`.
+  const egressError = providerEgressConfigError(typed);
+  if (egressError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${egressError}`;
   }
   const modelCostsError = providerModelCostsConfigError(raw.modelCosts);
   if (modelCostsError) {
@@ -798,6 +816,10 @@ export function providerManagementConfigError(
   }
   const reasoningSummariesError = booleanRecordConfigError(raw.modelSupportsReasoningSummaries, "modelSupportsReasoningSummaries");
   if (reasoningSummariesError) return `provider ${name} ${reasoningSummariesError}`;
+  const suppressSyntheticMaxError = booleanRecordConfigError(raw.modelSuppressSyntheticMax, "modelSuppressSyntheticMax");
+  if (suppressSyntheticMaxError) return `provider ${name} ${suppressSyntheticMaxError}`;
+  const verbositySupportError = booleanRecordConfigError(raw.modelSupportsVerbosity, "modelSupportsVerbosity");
+  if (verbositySupportError) return `provider ${name} ${verbositySupportError}`;
   const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
     raw.modelReasoningSummaryDelivery,
     raw.modelSupportsReasoningSummaries,
@@ -839,6 +861,22 @@ export function providerManagementConfigError(
     "omitReasoningEffortWithToolsModels",
   );
   if (toolReasoningOptOutError) return `provider ${name} ${toolReasoningOptOutError}`;
+  const unsupportedHostedToolsError = nonBlankStringArrayConfigError(
+    raw.unsupportedHostedTools,
+    "unsupportedHostedTools",
+  );
+  if (unsupportedHostedToolsError) return `provider ${name} ${unsupportedHostedToolsError}`;
+  if (Array.isArray(raw.unsupportedHostedTools)) {
+    // Closed vocabulary, same reason as the config schema: an unrecognized name would be
+    // stored and then strip nothing, so the operator would keep getting the upstream 400
+    // this field exists to prevent.
+    const unknownTool = (raw.unsupportedHostedTools as unknown[])
+      .find(tool => typeof tool === "string" && !DECLARABLE_HOSTED_TOOL_TYPES.has(tool.trim()));
+    if (unknownTool !== undefined) {
+      return `provider ${name} unsupportedHostedTools must name only hosted tool types: `
+        + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`;
+    }
+  }
   const openRouterError = openRouterRoutingConfigError(typed);
   if (openRouterError) return `provider ${name} ${openRouterError}`;
   const vercelError = vercelGatewayRoutingConfigError(typed);
@@ -923,12 +961,22 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   supportsServiceTier: "editor",
   modelSupportsServiceTier: "editor",
   preserveResponsesReasoningContent: "editor",
+  dropResponsesReasoningItems: "editor",
+  modelReasoningEffortsAuthoritative: "editor",
   decodesNativeCompactionBlobs: "editor",
   allowEncryptedV2AgentTasks: "editor",
   allowPrivateNetwork: "editor",
+  // A proxy URL routinely embeds `user:password@`, so it never reaches the dashboard DTO and
+  // the editor may not write it. `ocx config set` and the config file remain the way to set
+  // it, which is the same boundary `apiKey` sits behind and for the same reason.
+  proxy: "redacted",
+  // A bypass list names destinations, carries no credential, and is only meaningful next to a
+  // route the operator can already see.
+  noProxy: "editor",
   upstreamHttpVersion: "editor",
   upstreamWebsocket: "editor",
   directGeminiWireRenames: "editor",
+  googleToolSchemaPolicy: "editor",
   disabled: "editor",
   codexAccountMode: "editor",
   apiKey: "redacted",
@@ -969,6 +1017,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   refreshPolicy: "editor",
   reasoningEfforts: "editor",
   modelReasoningEfforts: "editor",
+  modelSuppressSyntheticMax: "editor",
   modelDefaultReasoningEfforts: "editor",
   pinnedReasoningEffort: "editor",
   modelPinnedReasoningEfforts: "editor",
@@ -984,6 +1033,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   xaiResponsesDefaultVersion: "runtime",
   zaiResponsesDefaultVersion: "runtime",
   supportsResponsesCustomTools: "editor",
+  unsupportedHostedTools: "editor",
   responsesSnapshotRepair: "editor",
   webSearchBridge: "editor",
   reasoningEffortMap: "editor",
@@ -1000,6 +1050,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   pinParallelToolCallsFalse: "editor",
   terminalContinuationGuard: "editor",
   openaiChatEofTolerance: "editor",
+  foldDeveloperRoleToSystem: "editor",
   promptCacheKey: "editor",
   chatServiceTier: "editor",
   responsesItemIdRepair: "editor",
@@ -1009,6 +1060,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   showThinkingSummary: "editor",
   retryOn429: "editor",
   transientRetryOn5xx: "editor",
+  retryOnReset: "editor",
   reasoningSplitModels: "editor",
   reasoningDetailsModels: "editor",
   thinkingToggleModels: "editor",

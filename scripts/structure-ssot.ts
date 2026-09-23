@@ -35,6 +35,14 @@ export type Manifest = {
   absentPaths: { path: string; reason: string }[];
   tiers: { id: number; name: string; purpose: string }[];
   docs: { path: string; tier: number; title: string; scope: string; documents: string[] }[];
+  contracts?: {
+    version: 1;
+    entries: {
+      id: string;
+      owner: { document: string; anchor: string };
+      dependents: string[];
+    }[];
+  };
   grace: {
     undocumentedSourceAreas: { path: string; reason: string }[];
     unboundInvariants: { id: string; reason: string }[];
@@ -86,6 +94,34 @@ export function loadManifest(raw: string): { manifest: Manifest } | { error: str
       if (typeof doc?.scope !== "string") problems.push("docs[" + i + "].scope must be a string");
       if (!isArray(doc?.documents)) problems.push("docs[" + i + "].documents must be an array");
     });
+  }
+  if (m.contracts !== undefined) {
+    if (typeof m.contracts !== "object" || m.contracts === null || isArray(m.contracts)) {
+      problems.push("contracts must be an object");
+    } else {
+      const contracts = m.contracts as Partial<NonNullable<Manifest["contracts"]>>;
+      if (contracts.version !== 1) problems.push("contracts.version must be 1");
+      if (!isArray(contracts.entries)) problems.push("contracts.entries must be an array");
+      else {
+        contracts.entries.forEach((entry, i) => {
+          if (typeof entry?.id !== "string" || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(entry.id)) {
+            problems.push("contracts.entries[" + i + "].id must be a kebab-case string");
+          }
+          if (typeof entry?.owner !== "object" || entry.owner === null || isArray(entry.owner)) {
+            problems.push("contracts.entries[" + i + "].owner must be an object");
+          } else {
+            if (typeof entry.owner.document !== "string") problems.push("contracts.entries[" + i + "].owner.document must be a string");
+            if (typeof entry.owner.anchor !== "string") problems.push("contracts.entries[" + i + "].owner.anchor must be a string");
+          }
+          if (!isArray(entry?.dependents)) problems.push("contracts.entries[" + i + "].dependents must be an array");
+          else {
+            entry.dependents.forEach((dependent, j) => {
+              if (typeof dependent !== "string") problems.push("contracts.entries[" + i + "].dependents[" + j + "] must be a string");
+            });
+          }
+        });
+      }
+    }
   }
   const grace = m.grace as Partial<Manifest["grace"]> | undefined;
   if (!grace) problems.push("grace must be an object");
@@ -184,8 +220,7 @@ export function renderIndex(manifest: Manifest): string {
   lines.push("");
   lines.push("This folder is the maintainer source of truth for the current system shape. Public user workflows");
   lines.push("belong in " + BT + "docs-site/" + BT + ". Development work is recorded in " + BT + "devlog/" + BT + " units — " + BT + "_plan/" + BT + " while open,");
-  lines.push(BT + "_fin/" + BT + " once closed — while " + BT + "docs/" + BT + " keeps investigations and diagnostic notes worth retaining for");
-  lines.push("archaeology, debugging, or source research.");
+  lines.push(BT + "_fin/" + BT + " once closed.");
   lines.push("");
   lines.push(
     "Generated from " + BT + "structure/manifest.json" + BT + " by " + BT + "bun run structure:index" + BT + ". Do not edit by hand; " +
@@ -210,8 +245,7 @@ export function renderIndex(manifest: Manifest): string {
   lines.push("## Which doc describes which source");
   lines.push("");
   lines.push("A source area can be described by more than one doc, because these docs are organised by topic and");
-  lines.push(BT + "src/" + BT + " is organised by module. Changing an area obliges the same change to update every doc listed");
-  lines.push("for it; see [" + BT + "AGENTS.md" + BT + "](AGENTS.md).");
+  lines.push(BT + "src/" + BT + " is organised by module. Changing an area requires review of every listed document. Edit only the documents whose local explanation changes; named cross-cutting authorities and dependents are listed below.");
   lines.push("");
   lines.push("| Source path | Described by |");
   lines.push("| --- | --- |");
@@ -232,6 +266,23 @@ export function renderIndex(manifest: Manifest): string {
     lines.push("| " + BT + row.path + BT + " | " + row.reason + " |");
   }
   lines.push("");
+  if (manifest.contracts?.entries.length) {
+    lines.push("## Cross-cutting contracts");
+    lines.push("");
+    lines.push("Source review remains defined by the source-to-doc map above. This registry names each authoritative statement and the documents that review it. Link validation proves declared topology, not behavioral correctness.");
+    lines.push("");
+    lines.push("| Contract | Authority | Review dependents |");
+    lines.push("| --- | --- | --- |");
+    for (const contract of [...manifest.contracts.entries].sort((a, b) => a.id.localeCompare(b.id))) {
+      const owner = contract.owner.document + "#" + contract.owner.anchor;
+      const dependents = [...contract.dependents]
+        .sort((a, b) => a.localeCompare(b))
+        .map((document) => "[" + BT + document + BT + "](" + document + ")")
+        .join("<br>") || "—";
+      lines.push("| " + BT + contract.id + BT + " | [" + BT + owner + BT + "](" + owner + ") | " + dependents + " |");
+    }
+    lines.push("");
+  }
   lines.push("## Decision records");
   lines.push("");
   lines.push("Superseded reasoning lives in " + BT + "decisions/" + BT + " as numbered records. A doc states the contract that holds now and");
@@ -376,7 +427,54 @@ export function runStructureChecks(repoRoot: string): string[] {
     if (isTracked(absent.path)) fail(absent.path + " is declared absent in manifest.json but is tracked; the docs describing its absence are wrong");
   }
 
-  // 4. decision records
+  // 4. cross-cutting contract authority
+  const contractIds = new Set<string>();
+  for (const contract of manifest.contracts?.entries ?? []) {
+    if (contractIds.has(contract.id)) fail("contract " + contract.id + " is declared twice");
+    contractIds.add(contract.id);
+
+    const owner = contract.owner.document;
+    const ownerAbs = join(structureDir, owner);
+    if (!declared.includes(owner)) fail("contract " + contract.id + " owner " + owner + " is not a declared structure document");
+    if (!present.includes(owner)) fail("contract " + contract.id + " owner structure/" + owner + " is missing");
+    else if (!headingAnchors(readFileSync(ownerAbs, "utf8")).has(contract.owner.anchor)) {
+      fail("contract " + contract.id + " owner structure/" + owner + " has no #" + contract.owner.anchor + " heading anchor");
+    }
+
+    const dependents = new Set<string>();
+    for (const dependent of contract.dependents) {
+      if (dependents.has(dependent)) fail("contract " + contract.id + " lists dependent " + dependent + " twice");
+      dependents.add(dependent);
+      if (dependent === owner) fail("contract " + contract.id + " lists its owner " + owner + " as a dependent");
+      if (!declared.includes(dependent)) fail("contract " + contract.id + " dependent " + dependent + " is not a declared structure document");
+      if (!present.includes(dependent)) {
+        fail("contract " + contract.id + " dependent structure/" + dependent + " is missing");
+        continue;
+      }
+      const dependentAbs = join(structureDir, dependent);
+      const body = withoutFences(readFileSync(dependentAbs, "utf8"));
+      let linked = false;
+      let hit: RegExpExecArray | null;
+      linkRe.lastIndex = 0;
+      while ((hit = linkRe.exec(body))) {
+        const separator = hit[1].indexOf("#");
+        if (separator === -1) continue;
+        const file = hit[1].slice(0, separator);
+        const fragment = hit[1].slice(separator + 1);
+        const resolved = file === "" ? dependentAbs : resolve(dirname(dependentAbs), file);
+        const target = toPosix(relative(structureDir, resolved));
+        if (target === owner && fragment === contract.owner.anchor) {
+          linked = true;
+          break;
+        }
+      }
+      if (!linked) {
+        fail("contract " + contract.id + " dependent structure/" + dependent + " does not link " + owner + "#" + contract.owner.anchor);
+      }
+    }
+  }
+
+  // 5. decision records
   const adrFiles = present.filter((p) => p.startsWith("decisions/"));
   const referenced = new Map<string, Set<string>>();
   // Ownership is the declared link form, read with fences removed. A record path mentioned in prose
@@ -417,7 +515,7 @@ export function runStructureChecks(repoRoot: string): string[] {
   }
   for (const key of referenced.keys()) if (!adrFiles.includes(key)) fail("a doc links structure/" + key + ", which does not exist");
 
-  // 5. invariant-to-test bindings
+  // 6. invariant-to-test bindings
   const overviewPath = join(structureDir, "overview.md");
   if (!existsSync(overviewPath)) {
     fail("structure/overview.md is missing; it is the invariant index, and its absence would silence every binding check");
@@ -472,7 +570,7 @@ export function runStructureChecks(repoRoot: string): string[] {
     }
   }
 
-  // 6. source-to-doc map
+  // 7. source-to-doc map
   const described = new Map<string, string[]>();
   // What a doc actually names, so a manifest claim cannot invent coverage the prose does not have.
   const namedByDoc = new Map<string, string[]>();
@@ -530,7 +628,7 @@ export function runStructureChecks(repoRoot: string): string[] {
     fail(area + " is described by no doc; add it to a doc's " + BT + "documents" + BT + " list or record it in grace.undocumentedSourceAreas with a reason");
   }
 
-  // 7. generated index parity
+  // 8. generated index parity
   const indexPath = join(structureDir, "INDEX.md");
   const expected = renderIndex(manifest);
   if (!existsSync(indexPath)) fail("structure/INDEX.md is missing; run bun run structure:index");
@@ -541,11 +639,27 @@ export function runStructureChecks(repoRoot: string): string[] {
   return failures;
 }
 
+/**
+ * Rewrite the generated index only after the manifest validates. The renderer trusts the typed
+ * shape, so a malformed manifest (for example a string where `contracts.entries` belongs) would
+ * otherwise crash the renderer with a TypeError and could write a broken index before the checker
+ * ever ran. Validation failure is an actionable schema diagnostic and leaves INDEX.md untouched.
+ */
+export function writeGeneratedIndex(repoRoot: string): { wrote: true } | { error: string } {
+  const loaded = loadManifest(readFileSync(join(repoRoot, "structure", "manifest.json"), "utf8"));
+  if ("error" in loaded) return { error: loaded.error };
+  writeFileSync(join(repoRoot, "structure", "INDEX.md"), renderIndex(loaded.manifest), "utf8");
+  return { wrote: true };
+}
+
 if (import.meta.main) {
   const repoRoot = resolve(import.meta.dir, "..");
   if (process.argv.includes("--fix")) {
-    const manifest = JSON.parse(readFileSync(join(repoRoot, "structure/manifest.json"), "utf8")) as Manifest;
-    writeFileSync(join(repoRoot, "structure/INDEX.md"), renderIndex(manifest), "utf8");
+    const fixed = writeGeneratedIndex(repoRoot);
+    if ("error" in fixed) {
+      console.error(fixed.error);
+      process.exit(1);
+    }
     console.log("wrote structure/INDEX.md");
   }
   const failures = runStructureChecks(repoRoot);

@@ -36,6 +36,7 @@ export type IntegrationRefusalReason =
   | "conflict"
   | "unsafe"
   | "non_loopback"
+  | "superseded_store"
   | "drift_requires_confirm"
   | "snapshot_expired"
   | "write_failed";
@@ -61,6 +62,14 @@ export interface IntegrationStatus {
   appliedAt?: string;
   lastOpId?: string;
   reason?: IntegrationReason;
+  /**
+   * The store this client reads instead of `configPath`, when one exists.
+   *
+   * Independent of `state`: the block can be current in a file the client
+   * stopped opening, which is the one case where a green badge alone misleads.
+   * Same role as `raycast`, whose plan can make a written file inert.
+   */
+  supersededBy?: string;
   snapshotCount: number;
   retentionDegraded: boolean;
   /** Aside's explicit account-backed profile scope and desired sync state. */
@@ -109,6 +118,50 @@ export type IntegrationRestoreResult = IntegrationMutationResult;
 /** Kept as the shared name consumed by the page surfaces. */
 export type IntegrationMutationEnvelope = IntegrationMutationResult;
 
+export type IntegrationPlanOperation = "apply" | "overwrite" | "disable" | "restore";
+export type IntegrationPlanChangeKind = "add" | "replace" | "remove" | "snapshot" | "ownership" | "journal";
+export type IntegrationPlanForeignEdit = "none" | "unowned" | "foreign-edit" | "drift";
+
+export interface IntegrationPlanChange {
+  kind: IntegrationPlanChangeKind;
+  path: string;
+}
+
+export interface IntegrationMutationPlan {
+  version: 1;
+  clientId: FileIntegrationClientId;
+  operation: IntegrationPlanOperation;
+  state: IntegrationState;
+  foreignEdit: IntegrationPlanForeignEdit;
+  changes: IntegrationPlanChange[];
+  fingerprint: string;
+  canApply: boolean;
+  willChange: boolean;
+  refusalReason?: IntegrationRefusalReason;
+  profileId?: number;
+}
+
+export interface IntegrationPlanBinding {
+  operation: IntegrationPlanOperation;
+  planFingerprint: string;
+}
+
+export interface ToggleIntegrationOptions {
+  enabled: boolean;
+  signal?: AbortSignal;
+  overwriteConflict?: boolean;
+  profileId?: number;
+  binding?: IntegrationPlanBinding;
+}
+
+export interface RestoreIntegrationOptions {
+  opId: string;
+  confirmDrift?: boolean;
+  signal?: AbortSignal;
+  profileId?: number;
+  binding: IntegrationPlanBinding;
+}
+
 export type IntegrationRefusalCode =
   | "integration_unsafe"
   | "integration_conflict"
@@ -140,6 +193,7 @@ export interface IntegrationErrorEnvelope {
   validClients?: readonly FileIntegrationClientId[];
   hint?: string;
   results?: AsideProfileOutcome[];
+  plan?: IntegrationMutationPlan;
 }
 
 export type IntegrationErrorBody = IntegrationErrorEnvelope | IntegrationRefusalEnvelope;
@@ -149,6 +203,7 @@ const REFUSAL_REASONS: ReadonlySet<string> = new Set<IntegrationRefusalReason>([
   "conflict",
   "unsafe",
   "non_loopback",
+  "superseded_store",
   "drift_requires_confirm",
   "snapshot_expired",
   "write_failed",
@@ -167,9 +222,102 @@ const INTEGRATION_STATES: ReadonlySet<string> = new Set<IntegrationState>([
   "conflict",
   "unsafe",
 ]);
+const PLAN_OPERATIONS: readonly IntegrationPlanOperation[] = ["apply", "overwrite", "disable", "restore"];
+const PLAN_CHANGE_KINDS: readonly IntegrationPlanChangeKind[] = ["add", "replace", "remove", "snapshot", "ownership", "journal"];
+const PLAN_FOREIGN_EDITS: readonly IntegrationPlanForeignEdit[] = ["none", "unowned", "foreign-edit", "drift"];
+const PLAN_KEYS = new Set(["version", "clientId", "operation", "state", "foreignEdit", "changes", "fingerprint", "canApply", "willChange", "refusalReason", "profileId"]);
+const PLAN_CHANGE_KEYS = new Set(["kind", "path"]);
+const PLAN_PSEUDO_PATHS = new Set(["$snapshot", "$ownership", "$journal"]);
+const PLAN_SCHEMA_PATHS = new Set([
+  "provider.opencodex",
+  "providers.opencodex",
+  "models.providers.opencodex",
+  "models.*",
+  "llm-pi-ai.providers.opencodex",
+  "custom_provider.opencodex",
+  "providers.[id=opencodex]",
+  "settings.providers.opencodex",
+  "catalog.providers.opencodex",
+  // ZCode reads its providers from a second file; a plan for it publishes that
+  // file's templates, and a path missing here is rejected as an invalid preview.
+  "config.providerConfigRules.providerRules.[providerId=opencodex]",
+  "config.modelConfigRules.providerModelRules.*",
+]);
+const PLAN_CHANGE_LIMIT = 256;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): boolean {
+  return Object.keys(value).every(key => allowed.has(key));
+}
+
+function isSafePlanPath(path: string): boolean {
+  return PLAN_PSEUDO_PATHS.has(path) || PLAN_SCHEMA_PATHS.has(path);
+}
+
+function invalidPreviewResponse(): IntegrationApiError {
+  return new IntegrationApiError(502, { code: "invalid_integration_preview_response" });
+}
+
+export function parseIntegrationMutationPlan(value: unknown): IntegrationMutationPlan {
+  if (!isRecord(value) || !hasOnlyKeys(value, PLAN_KEYS)
+    || value.version !== 1
+    || !FILE_INTEGRATION_CLIENTS.includes(value.clientId as FileIntegrationClientId)
+    || !PLAN_OPERATIONS.includes(value.operation as IntegrationPlanOperation)
+    || !INTEGRATION_STATES.has(String(value.state))
+    || !PLAN_FOREIGN_EDITS.includes(value.foreignEdit as IntegrationPlanForeignEdit)
+    /*
+     * The version is matched as a version, not as `p1`. The server calls this
+     * token opaque and bumps its prefix whenever the inputs it binds change; a
+     * literal here made that bump a silent client-side rejection of every
+     * preview, which is a worse failure than the drift it was meant to catch.
+     */
+    || typeof value.fingerprint !== "string" || !/^p[0-9]+:(?:[0-9a-f]{32}|unbound)$/.test(value.fingerprint)
+    || typeof value.canApply !== "boolean" || typeof value.willChange !== "boolean"
+    || !Array.isArray(value.changes) || value.changes.length > PLAN_CHANGE_LIMIT
+    || (value.profileId !== undefined && (typeof value.profileId !== "number" || !Number.isSafeInteger(value.profileId) || value.profileId < 0))
+    || (value.profileId !== undefined && value.clientId !== "aside")
+    || (value.refusalReason !== undefined && !REFUSAL_REASONS.has(String(value.refusalReason)))) {
+    throw invalidPreviewResponse();
+  }
+  const changes: IntegrationPlanChange[] = [];
+  let previousOrder = -1;
+  let previousPath = "";
+  const seenByKind = new Map<IntegrationPlanChangeKind, Set<string>>();
+  for (const item of value.changes) {
+    if (!isRecord(item) || !hasOnlyKeys(item, PLAN_CHANGE_KEYS)
+      || !PLAN_CHANGE_KINDS.includes(item.kind as IntegrationPlanChangeKind)
+      || typeof item.path !== "string" || !isSafePlanPath(item.path)) throw invalidPreviewResponse();
+    const order = PLAN_CHANGE_KINDS.indexOf(item.kind as IntegrationPlanChangeKind);
+    if (order < previousOrder || (order === previousOrder && item.path <= previousPath)) throw invalidPreviewResponse();
+    const kind = item.kind as IntegrationPlanChangeKind;
+    const paths = seenByKind.get(kind) ?? new Set<string>();
+    if (paths.has(item.path)) throw invalidPreviewResponse();
+    paths.add(item.path);
+    seenByKind.set(kind, paths);
+    previousOrder = order;
+    previousPath = item.path;
+    changes.push({ kind, path: item.path });
+  }
+  if ((value.willChange && (!value.canApply || changes.length === 0))
+    || (!value.willChange && changes.length !== 0)
+    || ((value.fingerprint as string).endsWith(":unbound") && value.canApply)
+    || (value.canApply === (value.refusalReason !== undefined))) throw invalidPreviewResponse();
+  return {
+    version: 1,
+    clientId: value.clientId as FileIntegrationClientId,
+    operation: value.operation as IntegrationPlanOperation,
+    state: value.state as IntegrationState,
+    foreignEdit: value.foreignEdit as IntegrationPlanForeignEdit,
+    changes,
+    fingerprint: value.fingerprint,
+    canApply: value.canApply,
+    willChange: value.willChange,
+    ...(value.refusalReason === undefined ? {} : { refusalReason: value.refusalReason as IntegrationRefusalReason }),
+    ...(value.profileId === undefined ? {} : { profileId: Number(value.profileId) }),
+  };
 }
 
 /** Writer refusals are identified by their canonical reason, never by state. */
@@ -186,6 +334,7 @@ export class IntegrationApiError extends Error {
   readonly refusal: IntegrationRefusalEnvelope | null;
   readonly status: number;
   readonly body: IntegrationErrorBody;
+  readonly stalePlan: IntegrationMutationPlan | null;
 
   // Parameter properties are erasable-syntax violations under the GUI's
   // stricter tsconfig, which the root typecheck does not enforce; the build
@@ -197,6 +346,7 @@ export class IntegrationApiError extends Error {
     this.status = status;
     this.body = body;
     this.refusal = refusal;
+    this.stalePlan = body.code === "integration_preview_stale" && "plan" in body && body.plan ? body.plan : null;
   }
 }
 
@@ -208,12 +358,17 @@ export function isMissingJournalEntry(error: unknown): boolean {
 }
 
 async function readErrorBody(response: Response): Promise<IntegrationErrorEnvelope> {
+  let body: unknown;
   try {
-    const body = await response.json() as unknown;
-    return isRecord(body) ? body as IntegrationErrorEnvelope : {};
+    body = await response.json() as unknown;
   } catch {
     return {};
   }
+  if (!isRecord(body)) return {};
+  if (body.code === "integration_preview_stale") {
+    return { code: body.code, plan: parseIntegrationMutationPlan(body.plan) };
+  }
+  return body as IntegrationErrorEnvelope;
 }
 
 async function readResponse<T>(response: Response): Promise<T> {
@@ -228,6 +383,14 @@ async function readResponse<T>(response: Response): Promise<T> {
 }
 
 export { readResponse as readIntegrationResponse };
+
+export function isIntegrationPreviewUnavailable(error: unknown): boolean {
+  return error instanceof IntegrationApiError && error.body.code === "integration_preview_unavailable";
+}
+
+export function bindingFor(plan: IntegrationMutationPlan): IntegrationPlanBinding {
+  return { operation: plan.operation, planFingerprint: plan.fingerprint };
+}
 
 function profilePath(profileId: number): string {
   if (!Number.isSafeInteger(profileId) || profileId < 0) throw new IntegrationApiError(400, { code: "invalid_aside_profile" });
@@ -282,26 +445,55 @@ export async function loadIntegrationJournal(
   return result;
 }
 
-export async function toggleIntegration(
+export async function previewIntegrationMutation(
   apiBase: string,
   client: FileIntegrationClientId,
-  enabled: boolean,
+  operation: Exclude<IntegrationPlanOperation, "restore">,
   signal?: AbortSignal,
-  /**
-   * Opt in to replacing a conflicted block. Deliberately last and optional: no
-   * existing call site can acquire it, and a caller has to name it.
-   */
-  overwriteConflict?: boolean,
   profileId?: number,
 ) {
-  const result = await readResponse<IntegrationToggleResult | { ok: false; message?: string; results?: unknown }>(
-    await fetch(`${apiBase}${clientPath(client, profileId)}`, {
+  const path = profileId === undefined ? "/api/client-integrations/preview" : `${profilePath(profileId)}/preview`;
+  const requestBody = profileId === undefined ? { clientId: client, operation } : { operation };
+  const plan = parseIntegrationMutationPlan(await readResponse<unknown>(await fetch(`${apiBase}${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(requestBody), signal,
+  })));
+  if (plan.clientId !== client || plan.operation !== operation || plan.profileId !== profileId) throw invalidPreviewResponse();
+  return plan;
+}
+
+export async function previewIntegrationRestore(
+  apiBase: string,
+  opId: string,
+  confirmDrift = false,
+  signal?: AbortSignal,
+  profileId?: number,
+) {
+  const path = profileId === undefined ? "/api/client-integrations/restore/preview" : `${profilePath(profileId)}/preview`;
+  const body = profileId === undefined ? { opId, confirmDrift } : { operation: "restore", opId, confirmDrift };
+  const plan = parseIntegrationMutationPlan(await readResponse<unknown>(await fetch(`${apiBase}${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+  })));
+  if (plan.operation !== "restore" || plan.profileId !== profileId) throw invalidPreviewResponse();
+  return plan;
+}
+
+export async function toggleIntegration(apiBase: string, client: FileIntegrationClientId, options: ToggleIntegrationOptions) {
+  const { enabled, signal, overwriteConflict, profileId, binding } = options;
+  const expectedOperation: IntegrationPlanOperation = enabled ? (overwriteConflict ? "overwrite" : "apply") : "disable";
+  let result: IntegrationToggleResult | { ok: false; message?: string; results?: unknown };
+  try {
+    result = await readResponse<IntegrationToggleResult | { ok: false; message?: string; results?: unknown }>(await fetch(`${apiBase}${clientPath(client, profileId)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(overwriteConflict === true ? { enabled, overwriteConflict: true } : { enabled }),
+      body: JSON.stringify({ enabled, ...(overwriteConflict === true ? { overwriteConflict: true } : {}), ...binding }),
       signal,
-    }),
-  );
+    }));
+  } catch (error) {
+    if (error instanceof IntegrationApiError && error.stalePlan
+      && (error.stalePlan.clientId !== client || error.stalePlan.operation !== expectedOperation
+        || error.stalePlan.profileId !== profileId)) throw invalidPreviewResponse();
+    throw error;
+  }
   const outcomes = result.results === undefined ? undefined : parseAsideProfileOutcomes(result.results);
   if (client === "aside" && result.results !== undefined && (!outcomes
     || result.ok !== outcomes.every(row => row.ok))) {
@@ -317,19 +509,22 @@ export async function toggleIntegration(
 
 export async function restoreIntegration(
   apiBase: string,
-  opId: string,
-  confirmDrift = false,
-  signal?: AbortSignal,
-  profileId?: number,
+  options: RestoreIntegrationOptions,
 ) {
-  const result = await readResponse<IntegrationRestoreResult>(
-    await fetch(`${apiBase}${profileId === undefined ? "/api/client-integrations/restore" : `${profilePath(profileId)}/restore`}`, {
+  const { opId, confirmDrift = false, signal, profileId, binding } = options;
+  let result: IntegrationRestoreResult;
+  try {
+    result = await readResponse<IntegrationRestoreResult>(await fetch(`${apiBase}${profileId === undefined ? "/api/client-integrations/restore" : `${profilePath(profileId)}/restore`}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ opId, confirmDrift }),
+      body: JSON.stringify({ opId, confirmDrift, ...binding }),
       signal,
-    }),
-  );
+    }));
+  } catch (error) {
+    if (error instanceof IntegrationApiError && error.stalePlan
+      && (error.stalePlan.operation !== "restore" || error.stalePlan.profileId !== profileId)) throw invalidPreviewResponse();
+    throw error;
+  }
   if (profileId !== undefined && result.profileId !== profileId) throw new IntegrationApiError(502, { code: "invalid_aside_profile_response" });
   return result;
 }

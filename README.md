@@ -90,7 +90,36 @@ Use `ocx service` to run it in the background.
 Open **http://localhost:10100** and configure everything in the web dashboard — add providers
 (40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
 re-opens the dashboard at any time.
-It can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
+
+<details>
+<summary><b>Desktop app and macOS widget — beta</b></summary>
+
+A native shell around the same dashboard, plus a WidgetKit extension that shows proxy status,
+today's usage and provider quotas without opening a browser. The proxy is unchanged: the app
+finds a running one or starts the bundled `ocx` sidecar, and the dashboard stays on the proxy's
+port (**http://localhost:10100** unless you configured another).
+
+It is beta. Release builds of the macOS app are signed with a Developer ID and notarized (local
+builds are ad-hoc signed); the Windows installer is not code-signed yet, so SmartScreen warns on
+first run. The widget needs macOS 14 or newer; the snapshot model it renders lives in
+[`app/`](./app) (`MenuBarCore`).
+
+Download it from the [latest release](https://github.com/lidge-jun/opencodex/releases), or build
+it locally: run `bun install && bun run build:gui` at the repository root, then
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` in
+`desktop/`.
+
+Install locations, service files and everything else written to disk are listed in
+[`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed). The
+[Desktop App guide](https://opencodex.me/guides/desktop-app/) and the
+[macOS Menu Bar App guide](https://opencodex.me/guides/macos-menu-bar/) cover per-platform
+installation and first launch.
+
+</details>
+
+### ChatGPT account pool
+
+opencodex can also manage a **ChatGPT account pool** for Codex auth. Add multiple ChatGPT / Codex accounts,
 refresh their 5h / weekly / 30d quota in the dashboard. Under quota routing, new sessions can use
 the lowest-usage healthy account; round-robin and fill-first use their own policies. Existing Codex
 threads normally retain affinity to the account that started them, so long SSH, tmux, or
@@ -125,14 +154,14 @@ See [SPONSORS.md](./SPONSORS.md).
 <details>
 <summary>Docker Compose</summary>
 
-The repository ships a digest-pinned, non-root Compose build. With Git and Bun installed on the
-host, generate the canonical compatibility manifest before every image build, then initialize
-the data-plane token once through stdin and start the hub:
+The repository ships a digest-pinned, non-root Compose build. The build generates and verifies the
+canonical compatibility manifest from the selected Git snapshot. A local clone needs Git and
+Docker Compose; a remote Git context needs Docker Compose. Neither path needs host Bun or a
+preparation step. Initialize the data-plane token once through stdin and start the hub:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -143,11 +172,28 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 The default host binding is `127.0.0.1:10100`. Remote exposure requires explicit
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d`; `0.0.0.0` opts into
 all host interfaces. Restrict access with a firewall and an authenticated TLS/tailnet frontend.
-The generated JSON stays untracked; it is copied into the image without including `.git`.
-Regenerate it after source changes, and do not change the source between generation and build.
-The build rejects stale manifests, missing or mismatched files, extra source files, and symlinks.
+The generated JSON stays untracked. The build context admits only `.git/index` and `.git/HEAD` — the
+inventory `git ls-files` reads, about 1 MB rather than the full object store — and they are visible
+only to the build-only manifest stage through a read-only mount, so no `COPY` includes `.git`. An existing host-generated manifest
+is still accepted only after validation; otherwise the build generates one itself. The build rejects
+stale manifests, missing or mismatched files, extra source files, and symlinks.
 It checks every recorded SHA-256 against the build context and copied runtime files, including
 `package.json`, `bun.lock`, and the specifically included `scripts/model-metadata.source.json`.
+
+A remote Git context needs BuildKit to retain Git metadata. This Compose build fragment selects the
+remote snapshot and passes the required built-in argument:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 The token and mutable state stay in the `ocx-state` named volume; no credential is placed in the
 image, Compose file, environment, or shell arguments. See the
@@ -163,8 +209,9 @@ setup, authenticated acceptance checks, remote management, and rollback.
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -172,8 +219,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

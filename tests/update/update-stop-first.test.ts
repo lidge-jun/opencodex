@@ -534,7 +534,9 @@ describe("update stops the running proxy before replacing files", () => {
     expect(stopAt).toBeGreaterThan(-1);
     expect(updateAt).toBeGreaterThan(-1);
     expect(stopAt).toBeLessThan(updateAt);
-    expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())");
+    // The four signals are now inside a runtime-ownership veto: a desktop-owned runtime is
+    // not stopped at all. Every original reason to stop still reaches the gate unchanged.
+    expect(updateSource).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
   });
 
   test("integrity pre-flight runs BEFORE the stop so anomalous metadata never unloads the proxy", () => {
@@ -600,9 +602,9 @@ describe("update stops the running proxy before replacing files", () => {
     expect(updateSource).toContain("serviceReinstallArgs()");
     expect(launcherSource).toContain("aborting the update");
     expect(launcherSource).toContain('"service", "repair"');
-    // The launcher still reads service-state.json for service-installed detection, and
-    // for the backend choice on the genuinely-absent install fallback.
-    expect(launcherSource).toContain('"service-state.json"');
+    // The launcher reads the shared active/default state-path set for service-installed
+    // detection and the authoritative backend on the genuinely-absent install fallback.
+    expect(launcherSource).toContain("serviceStateFilesFor");
     // That marker can be STALE, so the fallback asks for structured state rather than
     // parsing a failure message; bin/ocx.mjs is plain Node and cannot import
     // diagnoseService(), so it reads startup.serviceInstalled from `status --json`.
@@ -783,13 +785,50 @@ esac
     // A pending-teardown receipt is a fourth reason to stop: after a parent crashed
     // mid-deferral the service, pid and runtime records can all be absent while shared
     // client config still points at a proxy that is gone (#3008).
-    expect(updateSource).toContain("if (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding())");
-    expect(launcherSource).toContain("if (serviceWasInstalled || hasRuntimeState || hasPendingTeardown)");
+    expect(updateSource).toContain("if (runtimePlan.mayStopRuntime && (serviceWasInstalled || readPid() || readRuntimePort() || pendingTeardownOutstanding()))");
+    expect(launcherSource).toContain("const stopNeeded = serviceWasInstalled || hasRuntimeState || hasPendingTeardown");
+    expect(launcherSource).toContain("if (stopNeeded && !runtimePlan.mayStopRuntime)");
+    expect(launcherSource).toContain("if (stopNeeded) {");
     // The rule now lives in the shared post-stop decision both lanes import (#3008): a
     // history-only stop proceeds, every other nonzero status and any surviving runtime
     // state aborts. Pinned by tests/update/update-stop-classification.test.ts.
     expect(launcherSource).toContain("decidePostStopUpdate({");
     expect(launcherSource).toContain("hasRuntimeState: stillHasRuntimeState");
+  });
+
+  test("the Node updater holds one authority from stop permission through replacement", () => {
+    const leaseAt = launcherSource.indexOf("const updateLease = acquireOwnershipMutationLease(");
+    const lockedPlanAt = launcherSource.indexOf("const lockedPlan = planUpdateRuntimeHandling(", leaseAt);
+    const stopAt = launcherSource.indexOf('[launcher, "stop"]', lockedPlanAt);
+    const replacementAt = launcherSource.indexOf("const replacementOwnership = readOwnership()", stopAt);
+    const releaseAt = launcherSource.indexOf("releaseUpdateLease()", replacementAt);
+    expect(leaseAt).toBeGreaterThan(-1);
+    expect(lockedPlanAt).toBeGreaterThan(leaseAt);
+    expect(stopAt).toBeGreaterThan(lockedPlanAt);
+    expect(replacementAt).toBeGreaterThan(stopAt);
+    expect(releaseAt).toBeGreaterThan(replacementAt);
+    const stopEnvAt = launcherSource.indexOf("env: mutationChildEnvironment()", stopAt);
+    expect(stopEnvAt).toBeGreaterThan(stopAt);
+    expect(stopEnvAt).toBeLessThan(replacementAt);
+    expect(launcherSource.slice(lockedPlanAt, stopAt)).toContain("!runtimePlan.mayStopRuntime");
+    const packageReplacement = launcherSource.slice(stopAt, launcherSource.indexOf("const postInstallPlan", stopAt));
+    expect(packageReplacement.match(/unprivilegedOwnershipMutationEnvironment/g)).toHaveLength(2);
+  });
+
+  test("replacement refusal reaches owner-aware recovery before releasing authority", () => {
+    const refusalAt = launcherSource.indexOf("replacementOwnership.subjectToken !== initialOwnership.subjectToken");
+    const recoverAt = launcherSource.indexOf('recoverStoppedRuntimeAfterFailure("replacement was refused")', refusalAt);
+    const releaseAt = launcherSource.indexOf("releaseUpdateLease()", recoverAt);
+    expect(refusalAt).toBeGreaterThan(-1);
+    expect(recoverAt).toBeGreaterThan(refusalAt);
+    expect(releaseAt).toBeGreaterThan(recoverAt);
+    const recovery = launcherSource.slice(
+      launcherSource.indexOf("function recoverStoppedRuntimeAfterFailure("),
+      launcherSource.indexOf("const hasPendingTeardown", launcherSource.indexOf("function recoverStoppedRuntimeAfterFailure(")),
+    );
+    expect(recovery).toContain("planStoppedRuntimeRecovery");
+    expect(recovery).toContain("sameOwner:");
+    expect(recovery).toContain("currentPackageRuntimeLiveness()");
   });
 
   test("GUI worker update children use pipe stdio so background updates do not open consoles", () => {

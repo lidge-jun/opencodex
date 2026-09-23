@@ -6,10 +6,17 @@ import * as adapterResolveModule from "../../src/server/adapter-resolve";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses/core";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
+let releaseSpendHome: (() => void) | undefined;
+// Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome(); };
 
 afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
 });
 
@@ -45,7 +52,8 @@ async function driveResponses(args: {
     ...(args.callerTier === undefined ? {} : { service_tier: args.callerTier }),
   };
 
-  await handleResponses(
+  takeSpendHome();
+  const turn = await handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -56,6 +64,9 @@ async function driveResponses(args: {
     {},
   );
 
+  // The turn's body is a live stream. Releasing it here means no reader is still attached when
+  // the lease is dropped, which is what turns a finished case into a pending one.
+  await turn.body?.cancel();
   expect(bodies).toHaveLength(1);
   return { outboundBody: bodies[0]!, logCtx };
 }
@@ -355,7 +366,9 @@ describe("FastWire characterization: rawBody observation point", () => {
         }),
       });
 
-      await handleResponses(request, config, { model: "", provider: "" }, {});
+      takeSpendHome();
+      const turn = await handleResponses(request, config, { model: "", provider: "" }, {});
+      await turn.body?.cancel();
       expect(outboundBody?.service_tier).toBe("priority");
       expect(adapterRawBody?.service_tier).toBe("flex");
     } finally {

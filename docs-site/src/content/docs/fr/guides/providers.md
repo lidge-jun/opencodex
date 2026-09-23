@@ -94,7 +94,7 @@ Le catalogue du transfert ChatGPT ajoute également les identifiants non qualifi
 
 ## 2. Connexion au compte (OAuth)
 
-Huit préréglages de fournisseurs utilisent une connexion OAuth. GitHub Copilot s'y ajoute au moyen d'un pont
+Des préréglages de fournisseurs peuvent utiliser une connexion au compte, y compris GitHub Copilot au moyen d'un pont
 expérimental et non officiel reposant sur un flux d'autorisation d'appareil. opencodex enregistre leurs identifiants dans
 `~/.opencodex/auth.json` et les actualise automatiquement. La CLI de connexion accepte également
 `ocx login codex`, qui n'est pas l'un des fournisseurs ci-dessus : la commande est routée vers la
@@ -121,7 +121,8 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth utilise la passerelle d'abonnement Grok CLI distincte. Le remplacement par clé API utilise `https://api.x.ai/v1` et peut injecter Priority Processing. Catalogue Grok découvert en direct en priorité ; `grok-4.5` est le modèle de repli par défaut. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Modèles Claude ; liste des modèles récupérée en direct depuis `/v1/models`. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Modèles de programmation Kimi K2.7/K2.6/K2.5. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Modèles Kimi Code. L'alias `kimi-for-coding` pointe actuellement vers K2.8 Preview (contexte de 1 M de tokens, raisonnement `low`/`high`/`max`, texte et images). `k3-256k` offre une limite fixe de 256 K. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Réutilise la connexion OAuth de `kimi` avec les mêmes modèles sur le protocole Responses. Le contenu du raisonnement reste chiffré côté serveur ; les appels d'outils et leurs résultats restent visibles. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Passerelle d'abonnement Nous Research (le même service en amont que celui utilisé par Hermes Agent). Connexion par autorisation d'appareil auprès de `portal.nousresearch.com` ; le jeton d'accès est le JWT d'inférence envoyé avec chaque requête. Le catalogue mixte de modèles payants et `:free` (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) est découvert en direct pour le compte connecté. Les jetons d'actualisation sont à usage unique et renouvelés à chaque actualisation. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | La connexion initiale importe la session de l'installation locale de `kiro-cli`, déjà authentifiée (sous Unix, installez avec `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`; sous Windows PowerShell, utilisez `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`; puis exécutez `kiro-cli login`). **Ajouter un compte** déconnecte `kiro-cli`, lance une nouvelle connexion dans le navigateur qui change le compte utilisé par `kiro-cli`, puis enregistre les métadonnées propres au profil. Les comptes OpenCodex existants sont préservés ; une annulation ou un échec restaure la session `kiro-cli` précédente. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth avec le protocole Cloud Code Assist. La découverte en direct utilise le point de terminaison CCA authentifié `v1internal:fetchAvailableModels` et publie les modèles d'agent accessibles au compte connecté ; le catalogue maintenu reste la solution de repli. |
@@ -130,6 +131,25 @@ ocx logout <provider>
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Expérimental. Flux d'appareil GitHub et échange `copilot_internal` (client OAuth de VS Code). Nécessite un abonnement Copilot actif ; il ne s'agit pas d'une API tierce officielle. |
 
 Les vérifications de quota Google Antigravity utilisent des points de terminaison Google fixes, y compris le repli vers la liste des modèles. Elles prennent en charge le DNS Fake-IP transparent pour ces destinations en conservant la vérification TLS, le refus des redirections et les contrôles des adresses privées. Une URL de base personnalisée ne modifie que les requêtes de modèles ; `NO_PROXY` conserve la politique de connexion directe.
+
+### Diagnostic de perte du schéma d’outil Google
+
+Les déclarations d’outils Google sont compilées selon la classe du point de terminaison sélectionné.
+Lorsque le débogage du fournisseur est activé — avec `ocx debug provider on`, le bouton Logs du
+tableau de bord ou `OCX_DEBUG=1` — la perte de schéma lors de la conversion de compatibilité sur le
+chemin où la politique est absente ou vaut `compatible` émet un enregistrement
+`[ocx:google:google-tool-schema-loss]` (à suivre avec `ocx debug provider logs -f`) ne contenant que
+la version du rapport, la classe du point de terminaison, un indicateur `lossy`, un compteur borné de
+comparaisons indéterminées, des catégories de perte fixes avec des compteurs bornés et un indicateur de troncature. Les noms d’outils et de
+propriétés, les chemins, les valeurs et le texte du schéma ne sont jamais inclus. Avec une politique
+absente ou `compatible`, ce diagnostic observe la conversion sans la refuser. Sous `reject-lossy`,
+une compilation initialement avec perte ou dont la comparaison bornée est indéterminée est refusée
+avant l’envoi ; aucun enregistrement de perte distinct n’est émis pour la requête refusée. Sous `reject-lossy`, une
+réparation Vertex ou Cloud Code Assist qui supprimerait des contraintes émet un enregistrement
+`google-tool-schema-repair` également sans contenu et renvoie le 400 d’origine sans nouvel envoi ;
+avec une politique absente ou `compatible`, la requête réparée est rejouée comme auparavant. AI Studio direct ne tente jamais cette réparation. Les schémas
+de sortie natifs restent hors de ces deux chemins. Consultez la
+[référence des commandes de débogage](/fr/reference/cli/agents/).
 
 
 Après un échec définitif d'actualisation de Nous, exécutez `ocx login nous` pour vous réauthentifier.
@@ -140,6 +160,14 @@ par l'appelant ; il n'en génère jamais. Selon la documentation de Kimi, une cl
 est nécessaire pour améliorer le taux de succès du cache du Coding Plan ; les requêtes dépourvues de clé le
 restent. Si un service en amont explicitement activé rejette ce champ, opencodex ne le retire pas avant de
 réessayer et ne modifie pas la configuration enregistrée. Tous les autres fournisseurs le refusent par défaut.
+
+Les prix de `k3`, `k3[1m]` et `k3-256k` pour `kimi`, `kimi-code` et `kimi-responses`
+sont des estimations fondées sur les [tarifs de l'API](https://platform.kimi.ai/docs/pricing/chat),
+avec l'écriture en cache par défaut de cinq minutes. Ils ne représentent ni la facturation ni
+les quotas du Code Plan : la variante 1 M consomme environ deux fois le quota de `k3-256k`.
+L'alias `kimi-for-coding` pointe désormais vers K2.8 Preview ; son ancien tarif K2.7 n'est plus
+utilisé. Son coût reste inconnu sans `modelCosts` fourni par l'utilisateur, et les règles de routage
+qui excluent les coûts inconnus peuvent donc l'écarter.
 
 Vous pouvez également démarrer OAuth à partir du [tableau de bord Web](/fr/guides/web-dashboard/).
 
@@ -264,7 +292,7 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 94 préréglages intégrés : 78 à clé, 12 OAuth, trois locaux et un préréglage par défaut de
+opencodex fournit 97 préréglages intégrés : 80 à clé, 13 OAuth, trois locaux et un préréglage par défaut de
 transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
@@ -359,7 +387,7 @@ restriction. Conditions en amont : [opencode.ai/docs/zen](https://opencode.ai/do
 
 La plupart utilisent l'adaptateur `openai-chat` avec une clé Bearer ; quelques fournisseurs qui n'exposent
 qu'un point de terminaison compatible Anthropic, comme **Xiaomi MiMo**, emploient l'adaptateur `anthropic`
-(`x-api-key`). Volcengine Agent Plan utilise son point de terminaison Responses natif par `openai-responses`.
+(`x-api-key`). Volcengine Coding Plan et Agent Plan utilisent leur point de terminaison Responses natif par `openai-responses`. Lors des continuations d'outils validées sur Ark Coding Plan, renvoyer l'élément `reasoning` retourné par le tour précédent provoque `400 InvalidParameter` ; le préréglage Coding Plan retire donc ces éléments avant de transmettre l'entrée de continuation. Cela perd l'état de raisonnement de ce tour et se désactive avec `dropResponsesReasoningItems: false`. Une configuration Coding Plan déjà enregistrée en `openai-chat` n'est pas réécrite et reste sur Chat : pour basculer, passez `adapter` à `openai-responses` et `responsesPath` à `/responses`, ou supprimez puis rajoutez le préréglage.
 Le préréglage DeepSeek intégré route également `deepseek-v4-flash` par son point de terminaison Responses natif
 et conserve le streaming SSE en amont. Si ce modèle termine tous les éléments de sortie mais omet l'événement
 Responses final, opencodex applique une réparation après un délai de grâce de cinq secondes, limitée à ce
@@ -603,12 +631,13 @@ Cursor est géré séparément comme adaptateur expérimental. `adapter: "cursor
 le sélecteur **Ajouter un fournisseur** du tableau de bord comme entrée expérimentale de la configuration locale,
 avec les métadonnées du catalogue statique de repli de Cursor. Lorsqu'un jeton d'accès Cursor est configuré,
 opencodex utilise le transport HTTP/2 direct de Cursor. Sa liste de repli intégrée comprend `gpt-5.6-sol` /
-`terra` / `luna` (contexte de 1M), les variantes ordinaires et Fast de Grok 4.5 et 4.6 (500K), ainsi que
-`kimi-k3` (262K) ; la découverte en direct détermine celles qui restent visibles pour le compte. Grok 4.6 expose
-`low` / `medium` / `high` / `xhigh` sous les deux formes, tandis que 4.5 s'arrête à `high`. Les requêtes Fast
-envoient le modèle Grok de base correspondant avec des paramètres `effort` et `fast=true` `requested_model`
-distincts ; les identifiants aplatis `cursor-grok-{version}-{effort}-fast` servent uniquement à la découverte et
-à la sélection. Cursor ne fournit Kimi K3 qu'avec des identifiants de protocole suffixés par l'effort ;
+`terra` / `luna` (contexte de 1M), les variantes ordinaires et Fast de Grok 4.5, 4.6 et 4.7 (500K), ainsi que
+`kimi-k3` (262K) ; la découverte en direct détermine celles qui restent visibles pour le compte. Grok 4.6 et 4.7 exposent
+`low` / `medium` / `high` / `xhigh` sous les deux formes, tandis que 4.5 s'arrête à `high`. Pour Grok 4.5 et 4.6,
+les requêtes Fast envoient le modèle de base avec des paramètres `effort` et `fast=true` distincts dans
+`requested_model` ; leurs identifiants aplatis `cursor-grok-{version}-{effort}-fast` servent uniquement à la découverte
+et à la sélection. Grok 4.7 figure sans préfixe `cursor-` et envoie directement `grok-4.7-{effort}-fast`.
+Cursor ne fournit Kimi K3 qu'avec des identifiants de protocole suffixés par l'effort ;
 `cursor/kimi-k3` expose donc une échelle `low` / `high` / `max` avec `max` par défaut, conformément à la valeur
 par défaut documentée de l'API du modèle. L'exécution native read/write/delete/ls/grep/shell/fetch pilotée par
 le serveur Cursor est désactivée par défaut, car elle contourne le parcours d'approbation et le bac à sable de

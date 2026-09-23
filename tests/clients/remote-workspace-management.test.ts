@@ -35,6 +35,7 @@ async function call(
   principal: "admin-token" | "gui-session" = "gui-session",
   body?: unknown,
   sessions: RemoteWorkspaceSessionService = emptySessions,
+  paired = principal === "gui-session",
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const url = new URL(`http://127.0.0.1:10100${path}`);
   const req = new Request(url, {
@@ -45,7 +46,11 @@ async function call(
   const response = await handleManagementAPI(req, url, config, {
     remoteWorkspaceHub: hub,
     remoteWorkspaceSessions: sessions,
-  }, principal);
+  }, principal, {
+    isCurrent: () => principal === "gui-session",
+    isPaired: () => paired,
+    revokeCurrent: () => false,
+  });
   if (!response) throw new Error("Remote Workspace management route was not mounted");
   return { status: response.status, body: await response.json() as Record<string, unknown> };
 }
@@ -62,7 +67,7 @@ const emptySessions = {
 } as unknown as RemoteWorkspaceSessionService;
 
 describe("Remote Workspace management routes", () => {
-  test("lists devices and requires a GUI consent session to create enrollment grants", async () => {
+  test("lists devices and requires an operator-paired GUI session to create enrollment grants", async () => {
     const hub = new RemoteWorkspaceHub(new MemoryStore());
     const initial = await call(hubConfig, hub, "GET", "/api/remote-workspace", "admin-token");
     expect(initial).toEqual({
@@ -80,6 +85,20 @@ describe("Remote Workspace management routes", () => {
     });
     const denied = await call(hubConfig, hub, "POST", "/api/remote-workspace/pairing", "admin-token");
     expect(denied.status).toBe(403);
+    const bootstrapSession = await call(
+      hubConfig,
+      hub,
+      "POST",
+      "/api/remote-workspace/pairing",
+      "gui-session",
+      undefined,
+      emptySessions,
+      false,
+    );
+    expect(bootstrapSession).toEqual({
+      status: 403,
+      body: { error: "A paired dashboard session is required for Remote Workspace changes." },
+    });
     const created = await call(hubConfig, hub, "POST", "/api/remote-workspace/pairing");
     expect(created.status).toBe(201);
     expect(created.body.code).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);

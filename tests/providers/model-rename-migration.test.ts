@@ -9,8 +9,16 @@ import {
 } from "../../src/providers/model-rename-migration";
 import { runModelRenameStartupMigration } from "../../src/providers/model-rename-startup";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { providerConfigSeed } from "../../src/providers/derive";
+import { reconcileOAuthProviders } from "../../src/oauth";
+import {
+  ANTIGRAVITY_MODELS,
+  ANTIGRAVITY_MODEL_CONTEXT_WINDOWS,
+} from "../../src/providers/antigravity-models";
 import { getConfigPath, loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
+import { routeModel } from "../../src/router";
+import { requestPacingIntervalMs } from "../../src/providers/request-pacing";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const INTL_BASE_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
@@ -135,6 +143,197 @@ describe("registry model rename migration (#1610)", () => {
       // A rename whose source id is still seeded would fight the registry.
       expect(entry?.models).not.toContain(rename.from);
     }
+  });
+
+  test("repairs a saved kimi row still defaulting to the retired k2.7 id", () => {
+    // The shape a config saved under the pre-K2.8 registry carries: the picker list,
+    // the context-window record and the default all name kimi-k2.7-code, and the old
+    // registry already seeded kimi-for-coding rows next to them.
+    const stale = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-k2.7-code",
+          models: ["k3", "k3[1m]", "kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5", "kimi-for-coding"],
+          modelContextWindows: { "kimi-k2.7-code": 262_144, "kimi-for-coding": 262_144 },
+          noReasoningModels: ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5", "kimi-for-coding"],
+          modelReasoningEfforts: { "kimi-k2.7-code": [], "kimi-for-coding": [] },
+          modelDefaultReasoningEfforts: { k3: "max" },
+          modelReasoningEffortMap: { k3: { high: "high" } },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers.kimi!;
+    expect(changed).toBe(true);
+    expect(prov.defaultModel).toBe("kimi-for-coding");
+    expect(prov.models).toEqual(["k3", "k3[1m]", "kimi-for-coding"]);
+    expect(prov.modelContextWindows).toEqual({ "kimi-for-coding": 1_048_576 });
+    expect(prov.noReasoningModels).toEqual([]);
+    expect(prov.modelReasoningEfforts).toEqual({ "kimi-for-coding": ["low", "high", "max"] });
+    expect(prov.modelDefaultReasoningEfforts).toEqual({ k3: "max", "kimi-for-coding": "max" });
+    expect(prov.modelReasoningEffortMap?.["kimi-for-coding"]).toEqual({
+      none: "none", low: "low", medium: "high", high: "high", xhigh: "max", max: "max",
+    });
+  });
+
+  test("repairs the kimi-code key preset row the same way", () => {
+    const stale = {
+      providers: {
+        "kimi-code": {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "key",
+          apiKey: "sk-test",
+          defaultModel: "kimi-k2.7-code",
+          models: ["k3", "k3[1m]", "kimi-k2.7-code", "kimi-k2.6", "kimi-k2.5", "kimi-for-coding"],
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers["kimi-code"]!;
+    expect(changed).toBe(true);
+    expect(prov.defaultModel).toBe("kimi-for-coding");
+    expect(prov.models).toEqual(["k3", "k3[1m]", "kimi-for-coding"]);
+  });
+
+  test("renamed operator aliases, wire policy and nested pacing remain effective", () => {
+    const from = "kimi-k2.7-code", to = "kimi-for-coding";
+    const stale = { defaultProvider: "kimi-code", providers: { "kimi-code": {
+      adapter: "openai-chat", baseUrl: "https://api.kimi.com/coding/v1", apiKey: "fixture-key",
+      models: [from], modelAliases: { [from]: "work" },
+      modelAdapters: { [from]: "openai-responses" }, modelCapabilities: { [from]: { inputModalities: ["text"] } },
+      modelMaxInputTokens: { [from]: 12345 }, modelPinnedReasoningEfforts: { [from]: "high" },
+      autoReviewModelOverrides: { [from]: "reviewer/model" },
+      requestPacing: { enabled: true, models: { [from]: { minIntervalMs: 125 } } },
+      noStructuredOutputModels: [from], requiresReasoningPlaceholderModels: [from],
+    } } } as unknown as OcxConfig;
+    const { config, changed } = projectModelRenames(stale);
+    expect(changed).toBe(true);
+    const prov = config.providers["kimi-code"]!;
+    const route = routeModel(config, "kimi-code/work");
+    expect(route.modelId).toBe(to);
+    expect(route.staticPolicy.model.adapter).toBe("openai-responses");
+    expect(route.staticPolicy.model.inputModalities).toEqual(["text"]);
+    expect(route.staticPolicy.model.maxInputTokens).toBe(12345);
+    expect(prov.modelPinnedReasoningEfforts).toEqual({ [to]: "high" });
+    expect(prov.autoReviewModelOverrides).toEqual({ [to]: "reviewer/model" });
+    expect(requestPacingIntervalMs(prov, to)).toBe(125);
+    expect(prov.requestPacing?.models?.[from]).toBeUndefined();
+    expect(prov.noStructuredOutputModels).toEqual([to]);
+    expect(prov.requiresReasoningPlaceholderModels).toEqual([to]);
+    expect(projectModelRenames(config).changed).toBe(false);
+  });
+
+  test("newer target alias and nested pacing win during a rename", () => {
+    const from = "kimi-k2.7-code", to = "kimi-for-coding";
+    const stale = { providers: { "kimi-code": {
+      adapter: "openai-chat", baseUrl: "https://api.kimi.com/coding/v1",
+      modelAliases: { [from]: "old", [to]: "new" },
+      autoReviewModelOverrides: { [from]: "reviewer/old", [to]: "reviewer/new" },
+      requestPacing: { enabled: true, minIntervalMs: 10, models: {
+        [from]: { minIntervalMs: 125 }, [to]: { minIntervalMs: 250 },
+      } },
+    } } } as unknown as OcxConfig;
+    const prov = projectModelRenames(stale).config.providers["kimi-code"]!;
+    expect(prov.modelAliases).toEqual({ [to]: "new" });
+    expect(prov.autoReviewModelOverrides).toEqual({ [to]: "reviewer/new" });
+    expect(prov.requestPacing?.minIntervalMs).toBe(10);
+    expect(prov.requestPacing?.models).toEqual({ [to]: { minIntervalMs: 250 } });
+  });
+
+  test("preserves explicit kimi-for-coding metadata while retiring old ids", () => {
+    const stale = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-k2.6",
+          models: ["kimi-k2.6", "kimi-for-coding"],
+          modelContextWindows: { "kimi-k2.6": 262_144, "kimi-for-coding": 131_072 },
+          modelReasoningEfforts: { "kimi-k2.6": [], "kimi-for-coding": ["low"] },
+          modelDefaultReasoningEfforts: { "kimi-for-coding": "low" },
+          modelReasoningEffortMap: { "kimi-for-coding": { medium: "low" } },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers.kimi!;
+    expect(prov.defaultModel).toBe("kimi-for-coding");
+    expect(prov.models).toEqual(["kimi-for-coding"]);
+    expect(prov.modelContextWindows?.["kimi-for-coding"]).toBe(131_072);
+    expect(prov.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low"]);
+    expect(prov.modelDefaultReasoningEfforts?.["kimi-for-coding"]).toBe("low");
+    expect(prov.modelReasoningEffortMap?.["kimi-for-coding"]).toEqual({ medium: "low" });
+  });
+
+  test("clears a stale no-reasoning classification saved under the live alias alone", () => {
+    // A config saved by the pre-K2.8 registry can carry kimi-for-coding in
+    // noReasoningModels even after every retired id is gone from the row - the old
+    // registry seeded the alias there. With no `from` left to rename, the stale
+    // classification would survive and keep the picker disabled; the drop must
+    // therefore trigger on the replacement id alone.
+    const stale = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-for-coding",
+          models: ["k3", "k3[1m]", "kimi-for-coding"],
+          noReasoningModels: ["kimi-for-coding"],
+          modelReasoningEfforts: { "kimi-for-coding": [] },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(stale, MODEL_RENAMES);
+    const prov = config.providers.kimi!;
+    expect(changed).toBe(true);
+    expect(prov.noReasoningModels).toEqual([]);
+    expect(prov.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
+  });
+
+  test("preserves an explicit no-reasoning override on the live alias", () => {
+    const configured = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://api.kimi.com/coding/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-for-coding",
+          models: ["k3", "k3[1m]", "kimi-for-coding"],
+          noReasoningModels: ["kimi-for-coding"],
+          modelReasoningEfforts: { "kimi-for-coding": ["low"] },
+        },
+      },
+    } as unknown as OcxConfig;
+
+    const { config, changed } = projectModelRenames(configured, MODEL_RENAMES);
+    expect(changed).toBe(false);
+    expect(config.providers.kimi?.noReasoningModels).toEqual(["kimi-for-coding"]);
+  });
+
+  test("leaves a kimi row repointed at a different gateway alone", () => {
+    const custom = {
+      providers: {
+        kimi: {
+          adapter: "openai-chat",
+          baseUrl: "https://my-proxy.internal/v1",
+          authMode: "oauth",
+          defaultModel: "kimi-k2.7-code",
+          models: ["kimi-k2.7-code"],
+        },
+      },
+    } as unknown as OcxConfig;
+    const { changed } = projectModelRenames(custom, MODEL_RENAMES);
+    expect(changed).toBe(false);
   });
 });
 
@@ -274,5 +473,139 @@ describe("model rename startup persistence", () => {
     // adoptConfig copies key by key, so a reference a caller still holds to an unchanged
     // branch survives; a clear-and-reassign would silently detach it.
     expect(live.providers.untouched).toBe(liveUntouched);
+  });
+});
+
+// ── Issue #5066: the migration has to converge, not re-announce itself on every boot ──
+//
+// The reporter saw the same nine `[model-rename-migration]` lines at every `ocx start`. Nothing
+// in the projection, the persistence or the in-memory fallback was broken; the migration was
+// losing to the second half of its own boot. `startServer` runs it and then
+// `reconcileOAuthProviders`, and the Antigravity OAuth preset carries
+// `ANTIGRAVITY_MODEL_CONTEXT_WINDOWS`, which derives a window for every compatibility alias —
+// all nine retired Flash ids among them. `applyOAuthPresetCatalog` copies that record over the
+// saved one whenever the two differ, so reconciliation restored precisely the keys the rename
+// had removed, and the next boot found them and said so again.
+//
+// It also explains the count: nine messages for a user who never chose nine models, because the
+// ids came from the registry rather than from anything they had selected.
+describe("registry-seeded metadata does not re-arm the rename (#5066)", () => {
+  const homes: string[] = [];
+  const originalHome = process.env.OPENCODEX_HOME;
+
+  function isolate(prefix: string): void {
+    const home = mkdtempSync(join(tmpdir(), prefix));
+    homes.push(home);
+    process.env.OPENCODEX_HOME = home;
+  }
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = originalHome;
+    for (const home of homes.splice(0)) removeTreeWithRetry(home);
+  });
+
+  /**
+   * A saved Antigravity row carrying one genuinely stale user selection.
+   *
+   * `modelContextWindows` is deliberately absent. The point of the fixture is to watch
+   * reconciliation introduce it between the two boots rather than to assume it is there.
+   */
+  function antigravityRow(): Record<string, unknown> {
+    return {
+      adapter: "google",
+      baseUrl: "https://daily-cloudcode-pa.googleapis.com",
+      authMode: "oauth",
+      googleMode: "cloud-code-assist",
+      liveModels: true,
+      defaultModel: "gemini-3.8-flash",
+      models: [...ANTIGRAVITY_MODELS],
+      // Reconciliation does not carry `selectedModels`, so this one is the migration’s to fix
+      // — once.
+      selectedModels: ["gemini-3.6-flash-high"],
+    };
+  }
+
+  function antigravityConfig(): OcxConfig {
+    return {
+      port: 10100,
+      defaultProvider: "google-antigravity",
+      providers: { "google-antigravity": antigravityRow() },
+    } as unknown as OcxConfig;
+  }
+
+  /** The rename lines a boot prints, in order. */
+  function renameLines(boot: () => void): string[] {
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      boot();
+      return warn.mock.calls
+        .map(([first]) => (typeof first === "string" ? first : ""))
+        .filter(line => line.startsWith("[model-rename-migration] renamed "));
+    } finally {
+      warn.mockRestore();
+    }
+  }
+
+  // RED on dev, at the last assertion: the second boot reprints nine lines, and so does the
+  // third, and every one after it.
+  test("the second boot after reconciliation renames nothing and prints nothing", () => {
+    isolate("ocx-antigravity-rename-loop-");
+    saveConfig(antigravityConfig());
+
+    // Boot one, in startServer’s order: migrate, then reconcile the OAuth presets.
+    const first = renameLines(() => {
+      reconcileOAuthProviders(runModelRenameStartupMigration(loadConfig()));
+    });
+    expect(first).toHaveLength(1);
+    expect(first.join("\n")).toContain("google-antigravity/gemini-3.6-flash-high");
+
+    const afterFirstBoot = loadConfig().providers["google-antigravity"]!;
+    // The writer between the two boots, caught in the act: reconciliation put the registry’s
+    // own record on disk, retired keys and all. The next boot must not read that as a repair
+    // the user is still owed.
+    expect(Object.keys(afterFirstBoot.modelContextWindows ?? {})).toContain("gemini-3.6-flash");
+    // What the migration did own stayed fixed.
+    expect(afterFirstBoot.selectedModels).toEqual(["gemini-3.7-flash"]);
+
+    const second = renameLines(() => { runModelRenameStartupMigration(loadConfig()); });
+    expect(second).toEqual([]);
+  });
+
+  test("a registry-published id survives in metadata while a user selection is still repaired", () => {
+    const reconciled = {
+      ...antigravityRow(),
+      modelContextWindows: { ...ANTIGRAVITY_MODEL_CONTEXT_WINDOWS },
+    };
+    const config = { providers: { "google-antigravity": reconciled } } as unknown as OcxConfig;
+
+    const { config: out, changed, warnings } = projectModelRenames(config);
+    const prov = out.providers["google-antigravity"]!;
+
+    expect(changed).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(prov.selectedModels).toEqual(["gemini-3.7-flash"]);
+    // Left alone on purpose: a request that still names the retired id routes to 3.7 and needs
+    // a window under the id it asked for, and reconciliation would rewrite this record anyway.
+    expect(prov.modelContextWindows?.["gemini-3.6-flash"]).toBe(1_048_576);
+  });
+
+  // The general form of the defect, applied to every rename this file ships: a provider row the
+  // registry itself produced must never be something the migration wants to rewrite. When it is,
+  // the two halves of the boot disagree forever and the user pays for it in log noise.
+  const seedCases: [string, ModelRename][] = MODEL_RENAMES.map(
+    rename => [`${rename.provider}/${rename.from}`, rename],
+  );
+  test.each(seedCases)("the registry seed for %s is not something the migration rewrites", (_label, rename) => {
+    const entry = PROVIDER_REGISTRY.find(row => row.id === rename.provider);
+    expect(entry, `registry entry missing for ${rename.provider}`).toBeDefined();
+    const seeded = {
+      providers: { [rename.provider]: providerConfigSeed(entry!) },
+    } as unknown as OcxConfig;
+
+    const { changed, warnings } = projectModelRenames(seeded, [rename]);
+
+    expect(warnings).toEqual([]);
+    expect(changed).toBe(false);
   });
 });

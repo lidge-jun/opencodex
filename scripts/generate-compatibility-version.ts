@@ -82,16 +82,16 @@ export function buildCompatibilityVersionManifest(repoRoot: string): Compatibili
   };
 }
 
-export function generateCompatibilityVersionManifest(repoRoot?: string): string {
+export function generateCompatibilityVersionManifest(repoRoot?: string, destinationPath?: string): string {
   const root = repoRoot ?? resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const manifest = buildCompatibilityVersionManifest(root);
-  const outputPath = join(root, ...SELF_PATH.split("/"));
+  const outputPath = destinationPath ? resolve(destinationPath) : join(root, ...SELF_PATH.split("/"));
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   return outputPath;
 }
 
 if (import.meta.main) {
-  const path = generateCompatibilityVersionManifest();
+  const path = generateCompatibilityVersionManifest(process.argv[2], process.argv[3]);
   console.log(`generated ${path}`);
 }

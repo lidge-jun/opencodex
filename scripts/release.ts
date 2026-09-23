@@ -5,7 +5,8 @@
  * Usage:
  *   bun scripts/release.ts <version> [--tag latest|preview] [--publish]
  *   bun scripts/release.ts --bump patch|minor|major [--tag latest|preview] [--publish]
- *       Preflight (clean tree + dependency audit + typecheck + tests + privacy scan) → bump package.json → commit → push →
+ *       Preflight (clean tree + dependency audit + typecheck + tests + privacy scan) → bump package.json and the
+ *       desktop version sources (scripts/release-version-sources.ts) → commit → push →
  *       wait for Cross-platform CI → dispatch the Release workflow → watch it.
  *       The version bump commit/push is real; the Release workflow publish step is dry-run by default.
  *       Pass --publish to publish.
@@ -26,6 +27,7 @@
  * behaves exactly as before.
  */
 import { commandInvocation } from "../src/lib/win-exec";
+import { VERSION_SOURCE_PATHS } from "./release-version-sources";
 import {
   compareVersions as compareReleaseVersions,
   nextPreviewRelease,
@@ -596,7 +598,7 @@ for (const isolated of ISOLATED_TEST_FILES) {
 console.log("→ privacy scan");
 await runLoud(["bun", "run", "privacy:scan"]);
 
-// 2. Bump package.json only; the workflow creates the version tag after npm publish.
+// 2. Bump every version source; the workflow creates the version tag after npm publish.
 //
 // A dry run bumps and pushes exactly like a real one, because the point of the dry run is to
 // exercise the workflow against the REAL release commit. That makes the second invocation
@@ -611,13 +613,21 @@ if (currentVersion === version) {
   console.log(`→ bump package.json → ${version}`);
   await runLoud(["npm", "version", version, "--no-git-tag-version"]);
 }
+// The desktop app takes its version from tauri.conf.json and Cargo.toml/Cargo.lock, not from
+// package.json, and release.yml refuses to build when they disagree with the requested version.
+// Moving package.json alone would ship an app that reports the previous version under an updater
+// manifest naming this one. The sync is idempotent, so the --publish re-run is a no-op. It runs as
+// a `bun` subprocess like every other step here, which is what keeps it inside the helper
+// suite's PATH shim instead of rewriting the checkout the suite runs in.
+console.log(`→ sync desktop version sources → ${version}`);
+await runLoud(["bun", "scripts/release-version-sources.ts", "sync", version]);
 
 // 3. Commit + push the version bump — only if it is not already committed and pushed. On the
 // --publish re-run of a dry run there is nothing to commit, and `git commit` with an empty
 // index fails, which would strand the release just as surely as the bump did.
-const pendingBump = (await capture(["git", "status", "--porcelain", "package.json"])).trim() !== "";
+const pendingBump = (await capture(["git", "status", "--porcelain", "--", ...VERSION_SOURCE_PATHS])).trim() !== "";
 if (pendingBump) {
-  await runLoud(["git", "add", "package.json"]);
+  await runLoud(["git", "add", "--", ...VERSION_SOURCE_PATHS]);
   await runLoud(["git", "commit", "-m", `release: v${version}`]);
 }
 const releaseSha = await capture(["git", "rev-parse", "HEAD"]);

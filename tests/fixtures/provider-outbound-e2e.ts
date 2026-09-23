@@ -19,7 +19,11 @@ async function listen(server: ReturnType<typeof createServer>): Promise<number> 
 }
 
 async function close(server: ReturnType<typeof createServer>): Promise<void> {
-  await new Promise<void>(resolve => server.close(() => resolve()));
+  await new Promise<void>(resolve => {
+    server.close(() => resolve());
+    server.closeIdleConnections?.();
+    server.closeAllConnections?.();
+  });
 }
 
 async function probe(config: OcxConfig, name: string): Promise<Record<string, unknown>> {
@@ -62,6 +66,7 @@ try {
   process.env.NO_PROXY = "localhost,127.0.0.1,::1,[::1]";
   process.env.no_proxy = "localhost,127.0.0.1,::1,[::1]";
 
+  console.error("fixture phase: outbound");
   const outboundResponse = await providerOutboundGet(
     "proxied",
     { baseUrl: "http://proxy-only.invalid/v1", allowPrivateNetwork: false },
@@ -69,6 +74,7 @@ try {
   );
   const outbound = { status: outboundResponse.status, body: await outboundResponse.text() };
 
+  console.error("fixture phase: management proxy");
   const managementProxy = await probe({
     port: 0,
     hostname: "127.0.0.1",
@@ -82,6 +88,7 @@ try {
     },
   } as OcxConfig, "proxied");
 
+  console.error("fixture phase: proxy discovery");
   const proxyModels = await fetchProviderModels("proxy-discovery-e2e", {
     baseUrl: "http://proxy-models.invalid/v1",
     adapter: "openai-chat",
@@ -91,6 +98,7 @@ try {
 
   for (const key of proxyKeys) delete process.env[key];
   process.env.ALL_PROXY = proxyUrl;
+  console.error("fixture phase: all proxy");
   const allProxyResponse = await providerOutboundGet(
     "all-proxy",
     { baseUrl: "http://all-proxy-only.invalid/v1", allowPrivateNetwork: false },
@@ -113,9 +121,11 @@ try {
   } as OcxConfig;
   process.env.NO_PROXY = "localhost,127.0.0.1,::1,[::1]";
   process.env.no_proxy = "localhost,127.0.0.1,::1,[::1]";
+  console.error("fixture phase: no proxy");
   const managementNoProxy = await probe(localConfig, "local");
 
   for (const key of proxyKeys) delete process.env[key];
+  console.error("fixture phase: direct");
   const managementDirect = await probe(localConfig, "local");
   const directModels = await fetchProviderModels("direct-discovery-e2e", {
     baseUrl: `http://127.0.0.1:${providerPort}/v1`,
@@ -137,5 +147,7 @@ try {
     providerRequests,
   }));
 } finally {
+  console.error("fixture phase: closing listeners");
   await Promise.all([close(proxy), close(provider)]);
+  console.error("fixture phase: closed");
 }

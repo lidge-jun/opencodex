@@ -1,4 +1,4 @@
-import { configureSocks5Fetch } from "../lib/proxy-env";
+import { configureSocks5Fetch, socks5ProxyFromEnv } from "../lib/proxy-env";
 import { redactUrlForLog } from "../lib/redact";
 import { join } from "node:path";
 import { DEFAULT_SUBAGENT_MODELS, SUBAGENT_MODELS_VERSION } from "./subagent-models";
@@ -98,6 +98,60 @@ function warnProxyConfigDiscardOnce(kind: "proxy" | "noProxy" | "noProxyElements
   }
 }
 
+const LOOPBACK_NO_PROXY = ["localhost", "127.0.0.1", "::1", "[::1]"] as const;
+const LOOPBACK_ADDRESS_NO_PROXY = ["127.0.0.1", "::1", "[::1]"] as const;
+
+// With no config.proxy, which loopback bypasses are written depends on who reads them. The
+// installed SOCKS fetch wrapper (src/lib/proxy-env.ts configuredOutboundFetch) matches these
+// entries as exact hosts. Bun applies an inherited HTTP(S) proxy itself and matches NO_PROXY
+// entries as domain suffixes, so a bare "localhost" there would also send any *.localhost name
+// direct, including from a fetch that never passes the wrapper. The full list is therefore
+// written only when an inherited SOCKS proxy is the only one. Whenever Bun applies an inherited
+// HTTP(S) proxy, only the loopback addresses are added: they cannot widen that way (a URL host
+// ending in a numeric label parses as IPv4) and keep local health and management calls to
+// 127.0.0.1 off the proxy. A proxy-free process is left untouched: writing NO_PROXY into it is
+// itself a proxy-env mutation callers observe (the lab sandbox rejects these keys).
+function inheritedLoopbackBypass(): readonly string[] | undefined {
+  const schemeProxy = ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"].some(key => process.env[key]?.trim());
+  const httpAllProxy = ["ALL_PROXY", "all_proxy"].some(key => {
+    const value = process.env[key]?.trim();
+    if (!value) return false;
+    try {
+      return ["http:", "https:"].includes(new URL(value).protocol);
+    } catch {
+      return false;
+    }
+  });
+  if (schemeProxy || httpAllProxy) return LOOPBACK_ADDRESS_NO_PROXY;
+  return socks5ProxyFromEnv() !== undefined ? LOOPBACK_NO_PROXY : undefined;
+}
+
+function withNoProxyEntries(existing: string, configured: readonly string[], loopback: readonly string[]): string {
+  const entries = existing.split(",").map(s => s.trim()).filter(Boolean);
+  const seen = new Set(entries.map(entry => entry.toLowerCase()));
+  for (const host of [...configured, ...loopback]) {
+    const key = host.toLowerCase();
+    if (!seen.has(key)) {
+      entries.push(host);
+      seen.add(key);
+    }
+  }
+  return entries.join(",");
+}
+
+function mergeNoProxyEntries(configured: readonly string[] = [], loopback: readonly string[] = LOOPBACK_NO_PROXY): void {
+  process.env.NO_PROXY = withNoProxyEntries(process.env.NO_PROXY ?? process.env.no_proxy ?? "", configured, loopback);
+  // Bun's native fetch reads a non-empty lowercase no_proxy before NO_PROXY
+  // (src/codex/catalog/remote.ts), so an inherited one would shadow the loopback entries above.
+  // Only the loopback addresses join it: Bun matches entries as domain suffixes, and any name
+  // (a bare "localhost", or a configured noProxy entry the inherited value always shadowed)
+  // would send its subdomains past a proxy the inherited value kept them on.
+  const inherited = process.env.no_proxy;
+  if (inherited !== undefined && inherited.trim() !== "") {
+    process.env.no_proxy = withNoProxyEntries(inherited, [], loopback.filter(host => host !== "localhost"));
+  }
+}
+
 /**
  * Mirror `config.proxy` into HTTP(S)_PROXY env vars. Bun fetch consumes them natively; transports
  * such as the ChatGPT upstream WebSocket select the same environment explicitly. User-set HTTP(S)_PROXY
@@ -130,6 +184,12 @@ export function applyProxyEnvWith(
   let proxy = typeof rawProxy === "string" ? resolveEnvValue(rawProxy) : undefined;
   if (!proxy) {
     if (rawProxy !== undefined) warnProxyConfigDiscardOnce("proxy");
+    // Inherited-SOCKS path: only loopback bypasses are appended. A configured noProxy is
+    // deliberately NOT merged here — with no config.proxy the operator's bypass list has
+    // no declared proxy to apply against, and merging it would silently widen direct
+    // egress beyond the loopback fix this branch exists for.
+    const loopback = inheritedLoopbackBypass();
+    if (loopback) mergeNoProxyEntries([], loopback);
     configureSocks5Fetch();
     return;
   }
@@ -143,8 +203,14 @@ export function applyProxyEnvWith(
     } else {
       const found = readWindowsSystemProxy(auto.reader, auto.platform);
       if (found.kind === "proxy") {
-        console.log(`[opencodex] proxy "auto": using Windows system proxy ${describeProxyForLog(found.url)}`);
-        proxy = found.url;
+        const origins = [
+          found.httpUrl && `HTTP ${describeProxyForLog(found.httpUrl)}`,
+          found.httpsUrl && `HTTPS ${describeProxyForLog(found.httpsUrl)}`,
+        ].filter(Boolean).join(", ");
+        console.log(`[opencodex] proxy "auto": using Windows system proxy ${origins}`);
+        if (found.httpUrl) process.env.HTTP_PROXY = found.httpUrl;
+        if (found.httpsUrl) process.env.HTTPS_PROXY = found.httpsUrl;
+        proxy = undefined;
       } else {
         const reason = found.kind === "unsupported"
           ? "only Windows system proxy discovery is supported; using direct egress on this OS"
@@ -172,9 +238,6 @@ export function applyProxyEnvWith(
       if (!process.env.HTTPS_PROXY?.trim() && !process.env.https_proxy?.trim()) process.env.HTTPS_PROXY = proxy;
     }
   }
-  const existing = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
-  const entries = existing.split(",").map(s => s.trim()).filter(Boolean);
-  const seen = new Set(entries.map(e => e.toLowerCase()));
   // Configured entries first, then loopback: loopback is unconditional, so appending it last
   // keeps it present even when the operator lists a loopback host themselves.
   const raw = config.noProxy;
@@ -194,13 +257,6 @@ export function applyProxyEnvWith(
   const configured = configuredEntries
     .map(entry => entry.trim())
     .filter(Boolean);
-  for (const host of [...configured, "localhost", "127.0.0.1", "::1", "[::1]"]) {
-    const key = host.toLowerCase();
-    if (!seen.has(key)) {
-      entries.push(host);
-      seen.add(key);
-    }
-  }
-  process.env.NO_PROXY = entries.join(",");
+  mergeNoProxyEntries(configured);
   configureSocks5Fetch();
 }

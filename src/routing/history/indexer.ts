@@ -22,6 +22,7 @@ import { getConfigDir } from "../../config";
 import { recordOwnedConfigPath } from "../../lib/config-ownership";
 import {
   currentUsageLogRevision,
+  encodePersistedRequestedModel,
   normalizeUsageEntryForTest,
   usageLogPath,
   type PersistedUsageEntry,
@@ -157,7 +158,9 @@ function extractRow(entry: PersistedUsageEntry): Array<string | number | null> {
     entry.timestamp,
     entry.provider,
     entry.model,
-    entry.requestedModel ?? null,
+    // Old canonical JSONL rows can predate bounded selector persistence. Encode
+    // the disposable projection on rebuild so exact filters match across versions.
+    typeof entry.requestedModel === "string" ? encodePersistedRequestedModel(entry.requestedModel) : null,
     entry.status,
     entry.surface ?? null,
     entry.inboundProtocol ?? null,
@@ -510,7 +513,9 @@ function queryRows(
   };
   if (filters.provider !== undefined) add("provider = ?", filters.provider);
   if (filters.model !== undefined) add("model = ?", filters.model);
-  if (filters.requestedModel !== undefined) add("requested_model = ?", filters.requestedModel);
+  // Rows store the bounded encoded form, so the lookup value must be encoded the
+  // same way — short selectors encode to themselves and still match verbatim.
+  if (filters.requestedModel !== undefined) add("requested_model = ?", encodePersistedRequestedModel(filters.requestedModel));
   if (filters.status !== undefined) add("status = ?", filters.status);
   if (filters.conversationId !== undefined) add("conversation_id = ?", filters.conversationId);
   if (filters.surface !== undefined) add("surface = ?", filters.surface);

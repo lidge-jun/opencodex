@@ -4,22 +4,10 @@ import {
   unwrapFreeformToolInput,
 } from "./apply-patch-envelope";
 import { declaresCodeModeExec } from "../types/tools";
+import { parseCodeModeShellInput } from "./code-mode-shell-input";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function unwrapPatchInput(value: string): string {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    if (isPlainObject(parsed)) {
-      if (typeof parsed.input === "string") return parsed.input;
-      if (typeof parsed.patch === "string") return parsed.patch;
-    }
-  } catch {
-    // Native custom calls carry the patch body directly.
-  }
-  return value;
 }
 
 /**
@@ -28,14 +16,45 @@ function unwrapPatchInput(value: string): string {
  * Parsed values are serialized as data, never interpolated as source, so command and patch text
  * cannot escape the generated call. Invalid structured helper payloads are also passed as data so
  * nested-tool validation can reject them without evaluating provider text as JavaScript.
+ *
+ * `wireToolName` is the name the body actually arrived under, which is not always the helper:
+ * a provider that got the NAME right and the BODY wrong sends `exec`, and the apply-patch
+ * helper is inferred from the payload. Recognition and compilation must read ONE canonical
+ * body, so both unwrap under that same name — see the apply-patch branch below. It defaults to
+ * the helper name, which is correct for the name-based path where the wire name IS the helper.
  */
-export function compileCodeModeHelperInput(argumentsText: unknown, toolName: string): string {
+export function compileCodeModeHelperInput(
+  argumentsText: unknown,
+  toolName: string,
+  wireToolName?: string,
+): string {
   if (typeof argumentsText !== "string") return "";
   const helperName = toolName.startsWith("default.")
     ? toolName.slice("default.".length)
     : toolName;
+  if (helperName === "exec_command" && wireToolName === "exec") {
+    const args = parseCodeModeShellInput(argumentsText);
+    if (args) return `const result = await tools.exec_command(${JSON.stringify(args)});\ntext(result);`;
+  }
   if (helperName === "apply_patch") {
-    const patch = normalizeApplyPatchDelimiters(unwrapPatchInput(argumentsText));
+    // `resolveCodeModeHelperName` decides this IS an apply-patch call by reading
+    // `unwrapFreeformToolInput(argumentsText, wireToolName)`, which strips an outer Markdown
+    // fence and accepts that name's fallback fields (#4983). Compiling from a narrower unwrap
+    // meant a body accepted through a fence or a fallback field reached `tools.apply_patch`
+    // still wrapped, so the host rejected the JSON or the fence instead of applying the patch
+    // (#5046). One unwrap, one body, one decision.
+    //
+    // The vocabulary is the WIRE name rather than the helper name on purpose. `{"patch": ...}`
+    // is an apply_patch wrapper and is not an `exec` fallback field, and the recognizer already
+    // declines it under `exec`; reading it here would compile a body that recognition rejected,
+    // which is exactly the drift a second, looser unwrap introduces.
+    const bodyToolName = wireToolName ?? helperName;
+    const normalizedBodyToolName = bodyToolName.startsWith("default.")
+      ? bodyToolName.slice("default.".length)
+      : bodyToolName;
+    const patch = normalizeApplyPatchDelimiters(
+      unwrapFreeformToolInput(argumentsText, normalizedBodyToolName),
+    );
     return `const result = await tools.apply_patch(${JSON.stringify(patch)});\ntext(result);`;
   }
   let parsed: unknown = argumentsText;
@@ -86,8 +105,8 @@ export function compileCodeModeHelperInput(argumentsText: unknown, toolName: str
  * wrong.
  *
  * This adds that second case: the name is already `exec` so nothing was rewritten, but
- * the body is a complete patch envelope and therefore cannot be the JavaScript that
- * `exec` runs. Same inference the name-based path makes, drawn from the payload.
+ * the body is a complete patch envelope or an unambiguous structured shell call.
+ * Same inference the name-based path makes, drawn from the payload.
  *
  * Returns undefined for everything else, including JavaScript that merely mentions a
  * patch envelope — that body is a real program and is forwarded byte-identical.
@@ -106,5 +125,6 @@ export function resolveCodeModeHelperName(
   // `tools.apply_patch(...)` JavaScript would be the mis-route this repair exists to avoid.
   if (!declaresCodeModeExec(declaredNames)) return undefined;
   if (typeof argumentsText !== "string" || argumentsText === "") return undefined;
-  return isCompletePatchEnvelope(unwrapFreeformToolInput(argumentsText, "exec")) ? "apply_patch" : undefined;
+  if (isCompletePatchEnvelope(unwrapFreeformToolInput(argumentsText, "exec"))) return "apply_patch";
+  return parseCodeModeShellInput(argumentsText) ? "exec_command" : undefined;
 }

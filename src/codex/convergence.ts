@@ -70,6 +70,7 @@ import {
   clampCatalogModelsToObservedCodexSupport,
   supportedCodexReasoningEffortsFromObservedCatalog,
 } from "./catalog/effort";
+import { suppressedSyntheticMaxCatalogSlugs } from "./catalog/model-hints";
 import { codexRuntimeStatePath, peekCodexRuntimeProcessCache } from "./runtime";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "./account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
@@ -77,9 +78,9 @@ import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
   isCodexModelEntitlementSnapshotCurrent,
-  resolveCodexModelEntitlements,
   type CodexModelEntitlementSnapshot,
 } from "./model-entitlements";
+import { resolveAdmittedCodexModelEntitlements } from "./model-entitlement-admission";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import { providerCodexAccountMode } from "../providers/registry";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
@@ -306,6 +307,7 @@ function prepareCatalog(
     [catalog.models ?? [], ...nativeRecoverySources],
   );
   const catalogModels = nativeCatalogModels;
+  const suppressedSyntheticMaxSlugs = suppressedSyntheticMaxCatalogSlugs(config, ordered, catalogModels);
   const routedEntries = buildCatalogEntriesFromObservedState({
     template: template ? JSON.parse(JSON.stringify(template)) : null,
     gptSlugs: [],
@@ -372,6 +374,7 @@ function prepareCatalog(
     includeNativeOpenAi,
     accountBoundEntries,
     suppressedBareNativeSlugs,
+    suppressedSyntheticMaxSlugs,
     openaiContextCap,
     nativeDisplayNames: config.providers[OPENAI_CODEX_PROVIDER_ID]?.modelDisplayNames,
     nativeMultiAgentDefaults: nativeMultiAgentDefaults(baselineCatalogModels),
@@ -431,7 +434,7 @@ export async function gatherCodexCatalogCandidate(
         providerModelOutcomes,
         discoveryPolicySnapshots: discoveryPolicies,
       }),
-      resolveCodexModelEntitlements(snapshot.config),
+      resolveAdmittedCodexModelEntitlements(snapshot.config),
     ]);
     const processLocal = processEvidence(source);
     const sourceEvidence = sealCatalogGatherEvidenceSession(session);

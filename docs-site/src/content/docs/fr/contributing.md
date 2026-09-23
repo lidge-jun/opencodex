@@ -12,13 +12,16 @@ runtime Bun aux utilisateurs, mais les scripts de ce dépôt utilisent votre ins
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
+bun run setup:hooks  # installer post-merge et retirer l’ancien pre-push géré
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
 bun run typecheck    # bun x tsc --noEmit
-bun run test:changed              # routine import-graph test selection
-bun test tests/routing/router.test.ts     # routine focused test
-bun run test                      # complete suite (PR-ready / explicit ask)
+bun run test        # suite complète (par défaut)
 ```
+
+`bun run setup:hooks` installe uniquement `post-merge` et supprime l’ancien hook `pre-push`
+géré s’il n’a pas été modifié, tout en préservant les hooks personnalisés. Le hook `pre-push`
+n’est plus obligatoire. `bun run prepush` reste une vérification manuelle facultative.
 
 `bun run dev` reste un alias pour `bun run dev:proxy`. Le serveur de développement du tableau de bord est `bun run dev:gui` ;
 le tableau de bord packagé en `GET /` est produit par `bun run build:gui` (`gui/dist`).
@@ -31,17 +34,25 @@ distincte. Utilisez les scripts enregistrés afin que les commandes locales corr
 ```bash
 bun run typecheck                 # strict TypeScript check
 bun run test:changed              # import-graph tests against the resolved dev merge base
-bun run test                      # complete tests/ suite (PR-ready / explicit ask)
+bun run test                      # suite complète (par défaut)
 bun test tests/routing/router.test.ts     # focused test file
 bun run build:gui                 # Vite GUI build + package preparation
 bun run privacy:scan              # credential/privacy scan used by CI
 bun run prepare:package           # refresh package launchers/assets
 ```
 
+Exécutez `bun run test` par défaut. Si une exécution complète est disproportionnée par rapport
+à la taille de la tâche, aux ressources de la machine ou aux worktrees utilisés en parallèle, vous
+devez au minimum exécuter des tests de régression ciblés qui exercent le comportement modifié, par
+exemple `bun test tests/<domain>/<name>.test.ts`. Expliquez ce choix et indiquez les commandes
+exactes, leurs résultats et le périmètre non testé. `bun run test:changed` peut compléter cette
+couverture, mais ne détecte pas toutes les dépendances indirectes. Se reposer uniquement sur la CI
+ou omettre les tests locaux ne constitue pas une exemption générale. Avant la fusion, tous les
+contrôles CI obligatoires doivent réussir sur le commit exact de la tête actuelle de la PR.
+
 Les tests Bun vivent dans des répertoires par domaine calqués sur `src/` (`tests/<domain>/`), la carte étant `scripts/test-layout/layout.json`. `tests/helpers/` contient les fixtures
 partagées et `tests/e2e-style/` des scénarios plus larges de parité native. Placez une régression ciblée près
-des tests existants du sous-système modifié. Exécutez la suite complète pour le routage partagé, les adaptateurs,
-la configuration ou le comportement du serveur.
+des tests existants du sous-système modifié.
 
 Le site de documentation que vous lisez se trouve dans `docs-site/` (Astro + Starlight) :
 
@@ -136,8 +147,11 @@ une contribution normale ; indiquez les commits sources dans la description.
 - Rédigez une vraie description : un **Résumé** de la modification et de sa raison, ainsi qu’un **Plan de test**
   ou un contenu équivalent. Les corps vides, les textes composés seulement d’espaces réservés et les descriptions
   contenant des `\n` échappés au lieu de véritables sauts de ligne échouent au contrôle.
-- Si le titre ou la description mentionne `gui`, incluez dans la description une capture d’écran de la modification
-  de l’interface. `enforce-target` est réexécuté après chaque modification de la description jusqu’à sa présence.
+- Si la pull request modifie des fichiers sous `gui/`, ajoutez une capture d’écran de la modification de
+  l’interface dans sa description. `enforce-target` est réexécuté après chaque modification de la description
+  jusqu’à sa présence. Glissez l’image dans la description au lieu de la committer sur la branche : elle serait
+  incluse dans le squash merge vers `dev`. Pour un envoi en ligne de commande, les responsables utilisent la
+  branche `pr-assets` avec un lien vers le SHA du commit.
 - Les workflows de ce dépôt utilisent **`pull_request_target`**. Une nouvelle logique d’application ne prend effet
   qu’après la promotion du workflow vers la branche par défaut, conformément à l’avertissement opérationnel de #631.
 
@@ -155,7 +169,7 @@ du dépôt et des chemins sensibles du point de vue de la sécurité est déclar
 - **Gérer les erreurs asynchrones aux frontières** — les services auxiliaires ne propagent jamais d’exception dans le
   chemin de requête ; ils se dégradent en un marqueur explicite.
 - **Structure, source de vérité** — les invariants actuels des responsables résident dans `structure/`. Conservez
-  les parcours utilisateurs publics dans `docs-site/` et les notes d’enquête historiques dans `docs/`.
+  les parcours utilisateurs publics dans `docs-site/` et les notes de planification et d’enquête dans `devlog/`.
 - **Préserver les exportations** — d'autres modules peuvent en dépendre.
 
 ## Ajout d'un fournisseur au catalogue
@@ -224,6 +238,6 @@ la fabrique depuis `src/index.ts` lorsqu’elle appartient à l’API publique d
 
 ## Vérifiez avant de déclarer que c'est fait
 
-Exécutez la commande la plus étroite qui prouve votre changement — `bun run typecheck` pour les types, un
-`bun test tests/<name>.test.ts` ou une sonde d'exécution pour le comportement, puis les portes plus larges appropriées à
-la surface affectée. opencodex privilégie les petits commits vérifiables plutôt que les gros lots.
+Suivez la politique de test ci-dessus et exécutez `bun run typecheck` pour les changements de types,
+ainsi que les vérifications requises pour la zone concernée. Indiquez les commandes, les résultats
+et le périmètre non testé ; ne revendiquez que les validations réellement effectuées.

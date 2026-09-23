@@ -6,8 +6,11 @@ import type { ProviderModelDiscoverySpec } from "./types";
 // devlog/_plan/260710_provider_hardening/001_research_frontier.md.
 // 260902 Claude Fable 5.1 (`claude-fable-5-1`): 1M context / 128K output / adaptive thinking
 // always on, per the official models overview and pricing page (platform.claude.com).
-export const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
-export const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
+// 260923 Claude Opus 5.5 (`claude-opus-5-5`, released 2026-09-22): 1M context / 128K output /
+// adaptive thinking always on / effort low..max with a medium default, per the Opus 5.5
+// overview, effort and pricing pages (platform.claude.com).
+export const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"];
+export const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-4-5": 200_000 };
 // All seeded Claude models support vision: https://platform.claude.com/docs/en/models/overview
 export const ANTHROPIC_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
   ANTHROPIC_MODELS.map(id => [id, ["text", "image"]]),
@@ -154,6 +157,12 @@ export const OPENAI_API_GPT56_VIRTUAL_MODELS: Record<string, { wireModelId: stri
   "gpt-5.6-luna-pro": { wireModelId: "gpt-5.6-luna", reasoningMode: "pro" },
 };
 export const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+/**
+ * GPT-6 Sol and Luna on the OpenAI API (released 2026-09-22,
+ * https://developers.openai.com/api/docs/changelog). Added 2026-09-23 ahead of live discovery; the
+ * API window is not published yet, so the rows mirror gpt-6-astra's 1,050,000 / 922,000 API seed.
+ */
+export const OPENAI_GPT6_MODELS = ["gpt-6-sol", "gpt-6-luna"];
 /*
  * Meta Model API (https://api.meta.ai/v1) — published ladder, deliberately NOT the
  * house set. dev.meta.ai/docs/reasoning lists "none", "minimal", "low", "medium",
@@ -176,6 +185,15 @@ export const META_MUSE_REASONING_EFFORTS = ["minimal", "low", "medium", "high", 
  */
 export const META_MUSE_REASONING_EFFORT_MAP: Record<string, string> = Object.fromEntries(
   META_MUSE_REASONING_EFFORTS.map(effort => [effort, effort]),
+);
+/*
+ * Muse Code credentials have a separate capability contract. Meta's authenticated
+ * /muse-code/models roster advertises max for both 1.3 models, and the Responses API
+ * accepts it when the request identifies the Muse client surface.
+ */
+export const META_MUSE_CODE_REASONING_EFFORTS = [...META_MUSE_REASONING_EFFORTS, "max"];
+export const META_MUSE_CODE_REASONING_EFFORT_MAP: Record<string, string> = Object.fromEntries(
+  META_MUSE_CODE_REASONING_EFFORTS.map(effort => [effort, effort]),
 );
 /** Both Muse Spark 1.3 tiers publish a 1,048,576-token window (dev.meta.ai/docs/models). */
 export const META_MUSE_CONTEXT_WINDOW = 1_048_576;
@@ -213,6 +231,7 @@ export const OPENAI_DAYBREAK_REASONING_EFFORTS: Record<string, string[]> = Objec
 );
 export const OPENROUTER_GPT56_MODELS = OPENAI_GPT56_MODELS.map(id => `openai/${id}`);
 export const XAI_MODELS = [
+  "grok-4.7",
   "grok-4.6",
   "grok-4.5",
   "grok-4.3",
@@ -229,6 +248,9 @@ export const OPENROUTER_GPT56_CONTEXT_WINDOWS = {
   "openai/gpt-5.6-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
   "openai/gpt-5.6-terra": OPENROUTER_GPT56_CONTEXT_WINDOW,
   "openai/gpt-5.6-luna": OPENROUTER_GPT56_CONTEXT_WINDOW,
+  // 260923 preemptive: GPT-6 Sol/Luna ahead of OpenRouter's own listing; same window as GPT-5.6.
+  "openai/gpt-6-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
+  "openai/gpt-6-luna": OPENROUTER_GPT56_CONTEXT_WINDOW,
 };
 
 /**
@@ -308,13 +330,20 @@ export const DEEPSEEK_VISION_PREVIEW_MODEL = "deepseek-v4-flash-vision-exp";
  * CommandCode routes verified to accept image input end-to-end (#2406).
  *
  * Verified-negative and therefore deliberately ABSENT: deepseek/deepseek-v4-flash,
- * zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6. Those
+ * zai-org/GLM-5.2, zai-org/GLM-5.3. Those
  * routes accept the request and drop the image, which is worse than declining it — the
  * model answers about an image it never saw. Do not add an id here on family resemblance;
  * capability intersection trusts this map.
  */
 export const COMMAND_CODE_IMAGE_MODELS = [
   `deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`,
+  // Probed 2026-09-18 through a running 2.58.0 proxy: a 3x3 random-color grid
+  // (180x180 PNG, six candidate colors) came back 9/9 correct both as a user
+  // message and as a tool_result, and the request logs show the route served
+  // the image natively — no vision-sidecar call in either window. #4505 asked
+  // for exactly this upstream probe before promoting the id. The sibling
+  // deepseek/deepseek-v4-flash route remains verified-negative above.
+  "deepseek/deepseek-v4.1-flash",
   "gpt-5.6-luna",
   "gpt-5.6-sol",
   "MiniMaxAI/MiniMax-M3",
@@ -323,10 +352,16 @@ export const COMMAND_CODE_IMAGE_MODELS = [
   "meta/muse-spark-1.3-contributor",
   "meta/muse-spark-1.2",
   "meta/muse-spark-1.2-contributor",
+  // Live 2026-09-23 3x3 random-color grid (180x180) via ocx 2.62.0:
+  // 4.7 read 9/9 in user messages and tool results; 4.6 read 9/9 and 8/9.
+  // Neither route requested a vision sidecar. Evidence:
+  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  "xai/grok-4.6",
+  "xai/grok-4.7",
   // Native Z.AI VLM (docs.z.ai/guides/vlm/glm-5.3-flash). This exact id is already
   // classified as natively vision-capable in NVIDIA_NIM_VISION_MODELS in this file;
   // it is not one of the verified-negative ids the header names (those are
-  // deepseek/deepseek-v4-flash, zai-org/GLM-5.2, zai-org/GLM-5.3, xai/grok-4.6 —
+  // deepseek/deepseek-v4-flash, zai-org/GLM-5.2, zai-org/GLM-5.3 —
   // different ids). Adding it on the shared GLM-5.3 prefix would be the family-
   // resemblance mistake the header forbids; the VLM docs are the evidence (#4505).
   "z-ai/glm-5.3-flash",
@@ -334,20 +369,19 @@ export const COMMAND_CODE_IMAGE_MODELS = [
 /**
  * Native image stays sourced from COMMAND_CODE_IMAGE_MODELS. Text-only routes
  * sit beside that list so the catalog can still advertise sidecar coverage
- * without claiming the gateway itself accepts a picture.
- *
- * The gateway-prefixed DeepSeek V4.1 Flash route has no verified native image
- * support, so declaring it image-capable would hand it a picture it drops. A
- * positive text-only declaration makes it a vision-sidecar consumer
+ * without claiming the gateway itself accepts a picture. A positive text-only
+ * declaration makes the route a vision-sidecar consumer
  * (src/vision/eligibility.ts), so the catalog advertises image input on its
- * behalf and the four-target combo in #4505 intersects to ["text","image"]
- * instead of ["text"] — without claiming native vision. modelInputModalities
- * is per-key filled, so this reaches an existing install even when
- * noVisionModels was persisted before the id joined that list.
+ * behalf — without claiming native vision — and modelInputModalities is
+ * per-key filled, so that reaches an existing install even when noVisionModels
+ * was persisted before the id joined a list.
+ *
+ * Empty as of 2026-09-18. Its only entry, deepseek/deepseek-v4.1-flash, moved
+ * to COMMAND_CODE_IMAGE_MODELS once the #4505-requested probe passed on both
+ * the user-message and tool-result paths (see the note at that entry). The
+ * mechanism stays for the next route that measures text-only.
  */
-export const COMMAND_CODE_TEXT_ONLY_MODELS = [
-  "deepseek/deepseek-v4.1-flash",
-] as const;
+export const COMMAND_CODE_TEXT_ONLY_MODELS = [] as const;
 export const COMMAND_CODE_MODEL_INPUT_MODALITIES: Record<string, ["text"] | ["text", "image"]> = {
   ...Object.fromEntries(COMMAND_CODE_IMAGE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
   ...Object.fromEntries(COMMAND_CODE_TEXT_ONLY_MODELS.map(id => [id, ["text"] as ["text"]])),
@@ -622,16 +656,33 @@ export const ALIBABA_TOKEN_PLAN_PRESERVE_REASONING = [
 // entitlement tiers. Bare `k3` advertises the Moderato 256K ceiling; the local `[1m]`
 // alias advertises Allegretto's 1M ceiling and is stripped before the upstream request.
 // The separately billed Moonshot API uses `kimi-k3`.
+// 260921: `k3-256k` is the same K3 served under the explicit ceiling id (verified live
+// 260921: same 988-token scaffold and identity answer as bare `k3` on the same input).
 // Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
 //           https://www.kimi.com/code/docs/en/kimi-code/error-reference.html
 export const KIMI_K3_STANDARD_CONTEXT_WINDOW = 262_144;
 export const KIMI_K3_1M_CONTEXT_WINDOW = 1_048_576;
-export const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]"];
+export const KIMI_CODING_K3_MODELS = ["k3", "k3[1m]", "k3-256k"];
+// 260921 Kimi K2.8: `kimi-for-coding` is the stable subscription alias Moonshot re-points
+// at each coding release. Live GET /coding/v1/models lists only kimi-for-coding[-highspeed],
+// k3, k3-256k — the k2.x ids are retired from the subscription endpoint. Since K2.8 Preview
+// the alias serves an adjustable low/high/max thinking ladder (same wire map as k3) and a
+// 1M context ceiling. Verified live 260921: 350K-token request accepted; upstream rejects
+// with "model token limit: 1048576" beyond that.
+// Evidence: https://www.kimi.com/code/docs/en/kimi-code/models.html
+export const KIMI_CODING_K28_MODELS = ["kimi-for-coding"];
+export const KIMI_CODING_LIVE_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_CODING_K28_MODELS];
+export const KIMI_CODING_ADJUSTABLE_THINKING_MODELS = [...KIMI_CODING_LIVE_MODELS];
 export const KIMI_LEGACY_API_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2.6", "kimi-k2.5"];
 export const KIMI_API_MODELS = ["kimi-k3", ...KIMI_LEGACY_API_MODELS];
-export const KIMI_CODING_MODELS = [...KIMI_CODING_K3_MODELS, ...KIMI_LEGACY_API_MODELS, "kimi-for-coding"];
-export const KIMI_THINKING_MODELS = KIMI_CODING_MODELS;
-export const KIMI_CODING_NO_REASONING_MODELS = KIMI_CODING_MODELS.filter(id => !KIMI_CODING_K3_MODELS.includes(id));
+// Every kimi coding preset record - picker, context windows, locked-parameter lists -
+// derives from the live ids only. seeding a retired id in a metadata list would re-arm
+// the model-rename migration on every boot (#5066): the list holds the retired id but
+// not the live alias, so the residue guard cannot skip it. The retired ids survive only
+// in KIMI_LEGACY_API_MODELS (moonshot platform API records); model-rename-migration
+// repairs saved rows still naming them.
+export const KIMI_THINKING_MODELS = KIMI_CODING_LIVE_MODELS;
+export const KIMI_CODING_NO_REASONING_MODELS = KIMI_CODING_LIVE_MODELS.filter(id => !KIMI_CODING_ADJUSTABLE_THINKING_MODELS.includes(id));
 export const KIMI_API_NO_REASONING_MODELS = KIMI_API_MODELS.filter(id => id !== "kimi-k3");
 export const KIMI_CODING_K3_REASONING_EFFORTS = ["low", "high", "max"];
 export const KIMI_CODING_K3_REASONING_EFFORT_MAP: Record<string, string> = {
@@ -643,19 +694,19 @@ export const KIMI_CODING_K3_REASONING_EFFORT_MAP: Record<string, string> = {
   max: "max",
 };
 export const KIMI_CODING_REASONING_EFFORTS = Object.fromEntries(
-  KIMI_CODING_MODELS.map(id => [id, KIMI_CODING_K3_MODELS.includes(id) ? KIMI_CODING_K3_REASONING_EFFORTS : []]),
+  KIMI_CODING_LIVE_MODELS.map(id => [id, KIMI_CODING_ADJUSTABLE_THINKING_MODELS.includes(id) ? KIMI_CODING_K3_REASONING_EFFORTS : []]),
 );
 export const KIMI_CODING_DEFAULT_REASONING_EFFORTS = Object.fromEntries(
-  KIMI_CODING_K3_MODELS.map(id => [id, "max"]),
+  KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, "max"]),
 );
 export const KIMI_CODING_REASONING_EFFORT_MAPS = Object.fromEntries(
-  KIMI_CODING_K3_MODELS.map(id => [id, KIMI_CODING_K3_REASONING_EFFORT_MAP]),
+  KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, KIMI_CODING_K3_REASONING_EFFORT_MAP]),
 );
 export const KIMI_API_REASONING_EFFORTS = Object.fromEntries(
   KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? ["max"] : []]),
 );
-export const KIMI_LOCKED_PARAMETER_MODELS = KIMI_CODING_MODELS;
-export const KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS = ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-for-coding"];
+export const KIMI_LOCKED_PARAMETER_MODELS = KIMI_CODING_LIVE_MODELS;
+export const KIMI_AUTO_TOOL_CHOICE_ONLY_MODELS = ["kimi-for-coding"];
 export const KIMI_API_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
   KIMI_API_MODELS.map(id => [id, id === "kimi-k3" ? KIMI_K3_1M_CONTEXT_WINDOW : 262_144]),
 );
@@ -743,10 +794,10 @@ export const NVIDIA_NIM_NO_VISION_MODELS = [
   "poolside/laguna-xs-2.1", "z-ai/glm-5.3", "z-ai/glm-5.2",
 ];
 export const KIMI_CODING_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
-  KIMI_CODING_MODELS.map(id => [id, id === "k3[1m]" ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
+  KIMI_CODING_LIVE_MODELS.map(id => [id, (id === "k3[1m]" || KIMI_CODING_K28_MODELS.includes(id)) ? KIMI_K3_1M_CONTEXT_WINDOW : KIMI_K3_STANDARD_CONTEXT_WINDOW]),
 );
 export const KIMI_CODING_MODEL_INPUT_MODALITIES = Object.fromEntries(
-  KIMI_CODING_K3_MODELS.map(id => [id, ["text", "image"]]),
+  KIMI_CODING_ADJUSTABLE_THINKING_MODELS.map(id => [id, ["text", "image"]]),
 );
 export const NEURALWATT_REASONING_HISTORY_MODELS = [
   "glm-5.3", "glm-5.3-short", "glm-5.3-flash",
@@ -808,6 +859,9 @@ export const DIGITALOCEAN_CHAT_COMPLETION_MODELS = [
   "openai-gpt-5.6-sol",
   "openai-gpt-5.6-terra",
   "openai-gpt-5.6-luna",
+  // 260923 preemptive: GPT-6 Sol/Luna ahead of DigitalOcean's model list.
+  "openai-gpt-6-sol",
+  "openai-gpt-6-luna",
   "qwen3-coder-flash",
   "qwen3.5-397b-a17b",
   "deepseek-4-flash",
@@ -973,8 +1027,11 @@ export const CLINE_PASS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Objec
 // catalogue snapshot supplied by the original provider author
 // (https://api.opper.ai/v3/models?limit=2000, captured 2026-09-14); `vendor/model` ids
 // (anthropic/claude-sonnet-4-6) pin one route and stay valid, they are just not seeded.
+// 260923: `claude-opus-5-5` pool (anthropic, aws eu, vertex, vertex-eu members; all 1M / 128K,
+// vision) read from the same catalogue endpoint the day after Anthropic's release.
 export const OPPER_MODELS = [
   "claude-sonnet-4-6",
+  "claude-opus-5-5",
   "claude-opus-5",
   "gpt-5.5",
   "gpt-5.4-mini",
@@ -987,6 +1044,7 @@ export const OPPER_MODELS = [
 // (kimi-k3 output); live discovery owns which models exist.
 export const OPPER_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-sonnet-4-6": 1_000_000,
+  "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,
   "gpt-5.5": 1_050_000,
   "gpt-5.4-mini": 400_000,
@@ -997,6 +1055,7 @@ export const OPPER_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 export const OPPER_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-sonnet-4-6": 64_000,
+  "claude-opus-5-5": 128_000,
   "claude-opus-5": 128_000,
   "gpt-5.5": 128_000,
   "gpt-5.4-mini": 128_000,
@@ -1011,3 +1070,25 @@ export const OPPER_TEXT_ONLY_MODELS = ["deepseek-v4-pro", "kimi-k3"];
 export const OPPER_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
   OPPER_MODELS.map(id => [id, OPPER_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"]]),
 );
+
+export const STEPFUN_MODELS = [
+  "step-5-preview",
+  "step-3.5-flash",
+  "step-3.7-flash",
+];
+
+export const STEPFUN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "step-5-preview": 1_000_000,
+  "step-3.5-flash": 256_000,
+  "step-3.7-flash": 256_000,
+};
+
+export const STEPFUN_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
+  "step-5-preview": ["text", "image"],
+  "step-3.5-flash": ["text"],
+  "step-3.7-flash": ["text", "image"],
+};
+
+export const STEPFUN_NO_VISION_MODELS = ["step-3.5-flash"];
+
+export const STEPFUN_REASONING_EFFORTS = ["low", "medium", "high"];

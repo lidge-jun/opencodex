@@ -12,7 +12,7 @@ import {
   adapterNeedsForcedContinuation,
   adapterResponseReachedServingTerminal,
 } from "./core-replay";
-import { sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
+import { noteAttemptRecoveryWithheld, sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
 import { waitForProviderRequestSlot, RequestPacingQueueOverloadError } from "../../providers/request-pacing";
 import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
@@ -23,6 +23,7 @@ import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
@@ -79,7 +80,11 @@ export async function executeResponsesRunTurn(
   >,
   sendBudgetState: Pick<
     ResponsesSendBudget,
-    "adapterDispatchBudget" | "reserveCredentialHop" | "pendingHopPermit"
+    | "adapterDispatchBudget"
+    | "noteAdapterPhysicalSend"
+    | "noteAdapterRecoveryWithheld"
+    | "reserveCredentialHop"
+    | "pendingHopPermit"
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
 ): Promise<Response> {
@@ -100,7 +105,12 @@ export async function executeResponsesRunTurn(
     rememberKiroDeliveredFinalAnswer,
     responseStateOptions,
   } = requestState;
-  const { adapterDispatchBudget, reserveCredentialHop } = sendBudgetState;
+  const {
+    adapterDispatchBudget,
+    noteAdapterPhysicalSend,
+    noteAdapterRecoveryWithheld,
+    reserveCredentialHop,
+  } = sendBudgetState;
   const { emptyCompletionGuardEnabled } = completionPolicy;
   const {
     cancelResponseCompletion,
@@ -146,7 +156,11 @@ export async function executeResponsesRunTurn(
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         await refreshRunTurnSelection();
-        transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
+        // An adapter that reports its own sends accounts for the first one at the boundary that
+        // dispatches it. Logging here would claim a send that the adapter's own budget can still
+        // refuse, which is exactly what happens once earlier recovery has spent the allowance.
+        const reportsOwnSends = transportState.runTurnAdapter.reportsPhysicalSends === true;
+        if (!reportsOwnSends) transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
         const runTurnProviderFetch = providerFetch(
           route.provider,
           options.codexWsRuntimeIdentity,
@@ -169,6 +183,14 @@ export async function executeResponsesRunTurn(
             // The only way the request budget reaches a transport the adapter owns. Without it
             // a Cursor turn's inner ladder was three physical sends the cap read as one.
             ...(adapterDispatchBudget ? { sendBudget: adapterDispatchBudget } : {}),
+            onPhysicalSend: send => noteAdapterPhysicalSend(
+              logCtx.usageLogInputTokens,
+              // The attempt's own recovery kind still labels its first send when the adapter
+              // does not supply one of its own.
+              { ...send, ...(send.recovery ?? recovery ? { recovery: send.recovery ?? recovery } : {}) },
+              { includeFirst: reportsOwnSends },
+            ),
+            onRecoveryWithheld: noteAdapterRecoveryWithheld,
           },
           targetQueue.push,
         );
@@ -231,7 +253,14 @@ export async function executeResponsesRunTurn(
         "auth-recovery",
         `${route.providerName}|${route.modelId}|runturn-oauth-429`,
       );
-      if (!hop.allowed) return false;
+      if (!hop.allowed) {
+        // The activation quorum deliberately ignores cooldowns. Attribute a withheld recovery
+        // only when the non-mutating selector proves a usable alternate exists right now.
+        if (hasEligibleGenericOAuthFailoverTarget(
+          route.providerName, transportState.genericFailoverAccountId, Date.now(), route.modelId,
+        )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
+        return false;
+      }
       const nextAccountId = rotateGenericOAuthAccountOn429(
         config,
         route.providerName,
@@ -247,7 +276,8 @@ export async function executeResponsesRunTurn(
       try {
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
         transportState.genericFailovers += 1;
-        if (!await applyFailoverSnapshot(snapshot)) {
+        const admittedSnapshot = await applyFailoverSnapshot(snapshot);
+        if (!admittedSnapshot) {
           hop.permit?.release();
           return false;
         }
@@ -265,6 +295,7 @@ export async function executeResponsesRunTurn(
           route.modelId,
           route.provider,
           inboundWire,
+          route.staticPolicy,
         );
         const rotatedAdapter = resolveSelectionAdapter(rotatedProvider, config.cacheRetention);
         if (!rotatedAdapter.runTurn) {
@@ -277,7 +308,10 @@ export async function executeResponsesRunTurn(
           providerName: route.providerName,
           provider: rotatedProvider,
           adapterName: rotatedAdapter.name,
-          oauthCredentialSnapshot: { accountId: snapshot.accountId, generation: snapshot.generation },
+          oauthCredentialSnapshot: {
+            accountId: admittedSnapshot.accountId,
+            generation: admittedSnapshot.generation,
+          },
           codexAuthContext: admissionState.authCtx,
           forwardHeaders: requestState.selectedForwardHeaders,
         });

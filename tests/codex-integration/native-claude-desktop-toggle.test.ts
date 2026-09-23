@@ -6,6 +6,7 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import { writeDesktop3pConfig, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
 import { setIntegrationEnabled } from "../../src/codex/desired-state";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
+import { armClaudeCodeBaseline, saveConfigPreservingClaudeCode } from "../../src/config";
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -14,12 +15,16 @@ let root = "";
 let library = "";
 let previousHome: string | undefined;
 let previousLibrary: string | undefined;
+let previousClaudeConfigDir: string | undefined;
 
+// These tests pin the gateway (third-party profile) path; first-party is covered by
+// tests/claude-integration/claude-desktop-first-party.test.ts.
 function config(): OcxConfig {
   return {
     port: 10100,
     providers: {},
     defaultProvider: "openai",
+    claudeCode: { desktopMode: "gateway" },
   } as OcxConfig;
 }
 
@@ -84,8 +89,10 @@ beforeEach(() => {
   library = join(root, "desktop-library");
   previousHome = process.env.OPENCODEX_HOME;
   previousLibrary = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
+  previousClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
   process.env.OPENCODEX_HOME = root;
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = library;
+  process.env.CLAUDE_CONFIG_DIR = join(root, "claude");
   writeFileSync(join(root, "config.json"), JSON.stringify(config()));
 });
 
@@ -94,6 +101,8 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousLibrary === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   else process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = previousLibrary;
+  if (previousClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+  else process.env.CLAUDE_CONFIG_DIR = previousClaudeConfigDir;
   removeTreeWithRetry(root);
 });
 
@@ -237,7 +246,7 @@ test("auto-apply re-reads desired state after catalog fetch and skips a concurre
     assignments: {},
     defaults: { opus: null, fable: null, sonnet: null, haiku: null },
   };
-  const persisted = { ...config(), claudeCode: { desktopProfile: profile, injectAgents: false } };
+  const persisted = { ...config(), claudeCode: { desktopMode: "gateway" as const, desktopProfile: profile, injectAgents: false } };
   writeFileSync(join(root, "config.json"), JSON.stringify(persisted));
   writeFileSync(join(root, "config.json.bak"), JSON.stringify(persisted));
   writeFileSync(join(root, "config.json"), JSON.stringify(persisted));
@@ -302,7 +311,7 @@ test("explicit enable re-reads desired state after catalog fetch and skips a con
 });
 
 test("explicit enable honors the Claude Desktop native-model opt-out", async () => {
-  const persisted = { ...config(), claudeCode: { desktopNativeModels: false } };
+  const persisted = { ...config(), claudeCode: { desktopMode: "gateway" as const, desktopNativeModels: false } };
   writeFileSync(join(root, "config.json"), JSON.stringify(persisted));
   let nativeSlugs: string[] | undefined;
 
@@ -409,4 +418,43 @@ test("POST /apply leaves the reused server snapshot agreeing with disk", async (
     body: JSON.stringify({ profile: { mode: "static" } }),
   }, deps, staleSnapshot);
   expect(persistedIntent()).toBeUndefined();
+});
+
+test("POST /apply rebases the Claude hand-edit guard after its scoped profile save", async () => {
+  const snapshot = {
+    ...config(),
+    claudeCode: { authMode: "subscription" as const, nativePassthrough: true },
+  };
+  writeFileSync(join(root, "config.json"), JSON.stringify(snapshot));
+  armClaudeCodeBaseline(snapshot);
+
+  const response = await dispatch("/api/claude-desktop/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: "static" }),
+  }, {
+    fetchAllModels: async () => [],
+    writeDesktop3pConfig: () => ({ written: true, path: join(library, "applied.json"), fingerprint: "fingerprint" }),
+  }, snapshot);
+  expect(response!.status).toBe(200);
+
+  const handEdited = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  handEdited.claudeCode = {
+    ...handEdited.claudeCode,
+    authMode: "proxy",
+    nativePassthrough: false,
+    anthropicBaseUrl: "http://127.0.0.1:19999",
+  };
+  writeFileSync(join(root, "config.json"), JSON.stringify(handEdited));
+
+  snapshot.disabledModels = ["unrelated/model"];
+  saveConfigPreservingClaudeCode(snapshot);
+
+  const saved = JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig;
+  expect(saved.claudeCode).toMatchObject({
+    authMode: "proxy",
+    nativePassthrough: false,
+    anthropicBaseUrl: "http://127.0.0.1:19999",
+  });
+  expect(saved.disabledModels).toEqual(["unrelated/model"]);
 });

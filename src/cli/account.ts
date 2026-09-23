@@ -60,7 +60,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account import-orca --source <orca-data-directory> --registry <orca-data.json> [--apply] [--json]
   ocx account login <provider> [--id <account-id>] [--reauth] [--code -] [--no-wait] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
-  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account cancel <provider> [--flow <flow-id>] [--json] (--flow required for codex)
   ocx account reset-credits <account-id|main> [--consume --yes] [--json]
   ocx account grok-reset-coupons [<account-id>] [--consume --yes] [--token-id <token-id>] [--json]
   ocx account main <doctor|list|register|add|reauth|switch|recover> ...
@@ -340,10 +340,9 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
   }
   if (c.type === "codex") {
     console.error("Takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.");
-    const active = await apiJson(deps, baseUrl, "GET", "/api/codex-auth/active");
-    const threshold = active.status === 200 && typeof active.json.autoSwitchThreshold === "number"
-      ? active.json.autoSwitchThreshold
-      : undefined;
+    const state = await fetchRows(deps, baseUrl, name, "codex");
+    const selected = state.rows.find(row => row.id === activeId);
+    const threshold = selected?.autoSwitchThresholdOverride ?? state.autoSwitchThreshold;
     if (pinDrainReason !== undefined) {
       // "may override" is the right caveat for a pin that is currently fine and could be
       // overtaken later. It is the wrong sentence for one the next request will discard, and
@@ -352,7 +351,7 @@ async function cmdUse(rest: string[], deps: AccountDeps): Promise<number> {
         ? `is at or above the auto-switch threshold${threshold !== undefined ? ` (${threshold}%)` : ""}`
         : `cannot currently be selected (${pinDrainReason})`;
       console.error(`Note: ${displayId(activeId)} ${because}, so routing releases this pin on its next request.`);
-    } else if (threshold !== undefined && threshold > 0) {
+    } else if (state.status === 200 && typeof threshold === "number" && threshold > 0) {
       console.error(`Note: auto-switch (threshold ${threshold}%) may override this pin.`);
     }
   }

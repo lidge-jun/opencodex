@@ -7,6 +7,12 @@
  * unchanged. The Responses output (SSE or JSON) is converted back to Anthropic shape.
  */
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import {
+  admissionModelDeniedResponse,
+  AdmissionModelDeniedError,
+  assertRouteAllowedByScope,
+  resolveAdmissionModelScope,
+} from "./admission-model-scope";
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { enforceAnthropicImageLimits, sniffImageDimensions } from "../adapters/anthropic-image-guard";
@@ -18,7 +24,14 @@ import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
-import { isTransientUpstreamStatus } from "../lib/upstream-retry";
+import {
+  applyReplayRefusalClientHeaders,
+  carryReplayRefusal,
+  isReplayRefusalResponse,
+  isTransientUpstreamStatus,
+  REPLAY_REFUSED_STATUS,
+  UPSTREAM_RESET_REPLAY_REFUSED_CODE,
+} from "../lib/upstream-retry";
 import { resolveClientRetryAfter } from "../lib/retry-after";
 import {
   anthropicErrorBody,
@@ -29,7 +42,7 @@ import {
 } from "../claude/outbound";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { estimateTokens } from "../lib/token-estimate";
-import { NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
+import { captureRouteStaticPolicy, NoEligiblePolicyCandidateError, UnknownRoutingPolicyError, routeModel } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
@@ -420,7 +433,7 @@ async function anthropicNativePassthrough(
   // count_tokens too — counts must match what the real send will contain, and the 32MB
   // body cap applies to it equally. Non-message bodies pass through untouched.
   if (Array.isArray(body.messages)) {
-    await normalizeAnthropicImages(body.messages);
+    await normalizeAnthropicImages(body.messages, { abortSignal: req.signal });
     enforceAnthropicImageLimits(body.messages);
   }
   const headers = new Headers();
@@ -727,9 +740,10 @@ async function handleClaudeMessagesWithBudget(
       );
       if (claudeConversationId) logCtx.conversationId = claudeConversationId;
     }
-    // A fast row blocks passthrough, unlike the chat case: this path forwards to Anthropic's
-    // own API, whose wire has no service_tier field and whose FastWire kind has an empty
-    // adapter set by design, so the tier would be silently dropped.
+    // A fast row blocks passthrough, unlike the chat case: native passthrough forwards the
+    // caller's body with the caller's credential and never runs the Anthropic adapter, so the
+    // proxy-owned `speed` + beta (anthropic-speed wire) and its usage.speed observation would be
+    // silently skipped. Translation reaches the adapter, which owns both.
     if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model)) {
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
@@ -790,6 +804,22 @@ async function handleClaudeMessagesWithBudget(
 
   if (!requestedModel) requestedModel = (anthropicBody as Rec).model as string;
   const stream = internalBody.stream === true;
+  /**
+   * This proxy's count of the prompt it is about to forward, computed at most once.
+   *
+   * Two readers want it and they want it under different rules. The usage log takes it as a
+   * floor only for estimated-usage adapters, because its merge is `max(reported, estimate)` and
+   * would otherwise overwrite real usage. `message_start` takes it whenever the upstream sent
+   * no confirmed usage before the first frame, where nothing is merged and the terminal
+   * `message_delta` still corrects it (#4857).
+   */
+  let requestTokenFloor: number | undefined;
+  const claudeRequestTokenFloor = (): number => {
+    if (requestTokenFloor === undefined) {
+      requestTokenFloor = estimateClaudeRequestTokens(anthropicBody as Rec, requestedModel);
+    }
+    return requestTokenFloor;
+  };
   // Routed adapters only support streamed turns; always stream internally and fold
   // the translated Anthropic SSE into a message JSON for non-streaming clients.
   internalBody.stream = true;
@@ -799,9 +829,19 @@ async function handleClaudeMessagesWithBudget(
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
   try {
     const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
+    // Same reason as the native Chat lane: this route can be sent from here, so
+    // the key's scope is applied before the wire is settled.
+    assertRouteAllowedByScope(
+      resolveAdmissionModelScope(config, logIds?.admission),
+      String(internalBody.model ?? ""),
+      route,
+    );
     // Settle the wire once so the sampling decision below reads the effective
     // adapter rather than the provider-wide default (#404).
-    route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic");
+    route.staticPolicy = captureRouteStaticPolicy(
+      route.providerName, route.modelId, route.provider, route.staticPolicy.effectiveAlias, "anthropic",
+    );
+    route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy);
     logCtx.routeDecision = route.routeDecision;
     if (route.provider.adapter === "openai-responses") {
       delete internalBody.max_output_tokens;
@@ -815,7 +855,7 @@ async function handleClaudeMessagesWithBudget(
     // accurate-usage adapters — the request-log merge is max(reported, estimate) and
     // would overwrite real usage (audit 133 R1#7).
     if (route.provider.adapter === "cursor" || route.provider.adapter === "kiro") {
-      logCtx.usageLogInputTokens = estimateClaudeRequestTokens(anthropicBody as Rec, requestedModel);
+      logCtx.usageLogInputTokens = claudeRequestTokenFloor();
     }
     // Effort safety valve (devlog 136 B6, audit 139 R2#2): opus-shaped aliases make
     // every routed model look like a reasoning model to Claude clients, so a forced
@@ -828,6 +868,11 @@ async function handleClaudeMessagesWithBudget(
       if (ladder !== undefined && ladder.length === 0) delete internalBody.reasoning;
     }
   } catch (err) {
+    if (err instanceof AdmissionModelDeniedError) {
+      logCtx.requestedModel = requestedModel;
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
+      return admissionModelDeniedResponse(err);
+    }
     if (err instanceof UnknownRoutingPolicyError) {
       logCtx.requestedModel = requestedModel;
       if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 404, { closeReason: "non_stream" });
@@ -942,6 +987,9 @@ async function handleClaudeMessagesWithBudget(
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
 
   if (!response.ok) {
+    // Read the shared provenance verdict before consuming and re-wrapping the body. A refusal
+    // and an ordinary provider rate limit are both 429, so the status cannot distinguish them.
+    const replayRefusal = isReplayRefusalResponse(response);
     // Re-shape the OpenAI-style error envelope into the Anthropic one, preserving status.
     let message = `upstream error (${response.status})`;
     try {
@@ -956,14 +1004,16 @@ async function handleClaudeMessagesWithBudget(
       }
     } catch { /* keep fallback message */ }
     const upstreamRetryAfter = response.headers.get("retry-after");
-    const retryAfter = resolveClientRetryAfter({
-      status: response.status,
-      message,
-      upstreamRetryAfter,
-    })
-      // Instant-retry "0" is a valid client directive but rejected by cooldown parsers.
-      // Preserve it so it still wins over the transient "2" fallback (claude-529 mapping).
-      ?? (upstreamRetryAfter?.trim() === "0" ? "0" : undefined);
+    const retryAfter = replayRefusal
+      ? undefined
+      : resolveClientRetryAfter({
+          status: response.status,
+          message,
+          upstreamRetryAfter,
+        })
+        // Instant-retry "0" is a valid client directive but rejected by cooldown parsers.
+        // Preserve it so it still wins over the transient "2" fallback (claude-529 mapping).
+        ?? (upstreamRetryAfter?.trim() === "0" ? "0" : undefined);
     // Transient upstream 5xx (already retried pre-stream, 010): reclassify as Anthropic
     // 529 overloaded_error so the Claude Code client applies its built-in backoff retry
     // instead of dying on a fatal api_error (260716 sol-builder incident). The request
@@ -974,21 +1024,35 @@ async function handleClaudeMessagesWithBudget(
     const nativeMainFence = response.status === 503
       && upstreamRetryAfter?.trim() === "1"
       && message === CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE;
-    const transient = !nativeMainFence && isTransientUpstreamStatus(response.status);
-    const outStatus = nativeMainFence ? 503 : transient ? 529 : response.status;
-    const out = new Response(JSON.stringify(anthropicErrorBody(outStatus, message)), {
+    const transient = !replayRefusal && !nativeMainFence && isTransientUpstreamStatus(response.status);
+    const outStatus = replayRefusal
+      ? REPLAY_REFUSED_STATUS
+      : nativeMainFence ? 503 : transient ? 529 : response.status;
+    const outHeaders = new Headers({ "Content-Type": "application/json" });
+    if (retryAfter) outHeaders.set("Retry-After", retryAfter);
+    else if (transient) outHeaders.set("Retry-After", "2");
+    if (replayRefusal) applyReplayRefusalClientHeaders(outHeaders);
+    const out = new Response(JSON.stringify(anthropicErrorBody(
+      outStatus,
+      message,
+      undefined,
+      replayRefusal ? UPSTREAM_RESET_REPLAY_REFUSED_CODE : undefined,
+    )), {
       status: outStatus,
-      headers: {
-        "Content-Type": "application/json",
-        ...(retryAfter ? { "Retry-After": retryAfter } : (transient ? { "Retry-After": "2" } : {})),
-      },
+      headers: outHeaders,
     });
-    return out;
+    return carryReplayRefusal(response, out);
   }
 
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
-    const anthropicSse = responsesSseToAnthropicSse(response.body, requestedModel, { translatorBudget });
+    const anthropicSse = responsesSseToAnthropicSse(response.body, requestedModel, {
+      translatorBudget,
+      // Only a floor, and only for the first frame: an upstream that reports usage early wins
+      // over it inside the translator, and the terminal `message_delta` carries the
+      // authoritative count either way (#4857).
+      inputTokenFloor: claudeRequestTokenFloor(),
+    });
     if (stream) {
       return new Response(anthropicSse, {
         status: 200,

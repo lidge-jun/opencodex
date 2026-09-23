@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   appendUsageEntry,
   currentUsageLogRevision,
+  encodePersistedRequestedModel,
   normalizeUsageEntryForTest,
   normalizeClaudeCompatibilityUsageLog,
   normalizePersistedUsageRow,
@@ -80,6 +81,39 @@ describe("usage log", () => {
     expect(readUsageEntries().every(row => row.claudeCompatibility === undefined)).toBe(true);
   });
 
+  test("round trips only recognized recovery-withheld reasons (#5044)", () => {
+    // The attribution is a wire value a maintainer reads, so it is a bounded vocabulary: an
+    // unknown reason is dropped rather than failing the row, which is how a log written by a
+    // newer build stays readable by an older one — the same rule `recoveryKinds` follows.
+    const attempt = {
+      ordinal: 1, provider: "google", model: "gemini-test", adapter: "google", status: 429,
+      durationMs: 1, sendCount: 1, recoveryKinds: [], usageStatus: "reported" as const,
+    };
+    const normalized = normalizeUsageEntryForTest({
+      requestId: "withheld", timestamp: Date.now(), provider: "google", model: "gemini-test",
+      status: 429, durationMs: 1, usageStatus: "reported",
+      attempts: [
+        { ...attempt, recoveryWithheld: ["retry-send-budget"] },
+        { ...attempt, ordinal: 2, recoveryWithheld: ["rotation-send-budget", "rotation-send-budget"] },
+        { ...attempt, ordinal: 3, recoveryWithheld: ["secret-canary"] },
+        { ...attempt, ordinal: 4 },
+      ],
+    });
+    expect(normalized?.attempts?.map(row => row.recoveryWithheld)).toEqual([
+      ["retry-send-budget"],
+      // Deduplicated: one rotation refused twice is one fact about the attempt.
+      ["rotation-send-budget"],
+      // Unknown value dropped, and the key omitted entirely rather than left as an empty array,
+      // so an attempt that withheld nothing keeps the exact shape it had before this field.
+      undefined,
+      undefined,
+    ]);
+
+    // The count that means "requests this proxy actually made" does not move for a refusal.
+    expect(normalized?.attempts?.every(row => row.sendCount === 1)).toBe(true);
+  });
+
+
   test("round trips only recognized per-attempt xAI credential sources", () => {
     const attempt = {
       ordinal: 1, provider: "xai", model: "grok-test", adapter: "openai-chat", status: 200,
@@ -115,6 +149,47 @@ describe("usage log", () => {
     });
 
     expect(normalized.attempts).toEqual([]);
+  });
+
+  test("bounds requested model selectors before appending usage rows", () => {
+    const requestedModel = `policy/${"x".repeat(1024 * 1024)}`;
+    appendUsageEntry({
+      requestId: "ocx-bounded-selector",
+      timestamp: 1,
+      provider: "unknown",
+      model: "unknown",
+      requestedModel,
+      status: 404,
+      durationMs: 1,
+      usageStatus: "unreported",
+    });
+
+    const raw = readFileSync(usageLogPath(), "utf8");
+    const persisted = JSON.parse(raw) as PersistedUsageEntry;
+    expect(persisted.requestedModel).toBe(encodePersistedRequestedModel(requestedModel));
+    expect(persisted.requestedModel!.length).toBeLessThanOrEqual(130);
+    expect(raw.length).toBeLessThan(1024);
+  });
+
+  test("keeps over-long selectors that share the bounded prefix distinguishable", () => {
+    // Selectors are not length-bound at admission, so two valid selectors can
+    // agree past the persistence bound; they must not collapse into one identity.
+    const sharedPrefix = `provider/${"m".repeat(200)}`;
+    const selectorA = `${sharedPrefix}-alpha`;
+    const selectorB = `${sharedPrefix}-omega`;
+    expect(selectorA.slice(0, 130)).toBe(selectorB.slice(0, 130));
+
+    const encodedA = encodePersistedRequestedModel(selectorA);
+    const encodedB = encodePersistedRequestedModel(selectorB);
+    expect(encodedA).not.toBe(encodedB);
+    expect(encodedA.length).toBeLessThanOrEqual(130);
+    expect(encodedB.length).toBeLessThanOrEqual(130);
+
+    // Short selectors persist verbatim, and re-normalizing a persisted row is a
+    // no-op — normalizeUsageEntry also runs on every read.
+    const short = "provider/model";
+    expect(encodePersistedRequestedModel(short)).toBe(short);
+    expect(encodePersistedRequestedModel(encodedA)).toBe(encodedA);
   });
 
   test("preserves only valid non-PII Codex account log labels", () => {

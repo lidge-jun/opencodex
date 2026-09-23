@@ -33,6 +33,38 @@ function namespaceOf(value: unknown): string | undefined {
   return typeof value === "string" && value !== "functions" ? value : undefined;
 }
 
+/**
+ * Repair one provider spelling drift for Codex's flat shell bridge.
+ *
+ * This is schema-bound rather than a general alias: `input` is also a legitimate
+ * argument name for arbitrary caller and MCP tools. Only the exact bare
+ * `exec_command` declaration can establish that its sole string input has one faithful
+ * reading as the required string `cmd` member.
+ */
+function repairExecCommandInput(
+  argumentsText: string,
+  schema: FunctionCallRepairSchema,
+): string {
+  if (schema.namespace !== undefined || schema.name !== "exec_command") return argumentsText;
+  const parameters = schema.parameters;
+  if (!isObject(parameters) || parameters.type !== "object"
+    || !Array.isArray(parameters.required) || !parameters.required.includes("cmd")
+    || !isObject(parameters.properties) || !isObject(parameters.properties.cmd)
+    || parameters.properties.cmd.type !== "string") return argumentsText;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(argumentsText);
+  } catch {
+    return argumentsText;
+  }
+  if (!isObject(parsed)) return argumentsText;
+  const keys = Object.keys(parsed);
+  if (keys.length !== 1 || keys[0] !== "input" || typeof parsed.input !== "string") {
+    return argumentsText;
+  }
+  return JSON.stringify({ cmd: parsed.input });
+}
+
 function selectorAllows(
   selector: unknown,
   lowered: unknown,
@@ -131,7 +163,12 @@ function repairItem(item: unknown, schemas: FunctionCallRepairSchemas, completed
       if (unsafe) return item;
     } catch { return item; }
   }
-  const argumentsText = coerceIntegerToolArguments(raw || "{}", schema.parameters, schema.namespace ? undefined : schema.name);
+  const integerRepaired = coerceIntegerToolArguments(
+    raw || "{}",
+    schema.parameters,
+    schema.namespace ? undefined : schema.name,
+  );
+  const argumentsText = repairExecCommandInput(integerRepaired, schema);
   return argumentsText === raw ? item : { ...item, arguments: argumentsText };
 }
 

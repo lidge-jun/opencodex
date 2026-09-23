@@ -9,6 +9,7 @@ import { saveConfig } from "../../../src/config";
 import { setActiveProviderApiKey } from "../../../src/providers/api-keys";
 import type { OcxConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 
 const ACCOUNT_A_ORIGIN = "https://a.githubcopilot.com";
 const ACCOUNT_B_ORIGIN = "https://b.githubcopilot.com";
@@ -187,15 +188,24 @@ function installFetch(options: {
   return { dispatches };
 }
 
+let releaseSpendHome: (() => void) | undefined;
+
 beforeEach(() => {
   beforeBuildReturns = undefined;
   beforePacingReturns = undefined;
   home = mkdtempSync(join(tmpdir(), "ocx-copilot-origin-"));
   process.env.OPENCODEX_HOME = home;
   clearGenericFailoverHealth();
+  // Dispatches without starting a server, so it takes the spend-journal lease itself. Taken
+  // last because the lease binds the home in effect at the moment it is taken.
+  releaseSpendHome = acquireOwnedSpendHome();
 });
 
 afterEach(() => {
+  // Released before this case's home is removed: an open lease inside a directory being
+  // deleted fails the removal on Windows and leaves an unlinked live database on POSIX.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   clearGenericFailoverHealth();
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;

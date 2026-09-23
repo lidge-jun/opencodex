@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  MAX_PROJECTED_HISTORY_CHARS,
   buildConversationInput,
   buildInputLines,
   buildSystemPrompt,
   mapStreamMessageToEvents,
+  projectedHistoryCharLimit,
   readJsonLines,
   usageFromResult,
 } from "../../src/adapters/coding-agent/protocol";
@@ -249,6 +251,85 @@ describe("codebuddy stream-json event mapping", () => {
   test("usageFromResult returns undefined when no usage is present", () => {
     expect(usageFromResult({ type: "result" })).toBeUndefined();
   });
+
+  test("a cache-creation-only usage snapshot is kept instead of collapsing to undefined", () => {
+    // A capture-only tool leg ends at message_stop with no result frame, so a snapshot whose only
+    // non-zero counter is cache creation is the sole token accounting the turn will ever see.
+    expect(usageFromResult({
+      type: "result",
+      usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 200 },
+    })).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cacheCreationInputTokens: 200,
+    });
+    // Cache-creation-only through the partial fold too: message_start carries it before any delta.
+    const state = { sawPartialText: false, sawPartialThinking: false, sawTerminalResult: false };
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_start", message: { usage: { cache_creation_input_tokens: 7 } } } },
+      state,
+    );
+    expect(state.partialUsage).toEqual({
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cacheCreationInputTokens: 7,
+    });
+  });
+
+  test("a zero-valued cache-read counter stays absent instead of reporting a phantom cache hit", () => {
+    const state = { sawPartialText: false, sawPartialThinking: false, sawTerminalResult: false };
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 9, output_tokens: 1, cache_read_input_tokens: 0 } } },
+      state,
+    );
+    expect(state.partialUsage).toEqual({ inputTokens: 9, outputTokens: 1, totalTokens: 10 });
+    expect(state.partialUsage).not.toHaveProperty("cachedInputTokens");
+  });
+
+  test("message_delta and assistant usage snapshots fold into partialUsage; result stays authoritative", () => {
+    const state = { sawPartialText: false, sawPartialThinking: false, sawTerminalResult: false };
+    // Zero-only snapshots are ignored so a tool-bridge turn without vendor usage stays absent.
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 0, output_tokens: 0 } } },
+      state,
+    );
+    expect(state.partialUsage).toBeUndefined();
+    // First real snapshot sticks.
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 12, output_tokens: 5 } } },
+      state,
+    );
+    expect(state.partialUsage).toEqual({ inputTokens: 12, outputTokens: 5, totalTokens: 17 });
+    // A later snapshot maxes each field instead of trusting frame order.
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_delta", usage: { input_tokens: 15, output_tokens: 4, cache_read_input_tokens: 3 } } },
+      state,
+    );
+    expect(state.partialUsage).toEqual({
+      inputTokens: 15, outputTokens: 5, totalTokens: 20, cachedInputTokens: 3, cacheReadInputTokens: 3,
+    });
+    // Assistant-frame usage snapshots participate in the same fold.
+    mapStreamMessageToEvents(
+      { type: "assistant", message: { role: "assistant", content: [], usage: { input_tokens: 10, output_tokens: 9 } } },
+      state,
+    );
+    expect(state.partialUsage).toMatchObject({ inputTokens: 15, outputTokens: 9, totalTokens: 24 });
+    // message_start carries input tokens in Anthropic-shaped streams; a capture-only tool leg
+    // terminates at message_stop before any result frame, so this snapshot must be recorded.
+    mapStreamMessageToEvents(
+      { type: "stream_event", event: { type: "message_start", message: { usage: { input_tokens: 40, output_tokens: 0 } } } },
+      state,
+    );
+    expect(state.partialUsage).toMatchObject({ inputTokens: 40, outputTokens: 9, totalTokens: 49 });
+    // A terminal result frame carries its own usage and does not consult partialUsage.
+    const events = mapStreamMessageToEvents(
+      { type: "result", subtype: "success", is_error: false, usage: { input_tokens: 30, output_tokens: 2 } },
+      state,
+    );
+    expect(events).toEqual([{ type: "done", stopReason: "stop", usage: { inputTokens: 30, outputTokens: 2, totalTokens: 32 } }]);
+  });
 });
 
 describe("codebuddy conversation input builder (Strategy C projection)", () => {
@@ -350,5 +431,43 @@ describe("codebuddy conversation input builder (Strategy C projection)", () => {
       type: "image",
       source: { type: "base64", media_type: "image/png", data: "QUJD" },
     });
+  });
+});
+describe("projected history ceiling derives from the model context window", () => {
+  test("absent or invalid window metadata keeps the legacy flat cap", () => {
+    expect(projectedHistoryCharLimit(undefined)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+    expect(projectedHistoryCharLimit(Number.NaN)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+    expect(projectedHistoryCharLimit(0)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+    expect(projectedHistoryCharLimit(-1)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+  });
+
+  test("a small window never lowers the cap below the legacy default", () => {
+    expect(projectedHistoryCharLimit(64_000)).toBe(MAX_PROJECTED_HISTORY_CHARS);
+  });
+
+  test("a large window scales the cap until the hard ceiling", () => {
+    expect(projectedHistoryCharLimit(128_000)).toBe(384_000);
+    expect(projectedHistoryCharLimit(1_000_000)).toBe(3_000_000);
+    expect(projectedHistoryCharLimit(Number.MAX_SAFE_INTEGER)).toBe(4_000_000);
+  });
+
+  test("buildConversationInput keeps the history a derived ceiling admits", () => {
+    const history = Array.from({ length: 5 }, (_, index) => ({
+      role: "user" as const,
+      content: "EARLY-MARKER-" + String(index) + " " + "a".repeat(50_000),
+      timestamp: index,
+    }));
+    const messages = [...history, { role: "user", content: "current request", timestamp: 5 }];
+    const parsed = parsedRequest({ context: { messages } });
+
+    const wide = buildConversationInput(parsed, { maxHistoryChars: projectedHistoryCharLimit(1_000_000) })
+      .map(line => JSON.parse(line));
+    expect(wide[0].message.content[0].text).toContain("EARLY-MARKER-0");
+    expect(wide[0].message.content[0].text).not.toContain("truncated for length");
+
+    const flat = buildConversationInput(parsed).map(line => JSON.parse(line));
+    expect(flat[0].message.content[0].text).not.toContain("EARLY-MARKER-0");
+    expect(flat[0].message.content[0].text).toContain("truncated for length");
+    expect(flat[0].message.content[0].text).toContain("current request");
   });
 });

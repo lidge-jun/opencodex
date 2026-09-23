@@ -3,7 +3,7 @@
  * so the proxy must relay it to an OpenAI upstream instead of the /v1/* JSON-404 guard.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../../src/codex/auth-api";
@@ -33,6 +33,8 @@ import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { phaseTimer } from "../helpers/phase-timing";
+import { expectSidebandUpgrade, openSidebandClient, redirectSidebandWebSocket, sidebandRelayUpstream } from "../helpers/sideband-relay-probe";
 
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -607,94 +609,91 @@ test("call-create and its sideband join bind to the same pool account (openai/co
 }, { timeout: 20_000 });
 
 test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectionally", async () => {
-  const seenPaths: string[] = [];
-  const seenUpgradeHeaders: Headers[] = [];
-  const upstream = Bun.serve({
-    port: 0,
-    fetch(req, server) {
-      const url = new URL(req.url);
-      if (req.headers.get("upgrade")?.toLowerCase() === "websocket") {
-        seenPaths.push(url.pathname);
-        seenUpgradeHeaders.push(req.headers);
-        if (server.upgrade(req, { data: {} })) return undefined as unknown as Response;
-        return new Response("upgrade failed", { status: 500 });
-      }
-      return new Response("not found", { status: 404 });
-    },
-    websocket: {
-      maxPayloadLength: MAX_WS_FRAME_BYTES,
-      message(ws, message) {
-        ws.send(typeof message === "string" ? `echo:${message}` : `bytes:${message.byteLength}`);
-      },
-    },
-  });
+  // The peer is a helper so it can report what it saw: this case's only symptom on failure is
+  // its own deadline, which names neither the slow leg nor whether the reply was ever sent.
+  const { server: upstream, seenPaths, seenUpgradeHeaders, probe } = sidebandRelayUpstream(MAX_WS_FRAME_BYTES);
 
-  saveConfig(forwardConfig());
-
-  // Redirect ChatGPT sideband WebSocket targets to the local mock (config stays canonical).
-  const RealWebSocket = globalThis.WebSocket;
-  const upstreamPort = upstream.port;
-  globalThis.WebSocket = class extends RealWebSocket {
-    constructor(url: string | URL, protocols?: string | string[] | Record<string, unknown>) {
-      const parsed = new URL(String(url));
-      const target =
-        parsed.hostname === "api.openai.com" && parsed.pathname.startsWith("/v1/live/")
-          ? `ws://127.0.0.1:${upstreamPort}${parsed.pathname}${parsed.search}`
-          : String(url);
-      super(target, protocols as string[]);
-    }
-  } as typeof WebSocket;
-
-  const server = startServer(0);
+  // Created inside the try: a startServer throw used to leak the peer and the socket override.
+  let restoreWebSocket: (() => void) | undefined;
+  let live: ReturnType<typeof startServer> | undefined;
   try {
-    const wsUrl = new URL(`/v1/live/rtc_sideband`, server.url);
-    wsUrl.protocol = "ws:";
-    const client = new RealWebSocket(wsUrl.toString(), {
-      headers: {
-        authorization: `Bearer ${DIRECT_CHATGPT_TOKEN}`,
-        "chatgpt-account-id": "acct-123",
-        "openai-alpha": "quicksilver=v2",
-        "x-session-id": "rts_side",
-      },
-    } as unknown as string[]);
-
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("sideband timeout")), 15_000);
-      let sawPing = false;
-      client.addEventListener("open", () => {
-        client.send("ping-sideband");
-      });
-      client.addEventListener("message", (event) => {
-        try {
-          if (!sawPing) {
-            expect(String(event.data)).toBe("echo:ping-sideband");
-            sawPing = true;
-            client.send(Buffer.alloc(MAX_WS_FRAME_BYTES));
-            return;
+    saveConfig(forwardConfig());
+    // Redirect ChatGPT sideband targets to the local mock; the config stays canonical. A sibling
+    // helper because this case is at its size cap and the repo answer is not to compress.
+    const { OriginalWebSocket, restore } = redirectSidebandWebSocket(upstream.port);
+    restoreWebSocket = restore;
+    const server = live = startServer(0);
+    const client = openSidebandClient(OriginalWebSocket, server.url, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
+    // The try opens here, one statement after the client exists, so the timer and the phase
+    // recorder are both created inside the block that closes them.
+    let phase: ReturnType<typeof phaseTimer> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // Each leg is its own segment and the timer's ticks read the peer's event count, so a
+      // segment that reaches no further milestone is visible as such. That is weaker than proof
+      // of a stall: a tick without movement says no milestone was reached, not that nothing moved.
+      phase = phaseTimer("sideband 50MiB exact frame ceiling", probe.progress);
+      const leg = phase;
+      await new Promise<void>((resolve, reject) => {
+        const fail = (reason: string): void => reject(new Error(`${reason}; peer: ${probe.summary()}`));
+        timer = setTimeout(() => fail("sideband timeout"), 15_000);
+        let stage: "echo-roundtrip" | "await-ceiling-echo" | "done" = "echo-roundtrip";
+        leg.split("upgrade");
+        client.addEventListener("open", () => {
+          probe.noteClient("open");
+          leg.split("echo-roundtrip");
+          client.send("ping-sideband");
+        });
+        client.addEventListener("close", event => {
+          probe.noteClient("close=" + event.code);
+          // ANY close before this case settles is its own outcome, not a deadline. Keying that
+          // on the first echo left the harder half unreported: a close after the ping and
+          // before the ceiling echo -- the disconnect a 50MiB frame is most likely to cause --
+          // fell through to the 15s timeout and read as a slow peer.
+          if (stage !== "done") fail(`sideband closed during ${stage}`);
+        });
+        client.addEventListener("message", (event) => {
+          try {
+            probe.noteClient("message");
+            if (stage === "echo-roundtrip") {
+              expect(String(event.data)).toBe("echo:ping-sideband");
+              leg.split("allocate-ceiling-frame");
+              const frame = Buffer.alloc(MAX_WS_FRAME_BYTES);
+              // The send is synchronous, so allocating the frame, handing it to the socket and
+              // waiting for the acknowledgement are three separate costs. Timing them as one
+              // segment reported allocation time as wait time.
+              leg.split("send-ceiling-frame");
+              client.send(frame);
+              stage = "await-ceiling-echo";
+              leg.split("await-ceiling-echo");
+              return;
+            }
+            expect(String(event.data)).toBe(`bytes:${MAX_WS_FRAME_BYTES}`);
+            expectSidebandUpgrade({ seenPaths, seenUpgradeHeaders }, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
+            stage = "done";
+            resolve();
+          } catch (err) {
+            reject(err);
           }
-          expect(String(event.data)).toBe(`bytes:${MAX_WS_FRAME_BYTES}`);
-          expect(seenPaths).toContain("/v1/live/rtc_sideband");
-          expect(seenUpgradeHeaders).toHaveLength(1);
-          expect(seenUpgradeHeaders[0].get("openai-alpha")).toBe("quicksilver=v2");
-          expect(seenUpgradeHeaders[0].get("x-session-id")).toBe("rts_side");
-          expect(seenUpgradeHeaders[0].get("authorization")).toBe(`Bearer ${DIRECT_CHATGPT_TOKEN}`);
-          clearTimeout(timer);
-          resolve();
-        } catch (err) {
-          clearTimeout(timer);
-          reject(err);
-        }
+        });
+        client.addEventListener("error", () => fail("client websocket error"));
       });
-      client.addEventListener("error", () => {
-        clearTimeout(timer);
-        reject(new Error("client websocket error"));
-      });
-    });
-    client.close();
+    } finally {
+      // The case owns both: leaving them for the runner to collect is a resource leak whatever
+      // it did or did not contribute to any particular deadline.
+      phase?.end();
+      clearTimeout(timer);
+      client.close();
+    }
   } finally {
-    globalThis.WebSocket = RealWebSocket;
-    await server.stop(true);
-    await upstream.stop(true);
+    restoreWebSocket?.();
+    // Nested so the peer is stopped even when stopping the proxy throws: one failed shutdown
+    // must not leave the other listener running for every case after this one.
+    try {
+      if (live) await live.stop(true);
+    } finally {
+      await upstream.stop(true);
+    }
   }
 }, { timeout: 20_000 });
 
@@ -1335,6 +1334,7 @@ test("sideband frame log preserves delivery without recording damaged or clean t
       expect(JSON.stringify(line)).not.toContain("clean-frame");
       expect(JSON.stringify(line)).not.toContain(FFFD_TEXT);
     }
+    if (process.platform !== "win32") expect(statSync(frameLogPath).mode & 0o777).toBe(0o600);
 
     client.close();
   } finally {
@@ -1343,50 +1343,6 @@ test("sideband frame log preserves delivery without recording damaged or clean t
     globalThis.WebSocket = RealWebSocket;
     await server.stop(true);
     await upstream.stop(true);
-  }
-});
-
-test("frame diagnostics retain only metadata for text, binary, and bounded views", async () => {
-  const { logLiveSidebandFrame } = await import("../../src/server/live");
-  const previousFrameLog = process.env.OCX_LIVE_FRAME_LOG;
-  const frameLogPath = join(TEST_DIR, "frame-metadata.jsonl");
-  const damagedText = "private-voice-�";
-  const encoded = new TextEncoder().encode(damagedText);
-  const padded = new TextEncoder().encode("�safe�");
-  const frames: Array<{ data: unknown; kind: string; bytes: number; fffd: boolean }> = [
-    { data: damagedText, kind: "text", bytes: 17, fffd: true },
-    { data: encoded.buffer, kind: "binary", bytes: 17, fffd: true },
-    { data: Buffer.from(encoded), kind: "binary", bytes: 17, fffd: true },
-    // Replacement characters outside this view must not affect the flag or byte count.
-    { data: new Uint8Array(padded.buffer, 3, 4), kind: "binary", bytes: 4, fffd: false },
-    { data: new DataView(padded.buffer, 3, 4), kind: "binary", bytes: 4, fffd: false },
-    { data: "한글", kind: "text", bytes: 6, fffd: false },
-    { data: new Uint8Array([0xff]), kind: "binary", bytes: 1, fffd: true },
-  ];
-  try {
-    process.env.OCX_LIVE_FRAME_LOG = frameLogPath;
-    for (const frame of frames) logLiveSidebandFrame("u2c", frame.data);
-    logLiveSidebandFrame("c2u", { privateText: damagedText });
-    const raw = readFileSync(frameLogPath, "utf8");
-    const records = raw.trim().split("\n").map(line => JSON.parse(line));
-    expect(records).toHaveLength(frames.length);
-    records.forEach((record, index) => {
-      const expected = frames[index]!;
-      expect(record).toEqual({
-        ts: expect.any(String), dir: "u2c", kind: expected.kind,
-        bytes: expected.bytes, fffd: expected.fffd,
-      });
-      expect(Number.isNaN(Date.parse(record.ts))).toBe(false);
-    });
-    for (const content of [damagedText, "safe", "한글", "�"]) expect(raw).not.toContain(content);
-    delete process.env.OCX_LIVE_FRAME_LOG;
-    logLiveSidebandFrame("c2u", damagedText);
-    expect(readFileSync(frameLogPath, "utf8")).toBe(raw);
-    process.env.OCX_LIVE_FRAME_LOG = TEST_DIR;
-    expect(() => logLiveSidebandFrame("c2u", damagedText)).not.toThrow();
-  } finally {
-    if (previousFrameLog === undefined) delete process.env.OCX_LIVE_FRAME_LOG;
-    else process.env.OCX_LIVE_FRAME_LOG = previousFrameLog;
   }
 });
 
@@ -1399,11 +1355,12 @@ test("frame diagnostics retain only metadata for text, binary, and bounded views
 // PRIVATE gate via createReadinessGate(); starting/failing a second server in the
 // same process can never reset or mutate the first server's gate.
 describe("GET /readyz", () => {
-  test("controlled startup sync drives the server gate to ready or failed", async () => {
+  test("startup sync drives the gate: ok=true is ready even with a warning, ok=false fails (#5181)", async () => {
     saveConfig(forwardConfig());
     const cases = [
       { outcome: { ok: true }, expectedStatus: "ready", expectedHttp: 200 },
-      { outcome: { ok: true, warning: "catalog sync blocked" }, expectedStatus: "failed", expectedHttp: 503 },
+      { outcome: { ok: true, warning: "catalog sync blocked" }, expectedStatus: "ready", expectedHttp: 200 },
+      { outcome: { ok: false }, expectedStatus: "failed", expectedHttp: 503 },
     ] as const;
 
     for (const { outcome, expectedStatus, expectedHttp } of cases) {

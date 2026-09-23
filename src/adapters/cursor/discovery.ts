@@ -80,7 +80,7 @@ function inferCursorContextWindowHeuristic(modelId: string): number {
   if (id.includes("fable")) return CONTEXT_1M;
   if (id.startsWith("gpt-5.6-")) return CONTEXT_1M;
   if (id.startsWith("gpt-5") || id === "gpt-5-codex") return CONTEXT_272K;
-  if (id.startsWith("grok-4.5") || id.startsWith("grok-4.6")) return 500_000;
+  if (id.startsWith("grok-4.5") || id.startsWith("grok-4.6") || id.startsWith("grok-4.7")) return 500_000;
   if (id.startsWith("grok-")) return CONTEXT_256K;
   if (id.includes("claude")) return CONTEXT_200K;
   return CURSOR_DEFAULT_CONTEXT_WINDOW;
@@ -305,15 +305,18 @@ export function isCursorRouterModelId(modelId: string): boolean {
 export function filterCursorConfiguredModelsByLiveDiscovery<T extends { id: string }>(
   configured: readonly T[],
   liveIds: readonly string[],
+  maxModeLiveIds: readonly string[] = [],
 ): T[] {
-  return configured.filter(model =>
-    !CURSOR_KNOWN_UNCALLABLE_MODEL_IDS.has(model.id)
-    && (
-      isCursorRouterModelId(model.id)
-      // Synthetic ultra rows ride their base model's account availability.
-      || isCursorModelAvailableForAccount(cursorUltraBaseModelId(model.id) ?? model.id, liveIds)
-    ),
-  );
+  return configured.filter(model => {
+    if (CURSOR_KNOWN_UNCALLABLE_MODEL_IDS.has(model.id)) return false;
+    if (isCursorRouterModelId(model.id)) return true;
+    const ultraBase = cursorUltraBaseModelId(model.id);
+    return isCursorModelAvailableForAccount(ultraBase ?? model.id, liveIds)
+      // Successful discovery is authoritative: synthetic ultra rows additionally require the
+      // account-specific Max Mode capability. Discovery failures bypass this filter and retain
+      // the static seed under the caller's existing degraded-catalog policy.
+      && (ultraBase === undefined || isCursorModelAvailableForAccount(ultraBase, maxModeLiveIds));
+  });
 }
 
 /**

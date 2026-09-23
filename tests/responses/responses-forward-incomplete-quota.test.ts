@@ -26,6 +26,7 @@ import { isEagerRelaySseResponse } from "../../src/server/relay";
 import { sendResponseToWebSocket, type WsData } from "../../src/server/ws-bridge";
 import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 
 const provider: OcxProviderConfig = {
@@ -116,6 +117,8 @@ async function exerciseSpawnReporter(path: ReporterPath): Promise<void> {
   const home = mkdtempSync(join(tmpdir(), "ocx-incomplete-quota-"));
   const codexHome = installIsolatedCodexHome("ocx-incomplete-quota-codex-");
   process.env.OPENCODEX_HOME = home;
+  // Taken after this reporter installs its home so every direct dispatch owns its journal.
+  const releaseSpendHome = acquireOwnedSpendHome();
   const accountId = "incomplete-quota-endpoint";
   const model = "gpt-test";
   const config: OcxConfig = {
@@ -303,6 +306,8 @@ async function exerciseSpawnReporter(path: ReporterPath): Promise<void> {
     expect(wsDispatches).toBe(path === "guarded-ws" ? 2 : 0);
     expect(httpDispatches).toBe(path === "guarded-ws" ? 0 : 2);
   } finally {
+    // Released before restoring or removing the home so the lease files are not left open.
+    releaseSpendHome();
     client?.close();
     await endpoint.stop(true);
     await upstream.stop(true);

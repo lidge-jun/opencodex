@@ -9,6 +9,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
+import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import {
   clearAccountQuota,
   updateAccountQuota,
@@ -43,6 +44,7 @@ import {
   encryptedInput as recoverableEncryptedInput,
   recoverySse,
 } from "../helpers/agent-task-recovery";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 setDefaultTimeout(30_000);
@@ -52,6 +54,7 @@ const originalNow = Date.now;
 let testDir: string;
 let previousOpencodexHome: string | undefined;
 let previousCodexHome: string | undefined;
+let releaseSpendHome: (() => void) | undefined;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-subagent-hr-"));
@@ -59,6 +62,8 @@ beforeEach(() => {
   previousCodexHome = process.env.CODEX_HOME;
   process.env.OPENCODEX_HOME = testDir;
   process.env.CODEX_HOME = testDir;
+  // Direct handler dispatches need the writer lease that startServer normally holds.
+  releaseSpendHome = acquireOwnedSpendHome();
   clearThreadAccountMap();
   clearCodexUpstreamHealth();
   clearAccountQuota();
@@ -71,6 +76,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // Release before home teardown to prevent Windows removal failures and a live unlinked database.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
   Date.now = originalNow;
   clearThreadAccountMap();
@@ -2150,9 +2158,16 @@ describe("native passthrough terminal finalization", () => {
     const terminals: ResponsesTerminalStatus[] = [];
     mockSseUpstream(sseBody);
 
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    // Force win32 so eager-relay decision path is reachable via streamMode override.
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    // darwin, not win32, because this pair is about streamMode choosing the path. On win32 a
+    // turn that needs a client rewrite takes the eager relay unconditionally (#864), so the
+    // legacy half could never be legacy there and the marker assertion below would be a lie.
+    // darwin is the platform where the configured mode actually decides.
+    //
+    // The claim is also narrowed to the relay decision itself: overwriting process.platform
+    // globally redirects filesystem, ACL and state-directory identity too, and the spend-ledger
+    // owner lowercases its home on win32, which on a case-sensitive filesystem is a different
+    // directory. That made the send unreservable and the turn delivered no terminal at all.
+    setRelayPlatformForTests("darwin");
     try {
       const response = await postSpawn(
         cfg,
@@ -2161,6 +2176,12 @@ describe("native passthrough terminal finalization", () => {
           onNativePassthroughTerminal: (status) => terminals.push(status),
         },
       );
+      // Asserted before the callback is inspected, so a turn that never delivered says so
+      // instead of presenting as a missing callback.
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      // The relay path this case exists to exercise, proven rather than assumed.
+      expect(isEagerRelaySseResponse(response)).toBe(streamMode === "eager-relay");
       const responseText = await response.text();
       // Allow inspection consumer microtasks to settle.
       await Bun.sleep(20);
@@ -2170,7 +2191,7 @@ describe("native passthrough terminal finalization", () => {
         responseText,
       };
     } finally {
-      if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+      setRelayPlatformForTests(undefined);
     }
   }
 

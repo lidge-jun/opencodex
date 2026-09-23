@@ -92,7 +92,38 @@ Ouvrez **http://localhost:10100** et configurez tout dans le tableau de bord web
 fournisseurs (plus de 40 intégrés, ou n'importe quel point de terminaison compatible OpenAI),
 choisissez les modèles, gérez les comptes. `ocx gui`
 rouvre le tableau de bord à tout moment.
-Il peut également gérer un **groupe de comptes ChatGPT** pour l'authentification Codex. Ajoutez plusieurs
+
+<details>
+<summary><b>Application de bureau et widget macOS — bêta</b></summary>
+
+Une application native qui reprend le même tableau de bord, accompagnée d’une extension WidgetKit qui
+affiche l’état du proxy, l’utilisation du jour et les quotas des fournisseurs sans ouvrir de
+navigateur. Le proxy ne change pas : l’application détecte une instance en cours d’exécution ou
+démarre le sidecar `ocx` inclus, tandis que le tableau de bord reste accessible sur le port du proxy
+(**http://localhost:10100** sauf si vous en avez configuré un autre).
+
+Cette version est en bêta. Les versions publiées de l’application macOS sont signées avec un identifiant
+Developer ID et notariées (les compilations locales sont signées ad hoc) ; le programme d’installation
+Windows n’est pas encore signé, et SmartScreen affiche donc un avertissement au premier lancement.
+Le widget nécessite macOS 14 ou une version ultérieure ; le modèle de données des instantanés qu’il
+affiche se trouve dans [`app/`](../app) (`MenuBarCore`).
+
+Téléchargez l’application depuis la [dernière version publiée](https://github.com/lidge-jun/opencodex/releases),
+ou compilez-la localement : exécutez `bun install && bun run build:gui` à la racine du dépôt, puis
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` dans
+`desktop/`.
+
+Les emplacements d’installation, les fichiers de service et tous les autres éléments écrits sur le
+disque sont répertoriés dans [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed).
+Le [guide de l’application de bureau](https://opencodex.me/fr/guides/desktop-app/) et le
+[guide de l’application macOS dans la barre des menus](https://opencodex.me/fr/guides/macos-menu-bar/)
+détaillent l’installation sur chaque plateforme et le premier lancement.
+
+</details>
+
+### Groupe de comptes ChatGPT
+
+opencodex peut également gérer un **groupe de comptes ChatGPT** pour l'authentification Codex. Ajoutez plusieurs
 comptes ChatGPT / Codex et actualisez leurs quotas 5 h / hebdomadaires / 30 j dans le tableau de bord.
 Avec le routage par quota, les nouvelles sessions peuvent utiliser le compte opérationnel le moins sollicité ;
 les modes round-robin et fill-first appliquent leurs propres politiques. Les fils Codex existants restent
@@ -128,14 +159,15 @@ Voir [SPONSORS.md](../SPONSORS.md).
 <details>
 <summary>Docker Compose</summary>
 
-Le dépôt fournit une construction Compose épinglée par digest, exécutée hors root. Avec Git et Bun installés sur
-l'hôte, générez le manifeste de compatibilité canonique avant chaque construction d'image, puis initialisez
-une seule fois le jeton du plan de données via stdin et démarrez le hub :
+Le dépôt fournit une construction Compose épinglée par digest, exécutée hors root. La construction génère et
+vérifie elle-même le manifeste de compatibilité canonique à partir de l'instantané Git sélectionné. Un clone local
+nécessite Git et Docker Compose ; un contexte Git distant ne nécessite que Docker Compose. Aucun des deux chemins
+ne requiert Bun sur l'hôte ni d'étape de préparation. Initialisez une seule fois le jeton du plan de données via
+stdin et démarrez le hub :
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -146,11 +178,28 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 La liaison hôte par défaut est `127.0.0.1:10100`. Une exposition distante exige explicitement
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d` ; `0.0.0.0` active
 toutes les interfaces de l'hôte. Restreignez l'accès avec un pare-feu et une façade TLS/tailnet authentifiée.
-Le JSON généré reste non suivi ; il est copié dans l'image sans y inclure `.git`.
-Régénérez-le après toute modification des sources, et ne changez pas les sources entre la génération et la construction.
-La construction rejette les manifestes obsolètes, les fichiers manquants ou non concordants, les fichiers sources en trop et les liens symboliques.
+Le JSON généré reste non suivi. Le contexte de construction n'admet que `.git/index` et `.git/HEAD` — l'inventaire
+lu par `git ls-files`, soit environ 1 Mo au lieu du magasin d'objets complet — et ils ne sont visibles que par l'étape
+de manifeste réservée à la construction, via un montage en lecture seule ; aucun `COPY` n'inclut donc `.git`. Un manifeste
+déjà généré sur l'hôte n'est accepté qu'après validation ; sinon, la construction le génère elle-même. La construction
+rejette les manifestes obsolètes, les fichiers manquants ou non concordants, les fichiers sources en trop et les liens symboliques.
 Elle vérifie chaque SHA-256 enregistré par rapport au contexte de construction et aux fichiers d'exécution copiés, y compris
 `package.json`, `bun.lock` et le fichier spécifiquement inclus `scripts/model-metadata.source.json`.
+
+Un contexte Git distant exige que BuildKit conserve les métadonnées Git. Cet extrait de configuration Compose
+sélectionne l'instantané distant et transmet l'argument intégré requis :
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 Le jeton et l'état mutable restent dans le volume nommé `ocx-state` ; aucun secret n'est placé dans
 l'image, le fichier Compose, l'environnement ou les arguments du shell. Consultez le
@@ -166,8 +215,9 @@ des fournisseurs, les contrôles d'acceptation authentifiés, la gestion distant
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -175,8 +225,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

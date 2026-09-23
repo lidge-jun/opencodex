@@ -23,7 +23,7 @@ import type {
   CodexHistoryWorkerOperation,
   HistoryWorkerResult,
 } from "./history-worker";
-import { currentHistoryDbBusyTimeoutMs, historyBackupPathFor } from "./history-provider";
+import { currentHistoryDbBusyTimeoutMs, resolveExistingHistoryBackupPath } from "./history-provider";
 import type { CodexHistoryFailureReason, CodexHistoryVerifiedNoopProof } from "./history-provider";
 import { getCodexHome, resolveCodexStateDbPath } from "./paths";
 
@@ -32,7 +32,7 @@ import { getCodexHome, resolveCodexStateDbPath } from "./paths";
  *
  * The SQLite root can differ from CODEX_HOME and both environment/config inputs
  * can change between invocations. The parent resolves one exact target and hands
- * those canonical paths to the Worker rather than asking the Worker to infer a
+ * those resolved paths to the Worker rather than asking the Worker to infer a
  * possibly different environment.
  */
 export function resolveCodexHistoryJobTarget(): {
@@ -45,10 +45,10 @@ export function resolveCodexHistoryJobTarget(): {
   return {
     canonicalCodexHome: home,
     canonicalStateDbPath: stateDb,
-    // Derived by the provider's own rule rather than guessed: the manifest lives
-    // in the config directory under a hash of the state database, so a
-    // hand-built path would address a different file entirely.
-    canonicalBackupPath: historyBackupPathFor(stateDb),
+    // Resolve through the provider's canonical-first compatibility rule. Passing
+    // only the newly normalized name would hide a pre-#4442 Windows manifest from
+    // the Worker and make an upgrade look like an empty backup.
+    canonicalBackupPath: resolveExistingHistoryBackupPath(stateDb),
   };
 }
 

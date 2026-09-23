@@ -87,6 +87,8 @@ anyone's prompt. Each names its source.
 The editor has prev/next controls and a position indicator. Unsaved edits are kept
 while you move, so you can compare two layers mid-edit and come back without
 losing what you typed.
+Closing with edits on another layer asks before discarding them. Saving one layer also asks before
+discarding edits parked on other layers; the confirmation's **Save** button saves only the displayed layer.
 
 ### Compatibility warnings
 

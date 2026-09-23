@@ -90,6 +90,7 @@ import type { CatalogModel } from "./parsing";
 import { disabledNativeSlugs, hasComboTargets, hasNativeOpenAiCapabilityMetadata, NATIVE_GPT56_MAX_INPUT_TOKENS, nativeContextLimits, nativeOpenAiCapabilityDisplayName, nativeDefaultReasoningEffort, nativeInputModalities, nativeOpenAiAutoCompactTokenLimit, nativeOpenAiContextWindow, nativeOpenAiMaxInputTokens, nativeOpenAiMaxOutputTokens, nativeOpenAiSlugs, nativeParallelToolCalls, nativeReasoningEfforts } from "./metadata";
 import { deriveComboCatalogModel, normalizedOpenAiApiSignature, openAiApiCollisionWarnings, replaceLastComboCatalogOmissions, warnUncataloguedComboOnce } from "./aggregation";
 import type { ComboCatalogOmission } from "./aggregation";
+import { clampObservedModelLimits, resolveModelPolicy } from "../../providers/resolved-model-policy";
 import type { CatalogGatherProviderAuthEvidence } from "./filesystem-evidence";
 import type {
   CatalogAdmissionSnapshot,
@@ -246,22 +247,6 @@ export function configuredReasoningSummarySupport(prov: OcxProviderConfig | unde
   return modelRecordValue(prov.modelReasoningSummaryDelivery, id) !== undefined ? true : undefined;
 }
 
-function configuredVerbositySupport(name: string, prov: OcxProviderConfig | undefined, id: string): boolean | undefined {
-  const explicit = prov ? modelRecordValue(prov.modelSupportsVerbosity, id) : undefined;
-  if (explicit !== undefined) return explicit;
-  if (!prov) return undefined;
-  void name;
-  // Provider-wide fallback for ids the per-model map does not enumerate — a live-discovered
-  // model would otherwise re-advertise a control the upstream accepts and ignores.
-  //
-  // Read from the PROVIDER CONFIG, never from PROVIDER_REGISTRY. A gather flight captures its
-  // registry authority up front and forbids any later registry read, so consulting the registry
-  // here made a custom-destination flight fall back to "configured" instead of serving its own
-  // discovery result (tests/codex-integration/codex-gather-authority.test.ts). `applyVerbosityDefaults` in
-  // providers/derive.ts materializes the registry default into the config at seed/enrich time.
-  return prov.supportsVerbosity;
-}
-
 export function applyProviderConfigHints(
   name: string,
   prov: OcxProviderConfig,
@@ -270,6 +255,15 @@ export function applyProviderConfigHints(
   metadataModelIdCaseFold?: boolean,
   effectiveAlias?: string | null,
 ): CatalogModel {
+  const staticPolicy = resolveModelPolicy({
+    providerName: name,
+    modelId: model.id,
+    provider: prov,
+    transportMatchedRegistry: false,
+    modelCapabilities: prov.modelCapabilities?.[model.id],
+    ...(prov.authMode ? { effectiveAuth: { authMode: prov.authMode } } : {}),
+    ...(effectiveAlias !== undefined ? { effectiveAlias } : {}),
+  });
   const displayName = configuredModelDisplayName(prov, model.id);
   // The alias decision is resolved once at flight admission (captureProviderGather) and threaded
   // through as `effectiveAlias`. Re-deriving it here would read PROVIDER_REGISTRY after admission,
@@ -279,11 +273,15 @@ export function applyProviderConfigHints(
   const providerAlias = typeof effectiveAlias === "string" || effectiveAlias === null
     ? effectiveAlias
     : model.providerAlias;
-  const configuredCap = configuredContextWindow(prov, model.id);
-  const configuredMaxInput = configuredMaxInputTokens(prov, model.id);
+  const configuredCap = staticPolicy.model.contextWindow ?? configuredContextWindow(prov, model.id);
+  const configuredMaxInput = staticPolicy.model.maxInputTokens;
   const maxOutputTokens = routedMaxOutputTokens(name, prov, model, model.id, metadataModelIdCaseFold);
   const configuredAutoCompact = configuredAutoCompactTokenLimit(prov, model.id);
-  let inputModalities = configuredInputModalities(prov, model.id);
+  // The resolver owns exact capability precedence and legacy exact/colon-family/case-fold fallback.
+  // Removing an exact capability row therefore returns this projection to legacy-map inference.
+  let inputModalities = staticPolicy.model.inputModalities
+    ? [...staticPolicy.model.inputModalities]
+    : undefined;
   // The shared vision-sidecar consumer predicate keeps catalog advertisement and request-time
   // planning aligned. The catalog must still advertise image input — the Codex app
   // gates attachments client-side on input_modalities, and a text-only entry would block images
@@ -296,24 +294,31 @@ export function applyProviderConfigHints(
     inputModalities = base.includes("image") ? [...base] : [...base, "image"];
   }
   const reasoningEfforts = configuredReasoningEfforts(prov, model.id);
-  const defaultReasoningEffort = modelRecordValue(prov.modelDefaultReasoningEfforts, model.id) ?? model.defaultReasoningEffort;
-  const supportsReasoningSummaries = configuredReasoningSummarySupport(prov, model.id);
-  const supportsVerbosity = configuredVerbositySupport(name, prov, model.id);
+  const suppressSyntheticMax = modelRecordValue(prov.modelSuppressSyntheticMax, model.id) === true;
+  const defaultReasoningEffort = staticPolicy.model.defaultReasoningEffort ?? model.defaultReasoningEffort;
+  const supportsReasoningSummaries = staticPolicy.model.supportsReasoningSummaries;
+  const supportsVerbosity = staticPolicy.model.supportsVerbosity;
   const fastPolicy = fastPolicyForModel(prov, model.id, name);
+  // Frozen gather providers retain the captured Fast authority. That late/captured eligibility
+  // owns catalog publication, including an explicit provider-level false.
   const supportsServiceTier = serviceTierSupportFromPolicy(fastPolicy);
   const {
     supportsServiceTier: _staleServiceTier,
     fastTierDescription: _staleFastTierDescription,
     providerAlias: _staleProviderAlias,
+    suppressSyntheticMax: _staleSuppressSyntheticMax,
     ...modelWithoutServiceTier
   } = model;
   // 已发现窗口只允许被配置值压低；缺窗口时，已开的 Context cap 就是实际窗口。
   const discoveredWindow = typeof model.contextWindow === "number" && model.contextWindow > 0
     ? model.contextWindow
     : undefined;
-  const hintedWindow = discoveredWindow !== undefined
-    ? (configuredCap !== undefined ? Math.min(discoveredWindow, configuredCap) : discoveredWindow)
-    : (configuredCap ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined));
+  const projectedLimits = clampObservedModelLimits(staticPolicy.model, {
+    ...(discoveredWindow !== undefined ? { contextWindow: discoveredWindow } : {}),
+    ...(typeof model.maxInputTokens === "number" && model.maxInputTokens > 0 ? { maxInputTokens: model.maxInputTokens } : {}),
+  });
+  const hintedWindow = projectedLimits.contextWindow
+    ?? (providerCap !== undefined ? resolveUnknownRoutedContextWindow(providerCap) : undefined);
   const hinted = {
     ...modelWithoutServiceTier,
     ...(displayName !== undefined ? { displayName } : {}),
@@ -321,11 +326,10 @@ export function applyProviderConfigHints(
     ...(hintedWindow !== undefined ? { contextWindow: hintedWindow } : {}),
     ...(inputModalities ? { inputModalities } : {}),
     ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+    ...(suppressSyntheticMax ? { suppressSyntheticMax: true } : {}),
     ...(configuredMaxInput !== undefined
       ? {
-        maxInputTokens: typeof model.maxInputTokens === "number" && model.maxInputTokens > 0
-          ? Math.min(model.maxInputTokens, configuredMaxInput)
-          : configuredMaxInput,
+        maxInputTokens: projectedLimits.maxInputTokens ?? configuredMaxInput,
       }
       : {}),
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
@@ -393,6 +397,31 @@ export function applyConfigHintsToCachedModels(
   effectiveAlias?: string | null,
 ): CatalogModel[] {
   return models.map(model => applyProviderConfigHints(name, prov, model, contextCap, metadataModelIdCaseFold, effectiveAlias));
+}
+
+/** Catalog slugs whose configured model must not gain a missing synthetic max rung. */
+export function suppressedSyntheticMaxCatalogSlugs(
+  config: Pick<OcxConfig, "providers">,
+  models: readonly CatalogModel[],
+  observedEntries: readonly { slug?: unknown }[] = [],
+): ReadonlySet<string> {
+  const slugs = new Set(models
+    .filter(model => model.suppressSyntheticMax === true)
+    .map(catalogModelSlug));
+  for (const [provider, providerConfig] of Object.entries(config.providers)) {
+    const configured = providerConfig.modelSuppressSyntheticMax ?? {};
+    const encoded = Object.fromEntries(Object.entries(configured)
+      .map(([modelId, suppress]) => [routedSlug(provider, modelId).slice(provider.length + 1), suppress]));
+    for (const [modelId, suppress] of Object.entries(configured)) {
+      if (suppress === true) slugs.add(routedSlug(provider, modelId));
+    }
+    for (const entry of observedEntries) {
+      const slug = typeof entry.slug === "string" ? entry.slug : "";
+      if (!slug.startsWith(`${provider}/`)) continue;
+      if (modelRecordValue(encoded, slug.slice(provider.length + 1)) === true) slugs.add(slug);
+    }
+  }
+  return slugs;
 }
 export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
 

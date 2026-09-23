@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
 import { sharedSpendLedger, type SpendReservationLedger } from "../../lib/spend-reservation-ledger";
-import type { RequestLogContext } from "../request-log";
+import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
+import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
+import { recordWorkflowRefusalEvent, workflowDenialSummary } from "../../lib/workflow-budget";
 
 /** The terminal usage a request reported, in the only two fields the ledger books. */
 export interface TerminalSpendUsage {
@@ -41,8 +43,8 @@ export interface RequestSpendTracker extends RequestSendObserver, RequestSpendSe
 export function createRequestSpendTracker(
   logCtx: Pick<
     RequestLogContext,
-    "provider" | "accountLogLabel" | "usageLogInputTokens" | "spendOutputCeilingTokens"
-  >,
+    "provider" | "accountLogLabel" | "usageLogInputTokens" | "spendOutputCeilingTokens" | "spendInputEstimateTokens"
+  > & Partial<Pick<RequestLogContext, "localTerminalReason" | "terminalSource" | "errorCode">>,
   rootId: string | undefined,
   injected?: SpendReservationLedger,
 ): RequestSpendTracker {
@@ -56,6 +58,7 @@ export function createRequestSpendTracker(
   const live: string[] = [];
   let refusals = 0;
   let resolved = false;
+  let terminalProcessed = false;
   /**
    * Confirm the sends this request has already moved past.
    *
@@ -70,7 +73,13 @@ export function createRequestSpendTracker(
     for (let index = 0; index < live.length - 1; index += 1) ledger().markDispatched(live[index] as string);
   };
   return {
-    charge(): boolean {
+    charge(options?: { alreadySent?: boolean }): boolean {
+      // A send that has already left is RECORDED, never refused: the tokens are spent, and a
+      // booking the ledger drops is a booking the ceiling can never see. This is the reporting
+      // transports' path -- the passthrough ladder reports through `onSendsConsumed` after the
+      // fetch -- so without it a root ceiling on the canonical Codex path would sit one send
+      // short of its limit forever and refuse nothing.
+      const alreadySent = options?.alreadySent === true;
       const sendId = randomUUID();
       const decision = ledger().reserve({
         sendId,
@@ -81,20 +90,42 @@ export function createRequestSpendTracker(
           ...(logCtx.accountLogLabel !== undefined ? { identityId: logCtx.accountLogLabel } : {}),
           ...(logCtx.provider !== undefined ? { poolId: logCtx.provider } : {}),
         },
-        inputTokens: logCtx.usageLogInputTokens ?? 0,
+        inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
         outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0,
+        ...(alreadySent ? { alreadySent: true } : {}),
       });
       if (!decision.reserved) {
         refusals += 1;
-        // Only an operator's configured ceiling refuses a dispatch. Every other denial --
-        // capacity, durability, a journal this process could not prove complete -- means the
-        // ledger cannot ACCOUNT for this send, which is not a reason to refuse one. An
-        // unconfigured install keeps the count caps it already had and is not newly refused,
-        // and a degraded ledger must not become an outage.
-        return decision.denial.reason !== "spend-limit-exceeded";
+        const denial = decision.denial;
+        // A ceiling refuses, and so does a ledger that cannot make the reservation durable
+        // under one. That second case is the whole reason this store is on disk: admitting a
+        // send whose record a restart would forget is how an exhausted budget comes back with
+        // a fresh allowance, and the ledger raises those two denials ONLY when a limit is
+        // configured -- so an install that configured nothing is still never refused here.
+        // Capacity and a duplicate send id stay permissive: they say the ledger cannot account
+        // for this send, which is a degradation to report, not an outage to cause.
+        if (denial.reason === "reserve-not-durable" || denial.reason === "journal-corrupt") {
+          return alreadySent;
+        }
+        if (denial.reason !== "spend-limit-exceeded") return true;
+        // This send is refused, and the dispatch path that asked will report an exhausted send
+        // budget -- from there, that is all it can see. The row is where an operator actually
+        // looks, so the ceiling is named on it here: a locally assigned code wins in
+        // addFinalRequestLog, so the request that CROSSED the ceiling reads as a spend refusal
+        // rather than as the ordinary budget exhaustion it would otherwise be indistinguishable
+        // from. The event ring gets the same pair so /api/workflow-budget agrees with the row.
+        const detail = { scope: denial.scope, limit: denial.limit, projected: denial.projected };
+        const summary = workflowDenialSummary("workflow-spend-exhausted", detail);
+        markLocalRequestLogRefusal(logCtx, summary.code);
+        logCtx.errorCode = summary.code;
+        recordWorkflowRefusalEvent(rootId, "workflow-spend-exhausted", Date.now(), detail);
+        return false;
       }
       live.push(sendId);
       confirmOlderSends();
+      // It has already left, so the reservation cannot be handed back for free: from here only
+      // a settlement or unresolved spend is honest about it.
+      if (alreadySent) ledger().markDispatched(sendId);
       return true;
     },
     refund(): void {
@@ -106,21 +137,35 @@ export function createRequestSpendTracker(
     },
     settle(usage: TerminalSpendUsage | undefined): void {
       if (resolved) return;
-      resolved = true;
-      const terminal = live.pop();
-      if (terminal !== undefined) {
-        const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
-        if (reported) {
-          ledger().settle(terminal, {
-            inputTokens: usage?.inputTokens ?? 0,
-            outputTokens: usage?.outputTokens ?? 0,
-          });
-        } else {
-          // The response never reported usage. It may still have been billed.
-          ledger().markLost(terminal);
+      try {
+        if (!terminalProcessed && live.length > 0) {
+          const terminal = live[live.length - 1] as string;
+          const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
+          if (reported) {
+            ledger().settle(terminal, {
+              inputTokens: usage?.inputTokens ?? 0,
+              outputTokens: usage?.outputTokens ?? 0,
+            });
+          } else {
+            // The response never reported usage. It may still have been billed.
+            ledger().markLost(terminal);
+          }
+          live.pop();
+          terminalProcessed = true;
         }
+        while (live.length > 0) {
+          ledger().markLost(live[live.length - 1] as string);
+          live.pop();
+        }
+        resolved = true;
+      } catch (error) {
+        // A deferred final log may arrive after server.stop released this ledger's lease.
+        // Only that ended ownership can discard sends already reserved by this tracker.
+        if (live.length === 0 || !(error instanceof SpendLedgerOwnerError)
+          || error.code !== "SPEND_LEDGER_OWNER_NOT_HELD") throw error;
+        live.length = 0;
+        resolved = true;
       }
-      for (const sendId of live.splice(0)) ledger().markLost(sendId);
     },
     get refusals(): number { return refusals; },
   };

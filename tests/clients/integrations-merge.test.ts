@@ -5,8 +5,10 @@ import { dirname, join } from "node:path";
 import type { ExportModel, ManagedContribution } from "../../src/clients/config-export";
 import {
   AmbiguousSelectorError,
+  InvalidSelectorError,
   createdContainerPaths,
   deletePath,
+  formatSelectorConjunction,
   parseSegment,
   setPath,
 } from "../../src/integrations/merge";
@@ -32,20 +34,64 @@ const OURS = { id: "opencodex", name: "OpenCodex" };
 const THEIRS = { id: "lmstudio", name: "LM Studio" };
 const SELECT = ["providers", "[id=opencodex]"] as const;
 
+function conjunction(criteria: Parameters<typeof formatSelectorConjunction>[0]): string {
+  const selector = formatSelectorConjunction(criteria);
+  if (selector === null) throw new Error("test fixture must be a valid conjunction");
+  return selector;
+}
+
+function withoutLastCriterion(selector: string): string {
+  const separator = selector.lastIndexOf(",");
+  if (separator < 0) throw new Error("test fixture must contain multiple criteria");
+  return `${selector.slice(0, separator)}${selector.slice(-1)}`;
+}
+
 function contribution(path: readonly string[], value: unknown = OURS): ManagedContribution {
   return { clientId: "raycast", fragments: [{ path, value }] };
 }
 
 describe("parseSegment", () => {
   test("a selector splits into field and value; anything else is a key", () => {
-    expect(parseSegment("[id=opencodex]")).toEqual({ kind: "select", field: "id", value: "opencodex" });
+    expect(parseSegment("[id=opencodex]"))
+      .toEqual({ kind: "select", criteria: [{ field: "id", value: "opencodex" }] });
     expect(parseSegment("[model_id=anthropic/claude-opus-5]"))
-      .toEqual({ kind: "select", field: "model_id", value: "anthropic/claude-opus-5" });
+      .toEqual({ kind: "select", criteria: [{ field: "model_id", value: "anthropic/claude-opus-5" }] });
     expect(parseSegment("providers")).toEqual({ kind: "key", key: "providers" });
     // Near misses stay keys: a client whose map literally has such a key keeps working.
     expect(parseSegment("[id=]")).toEqual({ kind: "key", key: "[id=]" });
     expect(parseSegment("[=x]")).toEqual({ kind: "key", key: "[=x]" });
     expect(parseSegment("[id=x")).toEqual({ kind: "key", key: "[id=x" });
+  });
+
+  test("unversioned selectors keep commas and equals inside one legacy value", () => {
+    expect(parseSegment("[id=a,b=c]")).toEqual({
+      kind: "select",
+      criteria: [{ field: "id", value: "a,b=c" }],
+    });
+    expect(parseSegment("[name=Acme, Inc.]"))
+      .toEqual({ kind: "select", criteria: [{ field: "name", value: "Acme, Inc." }] });
+  });
+
+  test("a formatted conjunction names every criterion and malformed marked input is refused", () => {
+    const criteria = [
+      { field: "providerId", value: "opencodex" },
+      { field: "modelId", value: "anthropic/claude-opus-5" },
+    ];
+    const selector = conjunction(criteria);
+    expect(parseSegment(selector)).toEqual({ kind: "select", criteria });
+    expect(() => parseSegment(withoutLastCriterion(selector))).toThrow(InvalidSelectorError);
+  });
+
+  test("the conjunction formatter refuses unrepresentable criteria", () => {
+    const invalid: Parameters<typeof formatSelectorConjunction>[0][] = [
+      [],
+      [{ field: "id", value: "one" }],
+      [{ field: "not-a-field", value: "one" }, { field: "id", value: "two" }],
+      [{ field: "providerId", value: "" }, { field: "modelId", value: "two" }],
+      [{ field: "providerId", value: "one,two" }, { field: "modelId", value: "two" }],
+      [{ field: "providerId", value: "one]two" }, { field: "modelId", value: "two" }],
+    ];
+    for (const criteria of invalid) expect(formatSelectorConjunction(criteria)).toBeNull();
   });
 });
 
@@ -153,6 +199,23 @@ describe("readPath and blockedContainerPath with a selector", () => {
     expect(blockedContainerPath({ providers: [{ id: "opencodex", name: 1 }] }, contribution(["providers", "[id=opencodex]", "name", "leaf"], "X")))
       .toEqual(["providers", "[id=opencodex]", "name"]);
   });
+
+  test("a formatted conjunction selects only the row matching every criterion", () => {
+    const modelId = "anthropic/claude-opus-5";
+    const selector = conjunction([
+      { field: "providerId", value: "opencodex" },
+      { field: "modelId", value: modelId },
+    ]);
+    const both = { providerId: "opencodex", modelId, owner: "both" };
+    const doc = {
+      rules: [
+        { providerId: "opencodex", modelId: "other", owner: "provider-only" },
+        { providerId: "other", modelId, owner: "model-only" },
+        both,
+      ],
+    };
+    expect(readPath(doc, ["rules", selector])).toEqual(both);
+  });
 });
 
 describe("plain-key paths are unchanged", () => {
@@ -252,6 +315,20 @@ describe("raycast writer round trip", () => {
     expect(readIntegrationState(input())).toMatchObject({ state: "unsafe", reason: "blocked-container" });
     expect(applyIntegration(input())).toMatchObject({ ok: false, reason: "unsafe" });
     expect(Bun.YAML.parse(readFileSync(configPath, "utf8"))).toEqual({ providers: { opencodex: {} } });
+  });
+
+  test("a persisted legacy selector keeps its comma-and-equals value", () => {
+    const configPath = installRaycast();
+    writeFileSync(configPath, Bun.YAML.stringify({ providers: [THEIRS] }));
+    expect(applyIntegration(input())).toMatchObject({ ok: true });
+
+    const legacyPath = ["providers", "[id=a,b=c]"];
+    store.putRecord({ ...store.readRecords().raycast!, fragmentPaths: [legacyPath] });
+    const persistedPath = store.readRecords().raycast!.fragmentPaths[0]!;
+    const legacyRow = { id: "a,b=c", owner: "legacy" };
+    const apparentConjunctionRow = { id: "a", b: "c", owner: "other" };
+
+    expect(readPath({ providers: [apparentConjunctionRow, legacyRow] }, persistedPath)).toEqual(legacyRow);
   });
 
   for (const recorded of [false, true]) {

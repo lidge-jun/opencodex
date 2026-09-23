@@ -370,7 +370,7 @@ export function modelAdapterRecordConfigError(
     if (typeof entry !== "string" || !MODEL_ADAPTER_OVERRIDE_ALLOWED.has(entry)) {
       return `${field}.${key} must be one of: ${[...MODEL_ADAPTER_OVERRIDE_ALLOWED].join(", ")}`;
     }
-    if (isWirePinnedModel(providerName, key.trim())) {
+    if (isWirePinnedModel(providerName, key.trim(), provider)) {
       return `${field}.${key} cannot be overridden: the upstream only speaks one wire for this model`;
     }
   }

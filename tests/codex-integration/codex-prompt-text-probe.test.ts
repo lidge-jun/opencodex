@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   extractSectionsForTests,
+  mapSectionsToLayersForTests,
   probePromptText,
   promptTextProbeSpawnAttemptsForTests,
   resetPromptTextProbeForTests,
@@ -181,6 +182,23 @@ describe("section extraction", () => {
   test("a section spanning multiple lines keeps its body", () => {
     const sections = extractSectionsForTests(message("<apps_instructions>line one\nline two</apps_instructions>"));
     expect(sections.get("apps_instructions")).toBe("line one\nline two");
+  });
+
+  test("context-dependent collaboration text maps to its prompt layer", () => {
+    const rendered = extractSectionsForTests(
+      message("<collaboration_mode>Pair-programming instructions.</collaboration_mode>"),
+    );
+    expect(mapSectionsToLayersForTests(rendered).collaboration).toEqual({
+      text: "Pair-programming instructions.",
+      reason: "ok",
+      bytes: 30,
+    });
+
+    expect(mapSectionsToLayersForTests(new Map()).collaboration).toEqual({
+      text: null,
+      reason: "not-rendered",
+      bytes: 0,
+    });
   });
 
   test("AGENTS.md is bounded by its own INSTRUCTIONS wrapper", () => {
@@ -610,6 +628,38 @@ describe("prompt probe process lifecycle", () => {
     });
     expect((await probePromptText(2_000)).ok).toBe(true);
     expect(promptTextProbeSpawnAttemptsForTests()).toBe(1);
+  });
+});
+
+describe("unmapped layers", () => {
+  test("a layer with no confirmed tag reports unmapped, not the base prompt's not-exposed", async () => {
+    // UNMAPPED_LAYER_IDS used to reuse "not-exposed", which is the base prompt's
+    // contract: the GUI renders a base-prompt-specific explanation for it. A
+    // layer the extractor simply has no verified tag for is a smaller claim.
+    const home = promptHome({
+      "config.toml": "model = \"gpt-test\"\n",
+      "opencodex-catalog.json": catalogJson([{ slug: "gpt-test", base_instructions: "Base prompt body." }]),
+    });
+    const previousHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = home;
+    setPromptTextProbeCommandForTests({
+      binary: process.execPath,
+      args: ["-e", `process.stdout.write(${JSON.stringify(VALID_PROBE_OUTPUT)})`],
+    });
+    try {
+      const result = await probePromptText(2_000);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.layers["personality"]).toMatchObject({ text: null, reason: "unmapped", bytes: 0 });
+        expect(result.layers["tools"]).toMatchObject({ text: null, reason: "unmapped", bytes: 0 });
+        // The base prompt keeps its own contract: readable text stays "ok" and an
+        // unexpanded template stays "not-exposed" - never "unmapped".
+        expect(result.layers["base-instructions"]).toMatchObject({ text: "Base prompt body.", reason: "ok" });
+      }
+    } finally {
+      if (previousHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousHome;
+    }
   });
 });
 

@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { DestinationDnsResolutionError } from "../../src/lib/destination-policy";
 import type { ProviderOutboundDependencies } from "../../src/lib/provider-outbound";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -54,6 +55,33 @@ function directDependencies(
 }
 
 describe("provider outbound GET transport", () => {
+  test("a written fetch value is configuration, not an executor to call", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = directDependencies(new Response('{"data":[]}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }));
+
+    /*
+     * A provider entry keeps unknown configuration keys, so an operator can write `fetch` into
+     * config.json and it arrives here as a string. Treating a present value as callable threw
+     * inside discovery and failed that provider for a reason nothing in its configuration
+     * explains. A configured value means the built-in transport, which is what pins the peer.
+     */
+    const written = { baseUrl: "https://provider.example/v1", fetch: "https://not-an-executor.example" };
+    const response = await providerOutboundGet(
+      "written-fetch",
+      written as unknown as Parameters<typeof providerOutboundGet>[1],
+      "https://provider.example/v1/models",
+      { headers: { authorization: "Bearer test-key" } },
+      dependencies,
+    );
+
+    expect(await response.json()).toEqual({ data: [] });
+    expect(captured.address).toBe("93.184.216.34");
+  });
+
   test("direct HTTPS connects only to the validated address with TLS verification", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
@@ -207,6 +235,182 @@ describe("provider outbound GET transport", () => {
     }
   });
 
+  test("scheme-mismatched proxy variables keep the DNS-pinned transport", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      for (const { url, proxyKey } of [
+        { url: "http://provider.example/v1/models", proxyKey: "HTTPS_PROXY" },
+        { url: "https://provider.example/v1/models", proxyKey: "HTTP_PROXY" },
+      ] as const) {
+        for (const key of proxyKeys) delete process.env[key];
+        process.env[proxyKey] = "http://127.0.0.1:9";
+        const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+        const resolveOptions: { allowBenchmarkAddresses?: boolean }[] = [];
+        const { dependencies, captured } = directDependencies(new Response(null, { status: 204 }));
+        dependencies.resolveAddresses = mock(async (_url: string, options?: { allowBenchmarkAddresses?: boolean }) => {
+          resolveOptions.push({ allowBenchmarkAddresses: options?.allowBenchmarkAddresses });
+          return {
+            hostname: "provider.example",
+            addresses: [{ address: "93.184.216.34", family: 4 }],
+            privateNetwork: false,
+          };
+        }) as ProviderOutboundDependencies["resolveAddresses"];
+
+        const response = await providerOutboundGet(
+          "custom",
+          { baseUrl: new URL(url).origin + "/v1" },
+          url,
+          {},
+          dependencies,
+        );
+
+        expect(response.status).toBe(204);
+        expect(captured.address).toBe("93.184.216.34");
+        expect(resolveOptions).toEqual([{ allowBenchmarkAddresses: false }]);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a NO_PROXY match keeps the request on the DNS-pinned transport", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTPS_PROXY = "http://127.0.0.1:9";
+    process.env.NO_PROXY = "provider.example";
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+      const { dependencies, captured } = directDependencies(new Response(null, { status: 204 }));
+
+      const response = await providerOutboundGet(
+        "custom",
+        { baseUrl: "https://provider.example/v1" },
+        "https://provider.example/v1/models",
+        {},
+        dependencies,
+      );
+
+      expect(response.status).toBe(204);
+      expect(captured.address).toBe("93.184.216.34");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a scheme-mismatched proxy variable does not demand NO_PROXY for private providers", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTP_PROXY = "http://127.0.0.1:9";
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = directDependencies(new Response(null, { status: 200 }), {
+      privateNetwork: true,
+      address: "192.168.1.50",
+    });
+
+    const response = await providerOutboundGet(
+      "ollama-lan",
+      { baseUrl: "https://ollama.lan:11434/v1", allowPrivateNetwork: true },
+      "https://ollama.lan:11434/v1/models",
+      {},
+      dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(captured.address).toBe("192.168.1.50");
+  });
+
+  test("DNS failure with only a scheme-mismatched proxy rethrows instead of degrading to an unpinned fetch", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTP_PROXY = "http://127.0.0.1:9";
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response("unexpected", { status: 500 })) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+      const { dependencies } = directDependencies(new Response(null, { status: 204 }));
+      dependencies.resolveAddresses = mock(async () => {
+        throw new DestinationDnsResolutionError("getaddrinfo ENOTFOUND provider.example");
+      }) as ProviderOutboundDependencies["resolveAddresses"];
+
+      // A proxy variable fetch would never use for this https: target must not
+      // license the unpinned degradation path: the DNS failure surfaces as-is.
+      await expect(providerOutboundGet(
+        "custom",
+        { baseUrl: "https://provider.example/v1" },
+        "https://provider.example/v1/models",
+        {},
+        dependencies,
+      )).rejects.toBeInstanceOf(DestinationDnsResolutionError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("DNS failure behind a scheme-matched proxy still degrades to the proxy fetch", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTPS_PROXY = "http://127.0.0.1:9";
+    const originalFetch = globalThis.fetch;
+    const fetchMock = mock(async () => new Response('{"data":[]}', { status: 200 })) as typeof fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+      const { dependencies } = directDependencies(new Response(null, { status: 204 }));
+      dependencies.resolveAddresses = mock(async () => {
+        throw new DestinationDnsResolutionError("getaddrinfo ENOTFOUND provider.example");
+      }) as ProviderOutboundDependencies["resolveAddresses"];
+
+      // The proxy the request will actually use may resolve names the local
+      // resolver cannot, so the degradation stays for the route that applies.
+      const response = await providerOutboundGet(
+        "custom",
+        { baseUrl: "https://provider.example/v1" },
+        "https://provider.example/v1/models",
+        {},
+        dependencies,
+      );
+
+      expect(response.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("a SOCKS scheme-matched variable admits and binds the proxy instead of pin-connecting to fake-IP", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    process.env.HTTPS_PROXY = "socks5://127.0.0.1:9";
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = directDependencies(new Response(null, { status: 204 }));
+    const resolveOptions: { allowMihomoIpv6FakeIp?: boolean }[] = [];
+    dependencies.resolveAddresses = mock(async (_url: string, options?: { allowMihomoIpv6FakeIp?: boolean }) => {
+      resolveOptions.push({ allowMihomoIpv6FakeIp: options?.allowMihomoIpv6FakeIp });
+      return {
+        hostname: "provider.example",
+        addresses: [{ address: "fdfe:dcba:9876::1", family: 6 }],
+        privateNetwork: false,
+      };
+    }) as ProviderOutboundDependencies["resolveAddresses"];
+
+    // Admission and transport must name the same proxy: the request rides the
+    // SOCKS binding the admission assumed, so the unreachable proxy rejects
+    // here. Pin-connecting to the fake-IP instead would be the inconsistency.
+    await expect(providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      {},
+      dependencies,
+    )).rejects.toThrow();
+    expect(resolveOptions).toEqual([{ allowMihomoIpv6FakeIp: true }]);
+    expect(captured.address).toBeUndefined();
+  });
+
   test("built-in ollama admits loopback discovery without an explicit allowPrivateNetwork flag (#758)", async () => {
     for (const key of proxyKeys) delete process.env[key];
     const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
@@ -351,6 +555,8 @@ describe("provider outbound GET transport", () => {
       expect(result.providerRequests).toEqual(["/v1/models", "/v1/models", "/v1/models"]);
       expect(stderr).toContain("cannot be pinned locally");
     } finally {
+      if (child.exitCode === null) child.kill();
+      await child.exited;
       removeTreeWithRetry(childHome);
     }
   }, 15_000);
@@ -544,7 +750,7 @@ describe("#3462 Mihomo IPv6 fake-IP admission is gated on the scheme-matched pro
 });
 
 describe("effectiveProxyFor picks the variable Bun fetch actually honours", () => {
-  test("scheme-matched selection; HTTP ALL_PROXY is never consulted", async () => {
+  test("scheme-matched selection; HTTP ALL_PROXY only counts for http: targets", async () => {
     const { effectiveProxyFor } = await import("../../src/lib/proxy-env");
     const https = new URL("https://opencode.ai/zen/v1/models");
     const http = new URL("http://ollama.lan:11434/v1/models");
@@ -555,7 +761,218 @@ describe("effectiveProxyFor picks the variable Bun fetch actually honours", () =
     expect(effectiveProxyFor(https, { ALL_PROXY: "socks5://127.0.0.1:1080" })).toBe("socks5://127.0.0.1:1080");
     expect(effectiveProxyFor(http, { HTTP_PROXY: "http://p:5" })).toBe("http://p:5");
     expect(effectiveProxyFor(http, { HTTPS_PROXY: "http://p:6" })).toBeNull();
+    // Bun's native fetch honours a non-SOCKS ALL_PROXY for plain http: targets on
+    // every platform the CI matrix covers (the provider-outbound e2e proves the
+    // request reaches the proxy); https: targets only ever use the socks5 wrapper.
+    expect(effectiveProxyFor(http, { ALL_PROXY: "http://p:7" })).toBe("http://p:7");
+    expect(effectiveProxyFor(http, { all_proxy: "http://p:13" })).toBe("http://p:13");
+    expect(effectiveProxyFor(http, { ALL_PROXY: "ftp://p:8" })).toBeNull();
+    expect(effectiveProxyFor(http, { ALL_PROXY: "http://" })).toBeNull();
+    // A SOCKS URL in a scheme-matched variable is a usable proxy: admission
+    // binds it explicitly and the transport follows, so it counts as applying.
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "socks5://p:9" })).toBe("socks5://p:9");
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "socks5h://p:14" })).toBe("socks5h://p:14");
+    // A malformed or non-proxy-scheme scheme-matched variable is not a proxy
+    // Bun fetch can use either: it must not count as "the proxy that applies".
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "http://" })).toBeNull();
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "not a url" })).toBeNull();
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "http://" })).toBeNull();
     expect(effectiveProxyFor(https, { HTTPS_PROXY: "   " })).toBeNull();
+    // A present-but-unusable scheme-matched variable fails closed rather than
+    // falling through to ALL_PROXY: no usable proxy is guaranteed either way,
+    // so the DNS-pinned transport must stay.
+    expect(effectiveProxyFor(http, { HTTP_PROXY: "not a url", ALL_PROXY: "http://p:10" })).toBeNull();
+    expect(effectiveProxyFor(https, { HTTPS_PROXY: "ftp://p:11", ALL_PROXY: "http://p:12" })).toBeNull();
     expect(effectiveProxyFor(new URL("ftp://x/"), { HTTPS_PROXY: "http://p:7", HTTP_PROXY: "http://p:7" })).toBeNull();
+  });
+
+  test("schemeMatchedProxyFor keeps the stricter fake-IP binding gate", async () => {
+    const { schemeMatchedProxyFor } = await import("../../src/lib/proxy-env");
+    const https = new URL("https://opencode.ai/zen/v1/models");
+    const http = new URL("http://ollama.lan:11434/v1/models");
+    expect(schemeMatchedProxyFor(https, { HTTPS_PROXY: "http://p:1" })).toBe("http://p:1");
+    expect(schemeMatchedProxyFor(http, { HTTP_PROXY: "http://p:2" })).toBe("http://p:2");
+    // A SOCKS URL in a scheme-matched variable is a valid explicit binding.
+    expect(schemeMatchedProxyFor(https, { HTTPS_PROXY: "socks5://p:3" })).toBe("socks5://p:3");
+    expect(schemeMatchedProxyFor(https, { ALL_PROXY: "socks5://p:4" })).toBe("socks5://p:4");
+    // A non-SOCKS ALL_PROXY never counts for the binding gate, even for the
+    // http: targets effectiveProxyFor reports it for.
+    expect(schemeMatchedProxyFor(http, { ALL_PROXY: "http://p:5" })).toBeNull();
+    expect(schemeMatchedProxyFor(https, { ALL_PROXY: "http://p:6" })).toBeNull();
+    expect(schemeMatchedProxyFor(https, { HTTP_PROXY: "http://p:7" })).toBeNull();
+    // An unusable scheme-matched value is not a binding either: admitting a
+    // fake-IP answer against it would pin-connect to an address nothing resolves.
+    expect(schemeMatchedProxyFor(https, { HTTPS_PROXY: "not a url" })).toBeNull();
+    expect(schemeMatchedProxyFor(https, { HTTPS_PROXY: "ftp://p:8" })).toBeNull();
+  });
+});
+
+describe("provider outbound default User-Agent", () => {
+  function userAgentDependencies(response: Response): {
+    dependencies: ProviderOutboundDependencies;
+    captured: { headers?: HeadersInit };
+  } {
+    const captured: { headers?: HeadersInit } = {};
+    return {
+      captured,
+      dependencies: {
+        resolveAddresses: mock(async () => ({
+          hostname: "provider.example",
+          addresses: [{ address: "93.184.216.34", family: 4 }],
+          privateNetwork: false,
+        })),
+        pinnedGet: mock(async (_url, _pinned, _signal, requestOptions) => {
+          captured.headers = requestOptions?.headers;
+          return response;
+        }),
+        pinnedPost: mock(async (_url, _pinned, _body, _signal, requestOptions) => {
+          captured.headers = requestOptions?.headers;
+          return response;
+        }),
+      },
+    };
+  }
+
+  test("direct GET fills opencodex when no caller names a User-Agent", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response('{"data":[]}', { status: 200 }));
+
+    const response = await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: { authorization: "Bearer test-key" } },
+      dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
+  });
+
+  test("a caller User-Agent is kept without a second User-Agent beside it", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: { authorization: "Bearer test-key", "user-agent": "gateway-agent/1.0" } },
+      dependencies,
+    );
+
+    expect(Object.keys(captured.headers as Record<string, string>).filter(name => name.toLowerCase() === "user-agent"))
+      .toEqual(["user-agent"]);
+    expect(new Headers(captured.headers).get("user-agent")).toBe("gateway-agent/1.0");
+  });
+
+  test("no headers at all still sends the default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      {},
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+  });
+
+  test("the POST diagnostic path gets the same default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundPost } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    const response = await providerOutboundPost(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/discovery",
+      { headers: { authorization: "Bearer test-key" }, body: "{}" },
+      dependencies,
+    );
+
+    expect(response.status).toBe(200);
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+  });
+  test("a Headers object without a User-Agent gets the default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: new Headers({ authorization: "Bearer test-key" }) },
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
+  });
+
+  test("an array-form header list without a User-Agent gets the default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: [["authorization", "Bearer test-key"]] },
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
+  });
+
+  test("a Headers object keeps its own User-Agent", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+    const { dependencies, captured } = userAgentDependencies(new Response(null, { status: 200 }));
+
+    await providerOutboundGet(
+      "custom",
+      { baseUrl: "https://provider.example/v1" },
+      "https://provider.example/v1/models",
+      { headers: new Headers({ "user-agent": "vendor-agent/1.0" }) },
+      dependencies,
+    );
+
+    expect(new Headers(captured.headers).get("user-agent")).toBe("vendor-agent/1.0");
+  });
+
+  // The pinned transport is not the only way out of this wrapper. A provider that carries its
+  // own executor bypasses `pinnedGet`/`pinnedPost` entirely, so a fill applied only on the
+  // pinned path would leave that branch UA-less and still 403 behind the same WAF. Asserting the
+  // init the executor actually receives is what keeps the default from being pinned-path-only.
+  test("a caller-owned executor receives the same default", async () => {
+    for (const key of proxyKeys) delete process.env[key];
+    const captured: { headers?: HeadersInit } = {};
+    const override = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      captured.headers = init?.headers;
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    const { providerOutboundGet } = await import("../../src/lib/provider-outbound");
+
+    await providerOutboundGet(
+      "override",
+      { baseUrl: "https://override.example/v1", fetch: override } as { baseUrl: string; fetch: typeof fetch },
+      "https://override.example/v1/models",
+      { headers: { authorization: "Bearer test-key" } },
+    );
+
+    expect(override).toHaveBeenCalledTimes(1);
+    expect(new Headers(captured.headers).get("user-agent")).toBe("opencodex");
+    expect(new Headers(captured.headers).get("authorization")).toBe("Bearer test-key");
   });
 });

@@ -23,7 +23,7 @@ export interface MachineStatusV1 {
 export interface MachineApiDeps {
   sync: typeof syncConnectedClient;
   disconnect: typeof disconnectClient;
-  scheduleStandaloneRecycle: () => void;
+  scheduleStandaloneRecycle: (disconnectedTokenFingerprint: string) => void;
   hubReachability?: () => HubReachability;
   setHubReachability?: (value: HubReachability) => void;
 }
@@ -74,10 +74,11 @@ export async function handleMachineApi(
   injected: MachineApiDeps = defaultDeps,
 ): Promise<Response | null> {
   const deps = { ...defaultDeps, ...injected };
-  if (url.pathname === "/api/machine/status" && req.method === "GET") {
+  const readMethod = req.method === "GET" || req.method === "HEAD";
+  if (url.pathname === "/api/machine/status" && readMethod) {
     return Response.json(statusPayload(req, state, deps), { headers: { "Cache-Control": "no-store" } });
   }
-  if (url.pathname === "/api/machine/clients" && req.method === "GET") {
+  if (url.pathname === "/api/machine/clients" && readMethod) {
     return Response.json({
       selectedClients: [...state.selectedClients],
       journalOwner: journalOwner(),
@@ -103,7 +104,7 @@ export async function handleMachineApi(
       return Response.json({ success: false, error: message }, { status: 502 });
     }
   }
-  if (url.pathname === "/api/machine/shim" && req.method === "GET") {
+  if (url.pathname === "/api/machine/shim" && readMethod) {
     return Response.json(diagnoseCodexShim(), { headers: { "Cache-Control": "no-store" } });
   }
   if (url.pathname === "/api/machine/shim" && req.method === "POST") {
@@ -129,7 +130,7 @@ export async function handleMachineApi(
     }
     try {
       const result = await deps.disconnect(input.keepCatalog === undefined ? {} : { keepCatalog: input.keepCatalog });
-      deps.scheduleStandaloneRecycle();
+      deps.scheduleStandaloneRecycle(state.tokenFingerprint);
       return Response.json({ success: true, ...result }, { status: 202 });
     } catch (error) {
       return Response.json({ success: false, error: error instanceof Error ? error.message : "disconnect failed" }, { status: 409 });

@@ -80,7 +80,15 @@ describe("Responses core module boundaries", () => {
     const ingress = readResponsesCoreModule("core.ts");
     const native = readResponsesCoreModule("passthrough-execution.ts");
     expect(ingress).toContain("return await executePassthroughResponse(");
-    expect(native).toContain("return await deliverPassthroughResponse(");
+    // Delivery is awaited inside the try, and its direct body is wrapped before
+    // the return. What matters is that both awaits stay inside the lease owner,
+    // not that the delivery call is itself the return expression.
+    expect(native).toContain("const response = await deliverPassthroughResponse(");
+    expect(native).toContain("return guardDirectPassthroughBodyInactivity(");
+    expect(native.indexOf("await deliverPassthroughResponse("))
+      .toBeLessThan(native.indexOf("return guardDirectPassthroughBodyInactivity("));
+    expect(native.indexOf("return guardDirectPassthroughBodyInactivity("))
+      .toBeLessThan(native.indexOf("} finally {"));
     expect(native.indexOf("admissionState.pendingHostAdmissionLease = null;"))
       .toBeLessThan(native.indexOf("await preparePassthroughExchange("));
     expect(native).toMatch(/finally\s*\{\s*if \(nativeHostState\.lease\)\s*\{\s*releaseUpstreamHostAdmission\(nativeHostState\.lease\);\s*releaseCodexAuthContextProbeLease\(admissionState\.authCtx\);/);

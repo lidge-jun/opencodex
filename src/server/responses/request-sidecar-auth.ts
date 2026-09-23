@@ -50,7 +50,7 @@ export async function prepareResponsesSidecarAuth(
   let openAiSidecar: ResolvedOpenAiForwardSidecar | undefined;
   const visionDescribeTerminal = options.visionDescribeTerminal === true;
   const routedCompaction = parsed._compactionRequest === true
-    && !isCanonicalOpenAiForwardProvider(route.provider);
+    && (!isCanonicalOpenAiForwardProvider(route.provider) || parsed._portableCompaction === true);
   const needsOpenAiVision = !visionDescribeTerminal
     && shouldResolveOpenAiVisionSidecar(config, route.provider, route.modelId, parsed, route.providerName);
   const needsOpenAiSearch = !routedCompaction && !transportState.adapter.runTurn

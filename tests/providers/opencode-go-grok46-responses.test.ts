@@ -26,6 +26,7 @@ function buildRequest(
   modelId: string,
   rawBody: Record<string, unknown>,
   configuredProvider = provider(),
+  replayPrefixLength?: number,
 ) {
   return createResponsesPassthroughAdapter(configuredProvider).buildRequest({
     modelId,
@@ -33,6 +34,7 @@ function buildRequest(
     stream: true,
     options: {},
     _rawBody: { model: modelId, input: "ping", ...rawBody },
+    ...(replayPrefixLength === undefined ? {} : { _replayPrefixLen: replayPrefixLength }),
   }, { headers: new Headers() });
 }
 
@@ -41,11 +43,13 @@ function build(modelId: string, rawBody: Record<string, unknown>, configuredProv
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
-describe("OpenCode Go Grok 4.6 Responses compatibility", () => {
-  test("routes only the documented Grok model to Responses", () => {
+describe("OpenCode Go Grok Responses compatibility", () => {
+  test("routes the documented Grok models to Responses", () => {
     const configured = providerConfigSeed(registryEntry);
 
     expect(resolveWireProtocolOverride("opencode-go", "grok-4.6", configured).adapter)
+      .toBe("openai-responses");
+    expect(resolveWireProtocolOverride("opencode-go", "grok-4.7", configured).adapter)
       .toBe("openai-responses");
     expect(resolveWireProtocolOverride("opencode-go", "grok-4.5", configured).adapter)
       .toBe("openai-chat");
@@ -58,6 +62,11 @@ describe("OpenCode Go Grok 4.6 Responses compatibility", () => {
     expect(registryEntry.modelReasoningEfforts?.["grok-4.6"])
       .toEqual(["low", "medium", "high", "xhigh"]);
     expect(registryEntry.modelDefaultReasoningEfforts?.["grok-4.6"]).toBe("high");
+    expect(registryEntry.modelReasoningEfforts?.["grok-4.7"])
+      .toEqual(["low", "medium", "high", "xhigh"]);
+    expect(registryEntry.modelDefaultReasoningEfforts?.["grok-4.7"]).toBe("high");
+    expect(build("grok-4.7", { reasoning: { effort: "max" } }).reasoning)
+      .toEqual({ effort: "xhigh" });
   });
 
   test("drops the hosted search tool that this exact destination rejects", () => {
@@ -199,6 +208,26 @@ describe("OpenCode Go additional_tools placement", () => {
     });
     expect(build("grok-4.6", { input: [{ type: "additional_tools", tools: [web] }], tool_choice: "required" }))
       .toMatchObject({ input: [], tools: [], tool_choice: "none" });
+  });
+
+  test("does not promote additional tools restored from continuation history", () => {
+    const historicalWeb = { type: "web_search" };
+    const request = buildRequest("gpt-5.6-luna", {
+      tools: [],
+      input: [
+        { type: "additional_tools", tools: [historicalWeb] },
+        { type: "message", role: "assistant", content: "history" },
+        { type: "message", role: "user", content: "continue" },
+      ],
+    }, provider(), 2);
+
+    expect(JSON.parse(request.body)).toMatchObject({
+      input: [
+        { type: "message", role: "assistant", content: "history" },
+        { type: "message", role: "user", content: "continue" },
+      ],
+      tools: [],
+    });
   });
 
   test("activates tools loaded by tool search before moving their catalog", () => {

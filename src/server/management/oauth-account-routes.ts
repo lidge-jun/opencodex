@@ -210,7 +210,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { shouldOpenBrowserForLogin } = await import("../../oauth/open-browser-choice");
       if (authUrl && !deviceCode && shouldOpenBrowserForLogin(body.openBrowser, config)) {
         const { openUrl } = await import("../../lib/open-url");
-        openUrl(authUrl);
+        void openUrl(authUrl);
       }
       return jsonResponse({ url: authUrl, instructions, deviceCode });
     } catch (err) {
@@ -869,6 +869,10 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         name: k.name,
         prefix: k.key.slice(0, 17) + "...",
         createdAt: k.createdAt,
+        // Scope is metadata, not secret: an operator has to be able to read
+        // what a key may reach without minting a replacement to find out.
+        ...(k.allowedProviders ? { allowedProviders: [...k.allowedProviders] } : {}),
+        ...(k.allowedModels ? { allowedModels: [...k.allowedModels] } : {}),
         ...(k.pendingRotation ? { pendingRotation: {
           id: k.pendingRotation.id,
           createdAt: k.pendingRotation.createdAt,
@@ -952,15 +956,49 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readJsonBody(req);
     if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
     if (typeof body.id !== "string" || !body.id) return jsonResponse({ error: "id required" }, 400, req, config);
-    const nameField = validateKeyName(body.name, { required: true });
-    if ("error" in nameField) return jsonResponse({ error: nameField.error }, 400, req, config);
-    const entry = (config.apiKeys ?? []).find(k => k.id === body.id);
-    if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
-    entry.name = nameField.value;
+    const existing = (config.apiKeys ?? []).find(k => k.id === body.id);
+    if (!existing) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const entry = { ...existing };
+    // Rename and scope are independent edits. A scope-only PATCH must not have
+    // to restate the name, and a rename must not silently widen a scope, so
+    // each field is applied only when the caller actually sent it.
+    const renaming = body.name !== undefined;
+    const scopingProviders = body.allowedProviders !== undefined;
+    const scopingModels = body.allowedModels !== undefined;
+    if (!renaming && !scopingProviders && !scopingModels) {
+      return jsonResponse({ error: "name, allowedProviders or allowedModels required" }, 400, req, config);
+    }
+    if (renaming) {
+      const nameField = validateKeyName(body.name, { required: true });
+      if ("error" in nameField) return jsonResponse({ error: nameField.error }, 400, req, config);
+      entry.name = nameField.value;
+    }
+    for (const [field, sent] of [["allowedProviders", scopingProviders], ["allowedModels", scopingModels]] as const) {
+      if (!sent) continue;
+      const value = body[field];
+      // `null` and `[]` both clear the list back to unrestricted; anything else
+      // must be a list of non-empty strings, because a silently ignored malformed
+      // scope would read as "allowed everything" to whoever set it.
+      if (value === null) { delete entry[field]; continue; }
+      if (!Array.isArray(value) || value.some(item => typeof item !== "string" || !item.trim() || item.length > 256)) {
+        return jsonResponse({ error: `${field} must be a list of non-empty names` }, 400, req, config);
+      }
+      const normalized = [...new Set((value as string[]).map(item => item.trim()))];
+      if (normalized.length === 0) delete entry[field];
+      else entry[field] = normalized;
+    }
+    // Publish the validated replacement only after every field is accepted.
+    config.apiKeys = config.apiKeys!.map(key => key === existing ? entry : key);
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     // Never echo key material from a rename.
-    return jsonResponse({ id: entry.id, name: entry.name, createdAt: entry.createdAt }, 200, req, config);
+    return jsonResponse({
+      id: entry.id,
+      name: entry.name,
+      createdAt: entry.createdAt,
+      ...(entry.allowedProviders ? { allowedProviders: [...entry.allowedProviders] } : {}),
+      ...(entry.allowedModels ? { allowedModels: [...entry.allowedModels] } : {}),
+    }, 200, req, config);
   }
 
   if (url.pathname === "/api/keys" && req.method === "DELETE") {

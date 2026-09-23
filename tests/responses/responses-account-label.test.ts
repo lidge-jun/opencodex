@@ -15,10 +15,15 @@ import type { RequestLogContext } from "../../src/server/request-log";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { CodexWsMetadata } from "../../src/server/responses/codex-ws-metadata";
 import { applyAccountQuotaFromUpstreamHeaders, getAccountQuotaHistory } from "../../src/codex/quota";
 
 const originalFetch = globalThis.fetch;
+let releaseSpendHome: (() => void) | undefined;
+
+// Taken only by callbacks that physically dispatch, after withPoolHome installs their home.
+const takeSpendHome = (): void => { releaseSpendHome = acquireOwnedSpendHome(); };
 
 function poolConfig(accountIds: string[]): OcxConfig {
   return {
@@ -80,6 +85,9 @@ async function withPoolHome<T>(run: (home: string) => Promise<T>): Promise<T> {
   try {
     return await run(home);
   } finally {
+    // Released before the helper removes or restores the home so its lease cannot outlive it.
+    releaseSpendHome?.();
+    releaseSpendHome = undefined;
     globalThis.fetch = originalFetch;
     clearCodexUpstreamHealth();
     clearThreadAccountMap();
@@ -133,6 +141,7 @@ describe("Responses account usage attribution", () => {
     const originalWebSocket = globalThis.WebSocket;
     try {
       await withPoolHome(async home => {
+        takeSpendHome();
         writeFileSync(join(home, "auth.json"), JSON.stringify({
           tokens: { access_token: "main-access-token", account_id: "main-account" },
         }));
@@ -198,6 +207,7 @@ describe("Responses account usage attribution", () => {
     const finalQuotaAllowed = new Promise<void>(resolve => { releaseFinalQuota = resolve; });
     try {
       await withPoolHome(async () => {
+        takeSpendHome();
         savePoolCredential("pool-ws-replaced");
         class MetadataSocket {
           listeners = new Map<string, Array<(event: unknown) => void>>();
@@ -255,6 +265,7 @@ describe("Responses account usage attribution", () => {
 
   test("main-pool and legacy added accounts carry their effective labels", async () => {
     await withPoolHome(async home => {
+      takeSpendHome();
       writeFileSync(join(home, "auth.json"), JSON.stringify({
         tokens: { access_token: "main-access-token", account_id: "main-account" },
       }));
@@ -280,6 +291,7 @@ describe("Responses account usage attribution", () => {
 
   test("a pre-stream quota retry updates attribution to the serving alternate account", async () => {
     await withPoolHome(async () => {
+      takeSpendHome();
       const config = poolConfig(["pool-a", "pool-b"]);
       for (const id of ["pool-a", "pool-b"]) {
         savePoolCredential(id);
@@ -310,6 +322,7 @@ describe("Responses account usage attribution", () => {
 
   test("a quota message wrapped in HTTP 502 cools the account and retries an alternate", async () => {
     await withPoolHome(async () => {
+      takeSpendHome();
       const config = poolConfig(["pool-a", "pool-b"]);
       for (const id of ["pool-a", "pool-b"]) {
         savePoolCredential(id);
@@ -349,6 +362,7 @@ describe("Responses account usage attribution", () => {
   // refused nothing -- and the cooldown outlives the request that invented it.
   test("a refused reset replay is not quota evidence and invites no client retry", async () => {
     await withPoolHome(async () => {
+      takeSpendHome();
       const config = poolConfig(["pool-a"]);
       savePoolCredential("pool-a");
       updateAccountQuota("pool-a", 10);
@@ -372,6 +386,7 @@ describe("Responses account usage attribution", () => {
 
   test("a wrapped quota failure cools a sole account when no alternate exists", async () => {
     await withPoolHome(async () => {
+      takeSpendHome();
       const config = poolConfig(["pool-a"]);
       savePoolCredential("pool-a");
       updateAccountQuota("pool-a", 10);

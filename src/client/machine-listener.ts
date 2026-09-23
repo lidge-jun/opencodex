@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import type { Server } from "bun";
 import { loadConfig } from "../config";
 import { browserSecurityHeaders } from "../server/auth-cors";
@@ -16,11 +15,9 @@ import { readClientConnectionState } from "./state";
 import { handleMachineApi, type HubReachability, type MachineApiDeps } from "./machine-api";
 import { MACHINE_GUI_ORIGIN_HEADER, requireMachineAuth } from "./machine-auth";
 import { relayHubManagementRequest } from "./hub-relay";
+import { packageVersion } from "../lib/package-version";
 
-const VERSION = (() => {
-  try { return JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string; }
-  catch { return "0.0.0"; }
-})();
+const VERSION = packageVersion("0.0.0");
 const GUI_SPA_PATHS = new Set([
   "/dashboard", "/startup", "/providers", "/models", "/subagents",
   "/logs", "/usage", "/storage", "/codex-set", "/integrations",
@@ -46,9 +43,14 @@ export function machineRouteAllowed(url: URL, req: Request, relayEnabled: boolea
   if (req.headers.get("upgrade")) return false;
   const path = url.pathname;
   if (req.method === "GET" && (path === "/healthz" || path === "/readyz" || path === "/" || path === "/opencodex-session")) return true;
-  if (req.method === "GET" && (path === "/api/machine/status" || path === "/api/machine/clients" || path === "/api/machine/shim")) return true;
+  if ((req.method === "GET" || req.method === "HEAD") && (path === "/api/machine/status" || path === "/api/machine/clients" || path === "/api/machine/shim")) return true;
   if (req.method === "POST" && (path === "/api/machine/sync" || path === "/api/machine/shim" || path === "/api/machine/disconnect")) return true;
   if (relayEnabled && path.startsWith("/api/machine/hub-relay/")) return true;
+  // Known machine endpoints are admitted for every method so an unsupported
+  // method reaches the authenticated method restriction (403) instead of a
+  // bare 404 that hides the endpoint entirely.
+  if (path === "/api/machine/status" || path === "/api/machine/clients" || path === "/api/machine/shim"
+    || path === "/api/machine/sync" || path === "/api/machine/disconnect") return true;
   if (req.method !== "GET" || path.startsWith("/api/") || path.startsWith("/v1/")) return false;
   return GUI_SPA_PATHS.has(path)
     || path.startsWith("/integrations/")
@@ -70,8 +72,8 @@ export function startMachineListener(
   const machineApiDeps: MachineApiDeps = {
     sync: deps.machineApi?.sync ?? syncConnectedClient,
     disconnect: deps.machineApi?.disconnect ?? disconnectClient,
-    scheduleStandaloneRecycle: deps.machineApi?.scheduleStandaloneRecycle ?? (() => {
-      void import("./runtime").then(module => module.scheduleStandaloneRecycle());
+    scheduleStandaloneRecycle: deps.machineApi?.scheduleStandaloneRecycle ?? (tokenFingerprint => {
+      void import("./runtime").then(module => module.scheduleStandaloneRecycle(tokenFingerprint));
     }),
     hubReachability: deps.machineApi?.hubReachability ?? (() => hubReachability),
     setHubReachability: deps.machineApi?.setHubReachability ?? (value => { hubReachability = value; }),
@@ -110,6 +112,14 @@ export function startMachineListener(
         if (authError) return authError;
         if (managementPrincipal(req, managementAuth, config) !== "gui-session") {
           return Response.json({ error: "opencodex machine GUI session required" }, { status: 401 });
+        }
+        // A loopback dashboard session proves possession, not user presence: any local
+        // process can fetch the dashboard bootstrap and replay its token and CSRF value.
+        // Keep the connected listener useful for status/diagnostics, but never let that
+        // credentialless bootstrap authorize durable machine changes. Those operations
+        // remain available through the explicit CLI commands.
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          return Response.json({ error: "opencodex machine changes require the local CLI" }, { status: 403 });
         }
         return await handleMachineApi(req, url, connection, machineApiDeps) ?? json404(req);
       }

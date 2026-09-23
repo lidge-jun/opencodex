@@ -6,7 +6,9 @@
  * (ADR-1/ADR-8 in devlog/_fin/260804_router_intelligence/000_master_plan.md).
  */
 
-export const HISTORY_SCHEMA_VERSION = 1;
+// Version 2 rebuilds the derived projection so old raw requested-model selectors
+// are replaced by the bounded encoding already used by canonical JSONL reads.
+export const HISTORY_SCHEMA_VERSION = 2;
 export const HISTORY_DB_FILENAME = "routing-history.sqlite";
 
 export const HISTORY_META_KEYS = {

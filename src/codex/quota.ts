@@ -3,12 +3,13 @@ import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
+import { stampCodexQuotaUsageObservation } from "./quota-observation-freshness";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaWriter } from "./main-account-cache";
 
 import { CodexQuotaHistory, QUOTA_HISTORY_LIMITS, type QuotaHistoryWindow } from "./quota-history";
 import { isPoolQuotaWriterLive, poolQuotaHistoryIdentity } from "./account-store";
-import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_PERCENT } from "./quota-types";
+import { CODEX_EXHAUSTED_USAGE_PERCENT, MAIN_ACCOUNT_HARD_LOCK_PERCENT, resetAtToMs } from "./quota-types";
 import type { PoolQuotaWriter, StoredAccountQuota, WhamUsageResponse, WhamUsageWindow } from "./quota-types";
 
 export type { StoredAccountQuota, WhamUsageResponse } from "./quota-types";
@@ -57,14 +58,13 @@ const WEEKLY_WINDOW_MIN_MINUTES = WEEKLY_WINDOW_MIN_SECONDS / 60;
  * Both units reach storage — `normalizeResetAt` does not scale, and the GUI disambiguates by
  * magnitude at read time — so a comparison written against one assumption is off by 1000x
  * against the other. In the seconds-read-as-milliseconds direction every reading looks like it
- * elapsed in 1970, which is a check that passes its own test and does nothing. Exported so
- * `isTerminalShortWindow` in routing.ts shares this one split instead of repeating the literal.
+ * elapsed in 1970, which is a check that passes its own test and does nothing.
+ *
+ * The split now lives on `./quota-types`, the leaf the dashboard can also import, because the
+ * dashboard was the reader that did not have it (#5045). Re-exported here so the existing
+ * callers of this module keep their import path.
  */
-const RESET_AT_SECONDS_MAX = 10_000_000_000;
-
-export function resetAtToMs(resetAt: number): number {
-  return resetAt < RESET_AT_SECONDS_MAX ? resetAt * 1000 : resetAt;
-}
+export { resetAtToMs };
 
 const accountQuota = new Map<string, StoredAccountQuota>();
 const quotaHistory = new CodexQuotaHistory();
@@ -334,7 +334,7 @@ function mergeAccountQuota(
     assignCarriedShort(next, existing, updatedAt, policyEvidence);
     if (existing?.customWindows !== undefined) next.customWindows = existing.customWindows;
     next.resetCredits = quota.resetCredits;
-    return next;
+    return stampCodexQuotaUsageObservation(next, quota, existing);
   }
 
   if (snapshotHasWeekly(quota)) {
@@ -394,7 +394,7 @@ function mergeAccountQuota(
   if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
   else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;
 
-  return next;
+  return stampCodexQuotaUsageObservation(next, quota, existing);
 }
 
 /**
@@ -613,6 +613,7 @@ export function updateAccountQuota(
   }
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
+  stampCodexQuotaUsageObservation(quota, { weeklyPercent: nextWeekly, monthlyPercent: nextMonthly }, existing);
   accountQuota.set(accountId, quota);
   // This legacy writer has no physical credential provenance.
   if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;

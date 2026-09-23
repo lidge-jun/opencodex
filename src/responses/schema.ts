@@ -122,14 +122,24 @@ export const toolSchema = z.object({
   description: z.string().optional(),
   parameters: z.record(z.string(), z.unknown()).optional(),
   strict: z.boolean().optional(),
+  // Unknown keys are stripped here, so a field the parser is expected to read has to be
+  // declared: an undeclared allowed_callers never reached buildTools at all (#5210).
+  allowed_callers: z.array(z.string()).optional(),
 });
 
 const builtinToolSchema = z.object({ type: z.string() }).loose();
 
-const hostedToolType = z.enum([
+/**
+ * Hosted tool types a client may declare on an inbound Responses request. Exported so the
+ * provider-side capability vocabulary in `src/responses/hosted-tool-policy.ts` can be
+ * asserted to cover all of them: a gateway must be able to deny anything it can be sent.
+ */
+export const HOSTED_TOOL_TYPES = [
   "web_search", "web_search_preview", "file_search", "computer_use_preview",
   "code_interpreter", "image_generation", "mcp",
-]);
+] as const;
+
+const hostedToolType = z.enum(HOSTED_TOOL_TYPES);
 
 const allowedToolEntrySchema = z.object({ type: z.string(), name: z.string().optional() });
 

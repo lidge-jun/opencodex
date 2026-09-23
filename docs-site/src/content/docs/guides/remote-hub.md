@@ -61,6 +61,10 @@ The hub automatically issues a per-client key. The client writes it to the exist
 filtered to that client's stable `apiKeyId`. After disconnect, usage comes from the local store.
 OpenCodex does not mirror usage between the two stores.
 
+If a client saved a remote `http://` Hub URL before the secure transport rule, its Hub
+operations now return `insecure_http_refused`. Run `ocx disconnect` locally, then reconnect
+to the Hub with `https://` (or use loopback HTTP when both sides are on the same machine).
+
 Rotate a connected client with a fresh transient authority:
 
 ```bash
@@ -110,6 +114,18 @@ the request and shows matching cached hub state, or `unavailable` if no matching
 Bind the data listener to the hub's Tailscale address, enable the loopback companion so the hub's
 own processes reach that same port without a credential, and publish management separately. The
 values below are examples:
+
+:::danger[Use a dedicated single-tenant host]
+The loopback companion is unauthenticated: every process and OS user on this machine can use the
+hub's provider credentials and account quota, and can exhaust the shared turn capacity that
+authenticated remote clients depend on. Do not enable it on a shared or multi-tenant host. If the
+host is shared, leave the `unauthenticatedLoopbackListener` setting disabled and do not run the hub's local
+integrations.
+
+Binding to `127.0.0.1` means the kernel refuses remote connections, but it does not stop a browser:
+a page you visit can make your browser connect to `127.0.0.1`. The listener therefore applies the
+same `Host` and `Origin` checks as an ordinary loopback bind.
+:::
 
 ```bash
 ocx config set runtimeRole hub
@@ -215,6 +231,9 @@ separate ports:
 ```bash
 ocx config set unauthenticatedLoopbackListener '{"enabled":true,"port":10104}'
 ```
+
+The ported form is the same unauthenticated surface: the dedicated-host warning above applies to
+this command too.
 
 With a `port` set, the local integrations follow the listener and write `http://127.0.0.1:10104`
 instead. The port must differ from the proxy port and is never OS-assigned: an ephemeral port would
@@ -574,26 +593,48 @@ its actual project-prefixed volume names:
 --mount type=volume,src=codex-state,dst=/home/bun/.codex
 ```
 
-Install Git and Bun on the host first. Before **every** image build, run the existing canonical
-generator from this Git checkout. It hashes Git-tracked working-tree sources (stage any newly
-added source files first), not an arbitrary directory scan. Do not change source files between
-generation and build. Only its untracked `src/generated/compatibility-version.json` artifact
-enters the image; `.git` remains outside the Docker context. Do not commit or hand-edit the
-manifest. The build rejects stale manifests: it verifies every recorded SHA-256 against the
-read-only build context and again against the copied runtime files. It requires `package.json`,
-`bun.lock`, and `scripts/model-metadata.source.json`; only that exact scripts artifact is
-included, not the rest of `scripts/`. Missing or mismatched files, extra source files absent
-from the manifest, and symlinks (including parent directories) fail the build. The only source
-file exempt from the inventory is the generated manifest itself. If validation fails, reconcile
-the tracked sources, remove unintended source files, and rerun the canonical generator.
+The host needs Git and Docker Compose for a local clone, or only Docker Compose for a remote Git
+context. Bun and a manual preparation step are not required. The build-only
+manifest stage derives the canonical inventory from the selected Git snapshot, writes the untracked
+`src/generated/compatibility-version.json`, and verifies every recorded SHA-256 against the read-only
+build context before source `COPY` instructions can dereference a symlink. The copied runtime files
+are verified again inside the image. Git metadata is admitted only for that bind mount; no `COPY`
+places `.git` in an image layer, and the Git executable remains confined to the manifest stage.
+
+"Git metadata" here means two files. The canonical inventory comes from `git ls-files`, which reads
+the index and never opens an object or a ref, so the build context admits only `.git/index` and
+`.git/HEAD` — about 1 MB, rather than the repository's full object store. The manifest stage copies
+them into a scratch Git directory it owns and supplies the empty `objects/` and `refs/` directories
+Git's repository check requires. A context with neither a manifest nor a Git index fails the build
+with a message naming both supported inputs; it never falls back to a placeholder.
+
+An existing host-generated manifest remains compatible: the build verifies and uses it instead of
+silently replacing it. Missing or mismatched files, extra source files absent from the manifest, and
+symlinks (including parent directories) fail the build. The inventory requires `package.json`,
+`bun.lock`, and `scripts/model-metadata.source.json`; the generated manifest itself is the only source
+file exempt from the inventory. Do not commit or hand-edit it.
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
+```
+
+For a remote Git context, set the BuildKit built-in argument that retains Git metadata. For example,
+replace the service's build block with:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
 ```
 
 Set an alternate host port without changing the container's fixed `10100` listener:
@@ -612,8 +653,8 @@ OPENCODEX_BIND_ADDRESS=0.0.0.0 docker compose up -d
 Use a firewall and an authenticated TLS/tailnet frontend before exposing the port. The bind
 override changes only the host publication; the container listener remains `0.0.0.0:10100`.
 Keep the same bind override on subsequent Compose invocations that recreate the hub. To update
-an existing deployment, regenerate the manifest, run `docker compose build`, and recreate the
-hub with `docker compose up -d`; do not repeat the one-time token initialization.
+an existing deployment, run `docker compose build` and recreate the hub with `docker compose up -d`;
+do not repeat the one-time token initialization.
 
 Configure providers with the dashboard through an operator-owned management frontend, or with
 one-shot CLI commands that share the state volume. The commands below show the existing Remote Hub

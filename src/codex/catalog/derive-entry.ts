@@ -160,6 +160,7 @@ export function deriveEntry(
         preserveExactReasoning
           || codexForwardNativeCapabilityAlias !== null
           || preservePinnedNativeCustomReasoning(model),
+        model?.suppressSyntheticMax === true,
       );
       // This exact provider/model pair is the ChatGPT/Codex forward surface. Keep the pinned
       // native tool/search/responses-lite contract while preserving the routed slug and wire id.
@@ -208,7 +209,13 @@ export function deriveEntry(
   };
   if (isRouted) {
     applyRoutedCodexToolMode(entry, model?.codexToolMode);
-    applyReasoningLevels(entry, model?.reasoningEfforts, model?.defaultReasoningEffort, preserveExactReasoning || preservePinnedNativeCustomReasoning(model));
+    applyReasoningLevels(
+      entry,
+      model?.reasoningEfforts,
+      model?.defaultReasoningEffort,
+      preserveExactReasoning || preservePinnedNativeCustomReasoning(model),
+      model?.suppressSyntheticMax === true,
+    );
   }
   else {
     applyReasoningLevels(entry, isGpt56NativeSlug(slug) ? undefined : ["low", "medium", "high", "xhigh"]);

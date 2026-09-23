@@ -27,6 +27,10 @@ Bun-native TypeScript with no separate server compile step.
   seeds in `layout.json` place a conventionally named file until then.
   History: `devlog/_fin/260905_test_modularization_and_windows/`.
 - `gui/` — React + Vite dashboard; packaged output is served from `gui/dist`.
+- `app/` — native macOS WidgetKit extension bundled into the Tauri desktop app;
+  `MenuBarCore` is its snapshot model/formatting layer. Its tests are
+  executables, not XCTest bundles — Command Line Tools ships neither a usable
+  XCTest module nor the swift-testing runtime.
 - `docs-site/` — public docs (Astro + Starlight), deployed to GitHub Pages.
 - `go/` — retired Go native-runtime experiment; kept only where the TypeScript
   runtime still references it. New work does not go here.
@@ -41,6 +45,7 @@ Bun-native TypeScript with no separate server compile step.
   gone, and on a new `src/` area nobody claimed.
 - `scripts/` — release and maintenance tooling; `scripts/release.ts` is the
   release authority.
+- `desktop/` — Tauri v2 desktop shell, bootstrap UI, and compiled proxy sidecar preparation.
 - `devlog/` — planning and investigation notes, tracked in this repository. See
   "The `devlog` directory" below for what may and may not go there.
 
@@ -191,7 +196,7 @@ it binds you regardless of which mechanism is within reach.
 bun install
 bun run typecheck      # bun x tsc --noEmit (strict)
 bun run test:changed   # import-graph tests against the resolved `dev` merge base
-bun run test           # full tests/ suite (PR-ready / explicit ask only)
+bun run test           # full tests/ suite (default before review)
 bun run lint:gui       # GUI eslint
 bun run privacy:scan   # credential/privacy scan used by CI
 bun run structure:check # structure/ doc-map, ownership, and invariant-binding gate
@@ -212,25 +217,80 @@ bun run skill:surface:check  # what CI asserts
 also if the hand-written pages name a command the registry does not have. That second check is not
 hypothetical: it caught a documented `ocx request-history` that never existed.
 
-During implementation, use the smallest focused checks that directly cover the
-changed subsystem. Prefer `bun test tests/<domain>/<name>.test.ts` for a known
-file, `bun test tests/<domain>` for one subsystem, or
-`bun run test:changed` when the touch set is broader than one file. Do **not**
-run repository-wide `bun run test` or a bare `bun test` with no file arguments
-for a scoped change by default. `bun run test:changed` follows Bun's parsed module graph: it
-selects test files that import changed modules, but it cannot see dependencies
-expressed through subprocesses, source files read as data, or golden/derived
-files. Run the relevant focused tests explicitly for those paths; if no reliable
-focused set covers them, the full suite is required even for a scoped change.
-That indirect-dependency case is the explicit exception to the scoped-change
-default. The full suite is ~850 files, so otherwise reserve it for a failed or
-ambiguous focused result, an explicit user request, or the PR-ready gate below.
+Run the test suite for a change; `bun run test` is the default before a
+non-trivial PR is marked review-ready or approved. During implementation, use
+focused files or `bun run test:changed` for faster feedback.
 
-Before creating or updating a non-trivial PR as review-ready, or before
-approving such a PR, run `bun run typecheck` and `bun run test`. CI runs these
-on Linux, Windows, and macOS.
+If a full local run is disproportionately expensive for the task or available
+resources, including contention across concurrent worktrees, run at least the
+focused regression tests that exercise the changed behavior. This is a scope
+exception, not permission to skip testing or ignore a failing test. Record why
+the full run was impractical, the exact commands and results, and the coverage
+left to CI in the PR's Verification section. Never describe an unrun suite as
+passing. Run `bun run typecheck` before review readiness as well.
+
+`bun run test:changed` follows Bun's parsed module graph, so it cannot discover
+dependencies expressed through subprocesses, source files read as data, or
+golden/derived files. Run those relevant regression files explicitly. If a
+focused set cannot reliably cover the change, keep the PR in draft until the
+broader validation is available.
+
+After pushing, inspect the required CI for the current PR head. Missing,
+awaiting-approval, skipped, cancelled, or older-head results are not passing
+evidence. Required checks must actually complete successfully before merge.
+The repository does not install an automatic pre-push validation hook;
+`bun run prepush` remains available as an explicit comprehensive check.
 
 Do not rerun passing checks on unchanged code merely for additional confidence.
+
+## What a green pull request does not tell you
+
+Exact-head CI cannot see a defect that exists only in the union of two changes. Each
+branch is correct at its own head, the merge is not, and the failure lands on whoever
+pushes next. One round produced ten of these, including an hour of red `dev`, so the
+classes below are worth checking before you push rather than after.
+
+### The file-size ratchet has almost no headroom
+
+`tests/fixtures/file-size-baseline.json` records a line cap per file and
+`updateBaseline` uses `Math.min`, so a cap only ever moves **downward**. Raising one is
+not possible by design, and a cap is not a suggestion you can negotiate with.
+
+At the time of writing, 39 of the 51 tracked files sit at **exactly** their cap and three
+more are within five lines. Among them are `src/server/index.ts`, `src/config.ts`,
+`src/server/responses/core.ts`, `gui/src/pages/Models.tsx`, and the large test files
+`tests/codex-integration/codex-catalog.test.ts` and
+`tests/responses/openai-responses-passthrough.test.ts`. Adding one line to any of them
+fails `file-size ratchet: repository` for your branch and for every branch cut from
+`dev` afterwards.
+
+Two branches can each stay under a cap alone and sum over it together; that is what
+happened in #4908, #5011 and #5018. The remedy is always a move, never a number: put the
+new case in a sibling file, byte for byte, and register it in **both**
+`scripts/test-layout/layout.json` and `tests/fixtures/test-layout-expected.json`.
+`d3ca5522db` is the original precedent.
+
+A moved test is not automatically the same test. One case moved out of
+`codex-v2-gate.test.ts` failed in isolation and then failed again in place once unrelated
+blocks moved around it, because its final assertion was reading catalog state earlier
+cases had warmed rather than the contract. If a moved case changes colour, suspect the
+case before the move.
+
+### Anything exhaustive over a union
+
+A locale catalog, a `satisfies Record<Union, ...>`, a hand-maintained roster, a count in
+generated documentation. Adding a member to the union in one branch while another branch
+adds a consumer keyed by it produces a merge that typechecks in neither direction.
+
+`typecheck` precedes every job, so one missing member is not one red suite. It took down
+fourteen checks on `dev` — all four test shards, `docker smoke`, `storage policy`,
+`api usage` and all three `npm-global` smokes — when a closed translation namespace still
+listed nine locales after a tenth had landed.
+
+Counts drift the same way and more quietly, because both sides write a plausible number.
+Two branches each added one CLI capability and each wrote `47`; the merged truth was 48.
+Two each added one provider preset and each wrote `94`; the registry had 95. Prefer
+deriving a count or a member list from the thing it describes over restating it.
 
 ## Minimal containers and agent sandboxes
 
@@ -279,9 +339,16 @@ than nudged.
   issues, so there is no freeform fallback).
 - **Opening a pull request:** fill every section of
   `.github/PULL_REQUEST_TEMPLATE.md` (Summary, Verification, Checklist).
-  `enforce-target` rejects empty, thin, or malformed descriptions, and a PR
-  whose title or description mentions `gui` must include a screenshot of the
-  UI change in the description. When the PR resolves an issue, add
+  `enforce-target` rejects empty, thin, or malformed descriptions. If the PR
+  changes files under `gui/`, include a screenshot of the UI change in the
+  description; the check re-runs on description edits until the screenshot is
+  present. Drag the image into the description editor rather than committing it:
+  an image on your branch rides the squash merge into `dev`. Maintainers
+  uploading from the command line use the `pr-assets` branch and link by commit
+  SHA. Never commit screenshot evidence to the PR branch — the squash merge carries
+  it into `dev`, which is how `docs/pr-assets/` and its siblings grew until
+  they were deleted; `tests/ci-workflows/repo-hygiene.test.ts` now rejects
+  those folders. When the PR resolves an issue, add
   `Closes #<number>` to link it. GitHub auto-closes the linked issue only
   when the PR merges into the default branch (`main`); PRs here target
   `dev`, so close the issue manually once the change is on `dev`.
@@ -319,12 +386,16 @@ commits in the description.
 
 The **`enforce-target`** CI check rejects pull requests whose head
 ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
-empty, thin, or malformed descriptions; PRs whose title or description
-mentions `gui` must include a screenshot of the UI change in the description.
+empty, thin, or malformed descriptions. If changed paths include files under
+`gui/`, include a screenshot of the UI change in the description; the check
+re-runs on description edits until the screenshot is present. Drag the image
+into the description editor rather than committing it, or, when uploading from
+the command line, use the `pr-assets` branch and link by commit SHA.
 Contributor PRs (authors without repository push permission) open in draft and
 stay there until a four-box review-readiness checklist in the description is
-complete: local CI green, branch on the latest `dev` commit, all correct Codex
-and CodeRabbit findings fixed, and the ready-for-review confirmation. When all
+complete: required local validation passed with its scope documented, branch
+on the latest `dev` commit, all correct Codex and CodeRabbit findings fixed,
+and the ready-for-review confirmation. When all
 four boxes are ticked the gate marks the PR ready and notifies the maintainers
 listed in `MAINTAINERS.md` (excluding the author). Completion is bound to the
 exact commit the PR head pointed at: if new commits are pushed afterwards, the
@@ -333,7 +404,7 @@ and asks the author to test and tick the boxes again against the latest code.
 Before a completion is accepted, the gate verifies the checklist claims it
 can check itself: the branch must be on the latest `dev` commit or at most
 10 commits behind it, and Codex/CodeRabbit findings must be resolved. The
-local-CI box is an author attestation only — fork contributors cannot start
+local-validation box is an author attestation only — fork contributors cannot start
 repository CI; a maintainer has to — so the gate never disproves it; a new
 push still resets every box. A disproved claim unticks the matching box and
 keeps the PR a draft.
@@ -346,7 +417,7 @@ explicitly integrate through a PR without another maintainer approval, including
 their own PR, under the policy in `MAINTAINERS.md`. Record the decision and exact-head
 CI evidence; keep outstanding maintainer objections and security review separate.
 The bypass is PR-only, so a direct push to `dev` remains rejected regardless of
-`--no-verify`. Contributor review and `main`/`preview` rules remain unchanged.
+local hook settings. Contributor review and `main`/`preview` rules remain unchanged.
 
 [`MAINTAINERS.md`](./MAINTAINERS.md) is authoritative for review and merge
 policy (approvals, CI requirements, security review, promotion). This file
@@ -376,7 +447,8 @@ reviewers (Codex, CodeRabbit).
 - **Tests:** behavior changes in `src/` need a focused regression test near
   the existing tests for that subsystem. During implementation, run the relevant
   focused files and use `bun run test:changed` for import-connected coverage as
-  described above; the full suite is the PR-ready gate.
+  described above. Full-suite validation is the default before review readiness;
+  the documented resource exception still requires focused regression tests.
 - **Docs sync:** user-facing behavior changes should update `docs-site/` (and
   keep translated locales from contradicting the English source).
 - **Privacy:** `bun run privacy:scan` must stay green; never introduce logging

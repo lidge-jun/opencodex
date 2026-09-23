@@ -1,9 +1,31 @@
-import { PinnedHttpError, pinnedHttpGet, pinnedHttpPost } from "./pinned-http";
+import { PinnedHttpError, pinnedHttpGet, pinnedHttpPost, type PinnedHttpErrorCode } from "./pinned-http";
 import { TransportError } from "../lab/live/transport";
-import type { LabCredentialLeaseV1, LabPinnedSender } from "../lab/live/types";
+import type { LabCredentialLeaseV1, LabPinnedSender, TransportErrorCode } from "../lab/live/types";
 
 /** Only response metadata required by current live assertions crosses into Lab. */
 const LAB_RESPONSE_HEADER_ALLOWLIST = ["content-type"] as const;
+
+/**
+ * Every pinned-transport failure code, mapped to the Lab transport taxonomy or to nothing.
+ *
+ * A switch over the codes that existed when it was written silently let later ones fall through
+ * to a raw rethrow. That is not the same as leaving them unclassified: Lab's executor turns an
+ * unrecognized error into `harness_failure` / `execution_error`, so a response the peer coded
+ * in a format this transport cannot undo was reported as a fault of the runner. Both unreadable
+ * answers therefore carry `unreadable_response`, which Lab classifies as a protocol failure.
+ * A total map keeps a future code from acquiring that misattribution by default.
+ */
+const LAB_TRANSPORT_FAILURES = {
+  connect_timeout: { code: "connect_timeout", message: "pinned provider connection timed out" },
+  first_byte_timeout: { code: "first_byte_timeout", message: "pinned provider first byte timed out" },
+  inactivity_timeout: { code: "inactivity_timeout", message: "pinned provider response stalled" },
+  output_byte_limit: { code: "output_byte_limit", message: "pinned provider response exceeded byte budget" },
+  content_decode_failed: { code: "unreadable_response", message: "pinned provider response did not decode" },
+  unsupported_content_encoding: {
+    code: "unreadable_response",
+    message: "pinned provider used a content-encoding this transport cannot decode",
+  },
+} satisfies Record<PinnedHttpErrorCode, { code: TransportErrorCode; message: string }>;
 
 /**
  * Trusted credential/transport owner. Secret headers exist only in this non-Lab module and are
@@ -33,16 +55,8 @@ export function createLabAuthorizedPinnedSender(
       body = await response.text();
     } catch (error) {
       if (error instanceof PinnedHttpError) {
-        switch (error.code) {
-          case "connect_timeout":
-            throw new TransportError("connect_timeout", "pinned provider connection timed out");
-          case "first_byte_timeout":
-            throw new TransportError("first_byte_timeout", "pinned provider first byte timed out");
-          case "inactivity_timeout":
-            throw new TransportError("inactivity_timeout", "pinned provider response stalled");
-          case "output_byte_limit":
-            throw new TransportError("output_byte_limit", "pinned provider response exceeded byte budget");
-        }
+        const mapped = LAB_TRANSPORT_FAILURES[error.code];
+        throw new TransportError(mapped.code, mapped.message);
       }
       throw error;
     }

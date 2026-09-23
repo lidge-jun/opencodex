@@ -103,9 +103,9 @@ async function build() {
   check(!originalStat || originalStat.size <= 8 * 1024 * 1024, "existing manifest exceeds limit");
   const original = originalStat ? readFileSync(manifest) : undefined;
   try {
-    progress("generate compatibility manifest");
-    await command([process.execPath, "scripts/generate-compatibility-version.ts"]);
-    progress("build Docker image");
+    // Exercise the self-contained path even when a developer left a generated artifact behind.
+    rmSync(manifest, { force: true });
+    progress("build Docker image from clean Git context");
     await compose(["build", "hub"], undefined, 600_000);
   } finally {
     if (original && originalStat) {

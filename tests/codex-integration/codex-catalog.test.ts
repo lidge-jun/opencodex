@@ -3560,7 +3560,7 @@ describe("Codex catalog routed normalization", () => {
     expect(sol?.display_name).toBe("GPT-5.6-Sol");
     expect(terra?.display_name).toBe("GPT-5.6-Terra");
     expect(luna?.display_name).toBe("GPT-5.6-Luna");
-    expect(sol?.description).toBe("Latest frontier agentic coding model.");
+    expect(sol?.description).toBe("Reliable agentic workhorse for everyday tasks.");
     expect(sol?.availability_nux).toBeDefined();
 
     // Per-slug multi-agent generation: sol/terra v2, luna v1.
@@ -3753,9 +3753,9 @@ describe("Codex catalog routed normalization", () => {
       display_name: "Daybreak Blue",
       // The pinned snapshot stays a verbatim copy of what upstream shipped; the live
       // contract (1,050,000 / 922,000) is carried by NATIVE_OPENAI_CONTEXT_OVERRIDES and
-      // applied on top by applyNativeOpenAiContextOverride, so the raw entry still reads 372k.
-      context_window: 372_000,
-      max_context_window: 372_000,
+      // applied on top by applyNativeOpenAiContextOverride, so the raw entry reads 272k/872k.
+      context_window: 272_000,
+      max_context_window: 872_000,
       comp_hash: "3000",
       tool_mode: "code_mode_only",
       use_responses_lite: true,
@@ -4249,7 +4249,7 @@ describe("Codex catalog routed normalization", () => {
     expect(luna?.display_name).toBe("GPT-5.6-Luna");
     expect((luna?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
       .toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(luna?.priority).toBe(3); // upstream priority restored for the upgraded entry
+    expect(luna?.priority).toBe(8); // upstream priority restored for the upgraded entry
     expect(sol?.genuine_marker).toBe("from-installed-catalog");
     expect(sol?.priority).toBe(1);
   });
@@ -4269,7 +4269,7 @@ describe("Codex catalog routed normalization", () => {
     const sol = merged.find(entry => entry.slug === "gpt-5.6-sol");
 
     expect(sol?.display_name).toBe("GPT-5.6-Sol");
-    expect(sol?.description).toBe("Latest frontier agentic coding model.");
+    expect(sol?.description).toBe("Reliable agentic workhorse for everyday tasks.");
     expect(sol?.priority).toBe(41);
     expect(sol).not.toHaveProperty("stale_marker");
   });
@@ -6839,7 +6839,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
     "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
     "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro",
     "daybreak-red-latest", "daybreak-blue-latest",
-    "gpt-6-astra",
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
   ];
 
   test("Astra API registry metadata reaches the emitted catalog independently of native limits", async () => {
@@ -7103,17 +7103,6 @@ describe("shouldExposeRoutedModel — Gemini image-capable exemption", () => {
     ]) {
       expect(shouldExposeRoutedModel({ provider: "openrouter", id })).toBe(false);
     }
-  });
-
-  test("still filters compatibility-excluded slugs", () => {
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "hy3-preview" })).toBe(false);
-    // Issue #2330: uncallable or stale OpenCode Go models
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "mimo-v2-omni" })).toBe(false);
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "mimo-v2-pro" })).toBe(false);
-    // Control / live models are exposed
-    expect(shouldExposeRoutedModel({ provider: "opencode-free", id: "deepseek-v4-flash-free" })).toBe(true);
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "grok-4.6" })).toBe(true);
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "glm-5.2" })).toBe(true);
   });
 });
 

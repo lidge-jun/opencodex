@@ -36,6 +36,15 @@ export const CODEX_CAPACITY_MAX_QUOTA_AGE_MS = 30 * 60_000;
 export type CodexCapacityQuota = {
   fiveHourPercent?: number;
   fiveHourResetAt?: number;
+  /**
+   * Local observation time for the burst-window percentage.
+   *
+   * Carried because the terminal-short-window rule needs it whenever the reading has no reset
+   * instant, and the dashboard's account-switch warning evaluates that rule against this DTO.
+   * Dropping it here made the warning return "no opinion" for a snapshot routing was already
+   * refusing on (#5045).
+   */
+  shortObservedAt?: number;
   weeklyPercent?: number;
   weeklyResetAt?: number;
   monthlyPercent?: number;

@@ -387,6 +387,10 @@ describe("headless GUI parity CLI", () => {
       // `ocx integration native` verb would duplicate existing commands rather
       // than add a capability. Listed so the sweep stays exhaustive.
       ["/api/native-integrations", "(none — GUI-only)"],
+      // #3417: the dashboard's native main login disclosure reads and writes the same
+      // routes as `ocx account main` — list/doctor, register, switch and recover — so the
+      // GUI surface adds no endpoint the headless CLI cannot already reach.
+      ["/api/native-main-profiles", "ocx account main"],
       ["/api/debug", "ocx debug/observe"],
       ["/api/diagnostics", "ocx system"],
       ["/api/effort", "ocx agent"],
@@ -400,6 +404,7 @@ describe("headless GUI parity CLI", () => {
       ["/api/logs", "ocx observe"],
       ["/api/lab", "ocx lab"],
       ["/api/config", "ocx config"],
+      ["/api/companion", "ocx companion"],
       // The client machine plane. These are served by the connected client's own loopback
       // listener rather than the hub, and each one mirrors a connect-family command:
       // status/clients -> `ocx connect status`, sync -> `ocx sync`, shim -> the client
@@ -411,6 +416,9 @@ describe("headless GUI parity CLI", () => {
       // inventory and writes one config key. There is no headless equivalent
       // today, and claiming one would be worse than saying so here.
       ["/api/codex-prompt", "(none — GUI prompt-layer surface; keys live in config.toml)"],
+      // Claude reset grants: reading is an owed CLI verb (deferred-verb in the route
+      // registry) and spending is dashboard-session-only by design.
+      ["/api/anthropic/reset-grants", "(none — GUI reset-grant dialog; spend requires a dashboard session)"],
       ["/api/settings", "ocx system"],
       // Routing Intelligence (RI-04..RI-10): profiles + dry-run are mirrored by
       // `ocx route policy`. Analytics is GUI-first for now; the same request

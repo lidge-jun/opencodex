@@ -121,7 +121,8 @@ function defaultGateState() {
     titlePrefixedByBot: false,
     maintainersPinged: false,
     completedAtHeadSha: null,
-    reviewReadyLabeled: false
+    reviewReadyLabeled: false,
+    pendingReattestation: null
   };
 }
 
@@ -396,6 +397,7 @@ function completionIsStale({
 }
 
 module.exports = {
+  ...require("./pr-readiness-reattest.cjs"),
   READINESS_LATEST_DEV_BEHIND_MAX,
   readinessClaimViolations,
   unresolvedFindingsClaim,

@@ -44,6 +44,8 @@ export interface CodexAccountEntry {
   paused: boolean;
   /** Selection order; higher is used earlier. Always present, 0 when unset. */
   priority: number;
+  /** Null inherits global threshold; 0 disables usage-driven switching for this account. */
+  autoSwitchThresholdOverride: number | null;
   hasCredential: boolean;
   quota: AccountQuota | null;
   quotaAutoRefresh: {
@@ -97,11 +99,17 @@ export interface CodexAccountPoolController {
    * `ready` during a refresh so rows survive; this is what makes that wait visible.
    */
   refreshing: boolean;
+  /**
+   * The most recent account read failed. The rows it could not replace are still on screen, so
+   * this is the only thing that tells a surface they are no longer known to be current.
+   */
+  refreshFailed: boolean;
   /** True until the first load attempt settles, whether it succeeds or fails. */
   initialLoading: boolean;
   switchingId: string | null;
   pauseUpdatingId: string | null;
   priorityUpdatingId: string | null;
+  autoSwitchUpdatingId: string | null;
   pausingExhausted: boolean;
   activeNeedsReauth: boolean;
   /**
@@ -116,6 +124,8 @@ export interface CodexAccountPoolController {
   setAccountPaused(id: string, paused: boolean): Promise<CodexAccountActionResult>;
   /** `null` resets the account to the default order. Accepts the `__main__` sentinel. */
   setAccountPriority(id: string, priority: number | null): Promise<CodexAccountActionResult>;
+  /** `null` restores global inheritance. Accepts the `__main__` sentinel. */
+  setAccountAutoSwitchThreshold(id: string, threshold: number | null): Promise<CodexAccountActionResult>;
   pauseExhaustedAccounts(): Promise<CodexAccountActionResult<{ pausedCount: number }>>;
   saveAlias(id: string, alias: string): Promise<CodexAccountActionResult>;
   removeAccount(id: string): Promise<CodexAccountActionResult<CodexAccountMutationCompletion>>;
@@ -145,6 +155,12 @@ interface CodexAccountUsageSummary {
 /** In-memory last-good snapshot (not sessionStorage — accounts carry emails/ids). */
 const lastGoodByBase = new Map<string, { accounts: CodexAccountEntry[]; activeId: string | null }>();
 
+function normalizeAccountAutoSwitchThreshold(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 100
+    ? value
+    : null;
+}
+
 export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccountPoolController {
   const seed = lastGoodByBase.get(apiBase);
   const [accounts, setAccounts] = useState<CodexAccountEntry[]>(() => seed?.accounts ?? []);
@@ -160,9 +176,17 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   );
   const [activeId, setActiveId] = useState<string | null>(() => seed?.activeId ?? null);
   const [loadState, setLoadState] = useState<CodexAccountLoadState>(() => (seed != null ? "ready" : "loading"));
+  // Deliberately beside `loadState` rather than inside it. `loadState` answers what the surface
+  // can draw, and a warm refresh failure keeps the rows drawable — folding the failure in would
+  // mean either flashing the cold skeleton over good data or, as before, saying nothing at all.
+  // Saying nothing is the defect: the rows on screen are the ones from before the refresh, so an
+  // account the user has just added is simply absent while the older ones look current (#5261).
+  // `refreshing` already set the precedent that a fact about the read lives next to loadState.
+  const [refreshFailed, setRefreshFailed] = useState(false);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [pauseUpdatingId, setPauseUpdatingId] = useState<string | null>(null);
   const [priorityUpdatingId, setPriorityUpdatingId] = useState<string | null>(null);
+  const [autoSwitchUpdatingId, setAutoSwitchUpdatingId] = useState<string | null>(null);
   const [pausingExhausted, setPausingExhausted] = useState(false);
   const [activePinnedId, setActivePinnedId] = useState<string | null>(null);
   // A counter, not a boolean: the initial load, the 30s poll, quota-fill retries and explicit
@@ -199,6 +223,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
   // Its own gate, deliberately not the pause one: re-ordering one account and pausing
   // another are independent writes, and a shared ref would make either reject the other.
   const priorityMutationRef = useRef<{ accountId: string } | null>(null);
+  const autoSwitchMutationRef = useRef<{ accountId: string } | null>(null);
 
   const subscribeLoadObserver = useCallback((observer: CodexAccountLoadObserver) => {
     observersRef.current!.add(observer);
@@ -265,6 +290,9 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
                 ...account,
                 ...(logLabel ? { logLabel } : {}),
                 priority: normalizeAccountPriority(account.priority),
+                autoSwitchThresholdOverride: normalizeAccountAutoSwitchThreshold(
+                  account.autoSwitchThresholdOverride,
+                ),
                 quotaAutoRefresh: account.quotaAutoRefresh ?? {
                   ...available,
                   fiveHourEnabled: false,
@@ -277,6 +305,10 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
             hasLoadedRef.current = true;
             // Progressive: paint account/quota boxes as soon as /accounts returns.
             setLoadState("ready");
+            // Cleared here rather than at the settle below, because the rows it qualifies are
+            // painted here. Waiting for /active to finish would leave the just-replaced rows
+            // labelled as pre-refresh ones for as long as that read's budget allows.
+            setRefreshFailed(false);
           }
           return true;
         } catch {
@@ -329,9 +361,11 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
         });
         return activeOk;
       }
-      // Cold failure only: after a successful load (including empty), keep rows and stay ready
-      // so a soft poll miss does not flash the skeleton / wipe the pool.
+      // A cold failure has nothing to show, so it replaces the surface. A warm one keeps its rows
+      // — flashing the skeleton on a soft poll miss is its own defect — and says so instead of
+      // continuing to present them as current.
       if (!hasLoadedRef.current) setLoadState("error");
+      setRefreshFailed(true);
       return false;
     } finally {
       bounded.clear();
@@ -538,6 +572,42 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     }
   }, [apiBase, load]);
 
+  const setAccountAutoSwitchThreshold = useCallback(async (
+    id: string,
+    threshold: number | null,
+  ) => {
+    if (autoSwitchMutationRef.current) return { ok: false, reason: "busy" } as const;
+    autoSwitchMutationRef.current = { accountId: id };
+    setAutoSwitchUpdatingId(id);
+    try {
+      const response = await fetch(`${apiBase}/api/codex-auth/auto-switch`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, threshold }),
+      });
+      if (!response.ok) return { ok: false, reason: "request" } as const;
+      const raw = await response.json().catch(() => ({}));
+      const result = (raw && typeof raw === "object" ? raw : {}) as {
+        autoSwitchThresholdOverride?: unknown;
+      };
+      const stored = Object.prototype.hasOwnProperty.call(result, "autoSwitchThresholdOverride")
+        ? normalizeAccountAutoSwitchThreshold(result.autoSwitchThresholdOverride)
+        : threshold;
+      setAccounts(current => current.map(account => (
+        account.id === id || (id === "__main__" && account.isMain)
+          ? { ...account, autoSwitchThresholdOverride: stored }
+          : account
+      )));
+      void load();
+      return { ok: true } as const;
+    } catch {
+      return { ok: false, reason: "request" } as const;
+    } finally {
+      autoSwitchMutationRef.current = null;
+      setAutoSwitchUpdatingId(null);
+    }
+  }, [apiBase, load]);
+
   const pauseExhaustedAccounts = useCallback(async () => {
     if (pauseMutationRef.current) return { ok: false, reason: "busy" } as const;
     pauseMutationRef.current = "bulk";
@@ -623,10 +693,12 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     activeId,
     loadState,
     refreshing: inflightCount > 0,
+    refreshFailed,
     initialLoading: !firstAttemptSettled,
     switchingId,
     pauseUpdatingId,
     priorityUpdatingId,
+    autoSwitchUpdatingId,
     pausingExhausted,
     activeNeedsReauth,
     activePinnedId,
@@ -634,6 +706,7 @@ export function useCodexAccountPool(apiBase: string, enabled = true): CodexAccou
     switchAccount,
     setAccountPaused,
     setAccountPriority,
+    setAccountAutoSwitchThreshold,
     pauseExhaustedAccounts,
     saveAlias,
     removeAccount,

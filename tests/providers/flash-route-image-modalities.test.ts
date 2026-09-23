@@ -2,12 +2,15 @@
  * Flash-route image modality declarations (#4505).
  *
  * opencode-go and command-code each serve a GLM-5.3-Flash route (native VLM) and a
- * DeepSeek V4.1-Flash route (text-only upstream, covered by the vision sidecar).
- * None of the four declared input modalities, so a failover combo over them
- * intersected to ["text"] in deriveComboCatalogModel and the Codex app refused
- * image attachments for the whole combo — combo image routing was silently
- * disabled even though every member can accept an image (two natively, two
- * through the sidecar).
+ * DeepSeek V4.1-Flash route. None of the four declared input modalities, so a
+ * failover combo over them intersected to ["text"] in deriveComboCatalogModel
+ * and the Codex app refused image attachments for the whole combo — combo image
+ * routing was silently disabled even though every member can accept an image.
+ *
+ * command-code's DeepSeek route was promoted from sidecar-covered to native
+ * image on 2026-09-18 after the upstream probe #4505 asked for passed on both
+ * the user-message and tool-result paths (see model-seeds.ts); opencode-go's
+ * route remains text-only and sidecar-covered.
  *
  * The fix is positive per-route modelInputModalities declarations, not a
  * noVisionModels union: a text-only declaration makes the route a sidecar
@@ -32,9 +35,16 @@ import { nativeOpenAiAutoCompactTokenLimit } from "../../src/codex/catalog/metad
 import type { CatalogModel, OcxConfig, OcxProviderConfig } from "../../src/types";
 
 const OPENCODE_GO_NATIVE = "glm-5.3-flash";
-const OPENCODE_GO_SIDECAR = "deepseek-v4.1-flash";
+/**
+ * Reclassified on 2026-09-19: this route used to be the sidecar-covered counterexample, and was
+ * probed natively multimodal on the Zen Go gateway. The name says "deepseek" rather than
+ * "sidecar"/"native" so a future reclassification does not leave a lying identifier behind.
+ */
+const OPENCODE_GO_DEEPSEEK = "deepseek-v4.1-flash";
+/** The sibling route on the same gateway that genuinely rejects images upstream. */
+const OPENCODE_GO_DEEPSEEK_TEXT_ONLY = "deepseek-v4-flash";
 const COMMAND_CODE_NATIVE = "z-ai/glm-5.3-flash";
-const COMMAND_CODE_SIDECAR = "deepseek/deepseek-v4.1-flash";
+const COMMAND_CODE_DEEPSEEK = "deepseek/deepseek-v4.1-flash";
 
 /** Seeded provider config, shaped the way an install persists it. */
 function seeded(provider: string): OcxProviderConfig {
@@ -47,47 +57,70 @@ describe("flash-route registry modality declarations (#4505)", () => {
   // WHY: the combo collapse starts at the registry — if any of the four routes
   // loses its declaration the member row reaches the catalog with no modalities
   // and the intersection floor drops the whole combo back to ["text"].
-  test("opencode-go declares glm-5.3-flash native vision and deepseek-v4.1-flash text-only", () => {
+  test("opencode-go declares both flash routes image-capable (deepseek probed 2026-09-19)", () => {
     const entry = PROVIDER_REGISTRY.find(e => e.id === "opencode-go");
     expect(entry?.modelInputModalities?.[OPENCODE_GO_NATIVE]).toEqual(["text", "image"]);
-    expect(entry?.modelInputModalities?.[OPENCODE_GO_SIDECAR]).toEqual(["text"]);
+    // Promoted from the text-only list on 2026-09-19: the route accepted an image_url part and
+    // described a four-band colour chart in the correct order. Its sibling below did not.
+    expect(entry?.modelInputModalities?.[OPENCODE_GO_DEEPSEEK]).toEqual(["text", "image"]);
+    // The sibling carries no positive declaration — its classification comes from the
+    // noVisionModels list asserted in the test below, which is the half that survives.
+    expect(entry?.modelInputModalities?.[OPENCODE_GO_DEEPSEEK_TEXT_ONLY]).toBeUndefined();
   });
 
-  test("command-code declares z-ai/glm-5.3-flash in the image set and deepseek/deepseek-v4.1-flash text-only", () => {
+  test("the reclassified route is no longer a sidecar consumer", () => {
+    // The negative half matters as much as the positive one: a registry correction that left the
+    // id in noVisionModels would still strip images, because the predicate reads that list first.
+    const entry = PROVIDER_REGISTRY.find(e => e.id === "opencode-go");
+    expect(entry?.noVisionModels ?? []).not.toContain(OPENCODE_GO_DEEPSEEK);
+    // The sibling keeps its classification — it rejects image_url with HTTP 400 upstream.
+    expect(entry?.noVisionModels ?? []).toContain(OPENCODE_GO_DEEPSEEK_TEXT_ONLY);
+  });
+
+  test("command-code declares both flash routes image-capable (deepseek probed 2026-09-18)", () => {
     const entry = PROVIDER_REGISTRY.find(e => e.id === "command-code");
     expect(entry?.modelInputModalities?.[COMMAND_CODE_NATIVE]).toEqual(["text", "image"]);
-    // The text-only declaration must NOT come from the image allowlist: putting
-    // a DeepSeek route in COMMAND_CODE_IMAGE_MODELS would advertise native
-    // vision for a model that drops the image upstream.
-    expect(entry?.modelInputModalities?.[COMMAND_CODE_SIDECAR]).toEqual(["text"]);
+    // Promoted from COMMAND_CODE_TEXT_ONLY_MODELS: the upstream probe #4505
+    // asked for passed on both the user-message and tool-result paths.
+    expect(entry?.modelInputModalities?.[COMMAND_CODE_DEEPSEEK]).toEqual(["text", "image"]);
   });
 });
 
 describe("flash-route native vs sidecar distinction (#4505)", () => {
   // WHY: the issue requires routes needing a sidecar to stay distinguishable
-  // from native vision. A wrong fix that declares DeepSeek ["text","image"]
-  // passes an "everything says image" test while the upstream model silently
-  // drops the picture — the sidecar distinction is what keeps the image on a
-  // path that actually reads it.
+  // from native vision. The distinction must follow measured upstream behavior.
+  // After the 2026-09-19 probe all four routes read images natively; the sibling
+  // opencode-go deepseek-v4-flash is what still exercises the sidecar path here.
   test("the two glm-5.3-flash routes are NOT sidecar consumers (native VLM)", () => {
     expect(isModelVisionSidecarConsumer(seeded("opencode-go"), OPENCODE_GO_NATIVE)).toBe(false);
     expect(isModelVisionSidecarConsumer(seeded("command-code"), COMMAND_CODE_NATIVE)).toBe(false);
   });
 
-  test("the two deepseek-v4.1-flash routes ARE sidecar consumers (text-only upstream)", () => {
-    expect(isModelVisionSidecarConsumer(seeded("opencode-go"), OPENCODE_GO_SIDECAR)).toBe(true);
-    expect(isModelVisionSidecarConsumer(seeded("command-code"), COMMAND_CODE_SIDECAR)).toBe(true);
+  test("the reclassified opencode-go deepseek route is native; its sibling stays on the sidecar", () => {
+    expect(isModelVisionSidecarConsumer(seeded("opencode-go"), OPENCODE_GO_DEEPSEEK)).toBe(false);
+    expect(isModelVisionSidecarConsumer(seeded("opencode-go"), OPENCODE_GO_DEEPSEEK_TEXT_ONLY)).toBe(true);
+    expect(isModelVisionSidecarConsumer(seeded("command-code"), COMMAND_CODE_DEEPSEEK)).toBe(false);
   });
 });
 
 describe("flash-route catalog advertisement (#4505)", () => {
   // WHY: the Codex app gates attachments client-side on input_modalities, so the
   // catalog row is where the combo's image capability is actually won or lost.
-  // The DeepSeek rows must pick up "image" from the sidecar hint, not from a
-  // native claim.
-  test("applyProviderConfigHints advertises image for sidecar-covered deepseek-v4.1-flash on opencode-go", () => {
+  // The opencode-go DeepSeek row now carries its own image declaration; the
+  // command-code row carries a native one.
+  test("applyProviderConfigHints advertises image for deepseek-v4.1-flash on opencode-go", () => {
     const hinted = applyProviderConfigHints("opencode-go", seeded("opencode-go"), {
-      id: OPENCODE_GO_SIDECAR,
+      id: OPENCODE_GO_DEEPSEEK,
+      provider: "opencode-go",
+    });
+    expect(hinted.inputModalities).toEqual(["text", "image"]);
+  });
+
+  test("the text-only sibling still picks up image from the sidecar hint", () => {
+    // The hint pass must keep widening a sidecar-covered row, or the app would block the
+    // attachment before the sidecar can describe it.
+    const hinted = applyProviderConfigHints("opencode-go", seeded("opencode-go"), {
+      id: OPENCODE_GO_DEEPSEEK_TEXT_ONLY,
       provider: "opencode-go",
     });
     expect(hinted.inputModalities).toEqual(["text", "image"]);
@@ -96,9 +129,9 @@ describe("flash-route catalog advertisement (#4505)", () => {
   test("applyProviderConfigHints advertises image for all four routes", () => {
     const cases: Array<[string, string]> = [
       ["opencode-go", OPENCODE_GO_NATIVE],
-      ["opencode-go", OPENCODE_GO_SIDECAR],
+      ["opencode-go", OPENCODE_GO_DEEPSEEK],
       ["command-code", COMMAND_CODE_NATIVE],
-      ["command-code", COMMAND_CODE_SIDECAR],
+      ["command-code", COMMAND_CODE_DEEPSEEK],
     ];
     for (const [provider, id] of cases) {
       const hinted = applyProviderConfigHints(provider, seeded(provider), { id, provider });
@@ -116,9 +149,9 @@ describe("flash-route combo intersection (#4505)", () => {
   const combo = {
     targets: [
       { provider: "opencode-go", model: OPENCODE_GO_NATIVE },
-      { provider: "opencode-go", model: OPENCODE_GO_SIDECAR },
+      { provider: "opencode-go", model: OPENCODE_GO_DEEPSEEK },
       { provider: "command-code", model: COMMAND_CODE_NATIVE },
-      { provider: "command-code", model: COMMAND_CODE_SIDECAR },
+      { provider: "command-code", model: COMMAND_CODE_DEEPSEEK },
     ],
     defaultEffort: "high",
   } as never;
@@ -133,9 +166,9 @@ describe("flash-route combo intersection (#4505)", () => {
   test("a combo over the four advertised-image routes keeps image input", () => {
     const members = [
       hintedMember("opencode-go", OPENCODE_GO_NATIVE),
-      hintedMember("opencode-go", OPENCODE_GO_SIDECAR),
+      hintedMember("opencode-go", OPENCODE_GO_DEEPSEEK),
       hintedMember("command-code", COMMAND_CODE_NATIVE),
-      hintedMember("command-code", COMMAND_CODE_SIDECAR),
+      hintedMember("command-code", COMMAND_CODE_DEEPSEEK),
     ];
     const derived = deriveComboCatalogModel("flash_failover", combo, members);
     expect(derived?.inputModalities).toEqual(["text", "image"]);
@@ -147,9 +180,9 @@ describe("flash-route combo intersection (#4505)", () => {
     // accept an attachment one leg silently drops.
     const members = [
       hintedMember("opencode-go", OPENCODE_GO_NATIVE),
-      hintedMember("opencode-go", OPENCODE_GO_SIDECAR),
+      hintedMember("opencode-go", OPENCODE_GO_DEEPSEEK),
       hintedMember("command-code", COMMAND_CODE_NATIVE),
-      { ...hintedMember("command-code", COMMAND_CODE_SIDECAR), inputModalities: ["text"] },
+      { ...hintedMember("command-code", COMMAND_CODE_DEEPSEEK), inputModalities: ["text"] },
     ];
     const derived = deriveComboCatalogModel("flash_failover", combo, members);
     expect(derived?.inputModalities).toEqual(["text"]);

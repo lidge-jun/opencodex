@@ -1,6 +1,8 @@
 import type { TranslatorBudget } from "../lib/translator-budget";
 import { mayBecomePatchEnvelope, normalizeApplyPatchDelimiters } from "../responses/apply-patch-envelope";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
+import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
+import { progressiveFreeformInput } from "../responses/progressive-freeform-input";
 import { declaresCodeModeExec } from "../types/tools";
 import {
   customToolItemId,
@@ -15,48 +17,8 @@ import {
   type SseBlockRewrite,
 } from "./sse-payload-rewrite";
 
-/** Exact compact prefix used by our upstream rewriter; progressive matching also
- *  tolerates insignificant JSON whitespace via FREEFORM_WRAP_PREFIX_RE. */
-const FREEFORM_WRAP_PREFIX = '{"input":"';
-const FREEFORM_WRAP_PREFIX_RE = /^\s*\{\s*"input"\s*:\s*"/;
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-/**
- * Progressive decode of the freeform `{ "input": "…" }` wrapper.
- * Returns null when the accumulated text does not (yet) match that wrapper so
- * callers suppress deltas and rely on `response.custom_tool_call_input.done`.
- */
-function partialCustomToolInput(argumentsText: string): string | null {
-  const match = FREEFORM_WRAP_PREFIX_RE.exec(argumentsText);
-  if (!match) return null;
-  const body = argumentsText.slice(match[0]!.length);
-  let output = "";
-  for (let index = 0; index < body.length; index++) {
-    const char = body[index];
-    if (char === '"') break;
-    if (char !== "\\") {
-      output += char;
-      continue;
-    }
-    const escaped = body[index + 1];
-    if (escaped === undefined) break;
-    index += 1;
-    if (escaped === "n") output += "\n";
-    else if (escaped === "t") output += "\t";
-    else if (escaped === "r") output += "\r";
-    else if (escaped === "b") output += "\b";
-    else if (escaped === "f") output += "\f";
-    else if (escaped === "u") {
-      const hex = body.slice(index + 1, index + 5);
-      if (hex.length !== 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) break;
-      output += String.fromCharCode(Number.parseInt(hex, 16));
-      index += 4;
-    } else output += escaped;
-  }
-  return output;
 }
 
 function replaceSseEventName(block: string, type: string): string {
@@ -298,7 +260,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       releaseCall(upstreamItemId);
       return [replaceSseDataPayload(block, JSON.stringify({
         ...parsed,
-        input: helper ? compileCodeModeHelperInput(source, helper) : source,
+        input: helper ? compileCodeModeHelperInput(source, helper, name) : source,
       }))];
     }
     if (
@@ -332,21 +294,34 @@ export function createRoutedCustomToolRestoreBlockRewrite(
       openCalls.set(upstreamItemId, open);
       // A helper alias will become JavaScript at completion, never raw patch/JSON.
       if (itemNames.get(upstreamItemId)?.aliased) return [];
-      // Still accumulating toward the compact wrapper, or an unrecognized shape:
-      // suppress progressive emission and let the done event carry input.
-      if (FREEFORM_WRAP_PREFIX.startsWith(open.argumentsText)) return [];
-      const fullInput = partialCustomToolInput(open.argumentsText);
+      const itemName = itemNames.get(upstreamItemId);
+      const ownsFreeformGrammar = itemName?.namespace === undefined
+        || itemName?.namespace === "functions";
+      const fullInput = progressiveFreeformInput(
+        open.argumentsText,
+        ownsFreeformGrammar ? itemName?.name ?? "" : "",
+      );
       if (fullInput === null) return [];
-      // Hold a buffer that could still become a complete patch envelope. The done event
-      // recompiles such a body into an apply_patch helper call, so streaming the envelope
-      // bytes first and replacing them at completion is the rewind this path forbids.
-      // Mirrors the same hold in `src/bridge.ts`.
-      if (
-        declaresCodeModeExec(declaredNames)
-        && itemNames.get(upstreamItemId)?.namespace === undefined
-        && itemNames.get(upstreamItemId)?.name === "exec"
-        && mayBecomePatchEnvelope(fullInput)
-      ) return [];
+      // This routed path historically holds every unrecognized JSON object until done.
+      // The shared decoder streams ordinary raw input, so retain the stricter routed rule
+      // when no recognized wrapper transformed the accumulated object.
+      if (fullInput === open.argumentsText && open.argumentsText.trimStart().startsWith("{")) return [];
+      // Hold a buffer that could still become a complete patch envelope, for either of the two
+      // reasons completion rewrites one. Both are the same rewind this path forbids, and both
+      // mirror `src/bridge/sse.ts`.
+      //
+      // `exec`: the done event recompiles such a body into an apply_patch helper call.
+      // `apply_patch`: `normalizeApplyPatchDelimiters` rewrites a decorated
+      // `*** Begin Patch ***` envelope at completion, so the decorated markers would be
+      // published and then replaced by the normalized ones. Before the shared decoder, this
+      // path held every non-canonical shape and so never reached that case; now that ordinary
+      // raw input streams, the second reason has to be stated explicitly.
+      const mayCompile = declaresCodeModeExec(declaredNames)
+        && itemName?.namespace === undefined
+        && itemName?.name === "exec";
+      const mayNormalize = ownsFreeformGrammar && itemName?.name === "apply_patch";
+      if ((mayCompile || mayNormalize) && mayBecomePatchEnvelope(fullInput)) return [];
+      if (mayCompile && mayBecomeCodeModeShellInput(open.argumentsText, fullInput)) return [];
       if (!fullInput.startsWith(open.emittedInput) || fullInput.length === open.emittedInput.length) return [];
       const inputDelta = fullInput.slice(open.emittedInput.length);
       open.emittedInput = fullInput;
@@ -381,7 +356,7 @@ export function createRoutedCustomToolRestoreBlockRewrite(
         type: nextType,
         item_id: customToolItemId(upstreamItemId),
         input: helper
-          ? compileCodeModeHelperInput(source, helper)
+          ? compileCodeModeHelperInput(source, helper, itemName?.name ?? "")
           : unwrapRoutedCustomToolArguments(source, itemName?.name ?? "", itemName?.namespace),
       };
       return [replaceSseDataPayload(replaceSseEventName(block, nextType), JSON.stringify(next))];

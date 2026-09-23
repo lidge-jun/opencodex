@@ -1,7 +1,7 @@
 import type { AdapterEvent, OcxParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
-import type { AttemptRecoveryKind } from "../usage/log";
+import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../usage/log";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
@@ -31,10 +31,33 @@ export interface IncomingMeta {
    * behind it (#4546).
    */
   sendBudget?: RequestExecutionBudget;
+  /**
+   * Physical-send observations for runTurn adapters. Without the same callback carried by
+   * AdapterFetchContext, an adapter-owned replay spends the shared budget but remains absent
+   * from the request's sendCount.
+   */
+  onPhysicalSend?: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => void;
+  /**
+   * Recovery refusals for runTurn adapters. A refused replay is not a send, so this separate
+   * channel explains why recovery stopped without inflating physical-send telemetry.
+   */
+  onRecoveryWithheld?: (withheld: { reason: AttemptRecoveryWithheld }) => void;
 }
 
 export interface ProviderAdapter {
   name: string;
+
+  /**
+   * This adapter reports every physical inference send through `IncomingMeta.onPhysicalSend`,
+   * including its first.
+   *
+   * The caller normally logs the first send before handing control over, which is correct for a
+   * transport whose sends it can see. An adapter that admits its own sends through the shared
+   * budget can have that first send refused, and a send logged before admission is a send the
+   * log claims and the wire never made. Setting this moves the first send's accounting to the
+   * boundary where it is actually dispatched.
+   */
+  reportsPhysicalSends?: boolean;
 
   /**
    * Convert an already-read provider HTTP error into client-safe text. This hook must be pure and
@@ -168,6 +191,16 @@ export interface AdapterFetchContext {
    * to `sendCount` and no regression could assert a count for them (#4546).
    */
   onPhysicalSend?: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => void;
+  /**
+   * Observes a recovery this adapter was ready to make and did not, because the send budget
+   * refused the dispatch.
+   *
+   * Separate from `onPhysicalSend` because nothing was sent: folding it in would inflate
+   * `sendCount`, the one number that means "requests this proxy actually made". Without it a
+   * log with one send cannot distinguish "no recovery was eligible" from "one was and the
+   * budget withheld it", and those need opposite follow-ups (#5044).
+   */
+  onRecoveryWithheld?: (withheld: { reason: AttemptRecoveryWithheld }) => void;
 }
 
 /**

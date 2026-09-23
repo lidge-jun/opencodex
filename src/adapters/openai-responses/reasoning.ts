@@ -4,6 +4,13 @@ import { OCX_REASONING_PREFIX } from "../../responses/reasoning-envelope";
 import { configuredReasoningEfforts, mapReasoningEffort, modelRecordValue } from "../../reasoning-effort";
 import { isPlainObject } from "./internal";
 
+/** Drop only replayed Responses reasoning items; all other continuation input stays untouched. */
+export function dropResponsesReasoningInputItems(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  const input = body.input.filter(item => !isPlainObject(item) || item.type !== "reasoning");
+  return input.length === body.input.length ? body : { ...body, input };
+}
+
 /**
  * Sanitize reasoning input by field policy, not by preserving each item's shape. Retaining a
  * native `encrypted_content` guarantees only that blob value: `status` is always removed;

@@ -2,10 +2,15 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { handleResponses } from "../../src/server/responses/core";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
+let releaseSpendHome: (() => void) | undefined;
 
 afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;
 });
 
@@ -85,6 +90,8 @@ async function post(args: {
   }) as typeof fetch;
 
   const logCtx = { model: "", provider: "" } as RequestLogContext;
+  // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+  releaseSpendHome = acquireOwnedSpendHome();
   const response = await handleResponses(
     new Request("http://localhost/v1/responses", {
       method: "POST",

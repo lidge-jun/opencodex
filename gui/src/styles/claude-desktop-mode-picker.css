@@ -1,0 +1,22 @@
+/* ── Desktop connection mode picker (first-party default / gateway opt-in) ── */
+.claude-mode-picker {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px;
+  margin: 0 0 14px; padding: 10px 14px 12px; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface);
+}
+.claude-mode-picker legend { padding: 0 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.claude-mode-picker:disabled { opacity: 0.6; }
+.claude-mode-option {
+  display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: start;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer;
+}
+.claude-mode-option.active { border-color: var(--accent); }
+.claude-mode-option input { margin-top: 3px; }
+.claude-mode-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.claude-mode-hint { grid-column: 2; margin-top: 4px; font-size: 12px; color: var(--muted); line-height: 1.4; }
+.claude-mode-default, .claude-mode-current {
+  padding: 1px 6px; border-radius: var(--radius-xs); font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
+}
+.claude-mode-default { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.claude-mode-current { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
+.claude-mode-switch-note { grid-column: 1 / -1; font-size: 12px; color: var(--amber); }

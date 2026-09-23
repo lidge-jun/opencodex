@@ -89,12 +89,40 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 
 **http://localhost:10100**을 열고 웹 대시보드에서 전부 설정하세요. 프로바이더 추가(내장 40개 이상,
 또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
-Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. ChatGPT / Codex 계정을 여러 개 넣고, 대시보드에서
-5시간 / 주간 / 30일 쿼터를 갱신합니다. 쿼터 라우팅을 켜면 새 세션은 사용량이 가장 적은 정상 계정을 쓰고,
-round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 기본적으로 시작한 계정에 붙어
-있어서, 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터 재평가, failover,
-계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다. Codex Desktop 로그인처럼
-다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면, 계정에 선택 순서를 지정하세요.
+
+<details>
+<summary><b>데스크톱 앱과 macOS 위젯 — 베타</b></summary>
+
+같은 대시보드를 감싼 네이티브 앱과, 브라우저를 열지 않고 프록시 상태·오늘의 사용량·프로바이더
+쿼터를 보여 주는 WidgetKit 확장입니다. 프록시 자체는 그대로입니다. 앱은 실행 중인 프록시를 찾거나
+번들된 `ocx` 사이드카를 시작하며, 대시보드는 프록시의 포트에서 열립니다(다른 포트를 설정하지 않았다면
+**http://localhost:10100**).
+
+현재 베타 버전입니다. macOS 앱의 릴리스 빌드는 Developer ID로 서명되고 공증됩니다(로컬 빌드는
+ad-hoc 서명). Windows 설치 파일은 아직 코드 서명되지 않아 처음 실행할 때 SmartScreen 경고가
+표시됩니다. 위젯은 macOS 14 이상에서 쓸 수 있으며,
+위젯이 그리는 스냅샷 모델은 [`app/`](../app)의 `MenuBarCore`에 있습니다.
+
+[최신 릴리스](https://github.com/lidge-jun/opencodex/releases)에서 다운로드하거나
+직접 빌드하세요. 저장소 루트에서 `bun install && bun run build:gui`를 실행한 다음,
+`desktop/`에서 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`을 실행합니다.
+
+설치 위치, 서비스 파일을 비롯해 디스크에 쓰는 항목은
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에 정리되어 있습니다.
+[데스크톱 앱 가이드](https://opencodex.me/ko/guides/desktop-app/)와
+[macOS 메뉴 막대 앱 가이드](https://opencodex.me/ko/guides/macos-menu-bar/)에서
+플랫폼별 설치 방법과 첫 실행 안내를 확인할 수 있습니다.
+
+</details>
+
+### ChatGPT 계정 풀
+
+opencodex는 Codex 인증용 **ChatGPT 계정 풀**도 관리합니다. ChatGPT / Codex 계정을 여러 개 넣고,
+대시보드에서 5시간 / 주간 / 30일 쿼터를 갱신합니다. 쿼터 라우팅을 켜면 새 세션은 사용량이 가장 적은
+정상 계정을 쓰고, round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레드는 기본적으로
+시작한 계정에 붙어 있어서 긴 SSH·tmux·모바일 세션이 대화 도중에 계정을 바꾸지 않습니다. 다만 쿼터
+재평가, failover, 계정 제외, affinity 만료, 401/403·429 복구가 일어나면 다시 묶일 수 있습니다.
+Codex Desktop 로그인처럼 다른 계정이 소진된 뒤에만 쓰고 싶은 계정이 있으면 계정에 선택 순서를 지정하세요.
 
 ### 스폰서
 
@@ -122,14 +150,14 @@ round-robin과 fill-first는 각자 정책을 따릅니다. 기존 Codex 스레�
 <details>
 <summary>Docker Compose</summary>
 
-이 저장소는 digest로 고정하고 root를 쓰지 않는 Compose 빌드를 제공합니다. 호스트에 Git과 Bun이
-설치되어 있으면, 이미지를 빌드할 때마다 정식 호환성 매니페스트를 만든 다음, stdin으로 데이터 플레인
-토큰을 한 번 초기화하고 허브를 시작하세요:
+이 저장소는 digest로 고정하고 root를 쓰지 않는 Compose 빌드를 제공합니다. 빌드는 선택한 Git 스냅샷에서
+정식 호환성 매니페스트를 생성하고 검증합니다. 로컬 클론에는 Git과 Docker Compose가 필요하고, 원격 Git
+컨텍스트에는 Docker Compose가 필요합니다. 어느 쪽도 호스트의 Bun이나 준비 단계는 필요하지 않습니다.
+stdin으로 데이터 플레인 토큰을 한 번 초기화하고 허브를 시작하세요:
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -140,10 +168,27 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 기본 호스트 바인딩은 `127.0.0.1:10100`입니다. 원격 노출은
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d`를 명시해야 하며, `0.0.0.0`은
 호스트의 모든 인터페이스를 엽니다. 방화벽과 인증된 TLS/tailnet 프론트엔드로 접근을 제한하세요.
-생성된 JSON은 추적하지 않으며, `.git` 없이 이미지로 복사됩니다. 소스가 바뀌면 다시 생성하고,
-생성과 빌드 사이에 소스를 고치지 마세요. 빌드는 낡은 매니페스트, 없거나 불일치하는 파일, 여분의
-소스 파일, 심볼릭 링크를 거부합니다. 기록된 SHA-256을 빌드 컨텍스트와 복사된 런타임 파일
+생성된 JSON은 추적하지 않습니다. 빌드 컨텍스트에는 `git ls-files`가 인벤토리를 읽는 `.git/index`와
+`.git/HEAD`만 들어갑니다. 전체 오브젝트 저장소 대신 약 1 MB이며, 읽기 전용 마운트를 통해 빌드 전용
+매니페스트 단계에서만 볼 수 있으므로 어떤 `COPY`에도 `.git`이 포함되지 않습니다. 호스트에서 이미 생성한
+매니페스트는 검증을 통과해야만 사용하고, 그렇지 않으면 빌드가 직접 생성합니다. 빌드는 낡은 매니페스트,
+없거나 불일치하는 파일, 여분의 소스 파일, 심볼릭 링크를 거부합니다. 기록된 SHA-256을 빌드 컨텍스트와 복사된 런타임 파일
 (`package.json`, `bun.lock`, 특별히 포함된 `scripts/model-metadata.source.json`)과 대조합니다.
+
+원격 Git 컨텍스트에서는 BuildKit이 Git 메타데이터를 유지해야 합니다. 다음 Compose 빌드 조각은 원격
+스냅샷을 선택하고 필요한 기본 인자를 전달합니다:
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 토큰과 가변 상태는 `ocx-state` named volume에 남습니다. 이미지, Compose 파일, 환경, 셸 인자에는
 자격 증명을 넣지 않습니다. 프로바이더 설정, 인증된 수락 검사, 원격 관리, 롤백은
@@ -158,8 +203,9 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -167,8 +213,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

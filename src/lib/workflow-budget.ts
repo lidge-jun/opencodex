@@ -21,10 +21,46 @@
 
 import {
   sharedSpendLedger,
+  spendCeilingsConfigured,
   type SpendReservationLedger,
   type SpendScope,
   type SpendUsage,
 } from "./spend-reservation-ledger";
+
+/**
+ * What a token-ceiling refusal has to be able to say.
+ *
+ * "Budget exhausted" on its own is the failure this repository keeps re-learning: a policy
+ * rejection wearing another error's clothing sends an operator to look at the provider. The
+ * scope says WHICH ceiling fired -- one task, one account, or the whole pool -- and the limit
+ * is the number they would otherwise have to read the journal to recover. The scope ID is
+ * deliberately not here: root ids are client thread headers and identity ids are credentials,
+ * and the ledger's rule is that neither is written down in the clear.
+ */
+export interface WorkflowSpendDenialDetail {
+  readonly scope: SpendScope;
+  readonly limit: number;
+  /** Tokens the refused reservation would have taken the scope to, where that is known. */
+  readonly projected?: number;
+}
+
+/** Operator-facing name for each scope. What an operator calls it, not what the type calls it. */
+const SPEND_SCOPE_LABEL: Record<SpendScope, string> = {
+  root: "task",
+  identity: "account",
+  pool: "provider pool",
+};
+
+/**
+ * Thousands separators, done here rather than by `toLocaleString`.
+ *
+ * A ceiling is an eight- or nine-digit number and an unseparated one is genuinely hard to read
+ * against the figure beside it. `toLocaleString` would do this too, but its output depends on
+ * the ICU data the runtime happens to carry, and a message a test pins must not differ between
+ * a developer's machine and a CI image.
+ */
+const formatTokenCount = (tokens: number): string =>
+  Math.trunc(tokens).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 
 export interface WorkflowBudgetPolicy {
   /** Children admitted concurrently under one root. */
@@ -172,7 +208,10 @@ export type WorkflowDenial =
  * therefore says which ceiling fired AND that no provider was contacted, because that is the
  * first thing an operator needs and the only place left to put it.
  */
-export function workflowDenialSummary(reason: WorkflowDenial): { code: string; message: string } {
+export function workflowDenialSummary(
+  reason: WorkflowDenial,
+  spend?: WorkflowSpendDenialDetail,
+): { code: string; message: string } {
   switch (reason) {
     case "workflow-sends-exhausted":
       return {
@@ -197,8 +236,21 @@ export function workflowDenialSummary(reason: WorkflowDenial): { code: string; m
     case "workflow-spend-exhausted":
       return {
         code: "workflow_spend_exhausted",
-        message: "This proxy refused the request locally: the task reached a configured token"
-          + " ceiling, so no provider was contacted.",
+        // With the denial in hand the sentence names the ceiling that fired and its number,
+        // because the alternative is an operator who can see that something refused and has
+        // no way to find out what. Without one -- a caller that knows only the reason -- the
+        // original sentence is kept unchanged.
+        message: spend
+          ? "This proxy refused the request locally: the configured " + SPEND_SCOPE_LABEL[spend.scope]
+            + " token ceiling of " + formatTokenCount(spend.limit) + " is spent"
+            + (spend.projected !== undefined
+              ? " (this send would have taken it to " + formatTokenCount(spend.projected) + ")"
+              : "")
+            + ", so no provider was contacted. Spend is durable, so it does not roll forward"
+            + " with the send window: raise or remove spend." + spend.scope
+            + ".maxTokens in config.json to grant more."
+          : "This proxy refused the request locally: the task reached a configured token"
+            + " ceiling, so no provider was contacted.",
       };
     case "workflow-tracking-exhausted":
       return {
@@ -241,6 +293,10 @@ export interface WorkflowBudgetEvent {
   readonly rootId: string;
   /** The ceiling that fired. Present for `refused`, absent for `cleared`. */
   readonly reason?: WorkflowDenial;
+  /** Which token scope refused, on a spend denial. Absent on every count denial. */
+  readonly spendScope?: SpendScope;
+  /** That scope's ceiling, so the event is readable without the config open beside it. */
+  readonly spendLimit?: number;
   /** Windowed sends at the moment of the event. */
   readonly sends: number;
   /** Windowed distinct children at the moment of the event. */
@@ -289,6 +345,7 @@ export function recordWorkflowRefusalEvent(
   rootId: string | undefined,
   reason: WorkflowDenial,
   now: number = Date.now(),
+  spend?: WorkflowSpendDenialDetail,
 ): void {
   if (!rootId) return;
   const state = roots.get(rootId);
@@ -297,6 +354,7 @@ export function recordWorkflowRefusalEvent(
     kind: "refused",
     rootId,
     reason,
+    ...(spend ? { spendScope: spend.scope, spendLimit: spend.limit } : {}),
     sends: state ? windowedSends(state, now) : 0,
     children: state ? windowedChildren(state, now) : 0,
   });
@@ -323,6 +381,10 @@ export type WorkflowDecision =
       rootId: string;
       /** Which spend scope refused, when the denial came from the token ledger. */
       spendScope?: SpendScope;
+      /** That scope's configured ceiling, so a caller can say what it was. */
+      spendLimit?: number;
+      /** Tokens the refused reservation would have taken the scope to, where known. */
+      spendProjected?: number;
     };
 
 /**
@@ -424,24 +486,40 @@ export function admitWorkflowTurn(
 ): WorkflowDecision | undefined {
   if (!rootId) return undefined;
   // An explicit ledger is consulted even without a spend request, so root eviction can
-  // still see spend-exhausted entries. With neither, no token tracking is in play.
-  const ledger = spendLedger ?? (spend ? sharedSpendLedger() : undefined);
+  // still see spend-exhausted entries. The shared one is resolved whenever a ceiling is
+  // CONFIGURED, which is what lets admission refuse an already-spent scope before a body is
+  // parsed. An install that configured nothing resolves no ledger, opens no journal, and runs
+  // this function exactly as it did before -- the unconfigured path has to stay byte-identical
+  // because the ledger is on and journalling by default.
+  const ledger = spendLedger ?? (spend || spendCeilingsConfigured() ? sharedSpendLedger() : undefined);
   let state = roots.get(rootId);
   // Every refusal below goes on the record through this one seam. Recording at each return
   // site instead of at the HTTP caller is what makes the record complete: the spend denials
   // are decided inside the ledger branch and never surface as a distinct reason to the caller
   // that formats the response.
-  const refuse = (reason: WorkflowDenial, spendScope?: SpendScope): WorkflowDecision => {
+  const refuse = (reason: WorkflowDenial, denial?: WorkflowSpendDenialDetail): WorkflowDecision => {
     const current = roots.get(rootId);
     recordBudgetEvent({
       at: now,
       kind: "refused",
       rootId,
       reason,
+      ...(denial ? { spendScope: denial.scope, spendLimit: denial.limit } : {}),
       sends: current ? windowedSends(current, now) : 0,
       children: current ? windowedChildren(current, now) : 0,
     });
-    return { admitted: false, reason, rootId, ...(spendScope ? { spendScope } : {}) };
+    return {
+      admitted: false,
+      reason,
+      rootId,
+      ...(denial
+        ? {
+          spendScope: denial.scope,
+          spendLimit: denial.limit,
+          ...(denial.projected !== undefined ? { spendProjected: denial.projected } : {}),
+        }
+        : {}),
+    };
   };
   if (!state) {
     if (roots.size >= policy.maxTrackedRoots && !evictOneRoot(policy, ledger, now)) {
@@ -469,6 +547,26 @@ export function admitWorkflowTurn(
     return refuse("workflow-concurrency-exhausted");
   }
 
+  // The counts are checked first and the token ceiling second, and the order is deliberate
+  // rather than emergent. A count check reads two integers this process already holds; a token
+  // check may have to build the ledger and replay its journal. Checking the cheap bound first
+  // means the expensive one is never reached for a request the cheap one already refused.
+  //
+  // The two therefore CAN disagree, and the intersection is what is enforced: a request passes
+  // only when every count cap and every token ceiling admits it. A token denial happens before
+  // any count is charged, and a count denial happens before any reservation is booked, so
+  // neither leaves the other's accounting to unwind. Whichever refuses first is reported as
+  // itself -- one refusal is never relabelled as the other, because "sends exhausted" and
+  // "spend exhausted" send an operator to two different remedies.
+  //
+  // A scope whose ceiling is ALREADY spent is refused here rather than at the reservation. The
+  // reservation needs a token count, which is not known until the body is parsed and a route
+  // resolved; an exhausted scope needs neither and is the cheapest refusal available.
+  if (!spend && ledger) {
+    const reached = spentRootCeiling(rootId, ledger);
+    if (reached) return refuse("workflow-spend-exhausted", reached);
+  }
+
   if (spend && ledger) {
     const decision = ledger.reserve({
       sendId: spend.sendId,
@@ -491,7 +589,9 @@ export function admitWorkflowTurn(
             : "workflow-spend-exhausted";
       return refuse(
         reason,
-        denial.reason === "spend-limit-exceeded" ? denial.scope : undefined,
+        denial.reason === "spend-limit-exceeded"
+          ? { scope: denial.scope, limit: denial.limit, projected: denial.projected }
+          : undefined,
       );
     }
   }
@@ -598,6 +698,43 @@ export function workflowSendCeilingReached(
   if (!rootId) return false;
   const state = roots.get(rootId);
   return state !== undefined && windowedSends(state, now) >= policy.maxPhysicalSends;
+}
+
+/**
+ * The root scope's ceiling when that scope is already spent, or undefined.
+ *
+ * Root only: identity and pool are not known until routing has picked an account, so those two
+ * refuse at the reservation itself. `exhausted` sums settled spend, open reservations and
+ * unresolved spend, which is the same total the reservation compares, so this answers the same
+ * question the reservation would -- just without needing the request's token count.
+ */
+function spentRootCeiling(
+  rootId: string,
+  ledger: SpendReservationLedger,
+): WorkflowSpendDenialDetail | undefined {
+  const limit = ledger.policy.root.maxTokens;
+  if (limit === undefined) return undefined;
+  return ledger.exhausted("root", rootId) ? { scope: "root", limit } : undefined;
+}
+
+/**
+ * The token ceiling a root has already spent, or undefined when it has room or has none.
+ *
+ * The count-side twin of {@link workflowSendCeilingReached}, and the responses path calls both
+ * at the same seam for the same reason: a refusal decided before dispatch can be reported as
+ * ITSELF -- a named ceiling, a synthetic log row, a machine-readable header -- instead of
+ * surfacing later as a generic send-budget error from whichever leg happened to run out first.
+ *
+ * Returns undefined when no ceiling is configured, without resolving a ledger, so an install
+ * that never opted in neither pays for this check nor opens a journal because of it.
+ */
+export function workflowSpendCeilingReached(
+  rootId: string | undefined,
+  spendLedger?: SpendReservationLedger,
+): WorkflowSpendDenialDetail | undefined {
+  if (!rootId) return undefined;
+  const ledger = spendLedger ?? (spendCeilingsConfigured() ? sharedSpendLedger() : undefined);
+  return ledger ? spentRootCeiling(rootId, ledger) : undefined;
 }
 
 export interface WorkflowBudgetSnapshot {

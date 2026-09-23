@@ -1,8 +1,16 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { cancelBodyOnAbort } from "../../src/lib/abort";
 import { handleLive, readBodyCapped } from "../../src/server/live";
 import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+let releaseSpendHome: (() => void) | undefined;
+afterEach(() => {
+  // Release the lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+});
 
 function bodyWithCancelSpy(): { body: ReadableStream<Uint8Array>; cancelled: () => boolean } {
   let cancelled = false;
@@ -197,6 +205,8 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     } as OcxConfig;
 
     try {
+      // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+      releaseSpendHome = acquireOwnedSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -258,6 +268,7 @@ describe("readBodyCapped settles the stream when a read throws", () => {
     } as OcxConfig;
 
     try {
+      releaseSpendHome = acquireOwnedSpendHome();
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },

@@ -46,8 +46,10 @@ the inverse.
   the Responses transport doc and the Images doc. An earlier revision of this folder demanded exactly
   one owner per area, and that rule was simply false here — a false rule is worse than none, because
   the gate reports green while the map sends a maintainer to the wrong doc.
-- **Changing an area obliges the same change to update every doc listed for it.** Not a follow-up,
-  not a later cleanup pass.
+- **Changing an area obliges the same change to review every doc listed for it.** Review fan-out is
+  unchanged by contract authority: update the authority when the shared contract changes, and update
+  a dependent only when its local explanation or consequence changes. A reviewed document whose
+  content remains accurate does not need copied unchanged prose.
 - Describing an area means naming a path inside it. If a doc explains a subsystem without ever citing
   a path, the map cannot see it, and the area lands in `grace.undocumentedSourceAreas` instead — which
   is a signal to add the path reference, not a place to park work.
@@ -61,6 +63,16 @@ the inverse.
 What the map still does not do: it cannot tell you that two docs describe the same behavior in
 contradictory words. Avoiding that is a review judgement. Prefer one statement and a link over two
 statements that will drift apart.
+
+Cross-cutting authority is declared by the optional versioned `contracts` object in
+[`manifest.json`](manifest.json). Each entry has a stable kebab-case `id`, one `owner` with a
+manifest-declared document and heading anchor, and a `dependents` array of manifest-declared
+documents. Every dependent links the exact owner anchor. The registry supplements the source map;
+it never narrows which documents a source change requires review of.
+
+The gate proves declared topology: identifiers are unique, files and anchors exist, and each
+dependent carries the declared link. It does not compare prose or prove that the owner statement is
+behaviorally correct. Those remain review judgements.
 
 ## Decision records
 
@@ -103,8 +115,10 @@ violated is worse than admitting the gap: it converts an open question into fals
 
 1. Write or move the file.
 2. Add or update its `manifest.json` entry: `path`, `tier`, `title`, `scope`, `documents`.
-3. `bun run structure:index` to regenerate [`INDEX.md`](INDEX.md).
-4. `bun run structure:check` until it is green.
+3. Add or update any affected contract authority and dependent links in `manifest.json`; review every
+   document mapped to the changed source area even when its text remains accurate.
+4. `bun run structure:index` to regenerate [`INDEX.md`](INDEX.md).
+5. `bun run structure:check` until it is green.
 
 ## What the gate checks
 
@@ -128,11 +142,16 @@ verifies that:
 - every bound invariant names an existing test that names the id back, and every unbound one is
   recorded with a reason;
 - every `src/` directory and top-level module is described by a doc or recorded as undescribed;
+- contract ids are unique, owner and dependent documents exist in the manifest, owner anchors exist,
+  and every dependent links its declared authority without listing the owner as a dependent;
 - the manifest itself parses and has the shape the gate expects, reported as a failure rather than a
   stack trace;
 - `overview.md` exists, because its absence would otherwise silence every invariant check at once;
 - `INDEX.md` matches what the manifest generates, compared after newline normalisation so a CRLF
   checkout is not a failure.
+
+Contract checks establish declared authority and links only. They make no automatic claim that an
+owner's prose is semantically complete or that a dependent's explanation is behaviorally correct.
 
 Checks are scanned with fenced code blocks removed, so an example inside a fence does not trip a rule
 it is only illustrating.

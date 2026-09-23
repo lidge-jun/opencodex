@@ -2,18 +2,16 @@
  * Sets up the git hooks for local development.
  * Run once after cloning: bun run setup:hooks
  *
- * - `pre-push` runs `bun run prepush` (typecheck + tests + privacy scan + GUI
- *   eslint and React Doctor when `gui/` changed) — the local portion of the CI
- *   gate.
+ * - Retires the unmodified repository-managed `pre-push` hook. Validation is
+ *   run explicitly; custom hooks are preserved.
  * - `post-merge` runs `bun run postmerge`, which rebuilds the packaged GUI when
  *   a merge or pull brought `gui/` changes. `gui/dist` is generated and
  *   gitignored, so a fast-forward advances the source while the dashboard keeps
  *   serving the previously built bundle.
- *
- * To skip in an emergency: git push --no-verify / git pull --no-verify
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, copyFileSync, mkdirSync, chmodSync, readFileSync, renameSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, copyFileSync, mkdirSync, chmodSync, readFileSync, renameSync, lstatSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -72,15 +70,25 @@ function installHook(name: string, source: string, summary: string): void {
   console.log(`${name} hook installed at ${dest}. ${summary}`);
 }
 
-installHook(
-  "pre-push",
-  "pre-push.sh",
-  "Runs typecheck + tests + privacy scan (+ GUI eslint and React Doctor when gui/ changed) before every push.",
-);
+// Match the exact retired shim (normalizing checkout line endings), never a
+// name or a partial marker: a user may have added other work to their hook.
+const retiredPrePushSha256 = "2aa6b5f84ab989954d2ccc1a8680d63ad934034778e0ee99c277f8873fd40508";
+const prePushPath = join(hooksDir, "pre-push");
+const prePushStat = lstatSync(prePushPath, { throwIfNoEntry: false });
+if (prePushStat?.isFile()) {
+  const content = readFileSync(prePushPath, "utf8").replace(/\r\n/g, "\n");
+  if (createHash("sha256").update(content).digest("hex") === retiredPrePushSha256) {
+    unlinkSync(prePushPath);
+    console.log("Removed the retired repository-managed pre-push hook.");
+  } else {
+    console.log("Preserved custom pre-push hook.");
+  }
+}
+
 installHook(
   "post-merge",
   "post-merge.sh",
   "Rebuilds the packaged GUI when a merge or pull brought gui/ changes.",
 );
 
-console.log("Skip in an emergency with: git push --no-verify / git pull --no-verify");
+console.log("Run validation explicitly before review; see AGENTS.md for test scope.");

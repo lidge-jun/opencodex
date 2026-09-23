@@ -35,6 +35,7 @@ export const MAX_ACTIVE_SESSION_LANES = 64;
 export const SESSION_LANE_ID_BYTES = 32;
 const turnGate = createAdmissionGate("active_turns", MAX_ACTIVE_TURNS);
 export interface ActiveTurnLease extends AdmissionLease {
+  attach(lease: AdmissionLease): void;
   bindAbortController(ac: AbortController): void;
   beginCodexAccountSelection(): CodexAccountSelectionAdmission;
   isTransferred(): boolean;
@@ -190,10 +191,15 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
     }
   }
   const controllers = new Set<AbortController>();
+  const attachedLeases = new Set<AdmissionLease>();
   let active = true;
   let transferred = false;
   let nativeMainClaimed = false;
   const lease: ActiveTurnLease = {
+    attach(attachedLease) {
+      if (!active) attachedLease.release();
+      else attachedLeases.add(attachedLease);
+    },
     bindAbortController(ac) {
       knownTurnControllers.add(ac);
       if (!active) {
@@ -238,6 +244,8 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
         if (activeTurns.get(controller) === lease) activeTurns.delete(controller);
       }
       controllers.clear();
+      for (const attachedLease of attachedLeases) attachedLease.release();
+      attachedLeases.clear();
       nativeMainTurns.delete(lease);
       if (opaqueSessionLaneId) {
         const currentRefCount = activeSessionLaneRefCounts.get(opaqueSessionLaneId);
@@ -357,12 +365,12 @@ export function getServerListenPort(): number | undefined {
  *   caller sees the same result before a replacement binds the port. Swallowing it would let
  *   `drainAndShutdown` report success while a socket is still held.
  *
- * `always` runs after the listeners regardless of their outcome, and its own failure joins the
- * reported set rather than replacing it.
+ * `always` runs after the listeners regardless of their outcome and receives whether every
+ * listener stop succeeded. Its own failure joins the reported set rather than replacing it.
  */
 export async function runListenerShutdown(
   steps: Array<() => Promise<void>>,
-  always: () => Promise<void>,
+  always: (listenersStopped: boolean) => Promise<void>,
 ): Promise<void> {
   const failures: unknown[] = [];
   // Close admission and start connection-owner cleanup before waiting for any drain.
@@ -372,7 +380,7 @@ export async function runListenerShutdown(
     if (result.status === "rejected") failures.push(result.reason);
   }
   try {
-    await always();
+    await always(failures.length === 0);
   } catch (error) {
     failures.push(error);
   }

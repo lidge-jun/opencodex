@@ -30,7 +30,9 @@ let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 let container: HTMLElement;
 let root: Root | null = null;
-let requests: Array<{ url: string; method: string; body: unknown }> = [];
+type RecordedRequest = { url: string; method: string; body: unknown };
+
+let requests: RecordedRequest[] = [];
 /**
  * `useDataSurface` caches by key, and the key includes `apiBase`. Reusing one
  * base across tests replayed the previous test's response, so a fixture change
@@ -53,10 +55,11 @@ type JournalRow = {
 
 let stateResponse: () => Response;
 let journalRows: JournalRow[];
-let putResponse: () => Response;
+let putResponse: (request: RecordedRequest) => Response;
 let codexRoutingResponse: () => Response;
 let codexDesiredEnabled = true;
 let deleteResponse: () => Response;
+let previewResponse: (body: Record<string, unknown>, signal?: AbortSignal | null) => Response | Promise<Response>;
 /**
  * The overview also reads Codex routing, API keys, Claude Code, Claude Desktop
  * and the Grok fence. Default answers keep every existing test's card grid
@@ -80,6 +83,27 @@ function status(overrides: Record<string, unknown> = {}) {
     configPath: "/tmp/home/.hermes/config.yaml",
     snapshotCount: 1,
     retentionDegraded: false,
+    ...overrides,
+  };
+}
+
+function asideStatus(overrides: Record<string, unknown> = {}) {
+  return status({ clientId: "aside", configPath: "/tmp/aside/profiles.json", ...overrides });
+}
+
+function previewPlan(operation: "apply" | "overwrite" | "disable" | "restore", overrides: Record<string, unknown> = {}) {
+  return {
+    version: 1,
+    clientId: "hermes",
+    operation,
+    state: operation === "apply" ? "absent" : "current",
+    foreignEdit: "none",
+    changes: operation === "disable"
+      ? [{ kind: "remove", path: "providers.opencodex" }, { kind: "snapshot", path: "$snapshot" }, { kind: "ownership", path: "$ownership" }, { kind: "journal", path: "$journal" }]
+      : [{ kind: "replace", path: "providers.opencodex" }, { kind: "snapshot", path: "$snapshot" }, { kind: "ownership", path: "$ownership" }, { kind: "journal", path: "$journal" }],
+    fingerprint: `p1:${({ apply: "1", overwrite: "2", disable: "3", restore: "4" } as const)[operation].repeat(32)}`,
+    canApply: true,
+    willChange: true,
     ...overrides,
   };
 }
@@ -108,16 +132,29 @@ beforeEach(() => {
   codexRoutingResponse = () => json({ routingInjected: false, status: "native", recommendedCommand: null });
   codexDesiredEnabled = true;
   deleteResponse = () => json({ ok: true, clientId: "hermes", opId: "op-old", snapshotRemoved: true });
+  previewResponse = body => {
+    const clientId = body.clientId ?? "hermes";
+    return json(previewPlan((body.operation as "apply" | "overwrite" | "disable") ?? "apply", {
+      clientId,
+      ...(clientId === "pi" ? { fingerprint: `p1:${"5".repeat(32)}` } : {}),
+    }));
+  };
   failExtraSources = false;
 
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const method = (init?.method ?? "GET").toUpperCase();
-    requests.push({
+    const request = {
       url,
       method,
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
-    });
+    };
+    requests.push(request);
+    if (url.endsWith("/api/client-integrations/restore/preview")) return json(previewPlan("restore"));
+    if (url.endsWith("/api/client-integrations/preview")) {
+      const body = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : {};
+      return previewResponse(body, init?.signal);
+    }
     if (url.includes("/journal") && method === "DELETE") return deleteResponse();
     if (url.includes("/journal")) return json({ operations: journalRows });
     if (url.includes("/api/startup-health")) {
@@ -175,7 +212,7 @@ beforeEach(() => {
     if (url.includes("/api/grok")) {
       return failExtraSources ? json({ error: "nope" }, 500) : json({ present: false, models: [] });
     }
-    if (method === "PUT") return putResponse();
+    if (method === "PUT") return putResponse(request);
     if (url.includes("/restore")) return json({ ok: true, clientId: "hermes", changed: true, state: "current", message: "restored" });
     return stateResponse();
   }) as typeof fetch;
@@ -286,6 +323,16 @@ function toggleSwitch(): HTMLButtonElement {
   return found;
 }
 
+async function confirmDialog(label: string): Promise<void> {
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+  const dialog = container.querySelector("dialog[open]")!;
+  const confirm = Array.from(dialog.querySelectorAll("button")).find(
+    button => (button.textContent ?? "").trim() === label,
+  ) as HTMLButtonElement;
+  await act(async () => { confirm.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0)); });
+}
+
 test("turning the switch off disables, even when the block is stale", async () => {
   /*
    * The defect this pins: `stale` also means our block is on disk, so the
@@ -299,9 +346,10 @@ test("turning the switch off disables, even when the block is stale", async () =
   const sw = toggleSwitch();
   expect(sw.getAttribute("aria-pressed")).toBe("true");
   await act(async () => { sw.click(); });
+  await confirmDialog("Disable");
 
   const put = requests.find(request => request.method === "PUT");
-  expect(put?.body).toEqual({ enabled: false });
+  expect(put?.body).toEqual({ enabled: false, operation: "disable", planFingerprint: previewPlan("disable").fingerprint });
 });
 
 test("updating a stale block is a separate action from the switch", async () => {
@@ -311,14 +359,58 @@ test("updating a stale block is a separate action from the switch", async () => 
   const update = buttonByText("Update");
   expect(update).toBeDefined();
   await act(async () => { update!.click(); });
-  expect(requests.find(request => request.method === "PUT")?.body).toEqual({ enabled: true });
+  await confirmDialog("Apply");
+  expect(requests.find(request => request.method === "PUT")?.body).toEqual({ enabled: true, operation: "apply", planFingerprint: previewPlan("apply").fingerprint });
 });
 
 test("an absent integration applies", async () => {
   stateResponse = () => json(status({ state: "absent" }));
   await mountClient();
   await act(async () => { toggleSwitch().click(); });
-  expect(requests.find(request => request.method === "PUT")?.body).toEqual({ enabled: true });
+  await confirmDialog("Apply");
+  expect(requests.find(request => request.method === "PUT")?.body).toEqual({ enabled: true, operation: "apply", planFingerprint: previewPlan("apply").fingerprint });
+});
+
+test("a hostile preview fails closed without leaking payload data into the page", async () => {
+  const canary = "private-preview-canary-9f31";
+  stateResponse = () => json(status({ state: "absent" }));
+  previewResponse = body => json({
+    ...previewPlan("apply", { clientId: body.clientId ?? "hermes" }),
+    rawValue: canary,
+    message: canary,
+  });
+  await mountClient();
+  await act(async () => { toggleSwitch().click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+
+  expect(container.textContent).toContain("The change plan could not be loaded. Nothing was changed.");
+  expect(container.textContent).not.toContain(canary);
+  expect(requests.some(request => request.method === "PUT")).toBe(false);
+});
+
+test("closing a loading preview aborts it and fences a late response", async () => {
+  stateResponse = () => json(status({ state: "absent" }));
+  let previewSignal: AbortSignal | null | undefined;
+  let resolvePreview: ((response: Response) => void) | undefined;
+  previewResponse = (_body, signal) => {
+    previewSignal = signal;
+    return new Promise<Response>(resolve => { resolvePreview = resolve; });
+  };
+  await mountClient();
+  await act(async () => { toggleSwitch().click(); });
+  const dialog = container.querySelector("dialog[open]")!;
+  const close = Array.from(dialog.querySelectorAll("button")).find(button => button.textContent?.trim() === "Close") as HTMLButtonElement;
+  expect(close.disabled).toBe(false);
+  await act(async () => { close.click(); });
+  expect(previewSignal?.aborted).toBe(true);
+  expect(container.querySelector("dialog[open]")).toBeNull();
+
+  await act(async () => {
+    resolvePreview!(json(previewPlan("apply")));
+    await new Promise<void>(resolve => testWindow.setTimeout(resolve, 0));
+  });
+  expect(container.querySelector("dialog[open]")).toBeNull();
+  expect(container.textContent).not.toContain("Server change plan");
 });
 
 test("conflict locks the switch instead of guessing", async () => {
@@ -375,7 +467,7 @@ test("the overwrite button mutates nothing until the dialog is confirmed", async
   await act(async () => { confirm.click(); });
 
   const put = requests.find(request => request.method === "PUT");
-  expect(put?.body).toEqual({ enabled: true, overwriteConflict: true });
+  expect(put?.body).toEqual({ enabled: true, overwriteConflict: true, operation: "overwrite", planFingerprint: previewPlan("overwrite").fingerprint });
 });
 
 test("a foreign edit and an unowned block get different dialog copy", async () => {
@@ -533,6 +625,7 @@ test("a residual write tells the user the file may be half-written and where the
   }, 500);
   await mountClient();
   await act(async () => { toggleSwitch().click(); });
+  await confirmDialog("Disable");
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
 
   const text = container.textContent ?? "";
@@ -554,6 +647,7 @@ test("a refusal routes by reason, not by the state it happened in", async () => 
   }, 500);
   await mountClient();
   await act(async () => { toggleSwitch().click(); });
+  await confirmDialog("Disable");
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
 
   const text = container.textContent ?? "";
@@ -646,6 +740,224 @@ test("the overview does not claim nothing is installed while it is still loading
   expect(container.textContent ?? "").toContain("No installed clients were detected");
 });
 
+test("a failed first read does not claim nothing is installed either", async () => {
+  /*
+   * A failed-cold read carries no data, so it is not an answer: the error
+   * notice must stand alone, without the "nothing detected" panel, and the
+   * file clients stay as unknown rows rather than a server-side omission.
+   */
+  stateResponse = () => json({ error: "nope" }, 500);
+  await mountOverview();
+
+  const text = container.textContent ?? "";
+  expect(text).toContain("Could not load integration state.");
+  expect(text).not.toContain("No installed clients were detected");
+  expect(text).toContain("Hermes");
+});
+
+test("the aggregate Aside overview toggle stays unbound", async () => {
+  let applied = true;
+  stateResponse = () => json({ clients: [asideStatus({ state: applied ? "current" : "absent" })] });
+  previewResponse = body => body.clientId === "aside"
+    ? json({ error: "aggregate Aside previews require a profile", code: "invalid_aside_profile" }, 400)
+    : json(previewPlan("disable", { clientId: body.clientId }));
+  putResponse = request => {
+    const body = request.body as Record<string, unknown>;
+    if (body.operation !== undefined || body.planFingerprint !== undefined) {
+      return json({ error: "a confirmed plan applies to one profile", code: "invalid_aside_profile" }, 400);
+    }
+    applied = body.enabled === true;
+    return json({ ok: true, results: [{ profileId: 7, ok: true, state: applied ? "current" : "absent" }] });
+  };
+
+  await mountOverview();
+  await act(async () => { switchFor("aside")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+
+  expect(requests.filter(request => request.url.endsWith("/api/client-integrations/preview"))).toHaveLength(0);
+  const puts = requests.filter(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/aside/profiles"));
+  expect(puts).toHaveLength(1);
+  expect(puts[0]?.body).toEqual({ enabled: false });
+});
+
+test("aggregate Aside overview failures stay on the card without an unhandled rejection", async () => {
+  stateResponse = () => json({ clients: [asideStatus()] });
+  putResponse = request => {
+    const body = request.body as Record<string, unknown>;
+    if (body.operation !== undefined || body.planFingerprint !== undefined) {
+      return json({ error: "a confirmed plan applies to one profile", code: "invalid_aside_profile" }, 400);
+    }
+    return json({
+      ok: false,
+      message: "one profile failed",
+      results: [{ profileId: 7, ok: false, reason: "write_failed", message: "disk full" }],
+    }, 207);
+  };
+  let unhandled = 0;
+  testWindow.addEventListener("unhandledrejection", () => { unhandled += 1; });
+
+  await mountOverview();
+  await act(async () => { switchFor("aside")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+
+  const card = container.querySelector('[data-client="aside"]')!;
+  expect(card.querySelectorAll(".notice-err")).toHaveLength(1);
+  expect(card.textContent).toContain("disk full");
+  expect(switchFor("aside")?.disabled).toBe(false);
+  expect(unhandled).toBe(0);
+
+  await act(async () => { switchFor("aside")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  expect(requests.filter(request => request.method === "PUT" && request.url.endsWith("/api/client-integrations/aside/profiles"))).toHaveLength(2);
+  expect(unhandled).toBe(0);
+});
+
+test("Aside-only and mixed bulk disable keep aggregate Aside unbound", async () => {
+  let clients = [asideStatus()];
+  stateResponse = () => json({ clients });
+  previewResponse = body => body.clientId === "aside"
+    ? json({ error: "aggregate Aside previews require a profile", code: "invalid_aside_profile" }, 400)
+    : json(previewPlan("disable", {
+        clientId: body.clientId,
+        fingerprint: body.clientId === "pi" ? `p1:${"5".repeat(32)}` : `p1:${"3".repeat(32)}`,
+      }));
+  putResponse = request => {
+    const body = request.body as Record<string, unknown>;
+    if (request.url.endsWith("/api/client-integrations/aside/profiles")) {
+      if (body.operation !== undefined || body.planFingerprint !== undefined) {
+        return json({ error: "a confirmed plan applies to one profile", code: "invalid_aside_profile" }, 400);
+      }
+      clients = clients.filter(client => client.clientId !== "aside");
+      return json({ ok: true, results: [{ profileId: 7, ok: true, state: "absent" }] });
+    }
+    clients = clients.filter(client => client.clientId !== "pi");
+    return json({ ok: true, clientId: "pi", changed: true, state: "absent", message: "disabled" });
+  };
+
+  await mountOverview();
+  await act(async () => { buttonByText("Disable all…")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  expect(buttonByText("Disable all")?.disabled).toBe(false);
+  await act(async () => { buttonByText("Disable all")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  expect(requests.filter(request => request.url.endsWith("/api/client-integrations/preview"))).toHaveLength(0);
+  expect(requests.find(request => request.method === "PUT")?.body).toEqual({ enabled: false });
+
+  if (root) {
+    const current = root;
+    await act(async () => { current.unmount(); });
+    root = null;
+  }
+  mountCount += 1;
+  apiBase = `http://ocx-test-${mountCount}.invalid`;
+  requests = [];
+  clients = [asideStatus(), status({ clientId: "pi", configPath: "/tmp/pi.json" })];
+  await mountOverview();
+  await act(async () => { buttonByText("Disable all…")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  await act(async () => { buttonByText("Disable all")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+
+  expect(requests.filter(request => request.url.endsWith("/api/client-integrations/preview")).map(request => request.body)).toEqual([
+    { clientId: "pi", operation: "disable" },
+  ]);
+  expect(requests.filter(request => request.method === "PUT").map(request => request.body)).toEqual([
+    { enabled: false },
+    { enabled: false, operation: "disable", planFingerprint: `p1:${"5".repeat(32)}` },
+  ]);
+});
+
+test("bulk confirmation is disabled when every planned target is refused", async () => {
+  stateResponse = () => json({ clients: [status()] });
+  previewResponse = body => json(previewPlan("disable", {
+    clientId: body.clientId,
+    canApply: false,
+    willChange: false,
+    changes: [],
+    refusalReason: "unsafe",
+  }));
+  await mountOverview();
+  await act(async () => { buttonByText("Disable all…")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+
+  expect(buttonByText("Disable all")?.disabled).toBe(true);
+  expect(requests.filter(request => request.method === "PUT")).toHaveLength(0);
+});
+
+test("bulk stale plans require reconfirmation without repeating completed disables", async () => {
+  const applied = new Set(["hermes", "pi", "dsh"]);
+  stateResponse = () => json({ clients: [
+    status({ clientId: "hermes", state: applied.has("hermes") ? "current" : "absent" }),
+    status({ clientId: "pi", configPath: "/tmp/pi.json", state: applied.has("pi") ? "current" : "absent" }),
+    status({ clientId: "dsh", configPath: "/tmp/dsh.yaml", state: applied.has("dsh") ? "current" : "absent" }),
+  ] });
+  previewResponse = body => json(previewPlan("disable", {
+    clientId: body.clientId,
+    fingerprint: `p1:${body.clientId === "pi" ? "5".repeat(32) : body.clientId === "dsh" ? "6".repeat(32) : "3".repeat(32)}`,
+    ...(body.clientId === "dsh" ? { canApply: false, willChange: false, changes: [], refusalReason: "unsafe" } : {}),
+  }));
+  let piAttempts = 0;
+  putResponse = request => {
+    const clientId = request.url.split("/").pop()!;
+    if (clientId === "pi" && piAttempts++ === 0) {
+      return json({
+        code: "integration_preview_stale",
+        plan: previewPlan("disable", { clientId: "pi", fingerprint: `p1:${"9".repeat(32)}` }),
+      }, 409);
+    }
+    applied.delete(clientId);
+    return json({ ok: true, clientId, changed: true, state: "absent", message: "disabled" });
+  };
+
+  await mountOverview();
+  await act(async () => { buttonByText("Disable all…")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  await act(async () => { buttonByText("Disable all")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+
+  expect(container.textContent).toContain("Review the updated plan");
+  expect(requests.filter(request => request.method === "PUT" && request.url.endsWith("/hermes"))).toHaveLength(1);
+  expect(requests.filter(request => request.method === "PUT" && request.url.endsWith("/pi"))).toHaveLength(1);
+  expect(requests.filter(request => request.method === "PUT" && request.url.endsWith("/dsh"))).toHaveLength(0);
+
+  const staleDialog = container.querySelector("dialog")!;
+  const reconfirm = Array.from(staleDialog.querySelectorAll("button")).find(
+    button => (button.textContent ?? "").trim() === "Disable all",
+  ) as HTMLButtonElement;
+  const close = Array.from(staleDialog.querySelectorAll("button")).find(
+    button => (button.textContent ?? "").trim() === "Close",
+  ) as HTMLButtonElement;
+  expect(staleDialog.getAttribute("aria-busy")).toBe("false");
+  expect(reconfirm.disabled).toBe(false);
+  expect(close.disabled).toBe(false);
+
+  await act(async () => { reconfirm.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  const hermesPuts = requests.filter(request => request.method === "PUT" && request.url.endsWith("/hermes"));
+  const piPuts = requests.filter(request => request.method === "PUT" && request.url.endsWith("/pi"));
+  expect(hermesPuts).toHaveLength(1);
+  expect(piPuts).toHaveLength(2);
+  expect(piPuts[1]?.body).toEqual({ enabled: false, operation: "disable", planFingerprint: `p1:${"9".repeat(32)}` });
+  expect(container.querySelector("dialog")).toBeNull();
+  expect(container.textContent).toContain("dsh");
+});
+
+test("overview stale replacement does not persist a card failure", async () => {
+  stateResponse = () => json({ clients: [status()] });
+  putResponse = () => json({
+    code: "integration_preview_stale",
+    plan: previewPlan("disable", { fingerprint: `p1:${"9".repeat(32)}` }),
+  }, 409);
+  await mountOverview();
+  await act(async () => { switchFor("hermes")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  await confirmDialog("Disable");
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+
+  expect(container.querySelector('[data-client="hermes"] .notice')).toBeNull();
+  expect(container.querySelector("dialog")?.textContent).toContain("Review the updated plan");
+});
+
 test("bulk disable confirms the result with the server before claiming success", async () => {
   /*
    * The resource layer's `refresh()` is fire-and-forget, so awaiting it proves
@@ -660,6 +972,7 @@ test("bulk disable confirms the result with the server before claiming success",
     const method = (init?.method ?? "GET").toUpperCase();
     requests.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (url.includes("/journal")) return json({ operations: [] });
+    if (url.endsWith("/api/client-integrations/preview")) return json(previewPlan("disable"));
     if (method === "PUT") {
       // The server answers OK but the block is still on disk.
       return json({ ok: true, clientId: "hermes", changed: false, state: "current", message: "ok" });
@@ -673,6 +986,8 @@ test("bulk disable confirms the result with the server before claiming success",
   const disableAll = buttonByText("Disable all…");
   expect(disableAll).toBeDefined();
   await act(async () => { disableAll!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  await act(async () => { buttonByText("Disable all")!.click(); });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
 
   const text = container.textContent ?? "";
@@ -693,6 +1008,7 @@ test("bulk disable does report success once the server agrees", async () => {
     const method = (init?.method ?? "GET").toUpperCase();
     requests.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (url.includes("/journal")) return json({ operations: [] });
+    if (url.endsWith("/api/client-integrations/preview")) return json(previewPlan("disable"));
     if (method === "PUT") {
       applied = false;
       return json({ ok: true, clientId: "hermes", changed: true, state: "absent", message: "ok" });
@@ -707,13 +1023,38 @@ test("bulk disable does report success once the server agrees", async () => {
   expect(disableAll).toBeDefined();
   await act(async () => { disableAll!.click(); });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+  await act(async () => { buttonByText("Disable all")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
 
   const text = container.textContent ?? "";
   expect(text).toContain("Applied client integrations were disabled.");
   expect(text).not.toContain("may be stale");
 });
 
-test("a drifted restore asks a second time instead of failing", async () => {
+test("bulk disable keeps one preview fingerprint per client", async () => {
+  stateResponse = () => json({ clients: [
+    status({ clientId: "hermes", configPath: "/tmp/hermes.yaml" }),
+    status({ clientId: "pi", configPath: "/tmp/pi.json" }),
+  ] });
+  await mountOverview();
+  await act(async () => { buttonByText("Disable all…")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 30)); });
+  await act(async () => { buttonByText("Disable all")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 40)); });
+
+  const previews = requests.filter(request => request.url.endsWith("/api/client-integrations/preview"));
+  expect(previews.map(request => request.body)).toEqual([
+    { clientId: "hermes", operation: "disable" },
+    { clientId: "pi", operation: "disable" },
+  ]);
+  const puts = requests.filter(request => request.method === "PUT");
+  expect(puts.map(request => request.body)).toEqual([
+    { enabled: false, operation: "disable", planFingerprint: previewPlan("disable").fingerprint },
+    { enabled: false, operation: "disable", planFingerprint: `p1:${"5".repeat(32)}` },
+  ]);
+});
+
+test("a drifted restore previews confirmation before its first mutation", async () => {
   /*
    * The server refuses a drifted restore unless `confirmDrift` is set. That
    * refusal is the only moment the user is told their newer edits are about to
@@ -723,17 +1064,17 @@ test("a drifted restore asks a second time instead of failing", async () => {
   const restoreFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     posts.push(body);
+    if (String(input).endsWith("/restore/preview")) {
+      const confirmed = (body as { confirmDrift?: boolean })?.confirmDrift === true;
+      return json(previewPlan("restore", confirmed ? { foreignEdit: "drift", fingerprint: `p1:${"7".repeat(32)}` } : {
+        foreignEdit: "drift", canApply: false, willChange: false, changes: [], refusalReason: "drift_requires_confirm",
+        fingerprint: `p1:${"6".repeat(32)}`,
+      }));
+    }
     if ((body as { confirmDrift?: boolean })?.confirmDrift) {
       return json({ ok: true, clientId: "hermes", changed: true, state: "current", message: "restored" });
     }
-    return json({
-      error: "restore requires drift confirmation",
-      code: "integration_drift_confirmation_required",
-      clientId: "hermes",
-      state: "conflict",
-      reason: "drift_requires_confirm",
-      message: "this file changed after that operation",
-    }, 409);
+    return json({ error: "unexpected unconfirmed restore" }, 409);
   }) as typeof fetch;
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: restoreFetch });
   Object.defineProperty(testWindow, "fetch", { configurable: true, value: restoreFetch });
@@ -761,18 +1102,19 @@ test("a drifted restore asks a second time instead of failing", async () => {
     );
   });
 
-  await act(async () => { buttonByText("Restore")!.click(); });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
 
-  // First submit asked without confirmation and the dialog escalated.
+  // Both preview calls happen before the first mutation.
   expect((posts[0] as { confirmDrift?: boolean }).confirmDrift).toBe(false);
+  expect((posts[1] as { confirmDrift?: boolean }).confirmDrift).toBe(true);
   expect(container.textContent ?? "").toContain("Newer edits were detected");
 
   const confirm = buttonByText("Back up newer edits and restore");
   expect(confirm).toBeDefined();
   await act(async () => { confirm!.click(); });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
-  expect((posts[1] as { confirmDrift?: boolean }).confirmDrift).toBe(true);
+  expect((posts[2] as { confirmDrift?: boolean }).confirmDrift).toBe(true);
+  expect((posts[2] as { planFingerprint?: string }).planFingerprint).toBe(`p1:${"7".repeat(32)}`);
 });
 
 /**
@@ -808,7 +1150,8 @@ test("a successful restore keeps focus on the stable region after refresh remove
   };
   let resolveRestore: ((response: Response) => void) | undefined;
   const restoreFetch = ((input: RequestInfo | URL) => {
-    if (String(input).includes("/restore")) {
+    if (String(input).endsWith("/restore/preview")) return Promise.resolve(json(previewPlan("restore")));
+    if (String(input).endsWith("/restore")) {
       return new Promise<Response>(resolve => { resolveRestore = resolve; });
     }
     return Promise.resolve(json({ operations: [] }));
@@ -833,6 +1176,7 @@ test("a successful restore keeps focus on the stable region after refresh remove
     );
   });
 
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
   await act(async () => { buttonByText("Restore")!.click(); });
   expect(resolveRestore).toBeDefined();
 
@@ -895,10 +1239,12 @@ test("a card toggles its own client without a trip to the sub-page", async () =>
   expect(sw!.getAttribute("aria-pressed")).toBe("true");
   await act(async () => { sw!.click(); });
   await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
+  await act(async () => { buttonByText("Disable")!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 20)); });
 
   const put = requests.find(request => request.method === "PUT");
   expect(put?.url).toContain("/api/client-integrations/hermes");
-  expect(put?.body).toEqual({ enabled: false });
+  expect(put?.body).toEqual({ enabled: false, operation: "disable", planFingerprint: previewPlan("disable").fingerprint });
 });
 
 test("a card cannot toggle a client whose config is in conflict", async () => {

@@ -14,9 +14,11 @@ import {
 } from "../provider-validation";
 import { isValidCodexAccountNamespaceTarget } from "../../codex/account-namespace-match";
 import { isCodexAccountPriorityKey } from "../../codex/account-priority";
+import { isCodexAccountAutoSwitchThresholdKey, parseCodexAutoSwitchThreshold } from "../../codex/account-auto-switch";
 import { parseAccountPriority } from "../../codex/pool-rotation";
 import { credentialGroupIssues } from "../../routing/identity-domains";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
+import { providerEgressConfigError } from "../../lib/provider-egress";
 import { redactSecretString } from "../../lib/redact";
 import {
   MODEL_ADAPTER_OVERRIDE_ALLOWED,
@@ -32,13 +34,26 @@ import { getProviderRegistryEntry, providerMatchesRegistryTransport, providerMod
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import { COST4_RATE_KEYS, isValidCost4Rate } from "../../usage/user-cost-overlays";
 import { MAX_COST4_RATE } from "../../usage/expected-prices";
-import { isHostedToolUnsupportedForModel } from "../../responses/hosted-tool-policy";
+import {
+  DECLARABLE_HOSTED_TOOL_TYPES,
+  declaredUnsupportedHostedTools,
+  isHostedToolUnsupportedForModel,
+} from "../../responses/hosted-tool-policy";
 import { getConfigDir } from "../paths";
+import { COMPACTION_TRIGGERS } from "./compaction-triggers";
 
 /** One definition of "usable secret", shared by the schema and the warnings. */
 export function isUsableApiKeySecret(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value === value.trim();
 }
+
+export const compactionRoutingSchema = z.object({
+  model: z.string().trim().min(1),
+  reasoningEffort: z.string().refine(value => pinnedReasoningEffortConfigError(value) === null).optional(),
+  triggers: z.array(z.enum(COMPACTION_TRIGGERS)).nonempty()
+    .refine(values => new Set(values).size === values.length, "triggers must not repeat a value")
+    .optional(),
+}).strict();
 
 /**
  * Bounds for the opt-in same-target 429 wait-and-retry policy. Single source of truth
@@ -65,6 +80,17 @@ export const retryOn429PolicySchema = z.object({
 const transientRetryOn5xxPolicySchema = z.object({
   enabled: z.boolean().optional(),
   attempts: z.number().int().min(1).max(10).optional(),
+}).strict();
+
+/**
+ * `retryOnReset` accepts only these keys. `replacements` counts DUPLICATE inferences the
+ * operator is willing to risk for one logical request, so the ceiling is two rather than a
+ * send budget: this is the one send the proxy otherwise refuses outright, and a third of them
+ * says the connection, not the retry policy, is the problem.
+ */
+export const retryOnResetPolicySchema = z.object({
+  enabled: z.boolean().optional(),
+  replacements: z.number().int().min(1).max(2).optional(),
 }).strict();
 
 const requestPacingRuleSchema = z.object({
@@ -209,6 +235,25 @@ const modelCapabilitiesSchema = z.unknown().superRefine((value, ctx) => {
 }).transform(value => mergeModelCapabilities(undefined, value));
 
 /**
+ * Per-provider egress fields, validated by the resolver the transports themselves use.
+ *
+ * Calling `providerEgressConfigError` rather than restating the accepted forms keeps one
+ * definition of a usable value: a proxy the config loader admits is one the transport can
+ * carry, and a value rejected here is rejected at request time for the identical reason.
+ * Each field is checked on its own because neither depends on the other's value to be
+ * well-formed; how they combine is decided per request against the destination.
+ */
+const providerProxySchema = z.unknown().superRefine((value, ctx) => {
+  const error = providerEgressConfigError({ proxy: value as string | null | undefined });
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => value as string | null | undefined);
+
+const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
+  const error = providerEgressConfigError({ noProxy: value as string | string[] | undefined });
+  if (error) ctx.addIssue({ code: "custom", message: error });
+}).transform(value => value as string | string[] | undefined);
+
+/**
  * Zod schema for one provider entry: known fields are validated strictly while unknown
  * fields pass through (preserved for runtime extensions).
  */
@@ -245,13 +290,21 @@ export const providerConfigSchema = z.object({
   requiresAdjacentResponsesToolResults: z.boolean().optional(),
   requiresPairedResponsesToolResults: z.boolean().optional(),
   annotateEmptyToolOutputs: z.boolean().optional(),
+  foldDeveloperRoleToSystem: z.boolean().optional(),
   fastWire: fastWireSchema.nullable().optional(),
   supportsServiceTier: z.boolean().optional(),
   modelSupportsServiceTier: z.record(z.string().min(1), z.boolean()).optional(),
+  modelSuppressSyntheticMax: z.record(z.string().min(1), z.boolean()).optional(),
   preserveResponsesReasoningContent: z.boolean().optional(),
+  dropResponsesReasoningItems: z.boolean().optional(),
+  modelReasoningEffortsAuthoritative: z.boolean().optional(),
   decodesNativeCompactionBlobs: z.boolean().optional(),
   allowEncryptedV2AgentTasks: z.boolean().optional(),
   allowPrivateNetwork: z.boolean().optional(),
+  // Per-provider egress (#2894): absent inherits the global proxy decision, "direct"/null
+  // refuses it, and an http(s) or socks5 URL replaces it for this provider only.
+  proxy: providerProxySchema.optional(),
+  noProxy: providerNoProxySchema.optional(),
   // The management API accepts `null` as "clear this", so a config written before the POST
   // canonicalization below can hold one on disk. Rejecting it here would send the operator
   // through invalid-config recovery for a value the API told them was fine.
@@ -263,6 +316,7 @@ export const providerConfigSchema = z.object({
   // canonical ChatGPT backend WS selection is independent of this flag.
   upstreamWebsocket: z.boolean().optional(),
   directGeminiWireRenames: z.boolean().optional(),
+  googleToolSchemaPolicy: z.enum(["compatible", "reject-lossy"]).optional(),
   noStructuredOutputModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
@@ -275,8 +329,24 @@ export const providerConfigSchema = z.object({
   omitReasoningEffortWithToolsModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
+  // Validated against a closed vocabulary rather than accepted as free strings. This
+  // schema ends in `.passthrough()`, so a misspelled `web_serch` would otherwise be
+  // accepted, persisted, and strip nothing -- leaving the operator with the upstream 400
+  // the field was set to prevent, and no message saying why (the `codexToolMode` lesson,
+  // #2106).
+  unsupportedHostedTools: z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .refine(
+      tools => tools.every(tool => DECLARABLE_HOSTED_TOOL_TYPES.has(tool)),
+      { message: `unsupportedHostedTools accepts only hosted tool types: ${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}` },
+    )
+    .optional(),
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
+  // Degrades to "absent" like `webSearchBridge`: a malformed hand edit of an opt-in feature
+  // that is off by default must not send the operator through invalid-config recovery. The
+  // management write boundary still rejects it loudly (`retryOnResetPolicyConfigError`).
+  retryOnReset: retryOnResetPolicySchema.optional().catch(undefined),
   codexAccountMode: z.enum(["pool", "direct"]).optional(),
   // Validated rather than passed through: this schema ends in `.passthrough()`, so an
   // undeclared key survives verbatim. A misspelled `codexToolMode` therefore used to be
@@ -377,7 +447,13 @@ export function modelPreferHostedToolsConfigError(
   value: unknown,
   field: string,
   providerName: string,
-  provider: { adapter?: unknown; authMode?: unknown; modelAdapters?: unknown; baseUrl?: unknown },
+  provider: {
+    adapter?: unknown;
+    authMode?: unknown;
+    modelAdapters?: unknown;
+    baseUrl?: unknown;
+    unsupportedHostedTools?: unknown;
+  },
 ): string | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return `${field} must be a plain object`;
@@ -385,6 +461,12 @@ export function modelPreferHostedToolsConfigError(
   if (prototype !== Object.prototype && prototype !== null) return `${field} must be a plain object with own properties`;
   const entries = Object.entries(value);
   const registry = getProviderRegistryEntry(providerName);
+  // A provider that denies a hosted tool cannot also prefer it. Both keys are
+  // provider-owned capability statements about the same tool, and the denial wins at
+  // request time, so accepting the pair would silently ignore the preference.
+  const declaredUnsupported = declaredUnsupportedHostedTools(
+    provider as { unsupportedHostedTools?: readonly string[] },
+  );
   // Effective transport: a `preserveCustomDestination` registry row reused under a
   // different endpoint keeps its own adapter AND its own auth at runtime, because
   // `routedProviderConfig()` honors `providerMatchesRegistryTransport()`. Both the
@@ -409,7 +491,7 @@ export function modelPreferHostedToolsConfigError(
     ? (provider.modelAdapters as Record<string, unknown>)[modelId]
     : undefined;
   const resolveEffectiveWire = (modelId: string, currentWire: unknown): unknown => {
-    const pinned = pinnedWireAdapter(providerName, modelId);
+    const pinned = pinnedWireAdapter(providerName, modelId, provider);
     if (pinned) return pinned;
     const requestedWire = requestedWireFor(modelId);
     if (typeof requestedWire === "string" && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requestedWire)) {
@@ -444,6 +526,9 @@ export function modelPreferHostedToolsConfigError(
     for (const tool of entry) {
       if (typeof tool !== "string" || !SUPPORTED_PREFERRED_HOSTED_TOOLS.has(tool)) {
         return `${field}.${key} supports only image_generation`;
+      }
+      if (declaredUnsupported.has(tool)) {
+        return `${field}.${key} cannot prefer ${tool}: unsupportedHostedTools declares it unsupported`;
       }
       if (isHostedToolUnsupportedForModel(key, tool)) {
         return `${field}.${key} cannot prefer ${tool}: the model does not support it`;
@@ -549,6 +634,54 @@ const codexQuotaAutoRefreshEntrySchema = z.object({
 const CODEX_QUOTA_AUTO_REFRESH_KEY_ERROR =
   "quota auto-refresh keys must be a Codex pool-account id or the main Codex account and cannot be reserved JavaScript object keys";
 
+const CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLDS_RECORD_ERROR =
+  "codexAccountAutoSwitchThresholds must be a plain object mapping Codex account ids to usage thresholds";
+const CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_KEY_ERROR =
+  "usage-threshold keys must be a Codex pool-account id or the main Codex account and cannot be reserved JavaScript object keys";
+const CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_VALUE_ERROR =
+  "account usage threshold must be an integer between 0 and 100";
+
+export const codexAccountAutoSwitchThresholdsSchema = z.custom<Record<string, unknown>>(
+  (value): value is Record<string, unknown> => !!value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null),
+  { error: CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLDS_RECORD_ERROR },
+).superRefine((thresholds, ctx) => {
+  for (const [accountId, threshold] of Object.entries(thresholds)) {
+    if (!isCodexAccountAutoSwitchThresholdKey(accountId)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [accountId],
+        message: CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_KEY_ERROR,
+      });
+    }
+    if (parseCodexAutoSwitchThreshold(threshold) === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: [accountId],
+        message: CODEX_ACCOUNT_AUTO_SWITCH_THRESHOLD_VALUE_ERROR,
+      });
+    }
+  }
+}).pipe(z.record(z.string(), z.number().int()));
+
+/** Load only: retain valid overrides from a hand-edited map; writes use the strict schema above. */
+export function salvageCodexAccountAutoSwitchThresholds(value: unknown): Record<string, number> | undefined {
+  const parsed = codexAccountAutoSwitchThresholdsSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return undefined;
+  const valid: Record<string, number> = Object.create(null);
+  for (const [accountId, threshold] of Object.entries(value)) {
+    const parsedThreshold = parseCodexAutoSwitchThreshold(threshold);
+    if (isCodexAccountAutoSwitchThresholdKey(accountId) && parsedThreshold !== null) {
+      valid[accountId] = parsedThreshold;
+    }
+  }
+  return Object.keys(valid).length ? valid : undefined;
+}
+
 export const codexQuotaAutoRefreshSchema = z.custom<Record<string, unknown>>(
   (value): value is Record<string, unknown> => !!value
     && typeof value === "object"
@@ -605,6 +738,13 @@ export const apiKeyEntrySchema = z.object({
   createdAt: z.string().catch(""),
   // A damaged overlap record must never discard the still-authoritative key.
   pendingRotation: pendingApiKeyRotationSchema.optional().catch(undefined),
+  // Deliberately NOT `.catch`ed, unlike every field above. Degrading a damaged
+  // scope to `undefined` would silently widen the key to the whole catalog,
+  // which is the one direction a permission field must never fail. Letting the
+  // record fail instead drops the key, so a corrupted scope stops that client
+  // rather than promoting it.
+  allowedProviders: z.array(z.string().trim().min(1).max(256)).optional(),
+  allowedModels: z.array(z.string().trim().min(1).max(256)).optional(),
 }).passthrough();
 
 /**
@@ -839,4 +979,33 @@ export const quotaResetNotifySchema = z.object({
 export const catalogAutoRefreshSchema = z.object({
   enabled: z.boolean().optional(),
   intervalMinutes: z.number().int().min(0).max(1440).optional(),
+}).strict();
+
+/**
+ * One spend scope's ceiling.
+ *
+ * `.strict()` for the usual reason and one sharper one. Elsewhere a silently ignored key
+ * leaves a feature off that the operator believed was on; here it leaves a BUDGET off, and a
+ * budget nobody is enforcing looks exactly like a budget nobody has exceeded. That is #2106 --
+ * an undeclared option accepted, persisted, and then read as its default -- aimed at spend.
+ *
+ * Only positive integers: 0 would read as "no tokens at all" and refuse every request under
+ * the scope, which is never what writing a budget means. An operator who wants no ceiling
+ * removes the key.
+ */
+const spendScopeSchema = z.object({
+  maxTokens: z.number().int().positive().optional(),
+}).strict();
+
+/**
+ * Durable spend ceilings (#4546).
+ *
+ * Absent, empty, and all-scopes-absent are the same thing: observe-only accounting. There is
+ * no default ceiling anywhere in this section, deliberately.
+ */
+export const spendSchema = z.object({
+  root: spendScopeSchema.optional(),
+  identity: spendScopeSchema.optional(),
+  pool: spendScopeSchema.optional(),
+  retentionDays: z.number().int().min(1).max(365).optional(),
 }).strict();

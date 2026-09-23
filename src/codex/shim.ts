@@ -241,7 +241,7 @@ function backupPathFor(path: string): string {
  */
 function destroyedShimMessage(file: ShimFileState): string {
   const wrapper = existsSync(file.wrapperPath)
-    ? isShim(file.wrapperPath) ? "present but unusable" : "present but not an opencodex shim"
+    ? stableShimPathProbe(file.wrapperPath)?.prefix.includes(SHIM_MARKER) ? "present but unusable" : "present but not an opencodex shim"
     : "missing";
   const backup = existsSync(file.backupPath) ? "present" : "missing";
   const base = `Codex autostart shim not restored: wrapper ${wrapper} at ${file.wrapperPath}; original backup ${backup} at ${file.backupPath}.`;

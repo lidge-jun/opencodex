@@ -133,17 +133,30 @@ ocx connect rotate --admin-token-stdin
 
 opencodex 不发布官方 Docker 镜像，但仓库提供维护的 `Dockerfile` 和 `compose.yaml`，用于在本地构建按 digest 固定的 Bun 镜像。首次启动前，通过 stdin 初始化一次数据密钥；密钥不会输出，并以仅所有者可读的权限保存在 `ocx-state` 卷中。
 
-宿主机需要安装 Git 和 Bun。每次构建镜像前，都应从 Git 跟踪的源码生成规范兼容性清单，生成后到构建完成前不要修改源码。生成的 JSON 不加入 Git；`.git` 不进入 Docker 构建上下文。宿主机端口默认绑定 `127.0.0.1`。远程访问须显式使用 `OPENCODEX_BIND_ADDRESS=<LAN或Tailscale-IP> docker compose up -d`；`0.0.0.0` 会公开所有接口。请使用防火墙和经过身份验证的 TLS/tailnet 前端保护访问。
+本地 checkout 需要 Git 和 Docker Compose；远程 Git 上下文只需要 Docker Compose。两种方式都不再需要宿主机安装 Bun 或执行手动准备步骤。专用构建阶段会从所选 Git 快照生成规范清单，并在复制源码前完成验证。`.git` 仅通过只读挂载提供给该阶段，不会复制到任何镜像层。宿主机上已有的清单在通过验证后仍可继续使用。宿主机端口默认绑定 `127.0.0.1`。远程访问须显式使用 `OPENCODEX_BIND_ADDRESS=<LAN或Tailscale-IP> docker compose up -d`；`0.0.0.0` 会公开所有接口。请使用防火墙和经过身份验证的 TLS/tailnet 前端保护访问。
 
 构建会拒绝过期清单，并将每个 SHA-256 分别与构建上下文及复制后的文件进行核对。缺失或不匹配的文件、清单之外的源码和符号链接都会导致失败。必须包含 `package.json`、`bun.lock`，以及 `scripts/` 中唯一纳入的 `scripts/model-metadata.source.json`。
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
+```
+
+直接从远程 Git 上下文构建时，请使用 BuildKit 内置参数保留 Git 元数据：
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
 ```
 
 容器以非 root 的 `bun` 用户运行，根文件系统只读，并且只发布 `10100`。不要发布 `10101`，也不要把密钥放入 `ARG`、`ENV`、`COPY`、Compose、镜像历史或 argv。healthcheck 后仍需单独验证 readiness、认证目录和真实请求。`docker compose down` 会保留卷；`docker compose down --volumes` 还会删除配置、凭据和数据密钥。

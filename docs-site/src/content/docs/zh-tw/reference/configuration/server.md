@@ -18,9 +18,10 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 | `shutdownTimeoutMs?` | `number` | `5000` | 在中止活躍回合前的優雅排空截止時間。 |
 | `websockets?` | `boolean` | `false` | 廣告並允許面向 client 的 Responses WebSocket 路徑。False 時 client 使用 HTTP/SSE；不會停用符合條件的 canonical ChatGPT upstream WS 最佳化。 |
 | `corsAllowOrigins?` | `string[]` | `[]` | 額外的精確 CORS 來源。回送來源恆被允許。 |
-| `apiKeys?` | `OcxApiKey[]` | `[]` | 生成的 `ocx_…` 憑證，在非回送綁定上被管理與 data-plane 認證接受。由儀表板管理。 |
+| `apiKeys?` | `OcxApiKey[]` | `[]` | 生成的 `ocx_…` data-plane 准入憑證（用於非回送綁定）。它們不授權管理 API；管理存取使用[管理 API 參考](/zh-tw/reference/management-api/)中說明的獨立憑證。由儀表板管理。 |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | 停用 | 選擇加入的已封存 session 清理政策。永不隱含啟用。 |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | 以 MiB 為單位、可被驅逐的 app 擁有日誌、快取、blob 與 continuation payload 上限。範圍 64–4096；非 RSS 上限。 |
+| `metricsExport.enabled?` | `boolean` | `false` | 在已驗證的 `GET /api/metrics` 啟用程序本機的彙總請求指標。需要重新啟動；停用時路徑回傳 404，且不會啟動任何匯出活動。 |
 | `codexAutoStart?` | `boolean` | `true` | 讓 Codex shim 在啟動 Codex 前執行 `ocx ensure`。False 使 ensure 為 no-op。 |
 | `codexShimAutoRestore?` | `boolean` | `true` | 在完成的外部 Codex 更新取代已安裝的 shim 後還原它。環境退出：`OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`。 |
 | `syncResumeHistory?` | `boolean` | `true` | 可逆的 Codex App 歷史相容性。原始中繼資料由 `ocx stop` / `ocx restore` 備份並還原。 |
@@ -141,7 +142,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 | `claudeCode.authModeMigratedAt?` | `string` | 未設定 | 內部一次性升級標記。請勿手動設定。 |
 | `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | 繼承 | 寫入生成的 `~/.claude/agents/ocx-*.md` 的 effort；與 Codex guidance 與代理上限分開。透過 `ocx claude` 重啟以重新生成。 |
 
-自動認證在找到已儲存的 Claude 認證時選擇訂閱，無認證時選擇 proxy，偵測不明確時選擇訂閱並附帶警告。請見[Claude Code 認證模式](/zh-tw/guides/claude-code/#auth-mode)。
+自動認證在找到已儲存的 Claude 認證時選擇訂閱，無認證時選擇 proxy，偵測不明確時選擇訂閱並附帶警告。請見[Claude Code 認證模式](/zh-tw/guides/claude-code/#認證模式)。
 
 ## Shadow call
 

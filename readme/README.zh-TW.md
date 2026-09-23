@@ -88,7 +88,33 @@ ocx start                         # 代理 + 儀表板位於 localhost:10100
 開啟 **http://localhost:10100**，在網頁儀表板完成所有設定——新增供應商
 （40+ 內建，或任何 OpenAI 相容端點）、挑選模型、管理帳號。隨時可用 `ocx gui`
 重新開啟儀表板。
-它也能為 Codex 認證管理 **ChatGPT 帳號池**。新增多個 ChatGPT / Codex 帳號，
+
+<details>
+<summary><b>桌面應用程式與 macOS 小工具——Beta 版</b></summary>
+
+它是同一套儀表板的原生外殼，另附 WidgetKit 擴充套件，無需開啟瀏覽器就能查看代理狀態、
+今日用量與供應商配額。代理本身沒有改變：應用程式會尋找正在執行的代理，找不到便啟動隨附的
+`ocx` sidecar；儀表板仍使用代理的連接埠（除非你設定了其他連接埠，否則為 **http://localhost:10100**）。
+
+目前仍是 Beta 版。macOS 應用程式的發行版建置使用 Developer ID 簽章並經過公證（本機建置則使用 ad-hoc 簽章）；
+Windows 安裝程式尚未經程式碼簽章，因此首次執行時 SmartScreen 會顯示警告。小工具需要 macOS 14 或更新版本；它所呈現的快照模型位於
+[`app/`](../app)（`MenuBarCore`）。
+
+請從[最新發行版](https://github.com/lidge-jun/opencodex/releases)下載，或在本機建置：先在儲存庫根目錄執行
+`bun install && bun run build:gui`，再於 `desktop/` 執行
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`。
+
+安裝位置、服務檔案，以及其他寫入磁碟的內容，都列在
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)。
+[桌面應用程式指南](https://opencodex.me/zh-tw/guides/desktop-app/) 與
+[macOS 選單列應用程式指南](https://opencodex.me/zh-tw/guides/macos-menu-bar/)
+說明各平台的安裝方式與首次啟動步驟。
+
+</details>
+
+### ChatGPT 帳號池
+
+opencodex 也能為 Codex 認證管理 **ChatGPT 帳號池**。新增多個 ChatGPT / Codex 帳號，
 在儀表板重新整理 5 小時／每週／30 天配額。在配額路由下，新會話可使用
 使用量最低的健康帳號；round-robin 與 fill-first 則各自套用自己的策略。既有 Codex
 執行緒通常會維持對啟動帳號的親和性，因此長時間的 SSH、tmux 或
@@ -121,13 +147,13 @@ ocx start                         # 代理 + 儀表板位於 localhost:10100
 <details>
 <summary>Docker Compose</summary>
 
-本儲存庫提供 digest 釘選、非 root 的 Compose 建置。主機已安裝 Git 與 Bun 時，
-每次建置映像前先產生權威相容性清單，再透過 stdin 初始化一次資料平面權杖並啟動 hub：
+本儲存庫提供 digest 釘選、非 root 的 Compose 建置。建置會根據選定的 Git 快照自行產生並驗證
+權威相容性清單。本機 clone 需要 Git 與 Docker Compose；遠端 Git context 需要 Docker Compose。
+兩種方式都不需要主機上的 Bun，也不需要準備步驟。透過 stdin 初始化一次資料平面權杖並啟動 hub：
 
 ```bash
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
-bun scripts/generate-compatibility-version.ts
 docker compose build
 openssl rand -hex 32 | docker compose run --rm -T hub bun run docker/bootstrap-token.ts
 docker compose up -d
@@ -138,11 +164,27 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 預設主機綁定為 `127.0.0.1:10100`。遠端公開必須明確指定
 `OPENCODEX_BIND_ADDRESS=<LAN-or-Tailscale-IP> docker compose up -d`；`0.0.0.0` 會加入
 所有主機介面。請用防火牆與已認證的 TLS／tailnet 前端限制存取。
-產生的 JSON 不會被追蹤；它會複製進映像，且不含 `.git`。
-原始碼變更後請重新產生，產生與建置之間不要改原始碼。
-建置會拒絕過期清單、缺少或不相符的檔案、多餘原始碼檔案，以及符號連結。
+產生的 JSON 不會被追蹤。建置 context 只會納入 `.git/index` 與 `.git/HEAD`，也就是
+`git ls-files` 讀取的清單；大小約為 1 MB，而不是完整的 object store。這些檔案只能透過唯讀 mount
+在建置專用的 manifest 階段看到，因此沒有任何 `COPY` 會包含 `.git`。主機上已有的 manifest 只有在
+通過驗證後才會接受；否則建置會自行產生。建置會拒絕過期清單、缺少或不相符的檔案、多餘原始碼檔案，以及符號連結。
 它會核對建置上下文與複製進去的執行檔案上每一筆記錄的 SHA-256，包括
 `package.json`、`bun.lock`，以及特別納入的 `scripts/model-metadata.source.json`。
+
+遠端 Git context 需要 BuildKit 保留 Git metadata。以下 Compose 建置片段會選擇遠端快照，
+並傳入所需的內建參數：
+
+```yaml
+services:
+  hub:
+    pull_policy: build
+    build:
+      context: https://github.com/lidge-jun/opencodex.git#main
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILDKIT_CONTEXT_KEEP_GIT_DIR: "1"
+```
 
 權杖與可變狀態留在名為 `ocx-state` 的 volume；映像、Compose 檔、環境變數或 shell 引數都不會放入憑證。見
 [Remote Hub 部署指南](https://opencodex.me/zh-tw/guides/remote-hub/) 以了解供應商
@@ -157,8 +199,9 @@ curl --fail --silent http://127.0.0.1:10100/readyz
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -166,8 +209,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

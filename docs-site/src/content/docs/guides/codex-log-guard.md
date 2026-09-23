@@ -136,6 +136,6 @@ An unknown schema is not guessed into compatibility. This lets a newer Codex ver
 
 ## Reclaim is still separate
 
-Protect does not vacuum or compact SQLite. The later **Reclaim** stage will add an explicit, offline, bounded incremental-vacuum flow with checkpoints and integrity checks.
+Protect does not vacuum or compact SQLite. [**Reclaim**](/guides/codex-log-guard-reclaim/) provides an explicit, offline, bounded incremental-vacuum flow with checkpoints and integrity checks.
 
 Protect never runs `VACUUM`, never truncates or deletes Codex's WAL directly, and never performs scheduled space reclamation.

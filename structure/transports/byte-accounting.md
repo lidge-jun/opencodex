@@ -4,14 +4,20 @@ Native result continuations and function-result injection follow [the mode-speci
 
 Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
+Translated Chat inline-image normalization keeps retained wire bytes in its aggregate budget while process-wide native-decode admission and a decoded-pixel ceiling bound memory outside that byte accounting.
+
 Responses body-reader limits and lifetime handling follow the
 [core module ownership](responses.md#core-module-ownership). Raised HTTP concurrency follows the separate admission contract below.
 
 How opencodex measures request and stream bytes without allocating copies solely to count
 them. These contracts are shared by request parsing, SSE rewriting, the provider adapters and
-the translator budget, which is why so many documents link here rather than restating them. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314). Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
+the translator budget, which is why so many documents link here rather than restating them. Response-attached WebSocket telemetry follows the [stage record identity contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314). Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
 ## Request-copy accounting
+
+The Google tool-schema loss report retains fixed categories, bounded counts, and endpoint class
+only. It copies no request content and adds no bytes to the upstream wire; see the
+[Google provider contract](../providers/google.md#google-tool-schema-loss-reporting).
 
 `src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON
 without allocating encoded byte arrays solely to count them. Parsed-body accounting still uses
@@ -64,6 +70,12 @@ maintaining a second implementation. Empty byte results across the relay and
 `src/server/sse-frame-buffer.ts` reuse one immutable zero-length view; non-empty frame ownership,
 frame limits, cancellation, terminal detection, and wire bytes are unchanged.
 
+`src/server/responses-custom-tool-repair.ts` continues to own retained routed argument bytes and
+their charge/release lifecycle while it asks the pure progressive decoder in
+`src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The decoder neither
+charges nor releases translator budget; extracting it from `src/bridge/sse.ts` does not create a
+second retention owner or change terminal, failure, incomplete, or disposal release behavior.
+
 `src/adapters/openai-responses.ts` counts new compaction fragments, including surrogate pairs formed
 across deltas, while retaining snapshot/done/delta precedence and existing terminal ownership.
 Serialized request and buffered-response observations use byte counts without measurement arrays.
@@ -113,7 +125,7 @@ binds the bounded non-stream wrapper to request-log status and metadata behavior
 Retaining whole response bodies is the separate concern of `src/lib/bounded-body.ts`, whose cap,
 deadline, and cancellation rules are specified in the [bounded ingestion contract](inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
-Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 ## Terminal-continuation retention
 
@@ -157,3 +169,5 @@ Schema size still determines traversal work and the cost of copying a changed br
 `tests/responses/openai-responses-passthrough.test.ts` covers the existing wire contract.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+The [compaction routing override](responses-failover.md#compaction-routing-overrides) changes model and effort scalars on the already-read request body, before parsing, within the existing body-reader budget.

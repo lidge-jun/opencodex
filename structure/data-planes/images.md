@@ -14,7 +14,7 @@ Hosted Responses image-tool eligibility uses the shared compatibility policy wit
 Codex Spark exception; standalone Images retain the separate relay contract below. See
 [Responses transport](../transports/responses.md#responses-httpsse).
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Standalone Images
 
@@ -46,6 +46,14 @@ ChatGPT forward path still requires the dedicated header so its upstream bearer 
 The keyed path never enters `handleResponses`, so `src/server/images.ts` repeats
 `selectProactiveApiKeyTransport` inside the keyed branch and rebuilds Authorization from the
 returned clone rather than the earlier snapshot.
+
+A configured key's model and provider scope applies to whichever destination the request settles
+on: the ChatGPT forward account, the keyed provider, the xAI Imagine bridge, or the Antigravity
+fallback. It is evaluated against that destination rather than the selector in the body, because
+the bridge and the fallback choose their own model, and a body that names no model cannot satisfy
+a model list. A refusal is the same 403 the scope returns on the routed path, and a key with no
+scope reaches every destination as before. Coverage lives in
+`tests/server/api-key-scope-images.test.ts`.
 
 The API-key `openai-responses` path also adapts Codex's private standalone image tool to the public
 Responses tool surface. A complete `image_gen` namespace is lowered to safe
@@ -88,9 +96,9 @@ conflicts with `modelSupportsReasoningSummaries: false` for the same model.
 
 > Decision record: [ADR-0045](../decisions/ADR-0045-standalone-images.md)
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
@@ -100,9 +108,9 @@ Chat helper admission in `src/server/responses/core.ts` follows the
 claims stored main, after terminal vision, routed vision and search exclusions.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](../transports/responses.md).
@@ -114,7 +122,7 @@ privately to final dispatch; preliminary route selection does not inject Go-only
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -133,3 +141,6 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
+
+Image-bearing Codex history follows the selected model's existing compaction handling after a
+[compaction routing override](../transports/responses-failover.md#compaction-routing-overrides).

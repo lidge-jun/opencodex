@@ -4,14 +4,25 @@
 !bun.lock
 !tsconfig.json
 
+# The manifest stage needs Git's tracked-file INVENTORY and nothing else: `git ls-files` reads
+# the index and never opens an object or a ref. Admitting those two files costs about 1 MB;
+# admitting .git wholesale would put 1.3 GB in every local build context. The stage supplies the
+# empty objects/ and refs/ directories Git's repository check insists on, in a scratch GIT_DIR.
+# No COPY includes either file, so neither reaches an image layer.
+!.git/
+.git/**
+!.git/index
+!.git/HEAD
+
 !src/
 !src/**
-# Prepared on the host with the canonical Git-tracked-source generator.
+# Optional compatibility path for hosts that already generated the canonical artifact.
 !src/generated/compatibility-version.json
 
 !scripts/
 scripts/**
 !scripts/model-metadata.source.json
+!scripts/generate-compatibility-version.ts
 
 !docker/
 !docker/**

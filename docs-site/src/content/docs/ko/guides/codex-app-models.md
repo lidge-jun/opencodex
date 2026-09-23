@@ -109,8 +109,8 @@ GPT-5.6에만 사용합니다. 오래된 템플릿으로 근사하지 않고 모
 | Codex 로그인(명시적 Daybreak forward 행) | canonical `openai` provider에 정확한 `customModels` 항목이 있을 때만 `openai/gpt-daybreak-blue-latest`를 표시합니다. Daybreak wire id를 유지하고 고정된 Sol capability snapshot(컨텍스트 922,000; 자동 압축점 922,000)을 사용합니다. |
 | OpenAI(API key) | 정확히 열 개의 네임스페이스 행: `gpt-5.5`, `gpt-5.6`, Sol/Terra/Luna, 세 개의 `*-pro` 가상 id, 두 Daybreak 별칭 (모두 컨텍스트 922,000; 최대 입력 922,000) |
 | OpenRouter | `openrouter/openai/gpt-5.6-sol`, `openrouter/openai/gpt-5.6-terra`, `openrouter/openai/gpt-5.6-luna` (922,000) |
-| Cursor | 정적 폴백에는 `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` (1,000,000)와 Grok 4.5/4.6의 일반·Fast 항목(500,000)이 들어갑니다. 4.6은 `xhigh`도 노출하며, 실시간 계정 탐색이 어떤 항목을 계속 보일지 정합니다. |
-| xAI | 실시간 탐색이 기준입니다. 폴백 카탈로그에는 `xai/grok-4.6`이 포함되며 기본값은 `xai/grok-4.5`입니다. 두 모델 모두 컨텍스트 창은 500,000입니다. Grok 4.6은 `low` / `medium` / `high` / `xhigh`(업스트림 기본값: `high`)를 제공하고, Grok 4.5는 `high`까지만 제공합니다. |
+| Cursor | 정적 폴백에는 `cursor/gpt-5.6-sol`, `cursor/gpt-5.6-terra`, `cursor/gpt-5.6-luna` (1,000,000)와 Grok 4.5/4.6/4.7의 일반·Fast 항목(500,000)이 들어갑니다. 4.6과 4.7은 `xhigh`도 노출하며, 실시간 계정 탐색이 어떤 항목을 계속 보일지 정합니다. |
+| xAI | 실시간 탐색이 기준입니다. 폴백 카탈로그에는 `xai/grok-4.6`과 `xai/grok-4.7`이 포함되며 기본값은 `xai/grok-4.5`입니다. 세 모델 모두 컨텍스트 창은 500,000입니다. Grok 4.6과 4.7은 `low` / `medium` / `high` / `xhigh`(업스트림 기본값: `high`)를 제공하고, Grok 4.5는 `high`까지만 제공합니다. |
 
 고정된 GPT-5.6 항목은 업스트림 ladder를 그대로 보존합니다. Sol과 Terra는 `low`부터 `ultra`까지 노출하고,
 Luna는 `max`에서 멈춥니다. Sol의 기본값은 `low`이고, Terra와 Luna의 기본값은 `medium`입니다. 명시적

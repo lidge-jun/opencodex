@@ -20,9 +20,10 @@ yardımcı özellikleri nasıl çalıştıracağını kontrol eder.
 | `shutdownTimeoutMs?` | `number` | `5000` | Aktif turlar iptal edilmeden önce zarif boşaltma süresi sınırı. |
 | `websockets?` | `boolean` | `false` | Responses WebSocket yolu için `supports_websockets` bildirin. False, HTTP/SSE'yi tutar. |
 | `corsAllowOrigins?` | `string[]` | `[]` | CORS tarafından izin verilen ek tam kaynaklar. Geri döngü kaynaklarına her zaman izin verilir. `chrome-extension://<extension-id>` gibi yetki tabanlı tarayıcı uzantısı kaynakları desteklenir; `*` bir joker karakter değildir. Firefox ve Safari uzantı UUID'sini yeniden oluşturur (yükleme başına / tarayıcı başlatma başına), bu nedenle kaynak değiştiğinde girdiyi güncelleyin. |
-| `apiKeys?` | `OcxApiKey[]` | `[]` | Geri döngü olmayan bağlamalarda yönetim ve veri düzlemi kimlik doğrulaması tarafından kabul edilen oluşturulmuş `ocx_…` kimlik bilgileri. Kontrol paneli tarafından yönetilir. |
+| `apiKeys?` | `OcxApiKey[]` | `[]` | Geri döngü olmayan bağlamalarda veri düzlemi kabulü için oluşturulmuş `ocx_…` kimlik bilgileri. Yönetim API'lerini yetkilendirmezler; yönetim erişimi [yönetim API referansında](/tr/reference/management-api/) açıklanan ayrı kimlik bilgisini kullanır. Kontrol paneli tarafından yönetilir. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | devre dışı | İsteğe bağlı arşivlenmiş oturum temizleme politikası. Asla örtük olarak etkinleştirilmez. |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Çıkarılabilir uygulamaya ait günlükler, önbellekler, bloblar ve devam yükleri için MiB cinsinden sınır. Aralık 64–4096; bir RSS sınırı değildir. |
+| `metricsExport.enabled?` | `boolean` | `false` | Kimliği doğrulanmış `GET /api/metrics` üzerinde süreç yerel toplu istek metriklerini etkinleştirir. Yeniden başlatma gerekir; devre dışıyken yol 404 döndürür ve dışa aktarıcı etkinliği başlamaz. |
 | `codexAutoStart?` | `boolean` | `true` | Codex dolgusunun Codex'i başlatmadan önce `ocx ensure` çalıştırmasına izin verin. False, ensure'ı bir işlem yapmayan (no-op) hale getirir. |
 | `codexShimAutoRestore?` | `boolean` | `true` | Tamamlanan harici bir Codex güncellemesi değiştirdikten sonra kurulu bir dolguyu geri yükleyin. Ortam vazgeçmesi: `OPENCODEX_CODEX_SHIM_AUTO_RESTORE=0`. |
 | `syncResumeHistory?` | `boolean` | `true` | Tersine çevrilebilir Codex App geçmişi uyumluluğu. Orijinal meta veriler yedeklenir ve `ocx stop` / `ocx restore` tarafından geri yüklenir. |
@@ -196,7 +197,7 @@ ve Claude kontrol paneli sayfasını yönetir.
 Otomatik kimlik doğrulama saklanan Claude kimlik doğrulaması bulunduğunda
 subscription'ı, hiçbiri bulunmadığında proxy'yi ve algılama yetersiz olduğunda
 bir uyarı ile subscription'ı seçer. Bkz. [Claude Code kimlik doğrulama
-modu](/tr/guides/claude-code/#auth-mode).
+modu](/tr/guides/claude-code/#kimlik-doğrulama-modu-auth-mode).
 
 ## Gölge çağrılar
 

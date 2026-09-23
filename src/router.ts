@@ -1,4 +1,7 @@
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
+import { createHash } from "node:crypto";
+import { peekAuthStore } from "./oauth/store";
+import { resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./oauth/devin/api-base";
 import {
   getCombo,
   isComboTargetInCooldown,
@@ -15,10 +18,12 @@ import { assertProviderDestinationAllowed } from "./lib/destination-policy";
 import { redactSecretString, redactUrlForLog } from "./lib/redact";
 import {
   PROVIDER_REGISTRY,
-  mergeRegistryStaticHeaders,
   providerCodexAccountMode,
-  registryModelServiceTierCapabilityApplies,
+  registryEntryForProviderDestination,
 } from "./providers/registry";
+// Imported from the module directly rather than through the registry facade, which is at its
+// file-size cap.
+import { registryModelIdKeys } from "./providers/registry/model-ids";
 import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts } from "./providers/derive";
 import { cloneFastWire } from "./providers/fastwire";
 import {
@@ -29,13 +34,12 @@ import {
   isCanonicalOpenAiForwardProvider,
   LEGACY_CHATGPT_PROVIDER_ID,
   LEGACY_OPENAI_MULTI_PROVIDER_ID,
-  OPENAI_API_PROVIDER_ID,
   OPENAI_CODEX_PROVIDER_ID,
 } from "./providers/openai-tiers";
 import { decodeRoutedModelIdOrThrow, encodeRoutedModelId } from "./providers/slug-codec";
-import { resolveModelAlias } from "./providers/default-aliases";
+import { effectiveProviderAliasDecision, resolveModelAlias } from "./providers/default-aliases";
 import { resolveBlockedModelRedirect } from "./lib/shadow-call";
-import { getStaleCached } from "./codex/model-cache";
+import { getRoutingCached } from "./codex/model-cache";
 import { codexAccountNamespaceEntries } from "./codex/account-namespaces";
 import {
   buildRouteDecisionTrace,
@@ -46,6 +50,7 @@ import {
 import { getRoutingProfile, resolvePolicyProfileId, POLICY_NAMESPACE } from "./routing/profile";
 import { evaluatePolicyProfile, type PolicyRequestEvidence } from "./routing/evaluator";
 import { assemblePolicyCandidateEvidence } from "./routing/compatibility/assemble";
+import { resolveModelPolicy, type ResolvedModelPolicy } from "./providers/resolved-model-policy";
 
 export class UnknownRoutingPolicyError extends Error {
   constructor(readonly profileId: string) {
@@ -69,6 +74,8 @@ export interface RouteResult {
   providerName: string;
   provider: OcxProviderConfig;
   modelId: string;
+  /** Immutable static policy for the current final wire model. */
+  staticPolicy: ResolvedModelPolicy;
   /** Which deterministic routing path produced this route (RI-01). */
   routeKind: RouteDecisionKind;
   /** Stable wire reason code for the selected route (RI-01). */
@@ -81,6 +88,29 @@ export interface RouteResult {
   combo?: ComboPick;
   /** Bounded route-decision trace (RI-01); never contains secrets. */
   routeDecision?: RouteDecisionTraceV1;
+}
+
+export function captureRouteStaticPolicy(
+  providerName: string,
+  modelId: string,
+  provider: OcxProviderConfig,
+  effectiveAlias?: string | null,
+  inboundWire: "responses" | "chat" | "anthropic" = "responses",
+): ResolvedModelPolicy {
+  const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
+  const transportMatchedRegistry = !!registryEntry
+    && providerMatchesRegistryTransportWithStaticGuards(providerName, provider);
+  return resolveModelPolicy({
+    providerName,
+    modelId,
+    provider,
+    registryEntry,
+    transportMatchedRegistry,
+    inboundWire,
+    modelCapabilities: provider.modelCapabilities?.[modelId],
+    ...(provider.authMode ? { effectiveAuth: { authMode: provider.authMode } } : {}),
+    ...(effectiveAlias !== undefined ? { effectiveAlias } : {}),
+  });
 }
 
 const MODEL_PROVIDER_PATTERNS: Array<{ providerNames: string[]; prefixes: string[] }> = [
@@ -117,84 +147,36 @@ export function knownModelIdsForProvider(
     : undefined;
   for (const id of registry?.models ?? []) ids.add(id);
   // Registry model-keyed hint maps double as known native ids (e.g. NVIDIA carries no
-  // static models list but names `moonshotai/kimi-k2.6` in its effort/window maps).
-  for (const map of [
-    registry?.modelContextWindows,
-    registry?.modelInputModalities,
-    registry?.modelReasoningEfforts,
-    registry?.modelDefaultReasoningEfforts,
-    registry?.modelReasoningEffortMap,
-    registry?.modelMaxOutputTokens,
-    registry?.modelSupportsServiceTier,
-    registry?.modelSupportsVerbosity,
-  ]) {
-    for (const id of Object.keys(map ?? {})) ids.add(id);
-  }
-  for (const cached of getStaleCached(provName) ?? []) ids.add(cached.id);
+  // static models list but names `moonshotai/kimi-k2.6` in its effort/window maps). Which
+  // maps count is classified by the registry itself rather than listed here, so an id declared
+  // only in a map this function forgot is no longer undecodable, and a new model-keyed field
+  // fails typecheck until its keys are given a meaning.
+  for (const id of registry ? registryModelIdKeys(registry) : []) ids.add(id);
+  const cachedModels = getRoutingCached(provName, () => {
+    // This callback runs only for a scoped entry, not for each provider in an alias scan.
+    const routed = routedProviderConfig(provName, prov);
+    let key = routed.apiKey;
+    let destination = routed.baseUrl;
+    if (routed.authMode === "oauth") {
+      const set = peekAuthStore()[provName];
+      const account = set?.accounts.find(row => row.id === set.activeAccountId);
+      if (!account || account.needsReauth || !Number.isFinite(account.credential.expires)
+        || account.credential.expires <= Date.now()) return undefined;
+      key = account.credential.access;
+      if (routed.adapter === "devin") destination = validateDevinApiBaseUrl(account.credential.apiBaseUrl) ?? routed.baseUrl;
+    }
+    if (!key) return undefined;
+    return createHash("sha256")
+      .update(routed.adapter === "devin"
+        ? JSON.stringify([key, resolveDevinApiBaseUrl(destination)])
+        : key)
+      .digest("hex");
+  });
+  for (const cached of cachedModels ?? []) ids.add(cached.id);
   for (const model of config?.customModels ?? []) {
     if (model.provider === provName && model.modelId) ids.add(model.modelId);
   }
   return [...ids];
-}
-
-// Merge registry-default effort maps under user values so built-in provider configs can
-// carry real upstream aliases without a disk migration. User overrides win per-key.
-function mergeRecord(
-  seed: Record<string, string> | undefined,
-  user: Record<string, string> | undefined,
-): Record<string, string> | undefined {
-  if (!seed && !user) return undefined;
-  return { ...(seed ?? {}), ...(user ?? {}) };
-}
-
-function mergeNestedRecord(
-  seed: Record<string, Record<string, string>> | undefined,
-  user: Record<string, Record<string, string>> | undefined,
-): Record<string, Record<string, string>> | undefined {
-  if (!seed && !user) return undefined;
-  const out: Record<string, Record<string, string>> = {};
-  for (const [key, value] of Object.entries(seed ?? {})) out[key] = { ...value };
-  for (const [key, value] of Object.entries(user ?? {})) out[key] = { ...(out[key] ?? {}), ...value };
-  return out;
-}
-
-function mergeStringArray(
-  seed: string[] | undefined,
-  user: string[] | undefined,
-): string[] | undefined {
-  if (!seed && !user) return undefined;
-  return [...new Set([...(seed ?? []), ...(user ?? [])])];
-}
-
-function mergeRecordFill<T>(
-  seed: Record<string, T> | undefined,
-  user: Record<string, T> | undefined,
-): Record<string, T> | undefined {
-  if (!seed && !user) return undefined;
-  return { ...(seed ?? {}), ...(user ?? {}) };
-}
-
-function mergePositiveNumberCaps(
-  seed: Record<string, number> | undefined,
-  user: Record<string, number> | undefined,
-): Record<string, number> | undefined {
-  if (!seed && !user) return undefined;
-  const out = { ...(seed ?? {}) };
-  for (const [key, value] of Object.entries(user ?? {})) {
-    out[key] = typeof out[key] === "number" ? Math.min(out[key]!, value) : value;
-  }
-  return out;
-}
-
-function mergeStringArrayRecord(
-  seed: Record<string, string[]> | undefined,
-  user: Record<string, string[]> | undefined,
-): Record<string, string[]> | undefined {
-  if (!seed && !user) return undefined;
-  const out: Record<string, string[]> = {};
-  for (const [key, value] of Object.entries(seed ?? {})) out[key] = [...value];
-  for (const [key, value] of Object.entries(user ?? {})) out[key] = [...value];
-  return out;
 }
 
 /** Same endpoint modulo surrounding space and trailing slashes — matches `matchBaseUrlChoice`. */
@@ -302,7 +284,20 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const registryEntry = PROVIDER_REGISTRY.find(entry => entry.id === providerName);
   if (!registryEntry || !providerMatchesRegistryTransportWithStaticGuards(providerName, provider)) {
     assertProviderDestinationAllowed(providerName, provider);
-    return { ...provider, apiKey: usableResolvedApiKey(provider.apiKey) };
+    // A row whose adapter no longer matches its registry entry still reaches the Responses
+    // adapter when one model opts in through `modelAdapters` — a Volcengine Coding Plan config
+    // saved on Chat, for instance. The replay-drop flag belongs to the DESTINATION rather than
+    // to the provider-wide wire, so it is filled here too; without it that continuation forwards
+    // the reasoning item the upstream answers 400 to. Destination matching refuses templated and
+    // overridable base URLs, so this cannot follow a retargeted row, and an explicit value wins.
+    const destination = registryEntryForProviderDestination(provider);
+    return {
+      ...provider,
+      apiKey: usableResolvedApiKey(provider.apiKey),
+      ...(provider.dropResponsesReasoningItems === undefined && destination?.dropResponsesReasoningItems !== undefined
+        ? { dropResponsesReasoningItems: destination.dropResponsesReasoningItems }
+        : {}),
+    };
   }
   const resolvedApiKey = usableResolvedApiKey(provider.apiKey);
   const staticModelCatalog = !providerSupportsLiveModelDiscovery(providerName, provider);
@@ -317,46 +312,42 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       : registryEntry.authKind === "forward" || registryEntry.authKind === "oauth"
         ? registryEntry.authKind
         : provider.authMode === "forward" ? undefined : provider.authMode;
-  const reasoningEffortMap = mergeRecord(registryEntry.reasoningEffortMap, provider.reasoningEffortMap);
-  const modelReasoningEffortMap = mergeNestedRecord(registryEntry.modelReasoningEffortMap, provider.modelReasoningEffortMap);
-  const modelReasoningEfforts = mergeStringArrayRecord(registryEntry.modelReasoningEfforts, provider.modelReasoningEfforts);
-  const modelDefaultReasoningEfforts = mergeRecordFill(registryEntry.modelDefaultReasoningEfforts, provider.modelDefaultReasoningEfforts);
-  const modelContextWindows = providerName === OPENAI_API_PROVIDER_ID
-    ? mergePositiveNumberCaps(registryEntry.modelContextWindows, provider.modelContextWindows)
-    : mergeRecordFill(registryEntry.modelContextWindows, provider.modelContextWindows);
-  const modelInputModalities = mergeRecordFill(registryEntry.modelInputModalities, provider.modelInputModalities);
+  const staticPolicy = resolveModelPolicy({
+    providerName,
+    modelId: "__provider_static__",
+    provider,
+    registryEntry,
+    transportMatchedRegistry: true,
+    ...(canonicalAuthMode ? { effectiveAuth: { authMode: canonicalAuthMode } } : {}),
+  }).provider;
+  const reasoningEffortMap = staticPolicy.reasoningEffortMap;
+  const modelReasoningEffortMap = staticPolicy.modelReasoningEffortMap;
+  const modelReasoningEfforts = staticPolicy.modelReasoningEfforts;
+  const modelDefaultReasoningEfforts = staticPolicy.modelDefaultReasoningEfforts;
+  const modelContextWindows = staticPolicy.modelContextWindows;
+  const modelInputModalities = staticPolicy.modelInputModalities;
   // Registry static headers are documented as applying to every upstream request, so they are
   // filled at resolve time rather than only at seed time: a config written before a header
   // existed, or one carrying any header of its own, would otherwise never receive it. User
   // headers win, matched case-insensitively so an override replaces rather than duplicates.
-  const headers = mergeRegistryStaticHeaders(registryEntry.staticHeaders, provider.headers);
-  const modelMaxInputTokens = providerName === OPENAI_API_PROVIDER_ID
-    ? mergePositiveNumberCaps(registryEntry.modelMaxInputTokens, provider.modelMaxInputTokens)
-    : mergeRecordFill(registryEntry.modelMaxInputTokens, provider.modelMaxInputTokens);
-  const modelMaxOutputTokens = mergeRecordFill(registryEntry.modelMaxOutputTokens, provider.modelMaxOutputTokens);
-  const modelSupportsServiceTier = mergeRecordFill(
-    registryModelServiceTierCapabilityApplies(registryEntry, provider)
-      ? registryEntry.modelSupportsServiceTier
-      : undefined,
-    provider.modelSupportsServiceTier,
-  );
-  const modelSupportsVerbosity = mergeRecordFill(
-    registryEntry.modelSupportsVerbosity,
-    provider.modelSupportsVerbosity,
-  );
-  const noVisionModels = mergeStringArray(registryEntry.noVisionModels, provider.noVisionModels);
-  const noReasoningModels = mergeStringArray(registryEntry.noReasoningModels, provider.noReasoningModels);
-  const noTemperatureModels = mergeStringArray(registryEntry.noTemperatureModels, provider.noTemperatureModels);
-  const noTopPModels = mergeStringArray(registryEntry.noTopPModels, provider.noTopPModels);
-  const noPenaltyModels = mergeStringArray(registryEntry.noPenaltyModels, provider.noPenaltyModels);
-  const noJsonSchemaModels = mergeStringArray(registryEntry.noJsonSchemaModels, provider.noJsonSchemaModels);
-  const autoToolChoiceOnlyModels = mergeStringArray(registryEntry.autoToolChoiceOnlyModels, provider.autoToolChoiceOnlyModels);
-  const preserveReasoningContentModels = mergeStringArray(registryEntry.preserveReasoningContentModels, provider.preserveReasoningContentModels);
-  const requiresReasoningPlaceholderModels = mergeStringArray(registryEntry.requiresReasoningPlaceholderModels, provider.requiresReasoningPlaceholderModels);
-  const reasoningSplitModels = mergeStringArray(registryEntry.reasoningSplitModels, provider.reasoningSplitModels);
-  const reasoningDetailsModels = mergeStringArray(registryEntry.reasoningDetailsModels, provider.reasoningDetailsModels);
-  const thinkingToggleModels = mergeStringArray(registryEntry.thinkingToggleModels, provider.thinkingToggleModels);
-  const thinkingBudgetModels = mergeStringArray(registryEntry.thinkingBudgetModels, provider.thinkingBudgetModels);
+  const headers = staticPolicy.headers;
+  const modelMaxInputTokens = staticPolicy.modelMaxInputTokens;
+  const modelMaxOutputTokens = staticPolicy.modelMaxOutputTokens;
+  const modelSupportsServiceTier = staticPolicy.modelSupportsServiceTier;
+  const modelSupportsVerbosity = staticPolicy.modelSupportsVerbosity;
+  const noVisionModels = staticPolicy.noVisionModels;
+  const noReasoningModels = staticPolicy.noReasoningModels;
+  const noTemperatureModels = staticPolicy.noTemperatureModels;
+  const noTopPModels = staticPolicy.noTopPModels;
+  const noPenaltyModels = staticPolicy.noPenaltyModels;
+  const noJsonSchemaModels = staticPolicy.noJsonSchemaModels;
+  const autoToolChoiceOnlyModels = staticPolicy.autoToolChoiceOnlyModels;
+  const preserveReasoningContentModels = staticPolicy.preserveReasoningContentModels;
+  const requiresReasoningPlaceholderModels = staticPolicy.requiresReasoningPlaceholderModels;
+  const reasoningSplitModels = staticPolicy.reasoningSplitModels;
+  const reasoningDetailsModels = staticPolicy.reasoningDetailsModels;
+  const thinkingToggleModels = staticPolicy.thinkingToggleModels;
+  const thinkingBudgetModels = staticPolicy.thinkingBudgetModels;
   const registryBaseUrlIsTemplate = /\{[^}]*\}/.test(registryEntry.baseUrl);
   const userBaseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
   const userBaseUrlIsResolved = userBaseUrl.length > 0 && !/\{[^}]*\}/.test(userBaseUrl);
@@ -416,6 +407,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
       : {}),
     ...(provider.preserveResponsesReasoningContent === undefined && registryEntry.preserveResponsesReasoningContent !== undefined
       ? { preserveResponsesReasoningContent: registryEntry.preserveResponsesReasoningContent }
+      : {}),
+    ...(provider.dropResponsesReasoningItems === undefined && registryEntry.dropResponsesReasoningItems !== undefined
+      ? { dropResponsesReasoningItems: registryEntry.dropResponsesReasoningItems }
       : {}),
     // The request path resolves through routedProviderConfig() and never calls
     // enrichProviderFromRegistry(), so a saved provider row written before the
@@ -565,10 +559,15 @@ function routeResult(
   const effectiveModelId = redirected ?? modelId;
   const effectiveRouteReason = redirected ? "blocked-model-redirect" : routeReason;
   const codexAccountMode = providerCodexAccountMode(providerName, provider);
+  const routedProvider = routedProviderConfig(providerName, provider);
+  const effectiveAlias = config
+    ? effectiveProviderAliasDecision(providerName, provider, config)
+    : undefined;
   return {
     providerName,
-    provider: routedProviderConfig(providerName, provider),
+    provider: routedProvider,
     modelId: effectiveModelId,
+    staticPolicy: captureRouteStaticPolicy(providerName, effectiveModelId, routedProvider, effectiveAlias),
     routeKind,
     routeReason: effectiveRouteReason,
     ...(codexAccountMode ? { codexAccountMode } : {}),

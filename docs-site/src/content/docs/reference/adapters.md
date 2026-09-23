@@ -131,8 +131,11 @@ exception.
 
 Adapter selection does not select the upstream transport. Eligible requests can use the
 [upstream WebSocket proxy route](/reference/proxy-formats/#json-and-sse-output); invalid or unsupported
-WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses Bun's
-HTTP proxy rules and does not inherit the WSS-specific `ALL_PROXY` fallback.
+WebSocket proxy settings fall back to HTTP/SSE. HTTP fetch-based Responses handling uses the
+[configured outbound fetch](/reference/configuration/server/#server-fields): a server SOCKS5 proxy from
+`config.proxy` or a SOCKS5 `ALL_PROXY` uses the built-in tunnel when `NO_PROXY` does not exempt
+the target. Scheme-specific HTTP(S) proxy variables retain their separate native handling;
+non-SOCKS `ALL_PROXY` is not a native HTTP fetch route.
 
 Noncanonical Responses gateways receive Codex's client-executed `tool_search` declaration as a
 collision-safe public function tool. Matching request history and JSON/SSE function calls are
@@ -152,6 +155,11 @@ part with its exact whitespace and newlines. Other destinations retain string-va
 blank strings and mixed encrypted/unknown parts are not partially converted.
 See [agent messages](/reference/configuration/providers/#routed-agent-messages)
 for the separate opt-in encrypted-task recovery behavior.
+
+For xAI Responses, `auto` or `none` tool selection is omitted when normalization leaves no tools
+in the request, including when cached-only search is removed. Valid forced function selections
+remain intact. Replayed custom tool calls with missing or invalid item ids receive stable ids
+when their call id, name, and input are strings; their call/result pairing is preserved.
 
 The canonical ChatGPT Codex forward destination also normalizes two public Responses shapes that
 its stricter backend rejects: fully textual `system` messages inside `input` are appended to the
@@ -198,9 +206,14 @@ classified that key as belonging to one conversation. Shared or unclassified cac
 keys do not establish session affinity; requests without a usable identity receive
 a fresh session ID. Recovery and cached-history replay preserve this classification.
 
-The API-key `commandcode` provider uses the `openai-chat` adapter and supports
-forwarding `prompt_cache_key`. This is separate from the OAuth adapter's session
-header and does not guarantee a provider cache hit.
+The API-key `commandcode` provider uses Chat Completions for most model ids and the
+Anthropic Messages adapter (`x-api-key`) for `claude-*` ids, which Command Code serves
+only on `/provider/v1/messages`; the pin applies only while the provider points at that
+endpoint. It supports forwarding `prompt_cache_key`; this is separate
+from the OAuth adapter's session header and does not guarantee a provider cache hit.
+The OAuth `command-code` preset streams `/alpha/generate` as NDJSON. MiMo tool-call
+markup echoed by the gateway as text is removed when it duplicates a real call, or
+restored as a real call when a complete declared-tool call has no native counterpart.
 
 ## `anthropic`
 
@@ -408,6 +421,15 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   OAuth-backed live transport and account-filtered model discovery remain experimental; see the
   [provider guide](/guides/providers/) and [Cursor provider configuration](/reference/configuration/providers/#cursor-provider-adapter-cursor)
   for login and transport settings. Checkpoint reuse itself is automatic and has no user setting.
+- External-model tool continuations keep the latest actual user request in the active action;
+  automatic summaries and standalone ambient-browser context remain historical context.
+  Blank or image-only user input does not revive an older request. Grok 4.6 code-mode guidance
+  requires explicit result emission and never assumes an empty completed cell emitted output.
+  Missing output calls for a read-only state check, not replay of a completed side effect.
+  Repetition advice resets on a new user/developer turn and permits requested polling.
+  If carried checkpoint roots exceed the replay
+  budget, available history is rebuilt under the same limits. These repairs do not guarantee
+  identical wording or reasoning behavior between Cursor and xAI routes.
 - Honors `upstreamHttpVersion` for both live model discovery and inference. `auto`, `http2`, and `h2`
   preserve the existing HTTP/2 transport; only `http1.1` and `h1` select compatibility mode.
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,

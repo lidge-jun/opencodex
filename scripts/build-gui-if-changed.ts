@@ -1,6 +1,6 @@
 /**
  * Rebuild the packaged GUI when a merge or pull brought `gui/` changes.
- * Used by the `post-merge` git hook. Skip with: git pull --no-verify
+ * Used by the `post-merge` git hook.
  *
  * Why this exists: `ocx` serves `gui/dist`, which is generated output and
  * therefore gitignored. A fast-forward advances `gui/src` but leaves `gui/dist`

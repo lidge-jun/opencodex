@@ -8,6 +8,8 @@ import * as liveness from "../../src/server/proxy-liveness";
 import { buildOpencodeEnv, buildOpencodeProviderBlocksFromCatalog, cmdOpencode, fetchOpencodeProxyModels } from "../../src/cli/opencode";
 import { OPENCODE_API_KEY_ENV } from "../../src/clients/config-export";
 import type { OcxConfig } from "../../src/types";
+import { opencodeCatalogToken } from "../../src/lib/admin-secrets";
+import { requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
 
@@ -113,7 +115,7 @@ test.each(["environment", "file", "missing", "unauthorized", "redirect", "ingres
     const finder = spyOn(liveness, "findLiveProxy").mockResolvedValue({ port: 10123, hostname: mode === "ingress" ? "192.0.2.1" : "127.0.0.1", pid: null, source: "config" });
     const request = spyOn(directHttp, "directLocalHttpFetch").mockImplementation(async (input, init) => {
       expect(String(input)).toBe(`http://127.0.0.1:${mode === "ingress" ? 10124 : 10123}/api/models`);
-      expect(new Headers(init?.headers).get("x-opencodex-api-key")).toBe(mode === "file" ? fileAdmin : admin);
+      expect(new Headers(init?.headers).get("x-opencodex-api-key")).toBe(opencodeCatalogToken(mode === "file" ? fileAdmin : admin));
       return mode === "unauthorized" ? new Response(null, { status: 401 }) : mode === "redirect" ? new Response(null, { status: 302 }) : Response.json(rows);
     });
     let childEnv: NodeJS.ProcessEnv | undefined;
@@ -137,6 +139,22 @@ test.each(["environment", "file", "missing", "unauthorized", "redirect", "ingres
       }
     } finally { err.mockRestore(); spawn.mockRestore(); request.mockRestore(); finder.mockRestore(); }
   });
+
+test("captured catalog credential cannot authorize another management route", () => {
+  const state: ManagementAuthState = {
+    available: true,
+    token: admin,
+    source: "environment",
+    sessions: new Map(),
+    pairingGrants: new Map(),
+  };
+  const credential = opencodeCatalogToken(admin);
+  const headers = { "x-opencodex-api-key": credential };
+  expect(requireManagementAuth(new Request("http://127.0.0.1/api/models", { headers }), state)).toBeNull();
+  expect(requireManagementAuth(new Request("http://127.0.0.1/api/models?extra=1", { headers }), state)?.status).toBe(401);
+  expect(requireManagementAuth(new Request("http://127.0.0.1/api/config", { headers }), state)?.status).toBe(401);
+  expect(requireManagementAuth(new Request("http://127.0.0.1/api/stop", { method: "POST", headers }), state)?.status).toBe(401);
+});
 
 test("case-insensitive inherited admin names are removed without changing other child variables", () => {
   const blocks = buildOpencodeProviderBlocksFromCatalog(12345, [], undefined, config);

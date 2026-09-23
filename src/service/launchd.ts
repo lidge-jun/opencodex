@@ -160,7 +160,7 @@ function launchdServiceCommand(
  */
 export function expectedLaunchdCommand(
   port: number,
-  deps: { state?: ServiceInstallState | null; entry?: { bun: string; cli: string } } = {},
+  deps: { state?: ServiceInstallState | null; entry?: { bun: string; cli: string | null } } = {},
 ): string {
   const state = deps.state === undefined ? readServiceInstallState() : deps.state;
   if (state?.launcherPath) return buildServiceLauncherShellCommand(state.launcherPath, port);

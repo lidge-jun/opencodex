@@ -230,7 +230,7 @@ export function replaceSseDataPayload(block: string, payload: string): string {
       continue;
     }
     if (!replaced) {
-      rewritten.push(`data: ${payload}`);
+      rewritten.push(...payload.split(/\r?\n/).map(line => `data: ${line}`));
       replaced = true;
     }
   }

@@ -31,7 +31,7 @@ sticky session affinity 與依用量的新工作階段選擇。它**不**控制 
 - 復原（包括 429 容錯移轉）會使用 `quotaWindow` 為合格的替代帳號排序，且不改變現有的冷卻或
   容錯移轉上限；`round-robin` 會忽略 `quotaWindow`。
 
-請見 [Configuration](/zh-tw/reference/configuration/#anthropicaccountpool-experimental)。
+請見 [Configuration](/zh-tw/reference/configuration/providers/#anthropicaccountpool實驗性)。
 
 ## 快速入門
 
@@ -51,6 +51,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel`（可選，也包括舊版 `ANTHROPIC_SMALL_FAST_MODEL`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（可選） |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 啟用 `alwaysEnableEffort` 時設為 `1`（條件注入） |
+| `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入，預設關閉） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | 設定 `maxContextTokens` 時使用的舊版上下文覆蓋項（條件注入） |
 你自行匯出的變數始終優先。額外引數會直接透傳：`ocx claude -p "hello"`。
 
@@ -391,7 +392,7 @@ Claude 入站的路由重放會把主 ChatGPT 登入附加到內部請求，因�
 進行中描述不會消耗配額。成功的 `data:` 圖像描述會按後端、模型、detail、圖像位元組和請求上下文
 快取，避免每次重放都重複描述同一圖像與上下文。內容可能變化的遠端 `https:` 圖像不會快取。
 
-全部設定項見[設定參考](/zh-tw/reference/configuration/#sidecars)。Anthropic OAuth Web
+全部設定項見[設定參考](/zh-tw/reference/configuration/server/#sidecar)。Anthropic OAuth Web
 Search 和圖像描述沿用儲存庫已有的 Claude Code OAuth fingerprint 先例，但在用於長時間無人值守任務前，
 仍應使用你的帳號和實際負載進行充分 soak test。
 
@@ -537,4 +538,4 @@ Claude 模型時自動載入。對於原生透傳，這是正常現象；對於�
 
 在 `config.json` 中設定 `claudeCode.stabilizePromptCache: true`，可在轉換路由上將系統指令末尾支援的 Claude 提示移到最後一則使用者訊息。預設值為 `false`。僅在用戶端允許這種角色變更時啟用。程式碼圍欄中的範例和不符合的文字會保留，Anthropic 原生轉送不變。沒有中繼資料時，快取鍵依穩定後的指令計算。此選項不會產生對話識別碼，也不保證上游快取命中。
 
-在 OpenCode Go 的 `deepseek-v4.1-flash` Chat 路由上，轉換後的時間線系統提醒會自動保留原有位置和 system 角色，並排在尚待傳回的工具結果之後。因此，新增提醒不會重寫開頭的系統提示。無論 `stabilizePromptCache` 是否啟用，此行為都會生效；其他模型、目標位址的轉換方式以及 Anthropic 原生轉送維持不變。快取重用仍需要穩定的工作階段識別碼和可用的上游快取。修改較早的指令或工具、壓縮對話也可能影響快取命中；僅保留提醒順序並不保證快取重用。
+在所有轉換後的 Chat 路由上，時間線提醒都會保留在對話中的原有位置（排在尚待傳回的工具結果之後）。因此，新增提醒不會重寫開頭的系統提示，對話中途的指令也不會被移到它原本應跟隨的輪次之前。該位置攜帶哪個角色是另外決定的：除非提供者記錄了 `foldDeveloperRoleToSystem: false`，否則提醒以 `system` 傳送；該記錄表示上游接受 `developer` 角色，此時提醒在相同位置照原樣轉送。不接受該角色的上游會回應 `400 role 'developer' is not allowed`，該回合根本無法開始，所以未記錄的目的地採用摺疊。無論 `stabilizePromptCache` 是否啟用，此行為都會生效；Anthropic 原生轉送維持不變。快取重用仍需要穩定的工作階段識別碼和可用的上游快取。修改較早的指令或工具、壓縮對話也可能影響快取命中；僅保留提醒順序並不保證快取重用。

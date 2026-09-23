@@ -14,6 +14,7 @@ import { getConfigDir, getConfigPath, readConfigDiagnostics } from "../config";
 import { readPid } from "../config/process-state";
 import { probeUncleanExitState } from "./status";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { maskAccountId } from "../lib/privacy";
@@ -1073,12 +1074,15 @@ export interface DefaultModelExposure {
 
 /** Exactly the catalog's own `RawEntry` shape, so an on-disk row needs no conversion. */
 type CatalogVisibilityRow = Record<string, unknown>;
+type ExposedModelsFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+const EXPOSED_MODELS_MAX_ROWS = 10_000;
+const EXPOSED_MODEL_ID_MAX_LENGTH = 1_024;
 
 export interface DefaultModelExposureDeps {
   readConfiguredModelFn?: () => string | null;
   /** The live proxy doctor already resolved, or null/absent when none is running. */
   live?: LiveProxy | null;
-  fetchFn?: typeof fetch;
+  fetchFn?: ExposedModelsFetch;
   readCatalogModelsFn?: () => readonly CatalogVisibilityRow[] | null;
 }
 
@@ -1091,18 +1095,24 @@ export interface DefaultModelExposureDeps {
  * data-plane admission on a non-loopback bind (`isApiAuthRequired`), and doctor deliberately
  * holds no data-plane key, so a remote-bound proxy always falls through to the catalog.
  */
-async function fetchExposedModelIds(live: LiveProxy, fetchFn: typeof fetch): Promise<Set<string> | null> {
+async function fetchExposedModelIds(live: LiveProxy, fetchFn: ExposedModelsFetch): Promise<Set<string> | null> {
   try {
+    // directLocalHttpFetch never follows redirects and aborts past its byte cap, so the
+    // unbounded-body and redirect cases are covered below the JSON parse, not by options here.
     const res = await fetchFn(`http://${probeHostname(live.hostname)}:${live.port}/v1/models`, {
       signal: AbortSignal.timeout(EXPOSED_MODELS_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     const body = await res.json() as { data?: unknown };
     if (!Array.isArray(body?.data)) return null;
+    if (body.data.length > EXPOSED_MODELS_MAX_ROWS) return null;
     const ids = new Set<string>();
     for (const row of body.data) {
       const id = (row as { id?: unknown } | null)?.id;
-      if (typeof id === "string" && id.length > 0) ids.add(id);
+      if (typeof id !== "string") return null;
+      if (id.length === 0) continue;
+      if (id.length > EXPOSED_MODEL_ID_MAX_LENGTH) return null;
+      ids.add(id);
     }
     return ids;
   } catch {
@@ -1158,7 +1168,7 @@ export async function collectDefaultModelExposure(
   }
 
   const live = deps.live ?? null;
-  const proxyIds = live ? await fetchExposedModelIds(live, deps.fetchFn ?? fetch) : null;
+  const proxyIds = live ? await fetchExposedModelIds(live, deps.fetchFn ?? directLocalHttpFetch) : null;
   const catalogIds = catalogExposedModelIds((deps.readCatalogModelsFn ?? defaultCatalogModels)());
   if (proxyIds === null && catalogIds === null) {
     return {
@@ -1505,8 +1515,16 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   // cannot break a legitimately green pipeline.
 
   console.log("\nCodex agent role files");
-  const tomlFallbackRoles = scanCodexAgentRolesWithTomlModelFallback(resolveCodexHomeDirImpl());
-  if (tomlFallbackRoles.length === 0) {
+  let roleScanError: unknown;
+  const tomlFallbackRoles = scanCodexAgentRolesWithTomlModelFallback(
+    resolveCodexHomeDirImpl(),
+    cause => {
+      roleScanError = cause;
+    },
+  );
+  if (roleScanError) {
+    console.log(`  [WARN] unable to scan $CODEX_HOME/agents/*.toml: ${String(roleScanError)}`);
+  } else if (tomlFallbackRoles.length === 0) {
     console.log("  ok     no per-role model_fallback fields in $CODEX_HOME/agents/*.toml");
   } else {
     console.log(`  [WARN] ${tomlFallbackRoles.length} agent role file${tomlFallbackRoles.length === 1 ? "" : "s"} contain${tomlFallbackRoles.length === 1 ? "s" : ""} \`model_fallback\`: ${tomlFallbackRoles.join(", ")}`);
@@ -1514,13 +1532,24 @@ export async function runDoctor(args: string[] = []): Promise<void> {
   }
   // opencodex does not write these files; the Codex desktop external-agent import does, and it
   // drops the model pin on the way in. Observe-only: doctor never repairs or removes them.
-  const unpinnedDerivedRoles = scanOpencodexDerivedCodexAgentRolesWithoutModelPin(resolveCodexHomeDirImpl());
-  if (unpinnedDerivedRoles.length === 0) {
-    console.log("  ok     every opencodex-derived role file in $CODEX_HOME/agents/*.toml pins a model");
-  } else {
-    console.log(`  [WARN] ${unpinnedDerivedRoles.length} opencodex-derived role file${unpinnedDerivedRoles.length === 1 ? "" : "s"} without a \`model\` pin: ${unpinnedDerivedRoles.map(role => `${role}.toml`).join(", ")}`);
-    console.log("        Codex runs these roles on the parent model, so a spawn records one role and another model. The `ocx-route` directive in the file cannot pin them: it is honoured only on the Claude Code `/v1/messages` path and is inert on `/v1/responses`.");
-    console.log("        Add `model = \"<id>\"` to each file, or remove them. They usually come from the Codex desktop external-agent import of ~/.claude/agents/ocx-*.md; set `[desktop] external-agent-import-sync-item-types` with `SUBAGENTS = false` to stop it recreating them.");
+  // Both role scans share the same directory listing, so a failure above already reported the
+  // cause; skip the second scan rather than warn twice or print a false "ok".
+  if (!roleScanError) {
+    const unpinnedDerivedRoles = scanOpencodexDerivedCodexAgentRolesWithoutModelPin(
+      resolveCodexHomeDirImpl(),
+      cause => {
+        roleScanError = cause;
+      },
+    );
+    if (roleScanError) {
+      console.log(`  [WARN] unable to scan $CODEX_HOME/agents/*.toml: ${String(roleScanError)}`);
+    } else if (unpinnedDerivedRoles.length === 0) {
+      console.log("  ok     every opencodex-derived role file in $CODEX_HOME/agents/*.toml pins a model");
+    } else {
+      console.log(`  [WARN] ${unpinnedDerivedRoles.length} opencodex-derived role file${unpinnedDerivedRoles.length === 1 ? "" : "s"} without a \`model\` pin: ${unpinnedDerivedRoles.map(role => `${role}.toml`).join(", ")}`);
+      console.log("        Codex runs these roles on the parent model, so a spawn records one role and another model. The `ocx-route` directive in the file cannot pin them: it is honoured only on the Claude Code `/v1/messages` path and is inert on `/v1/responses`.");
+      console.log("        Add `model = \"<id>\"` to each file, or remove them. They usually come from the Codex desktop external-agent import of ~/.claude/agents/ocx-*.md; set `[desktop] external-agent-import-sync-item-types` with `SUBAGENTS = false` to stop it recreating them.");
+    }
   }
 
   const dual = collectWslDualInstall();
