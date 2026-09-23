@@ -36,3 +36,9 @@ Test-method note: `--user-agent` alone does not change `navigator.userAgentData.
 - SoT: structure/ops/docs-and-release.md (docs-site owner) does not describe the landing download surface; no patch needed.
 - Unobserved: none of the planned conditional paths remain unobserved (the iPad and Linux-arch rows were exercised through CDP emulation).
 
+
+## Follow-up: centred layout (user steering during C)
+
+- custom.css: `.lp-download` centres its heading, subtitle, version line, the single detected card (`justify-content: center`), the Other platforms summary, the disclosure grid (`margin-inline: auto`) and the terminal row; card copy stays left-aligned (`.lp-dl-card { text-align: start }`).
+- Rebuilt (exit 0) and re-observed at 1440 light (closed and open), 1440 dark, and 390px ko with the disclosure open: every block centred, no overlap.
+
