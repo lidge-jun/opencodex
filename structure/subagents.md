@@ -32,6 +32,9 @@ snapshot repair. Malformed, conflicting, unsupported or over-limit responses fai
 retrying the model. Raw stream inspection cannot publish plaintext continuation state: only
 restored client blocks reach its dedicated bounded collector. Foreign namespaces and opaque
 argument/metadata values remain unchanged; the empty encrypted-function-args marker is preserved.
+For a streamed response with a missing or incorrect content type, the native passthrough reads at
+most the first 4 KiB to confirm a Responses SSE event before restoring aliases. A body that does
+not match still fails closed, and its bytes never reach Codex as a successful response.
 
 Startup warns that task text can remain in Codex history, selected-provider requests and local
 response/debug state. This is application-level plaintext over HTTPS, depends on undocumented

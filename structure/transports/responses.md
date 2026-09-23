@@ -8,6 +8,7 @@ The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agen
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Management provider-validation calls use the [initialization-independent relative send-path validation](../config.md#provider-relative-send-paths) before persistence. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
 Plaintext collaboration restoration treats a null namespace as absent, rejects non-string namespace types, and restores the native namespace/name pair before HTTP/WS delivery and continuation publication.
+When a successful streamed native response has no recognizable content type, the plaintext V2 path confirms a bounded Responses SSE prefix before applying that restoration; unknown bodies retain the fail-closed response.
 
 ## Responses HTTP/SSE
 
