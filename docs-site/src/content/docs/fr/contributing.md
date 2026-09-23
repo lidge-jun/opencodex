@@ -147,8 +147,11 @@ une contribution normale ; indiquez les commits sources dans la description.
 - Rédigez une vraie description : un **Résumé** de la modification et de sa raison, ainsi qu’un **Plan de test**
   ou un contenu équivalent. Les corps vides, les textes composés seulement d’espaces réservés et les descriptions
   contenant des `\n` échappés au lieu de véritables sauts de ligne échouent au contrôle.
-- Si le titre ou la description mentionne `gui`, incluez dans la description une capture d’écran de la modification
-  de l’interface. `enforce-target` est réexécuté après chaque modification de la description jusqu’à sa présence.
+- Si la pull request modifie des fichiers sous `gui/`, ajoutez une capture d’écran de la modification de
+  l’interface dans sa description. `enforce-target` est réexécuté après chaque modification de la description
+  jusqu’à sa présence. Glissez l’image dans la description au lieu de la committer sur la branche : elle serait
+  incluse dans le squash merge vers `dev`. Pour un envoi en ligne de commande, les responsables utilisent la
+  branche `pr-assets` avec un lien vers le SHA du commit.
 - Les workflows de ce dépôt utilisent **`pull_request_target`**. Une nouvelle logique d’application ne prend effet
   qu’après la promotion du workflow vers la branche par défaut, conformément à l’avertissement opérationnel de #631.
 
@@ -166,7 +169,7 @@ du dépôt et des chemins sensibles du point de vue de la sécurité est déclar
 - **Gérer les erreurs asynchrones aux frontières** — les services auxiliaires ne propagent jamais d’exception dans le
   chemin de requête ; ils se dégradent en un marqueur explicite.
 - **Structure, source de vérité** — les invariants actuels des responsables résident dans `structure/`. Conservez
-  les parcours utilisateurs publics dans `docs-site/` et les notes d’enquête historiques dans `docs/`.
+  les parcours utilisateurs publics dans `docs-site/` et les notes de planification et d’enquête dans `devlog/`.
 - **Préserver les exportations** — d'autres modules peuvent en dépendre.
 
 ## Ajout d'un fournisseur au catalogue

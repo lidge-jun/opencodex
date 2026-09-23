@@ -65,7 +65,7 @@ describe("Codex CLI update CLI", () => {
     try {
       console.log = (...values: unknown[]) => logs.push(values.map(String).join(" "));
       expect(await handleCodexCliUpdateCommand(["attest", "--json"], {
-        deriveInstallationInput: input => {
+        deriveInstallationInput: async input => {
           snapshot = input;
           return { kind: "derived", input: { ...identityInput, candidateSource: "selected" as const } };
         },
@@ -92,7 +92,7 @@ describe("Codex CLI update CLI", () => {
     try {
       console.log = (...values: unknown[]) => logs.push(values.map(String).join(" "));
       expect(await handleCodexCliUpdateCommand(["attest", "--json"], {
-        deriveInstallationInput: () => ({ kind: "unavailable", reason: "candidate_unavailable" }),
+        deriveInstallationInput: async () => ({ kind: "unavailable", reason: "candidate_unavailable" }),
         inspectIdentity: async () => { inspectCalls += 1; return identityReport; },
       })).toBe(0);
       expect(inspectCalls).toBe(0);

@@ -89,6 +89,11 @@ contains no provider object, API key, OAuth value, custom header, reusable manag
 credential, or config digest. Both the proof and reload request use the direct local
 transport so environment HTTP proxies cannot observe or fabricate the exchange.
 
+Aside refresh from `ocx sync` also uses a one-shot process-bound capability for its
+exact POST route. It never sends the reusable management credential to a listener
+selected through public liveness discovery, and configured-port-only legacy proxies
+must be restarted before they can own this mutation.
+
 > Decision record: [ADR-0073](decisions/ADR-0073-authentication-boundaries.md)
 
 Management authentication never has a loopback bypass. If no management credential is available, or
@@ -734,7 +739,7 @@ The shared Responses path follows the [bounded multipart recovery contract](suba
 
 ## Remote credentials and bounded sessions
 
-Data keys authorize only the data matrix and authenticated catalog. Admin credentials authorize ordinary management and key rotation but cannot mint, exchange, or refresh a `gui-session`. Pairing grants are digest-only, origin-bound, one-use, capped at 128 live grants, burned after five grant failures, and source-limited after ten failures in ten minutes with at most 1,024 source buckets. `POST /api/session/logout` invalidates only the current origin/CSRF-authorized browser session.
+Data keys authorize only the data matrix and authenticated catalog. Admin credentials authorize ordinary management and key rotation but cannot mint, exchange, or refresh a `gui-session`. Pairing grants are digest-only, origin-bound, one-use, capped at 128 live grants, burned after five grant failures, and source-limited after ten failures in ten minutes with at most 1,024 source buckets. Source limiting applies only to invalid guesses from an allowed browser origin — disallowed origins record no limiter state, and a valid grant redeems even from a throttled source. `POST /api/session/logout` invalidates only the current origin/CSRF-authorized browser session.
 
 ### Model picker ordering settings
 

@@ -56,11 +56,18 @@ export function readGrokStatus(opts: { grokHome?: string } = {}): GrokStatus {
     return { configPath, present: false, baseUrl: null, models: [] };
   }
 
-  const begin = content.indexOf(BEGIN_MARKER);
-  const end = content.indexOf(END_MARKER, begin + 1);
-  if (begin < 0 || end < 0) return { configPath, present: false, baseUrl: null, models: [] };
+  // Line-anchored like findManagedRegion: marker-shaped text inside TOML string
+  // data (e.g. a provider-supplied model id) is not a fence boundary.
+  const markerLine = (marker: string): RegExp =>
+    new RegExp(`^[ \\t]*${marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[ \\t]*$`, "gm");
+  const beginMatch = markerLine(BEGIN_MARKER).exec(content);
+  if (!beginMatch) return { configPath, present: false, baseUrl: null, models: [] };
+  const endRe = markerLine(END_MARKER);
+  endRe.lastIndex = beginMatch.index + beginMatch[0].length;
+  const endMatch = endRe.exec(content);
+  if (!endMatch) return { configPath, present: false, baseUrl: null, models: [] };
 
-  const region = content.slice(begin + BEGIN_MARKER.length, end);
+  const region = content.slice(beginMatch.index + beginMatch[0].length, endMatch.index);
   const models: GrokStatusModel[] = [];
   let baseUrl: string | null = null;
   let current: GrokStatusModel | null = null;

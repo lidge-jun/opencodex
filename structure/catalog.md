@@ -173,8 +173,14 @@ Provider live-model lists are cached with a configured TTL (`src/codex/model-cac
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
 deliberately does not, because a disabled provider is already excluded from the catalog gather
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
+Account-scoped discovery transports remain bound to the credential snapshot that supplied the
+token. In particular, Devin discovery uses the allowlisted tenant API base URL from that same
+snapshot rather than pairing a durable account key with the provider registry's default host.
+If that stored destination is invalid, registered Devin discovery and routing both use the
+registry's fixed base URL instead of a stale configured override.
 Entitlement-specific rosters (Qoder, Devin, Cursor) additionally bind their cache entry to an
-irreversible credential fingerprint: a credential switch observes neither the fresh nor the stale
+irreversible credential fingerprint (for Devin, of the credential plus its validated tenant
+destination URL): a credential or destination switch observes neither the fresh nor the stale
 roster recorded under the previous credential, and a failed discovery's cooldown neither supplies
 the previous credential's stale roster nor suppresses the next credential's first discovery.
 Selector decoding uses the same authority boundary through `getRoutingCached`: it resolves a
@@ -210,6 +216,16 @@ removal markers. These presentation operations do not grant routing or account e
 ### Windows request-path catalog-state discovery
 
 > Decision record: [ADR-0021](decisions/ADR-0021-shared-catalog.md)
+
+## Reasoning metadata refresh
+
+Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the optional
+`src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
+gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with
+the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
+`src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh
+only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do
+not fetch on the request path; catalog sync owns their bootstrap.
 
 ## Startup readiness
 

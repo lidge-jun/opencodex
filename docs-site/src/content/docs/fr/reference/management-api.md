@@ -369,7 +369,7 @@ Codex. Ses routes sont les suivantes :
 | `POST /api/codex-auth/reset-credits/consume` | Consommer un crédit de réinitialisation éligible. L'`operationId` facultatif (UUIDv4) rend la consommation idempotente : le même id rejoue un unique résultat durable au lieu de consommer un second crédit. | 400 identifiant de compte manquant ou `operationId` invalide ; 409 `identity_mismatch` si l'id appartient à un autre compte ; transmission du statut en amont ; 503 `server_busy`, `capacity` ou `unavailable` ; 500 consommer l'échec |
 | `POST /api/codex-auth/login` | Démarrer une connexion ou une réauthentification Codex | 400 requête invalide ; état de connexion en conflit ou occupé |
 | `POST /api/codex-auth/login/code` | Soumettre manuellement un code pour un flux de connexion Codex | 400 flux ou code invalide |
-| `POST /api/codex-auth/login/cancel` | Annuler un flux de connexion Codex | — |
+| `POST /api/codex-auth/login/cancel` | Annuler uniquement la connexion Codex en attente identifiée par `{ "flowId": "..." }` | 400 identifiant de flux absent, inconnu ou non en attente |
 | `GET /api/codex-auth/login-status` | Interrogez un flux ou un état de connexion à un compte. Un flux de nouveau compte terminé inclut `catalogRefreshPending: true` uniquement lorsque la récupération est nécessaire. | Rapport de flux inconnus `expired` ; aucun rapport de flux actif `idle` |
 
 Si une nouvelle ligne de configuration de compte est enregistrée, mais que la mise en place des identifiants ne peut pas aboutir, le `login-status` OAuth indique

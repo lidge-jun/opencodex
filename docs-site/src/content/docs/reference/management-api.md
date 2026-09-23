@@ -198,12 +198,12 @@ readable; mutations refuse without initializing workspace services.
 | Method and path | Purpose | Notable errors |
 | --- | --- | --- |
 | `GET /api/remote-workspace` | Read paired computers, current capabilities, Hub runtimes, and session snapshots | Disabled status when Hub role or explicit opt-in is absent |
-| `POST /api/remote-workspace/pairing` | Create a ten-minute one-use Executor enrollment code | GUI session only; 429 pairing capacity |
+| `POST /api/remote-workspace/pairing` | Create a ten-minute one-use Executor enrollment code | Operator-paired GUI session only; 429 pairing capacity |
 | `GET /api/remote-workspace/runtimes` | Read Codex, Claude Code, and Pi availability on the Hub | — |
-| `GET, POST /api/remote-workspace/sessions` | List sessions or start one bound to a device, root, runtime, and access mode | POST is GUI session only; 409 offline/unavailable/invalid target |
-| `POST /api/remote-workspace/sessions/{id}/prompt` | Continue the bound model session | GUI session only; 409 active turn, offline Executor, or resume failure |
-| `DELETE /api/remote-workspace/sessions/{id}` | Stop the model runtime and encrypted Executor session | GUI session only; 404 unknown session |
-| `DELETE /api/remote-workspace/devices/{id}` | Revoke one computer and stop its sessions | GUI session only; 404 unknown device |
+| `GET, POST /api/remote-workspace/sessions` | List sessions or start one bound to a device, root, runtime, and access mode | POST requires an operator-paired GUI session; 409 offline/unavailable/invalid target |
+| `POST /api/remote-workspace/sessions/{id}/prompt` | Continue the bound model session | Operator-paired GUI session only; 409 active turn, offline Executor, or resume failure |
+| `DELETE /api/remote-workspace/sessions/{id}` | Stop the model runtime and encrypted Executor session | Operator-paired GUI session only; 404 unknown session |
+| `DELETE /api/remote-workspace/devices/{id}` | Revoke one computer and stop its sessions | Operator-paired GUI session only; 404 unknown device |
 
 Executor enrollment exchanges a one-use code at `POST /remote-workspace/pair` and then opens
 `/remote-workspace/agent` as a bearer-authenticated outbound WebSocket. Those two machine endpoints
@@ -581,7 +581,7 @@ manager. Its routes are:
 | `POST /api/codex-auth/reset-credits/consume` | Consume an eligible reset credit. Optional `operationId` (UUIDv4) makes the redemption idempotent: the same id replays one durable outcome instead of spending a second credit. | 400 missing account id or invalid `operationId`; 409 `identity_mismatch` when the id belongs to another account; upstream status passthrough; 503 `server_busy`, `capacity`, or `unavailable`; 500 consume failure |
 | `POST /api/codex-auth/login` | Start Codex login or reauthentication | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Submit a manual code for a Codex login flow | 400 invalid flow/code |
-| `POST /api/codex-auth/login/cancel` | Cancel a Codex login flow | — |
+| `POST /api/codex-auth/login/cancel` | Cancel only the pending Codex login identified by `{ "flowId": "..." }` | 400 missing, unknown, or non-pending flow ID |
 | `GET /api/codex-auth/login-status` | Poll a flow or account login state. A completed new-account flow includes `catalogRefreshPending: true` only when recovery is needed. | Unknown flows report `expired`; no active flow reports `idle` |
 
 For reset-credit consumption, a different `operationId` supplied while the same physical

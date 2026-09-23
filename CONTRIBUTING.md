@@ -8,7 +8,10 @@ Thanks for helping with opencodex.
 - Current maintainer invariants live in [`structure/`](./structure); start at [`structure/INDEX.md`](./structure/INDEX.md)
 - Maintainer roles and merge policy live in [`MAINTAINERS.md`](./MAINTAINERS.md)
 - Attribution for work landed through a maintainer carry lives in [`CREDITS.md`](./CREDITS.md)
-- Historical investigations live in [`docs/`](./docs)
+- Planning and investigation notes live in [`devlog/`](./devlog); older retired notes remain in git history
+- PR screenshots go in the pull request description, never on your branch: drag the image into the
+  description editor, or, with push access, commit it to the `pr-assets` branch and link it by commit SHA
+  (see that branch's README). Evidence images committed to a PR branch ride the squash merge into `dev`.
 
 ## Branches
 

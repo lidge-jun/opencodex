@@ -310,6 +310,9 @@ what produced a dead socket on a tailnet-bound hub in the first place.
 
 ## Aside profile ownership
 
+The local CLI sync shares one absolute deadline across listener attestation and the
+capability-bearing POST, even if the listener keeps sending partial bytes.
+
 Aside discovery projects only registered numeric account IDs, labels and current status. Catalog
 paths derive from the configured root/u/id, never from browser profilePath. Guarded filesystem
 identity and IO apply to status and writes; internal resolved path pairs survive async freezing.

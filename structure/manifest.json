@@ -6,6 +6,10 @@
   ],
   "absentPaths": [
     {
+      "path": "docs/",
+      "reason": "the root docs/ folder is retired; ops/docs-and-release.md documents where its material went and that no docs/ tree is tracked"
+    },
+    {
       "path": "go/",
       "reason": "the Go native-runtime experiment is retired; ops/docs-and-release.md documents that no go/ tree is tracked"
     }
@@ -114,6 +118,16 @@
         "src/config/",
         "src/config/persisted-mutation.ts",
         "src/types.ts"
+      ]
+    },
+    {
+      "path": "config-proxy.md",
+      "tier": 2,
+      "title": "Proxy Configuration",
+      "scope": "Global proxy activation, start flags, and credential-safe CLI output.",
+      "documents": [
+        "src/cli/",
+        "src/config/"
       ]
     },
     {
@@ -397,7 +411,7 @@
       "path": "ops/docs-and-release.md",
       "tier": 6,
       "title": "Docs And Release",
-      "scope": "Docs site, workflow map, branch policy, release flow, and cross-platform CI.",
+      "scope": "Docs site, workflow map, branch policy, and release flow.",
       "documents": [
         ".github/",
         "bin/",
@@ -408,6 +422,25 @@
         "src/codex/",
         "src/lib/",
         "src/service.ts"
+      ]
+    },
+    {
+      "path": "ops/cross-platform-ci.md",
+      "tier": 6,
+      "title": "Cross-platform CI",
+      "scope": "Test lanes, platform coverage, aggregate gating, and release CI proof.",
+      "documents": [
+        ".github/",
+        "scripts/"
+      ]
+    },
+    {
+      "path": "ops/test-sandbox-cleanup.md",
+      "tier": 6,
+      "title": "Test Sandbox Cleanup",
+      "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
+      "documents": [
+        "tests/"
       ]
     },
     {

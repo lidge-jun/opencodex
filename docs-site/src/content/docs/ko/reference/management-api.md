@@ -324,7 +324,7 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | `POST /api/codex-auth/reset-credits/consume` | 사용할 수 있는 reset credit을 소비합니다. 선택적 `operationId`(UUIDv4)를 보내면 소비가 멱등해집니다 — 같은 id는 크레딧을 다시 쓰지 않고 저장된 결과 하나를 재생합니다. | 400 누락된 account id 또는 잘못된 `operationId`; id가 다른 계정 소유이면 409 `identity_mismatch`; upstream 상태 전달; 503 `server_busy`/`capacity`/`unavailable`; 500 소비 실패 |
 | `POST /api/codex-auth/login` | Codex 로그인 또는 재인증을 시작합니다 | 400 잘못된 요청; 충돌/바쁨 로그인 상태 |
 | `POST /api/codex-auth/login/code` | Codex 로그인 흐름용 수동 코드를 제출합니다 | 400 잘못된 흐름/code |
-| `POST /api/codex-auth/login/cancel` | Codex 로그인 흐름을 취소합니다 | — |
+| `POST /api/codex-auth/login/cancel` | `{ "flowId": "..." }`로 지정한 대기 중인 Codex 로그인만 취소합니다 | 400 흐름 ID 누락, 알 수 없음 또는 대기 중이 아님 |
 | `GET /api/codex-auth/login-status` | 흐름 또는 account 로그인 상태를 조회합니다. 새 계정 완료 시 복구가 필요할 때만 `catalogRefreshPending: true`를 포함합니다. | 알 수 없는 흐름은 `expired`로 보고되며, 활성 흐름이 없으면 `idle`로 보고됩니다 |
 
 수동 소비가 `reset`으로 확인되면 같은 계정의 새 usage를 조회하여 기존 shared reset-derived

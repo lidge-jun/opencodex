@@ -72,6 +72,31 @@ describe("CLI dispatch aliases", () => {
 });
 
 describe("dispatchCommand exit codes", () => {
+  test("Aside sync refuses a marker-only configured-port listener before sending credentials", async () => {
+    const { refreshAsideProfilesThroughServer } = await import("../../src/cli/aside-profiles");
+    const requests: Array<{ input: string; headers: Headers }> = [];
+    const directRequests: string[] = [];
+    const http = spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      requests.push({ input: String(input), headers: new Headers(init?.headers) });
+      return new Response(JSON.stringify({ service: "opencodex", status: "ok" }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    try {
+      await expect(refreshAsideProfilesThroughServer({
+        findLiveProxy: async () => ({ pid: null, port: 10100, hostname: "127.0.0.1", source: "config" }),
+        directLocalFetch: async input => {
+          directRequests.push(String(input));
+          throw new Error("marker-only listener must not be contacted");
+        },
+      })).rejects.toMatchObject({ status: 503 });
+      expect(requests).toEqual([]);
+      expect(directRequests).toEqual([]);
+    } finally {
+      http.mockRestore();
+    }
+  });
+
   test("invalid client state refuses sync before local proxy discovery", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-dispatch-client-invalid-"));
     const previous = process.env.OPENCODEX_HOME;

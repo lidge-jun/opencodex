@@ -211,3 +211,28 @@ ocx integration client restore --op <operation-id>
 Undo は、もともと存在しなかったファイルも含め、**元の両方のバイト列**を復元します。操作後の編集には、既存の明示的な `--confirm-drift` が必要で、編集済みのペアも先にバックアップされます。すでに使われている OpenCodex 項目には、既存の `--overwrite-conflict` による同意が必要です。Disable は 2 つの管理対象項目を削除しますが、以前の他者の項目は復元しません。その場合は Undo を使ってください。スナップショットの保持件数と期限は他の統合と同じ規則です。
 
 ダウンロードされる `cline-config-bundle.json` には、`providers.json` 用の `settings` と `models.json` 用の `catalog` という 2 つのネイティブ文書要素が含まれます。それ自体は Cline の設定ファイルではありません。ジャーナル付きのマージとロールバックには統合コマンドを使ってください。生成された統合はリモートの受け入れ認証に対応せず、認証不要のループバックアクセスが必要です。
+
+## GitHub Copilot アプリ
+
+GitHub Copilot デスクトップアプリでは、opencodex を OpenAI 互換のモデルプロバイダーとして利用できます。これは手動で設定するクライアントで、Integrations タブのスイッチはありません。また、opencodex がバックエンドとして Copilot サブスクリプションを使う上流の `github-copilot` プロバイダーとは別のものです。
+
+1. opencodex を起動し、応答することを確認します。
+
+   ```bash
+   curl http://127.0.0.1:10100/healthz
+   curl http://127.0.0.1:10100/v1/models
+   ```
+
+2. Copilot アプリで **Settings → Model providers → Add provider** を開き、次の値を入力します。
+
+   | 項目 | 値 |
+   |---|---|
+   | 名前 | 任意のラベル（例: `OpenCodex`） |
+   | Base URL | `http://127.0.0.1:10100/v1`（バインドに合わせてポートを変更） |
+   | API key | ループバック接続では空欄 |
+
+3. エンドポイントからモデルを同期するか、`provider/model` 形式の ID でモデルを追加し、選択します。
+
+アプリはモデルの検出に `GET /v1/models`、リクエストの処理に `POST /v1/chat/completions` を使います。リクエストは opencodex の通常のモデルルーティングを通るため、他のクライアントと同じように、プロバイダーの認証情報、OAuth アカウント、コンボが適用されます。受け付けるリクエストフィールドは[プロキシ形式のリファレンス](/reference/proxy-formats/)を参照してください。
+
+モデルが見つからないと表示される場合は、Base URL が `/v1/chat/completions` ではなく `/v1` で終わっていることと、`/v1/models` が空でない `data` 配列を返すことを確認してください。opencodex がループバック以外のアドレスで待ち受けている場合は、アプリの API key 欄にデータ受け入れキー（[リモートアクセス](/reference/configuration/server/#remote-access)に記載されたトークン、またはダッシュボードで生成した `ocx_…` キー）を入力します。アプリはこれを `Authorization: Bearer` として送信します。`/v1/chat/completions` はこれをプロキシの受け入れ認証にだけ使い、上流には転送しません。詳しくは[認証マトリクス](/reference/proxy-formats/#authentication-matrix)を参照してください。

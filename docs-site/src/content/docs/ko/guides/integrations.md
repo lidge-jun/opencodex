@@ -209,3 +209,28 @@ ocx integration client restore --op <operation-id>
 Undo는 원래 없던 파일까지 포함해 **두 원본 바이트 문자열 모두** 복원합니다. 작업 후 편집된 내용이 있으면 기존의 명시적 `--confirm-drift`가 필요하며 편집된 파일 쌍도 먼저 백업합니다. 이미 차지된 OpenCodex 항목에는 기존 `--overwrite-conflict` 동의가 필요합니다. Disable은 관리형 항목 두 개를 제거하며 이전 외부 항목을 복원하지는 않습니다. 그럴 때는 Undo를 사용하세요. 스냅샷 보관과 만료에는 다른 연동과 같은 규칙이 적용됩니다.
 
 다운로드되는 `cline-config-bundle.json`에는 두 네이티브 문서 구성 요소가 있습니다. `providers.json`용 `settings`와 `models.json`용 `catalog`입니다. 번들 자체가 Cline 설정 파일은 아닙니다. 저널을 남기는 병합과 롤백에는 연동 명령을 권장합니다. 생성된 연동은 원격 수용 연결을 지원하지 않으며 인증이 없는 루프백 접근이 필요합니다.
+
+## GitHub Copilot 앱
+
+GitHub Copilot 데스크톱 앱에서 opencodex를 OpenAI 호환 모델 프로바이더로 사용할 수 있습니다. Integrations 탭의 스위치가 없는 수동 클라이언트 설정이며, opencodex의 백엔드로 Copilot 구독을 사용하는 upstream `github-copilot` 프로바이더와는 별개입니다.
+
+1. opencodex를 시작하고 응답하는지 확인하세요.
+
+   ```bash
+   curl http://127.0.0.1:10100/healthz
+   curl http://127.0.0.1:10100/v1/models
+   ```
+
+2. Copilot 앱에서 **Settings → Model providers → Add provider**를 열고 다음 값을 입력하세요.
+
+   | 항목 | 값 |
+   |---|---|
+   | 이름 | 원하는 라벨(예: `OpenCodex`) |
+   | Base URL | `http://127.0.0.1:10100/v1`(바인딩 포트에 맞게 조정) |
+   | API key | 루프백 연결이면 비워 둠 |
+
+3. 엔드포인트에서 모델을 동기화하거나 `provider/model` ID로 직접 추가한 뒤 선택하세요.
+
+앱은 모델 검색에 `GET /v1/models`, 요청 처리에 `POST /v1/chat/completions`를 사용합니다. 요청은 opencodex의 일반 모델 라우팅을 거치므로 다른 클라이언트와 마찬가지로 프로바이더 자격 증명, OAuth 계정, 콤보가 적용됩니다. 허용되는 요청 필드는 [프록시 형식 레퍼런스](/reference/proxy-formats/)를 확인하세요.
+
+모델이 없다고 표시되면 Base URL이 `/v1/chat/completions`가 아니라 `/v1`로 끝나는지, `/v1/models`가 비어 있지 않은 `data` 배열을 반환하는지 확인하세요. opencodex가 루프백이 아닌 주소에서 수신 대기한다면 앱의 API key 입력란에 데이터 수용 키([원격 액세스](/reference/configuration/server/#remote-access)에 설명된 토큰 또는 대시보드에서 생성한 `ocx_…` 키)를 입력하세요. 앱은 이를 `Authorization: Bearer`로 전송하며, `/v1/chat/completions`는 프록시 수용 인증에만 사용하고 upstream으로 전달하지 않습니다. 자세한 내용은 [인증 매트릭스](/reference/proxy-formats/#authentication-matrix)를 확인하세요.

@@ -16,12 +16,17 @@ import {
   OAUTH_PROVIDERS,
 } from "../../src/oauth";
 import {
+  gatherRoutedModels,
   gatherRoutedModelsForCatalogGather,
+  fetchProviderModels,
   type CatalogGatherProviderAuthOutcome,
   type CatalogGatherProviderModelOutcome,
 } from "../../src/codex/catalog/provider-fetch";
+import { parseCatalogBuffer, setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
+import { encodeMessage, encodeString } from "../../src/adapters/devin/cloud-direct/wire";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { getAuthRefreshIntentPath } from "../../src/oauth/store";
+import { knownModelIdsForProvider } from "../../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -50,6 +55,23 @@ function authStoreBytes(expires: number): Buffer {
           access: "fixture-a",
           refresh: "fixture-r",
           expires,
+        },
+      }],
+    },
+  }) + "\n");
+}
+
+function devinAuthStoreBytes(apiBaseUrl: string): Buffer {
+  return Buffer.from(JSON.stringify({
+    devin: {
+      activeAccountId: "active",
+      accounts: [{
+        id: "active",
+        credential: {
+          access: "fixture-devin-key",
+          refresh: "fixture-devin-key",
+          expires: Number.MAX_SAFE_INTEGER,
+          apiBaseUrl,
         },
       }],
     },
@@ -229,5 +251,132 @@ describe("catalog gather OAuth observation", () => {
     expect(outboundCalls).toBe(1);
     expectFileUnchanged(authPath, before);
     expect(readdirSync(opencodexHome).sort()).toEqual(listingBefore);
+  });
+
+  test("Devin discovery keeps the durable key bound to its observed tenant host", async () => {
+    const tenantBaseUrl = "https://eu.windsurf.com/_route/api_server";
+    const observedBuffer = devinAuthStoreBytes(tenantBaseUrl);
+    const observation = observeActiveOAuthAccessToken("devin", observedBuffer);
+    expect(observation.kind).toBe("available");
+    if (observation.kind !== "available") throw new Error("expected available Devin credential");
+    expect(observation.snapshot.apiBaseUrl).toBe(tenantBaseUrl);
+
+    writeFileSync(join(opencodexHome, "auth.json"), observedBuffer, { mode: 0o600 });
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      return new Response("upstream unavailable", { status: 503 });
+    }) as typeof fetch;
+    try {
+      const provider = structuredClone(OAUTH_PROVIDERS["devin"]!.providerConfig);
+      await gatherRoutedModelsForCatalogGather(
+        { providers: { devin: provider } },
+        { authStoreBuffer: observedBuffer },
+      );
+      clearModelCache();
+      await gatherRoutedModels({ providers: { devin: provider } });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    // Both observe-only catalog materialization and ordinary refreshing discovery
+    // must retain the account's destination alongside its token.
+    expect(urls.length).toBe(2);
+    expect(urls.every(url => url.startsWith(`${tenantBaseUrl}/`))).toBe(true);
+    expect(urls.every(url => !url.startsWith("https://server.codeium.com/"))).toBe(true);
+  });
+
+  test("Devin observation rejects a Copilot-only destination while Copilot keeps its own host", () => {
+    const copilotHost = "https://region.githubcopilot.com";
+    const devin = observeActiveOAuthAccessToken("devin", devinAuthStoreBytes(copilotHost));
+    expect(devin.kind).toBe("available");
+    if (devin.kind !== "available") throw new Error("expected available Devin credential");
+    expect(devin.snapshot.apiBaseUrl).toBeUndefined();
+
+    const tenantUrl = "https://eu.windsurf.com/_route/api_server";
+    const validDevin = observeActiveOAuthAccessToken("devin", devinAuthStoreBytes(tenantUrl));
+    expect(validDevin.kind).toBe("available");
+    if (validDevin.kind !== "available") throw new Error("expected available Devin credential");
+    expect(validDevin.snapshot.apiBaseUrl).toBe(tenantUrl);
+
+    const copilotStore = Buffer.from(JSON.stringify({
+      "github-copilot": {
+        activeAccountId: "active",
+        accounts: [{ id: "active", credential: {
+          access: "fixture-copilot-key", refresh: "fixture-copilot-key",
+          expires: Number.MAX_SAFE_INTEGER, apiBaseUrl: copilotHost,
+        } }],
+      },
+    }));
+    const copilot = observeActiveOAuthAccessToken("github-copilot", copilotStore);
+    expect(copilot.kind).toBe("available");
+    if (copilot.kind !== "available") throw new Error("expected available Copilot credential");
+    expect(copilot.snapshot.apiBaseUrl).toBe(copilotHost);
+  });
+
+  test("Devin invalid stored tenant uses the same fixed route for discovery and decoding", async () => {
+    const provider = { adapter: "devin", baseUrl: "https://windsurf.com",
+      authMode: "oauth", liveModels: true, models: [] } as OcxProviderConfig;
+    const destination = "https://server.codeium.com";
+    const authPath = join(opencodexHome, "auth.json");
+    writeFileSync(authPath, devinAuthStoreBytes("https://invalid.example"), { mode: 0o600 });
+    setCachedCatalogForTests(parseCatalogBuffer(
+      encodeMessage(1, Buffer.concat([encodeString(1, "fixed-route-only-model"), encodeString(22, "fixed-route-only-model")])),
+      "fixture-devin-key", destination,
+    ));
+    try {
+      expect((await fetchProviderModels("devin", provider, 60_000)).map(row => row.id)).toContain("fixed-route-only-model");
+      expect(knownModelIdsForProvider("devin", provider)).toContain("fixed-route-only-model");
+    } finally {
+      setCachedCatalogForTests(null);
+    }
+  });
+
+  test("Devin catalog and routing cache follow the full tenant path with one token", async () => {
+    const tenantA = "https://eu.windsurf.com/_route/api_server/tenant_a";
+    const tenantB = "https://eu.windsurf.com/_route/api_server/tenant_b";
+    const provider = { adapter: "devin", baseUrl: "https://server.codeium.com",
+      authMode: "oauth", liveModels: true, models: [] } as OcxProviderConfig;
+    const authPath = join(opencodexHome, "auth.json");
+    const originalFetch = globalThis.fetch;
+    let networkCalls = 0;
+    globalThis.fetch = (() => { networkCalls++; throw new Error("unexpected Devin catalog request"); }) as typeof fetch;
+    try {
+      const roster = (id: string, destination: string) => {
+        setCachedCatalogForTests(parseCatalogBuffer(
+          encodeMessage(1, Buffer.concat([encodeString(1, id), encodeString(22, id)])),
+          "fixture-devin-key", destination,
+        ));
+        writeFileSync(authPath, devinAuthStoreBytes(destination), { mode: 0o600 });
+      };
+      roster("tenant-a-only-model", tenantA);
+      expect((await fetchProviderModels("devin", provider, 60_000)).map(row => row.id))
+        .toContain("tenant-a-only-model");
+      expect(knownModelIdsForProvider("devin", provider)).toContain("tenant-a-only-model");
+
+      roster("tenant-b-only-model", tenantB);
+      expect(knownModelIdsForProvider("devin", provider)).not.toContain("tenant-a-only-model");
+      const tenantBModels = (await fetchProviderModels("devin", provider, 60_000)).map(row => row.id);
+      expect(tenantBModels).toContain("tenant-b-only-model");
+      expect(tenantBModels).not.toContain("tenant-a-only-model");
+      expect(knownModelIdsForProvider("devin", provider)).toContain("tenant-b-only-model");
+      expect(knownModelIdsForProvider("devin", provider)).not.toContain("tenant-a-only-model");
+
+      // A failure at B may serve B's stale roster, but its cooldown cannot
+      // suppress a subsequent discovery for A under the same token.
+      setCachedCatalogForTests(null);
+      expect((await fetchProviderModels("devin", provider, 0)).map(row => row.id))
+        .toContain("tenant-b-only-model");
+      expect(networkCalls).toBeGreaterThan(0);
+      const callsAfterFailure = networkCalls;
+      roster("tenant-a-only-model", tenantA);
+      expect((await fetchProviderModels("devin", provider, 60_000)).map(row => row.id))
+        .toContain("tenant-a-only-model");
+      expect(networkCalls).toBe(callsAfterFailure);
+    } finally {
+      setCachedCatalogForTests(null);
+      globalThis.fetch = originalFetch;
+    }
   });
 });

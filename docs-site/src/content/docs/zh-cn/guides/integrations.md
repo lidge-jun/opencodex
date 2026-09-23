@@ -209,3 +209,28 @@ ocx integration client restore --op <operation-id>
 Undo 会恢复**两个原始字节串**，包括原本不存在的文件。操作后的编辑需要现有的明确 `--confirm-drift`；编辑后的文件对会先备份。被其他内容占用的 OpenCodex 条目需要现有的 `--overwrite-conflict` 选择。Disable 只移除两个托管条目，不会恢复先前的外来条目；如需恢复，请使用 Undo。快照保留和过期规则与其他集成相同。
 
 下载文件 `cline-config-bundle.json` 包含两个原生文档成员：对应 `providers.json` 的 `settings`，以及对应 `models.json` 的 `catalog`。它本身不是 Cline 设置文件。建议使用集成命令，以获得带日志的合并和回滚。此生成集成不支持远程准入接线，需要免认证的回环访问。
+
+## GitHub Copilot 应用
+
+GitHub Copilot 桌面应用可以将 opencodex 用作兼容 OpenAI 的模型提供方。这需要手动配置客户端，Integrations 标签页没有对应的开关；它也不同于上游 `github-copilot` 提供方，后者使用 Copilot 订阅作为 opencodex 的后端。
+
+1. 启动 opencodex 并确认它能正常响应：
+
+   ```bash
+   curl http://127.0.0.1:10100/healthz
+   curl http://127.0.0.1:10100/v1/models
+   ```
+
+2. 在 Copilot 应用中打开 **Settings → Model providers → Add provider**，填写：
+
+   | 字段 | 值 |
+   |---|---|
+   | 名称 | 任意标签，例如 `OpenCodex` |
+   | Base URL | `http://127.0.0.1:10100/v1`（按绑定端口调整） |
+   | API key | 回环连接时留空 |
+
+3. 从端点同步模型，或按 `provider/model` ID 添加模型，然后选择它。
+
+应用通过 `GET /v1/models` 发现模型，并通过 `POST /v1/chat/completions` 发送请求。这些请求经过 opencodex 的常规模型路由，因此与其他客户端一样会应用提供方凭据、OAuth 账户和组合路由。支持的请求字段见[代理格式参考](/reference/proxy-formats/)。
+
+如果应用提示没有模型，请确认 Base URL 以 `/v1` 结尾，而不是 `/v1/chat/completions`，并确认 `/v1/models` 返回非空的 `data` 数组。如果 opencodex 监听的不是回环地址，请在应用的 API key 字段中填写数据准入密钥（[远程访问](/reference/configuration/server/#remote-access)中说明的令牌，或由仪表盘生成的 `ocx_…` 密钥）。应用会将其作为 `Authorization: Bearer` 发送；`/v1/chat/completions` 仅将其用于代理准入，不会转发到上游。详见[认证矩阵](/reference/proxy-formats/#authentication-matrix)。
