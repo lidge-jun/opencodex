@@ -812,8 +812,32 @@ export interface PiProviderBlock {
   baseUrl: string;
   api: string;
   apiKey: string;
-  compat?: { sendSessionAffinityHeaders: boolean };
+  compat?: PiProviderCompat;
   models: PiModelEntry[];
+}
+
+/**
+ * The subset of Pi's per-provider `compat` block this export writes. Both keys are part of
+ * Pi's own model-config schema; an unknown key there would empty the whole config, so nothing
+ * outside this set is ever emitted.
+ */
+export interface PiProviderCompat {
+  sendSessionAffinityHeaders?: boolean;
+  supportsDeveloperRole?: boolean;
+}
+
+interface PiExportOptions {
+  sendSessionAffinityHeaders?: boolean;
+  /**
+   * Tell Pi to send its system prompt as `system` rather than `developer` (#5664).
+   *
+   * Pi sends `developer` for reasoning models by default. On `/v1/chat/completions` the proxy
+   * forwards the caller's roles verbatim unless a destination has recorded
+   * `foldDeveloperRoleToSystem`, and many OpenAI-compatible upstreams reject `developer` with a
+   * 400. `system` is accepted by every destination behind this one provider block, so the export
+   * states it rather than leaving each user to hand-edit a block the next export rewrites.
+   */
+  foldDeveloperRole?: boolean;
 }
 
 export interface PiGeneratedConfig {
@@ -935,7 +959,7 @@ export interface GajaeGeneratedConfig {
  * model. The rest of this contract (omitting `cost`) is still ours rather than
  * a claim about Pi's acceptance.
  */
-function buildPiClientConfig(ctx: ExportContext, sendSessionAffinityHeaders = false): PiGeneratedConfig {
+function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}): PiGeneratedConfig {
   const models: PiModelEntry[] = [];
   for (const model of normalizeExportModels(ctx.models)) {
     // Text is the one modality every routed model supports; anything richer must come
@@ -972,18 +996,29 @@ function buildPiClientConfig(ctx: ExportContext, sendSessionAffinityHeaders = fa
     }
     models.push(entry);
   }
+  const compat: PiProviderCompat = {
+    ...(options.sendSessionAffinityHeaders ? { sendSessionAffinityHeaders: true } : {}),
+    ...(options.foldDeveloperRole ? { supportsDeveloperRole: false } : {}),
+  };
   return {
     providers: {
       [OPENCODE_PROVIDER_ID]: {
         baseUrl: ctx.baseUrl,
         api: PI_API_DIALECT,
         apiKey: LOOPBACK_API_KEY_PLACEHOLDER,
-        ...(sendSessionAffinityHeaders ? { compat: { sendSessionAffinityHeaders: true } } : {}),
+        ...(Object.keys(compat).length > 0 ? { compat } : {}),
         models,
       },
     },
   };
 }
+
+/**
+ * Pi's export options, shared by `ocx export --client pi` and the managed contribution so the two
+ * never drift apart at the first refresh. omo uses the same options: senpi documents both keys in
+ * its models.json `compat` block (docs/models.md, docs/custom-provider.md).
+ */
+const PI_EXPORT_OPTIONS: PiExportOptions = { sendSessionAffinityHeaders: true, foldDeveloperRole: true };
 
 /** Do not let provider-controlled catalog text become an environment lookup. */
 function containsEnvInterpolation(value: string): boolean {
@@ -1162,7 +1197,7 @@ function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
 }
 
 function buildPiContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx, true);
+  const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
   return singleFragment("pi", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1254,7 +1289,7 @@ function buildAsideContribution(ctx: ExportContext): ManagedContribution {
  * the two would drift apart at the first refresh.
  */
 function buildOmoContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx, true);
+  const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
   return singleFragment("omo", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1296,7 +1331,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => piConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Pi reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: ctx => buildPiClientConfig(ctx, true),
+    build: ctx => buildPiClientConfig(ctx, PI_EXPORT_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildPiContribution,
@@ -1479,7 +1514,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => omoConfigPath(env),
     apiKeyEnv: "",
     exportHint: "omo reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: ctx => buildPiClientConfig(ctx, true),
+    build: ctx => buildPiClientConfig(ctx, PI_EXPORT_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildOmoContribution,
