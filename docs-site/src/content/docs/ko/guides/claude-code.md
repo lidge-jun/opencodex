@@ -196,9 +196,6 @@ import/export는 로컬 설정만 다뤄요. 허브 프로필을 바꾸지 않�
 않아요. 폐기가 필요하면 허브에서 별도로 처리하세요.
 
 ## /model 선택기("From gateway")
-
-Claude Code 2.1.257부터는 각 항목의 `description`도 함께 보여줘요. opencodex는 Claude Code CLI용 항목마다 `Routed by OpenCodex to <provider>/<model>`을 보내므로, 그 항목에는 "From gateway" 대신 라우팅 경로가 표시돼요.
-
 각 항목은 `gemini-3-pro (gemini)` 같은 정직한 표시 이름과 함께, 공식 ModelInfo 형태의 모델
 능력 정보(추론 강도 사다리, thinking 타입)를 실어 보냅니다 — Claude Desktop의 서드파티
 게이트웨이 모드가 추론 강도 선택 UI를 열 수 있게 하기 위해서입니다. 실제 Anthropic 모델은
@@ -211,7 +208,9 @@ Claude Code 2.1.257부터는 각 항목의 `description`도 함께 보여줘요.
 지정하거나 `/model`에 라우팅 id를 직접 입력하세요 (Claude Code는 문자열을 그대로 통과시킵니다).
 
 Claude Code 2.1.129 이상은 `GET /v1/models?limit=1000`에서 게이트웨이 모델을 찾아 기본 `/model`
-선택기의 "From gateway" 항목에 표시해요. 선택기는 `claude` 또는 `anthropic`으로 시작하는 ID만
+선택기에 표시해요. `description`이 없는 항목은 "From gateway"로 보이는데, opencodex는 Claude Code CLI용
+항목마다 `description`(`Routed by OpenCodex to <provider>/<model>`)을 보내고 Claude Code 2.1.257 이상은
+그 내용을 대신 보여줘요. 선택기는 `claude` 또는 `anthropic`으로 시작하는 ID만
 받으므로, opencodex는 라우팅 모델을 안정적이고 되돌릴 수 있는 별칭으로 노출해요.
 
 | 화면 | 형식 | 예시 |

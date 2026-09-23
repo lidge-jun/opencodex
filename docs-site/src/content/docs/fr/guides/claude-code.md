@@ -299,10 +299,10 @@ pas les copies externes ; révoquez-la séparément sur le hub si nécessaire.
 
 ## Le sélecteur /model (« Depuis la passerelle »)
 
-Depuis Claude Code 2.1.257, chaque ligne affiche aussi sa `description` ; opencodex envoie `Routed by OpenCodex to <provider>/<model>` pour chaque ligne du CLI Claude Code, qui montre donc l'itinéraire au lieu du libellé « From gateway ».
-
 Claude Code 2.1.129+ découvre les modèles de passerelle via `GET /v1/models?limit=1000` et les répertorie dans
-le sélecteur natif `/model` intitulé « Depuis la passerelle ». Comme ce sélecteur n'accepte que les identifiants commençant
+le sélecteur natif `/model`. Une ligne sans `description` affiche « From gateway » ; opencodex en envoie une pour
+chaque ligne du CLI Claude Code (`Routed by OpenCodex to <provider>/<model>`), que Claude Code 2.1.257+ affiche
+à la place. Comme ce sélecteur n'accepte que les identifiants commençant
 par `claude` ou `anthropic`, opencodex expose les modèles routés sous forme d'alias stables et réversibles :
 
 | Surface | Format | Exemple |

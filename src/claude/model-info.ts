@@ -188,7 +188,13 @@ export function buildAnthropicModelInfos(
     // A real model always wins its own id, whatever the iteration order.
     if (realDiscoveryIds.has(id) || seen.has(id)) return;
     seen.add(id);
-    out.push({ ...base, id, display_name: `${base.display_name} · Fast` });
+    out.push({
+      ...base,
+      id,
+      display_name: `${base.display_name} · Fast`,
+      // Fast picks a different tier/variant, so the picker line says so like the name does.
+      ...(base.description === undefined ? {} : { description: `${base.description} · Fast` }),
+    });
   };
   for (const slug of nativeSlugs) {
     const id = idStyle === "readable" ? claudeCodeNativeAlias(slug) : aliasForRoute("native", slug);

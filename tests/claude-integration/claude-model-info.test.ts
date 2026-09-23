@@ -249,14 +249,16 @@ describe("Claude Code picker description (replaces the generic \"From gateway\" 
     expect(routed?.description).toBe("Routed by OpenCodex to xai/grok-4.7");
   });
 
-  test("1M and Fast siblings keep their base row's description", () => {
+  // A 1M row is the same route with a larger window; a Fast row selects a different tier or
+  // variant, so its description says so the way its display name does.
+  test("1M siblings keep the base description and Fast siblings name the Fast tier", () => {
     const infos = buildAnthropicModelInfos([], [
       { provider: "p", id: "big", contextWindow: 1_000_000 },
     ], undefined, "readable", undefined, undefined, false, () => true);
     expect(infos.map(i => [i.display_name, i.description])).toEqual([
       ["big (p)", "Routed by OpenCodex to p/big"],
       ["big (p) · 1M", "Routed by OpenCodex to p/big"],
-      ["big (p) · Fast", "Routed by OpenCodex to p/big"],
+      ["big (p) · Fast", "Routed by OpenCodex to p/big · Fast"],
     ]);
   });
 
