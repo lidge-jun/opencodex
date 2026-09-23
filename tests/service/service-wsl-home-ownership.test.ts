@@ -39,7 +39,11 @@ describe("WSL service ownership after Windows home discovery", () => {
       usersRoot,
       existsSync: (path: string) => path === usersRoot || path === posix.join(windowsHome, "config.toml"),
       readdirSync: () => ["profile"],
-      statSync: (() => ({ isDirectory: () => true })) as never,
+      // The Linux home is absent: discovery classifies the local home with stat alone.
+      statSync: ((path: string) => {
+        if (path === join("/home/fixture", ".codex")) throw Object.assign(new Error("absent"), { code: "ENOENT" });
+        return { isDirectory: () => true };
+      }) as never,
       realpathSync: (path: string) => path,
     };
     return { root, linuxHome, windowsHome, statePath, recordedHome, deps };

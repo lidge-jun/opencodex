@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { wslAutomountRoot, listWslWindowsCodexHomes } from "../../src/codex/home";
+import { join } from "node:path";
+import { defaultCodexHome, wslAutomountRoot, listWslWindowsCodexHomes } from "../../src/codex/home";
 import { isWindowsInteropDir } from "../../src/codex/shim";
 import { currentServiceHomes, serviceCodexHomeMatchesInstall } from "../../src/service";
 
@@ -45,6 +46,69 @@ describe("wsl.conf automount root", () => {
     expect(homes).toEqual(["/win/c/Users/example/.codex"]);
   });
 
+  test("defaultCodexHome keeps a fresh Linux home before config.toml exists", () => {
+    const usersRoot = ["/mnt/c", "Users"].join("/");
+    // Native join: defaultCodexHome builds the local home with the host path module.
+    const linuxCodexHome = join("/home/example", ".codex");
+    const windowsCodexHome = [usersRoot, "windows-user", ".codex"].join("/");
+
+    expect(defaultCodexHome({
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+      platform: "linux",
+      homedir: () => "/home/example",
+      usersRoot,
+      existsSync: (path: string) => path === usersRoot
+        || path === linuxCodexHome
+        || path === `${windowsCodexHome}/config.toml`,
+      readdirSync: () => ["windows-user"],
+      statSync: (() => ({ isDirectory: () => true })) as never,
+      realpathSync: (path: string) => path,
+    })).toBe(linuxCodexHome);
+  });
+
+  test("defaultCodexHome still discovers the Windows home when the local ~/.codex is a regular file", () => {
+    const usersRoot = ["/mnt/c", "Users"].join("/");
+    // Native join: defaultCodexHome builds the local home with the host path module.
+    const linuxCodexHome = join("/home/example", ".codex");
+    const windowsCodexHome = [usersRoot, "windows-user", ".codex"].join("/");
+
+    expect(defaultCodexHome({
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+      platform: "linux",
+      homedir: () => "/home/example",
+      usersRoot,
+      existsSync: (path: string) => path === usersRoot
+        || path === linuxCodexHome
+        || path === `${windowsCodexHome}/config.toml`,
+      readdirSync: () => ["windows-user"],
+      statSync: ((path: string) => ({ isDirectory: () => path !== linuxCodexHome })) as never,
+      realpathSync: (path: string) => path,
+    })).toBe(windowsCodexHome);
+  });
+
+  test("defaultCodexHome keeps an unreadable local home rather than switching homes", () => {
+    const usersRoot = ["/mnt/c", "Users"].join("/");
+    // Native join: defaultCodexHome builds the local home with the host path module.
+    const linuxCodexHome = join("/home/example", ".codex");
+    const windowsCodexHome = [usersRoot, "windows-user", ".codex"].join("/");
+
+    expect(defaultCodexHome({
+      env: { WSL_DISTRO_NAME: "Ubuntu" },
+      platform: "linux",
+      homedir: () => "/home/example",
+      usersRoot,
+      existsSync: (path: string) => path === usersRoot
+        || path === linuxCodexHome
+        || path === `${windowsCodexHome}/config.toml`,
+      readdirSync: () => ["windows-user"],
+      statSync: ((path: string) => {
+        if (path === linuxCodexHome) throw Object.assign(new Error("denied"), { code: "EACCES" });
+        return { isDirectory: () => true };
+      }) as never,
+      realpathSync: (path: string) => path,
+    })).toBe(linuxCodexHome);
+  });
+
   test("service ownership uses the same discovered Windows Codex home as the runtime", () => {
     const usersRoot = ["/mnt/c", "Users"].join("/");
     const windowsCodexHome = [usersRoot, "windows-user", ".codex"].join("/");
@@ -56,7 +120,10 @@ describe("wsl.conf automount root", () => {
       existsSync: (path: string) => path === usersRoot
         || path === `${windowsCodexHome}/config.toml`,
       readdirSync: () => ["windows-user"],
-      statSync: (() => ({ isDirectory: () => true })) as never,
+      statSync: ((path: string) => {
+        if (path === join("/home/example", ".codex")) throw Object.assign(new Error("absent"), { code: "ENOENT" });
+        return { isDirectory: () => true };
+      }) as never,
       realpathSync: (path: string) => path,
     });
 
@@ -75,7 +142,10 @@ describe("wsl.conf automount root", () => {
       existsSync: (path: string) => path === usersRoot
         || path === `${windowsCodexHome}/config.toml`,
       readdirSync: () => ["windows-user"],
-      statSync: (() => ({ isDirectory: () => true })) as never,
+      statSync: ((path: string) => {
+        if (path === join("/home/example", ".codex")) throw Object.assign(new Error("absent"), { code: "ENOENT" });
+        return { isDirectory: () => true };
+      }) as never,
       realpathSync: (path: string) => path,
     };
 

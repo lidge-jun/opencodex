@@ -32,7 +32,10 @@ issuing deferred inference warmups. Already dispatched requests retain their cap
 ## Codex home
 
 `src/codex/paths.ts` resolves Codex state from `CODEX_HOME` when set and valid, otherwise from
-`~/.codex`. An unset `CODEX_HOME` falls back to `~/.codex`, including WSL discovery. An explicitly
+`~/.codex`. An unset `CODEX_HOME` falls back to `~/.codex`, including WSL discovery. On WSL,
+discovery of a Windows Desktop home applies only when the Linux `~/.codex` is absent or is not a
+directory; a fresh `~/.codex` directory without `config.toml` stays the home, and a stat failure
+other than absence keeps the local home rather than switching to a different one. An explicitly
 set path that is unreadable or not a directory is an error, not a fallback: silently using a
 different home than the operator named would write provider state where nobody is looking for it.
 The managed files are:
