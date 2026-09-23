@@ -30,6 +30,7 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
+/** Observe a synthetic main identity and capture the live writer used to publish its fixture quota. */
 function writerFor(accountId = "fixture-main-a") {
   observeMainQuotaIdentity(accountId);
   const writer = captureMainQuotaWriter(accountId);
@@ -149,10 +150,12 @@ describe("main policy window replacement", () => {
   const weeklySeconds = 7 * 24 * 60 * 60;
   const monthlySeconds = 30 * 24 * 60 * 60;
 
+  /** Publish the same fixture through display normalization and strict policy validation. */
   function publish(data: WhamUsageResponse) {
     setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined, writerFor(), parseMainPolicyUsageQuota(data));
   }
 
+  /** Hydrate a sixteen-day-old short-window block and assert the replacement test's initial state. */
   function retainedShort() {
     const old = Date.now() - 16 * 24 * 60 * 60_000;
     writeColdPolicy({ shortPercent: 100, shortWindowSeconds: 18_000,

@@ -65,6 +65,7 @@ function installPersistenceClock() {
   }) as typeof setTimeout);
 }
 
+/** Run the captured quota persistence callback and read its actual disk snapshot without a sleep. */
 function flushPersistence(): string {
   if (!pendingPersist) throw new Error("Expected a scheduled quota persistence");
   const pending = pendingPersist;
@@ -74,6 +75,7 @@ function flushPersistence(): string {
   return readFileSync(join(testDir, "codex-quota-cache.json"), "utf8");
 }
 
+/** Bind a synthetic main identity and return its current generation-scoped quota writer. */
 function writerFor(accountId = "fixture-main-a"): MainQuotaWriter {
   observeMainQuotaIdentity(accountId);
   const writer = captureMainQuotaWriter(accountId);
@@ -302,6 +304,7 @@ describe("main policy quota writes", () => {
 test("window replacement persists without carrying its proof into later partial updates", () => {
   const cfg = { codexMainAccountHardLock: true };
   const writer = writerFor();
+  /** Publish both parsed projections with the captured writer throughout the simulated restart. */
   const publish = (data: WhamUsageResponse) => setAccountQuotaFromParsed(
     MAIN, parseUsageQuota(data), undefined, writer, parseMainPolicyUsageQuota(data),
   );

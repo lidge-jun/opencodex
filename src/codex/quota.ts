@@ -274,6 +274,11 @@ function snapshotHasCustom(quota: Omit<StoredAccountQuota, "updatedAt">): boolea
 function snapshotHasUsage(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
   return snapshotHasWeekly(quota) || snapshotHasMonthly(quota) || snapshotHasShort(quota) || snapshotHasCustom(quota);
 }
+/**
+ * Publish parsed display quota and separately validated main-policy evidence after writer checks.
+ * A null policy observation retains only the matching main identity's previous evidence;
+ * transient replacement markers are consumed during merging and never enter stored snapshots.
+ */
 export function setAccountQuotaFromParsed(
   accountId: string,
   quota: Omit<StoredAccountQuota, "updatedAt"> | null,
@@ -320,7 +325,11 @@ export function setAccountQuotaFromParsed(
   }
 }
 
-/** One partial-window merge contract for legacy quota and identity-bound policy evidence. */
+/**
+ * Merge a partial observation into the legacy or identity-bound policy snapshot.
+ * Policy mode retains omitted blocking short usage unless this observation authorizes replacement;
+ * the returned snapshot contains quota fields only, without the transient replacement marker.
+ */
 function mergeAccountQuota(
   quota: MainPolicyQuotaObservation,
   existing: StoredAccountQuota | undefined,
@@ -799,7 +808,11 @@ function filterMainPolicyMonthlyQuota(
   return hasKnownQuotaValue(filtered) || filtered.resetCredits !== undefined ? filtered : null;
 }
 
-/** Ordinary main policy rejects an entire message containing any invalid numeric window. */
+/**
+ * Parse ordinary main-policy usage, rejecting messages with invalid numeric window percentages.
+ * Mark a valid primary of at least 24h as replacement evidence only when all other declared
+ * windows are also at least 24h; null means this response supplies no usable policy observation.
+ */
 export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
