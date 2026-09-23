@@ -359,6 +359,34 @@ test("the direct path refuses replay after a spent replacement's decrypt failure
   }
 });
 
+test("the direct path keeps a spent replacement's reasoning-effort rejection without a downgrade", async () => {
+  const config = parityConfig();
+  config.providers.bridged.retryOnReset = {};
+  config.providers.bridged.reasoningEfforts = ["low", "high"];
+  saveConfig(config);
+  const rejection = { error: {
+    param: "reasoning.effort", type: "invalid_request_error",
+    message: "reasoning_effort high is not supported for model model.",
+  } };
+  const sends = countingUpstream(() => {
+    if (sends() === 1) preHeaderReset();
+    return Response.json(rejection, { status: 400 });
+  });
+  const server = startServer(0);
+  try {
+    const { response, attempts, json } = await sendWithClientRetries(new URL("/v1/responses", server.url), {
+      model: "bridged/model", store: false, stream: false,
+      reasoning: { effort: "high" }, ...RESPONSES_TURN,
+    });
+    expect(sends()).toBe(2);
+    expect(attempts).toBe(1);
+    expect(response.status).toBe(400);
+    expect(json).toEqual(rejection);
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test.each([
   { name: "a context overflow", status: 400, expectedStatus: 400 },
   { name: "a 413", status: 413, expectedStatus: REPLAY_REFUSED_STATUS },
