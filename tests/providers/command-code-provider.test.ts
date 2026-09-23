@@ -1050,6 +1050,21 @@ describe("Command Code provider", () => {
       .toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
+  test("effort rejections stay scoped to the destination that observed them", async () => {
+    const modelId = "deepseek/deepseek-v4-flash";
+    const alternate = "https://alternate.example/command-code";
+    const fetch = (async () => new Response("Reasoning efforts high, max are supported; no mapping.")) as typeof globalThis.fetch;
+    expect(await refreshCommandCodeReasoningEfforts(modelId, fetch, "max", provider.baseUrl)).toEqual(["high"]);
+    expect(commandCodeReasoningEfforts(modelId, alternate)).toEqual(["high", "max"]);
+    const options = { reasoning: "max", maxOutputTokens: 100 };
+    const officialRequest = await createCommandCodeAdapter(provider).buildRequest({ ...parsed(modelId), options });
+    const alternateRequest = await createCommandCodeAdapter({ ...provider, baseUrl: alternate }).buildRequest({ ...parsed(modelId), options });
+    expect(JSON.parse(officialRequest.body).params).not.toHaveProperty("reasoning_effort");
+    expect(JSON.parse(alternateRequest.body).params.reasoning_effort).toBe("max");
+    expect(await refreshCommandCodeReasoningEfforts(modelId, fetch, "high", alternate)).toEqual(["max"]);
+    expect(commandCodeReasoningEfforts(modelId, provider.baseUrl)).toEqual(["high"]);
+  });
+
   test("uses the 2026-09-23 profile ladders for newly cataloged models", async () => {
     const cases: Array<[string, string[]]> = [
       ["claude-fable-5-1", ["low", "medium", "high", "xhigh", "max"]],

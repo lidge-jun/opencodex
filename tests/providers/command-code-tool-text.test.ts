@@ -470,6 +470,7 @@ describe("Command Code MiMo tool-call text", () => {
     const markup = (raw: string) => parseToolCallMarkup(`<tool_call><function=t><parameter=value>${raw}</parameter></function></tool_call>`)!;
     const cases: Array<{ schema: Record<string, unknown>; raw: string }> = [
       { schema: { type: "string", pattern: "^/workspace/" }, raw: "/etc/passwd" },
+      { schema: { type: "string", pattern: "^/workspace/" }, raw: "/workspace/a" },
       { schema: { type: "string", minLength: 3 }, raw: "x" },
       { schema: { type: "object", properties: { path: { type: "string", pattern: "^/workspace/" } }, required: ["path"] }, raw: "{}" },
       { schema: { type: "object", properties: { optional: { type: "string", format: "uri" } } }, raw: "{}" },
@@ -480,11 +481,11 @@ describe("Command Code MiMo tool-call text", () => {
       const tool = { freeform: false, schema: { type: "object", properties: { value: schema }, required: ["value"] } };
       expect(salvagedArguments(markup(raw), tool), JSON.stringify(schema)).toBeUndefined();
     }
-    const safe = { freeform: false, schema: { type: "object", properties: { value: { type: "string", pattern: "^/workspace/", minLength: 12 } }, required: ["value"] } };
+    const safe = { freeform: false, schema: { type: "object", properties: { value: { type: "string", minLength: 12 } }, required: ["value"] } };
     expect(salvagedArguments(markup("/workspace/a"), safe)).toBe('{"value":"/workspace/a"}');
     const freeform = { freeform: true, schema: { type: "object", properties: { input: { type: "string", pattern: "^SAFE" } }, required: ["input"] } };
     expect(salvagedArguments(parseToolCallMarkup("<tool_call><function=t>unsafe</function></tool_call>")!, freeform)).toBeUndefined();
-    expect(salvagedArguments(parseToolCallMarkup("<tool_call><function=t>SAFE input</function></tool_call>")!, freeform)).toBe('{"input":"SAFE input"}');
+    expect(salvagedArguments(parseToolCallMarkup("<tool_call><function=t>SAFE input</function></tool_call>")!, freeform)).toBeUndefined();
   });
 
   test("an invalid declared schema leaves markup as text at the adapter boundary", async () => {

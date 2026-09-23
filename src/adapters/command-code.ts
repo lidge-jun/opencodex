@@ -555,7 +555,7 @@ function commandCodeEffortLadder(provider: OcxProviderConfig, canonicalId: strin
   if (operatorChoseCommandCodeLadder(provider, canonicalId)) {
     return configuredReasoningEfforts(provider, canonicalId);
   }
-  return commandCodeReasoningEfforts(canonicalId) ?? configuredReasoningEfforts(provider, canonicalId);
+  return commandCodeReasoningEfforts(canonicalId, provider.baseUrl) ?? configuredReasoningEfforts(provider, canonicalId);
 }
 
 function supportedCommandCodeEffort(provider: OcxProviderConfig, modelId: string, requested: string | undefined): string | undefined {
@@ -667,7 +667,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       // successful-looking response, so the upstream rejection is what the caller gets. The
       // downgrade below stays for the shipped table, where the rung was never the caller's idea.
       if (operatorChoseCommandCodeLadder(provider, canonicalCommandCodeModelId(modelId))) return response;
-      const refreshed = await refreshCommandCodeReasoningEfforts(modelId, executor, currentEffort);
+      const refreshed = await refreshCommandCodeReasoningEfforts(modelId, executor, currentEffort, provider.baseUrl);
       if (!refreshed || refreshed.includes(currentEffort)) return response;
       const retry = requestWithoutReasoningEffort(request);
       if (!retry) return response;

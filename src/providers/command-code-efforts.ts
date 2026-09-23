@@ -163,20 +163,33 @@ export const COMMAND_CODE_MODEL_REASONING_EFFORTS: Record<string, string[]> = Ob
 
 const refreshedEfforts = new Map<string, string[]>();
 const rejectedEfforts = new Map<string, Set<string>>();
+const DEFAULT_EFFORT_DESTINATION = "https://api.commandcode.ai";
 
 function keyFor(modelId: string): string {
   return modelId.trim().toLowerCase();
 }
 
-export function commandCodeReasoningEfforts(modelId: string): readonly string[] | undefined {
-  const key = keyFor(modelId);
+function cacheKey(modelId: string, destination: string): string {
+  let normalized = destination.trim().replace(/\/+$/, "");
+  try {
+    const url = new URL(destination);
+    normalized = `${url.origin}${url.pathname.replace(/\/+$/, "")}`;
+  } catch { /* Config validation owns malformed destinations. */ }
+  return JSON.stringify([normalized, keyFor(modelId)]);
+}
+
+export function commandCodeReasoningEfforts(
+  modelId: string,
+  destination = DEFAULT_EFFORT_DESTINATION,
+): readonly string[] | undefined {
+  const key = cacheKey(modelId, destination);
   const rejected = rejectedEfforts.get(key);
   const refreshed = refreshedEfforts.get(key);
   if (refreshed !== undefined) return rejected ? refreshed.filter(effort => !rejected.has(effort)) : refreshed;
   // Case-insensitive: the table keys match the EXACT upstream ids (e.g. `zai-org/GLM-5.3`),
   // but callers may pass either case.
   for (const [id, efforts] of Object.entries(COMMAND_CODE_MODEL_REASONING_EFFORTS)) {
-    if (keyFor(id) === key) return rejected ? efforts.filter(effort => !rejected.has(effort)) : efforts;
+    if (keyFor(id) === keyFor(modelId)) return rejected ? efforts.filter(effort => !rejected.has(effort)) : efforts;
   }
   return undefined;
 }
@@ -257,11 +270,12 @@ export async function refreshCommandCodeReasoningEfforts(
   modelId: string,
   fetchFn: typeof globalThis.fetch = globalThis.fetch,
   rejectedEffort?: string,
+  destination = DEFAULT_EFFORT_DESTINATION,
 ): Promise<readonly string[] | undefined> {
-  const key = keyFor(modelId);
+  const key = cacheKey(modelId, destination);
   let profile: { efforts: readonly string[]; profileUrl: string } | undefined;
   for (const [id, row] of Object.entries(COMMAND_CODE_MODEL_EFFORTS)) {
-    if (keyFor(id) === key) {
+    if (keyFor(id) === keyFor(modelId)) {
       profile = row;
       break;
     }
@@ -286,7 +300,7 @@ export async function refreshCommandCodeReasoningEfforts(
     if (!observed.displaySafe) return undefined;
     const efforts = parsedProfileEfforts(observed.text, modelId);
     if (efforts === undefined) return undefined;
-    const accepted = commandCodeReasoningEfforts(modelId) ?? [];
+    const accepted = commandCodeReasoningEfforts(modelId, destination) ?? [];
     const merged = [...new Set([...accepted, ...efforts])]
       .filter(effort => !rejectedEfforts.get(key)?.has(effort));
     refreshedEfforts.set(key, merged);

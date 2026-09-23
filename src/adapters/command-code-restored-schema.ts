@@ -2,7 +2,7 @@
 const ANNOTATIONS = new Set(["$schema", "$id", "title", "description", "default", "examples", "deprecated", "readOnly", "writeOnly"]);
 const CONSTRAINTS = new Set([
   "type", "enum", "const", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
-  "minLength", "maxLength", "pattern", "minItems", "maxItems", "uniqueItems", "items",
+  "minLength", "maxLength", "minItems", "maxItems", "uniqueItems", "items",
   "minProperties", "maxProperties", "properties", "required", "additionalProperties",
   "anyOf", "oneOf", "allOf",
 ]);
@@ -39,10 +39,6 @@ function supportedSchema(schema: unknown, depth: number): boolean {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) return false;
   const rule = schema as Record<string, unknown>;
   if (Object.keys(rule).some(key => !ANNOTATIONS.has(key) && !CONSTRAINTS.has(key))) return false;
-  if (rule.pattern !== undefined) {
-    if (typeof rule.pattern !== "string" || rule.pattern.length > 256) return false;
-    try { new RegExp(rule.pattern, "u"); } catch { return false; }
-  }
   if (rule.properties !== undefined) {
     if (!rule.properties || typeof rule.properties !== "object" || Array.isArray(rule.properties)) return false;
     if (!Object.values(rule.properties).every(child => supportedSchema(child, depth + 1))) return false;
@@ -85,10 +81,6 @@ function validateNode(value: unknown, schema: unknown, depth: number): boolean {
        !Number.isInteger(value / rule.multipleOf))) return false;
   if (rule.minLength !== undefined && !validBound(typeof value === "string" ? [...value].length : undefined, rule.minLength, (a, b) => a >= b)) return false;
   if (rule.maxLength !== undefined && !validBound(typeof value === "string" ? [...value].length : undefined, rule.maxLength, (a, b) => a <= b)) return false;
-  if (rule.pattern !== undefined) {
-    if (typeof value !== "string" || typeof rule.pattern !== "string" || rule.pattern.length > 256 || value.length > 4096) return false;
-    try { if (!new RegExp(rule.pattern, "u").test(value)) return false; } catch { return false; }
-  }
   if (rule.minItems !== undefined && !validBound(Array.isArray(value) ? value.length : undefined, rule.minItems, (a, b) => a >= b)) return false;
   if (rule.maxItems !== undefined && !validBound(Array.isArray(value) ? value.length : undefined, rule.maxItems, (a, b) => a <= b)) return false;
   if (rule.uniqueItems !== undefined) {
