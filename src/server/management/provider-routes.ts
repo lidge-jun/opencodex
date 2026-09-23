@@ -43,6 +43,8 @@ import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost, providerRedirectError } from "../../lib/provider-outbound";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
+import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
+import { resolveDevinApiBaseUrl } from "../../oauth/devin/api-base";
 import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
@@ -1602,10 +1604,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     }
     const { buildModelsRequest, getValidAccessTokenSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
-    const snapshot = antigravity
+    const snapshot = prov.authMode === "oauth"
       ? await getValidAccessTokenSnapshot(name).catch(() => undefined)
       : undefined;
-    const apiKey = snapshot?.accessToken ?? await resolveModelsAuthToken(name, prov);
+    const apiKey = prov.authMode === "oauth" ? snapshot?.accessToken : await resolveModelsAuthToken(name, prov);
     if (prov.authMode === "oauth" && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
@@ -1628,6 +1630,29 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         latencyMs,
         models: live.models.length,
         message: `Connected. ${live.models.length} models.`,
+      });
+    }
+    if (prov.adapter === "devin") {
+      const started = Date.now();
+      const configuredBase = name === "devin" ? getProviderRegistryEntry(name)?.baseUrl ?? prov.baseUrl : prov.baseUrl;
+      const destination = resolveDevinApiBaseUrl(snapshot?.apiBaseUrl ?? configuredBase);
+      const liveResult = await fetchDevinUsableModels({
+        apiKey: apiKey ?? "",
+        baseUrl: destination,
+      });
+      const latencyMs = Date.now() - started;
+      if (!liveResult.ok) {
+        return jsonResponse({
+          ok: false,
+          latencyMs,
+          error: `devin discovery ${liveResult.error}${liveResult.detail ? `: ${liveResult.detail}` : ""}`,
+        });
+      }
+      return jsonResponse({
+        ok: true,
+        latencyMs,
+        models: liveResult.models.length,
+        message: `Connected. ${liveResult.models.length} models.`,
       });
     }
     if (prov.adapter === "qoder") {
@@ -1656,7 +1681,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (antigravity && !project) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
-    const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name);
+    const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name, {
+      oauthApiBaseUrl: snapshot?.apiBaseUrl,
+    });
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
