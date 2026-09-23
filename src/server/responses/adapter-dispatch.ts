@@ -82,6 +82,7 @@ import {
 } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
+import { chargeWorkflowSends } from "../../lib/workflow-budget";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -137,6 +138,7 @@ export async function prepareAdapterExchange(
     | "sendBudgetExhausted"
     | "reserveCredentialHop"
     | "pendingHopPermit"
+    | "workflowRootId"
   >,
 ) {
   const { options, config, logCtx, req } = requestContext;
@@ -403,6 +405,15 @@ export async function prepareAdapterExchange(
        */
       onDispatch?: () => void,
     ): Promise<Response | { failed: Response }> => {
+      // The repair permit books the request ledger, but only the transient helper reports
+      // that send to the root workflow. The other two dispatch paths confirm it here, at
+      // their physical-send boundary, without booking the request ledger again.
+      let fastDowngradeWorkflowCharged = false;
+      const chargeFastDowngradeWorkflowSend = (): void => {
+        if (recovery !== "anthropic-fast-downgrade" || fastDowngradeWorkflowCharged) return;
+        fastDowngradeWorkflowCharged = true;
+        chargeWorkflowSends(sendBudgetState.workflowRootId, 1);
+      };
       let retryRequest: AdapterRequest;
       if (transportState.sameTargetRequest !== undefined && transportState.sameTargetParsed === parsed && transportState.sameTargetToken === transportState.transportToken) {
         // Same target (key/adapter/parsed/tier unchanged): replay the exact cached request.
@@ -453,7 +464,10 @@ export async function prepareAdapterExchange(
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
             sendBudget: adapterDispatchBudget,
-              onPhysicalSend: send => noteAdapterPhysicalSend(retryEstimate, send),
+              onPhysicalSend: send => {
+                noteAdapterPhysicalSend(retryEstimate, send);
+                chargeFastDowngradeWorkflowSend();
+              },
               onRecoveryWithheld: noteAdapterRecoveryWithheld,
               stream: parsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
@@ -494,6 +508,7 @@ export async function prepareAdapterExchange(
                 // Same boundary on the helper path: the thunk is what reaches the wire, and it
                 // can be refused above before it does. use() past the first attempt is a no-op.
                 onDispatch?.();
+                if (!refetchTransientPolicy) chargeFastDowngradeWorkflowSend();
                 return fetchWithHeaderTimeout(retryRequest.url,
                   applyUpstreamRecoveryInit({
                     method: retryRequest.method, headers: retryRequest.headers, body: retryRequest.body,

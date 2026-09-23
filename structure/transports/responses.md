@@ -294,7 +294,8 @@ FastWire only for `claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`. The
 provider-wide Fast fallback; other models stay unclassified. `tests/routing/fastwire-policy.test.ts`
 pins this eligibility. In the main adapter dispatch loop, a fast refusal naming fast mode or the
 `speed` parameter (400 or 429), or a 429 with a fast-pool remaining header of zero, may use one
-shared-budget repair permit for a standard-speed resend. The request then retains the drop decision
+shared-budget repair permit for a standard-speed resend. The dispatched resend also charges the root
+workflow send counter once, without a second request-budget charge. The request then retains the drop decision
 through later rebuilds, and records `anthropic-fast-downgrade`, cause `parameter-rejected`, and a
 `downgraded` / `response-declined` tier outcome. A spent budget leaves the original refusal intact;
 generic 429 and 529 responses keep their ordinary handling. This repair precedes same-target 429

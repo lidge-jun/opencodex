@@ -11,8 +11,8 @@ For an Anthropic route on stored OAuth or an Anthropic API key, native Fast is a
 `claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`: pick the model's `--fast` row (listed
 when Fast rows are enabled) or set `fastMode: true`. Claude Code's own `/fast` toggle is not
 translated on routed requests: the `speed` field it sends does not survive translation. The proxy sends Anthropic's Fast request and records the returned `usage.speed`; only
-confirmed Fast usage gets the 2x API-equivalent cost estimate. A recognized Fast entitlement or
-fast-pool refusal in the main adapter request path gets one budgeted standard-speed resend, and a
+confirmed Fast usage gets the 2x API-equivalent cost estimate. A recognized Fast-specific refusal
+in the main adapter request path gets one budgeted standard-speed resend, and a
 new turn may incur that refused round trip again. Pro/Max subscription accounts need usage credits;
 Team/Enterprise accounts need organization enablement, and API keys need provisioned
 research-preview access. See

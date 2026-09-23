@@ -6,7 +6,7 @@
 - `src/providers/anthropic-fast.ts` (new): the beta constant, narrow refusal recognition, and a case-insensitive `anthropic-beta` merge.
 - `src/adapters/anthropic.ts`: a `set` decision on the declared wire sends `speed: "fast"` with the beta; the adapter owns `tierLog`; `usage.speed` is observed in `message_start`, `message_delta` and buffered bodies.
 - `src/providers/registry/entries-core.ts`: `anthropic` and `anthropic-apikey` declare the wire and classify `claude-opus-5-5`, `claude-opus-5`, `claude-opus-4-8`.
-- `src/server/responses/adapter-dispatch.ts` + `core-opaque-recovery.ts`: one budget-reserved standard resend on a recognized fast refusal, before every 429 arm.
+- `src/server/responses/adapter-dispatch.ts` + `core-opaque-recovery.ts`: one budget-reserved standard resend on a recognized fast refusal, before every 429 arm. The physical resend charges the root workflow once; the request permit is not charged twice.
 - Recovery kind `anthropic-fast-downgrade` (cause `parameter-rejected`, metrics class `fast_downgrade`, log label in ten locales); 2x confirmation-gated pricing rules; docs and structure owners.
 
 ## Live smoke (real OAuth token, repository adapter, 2026-09-23)
@@ -19,10 +19,9 @@
 
 ## Checks
 
-- `bun run typecheck`, `bun run structure:check`, `bun run privacy:scan`, `bun run lint:gui`, `bun run skill:surface:check`, `git diff --check`: pass on the rebased head.
-- New tests: `tests/adapters/anthropic/anthropic-fast-speed.test.ts`, `tests/responses/responses-anthropic-fast-downgrade.test.ts`, `tests/usage/usage-anthropic-fast-pricing.test.ts` (30 pass).
-- Flipped/extended pins: `tests/routing/fastwire-policy.test.ts` (registry roster, anthropic eligibility), `tests/codex-integration/fast-row.test.ts`, `tests/server/management-metrics-export.test.ts`.
-- Directory runs: see the PR Verification section.
+- Original implementation (prior head `5e4cb7ea77`): the earlier PR Verification section recorded `bun run typecheck`, `bun run structure:check`, `bun run privacy:scan`, `bun run lint:gui`, `bun run skill:surface:check`, `git diff --check`, focused tests, and directory runs. Those results do not certify the repair head.
+- Repair checkout based on `ea0fab74a3ddb7b485452faa24a2d15b1036080b`: `bun install --frozen-lockfile` passed (104 packages); `bun test tests/responses/responses-anthropic-fast-downgrade.test.ts` passed (8 pass, 0 fail); `bun run typecheck` passed; `git diff --check` passed. Earlier focused-test runs during the repair failed on an assertion against the wrong public error string and then on a test-injected spend-home owner leak; both test defects were corrected before the final pass.
+- The repair was deliberately limited to the focused test and typecheck. The full suite, docs build, privacy scan, structure check, and other original focused tests were not rerun on this repair head. Hosted exact-head CI remains required before landing; cancelled test shards on the prior head are missing evidence, not a pass.
 
 ## Delegation
 

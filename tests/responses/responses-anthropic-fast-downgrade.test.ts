@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import {
+  admitWorkflowTurn,
+  chargeWorkflowSends,
+  DEFAULT_WORKFLOW_BUDGET_POLICY,
+  resetWorkflowBudgetsForTest,
+  workflowBudgetSnapshot,
+} from "../../src/lib/workflow-budget";
 import { handleResponses } from "../../src/server/responses/core";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
@@ -31,10 +38,13 @@ function config(fastMode = true): OcxConfig {
   } as OcxConfig;
 }
 
-function request(): Request {
+function request(parentThreadId?: string): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...(parentThreadId ? { "x-codex-parent-thread-id": parentThreadId } : {}),
+    },
     body: JSON.stringify({ model: "anthropic-apikey/claude-opus-5-5", stream: false, store: false, input: [
       { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
     ] }),
@@ -68,19 +78,26 @@ function fakeUpstream(answer: (index: number) => Response): Send[] {
 }
 
 beforeEach(() => {
+  resetWorkflowBudgetsForTest();
   testDir = mkdtempSync(join(tmpdir(), "ocx-anthropic-fast-downgrade-"));
   process.env.OPENCODEX_HOME = testDir;
   releaseSpendHome = acquireOwnedSpendHome();
 });
 
-afterEach(() => {
-  releaseSpendHome?.();
-  releaseSpendHome = undefined;
-  globalThis.fetch = originalFetch;
-  if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = originalHome;
-  rmSync(testDir, { recursive: true, force: true });
-});
+function cleanupTestState(): void {
+  try {
+    releaseSpendHome?.();
+  } finally {
+    releaseSpendHome = undefined;
+    globalThis.fetch = originalFetch;
+    if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = originalHome;
+    rmSync(testDir, { recursive: true, force: true });
+    resetWorkflowBudgetsForTest();
+  }
+}
+
+afterEach(cleanupTestState);
 
 describe("Anthropic fast refusal in Responses dispatch", () => {
   test("resends once at standard speed without rotating or cooling the account", async () => {
@@ -146,17 +163,35 @@ describe("Anthropic fast refusal in Responses dispatch", () => {
     // this arm owns, so a zero-send budget must refuse it and hand the real refusal back.
     const sends = fakeUpstream(() => refusal(CREDITS));
     const logCtx: RequestLogContext = { model: "", provider: "" };
+    const rootId = "anthropic-fast-refused-repair-root";
+    const admitted = admitWorkflowTurn(rootId, "interactive");
+    expect(admitted?.admitted).toBe(true);
+    if (admitted?.admitted) admitted.lease.release();
     const budget = createRequestExecutionBudget({
       maxTotalModelSends: 0, baseSendAllowance: 0, finalRecoveryAllowance: 0,
       maxAlternateTargetSends: 0, maxTargetTransitions: 0,
     }, "anthropic-fast-zero-send");
-    const response = await handleResponses(request(), config(), logCtx, { sendBudget: budget });
+    const response = await handleResponses(request(rootId), config(), logCtx, { sendBudget: budget });
     const body = await response.text();
 
     expect(response.status).toBe(429);
     expect(body).toContain("Usage credits are required for fast mode.");
     expect(sends).toHaveLength(1);
+    expect(workflowBudgetSnapshot(rootId)?.sends).toBe(0);
     expect(logCtx.activeAttempt?.recoveryKinds ?? []).not.toContain("anthropic-fast-downgrade");
+  });
+
+  test("cleanup restores global state even when spend-home release throws", () => {
+    globalThis.fetch = (() => { throw new Error("stale fake upstream"); }) as typeof fetch;
+    const release = releaseSpendHome;
+    releaseSpendHome = () => { release?.(); throw new Error("spend-home release failed"); };
+    const directory = testDir;
+
+    expect(cleanupTestState).toThrow("spend-home release failed");
+    expect(releaseSpendHome).toBeUndefined();
+    expect(globalThis.fetch).toBe(originalFetch);
+    expect(process.env.OPENCODEX_HOME).toBe(originalHome);
+    expect(existsSync(directory)).toBe(false);
   });
 
   test("the admitted standard resend is charged to the request ledger", async () => {
@@ -166,5 +201,27 @@ describe("Anthropic fast refusal in Responses dispatch", () => {
     const response = await handleResponses(request(), config(), logCtx, { sendBudget: budget });
     expect(response.status).toBe(200);
     expect(budget.used).toBe(1);
+  });
+
+  test("a child fast downgrade charges the workflow and exhausts later children", async () => {
+    const rootId = "anthropic-fast-workflow-root";
+    const admitted = admitWorkflowTurn(rootId, "interactive");
+    expect(admitted?.admitted).toBe(true);
+    if (admitted?.admitted) admitted.lease.release();
+    chargeWorkflowSends(rootId, DEFAULT_WORKFLOW_BUDGET_POLICY.maxPhysicalSends - 1);
+    const sends = fakeUpstream(index => index === 1 ? refusal(CREDITS) : success());
+    const budget = createRequestExecutionBudget(undefined, "anthropic-fast-workflow-child");
+    const response = await handleResponses(request(rootId), config(), { model: "", provider: "" }, { sendBudget: budget });
+    await response.text();
+
+    expect(response.status).toBe(200);
+    expect(sends).toHaveLength(2);
+    expect(budget.used).toBe(1);
+    expect(workflowBudgetSnapshot(rootId)?.sends).toBe(DEFAULT_WORKFLOW_BUDGET_POLICY.maxPhysicalSends);
+
+    const next = await handleResponses(request(rootId), config(), { model: "", provider: "" });
+    expect(next.status).toBe(429);
+    expect(await next.text()).toContain("the task reached its send ceiling");
+    expect(sends).toHaveLength(2);
   });
 });
