@@ -2024,15 +2024,19 @@ describe("selection order across rotation strategies", () => {
       updateAccountQuota("a", 10);
       updateAccountQuota("b", 50);
       updateAccountQuota("c", 50);
-      expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+      const start = Date.now();
+      expect(resolveCodexAccountForThreadDetailed(threadId, config, start, "shared"))
+        .toMatchObject({ status: "selected", accountId: "a", affinity: { move: "new_bind", reason: "healthy" } });
 
       updateAccountQuota("a", 95);
       updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5);
+      const reboundAt = Date.now();
 
       // The bound account crossed its threshold and the request-owned main is the strictly
       // cooler candidate — the promoteActiveCodexAccount(cooler) site.
-      expect(resolveCodexAccountForThreadDetailed(threadId, config, Date.now(), "shared", requestOwnedMain))
-        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
+      expect(resolveCodexAccountForThreadDetailed(threadId, config, reboundAt, "shared", requestOwnedMain))
+        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID,
+          affinity: { move: "rebound", reason: "quota_headroom" } });
       expect(config.activeCodexAccountId).toBe("a");
       expect(getEffectiveActiveCodexAccountId(config)).toBe("a");
     });
@@ -2048,13 +2052,17 @@ describe("selection order across rotation strategies", () => {
       updateAccountQuota("a", 10);
       updateAccountQuota("b", 50);
       updateAccountQuota("c", 50);
-      expect(resolveCodexAccountForThread(threadId, config)).toBe("a");
+      const start = Date.now();
+      expect(resolveCodexAccountForThreadDetailed(threadId, config, start, "shared"))
+        .toMatchObject({ status: "selected", accountId: "a", affinity: { move: "new_bind", reason: "healthy" } });
 
       updateAccountQuota("a", 95);
       updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5);
+      const reboundAt = Date.now();
 
-      expect(resolveCodexAccountForThreadDetailed(threadId, config, Date.now(), "shared", storedMainLive))
-        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
+      expect(resolveCodexAccountForThreadDetailed(threadId, config, reboundAt, "shared", storedMainLive))
+        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID,
+          affinity: { move: "rebound", reason: "quota_headroom" } });
       expect(config.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
       expect(getEffectiveActiveCodexAccountId(config)).toBe(MAIN_CODEX_ACCOUNT_ID);
     });
@@ -2072,7 +2080,8 @@ describe("selection order across rotation strategies", () => {
       updateAccountQuota("c", 30);
       updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5);
       const start = Date.now();
-      expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+      expect(resolveCodexAccountForThreadDetailed(threadId, config, start, "shared"))
+        .toMatchObject({ status: "selected", accountId: "a", affinity: { move: "new_bind", reason: "healthy" } });
 
       recordCodexUpstreamOutcome(config, "a", 503, { now: start });
       recordCodexUpstreamOutcome(config, "a", 503, { now: start });
@@ -2081,7 +2090,8 @@ describe("selection order across rotation strategies", () => {
       // The streak detours this request onto the request-owned main — the coolest eligible
       // account — while the binding itself stays on "a".
       expect(resolveCodexAccountForThreadDetailed(threadId, config, start, "shared", requestOwnedMain))
-        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
+        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID,
+          affinity: { move: "detour", reason: "transient" } });
       const operatorAccount = config.activeCodexAccountId;
       expect(operatorAccount).not.toBe(MAIN_CODEX_ACCOUNT_ID);
 
@@ -2092,7 +2102,8 @@ describe("selection order across rotation strategies", () => {
       recordCodexUpstreamOutcome(config, "a", 503, { now: late });
       recordCodexUpstreamOutcome(config, "a", 503, { now: late });
       expect(resolveCodexAccountForThreadDetailed(threadId, config, late, "shared", requestOwnedMain))
-        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
+        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID,
+          affinity: { move: "rebound", reason: "transient_hold_expired" } });
       expect(config.activeCodexAccountId).toBe(operatorAccount);
       expect(getEffectiveActiveCodexAccountId(config)).toBe(operatorAccount);
     });
@@ -2110,21 +2121,24 @@ describe("selection order across rotation strategies", () => {
       updateAccountQuota("c", 30);
       updateAccountQuota(MAIN_CODEX_ACCOUNT_ID, 5);
       const start = Date.now();
-      expect(resolveCodexAccountForThread(threadId, config, start)).toBe("a");
+      expect(resolveCodexAccountForThreadDetailed(threadId, config, start, "shared"))
+        .toMatchObject({ status: "selected", accountId: "a", affinity: { move: "new_bind", reason: "healthy" } });
 
       recordCodexUpstreamOutcome(config, "a", 503, { now: start });
       recordCodexUpstreamOutcome(config, "a", 503, { now: start });
       recordCodexUpstreamOutcome(config, "a", 503, { now: start });
 
       expect(resolveCodexAccountForThreadDetailed(threadId, config, start, "shared", storedMainLive))
-        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
+        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID,
+          affinity: { move: "detour", reason: "transient" } });
 
       const late = start + 11 * 60_000;
       recordCodexUpstreamOutcome(config, "a", 503, { now: late });
       recordCodexUpstreamOutcome(config, "a", 503, { now: late });
       recordCodexUpstreamOutcome(config, "a", 503, { now: late });
       expect(resolveCodexAccountForThreadDetailed(threadId, config, late, "shared", storedMainLive))
-        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID });
+        .toMatchObject({ status: "selected", accountId: MAIN_CODEX_ACCOUNT_ID,
+          affinity: { move: "rebound", reason: "transient_hold_expired" } });
       expect(config.activeCodexAccountId).toBe(MAIN_CODEX_ACCOUNT_ID);
       expect(getEffectiveActiveCodexAccountId(config)).toBe(MAIN_CODEX_ACCOUNT_ID);
     });
