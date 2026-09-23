@@ -85,6 +85,7 @@ import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-typ
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
 import { handleSessionRoutes } from "./management/session-routes";
+import { writeRecoveryIntentIfGuardianEnabled } from "../lib/recovery-intent";
 import { packageVersion } from "../lib/package-version";
 
 // installed npm version instead of a stale hardcode.
@@ -328,6 +329,17 @@ export async function handleManagementAPI(
     const { deferralMatchesReceipt } = await import("../config/pending-teardown");
     const { deferralHonored, performStopTeardown } = await import("./stop-teardown");
     const holdsReceipt = deferralHonored(url, deferralMatchesReceipt);
+    if (!holdsReceipt) {
+      try {
+        await writeRecoveryIntentIfGuardianEnabled("stopped");
+      } catch {
+        return jsonResponse({
+          success: false,
+          code: "recovery_intent_unavailable",
+          message: "The enabled recovery guardian marker could not be validated, so the stop was not dispatched.",
+        }, 503, req, config);
+      }
+    }
     const respawnRisk = holdsReceipt ? "none" : installedServiceRespawnRisk();
     if (respawnRisk === "respawnable") {
       return jsonResponse({

@@ -20,6 +20,9 @@ const TRAY_ICON_FILES = [
   "opencodex-tray-warning.ico",
   "opencodex-tray-offline.ico",
 ] as const;
+// The guardian intent helper keeps its scripts/ namespace in the repository and
+// installs into the private home alongside the tray script it is called from.
+const INSTALLED_TRAY_RECOVERY_INTENT_FILE = "opencodex-recovery-intent.ps1";
 
 export interface WindowsTrayEntry {
   bun: string;
@@ -68,6 +71,10 @@ function installedTrayIconPaths(): string[] {
   return TRAY_ICON_FILES.map(name => join(getConfigDir(), name));
 }
 
+function installedTrayRecoveryIntentPath(): string {
+  return join(getConfigDir(), INSTALLED_TRAY_RECOVERY_INTENT_FILE);
+}
+
 export function windowsTrayStatePathsOwned(
   state: Pick<WindowsTrayEntry, "script" | "opencodexHome"> & { launcherPath?: string },
   configDir = getConfigDir(),
@@ -84,6 +91,10 @@ function sourceTrayScriptPath(): string {
 
 function sourceTrayIconPaths(): string[] {
   return TRAY_ICON_FILES.map(name => join(import.meta.dir, "assets", name));
+}
+
+function sourceTrayRecoveryIntentPath(): string {
+  return join(import.meta.dir, "..", "..", "scripts", "ocx-recovery-guardian", "intent.ps1");
 }
 
 function currentCodexHome(): string {
@@ -469,7 +480,7 @@ function trayStatusFrom(registered: string | null): WindowsTrayStatus {
   const running = heartbeatProcessAlive(heartbeat);
   const registrationOwned = state !== null
     && registered === state.runCommand
-    && [state.bun, state.cli, state.script, ...(state.launcherPath ? [state.launcherPath] : []), ...installedTrayIconPaths()]
+    && [state.bun, state.cli, state.script, ...(state.launcherPath ? [state.launcherPath] : []), ...installedTrayIconPaths(), ...(existsSync(sourceTrayRecoveryIntentPath()) ? [installedTrayRecoveryIntentPath()] : [])]
       .every(path => existsSync(path));
   const stale = windowsTrayRegistrationIsStale({
     registered: registered !== null,
@@ -617,6 +628,8 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   assertWindows();
   const entry = currentEntry();
   const sourceScript = sourceTrayScriptPath();
+  const sourceRecoveryIntent = sourceTrayRecoveryIntentPath();
+  const installedRecoveryIntent = installedTrayRecoveryIntentPath();
   const iconPairs = sourceTrayIconPaths().map((source, index) => ({ source, installed: installedTrayIconPaths()[index] }));
   for (const path of [entry.bun, entry.cli, sourceScript, ...iconPairs.map(pair => pair.source)]) {
     if (!existsSync(path)) throw new Error(`Cannot install the tray because a required file is missing: ${path}`);
@@ -641,8 +654,8 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
   if (existsSync(launcherPath) && (!state?.launcherPath || resolve(state.launcherPath) !== resolve(launcherPath))) {
     throw new Error(`Refusing to overwrite an unowned tray launcher at ${launcherPath}.`);
   }
-  if (!state && iconPairs.some(pair => existsSync(pair.installed))) {
-    throw new Error("Refusing to overwrite unowned Windows tray icon assets.");
+  if (!state && [...iconPairs.map(pair => pair.installed), installedRecoveryIntent].some(path => existsSync(path))) {
+    throw new Error("Refusing to overwrite unowned Windows tray package assets.");
   }
   const wasRunning = heartbeatProcessAlive();
   if (wasRunning && !state) {
@@ -655,6 +668,7 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
 
   const previousStateBytes = existsSync(trayStatePath()) ? readFileSync(trayStatePath()) : null;
   const previousScriptBytes = existsSync(entry.script) ? readFileSync(entry.script) : null;
+  const previousRecoveryIntentBytes = existsSync(installedRecoveryIntent) ? readFileSync(installedRecoveryIntent) : null;
   const previousLauncherBytes = existsSync(launcherPath) ? readFileSync(launcherPath) : null;
   const previousIconBytes = new Map(iconPairs.map(pair => [
     pair.installed,
@@ -664,6 +678,10 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
     try {
       if (previousScriptBytes) replaceWindowsTrayOwnedFile(entry.script, previousScriptBytes);
       else if (existsSync(entry.script)) unlinkSync(entry.script);
+    } catch { /* rollback best-effort */ }
+    try {
+      if (previousRecoveryIntentBytes) replaceWindowsTrayOwnedFile(installedRecoveryIntent, previousRecoveryIntentBytes);
+      else if (existsSync(installedRecoveryIntent)) unlinkSync(installedRecoveryIntent);
     } catch { /* rollback best-effort */ }
     try {
       if (previousLauncherBytes) replaceWindowsTrayOwnedFile(launcherPath, previousLauncherBytes);
@@ -695,6 +713,12 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
     const hardenedDir = hardenSecretDir(getConfigDir(), { required: true });
     if (!hardenedDir.ok) throw new Error("Windows tray directory ACL hardening did not complete; refusing to install persistence.");
     replaceWindowsTrayOwnedFile(entry.script, readFileSync(sourceScript));
+    // `scripts/` is outside the npm package allowlist, so a published install has no
+    // guardian to carry and gets no helper. The tray script keeps its own fail-closed
+    // check for a home whose marker exists without the helper beside it.
+    if (existsSync(sourceRecoveryIntent)) {
+      replaceWindowsTrayOwnedFile(installedRecoveryIntent, readFileSync(sourceRecoveryIntent));
+    }
     for (const pair of iconPairs) replaceWindowsTrayOwnedFile(pair.installed, readFileSync(pair.source));
     replaceWindowsTrayOwnedFile(launcherPath, Buffer.from("\uFEFF" + buildWindowsTrayLauncherScript(entry), "utf16le"));
     runRegistry(["add", RUN_KEY, "/v", runValue, "/t", "REG_SZ", "/d", runCommand, "/f", "/reg:64"]);
@@ -747,7 +771,7 @@ export function uninstallWindowsTray(): WindowsTrayStatus {
   if (existing) runRegistry(["delete", RUN_KEY, "/v", state?.runValue ?? windowsTrayRunValue(getConfigDir()), "/f", "/reg:64"]);
   const ownedPaths = [trayStatePath(), trayHeartbeatPath(), ...(state?.launcherPath ? [state.launcherPath] : [])];
   if (state?.script && resolve(state.script) === resolve(installedTrayScriptPath())) ownedPaths.push(state.script);
-  if (state) ownedPaths.push(...installedTrayIconPaths());
+  if (state) ownedPaths.push(...installedTrayIconPaths(), installedTrayRecoveryIntentPath());
   for (const path of ownedPaths) {
     try { if (existsSync(path)) unlinkSync(path); } catch { /* best-effort */ }
   }

@@ -1,4 +1,9 @@
 import type { StorageCleanupPolicy } from "../types";
+import { join } from "node:path";
+import { getConfigDir } from "../config/paths";
+import { startRuntimeDiagnostics } from "../lib/runtime-diagnostics";
+import { getActiveTurnCount } from "./lifecycle";
+import { responseStateMetrics } from "../responses/state";
 import { startStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   abortStorageCleanupPolicyJobAsync,
@@ -32,6 +37,7 @@ import {
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
 type ProcessLoops = {
+  diagnostics: ReturnType<typeof startRuntimeDiagnostics> | null;
   memoryWatchdog: MemoryWatchdog;
   stateStoreSweeper: ReturnType<typeof startStateStoreSweeper>;
 };
@@ -58,10 +64,22 @@ function setLivePolicyOwner(applyPolicy: PolicyApply | null): void {
 }
 
 function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
+  let diagnostics: ReturnType<typeof startRuntimeDiagnostics> | null = null;
   let memoryWatchdog: MemoryWatchdog | null = null;
   let stateStoreSweeper: ReturnType<typeof startStateStoreSweeper> | null = null;
   try {
     memoryWatchdog = startMemoryWatchdog();
+    if (process.env.OPENCODEX_RUNTIME_DIAGNOSTICS === "1") {
+      try {
+        diagnostics = startRuntimeDiagnostics(join(getConfigDir(), "runtime-diagnostics.jsonl"), () => {
+          const turns = getActiveTurnCount();
+          const state = turns > 0 ? responseStateMetrics() : null;
+          return { activeTurns: turns, responseBytes: state?.totalBytes ?? null,
+            spillWrites: state?.spillWrites ?? null, spillFailures: state?.spillWriteFailures ?? null,
+            spillTimeoutRefusals: state?.spillAclTimeoutMemoRefusals ?? null };
+        });
+      } catch { console.warn("[runtime-diagnostics] recorder could not start"); }
+    }
     stateStoreSweeper = startStateStoreSweeper();
     setLivePolicyOwner(applyPolicy);
     startStorageCleanupScheduler();
@@ -95,8 +113,9 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       .catch(() => {
         // The next poll tick retries.
       });
-    return { memoryWatchdog, stateStoreSweeper };
+    return { memoryWatchdog, stateStoreSweeper, diagnostics };
   } catch (error) {
+    diagnostics?.stop();
     memoryWatchdog?.stop();
     stateStoreSweeper?.stop();
     stopStorageCleanupScheduler();
@@ -110,6 +129,7 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
 function stopProcessLoops(): void {
   const loops = processLoops;
   processLoops = null;
+  loops?.diagnostics?.stop();
   loops?.memoryWatchdog.stop();
   loops?.stateStoreSweeper.stop();
   stopStorageCleanupScheduler();

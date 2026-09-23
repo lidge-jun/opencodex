@@ -140,6 +140,7 @@ import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
+import { writeRecoveryIntentIfGuardianEnabled } from "../lib/recovery-intent";
 
 /**
  * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
@@ -816,7 +817,8 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
 }
 
 /** Fixed tray action: start the proxy without depending on codexAutoStart. */
-async function handleTrayProxyStart(existingIsSuccess = true): Promise<boolean> {
+async function handleTrayProxyStart(existingIsSuccess = true, writeRunningIntent = true): Promise<boolean> {
+  if (writeRunningIntent) await writeRecoveryIntentIfGuardianEnabled("running");
   const ok = await runTrayProxyStart({
     findLive: findLiveProxy,
     existingIsSuccess,
@@ -911,7 +913,9 @@ async function handleProxyRestart(
 }
 
 async function handleTrayProxyRestart(): Promise<void> {
-  await handleProxyRestart(() => handleTrayProxyStart(false));
+  await writeRecoveryIntentIfGuardianEnabled("maintenance", { until: Date.now() + 180_000 });
+  const restarted = await handleProxyRestart(() => handleTrayProxyStart(false, false));
+  if (restarted) await writeRecoveryIntentIfGuardianEnabled("running");
 }
 
 async function handleRestartStartWhenStopped(): Promise<boolean | "skipped"> {
@@ -991,6 +995,11 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
 }
 
 async function handleStop() {
+  // A guardian-driven recovery child is carrying out a bounded automatic repair,
+  // not an operator's durable manual-stop instruction.
+  if (process.env.OPENCODEX_GUARDIAN_RECOVERY !== "1") {
+    await writeRecoveryIntentIfGuardianEnabled("stopped");
+  }
   const lease = acquireOwnershipMutationLease(serviceStatePaths());
   try { return await handleStopUnlocked(); }
   finally { lease.release(); }

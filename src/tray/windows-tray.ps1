@@ -310,6 +310,43 @@ function Complete-PendingAction([bool]$Success) {
   }
 }
 
+function Test-RecoveryGuardianIntentEnabled([string]$OpenCodexHome) {
+  # A missing marker means this home predates the guardian, or the guardian was
+  # removed with it: the legacy tray actions stand on their own. Any marker that
+  # exists is load-bearing, so an unreadable one must fail closed and let the
+  # helper supply its own bounded error rather than dispatching a silent action.
+  $markerPath = Join-Path $OpenCodexHome 'recovery-guardian.json'
+  if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { return $false }
+  try {
+    $markerInfo = Get-Item -LiteralPath $markerPath -Force -ErrorAction Stop
+    if ((([int]$markerInfo.Attributes -band [int][System.IO.FileAttributes]::ReparsePoint) -ne 0) -or $markerInfo.Length -gt 16KB) { return $true }
+    $marker = [System.IO.File]::ReadAllText($markerInfo.FullName, [System.Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+    # Only a complete explicit disabled marker preserves legacy tray actions
+    # without requiring the new installed helper. Every other marker state is
+    # fail-closed and lets the helper supply its bounded error.
+    return -not ($marker.version -eq 1 -and $marker.enabled -is [bool] -and -not $marker.enabled)
+  } catch { return $true }
+}
+
+function Set-RecoveryIntent(
+  [Parameter(Mandatory)][string]$OpenCodexHome,
+  [Parameter(Mandatory)][ValidateSet('running', 'stopped', 'maintenance')][string]$Mode,
+  [long]$Until = 0
+) {
+  # The installed tray must write before dispatching its child: an older running
+  # proxy cannot be trusted to persist a manual Stop on the tray's behalf.
+  $helper = Join-Path $PSScriptRoot 'opencodex-recovery-intent.ps1'
+  if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+    if (-not (Test-RecoveryGuardianIntentEnabled $OpenCodexHome)) { return }
+    throw 'Recovery intent helper is missing; lifecycle action was not dispatched.'
+  }
+  # Array splatting is positional in Windows PowerShell. Keep the helper's
+  # named lifecycle arguments in a hashtable so a home path never binds -Mode.
+  $intentArgs = @{ OpenCodexHome = $OpenCodexHome; Mode = $Mode }
+  if ($Mode -eq 'maintenance') { $intentArgs.Until = $Until }
+  & $helper @intentArgs
+}
+
 function Update-TrayState {
   $target = Read-ListenTarget
   $script:port = [int]$target.port
@@ -428,6 +465,7 @@ function Update-TrayState {
 $openItem.add_Click({ Start-OcxCommand @("gui") })
 $startItem.add_Click({
   if (-not (Set-PendingAction "Start Proxy" 75)) { return }
+  Set-RecoveryIntent -OpenCodexHome $OpenCodexHome -Mode "running"
   $statusItem.Text = "Proxy: Starting..."
   # service start can spend 20s and the CLI then observes health for another 40s.
   $startProcess = Start-OcxCommand @("__tray-start") -TrackExit
@@ -439,6 +477,7 @@ $startItem.add_Click({
 })
 $stopItem.add_Click({
   if (-not (Set-PendingAction "Stop Proxy" 15)) { return }
+  Set-RecoveryIntent -OpenCodexHome $OpenCodexHome -Mode "stopped"
   $statusItem.Text = "Proxy: Stopping..."
   $stopProcess = Start-OcxCommand @("stop") -TrackExit
   if ($stopProcess -is [System.Diagnostics.Process]) {
@@ -449,6 +488,7 @@ $stopItem.add_Click({
 })
 $restartItem.add_Click({
   if (-not (Set-PendingAction "Restart Proxy" 160)) { return }
+  Set-RecoveryIntent -OpenCodexHome $OpenCodexHome -Mode "maintenance" -Until ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 180000)
   $statusItem.Text = "Proxy: Restarting..."
   # /api/system/restart may drain active work for 60s and then spend up to 70s
   # handing off to an identity-verified replacement. The tray observes health/PID

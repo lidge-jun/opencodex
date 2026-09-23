@@ -368,7 +368,7 @@ describe("Windows tray packaging and command safety", () => {
     expect(cli).toContain("isProxyReplacement(previous, live)");
     expect(cli).toContain("process.exitCode = result.ok ? 0 : 1");
     expect(cli).toContain("waitForProxy(40_000)");
-    expect(cli).toContain("await handleProxyRestart(() => handleTrayProxyStart(false))");
+    expect(cli).toContain("await handleProxyRestart(() => handleTrayProxyStart(false, false))");
     expect(cli).toContain("function detachedStartEnvironment()");
     expect(cli).toContain("delete env.OCX_SERVICE");
     expect(cli).not.toContain("OCX_KEEP_ROUTING");
