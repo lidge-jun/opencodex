@@ -709,6 +709,9 @@ Unix-only check. A failure aborts while the tray and proxy are still running. A 
 then stopped before files are replaced; an installed service is rebuilt and started automatically,
 while a foreground installation prints `ocx start` as the next step. Dashboard update records
 redact profile/cache paths and UID/GID values before they are persisted.
+If the install step fails, the previous version stays installed and its service is restarted; the
+terminal output names the next step, and [Update Failed on Windows](/troubleshooting/update-failed/)
+covers finishing the update and the folders a failed attempt can leave behind.
 
 ```bash
 ocx update
