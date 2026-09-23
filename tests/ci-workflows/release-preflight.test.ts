@@ -145,7 +145,7 @@ function preflight(scenario: Scenario): { status: number | null; output: string;
     if (scenario.devVersion !== null) {
       run(repo, gitEnv, "git", "checkout", "-q", "-b", "dev");
       writeFileSync(join(repo, "package.json"), JSON.stringify({ version: scenario.devVersion ?? NEXT_CORE }));
-      run(repo, gitEnv, "git", "commit", "-q", "-am", "dev pre-move");
+      run(repo, gitEnv, "git", "commit", "-q", "--allow-empty", "-am", "dev pre-move");
       run(repo, gitEnv, "git", "update-ref", "refs/remotes/origin/dev", "HEAD");
       run(repo, gitEnv, "git", "checkout", "-q", "release");
     }
