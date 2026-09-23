@@ -1,5 +1,6 @@
 import { copyFileSync, cpSync, existsSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { adHocSignSidecar, shouldAdHocSignSidecar } from "./sidecar-signing";
 
 const targetByTriple: Record<string, string> = {
   "aarch64-apple-darwin": "bun-darwin-arm64",
@@ -55,5 +56,9 @@ mkdirSync(binaries, { recursive: true });
 mkdirSync(resources, { recursive: true });
 const destination = join(binaries, `ocx-${triple}${target.startsWith("bun-windows-") ? ".exe" : ""}`);
 copyFileSync(executable, destination);
+if (shouldAdHocSignSidecar(process.platform, target)) {
+  const signed = adHocSignSidecar(destination);
+  if (signed !== 0) process.exit(signed);
+}
 cpSync(join(repoRoot, "gui", "dist"), resources, { recursive: true });
 console.log(`Prepared ${destination}`);

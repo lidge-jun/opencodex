@@ -483,6 +483,7 @@
   "config-user-edits.test.ts": "config",
   "config.test.ts": "server",
   "configured-native-models.test.ts": "codex-integration",
+  "gui-desktop-sidecar-signing.test.ts": "gui",
   "subagent-roster-migration.test.ts": "routing",
   "consume-for-inspection-cancel.test.ts": "server",
   "container-bootstrap.test.ts": "service",
