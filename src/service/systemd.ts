@@ -207,11 +207,10 @@ export function probeSystemdUnitInactive(deps: { show?: () => string } = {}): "i
     })))();
     const active = systemdProperty(output, "ActiveState")?.toLowerCase();
     const pid = systemdProperty(output, "MainPID");
-    const runningStates = ["active", "activating", "deactivating", "reloading"];
-    if (!["inactive", "failed", ...runningStates].includes(active ?? "")
-      || !/^(0|[1-9]\d*)$/.test(pid ?? "") || !Number.isSafeInteger(Number(pid))) return "unknown";
-    if (pid !== "0" || runningStates.includes(active ?? "")) return "active";
-    return "inactive";
+    if (active === "inactive" && pid === "0") return "inactive";
+    if (["active", "activating", "deactivating", "reloading"].includes(active ?? "")
+      || (pid !== null && /^\d+$/.test(pid) && Number(pid) > 0)) return "active";
+    return "unknown";
   } catch { return "unknown"; }
 }
 
