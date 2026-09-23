@@ -20,7 +20,7 @@ import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize"
 import { createToolCallIdAllocator } from "../adapters/tool-call-id";
 import { AnthropicRequestError, DesktopModelMappingUnavailableError, anthropicToResponsesTranslation, extractOcxEffortDirective, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
-import { resolveAlias, claudeCodeNativeAlias } from "../claude/alias";
+import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
@@ -113,7 +113,8 @@ function decodeClaudeFastSelector(raw: string, cc?: OcxConfig["claudeCode"]): st
 function decodeFablePickerAlias(raw: string, cc?: OcxConfig["claudeCode"]): string {
   const decoded = resolveInboundModel(raw, cc);
   if (!decoded.startsWith("claude-fable-")) return raw;
-  return claudeCodeNativeAlias(decoded) === raw ? decoded : raw;
+  // A picker value saved before the ocx-claude spelling keeps the native passthrough too.
+  return claudeCodeNativeAlias(decoded) === raw || legacyAliasForNative(decoded) === raw ? decoded : raw;
 }
 
 function isRec(v: unknown): v is Rec {

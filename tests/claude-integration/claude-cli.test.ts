@@ -8,6 +8,7 @@ import {
   ensureProxyForClaude,
   fetchClaudeCodeState,
   isProxyOnlyModelId,
+  readConnectedClaudeContextWindows,
   nativeModelOverride,
   readPickerDefaultModel,
   rootSkipPermissionsNotice,
@@ -157,6 +158,24 @@ describe("ocx claude native fallback", () => {
     expect(nativeModelOverride("claude-ocx2-abcd", "mock/model", [], ["mock"]).flag).toBeUndefined();
     expect(nativeModelOverride("claude-ocx2-abcd", "opus", ["--model", "sonnet"], ["mock"]))
       .toEqual({});
+  });
+
+  test("a connected client's window map keeps legacy claude-ocx selectors next to the current ones", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-claude-connected-catalog-"));
+    try {
+      const path = join(dir, "catalog.json");
+      writeFileSync(path, JSON.stringify({ models: [
+        { slug: "cursor/gpt-5.6-luna", context_window: 1_000_000 },
+        { slug: "gpt-5.6-sol", context_window: 272_000 },
+      ] }));
+      const windows = readConnectedClaudeContextWindows(path);
+      expect(windows["ocx-claude-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+      expect(windows["claude-ocx-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+      expect(windows["ocx-claude-native--gpt-5.6-sol"]).toBe(272_000);
+      expect(windows["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("a saved current ocx-claude selector also falls back to the configured native model", () => {

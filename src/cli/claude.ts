@@ -30,7 +30,7 @@ import { readServiceApiTokenState, type ServiceApiTokenState } from "../lib/serv
 import { DEFAULT_CATALOG_PATH } from "../codex/paths";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { aliasForNative, aliasForRoute } from "../claude/alias";
+import { aliasForNative, aliasForRoute, legacyAliasForNative, legacyAliasForRoute } from "../claude/alias";
 import { desktop3pAlias } from "../claude/desktop-3p";
 
 export interface ClaudeLaunchEnv {
@@ -465,10 +465,15 @@ export function readConnectedClaudeContextWindows(path = DEFAULT_CATALOG_PATH): 
         const id = slug.slice(slash + 1);
         const routeAlias = aliasForRoute(provider, id);
         if (routeAlias) put(routeAlias, contextWindow);
+        // A selector saved under the legacy claude-ocx spelling keeps its window here too.
+        const legacyRoute = legacyAliasForRoute(provider, id);
+        if (legacyRoute) put(legacyRoute, contextWindow);
         put(desktop3pAlias(provider, id), contextWindow);
       } else {
         const nativeAlias = aliasForNative(slug);
         if (nativeAlias) put(nativeAlias, contextWindow);
+        const legacyNative = legacyAliasForNative(slug);
+        if (legacyNative) put(legacyNative, contextWindow);
         put(desktop3pAlias("native", slug), contextWindow);
       }
     }

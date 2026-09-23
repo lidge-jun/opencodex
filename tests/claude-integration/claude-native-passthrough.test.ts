@@ -208,12 +208,15 @@ test("count_tokens passes through with native credentials", async () => {
   }
 });
 
-test("Fable 1M picker alias preserves native passthrough on both Messages endpoints", async () => {
+// The legacy claude-ocx spelling is what a picker saved before the ocx-claude aliases.
+test.each([
+  "ocx-claude-native--claude-fable-5-1",
+  "claude-ocx-native--claude-fable-5-1",
+])("Fable 1M picker alias %s preserves native passthrough on both Messages endpoints", async pickerModel => {
   const captured: Captured[] = [];
   const upstream = mockAnthropicUpstream(captured);
   saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
   const server = startServer(0);
-  const pickerModel = "ocx-claude-native--claude-fable-5-1";
   try {
     const messagesWithoutMarker = await fetch(new URL("/v1/messages", server.url), {
       method: "POST",
