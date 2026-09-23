@@ -4,7 +4,7 @@ import { configureApiTargets, fetchAudioUpload, installApiAuthFetch, installApiS
 import { targetsFromMachineStatus, type MachineStatusV1 } from "../src/api-targets";
 
 const LEGACY_TOKEN_KEY = "opencodex-api-token";
-const globals = ["document", "window", "navigator", "sessionStorage", "fetch"] as const;
+const globals = ["document", "window", "navigator", "sessionStorage", "localStorage", "fetch"] as const;
 let previousGlobals: Record<(typeof globals)[number], unknown>;
 let testWindow: Window;
 let originalPrompt: typeof window.prompt;
@@ -17,6 +17,7 @@ beforeEach(() => {
     window: { configurable: true, value: testWindow },
     navigator: { configurable: true, value: testWindow.navigator },
     sessionStorage: { configurable: true, value: testWindow.sessionStorage },
+    localStorage: { configurable: true, value: testWindow.localStorage },
     fetch: { configurable: true, value: testWindow.fetch.bind(testWindow) },
   });
   originalPrompt = window.prompt;
@@ -131,6 +132,88 @@ test("prompted API tokens stay memory-only and are not written to sessionStorage
   expect(authorized).toBe(true);
   expect(sessionStorage.getItem(LEGACY_TOKEN_KEY)).toBeNull();
   expect(sessionStorage.length).toBe(0);
+});
+
+test("remembered token is verified and used silently without prompting", async () => {
+  declareManagementAuthRequired();
+  localStorage.setItem("opencodex.remembered-admin-token", "remembered-token");
+  let promptCalls = 0;
+  window.prompt = () => { promptCalls += 1; return "prompt-token"; };
+
+  const seenTokens: Array<string | null> = [];
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const key = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    seenTokens.push(key);
+    if (key === "remembered-token") return new Response("{}", { status: 200 });
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  const res = await fetch("/api/config");
+  expect(res.status).toBe(200);
+  expect(promptCalls).toBe(0);
+  expect(seenTokens).toContain("remembered-token");
+  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBe("remembered-token");
+});
+
+test("rejected remembered token is cleared and the prompt takes over", async () => {
+  declareManagementAuthRequired();
+  localStorage.setItem("opencodex.remembered-admin-token", "stale-token");
+  let promptCalls = 0;
+  window.prompt = () => { promptCalls += 1; return "fresh-token"; };
+
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const key = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    if (key === "fresh-token") return new Response("{}", { status: 200 });
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  const res = await fetch("/api/config");
+  expect(res.status).toBe(200);
+  expect(promptCalls).toBe(1);
+  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBeNull();
+});
+
+test("unavailable remembered token survives a transient server error", async () => {
+  declareManagementAuthRequired();
+  localStorage.setItem("opencodex.remembered-admin-token", "good-token");
+  let promptCalls = 0;
+  window.prompt = () => { promptCalls += 1; return null; };
+
+  // Validation endpoint returns 503 (unavailable), not 401 (rejected).
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const key = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    const url = new URL(_input instanceof Request ? _input.url : String(_input), "http://localhost/");
+    if (url.pathname === "/api/settings" && key === "good-token") {
+      return new Response("overloaded", { status: 503 });
+    }
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  await fetch("/api/config");
+  expect(promptCalls).toBe(1); // fell through to prompt
+  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBe("good-token"); // NOT cleared
+});
+
+test("remembered token that caused the current 401 is cleared immediately", async () => {
+  declareManagementAuthRequired();
+  localStorage.setItem("opencodex.remembered-admin-token", "revoked-token");
+  let promptCalls = 0;
+  window.prompt = () => { promptCalls += 1; return "fresh-token"; };
+
+  const mockFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const key = new Headers(init?.headers).get("X-OpenCodex-API-Key");
+    if (key === "fresh-token") return new Response("{}", { status: 200 });
+    return new Response("unauthorized", { status: 401 });
+  }) as typeof fetch;
+  await installMockAuthFetch(mockFetch);
+
+  const res = await fetch("/api/config");
+  expect(res.status).toBe(200);
+  expect(promptCalls).toBe(1);
+  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBeNull();
 });
 
 test("validates prompted tokens with a safe read before retrying the failed request", async () => {
