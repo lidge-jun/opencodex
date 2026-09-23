@@ -810,20 +810,20 @@ function filterMainPolicyMonthlyQuota(
 
 /**
  * Parse ordinary main-policy usage, rejecting messages with invalid numeric window percentages.
- * Mark a valid primary of at least 24h as replacement evidence only when all other declared
- * windows are also at least 24h; null means this response supplies no usable policy observation.
+ * Mark a valid primary of at least 24h as replacement evidence only when both other windows
+ * are explicitly null or at least 24h. A null result supplies no usable policy observation.
  */
 export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
   const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
   const [primary, secondary, tertiary] = windows;
-  // Policy treats one valid WHAM snapshot as a replacement when all declared windows are >=24h.
-  // This trusts the reported topology; absent secondary windows may be null or omitted.
+  // WHAM explicitly reports absent windows as null; omissions cannot prove replacement.
+  // Policy trusts one complete snapshot only when every non-null window is >=24h.
   // Headers never supply this proof, and reset time alone still cannot release a block.
   if (quota && normalizeUsagePercent(primary?.used_percent) !== undefined && isExplicitLongWindow(primary)
-    && (secondary == null || isExplicitLongWindow(secondary))
-    && (tertiary == null || isExplicitLongWindow(tertiary))) {
+    && (secondary === null || isExplicitLongWindow(secondary))
+    && (tertiary === null || isExplicitLongWindow(tertiary))) {
     return { ...quota, shortWindowAbsent: true };
   }
   return quota;

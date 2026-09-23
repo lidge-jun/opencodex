@@ -302,11 +302,11 @@ become the fallback governing window without a monthly-only plan or explicit pri
 Previously unobserved usage is unknown, not fabricated headroom.
 
 A single fresh valid WHAM response with an explicitly long primary window can replace an obsolete
-short-window tuple when secondary and tertiary windows are absent or also explicitly long.
+short-window tuple when secondary and tertiary windows are explicitly null or also explicitly long.
 Long means **at least 24 hours**, matching the parser's short/long discriminator; a one-day primary
 qualifies, not only a seven-day or monthly window. The policy trusts that one reported topology;
 it does not require repeated observations or independently confirm upstream window completeness.
-An unknown primary duration, partial headers, or invalid usage cannot prove that the
+Omitted secondary/tertiary fields, an unknown primary duration, partial headers, or invalid usage cannot prove that the
 short window disappeared. Replacement proof belongs only to that observation and is never persisted;
 the resulting weekly/monthly window still blocks at 99%. This prevents old short-window exhaustion
 from surviving indefinitely on a now weekly/monthly account. Coverage lives in

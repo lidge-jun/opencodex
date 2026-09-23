@@ -166,7 +166,7 @@ describe("main policy window replacement", () => {
   test.each([86_399, 86_400, 86_401])("primary duration %s follows the exact 24h parser boundary", seconds => {
     retainedShort();
     const data = { rate_limit: {
-      primary_window: { used_percent: 20, limit_window_seconds: seconds }, secondary_window: null,
+      primary_window: { used_percent: 20, limit_window_seconds: seconds }, secondary_window: null, tertiary_window: null,
     } };
     const parsed = parseMainPolicyUsageQuota(data);
     expect(parsed?.shortWindowAbsent).toBe(seconds >= 86_400 ? true : undefined);
@@ -180,7 +180,7 @@ describe("main policy window replacement", () => {
     test.each([0, 35, 98.99, 99, 100])(`fresh ${field}=%s replaces a retired persisted short window`, percent => {
       retainedShort();
       publish({ rate_limit: {
-        primary_window: { used_percent: percent, limit_window_seconds: seconds }, secondary_window: null,
+        primary_window: { used_percent: percent, limit_window_seconds: seconds }, secondary_window: null, tertiary_window: null,
       } });
       const policy = getMainPolicyQuota();
       expect(policy?.[field]).toBe(percent);
@@ -197,12 +197,12 @@ describe("main policy window replacement", () => {
 
   test.each([
     { primary_window: { used_percent: 35 } },
-    { primary_window: { limit_window_seconds: weeklySeconds }, secondary_window: null },
-    { primary_window: { used_percent: -1, limit_window_seconds: weeklySeconds }, secondary_window: null },
-    { primary_window: { used_percent: 101, limit_window_seconds: weeklySeconds }, secondary_window: null },
-    { primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: {} },
+    { primary_window: { limit_window_seconds: weeklySeconds }, secondary_window: null, tertiary_window: null },
+    { primary_window: { used_percent: -1, limit_window_seconds: weeklySeconds }, secondary_window: null, tertiary_window: null },
+    { primary_window: { used_percent: 101, limit_window_seconds: weeklySeconds }, secondary_window: null, tertiary_window: null },
+    { primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: {}, tertiary_window: null },
     { primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds },
-      secondary_window: { used_percent: 99, limit_window_seconds: 18_000 } },
+      secondary_window: { used_percent: 99, limit_window_seconds: 18_000 }, tertiary_window: null },
     { primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: null,
       tertiary_window: { used_percent: 99, limit_window_seconds: 18_000 } },
   ])("partial, invalid or short-bearing metadata retains the old block: %j", rate_limit => {
@@ -216,15 +216,35 @@ describe("main policy window replacement", () => {
     retainedShort();
     publish({ rate_limit: {
       primary_window: { used_percent: 35, limit_window_seconds: monthlySeconds },
-      secondary_window: { used_percent: 99, limit_window_seconds: weeklySeconds },
+      secondary_window: { used_percent: 99, limit_window_seconds: weeklySeconds }, tertiary_window: null,
     } });
     expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
     expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
   });
 
-  test("a valid long primary also proves replacement when absent secondary is omitted", () => {
+  test.each([
+    {},
+    { secondary_window: null },
+    { tertiary_window: null },
+    { secondary_window: { used_percent: 20, limit_window_seconds: weeklySeconds } },
+    { tertiary_window: { used_percent: 20, limit_window_seconds: monthlySeconds } },
+  ])("omitted secondary or tertiary windows cannot retire a short block: %j", windows => {
     retainedShort();
-    publish({ rate_limit: { primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds } } });
+    const data = { rate_limit: {
+      primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, ...windows,
+    } };
+    expect(parseMainPolicyUsageQuota(data)?.shortWindowAbsent).toBeUndefined();
+    publish(data);
+    expect(getMainPolicyQuota()?.shortPercent).toBe(100);
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  });
+
+  test("an explicit null secondary and long tertiary permit replacement", () => {
+    retainedShort();
+    publish({ rate_limit: {
+      primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: null,
+      tertiary_window: { used_percent: 20, limit_window_seconds: monthlySeconds },
+    } });
     expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
     expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
   });
@@ -241,7 +261,7 @@ describe("main policy window replacement", () => {
     const staleWriter = writerFor("fixture-main-b");
     retainedShort();
     const data = { rate_limit: {
-      primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: null,
+      primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: null, tertiary_window: null,
     } };
     setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined, staleWriter, parseMainPolicyUsageQuota(data));
     expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
