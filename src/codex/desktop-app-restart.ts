@@ -81,6 +81,7 @@ export interface DesktopAppRestartIo {
 
 export type DesktopAppRestartReason =
   | "unsupported_platform"
+  | "test_environment"
   | "package_discovery_failed"
   | "process_probe_failed"
   | "no_targets"
@@ -213,6 +214,10 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
   const adapter = io.adapter ?? selected?.adapter;
   const exec = io.execFile ?? selected?.exec;
   if (!adapter || !exec) return skipped("unsupported_platform");
+  // Under the test runner a call without an injected adapter or exec would drive the real OS
+  // adapter: on a developer Mac, `performCodexRestart` tests quit the user's ChatGPT (Codex) app
+  // and relaunched it through `/usr/bin/open` with the runner's sandbox HOME, logged out.
+  if (!io.adapter && !io.execFile && process.env.NODE_ENV === "test") return skipped("test_environment");
 
   // Step 0. Two restarts at once are destructive rather than merely wasteful: the
   // first quits and relaunches, the second sees the freshly started shell as a target
