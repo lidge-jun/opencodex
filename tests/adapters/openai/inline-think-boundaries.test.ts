@@ -82,6 +82,23 @@ describe("inline thinking format boundaries", () => {
     }
     expect(budget.snapshot().currentBytes).toBe(0);
   });
+  test("multi-chunk whitespace join reserves its temporary copy and releases all bytes", () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 8 });
+    const reserve = spyOn(budget, "reserveTransient");
+    const parser = new InlineThinkTagParser(budget, { interleaved: true });
+    try {
+      expect(parser.feed("  ")).toEqual([]);
+      expect(parser.feed("\n\t")).toEqual([]);
+      expect(budget.snapshot().currentBytes).toBe(4);
+      expect(projection(parser.flush())).toEqual({ answer: "  \n\t", reasoning: "" });
+      expect(reserve.mock.calls.map(([bytes]) => bytes)).toEqual([2, 2, 4]);
+      expect(budget.snapshot()).toMatchObject({ currentBytes: 0, highWaterBytes: 8 });
+    } finally {
+      parser.dispose();
+      reserve.mockRestore();
+    }
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
   test("partial tags and unterminated reasoning flush without loss", () => {
     expect(split([" ", "\n"])).toEqual({ answer: " \n", reasoning: "" });
     expect(split(["<thi"])).toEqual({ answer: "<thi", reasoning: "" });

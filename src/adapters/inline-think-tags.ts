@@ -76,12 +76,16 @@ export class InlineThinkTagParser {
 
   private finishPreWhitespace(emit: boolean): string {
     if (this.preWhitespaceLength === 0) return "";
-    const out = emit ? this.preWhitespaceChunks.join("") : "";
-    this.preWhitespaceChunks.length = 0;
-    this.preWhitespaceLength = 0;
-    this.budget?.releaseRetained(this.preWhitespaceBytes, { kind: "reasoning" });
-    this.preWhitespaceBytes = 0;
-    return out;
+    const reservation = emit ? this.budget?.reserveTransient(this.preWhitespaceBytes, { kind: "reasoning" }) : undefined;
+    try {
+      return emit ? this.preWhitespaceChunks.join("") : "";
+    } finally {
+      this.preWhitespaceChunks.length = 0;
+      this.preWhitespaceLength = 0;
+      this.budget?.releaseRetained(this.preWhitespaceBytes, { kind: "reasoning" });
+      this.preWhitespaceBytes = 0;
+      reservation?.release();
+    }
   }
 
   feed(text: string): AdapterEvent[] {
