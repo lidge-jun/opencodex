@@ -84,6 +84,7 @@ const CURSOR_MODEL_EFFORT_TIERS: Record<string, readonly string[]> = {
   // Cursor's 260813 lineup exposes Grok 4.6 Extra High in both regular and Fast forms.
   "grok-4.6": ["low", "medium", "high", "xhigh"],
   "grok-4.6-fast": ["low", "medium", "high", "xhigh"],
+  "grok-4.7": ["low", "medium", "high", "xhigh"],
   "gpt-5.1": ["low", "high"],
   "gpt-5.1-codex-max": ["low", "medium", "high", "xhigh"],
   "gpt-5.1-codex-mini": ["low", "high"],

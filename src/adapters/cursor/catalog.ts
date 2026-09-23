@@ -265,6 +265,14 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
       fast: { levels: ["low", "medium", "high", "xhigh"] },
     },
   },
+  // Served as plain `grok-4.7-<effort>` (no `cursor-` prefix) and without a Fast variant:
+  // a Fast wire id for 4.7 answers Connect not_found.
+  "grok-4.7": {
+    displayName: "Cursor Grok 4.7",
+    window: CONTEXT_500K,
+    defaultVariant: "regular",
+    variants: { regular: { levels: ["low", "medium", "high", "xhigh"] } },
+  },
   "gpt-5.1": {
     displayName: "GPT-5.1",
     window: CONTEXT_272K,

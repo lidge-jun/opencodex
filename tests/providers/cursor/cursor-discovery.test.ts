@@ -333,3 +333,13 @@ describe("Cursor discovery metadata", () => {
     );
   });
 });
+
+describe("Cursor Grok 4.7 discovery", () => {
+  test("gets the 500K window, the low..xhigh ladder, and matches its unprefixed roster ids", () => {
+    expect(inferCursorContextWindow("grok-4.7")).toBe(500_000);
+    expect(cursorModelReasoningEfforts([{ id: "grok-4.7", supportsReasoningEffort: true }])["grok-4.7"])
+      .toEqual(["low", "medium", "high", "xhigh"]);
+    expect(isCursorModelAvailableForAccount("grok-4.7", ["grok-4.7-xhigh"])).toBe(true);
+    expect(isCursorModelAvailableForAccount("grok-4.7", ["grok-4.6-xhigh"])).toBe(false);
+  });
+});

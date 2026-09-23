@@ -272,3 +272,27 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
     });
   });
 });
+
+// Cursor serves Grok 4.7 as plain `grok-4.7-<effort>` (live-checked: low/medium/high/xhigh all
+// answer), unlike 4.5/4.6 which need the `cursor-` wire prefix, and it has no Fast variant
+// (`grok-4.7` Fast answers Connect not_found).
+describe("Cursor Grok 4.7", () => {
+  test("is a known catalog model with a 500K window and a low..xhigh ladder", () => {
+    expect(CURSOR_CAPABILITIES["grok-4.7"]).toMatchObject({ window: 500_000, defaultVariant: "regular" });
+    expect(CURSOR_CAPABILITIES["grok-4.7"]!.variants.regular!.levels).toEqual(["low", "medium", "high", "xhigh"]);
+  });
+
+  test.each(["low", "medium", "high", "xhigh"])("effort %s resolves to the unprefixed wire id", effort => {
+    expect(resolveCursorSelection("grok-4.7", effort)).toMatchObject({ wireId: `grok-4.7-${effort}`, known: true });
+  });
+
+  test("a Fast request never produces a -fast wire id", () => {
+    expect(resolveCursorSelection("grok-4.7", "high", undefined, { fast: true }).wireId).toBe("grok-4.7-high");
+    expect(CURSOR_CAPABILITIES["grok-4.7"]!.variants.fast).toBeUndefined();
+  });
+
+  test("the effort map advertises the same ladder", () => {
+    expect(cursorModelHasEffortTiers("grok-4.7")).toBe(true);
+    expect(cursorRequestWireModelIdWithEffort("grok-4.7", "xhigh")).toBe("grok-4.7-xhigh");
+  });
+});
