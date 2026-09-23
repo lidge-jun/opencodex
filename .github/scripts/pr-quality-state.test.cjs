@@ -795,6 +795,20 @@ describe("durable readiness re-attestation", () => {
     assert.equal(result.pending.checkpointAt, null);
   });
 
+  it("accepts an author edit when the live PR timestamp advances after the event", () => {
+    const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase: "await-clear", checkpointAt: CHECKPOINT };
+    const result = advanceReattestation({
+      pending,
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0, { updatedAt: "2026-09-22T01:00:02.000Z" }),
+      event: authorEdit(body0, body4),
+    });
+    assert.equal(result.pending.phase, "await-check");
+    assert.equal(result.pending.checkpointAt, null);
+  });
+
   it("rejects equal timestamps, title-only edits, and stale or reordered payloads", () => {
     const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase: "await-clear", checkpointAt: CHECKPOINT };
     const cases = [
@@ -805,6 +819,7 @@ describe("durable readiness re-attestation", () => {
       authorEdit(body0, body4, { senderId: 7 }),
       authorEdit(body0, body4, { senderType: "Bot" }),
       authorEdit(body0, body4, { name: "status" }),
+      authorEdit(body0, body4, { updatedAt: "2026-09-22T01:00:02.000Z" }),
     ];
     for (const event of cases) {
       const result = advanceReattestation({
