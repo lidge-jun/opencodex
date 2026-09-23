@@ -387,7 +387,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-opencodex가 managed [background service](/reference/cli/#ocx-service)로 실행될 때는 `OCX_SERVICE=1`을 설정하므로 service-driven restart가 Codex config를 흔들지 **않습니다**. 네이티브 Codex를 복원하는 것은 명시적인 `ocx stop` / `ocx service stop`뿐입니다.
+opencodex가 managed [background service](/ko/reference/cli/lifecycle/#백그라운드-서비스)로 실행될 때는 `OCX_SERVICE=1`을 설정하므로 service-driven restart가 Codex config를 흔들지 **않습니다**. 네이티브 Codex를 복원하는 것은 명시적인 `ocx stop` / `ocx service stop`뿐입니다.
 
 ## 페이지 분할 기록 보호에 따른 거부
 

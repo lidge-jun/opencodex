@@ -26,12 +26,18 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
+import { resetLabActivationForTests } from "../../src/lib/lab-activation";
 import { costEvidenceForCandidate } from "../../src/routing/cost";
+import { clearHealthHistoryCacheForTests } from "../../src/routing/health";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { evaluatePolicyProfile } from "../../src/routing/evaluator";
 import { normalizeRouteDecisionTrace } from "../../src/routing/trace";
 import { NoEligiblePolicyCandidateError, routeModel } from "../../src/router";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
+import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
 import { ManagementRequest } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -44,14 +50,22 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
 });
 
-afterEach(() => {
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  if (!testDir) return;
+afterEach(async () => {
   try {
-    removeTreeWithRetry(testDir);
-  } catch {
-    // Windows may keep a handle briefly after management/router I/O.
+    resetLabActivationForTests();
+    // Dry-run health evidence opens the SQLite history index for this home. ACL
+    // settlement does not close that handle or invalidate the cross-case health cache.
+    closeRequestHistoryIndex();
+    clearHealthHistoryCacheForTests();
+    // Management reads can schedule config-directory ACL work. Let that owner finish
+    // before synchronous removal, which would otherwise block its completion callbacks.
+    await flushConfigDirHardeningForTests();
+    if (testDir) await flushWindowsSecretAclReapsBeforeRemoval(testDir);
+  } finally {
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    // Remove the home even when a flush above rejects, so no stale or locked state survives the case.
+    if (testDir) removeTreeWithRetry(testDir);
   }
 });
 
@@ -89,6 +103,52 @@ function livePathEvidence(capUsd: number) {
 }
 
 describe("issue #1181 — hard cost cap under unknown evidence", () => {
+  test("Kimi's retargeted alias stays unknown to caps until the operator supplies a price", () => {
+    const model = "kimi-for-coding";
+    const usage = { inputTokens: 100, outputTokens: 10 };
+    try {
+      for (const provider of ["kimi", "kimi-code", "kimi-responses"]) {
+        const config: OcxConfig = {
+          port: 10100, defaultProvider: provider,
+          providers: { [provider]: {
+            adapter: provider === "kimi-responses" ? "openai-responses" : "openai-chat",
+            baseUrl: "https://api.kimi.com/coding/v1", models: [model],
+          } },
+          routingProfiles: { cost: {
+            candidates: [{ provider, model }], optimize: { cost: 0.8 },
+            limits: { maxEstimatedCostUsd: 1, onUnknownCost: "exclude" },
+            unknownEvidence: { capability: "allow", health: "allow", quota: "allow", cost: "allow" },
+          } },
+        };
+        refreshUserCostOverlays(config);
+        const evidence = costEvidenceForCandidate({ provider, model, usage, usageStatus: "reported", limitUsd: 1 });
+        expect(evidence).toEqual({ incomplete: true, priceSource: "unmatched", limitUsd: 1 });
+        const evaluate = () => evaluatePolicyProfile(config, "cost", {}, [
+          { provider, model, capability: { contextWindow: 1_048_576 }, cost: evidence },
+        ]).candidates[0]!;
+        expect(evaluate().cost?.capOutcome).toBe("unknown-excluded");
+        expect(evaluate().exclusions.some(e => e.code === "cost-limit-unknown")).toBe(true);
+        config.routingProfiles!.cost!.limits!.onUnknownCost = "allow";
+        expect(evaluate().eligible).toBe(true);
+        expect(evaluate().cost?.capOutcome).toBe("unknown-allowed");
+        config.routingProfiles!.cost!.unknownEvidence!.cost = "exclude";
+        expect(evaluate().exclusions.some(e => e.code === "unknown-price")).toBe(true);
+        config.providers[provider]!.modelCosts = { [model]: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 } };
+        refreshUserCostOverlays(config);
+        const priced = costEvidenceForCandidate({ provider, model, usage, usageStatus: "reported", limitUsd: 1 });
+        expect(priced.priceSource).toBe("user");
+        expect(priced.estimatedUsd).toBeCloseTo(0.00012, 12);
+        const candidate = evaluatePolicyProfile(config, "cost", {}, [
+          { provider, model, capability: { contextWindow: 1_048_576 }, cost: priced },
+        ]).candidates[0]!;
+        expect(candidate.eligible).toBe(true);
+        expect(candidate.cost?.capOutcome).toBe("satisfied");
+      }
+    } finally {
+      refreshUserCostOverlays({ providers: {} } as OcxConfig);
+    }
+  });
+
   test("default allow: live-path evidence stays eligible with unknown-allowed capOutcome", () => {
     const evidence = livePathEvidence(0.000001);
     expect(evidence.estimatedUsd).toBeUndefined();

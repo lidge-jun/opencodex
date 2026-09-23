@@ -11,7 +11,7 @@ Catalog discovery remains separate from the Responses final-route
 The configuration-only [plaintext V2 contract](subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
 
-Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Remote catalog HTTP proxy routing
 
@@ -64,7 +64,8 @@ provider-wide fallback. Exact model output limits precede the provider default o
   account-qualified native ids hide only that selector row; BARE native slugs hide the bare row
   and all account-selector clones and drop that model family from raw `/v1/models`);
 - applies exact provider/model compatibility exclusions after live discovery and metadata
-  augmentation, so upstream-advertised but uncallable rows never enter dashboard or Codex pickers;
+  augmentation, so upstream-advertised but uncallable rows—including retired aliases retained in
+  generated metadata for historical accounting—never enter dashboard or Codex pickers;
 - strips native-only service tier and WebSocket metadata unless the final routed provider/model
   explicitly enables the verified OpenAI-compatible service tier;
 - backs up the pristine catalog once per catalog: the copy is keyed by a hash of the catalog path
@@ -172,6 +173,13 @@ Provider live-model lists are cached with a configured TTL (`src/codex/model-cac
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
 deliberately does not, because a disabled provider is already excluded from the catalog gather
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
+Account-scoped discovery transports remain bound to the credential snapshot that supplied the
+token. Devin discovery uses the allowlisted tenant API base URL from that same snapshot rather
+than pairing a durable account key with the provider registry's default host. If the stored
+destination is invalid, registered Devin discovery and routing use the registry's fixed base URL
+instead of a stale configured override. For Devin, the irreversible roster fingerprint covers
+both credential and validated destination, so switching either observes neither fresh nor stale
+data recorded under the previous pair.
 Entitlement-specific rosters (Qoder, Devin, Cursor) additionally bind their cache entry to an
 irreversible credential fingerprint: a credential switch observes neither the fresh nor the stale
 roster recorded under the previous credential, and a failed discovery's cooldown neither supplies
@@ -488,9 +496,9 @@ spelling; the V1 and compaction cap exemptions are preserved.
 Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Connected CLI usage follows the [client-scoped hub usage contract](gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
 
@@ -499,10 +507,10 @@ Chat helper admission in `src/server/responses/core.ts` follows the
 [deferred stored-main contract](providers/openai-tiers.md): only a needed Direct OpenAI helper
 claims stored main, after terminal vision, routed vision and search exclusions.
 
-Account-qualified catalog routes bypass automatic plan exclusions while retaining credential and entitlement checks; see [automatic pool plan exclusions](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+Account-qualified catalog routes bypass automatic plan exclusions while retaining credential and entitlement checks; see [automatic pool plan exclusions](providers/openai-accounts.md#automatic-pool-plan-exclusions).
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](transports/responses.md).
@@ -511,15 +519,15 @@ Provider `showThinkingSummary` is a Responses request default; it does not rewri
 
 Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Claude replay carries [Go conversation affinity](data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
-Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
+Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-accounts.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
-The account history response can include a [low-confidence effective capacity estimate](providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -535,7 +543,7 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 
 ## Renamed destination reasoning metadata
 
-`src/providers/derive.ts` fills missing reasoning tables for renamed providers accepted by the existing fixed-key destination matcher. Model entries are cloned and explicit user entries (including empty arrays) win. Provider-wide effort defaults fill only when undefined; Command Code unknown models therefore keep the registry's empty picker policy unless overridden. Identity, transport and other capability axes are unchanged. The gathered row drives client exports; this metadata contract does not prove arbitrary gateway routing.
+`src/providers/derive.ts` fills missing reasoning tables for renamed providers accepted by the existing fixed-key destination matcher. Model entries are cloned and explicit user entries (including empty arrays) win, matched case-insensitively. Provider-wide effort defaults fill only when undefined; Command Code unknown models therefore keep the registry's empty picker policy unless overridden. Identity, transport and other capability axes are unchanged. The gathered row drives client exports; this metadata contract does not prove arbitrary gateway routing.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
 
@@ -546,4 +554,15 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
 
 Compaction routing selects its configured model at Responses ingress under the
-[compaction routing contract](transports/responses.md#compaction-routing-overrides). Catalog selection remains conversation-owned.
+[compaction routing contract](transports/responses-failover.md#compaction-routing-overrides). Catalog selection remains conversation-owned.
+Subagent account previews and live routing share the [priority failback](providers/openai-accounts.md#ongoing-priority-failback) decision; model eligibility and fixed catalog selectors retain their existing meaning.
+
+## Reasoning metadata refresh
+
+Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the optional
+`src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
+gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with
+the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
+`src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh
+only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do
+not fetch on the request path; catalog sync owns their bootstrap.

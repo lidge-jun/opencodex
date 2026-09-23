@@ -509,6 +509,21 @@ export function cursorBlobByteLength(blobId: Uint8Array): number | null {
   return entry ? entry.data.byteLength : null;
 }
 
+/** Read one stored root for usage estimation without hydration, pin release, or served-byte accounting. */
+export function cursorBlobTextForEstimate(blobId: Uint8Array): string | null {
+  if (!(blobId instanceof Uint8Array) || blobId.byteLength === 0) return null;
+  try {
+    const entry = blobs.get(key(blobId));
+    if (!entry) return null;
+    return new TextDecoder("utf-8", { fatal: true }).decode(entry.data);
+  } catch {
+    debugProviderDiagnostic("cursor", "blob-estimate-unreadable", {
+      bytes: blobId.byteLength,
+    });
+    return null;
+  }
+}
+
 /**
  * Serve-time integrity for content-addressed blobs (devlog 260826_cursor_responses_gap 080):
  * a raw 32-byte blob id IS the SHA-256 of its bytes, so served data whose digest mismatches

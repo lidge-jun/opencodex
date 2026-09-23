@@ -733,7 +733,7 @@ describe("provider registry parity", () => {
     expect(deriveKeyLoginMap().zai.modelMaxOutputTokens?.["glm-5.3[1m]"]).toBe(131_072);
     // `zhipu-bigmodel-coding` opts in for the same reason `zai` does: it serves the same
     // bracketed GLM ids, and that vendor's OpenAI path returns 400 code 1211 for them.
-    expect(optedInProviders).toEqual(["kimi", "zai", "zhipu-bigmodel-coding", "kimi-code"]);
+    expect(optedInProviders).toEqual(["kimi", "kimi-responses", "zai", "zhipu-bigmodel-coding", "kimi-code"]);
 
     const config: OcxConfig = {
       port: 10100,
@@ -931,6 +931,37 @@ describe("provider registry parity", () => {
     expect(apiKey.modelReasoningEfforts).toEqual(anthropicOauth?.modelReasoningEfforts);
   });
 
+  test("case-varied Anthropic effort overrides replace registry defaults", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      authMode: "oauth",
+      modelReasoningEfforts: { "Claude-Opus-5": [] },
+    };
+
+    const enriched = structuredClone(provider);
+    enrichProviderFromRegistry("anthropic", enriched);
+    expect(enriched.modelReasoningEfforts).not.toHaveProperty("claude-opus-5");
+    expect(enriched.modelReasoningEfforts?.["Claude-Opus-5"]).toEqual([]);
+
+    const config: OcxConfig = { port: 10100, defaultProvider: "anthropic", providers: { anthropic: provider } };
+    const routed = routeModel(config, "anthropic/claude-opus-5");
+    expect(routed.provider.modelReasoningEfforts).not.toHaveProperty("claude-opus-5");
+    expect(routed.provider.modelReasoningEfforts?.["Claude-Opus-5"]).toEqual([]);
+
+    // A renamed row reaches the same fill through the destination fallback
+    // (fillRecordOfArrays), which must claim registry keys case-insensitively too.
+    const customNamed: OcxProviderConfig = {
+      adapter: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      authMode: "key",
+      modelReasoningEfforts: { "Claude-Opus-5": [] },
+    };
+    enrichProviderFromRegistry("my-claude", customNamed);
+    expect(customNamed.modelReasoningEfforts).not.toHaveProperty("claude-opus-5");
+    expect(customNamed.modelReasoningEfforts?.["Claude-Opus-5"]).toEqual([]);
+  });
+
   test("the Anthropic ladder omits rungs the adapter cannot honor distinctly", () => {
     const anthropicOauth = PROVIDER_REGISTRY.find(entry => entry.id === "anthropic");
     for (const efforts of Object.values(anthropicOauth?.modelReasoningEfforts ?? {})) {
@@ -950,7 +981,7 @@ describe("provider registry parity", () => {
     // k3-256k). Seeding a retired id in a metadata list would re-arm the model-rename
     // migration on every boot (#5066); saved rows still naming one are repaired by
     // MODEL_RENAMES instead.
-    const codingModels = ["k3", "k3[1m]", "kimi-for-coding"];
+    const codingModels = ["k3", "k3[1m]", "k3-256k", "kimi-for-coding"];
     const parityLists = [
       "noReasoningModels",
       "noTemperatureModels",
@@ -960,10 +991,10 @@ describe("provider registry parity", () => {
       "preserveReasoningContentModels",
     ] as const;
 
-    for (const providerId of ["kimi", "kimi-code"]) {
+    for (const providerId of ["kimi", "kimi-code", "kimi-responses"]) {
       const entry = PROVIDER_REGISTRY.find(provider => provider.id === providerId);
       expect(entry?.models).toEqual(codingModels);
-      // The whole point of the refresh: both presets default to the live alias. A
+      // Every Coding preset defaults to the live alias. A
       // registry rollback to the retired default would silently pass without this.
       expect(entry?.defaultModel).toBe("kimi-for-coding");
       expect(entry?.models).not.toContain("kimi-k2.7-code");
@@ -987,15 +1018,22 @@ describe("provider registry parity", () => {
       // Key-pool 429 rotation rebuilds the provider from the persisted config (not the routed
       // one), so the flag must survive seeding/enrichment, not just the router's registry backfill.
       expect(providerConfigSeed(entry!).promptCacheKey).toBe(true);
-      const enriched: OcxProviderConfig = { adapter: "openai-chat", baseUrl: entry!.baseUrl };
+      const enriched: OcxProviderConfig = { adapter: entry!.adapter, baseUrl: entry!.baseUrl };
       enrichProviderFromCatalog(providerId, enriched);
       expect(enriched.promptCacheKey).toBe(true);
       expect(entry?.noReasoningModels).not.toContain("k3");
       expect(entry?.noReasoningModels).not.toContain("k3[1m]");
       expect(entry?.modelReasoningEfforts?.k3).toEqual(["low", "high", "max"]);
       expect(entry?.modelReasoningEfforts?.["k3[1m]"]).toEqual(["low", "high", "max"]);
-      for (const modelId of ["k3", "k3[1m]"]) {
+      for (const modelId of ["k3", "k3[1m]", "k3-256k"]) {
+        expect(entry?.noReasoningModels).not.toContain(modelId);
+        expect(entry?.modelReasoningEfforts?.[modelId]).toEqual(["low", "high", "max"]);
         expect(entry?.modelDefaultReasoningEfforts?.[modelId]).toBe("max");
+        expect(entry?.modelInputModalities?.[modelId]).toEqual(["text", "image"]);
+        for (const field of ["noTemperatureModels", "noTopPModels", "noPenaltyModels", "preserveReasoningContentModels"] as const) {
+          expect(entry?.[field]).toContain(modelId);
+        }
+        expect(entry?.autoToolChoiceOnlyModels).not.toContain(modelId);
         expect(entry?.modelReasoningEffortMap?.[modelId]).toEqual({
           none: "none",
           low: "low",
@@ -1016,6 +1054,24 @@ describe("provider registry parity", () => {
       // 260921: K2.8 gave kimi-for-coding the same adjustable low/high/max ladder as k3.
       expect(entry?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
     }
+
+    // The Responses preset shares the kimi OAuth account (same oauthId, no second login)
+    // and carries identical model metadata; the wire is the only difference.
+    const kimiResp = PROVIDER_REGISTRY.find(provider => provider.id === "kimi-responses");
+    expect(kimiResp).toBeDefined();
+    expect(kimiResp?.adapter).toBe("openai-responses");
+    expect(kimiResp?.authKind).toBe("oauth");
+    expect(kimiResp?.oauthId).toBe("kimi");
+    expect(kimiResp?.requiresAdjacentResponsesToolResults).toBe(true);
+    expect(kimiResp?.models).toEqual(codingModels);
+    expect(kimiResp?.defaultModel).toBe("kimi-for-coding");
+    expect(kimiResp?.modelContextWindows?.["kimi-for-coding"]).toBe(1_048_576);
+    expect(kimiResp?.modelReasoningEfforts?.["kimi-for-coding"]).toEqual(["low", "high", "max"]);
+    expect(kimiResp?.modelDefaultReasoningEfforts?.["kimi-for-coding"]).toBe("max");
+    expect(kimiResp?.modelInputModalities?.["kimi-for-coding"]).toEqual(["text", "image"]);
+    expect(kimiResp?.featured).toBe(false);
+    expect(kimiResp?.baseUrl).toBe(PROVIDER_REGISTRY.find(provider => provider.id === "kimi")?.baseUrl);
+    expect(resolveMetadataProvider("kimi-responses")).toBe("moonshot");
 
     const kimi = PROVIDER_REGISTRY.find(provider => provider.id === "kimi")!;
     const kimiModel = applyProviderConfigHints("kimi", providerConfigSeed(kimi), { provider: "kimi", id: "k3" });
@@ -1250,13 +1306,17 @@ describe("provider registry parity", () => {
     }
     expect(OAUTH_PROVIDERS.xai.providerConfig.defaultModel).toBe("grok-4.5");
     expect(OAUTH_PROVIDERS.xai.providerConfig.liveModels).toBe(true);
+    expect(OAUTH_PROVIDERS.xai.providerConfig.models?.[0]).toBe("grok-4.7");
     expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.6");
     expect(OAUTH_PROVIDERS.xai.providerConfig.models).toContain("grok-4.5");
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.7"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.6"]).toBe(500_000);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelContextWindows?.["grok-4.5"]).toBe(500_000);
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.7"]).toEqual(["low", "medium", "high", "xhigh"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.6"]).toEqual(["low", "medium", "high", "xhigh"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEfforts?.["grok-4.5"]).toEqual(["low", "medium", "high"]);
-    expect(OAUTH_PROVIDERS.xai.providerConfig.modelDefaultReasoningEfforts).toEqual({ "grok-4.6": "high" });
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelDefaultReasoningEfforts).toEqual({ "grok-4.7": "high", "grok-4.6": "high" });
+    expect(OAUTH_PROVIDERS.xai.providerConfig.modelInputModalities?.["grok-4.7"]).toEqual(["text", "image"]);
     expect(OAUTH_PROVIDERS.xai.providerConfig.modelReasoningEffortMap).toBeUndefined();
     expect(OAUTH_PROVIDERS.xai.providerConfig.noVisionModels).toContain("grok-build-0.1");
     const antigravityRegistry = PROVIDER_REGISTRY.find(entry => entry.id === "google-antigravity");
@@ -1406,6 +1466,7 @@ describe("provider registry parity", () => {
       "anthropic-apikey": "anthropic",
       "anthropic-key": "anthropic",
       kimi: "moonshot",
+      "kimi-responses": "moonshot",
       "opencode-go": "opencode-go",
       openrouter: "openrouter",
       google: "google",
@@ -1481,6 +1542,30 @@ describe("provider registry parity", () => {
     expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
       .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
     expect(entry?.default_reasoning_level).toBe("high");
+  });
+
+  test("grok-4.7 carries measured context and the four-rung picker ladder", () => {
+    const xai = PROVIDER_REGISTRY.find(entry => entry.id === "xai");
+    const seed = providerConfigSeed(xai!);
+    const model = applyProviderConfigHints("xai", seed, { id: "grok-4.7", provider: "xai" });
+    expect(model.contextWindow).toBe(500_000);
+    expect(model.reasoningEfforts).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(model.inputModalities).toEqual(["text", "image"]);
+
+    const entries = buildCatalogEntries(nativeTemplate() as never, [], [model]);
+    const entry = entries.find(e => e.slug === "xai/grok-4.7");
+    expect(entry?.context_window).toBe(500_000);
+    expect((entry?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
+      .toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
+    expect(entry?.default_reasoning_level).toBe("high");
+  });
+
+  test("Devin grok-4-7 degraded-mode seed carries its catalog window and ladder", () => {
+    const devin = PROVIDER_REGISTRY.find(entry => entry.id === "devin");
+    expect(devin?.models).toContain("grok-4-7");
+    expect(devin?.modelContextWindows?.["grok-4-7"]).toBe(500_000);
+    expect(devin?.modelReasoningEfforts?.["grok-4-7"])
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   // The id-list assertion above only proves the preset exists. Pin the contract a user actually
@@ -1764,7 +1849,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     const provider = make();
     enrichProviderFromRegistry("CommandCode", provider);
     expect(configuredReasoningEfforts(provider, known)).toEqual(["high", "max"]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
     expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual([]);
   });
   test("preserves explicit entries and clones arrays without losing other table rows", () => {
@@ -1777,7 +1862,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     enrichProviderFromRegistry("CommandCode", provider);
     expect(provider).toEqual(once);
     expect(configuredReasoningEfforts(provider, known)).toEqual(["low"]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
     expect(configuredReasoningEfforts(provider, "custom")).toEqual([]);
     expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual(["medium"]);
     provider.modelReasoningEfforts![known]!.push("high");
@@ -1789,7 +1874,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     const provider = make({ modelReasoningEfforts: { [known]: [] } });
     enrichProviderFromRegistry("CommandCode", provider);
     expect(configuredReasoningEfforts(provider, known)).toEqual([]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
   });
   test("does not infer metadata for a different adapter, OAuth, or unrelated endpoint", () => {
     for (const override of [{ adapter: "openai-responses" }, { authMode: "oauth" as const }, { baseUrl: "https://example.test/v1" }]) {

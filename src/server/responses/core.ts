@@ -189,7 +189,7 @@ export { readDisplaySafeErrorText } from "./core-errors";
 export { usesCodexForwardPoolAuth } from "./core-codex-account";
 export { preAuthUpstreamHostCircuitKey } from "./core-codex-account";
 export { upstreamHostCircuitOpenResponse } from "./core-codex-account";
-export { shouldRetryCodexPoolAccountQuota } from "./core-codex-account";
+export { shouldRetryCodexPoolAccountQuota, shouldRetryCodexScopedQuotaOnAlternate } from "./core-codex-account";
 export { shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
 export { codexAccountGatedCanonicalWireModel } from "./core-codex-account";
 export { codexForwardTerminalOutcomeRecorder } from "./core-codex-account";

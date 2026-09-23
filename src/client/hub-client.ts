@@ -6,14 +6,8 @@ import { clearableDeadline } from "../lib/abort";
 import type { Desktop3pModelEntry } from "../claude/desktop-3p";
 import { assertDesktop3pModelsValid } from "../claude/desktop-3p-guard";
 
-/**
- * A pairing grant may cross loopback or authenticated HTTPS, and nothing else.
- *
- * Mirrors the hub-side rule in src/server/gui-session.ts. Checking here too is not
- * redundant: it keeps the client from spending a single-use code on a request the hub is
- * certain to refuse.
- */
-function isPairingTransportPermitted(origin: string): boolean {
+/** Hub traffic may cross loopback or authenticated HTTPS, and nothing else. */
+function isHubTransportPermitted(origin: string): boolean {
   let url: URL;
   try {
     url = new URL(origin);
@@ -103,7 +97,7 @@ async function fetchBounded(
     });
     headerDeadline?.clear();
     if (response.status >= 300 && response.status < 400 && response.status !== 304) {
-      try { await response.body?.cancel(); } catch { /* best effort */ }
+      try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
       throw new HubClientError("redirect_refused", "Hub request redirect was refused", response.status);
     }
     return response;
@@ -118,15 +112,16 @@ async function fetchBounded(
 async function boundedText(
   response: Response,
   maxBytes: number,
-  options: { inactivityTimeoutMs?: number } = {},
+  options: { signal?: AbortSignal; inactivityTimeoutMs?: number } = {},
 ): Promise<string> {
   const declared = Number(response.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > maxBytes) {
-    try { await response.body?.cancel(); } catch { /* best effort */ }
+    try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
     throw new HubClientError("body_too_large", "Hub response exceeded the allowed size", response.status);
   }
   const result = await readBoundedResponseBytes(response, {
     maxBytes,
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
     ...(options.inactivityTimeoutMs === undefined ? {} : { inactivityTimeoutMs: options.inactivityTimeoutMs }),
   });
   if (result.oversized) {
@@ -193,6 +188,12 @@ export function normalizeHubOrigin(input: string): string {
       "Hub URL must be an HTTP(S) origin without credentials, query, fragment, or non-/v1 path",
     );
   }
+  if (!isHubTransportPermitted(parsed.origin)) {
+    throw new HubClientError(
+      "insecure_http_refused",
+      "Hub URLs require loopback or HTTPS; plaintext remote HTTP is not permitted",
+    );
+  }
   return parsed.origin;
 }
 
@@ -252,7 +253,7 @@ export async function exchangeConnectPairingGrant(
   // Deliberateness is not the control that matters: the grant is readable by anything on the
   // path and the session it mints is reusable. The hub refuses this exchange outright now, so
   // sending it would only burn a single-use code against a certain rejection.
-  if (!isPairingTransportPermitted(origin)) {
+  if (!isHubTransportPermitted(origin)) {
     throw new HubClientError("insecure_http_refused", "Pairing requires loopback or HTTPS; plaintext HTTP cannot carry a grant");
   }
   const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/opencodex-session`, {
@@ -446,20 +447,26 @@ export async function downloadClientCatalog(
     headers,
   }, options.timeoutMs, "headers");
   if (response.status === 304) {
+    try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
     throw new HubClientError("catalog_unexpected_304", "Hub answered 304 to an unconditional catalog request", 304);
   }
   if (!response.ok) {
+    try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
     const code = response.status === 401 ? "catalog_unauthorized" : `catalog_http_${response.status}`;
     throw new HubClientError(code, `Hub catalog request failed (${response.status})`, response.status);
   }
   if (!jsonCompatibleContentType(response)) {
-    try { await response.body?.cancel(); } catch { /* best effort */ }
+    try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
     throw new HubClientError("catalog_content_type_invalid", "Hub catalog response was not JSON", response.status);
   }
   let body: string;
   try {
+    const inactivityTimeoutMs = safeTimeout(options.timeoutMs);
     body = await boundedText(response, options.maxBytes ?? MAX_REMOTE_CATALOG_BYTES, {
-      inactivityTimeoutMs: safeTimeout(options.timeoutMs),
+      // Permit active catalog transfers to span multiple inactivity windows,
+      // while retaining the client's established maximum request lifetime.
+      signal: AbortSignal.timeout(Math.min(inactivityTimeoutMs * 24, 120_000)),
+      inactivityTimeoutMs,
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
@@ -481,7 +488,7 @@ export async function fetchHubUsage(
   options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
 ): Promise<HubUsageReport> {
   const origin = normalizeHubOrigin(serverUrl);
-  if (!isPairingTransportPermitted(origin)) {
+  if (!isHubTransportPermitted(origin)) {
     throw new HubClientError("insecure_http_refused", "Client usage requires HTTPS or loopback HTTP");
   }
   const response = await fetchBounded(options.fetchImpl ?? fetch, `${origin}/v1/usage?${query}`, {
@@ -593,7 +600,7 @@ export async function downloadDesktop3pModels(
   options: { timeoutMs?: number; fetchImpl?: typeof fetch } = {},
 ): Promise<{ version: 1; models: Desktop3pModelEntry[] }> {
   const origin = normalizeHubOrigin(serverUrl);
-  if (!isPairingTransportPermitted(origin)) {
+  if (!isHubTransportPermitted(origin)) {
     throw new HubClientError("insecure_http_refused", "Desktop model snapshots require HTTPS or loopback HTTP");
   }
   try {
@@ -608,11 +615,11 @@ export async function downloadDesktop3pModels(
       }),
     }, options.timeoutMs);
     if (!response.ok || response.status === 304) {
-      try { await response.body?.cancel(); } catch { /* best effort */ }
+      try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
       throw new HubClientError(`desktop_snapshot_http_${response.status}`, "Hub Desktop model snapshot request failed", response.status);
     }
     if (!jsonCompatibleContentType(response)) {
-      try { await response.body?.cancel(); } catch { /* best effort */ }
+      try { void response.body?.cancel().catch(() => {}); } catch { /* best effort */ }
       throw new HubClientError("desktop_snapshot_invalid", "Hub Desktop model snapshot was invalid");
     }
     const body = await boundedText(response, DESKTOP_SNAPSHOT_MAX_BYTES, {

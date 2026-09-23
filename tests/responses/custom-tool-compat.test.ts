@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { hasUnmappedRoutedCustomToolOutput, rewriteRoutedCustomToolsForUpstream } from "../../src/responses/custom-tool-compat";
+import {
+  hasUnmappedRoutedCustomToolOutput,
+  rewriteRoutedCustomToolsForUpstream,
+  RoutedCustomToolCompatError,
+  validateFinalCustomToolCompatibility,
+} from "../../src/responses/custom-tool-compat";
 
 function convertedInputDescription(name: string): string | undefined {
   const result = rewriteRoutedCustomToolsForUpstream({
@@ -195,5 +200,196 @@ describe("routed custom-tool compatibility", () => {
   test("other converted custom tools keep the generic raw-input contract", () => {
     expect(convertedInputDescription("review_patch"))
       .toBe("Raw input for this client-executed custom tool.");
+  });
+});
+
+describe("undeclared historical custom-tool replay", () => {
+  const awkwardInput = 'say "hi"\npath\\file';
+  const execCall = {
+    type: "custom_tool_call",
+    id: "ctc_exec",
+    call_id: "call_exec",
+    name: "exec",
+    input: awkwardInput,
+  };
+  const execOutput = {
+    type: "custom_tool_call_output",
+    call_id: "call_exec",
+    output: "ok",
+  };
+
+  test("lowers a complete undeclared history pair without expanding the live catalog", () => {
+    const raw = {
+      tools: [],
+      tool_choice: "none",
+      input: [execCall, execOutput],
+    };
+    const before = JSON.stringify(raw);
+
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw, false);
+    const body = rewritten.body as typeof raw;
+
+    expect(JSON.stringify(raw)).toBe(before);
+    expect(rewritten.body).not.toBe(raw);
+    expect(rewritten.names).toEqual(new Set());
+    expect(rewritten.repairNames).toEqual(new Set());
+    expect(body.tools).toEqual([]);
+    expect(body.tool_choice).toBe("none");
+    expect(body.input[0]).toMatchObject({
+      type: "function_call",
+      call_id: "call_exec",
+      name: "exec",
+      arguments: JSON.stringify({ input: awkwardInput }),
+    });
+    expect(JSON.parse(String((body.input[0] as { arguments: string }).arguments)).input).toBe(awkwardInput);
+    expect(body.input[1]).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_exec",
+      output: "ok",
+    });
+    expect(body.input[0]).not.toHaveProperty("id");
+    validateFinalCustomToolCompatibility(body, false);
+  });
+
+  test.each([undefined, true] as const)("leaves undeclared history unchanged when custom-tool support is %p", support => {
+    const raw = { input: [execCall, execOutput] };
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw, support);
+    expect(rewritten.body).toBe(raw);
+    expect(rewritten.names).toEqual(new Set());
+  });
+
+  test("does not depend on store and keeps a legal empty input string", () => {
+    const raw = {
+      store: false,
+      input: [
+        { type: "custom_tool_call", call_id: "call_empty", name: "exec", input: "" },
+        { type: "custom_tool_call_output", call_id: "call_empty", output: { type: "custom_tool_call", name: "exec", input: "nested" } },
+      ],
+    };
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw, false);
+    const body = rewritten.body as typeof raw;
+    expect(body.input[0]).toMatchObject({
+      type: "function_call",
+      arguments: JSON.stringify({ input: "" }),
+    });
+    expect(body.input[1]).toMatchObject({
+      type: "function_call_output",
+      output: { type: "custom_tool_call", name: "exec", input: "nested" },
+    });
+    const stored = rewriteRoutedCustomToolsForUpstream({ ...raw, store: true }, false);
+    expect((stored.body as typeof raw).input[0]).toMatchObject({ type: "function_call", call_id: "call_empty" });
+  });
+
+  test("converts an in-request output-only pair without requiring a second replay", () => {
+    const raw = {
+      input: [
+        { type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "text(1)" },
+        execOutput,
+      ],
+    };
+    expect(hasUnmappedRoutedCustomToolOutput(raw, false)).toBe(false);
+    const body = rewriteRoutedCustomToolsForUpstream(raw, false).body as typeof raw;
+    expect(body.input.map(item => item.type)).toEqual(["function_call", "function_call_output"]);
+  });
+
+  test("requests full replay for an unmapped result when the destination denies custom tools", () => {
+    const orphan = { input: [execOutput] };
+    expect(hasUnmappedRoutedCustomToolOutput(orphan)).toBe(false);
+    expect(hasUnmappedRoutedCustomToolOutput(orphan, true)).toBe(false);
+    expect(hasUnmappedRoutedCustomToolOutput(orphan, false)).toBe(true);
+    const rewritten = rewriteRoutedCustomToolsForUpstream(orphan, false);
+    expect((rewritten.body as typeof orphan).input[0]).toEqual(execOutput);
+    expect(() => validateFinalCustomToolCompatibility(rewritten.body, false)).toThrow(RoutedCustomToolCompatError);
+  });
+
+  test("does not re-wrap existing function calls and is idempotent", () => {
+    const raw = {
+      input: [
+        { type: "function_call", call_id: "call_fn", name: "lookup", arguments: "{\"q\":1}" },
+        { type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "{\"already\":true}" },
+        { type: "custom_tool_call_output", call_id: "call_exec", output: "done" },
+      ],
+    };
+    const first = rewriteRoutedCustomToolsForUpstream(raw, false);
+    const second = rewriteRoutedCustomToolsForUpstream(first.body, false);
+    const body = first.body as typeof raw;
+    expect(body.input[0]).toEqual(raw.input[0]);
+    expect(body.input[1]).toMatchObject({
+      type: "function_call",
+      arguments: JSON.stringify({ input: "{\"already\":true}" }),
+    });
+    expect(second.body).toEqual(first.body);
+  });
+
+  test.each([
+    ["missing", { type: "custom_tool_call", name: "exec", input: "text(1)" }],
+    ["empty", { type: "custom_tool_call", call_id: "", name: "exec", input: "text(1)" }],
+  ] as const)("rejects historical custom calls with a %s call_id before lowering", (_label, item) => {
+    expect(() => rewriteRoutedCustomToolsForUpstream({ input: [item] }, false))
+      .toThrow(/historical_item: custom_tool_call\.call_id/);
+  });
+
+  test("reports malformed historical fields separately from live-name collisions", () => {
+    expect(() => rewriteRoutedCustomToolsForUpstream({
+      input: [{ type: "custom_tool_call", call_id: "call_exec", name: "", input: "text(1)" }],
+    }, false)).toThrow(/historical_item: custom_tool_call\.name/);
+    expect(() => rewriteRoutedCustomToolsForUpstream({
+      input: [{ type: "custom_tool_call", call_id: "call_exec", name: "exec", input: { nested: true } }],
+    }, false)).toThrow(/historical_item: custom_tool_call\.input/);
+    expect(() => rewriteRoutedCustomToolsForUpstream({
+      tools: [{ type: "function", name: "exec", parameters: { type: "object" } }],
+      input: [{ type: "custom_tool_call", call_id: "call_exec", name: "exec", input: "text(1)" }],
+    }, false)).toThrow(/historical_collision: declared_function_name/);
+  });
+
+  test("rejects duplicate call IDs even when the historical call identity matches", () => {
+    expect(() => rewriteRoutedCustomToolsForUpstream({
+      input: [
+        { type: "custom_tool_call", call_id: "call_dup", name: "exec", input: "a" },
+        { type: "custom_tool_call", call_id: "call_dup", name: "exec", input: "a" },
+      ],
+    }, false)).toThrow(/historical_item: duplicate_call_id/);
+  });
+
+  test("refuses call_id identity collisions", () => {
+    expect(() => rewriteRoutedCustomToolsForUpstream({
+      input: [
+        { type: "custom_tool_call", call_id: "call_dup", name: "exec", input: "a" },
+        { type: "custom_tool_call", call_id: "call_dup", name: "apply_patch", input: "b" },
+      ],
+    }, false)).toThrow(RoutedCustomToolCompatError);
+  });
+
+  test("does not let a native function call claim a historical custom-tool output", () => {
+    const raw = {
+      input: [
+        { type: "function_call", call_id: "call_shared", name: "exec", arguments: "{}" },
+        { type: "custom_tool_call_output", call_id: "call_shared", output: "ok" },
+      ],
+    };
+    const rewritten = rewriteRoutedCustomToolsForUpstream(raw, false);
+    expect(rewritten.body).toBe(raw);
+    expect((rewritten.body as typeof raw).input[1]).toEqual(raw.input[1]);
+    expect(() => validateFinalCustomToolCompatibility(rewritten.body, false))
+      .toThrow(/final_guard: custom_tool_call_output/);
+  });
+
+  test("final guard reports leftover protocol items and ignores tool-output JSON", () => {
+    expect(() => validateFinalCustomToolCompatibility({
+      input: [{ type: "custom_tool_call", call_id: "call_x", name: "exec", input: "x" }],
+    }, false)).toThrow(/final_guard: custom_tool_call/);
+    expect(() => validateFinalCustomToolCompatibility({
+      tools: [{ type: "custom", name: "exec" }],
+    }, false)).toThrow(/final_guard: custom/);
+    expect(() => validateFinalCustomToolCompatibility({
+      input: [{
+        type: "function_call_output",
+        call_id: "call_x",
+        output: { type: "custom_tool_call", name: "exec", input: "x" },
+      }],
+    }, false)).not.toThrow();
+    expect(() => validateFinalCustomToolCompatibility({
+      input: [{ type: "custom_tool_call", call_id: "call_x", name: "exec", input: "x" }],
+    }, true)).not.toThrow();
   });
 });

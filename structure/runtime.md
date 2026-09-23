@@ -38,7 +38,7 @@ Chat request serialization owns
 and the developer wire role; it requires no runtime lifecycle change, and its one
 configuration option is a per-provider role opt-out.
 
-Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Anthropic streaming usage snapshots
 
@@ -99,9 +99,9 @@ backing, the npm prefix layout, and the Node/npm toolchain beside the resolved n
 Configured values containing a path separator must be drive-absolute; otherwise derivation
 refuses with `candidate_unavailable` instead of substituting a different PATH candidate. Bare
 command names and the unset default continue to resolve only through the captured PATH.
-Discovery only proposes paths and never reads ambient state. Four explicit absolute paths
-remain accepted as an all-or-none override. Only the
-standard npm command shim or direct Codex package entry is accepted. The native reader in
+Discovery probes candidates through the same local-volume, reparse-refusing held-handle reader as final observation, so captured PATH entries cannot trigger network filesystem I/O.
+It never reads ambient state. Four explicit absolute paths remain accepted as an all-or-none override.
+Only the standard npm command shim or direct Codex package entry is accepted. The native reader in
 `src/codex/windows-installation-files.ts` holds ancestor/file handles for bounded reads and
 rejects reparse points, conflicting writers and unsupported paths/platforms. Its path-free
 report binds file identities and bytes to this observation, not a durable update permission.
@@ -127,7 +127,7 @@ does not perform OAuth, and runtime credential resolution rereads the owned sour
 | `src/server/images.ts` | Standalone Images data plane: default OpenAI or explicit custom-provider selection, Codex account affinity, bounded opaque request relay, single-attempt upstream fetch, pool health recording, and safe response/cancellation relay. |
 | `src/server/audio-transcriptions.ts` | Standalone multipart transcription; audio-specific key admission, bounded upload/response, stored OpenAI credential resolution and lease-bound cancellation. See [audio contracts](data-planes/inbound-compat.md#standalone-file-transcription). |
 | `src/server/audio-live.ts`, `src/server/audio-dictation.ts` | External voice/dictation orchestration using the existing bounded socket relay, server-owned credentials, cancellation and opaque call ownership. See [streaming audio](data-planes/inbound-compat.md#streaming-audio). |
-| `src/config.ts` | Persisted `~/.opencodex/config.json` surface: the facade keeps the load/save/initialize entry points and re-exports, while schema lives in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`), defaults in `src/config/proxy-env.ts`, and replace-path persistence in `src/config/persist-unlocked.ts`. |
+| `src/config.ts`, `src/config/persisted-mutation.ts` | Persisted `~/.opencodex/config.json` surface: the facade keeps load/save/initialize entry points and re-exports the schema-valid mutation callback, types, and one-shot test seam; the leaf owns its bounded rebase under the shared lock. Schema lives in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`), defaults in `src/config/proxy-env.ts`, and replace-path persistence in `src/config/persist-unlocked.ts`. |
 | `src/config/paths.ts` | Resolves `OPENCODEX_HOME`, `config.json`, and owner-only directory hardening. |
 | `src/config/atomic-write.ts` | Shared synchronous/asynchronous temp-harden-rename writer and residual-temp failure contract. The temp is ACL-hardened before it holds a byte and again before the rename, both `required: true`; the second call is a memo hit rather than a second icacls sequence because the writer re-asserts descriptor/path identity after the content write and re-attributes the harden through `reattributeHardenedSecretPath`. Windows takes no `chmod` on that path — it sets the read-only attribute, not the DACL, and its ChangeTime bump is what used to retire the memo. |
 | `src/config/process-state.ts` | Owns `ocx.pid`, `runtime-port.json`, cheap liveness, full command-line identity verification, and snapshot-guarded cleanup. |
@@ -158,7 +158,7 @@ there. Feature code is grouped by responsibility:
 | Evidence and contracts | `src/compatibility/`, `src/lab/` |
 | Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/`, `src/generated/` |
 
-`src/generated/` is build output committed for the runtime; it is not edited by hand.
+`src/generated/` is committed build output, not hand-edited; `scripts/generate-model-metadata.ts` derives `kimi-responses` → Moonshot metadata from the registry's `jawcodeBundle` while keeping its provider row distinct.
 
 `src/server/` is split by responsibility: `index.ts` owns the listener and the startup transaction
 while `index/serve-options.ts` owns route ordering; `responses.ts` and `responses/core.ts` compose
@@ -188,6 +188,8 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
+The package-tree integrity fence for live package replacement follows the
+[update transaction contract](ops/docs-and-release.md#package-tree-integrity-fence).
 
 A busy preferred port is never resolved by starting somewhere else. Both questions a start asks
 about an existing proxy — the pre-bind owner check and the port-is-busy check in `src/cli/index.ts`
@@ -336,9 +338,9 @@ On `error` / incomplete / stall / EOF — and when assembled non-freeform tool a
 an open tool call is cancelled as `status: "incomplete"` without `function_call_arguments.done`, so
 the client never sees a completed call ahead of `response.failed` / `response.incomplete`.
 At the freeform boundary, `src/responses/apply-patch-envelope.ts` unwraps the contractual `input`
-field for every tool. Only bare `exec` and `apply_patch` calls may recover one recognized alternate
-body field or remove one complete outer Markdown fence; ambiguous alternate fields and every other
-freeform grammar pass through unchanged.
+field for every tool. Only bare or `default.`-prefixed `exec` and `apply_patch` calls may recover
+one recognized alternate body field or remove one complete outer Markdown fence; ambiguous
+alternate fields and every other freeform grammar pass through unchanged.
 
 The server exposes `POST /api/stop` which restores native Codex config, stops any installed service
 (to prevent respawn), and exits the process. The GUI sidebar stop button calls this endpoint.
@@ -374,7 +376,7 @@ Codex display-cache expiry, retained blocking main-policy evidence, and reset hi
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 Usage consumers preserve positive incomplete-history metadata as specified in
-[usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented
+[usage accounting](dashboard-and-usage.md#usage-accounting); readable totals are not represented
 as a complete ledger. The same contract owns `src/usage/log.ts` append-path permission rechecks and
 their bounded cache.
 
@@ -382,15 +384,13 @@ Connected `ocx usage` reads `/v1/usage` through `src/client/hub-client.ts`, usin
 
 The client usage read requires HTTPS or loopback HTTP before adding the enrolled credential, and sets request `cache: "no-store"`; the hub response also forbids caching.
 
-The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](remote-workspace.md).
-
-Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
+The shared atomic replacement publisher identifies explicit Remote Workspace file writes as `remote-workspace`. Remote Workspace's separate, explicitly enabled server surface uses structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration and documents its isolated owner and support limits.
 
 Chat helper admission in `src/server/responses/request-sidecar-auth.ts` follows the
 [deferred stored-main contract](providers/openai-tiers.md): only a needed Direct OpenAI helper
 claims stored main, after terminal vision, routed vision and search exclusions.
 
-Automatic Codex pool selection and account status share the [plan exclusion contract](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+Automatic Codex pool selection and account status share the [plan exclusion contract](providers/openai-accounts.md#automatic-pool-plan-exclusions).
 
 ### Empty forced search answers
 
@@ -413,7 +413,7 @@ the old binding; restoring the same configuration may reuse still-fresh evidence
 cooldowns and response-driven retry remain authoritative.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
 
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](transports/responses.md).
 
@@ -432,12 +432,12 @@ The relay is transparent in both directions, and that includes the close: a down
 
 Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Claude replay carries [Go conversation affinity](data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
 
-Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
+Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-accounts.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
 Cline CLI joins the existing export/client integration registries. Explicit CLI sync and POST /api/sync refresh its owned pair; unattended catalog refresh excludes it. See [Cline paired files](clients/integrations.md#cline-paired-files).
 Its paired-file writer uses the config atomic-write primitive that replaces the named entry without
@@ -451,9 +451,9 @@ The lightweight top-level CLI help counts Cline CLI among the fifteen registered
 Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes. The adapter takes a tenant host only from the stored account that owns the exact key being transmitted, in the literal slot or, during a detached rekey window, the alias slot, so separately configured or forwarded credentials and non-owning accounts cannot lend another account's destination.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
-Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
-The account history response can include a [low-confidence effective capacity estimate](providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -481,7 +481,7 @@ Regression coverage: `tests/vision/vision-cache.test.ts`, `tests/vision/vision-e
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
-Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.
+Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence. The [catalog sync owner](ops/docs-and-release.md) bootstraps supported destination effort metadata with a bounded wait before gathering; routed reads of an existing stale ladder request a background refresh, while missing snapshots wait for catalog sync.
 
 Translated audio/file admission follows the [final-adapter input contract](adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 ## Request-local target compatibility
@@ -523,7 +523,7 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 `src/codex/account-label.ts` owns the provider/selection digest and `src/providers/label.ts`
 stamps the configured key selected for the physical request. `src/server/request-log.ts`
 retains per-key attempt usage, and `src/usage/log.ts` validates and persists labels. The
-[account attribution contract](gui-and-management-api.md#upstream-key-account-attribution)
+[account attribution contract](dashboard-and-usage.md#upstream-key-account-attribution)
 defines identity, unknown records, and aggregation boundaries.
 
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).
@@ -533,7 +533,7 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Unicode pattern normalization uses [copy-on-write traversal](transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
 Codex compaction uses a request-local model override for the configured triggers; the
-[Responses compaction contract](transports/responses.md#compaction-routing-overrides) owns its trigger and replay boundaries.
+[Responses compaction contract](transports/responses-failover.md#compaction-routing-overrides) owns its trigger and replay boundaries.
 
 ## Background-service runtime ownership
 
@@ -595,6 +595,6 @@ rollback cannot prove the socket closed, the process retains its lease until exi
 The registration is never deleted; `ocx service install` releases the marker only after the
 registration succeeds.
 
-Bun updater lease and recovery behavior follows the [update transaction contract](ops/docs-and-release.md#bun-updater-ownership-transaction).
+Bun updater lease and recovery behavior follows the [update transaction contract](ops/service-and-sidecars.md#bun-updater-ownership-transaction).
 
-Companion timeline and filtered totals follow the [companion usage contract](companion.md).
+Companion timeline and filtered totals follow the [companion usage contract](companion.md). [Ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) reuses request-triggered quota priming and captured-account dispatch; it adds no periodic worker or mid-request account switch.

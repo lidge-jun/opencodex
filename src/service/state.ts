@@ -857,6 +857,10 @@ export function serviceHomeMatches(a: string, b: string): boolean {
   return normalizePathForCompare(a) === normalizePathForCompare(b);
 }
 
+export function serviceCodexHomeMatchesInstall(recordedHome: string, deps: CodexHomeDeps = {}): boolean {
+  return serviceHomeMatches(recordedHome, currentCodexHome(deps));
+}
+
 /** Single accessor for backend-sensitive service code — v1/legacy state maps to scheduler. */
 export function readServiceBackend(): ServiceBackend {
   return readServiceInstallState()?.backend === "native" ? "native" : "scheduler";

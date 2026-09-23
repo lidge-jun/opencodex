@@ -42,11 +42,15 @@ All four route to the `default` Cursor wire model. Explicit variants additionall
 parameterized-model channel used by current Cursor clients. Router rows are static capabilities and
 must survive a live `GetUsableModels` response that omits `default`.
 
-`cursor/grok-4.5-fast` and `cursor/grok-4.6-fast` are stable Codex-facing rows, but current Cursor
-clients do not request them as flat model slugs. OpenCodex sends the matching Grok base id through
+`cursor/grok-4.5-fast`, `cursor/grok-4.6-fast`, and `cursor/grok-4.7-fast` are stable Codex-facing rows.
+For 4.5 and 4.6 Fast, OpenCodex sends the matching Grok base id through
 `requested_model` with separate `effort` and `fast=true` parameters, leaving legacy `model_details`
-unset for that parameterized external selection. Grok 4.5 stops at `high`; Grok 4.6 additionally
-advertises and sends `xhigh`. Live discovery recognizes Cursor's flattened
+unset for that parameterized external selection. Grok 4.7 instead sends its flattened, unprefixed
+`grok-4.7-{effort}-fast` id directly. Grok 4.5 stops at `high`; Grok 4.6 and 4.7 additionally
+advertise and send `xhigh`. The 2026-09-23 Cursor roster and probes in
+`devlog/_plan/260923_grok47_parity/010_probe-evidence.md` show unprefixed
+`grok-4.7-{low,medium,high,xhigh}` and `grok-4.7-{low,medium,high,xhigh}-fast` wire ids;
+the bare `grok-4.7-fast` id is rejected. For 4.5 and 4.6, live discovery recognizes Cursor's flattened
 `cursor-grok-{version}-{effort}-fast` variants, plus the older
 `grok-{version}-fast-{effort}` ordering, as availability evidence only.
 
@@ -106,6 +110,31 @@ does not expose authoritative cache_read_tokens.
 
 > Decision record: [ADR-0054](../decisions/ADR-0054-cursor-conversation-checkpoint-reuse.md)
 
+## External tool continuations
+
+`src/adapters/cursor/protobuf-request.ts` repeats the latest actual user request in the active
+external-model tool continuation; `src/adapters/cursor/current-request.ts` selects that request.
+Canonical compaction summaries, opaque-compaction notes and
+standalone ambient-browser wrappers stay in history without being promoted to that request.
+Those wrappers are recognized by their exact canonical shape, the same prefix rule the Codex
+client uses to detect a stored summary; the wire carries no other provenance, so a user message
+that is itself an exact wrapper is treated as host context and the preceding real request stays
+the labeled one. Quoting a marker inside other text keeps the message as the request; an
+ambient wrapper followed by user text also remains the request. On an external-model echo retry,
+the active action carries the replayed tool-result provenance warning even with a checkpoint.
+Blank or image-only user input stops the search instead of reviving an older goal.
+Grok 4.6 code-mode continuations distinguish emitted observations from an empty completed cell:
+the latter is not proof of failure and never authorizes replay of a completed side effect.
+Copyable shell examples emit results through `text()`. Missing output is recovered with a
+read-only state check; existing observations inform the next action or requested final answer.
+Repetition maxima reset at user/developer boundaries, including a fresh active user action.
+Counts produce conditional advice, not a failure verdict: requested polling remains valid.
+`tests/providers/cursor/cursor-continuation-invariants.test.ts` covers scope preservation through
+repeated summaries, result-normalization idempotence, and executable code-mode examples.
+On an envelope-echo corrective retry, tool evidence uses the user wire role with an explicit
+system instruction to treat it as data; truncation and argument restoration preserve that role.
+These are adapter guidance and replay repairs, not a guarantee of identical provider answers.
+
 ## Cursor root replay budgets
 
 `src/adapters/cursor/protobuf-request.ts` bounds the replayed root set at 192 blobs and 512 KiB, and
@@ -124,6 +153,11 @@ the equal-share pass elides a trailing run, recovery drops an elided sibling to 
 the freed bytes become spare. It requires the share to land in a narrow window where the clipped
 invocation line survives but `output:` does not; outside that window the clipped-line lookup declines
 the root first.
+If carried checkpoint roots exceed either aggregate limit, the builder retries once with a full
+replay of available raw history; the same limits and final overflow error still apply.
+Token estimation includes retained external root blobs, including checkpoint-carried roots.
+Missing or invalid UTF-8 blobs are skipped with bounded provider diagnostics; estimating does not
+alter blob-retention metrics.
 Root-echo eligibility is `cursorNeedsExternalToolContinuation`, which includes native
 `composer-2.5`, not only external wire models, so the restoration reaches every replay that carries
 an invocation line. Coverage lives in
@@ -251,7 +285,7 @@ still bypass both and mint their own id.
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
-Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 

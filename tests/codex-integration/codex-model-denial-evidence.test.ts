@@ -136,6 +136,18 @@ describe("upstream refusal as per-account model denial evidence", () => {
  * same-account ladder that exists specifically for it.
  */
 describe("unsupported-model refusal detection", () => {
+  test("recognizes the exact refusal in the WebSocket HTTP error envelope", async () => {
+    const body = JSON.stringify({ error: {
+      type: "invalid_request_error",
+      code: "invalid_request_error",
+      message: `The '${ASTRA}' model is not supported when using Codex with a ChatGPT account.`,
+    } });
+    expect(codexUnsupportedModelFromDetail(400, body)).toBe(ASTRA);
+    expect(await shouldRetryCodexPoolAccountModel400(new Response(body, { status: 400 }), ASTRA)).toBe(true);
+    expect(isAllowListedCodexAccountModel400(400, body, SOL)).toBe(false);
+    expect(codexUnsupportedModelFromDetail(403, body)).toBeUndefined();
+  });
+
   test("extracts the model upstream named", () => {
     expect(codexUnsupportedModelFromDetail(400, refusalBody(SOL))).toBe(SOL);
     // Case and whitespace are normalized exactly as before.
@@ -144,7 +156,18 @@ describe("unsupported-model refusal detection", () => {
     }))).toBe(SOL);
   });
 
-  test("admits nothing but that exact envelope", () => {
+  test("rejects malformed, competing, and non-refusal error envelopes", () => {
+    const message = `The '${ASTRA}' model is not supported when using Codex with a ChatGPT account.`;
+    for (const payload of [
+      { error: message }, { error: [message] }, { error: null },
+      { error: { message: 400 } }, { error: { message: { detail: message } } },
+      { error: { message, code: 42 } }, { error: { message, type: [] } },
+      { error: { message: `note: ${message}` } }, { error: { message: "Invalid tool schema" } },
+      { detail: message, error: { message } }, { detail: null, error: { message } },
+    ]) expect(codexUnsupportedModelFromDetail(400, JSON.stringify(payload))).toBeUndefined();
+  });
+
+  test("admits nothing but an exact refusal envelope", () => {
     expect(codexUnsupportedModelFromDetail(400, JSON.stringify({ detail: "Bad request" })))
       .toBeUndefined();
     // Prose around the sentence is not the sentence.

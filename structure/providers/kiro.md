@@ -26,7 +26,7 @@ reserves the private completion tool. Meta Muse 64-character MCP aliases live in
 
 Kiro shares the Responses freeform restoration boundary in
 `src/responses/apply-patch-envelope.ts`: contractual `input` wrappers are unwrapped, while alternate
-field and outer-fence recovery is limited to unambiguous bare `exec` and `apply_patch` bodies.
+field and outer-fence recovery is limited to unambiguous bare or `default.`-prefixed `exec` and `apply_patch` bodies.
 
 Kiro refuses structured output and tolerates every other Responses `text` member. `text.format`
 of type `json_schema` or `json_object` is a contract the CodeWhisperer wire cannot honour, so the

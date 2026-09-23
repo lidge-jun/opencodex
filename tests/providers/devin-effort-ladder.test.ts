@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   DEVIN_DEFAULT_EFFORTS,
   DEVIN_MODEL_EFFORTS,
+  DEVIN_STATIC_MODELS,
   collapseDevinModelUid,
   devinReasoningRungsOf,
   sortDevinRungs,
@@ -54,6 +55,12 @@ describe("devin advertises a ladder instead of inheriting the generic one", () =
     // these three. Advertising low or xhigh would offer a control that silently
     // rounds to one of them.
     expect(DEVIN_MODEL_EFFORTS["swe-2"]).toEqual(["medium", "high", "max"]);
+  });
+
+  test("degraded Grok roster excludes 4.6 until its Devin ladder is measured", () => {
+    expect(DEVIN_STATIC_MODELS).not.toContain("grok-4-6");
+    expect(DEVIN_STATIC_MODELS).toContain("grok-4-7");
+    expect(DEVIN_MODEL_EFFORTS["grok-4-7"]).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
   test("the fallback ladder omits ultra, which Cognition has no lane for", () => {

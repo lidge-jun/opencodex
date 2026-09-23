@@ -139,3 +139,22 @@ CL-03 does not expose a management CLI/API or UI. Those surfaces remain CL-04+ w
 ## CL-05 GUI read surface
 
 CL-05 adds a read-only Models tab (`#models/compatibility`) that visualizes the compatibility verdict matrix from existing `GET /api/lab/*` management APIs. The legacy `#lab` hash redirects to `#models/compatibility`. The GUI never triggers probe execution, projection rebuilds, or evidence mutation. Verdicts remain per `(subject, evidence layer, suite)`; layers are not collapsed into a universal score.
+
+## Public-evidence mutation, purge and revocation
+
+Public-evidence mutation is serialized across processes by `src/lab/public/mutation-lock.ts`. A live,
+non-reclaimable owner is a fail-fast condition: the caller receives `PublicEvidenceValidationError`
+code `community_cache_busy` without running the protected work, and
+`src/server/management/lab-routes.ts` maps that code to HTTP 503 with `Retry-After: 1`. Other
+public-evidence validation failures stay 400. Rejection leaves the owner's lock bytes and directory
+identity untouched.
+
+Sensitive purge removes a community cache pathname that durable local provenance marks as locally
+originated, even when the cached object is oversized, hardlinked, symlinked or otherwise unreadable
+as a community object. It unlinks the pathname only: it never follows a symlink and never removes a
+peer hardlink. `ENOENT` counts as already absent. Origin markers are cleared only after the deletion
+pass and its directory durability boundary complete.
+
+A same-publisher bundle revocation whose target is absent fails with code `revocation_target` and the
+message `revocation target bundle not found` (`src/lab/public/community.ts`), never a platform
+filesystem `ENOENT`.

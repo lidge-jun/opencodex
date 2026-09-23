@@ -81,8 +81,11 @@ compatibility layer. Its endpoint profile and privacy boundary are specified in 
 
 Chat models sometimes return a freeform call body under a common alternate field or wrap the whole
 body in a Markdown fence. Restoration in `src/responses/apply-patch-envelope.ts` is deliberately
-narrow: only bare `exec` and `apply_patch` accept one recognized alternate field or one complete
+narrow: only bare or `default.`-prefixed `exec` and `apply_patch` accept one recognized alternate field or one complete
 outer fence, while ambiguous wrappers and provider-owned freeform grammars remain byte-exact.
+Structured shell arguments mistakenly sent to code-mode `exec` follow the shared
+[Responses restoration contract](../transports/responses.md#responses-httpsse), including preview
+holding and preservation of valid JavaScript fallback fields.
 
 Kiro groups only consecutive original-message tool results whose raw call ID exactly matches
 the originating call. Its wire-ID map retains the original ID privately so replacement or
@@ -236,8 +239,11 @@ xAI's public Responses API is stateful (`store` defaults true; `previous_respons
 stored conversation), so the provider is not marked `statelessResponses`. The pairing repair
 synthesizes an honest unknown-status placeholder without touching `store` or
 `previous_response_id`: repairing an interrupted history must not cost the thread its server-side
-state. Forward auth suppresses the synthesis regardless of the flag, because the backend that holds
-the conversation can resolve the pair itself.
+state. An output-only continuation is preserved because its call may live in that server-side state;
+pairing only synthesizes results for calls present in the current input. Forward auth suppresses the
+synthesis regardless of the flag, because the backend that holds the conversation can resolve the
+pair itself. Replay-miss reasoning cleanup remains independent of whether orphan outputs are
+converted. A retained previous-response ID does not override an explicit custom-tool denial below.
 
 > Decision record: [ADR-0052](../decisions/ADR-0052-reasoning-and-tool-result-compatibility.md)
 
@@ -273,6 +279,13 @@ and nothing explaining why. That is the `codexToolMode` lesson from #2106.
 This capability is independent of `supportsResponsesCustomTools`, which denies native `custom`
 tools and `custom_tool_call` items. A gateway that rejects both sets both; neither implies the
 other.
+
+When that capability is explicitly false, `src/responses/custom-tool-compat.ts` also lowers valid
+historical custom-call/result pairs absent from the live catalog, without adding their names to
+current declaration or restoration sets. Malformed or duplicate call identities and collisions
+with live function names fail closed. Unmapped custom outputs request full replay; residual native
+items fail the final outbound guard and map to HTTP 400. True or unspecified support preserves the
+existing native path. Nested tool-output JSON remains data, not a protocol item to rewrite.
 
 ## OpenRouter provider routing
 
@@ -504,6 +517,6 @@ refusal of original images is unchanged.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
-Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.

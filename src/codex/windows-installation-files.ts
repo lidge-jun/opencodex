@@ -18,6 +18,10 @@ export interface WindowsInstallationFileRequest {
   readonly path: string;
   readonly maxBytes: number;
   readonly hashOnly?: boolean;
+  /** Validate and hold the path without reading its contents. */
+  readonly metadataOnly?: boolean;
+  /** Read at most maxBytes from the start instead of refusing an oversized file. */
+  readonly prefixOnly?: boolean;
 }
 export interface WindowsInstallationFileIdentity {
   readonly volumeSerial: string;
@@ -31,10 +35,20 @@ export type WindowsInstallationFilesResult =
     path: string; identity: WindowsInstallationFileIdentity; bytes: Uint8Array; digest: string;
   }[] }
   | { kind: "refused"; reason: "unsupported-platform" | "invalid-request" | "native-api-unavailable"
-    | "volume-unavailable" | "open-refused" | "reparse-point" | "not-regular-file"
+    | "volume-unavailable" | "not-found" | "open-refused" | "reparse-point" | "not-regular-file"
     | "size-limit" | "read-failed" | "identity-changed" | "inspection-failed" };
 
 type Refusal = Extract<WindowsInstallationFilesResult, { kind: "refused" }>["reason"];
+/** Only these two NTSTATUS values prove that a candidate or its ancestor is absent. */
+export function ntCreateFileRefusal(status: number): Refusal {
+  switch (status >>> 0) {
+    case 0xc0000034: // STATUS_OBJECT_NAME_NOT_FOUND
+    case 0xc000003a: // STATUS_OBJECT_PATH_NOT_FOUND
+      return "not-found";
+    default:
+      return "open-refused";
+  }
+}
 class InspectionRefusal extends Error {
   constructor(readonly reason: Refusal) { super(reason); }
 }
@@ -76,6 +90,8 @@ export async function inspectWindowsInstallationFiles(
     const parsedPath = request && components(request.path);
     if (!parsedPath || !Number.isSafeInteger(request.maxBytes) || request.maxBytes < 0
       || (request.hashOnly !== undefined && typeof request.hashOnly !== "boolean")
+      || (request.metadataOnly !== undefined && typeof request.metadataOnly !== "boolean")
+      || (request.prefixOnly !== undefined && typeof request.prefixOnly !== "boolean")
       || request.maxBytes > (request.hashOnly ? 256 * MIB : MIB)) return null;
     ceiling += request.maxBytes;
     return parsedPath;
@@ -163,7 +179,7 @@ export async function inspectWindowsInstallationFiles(
       // Share READ only: while held, writes/reparse edits and delete/rename opens are refused.
       const result = nt!.symbols.NtCreateFile!(ffi.ptr(output), 0x100081, ffi.ptr(attributes),
         ffi.ptr(status), null, 0, 1, 1, 0x200020 | (directory ? 1 : 0), null, 0);
-      if (result < 0) throw new InspectionRefusal("open-refused");
+      if (result < 0) throw new InspectionRefusal(ntCreateFileRefusal(result));
       const handle = keep(output.readBigUInt64LE(0));
       inspect(handle, directory);
       return handle;
@@ -184,29 +200,35 @@ export async function inspectWindowsInstallationFiles(
       }
       const handle = relativeOpen(parent, names[names.length - 1]!, false);
       const identity = inspect(handle, false);
-      if (identity.size > request.maxBytes) throw new InspectionRefusal("size-limit");
+      if (!request.metadataOnly && !(request.prefixOnly && !request.hashOnly)
+        && identity.size > request.maxBytes) throw new InspectionRefusal("size-limit");
       return { request, handle, identity };
     });
     openedForTests?.();
     const observed = files.map(({ request, handle, identity }) => {
       const hash = createHash("sha256");
-      const bytes = request.hashOnly ? new Uint8Array() : new Uint8Array(identity.size);
-      const chunk = Buffer.alloc(Math.min(MIB, Math.max(1, identity.size)));
+      if (request.metadataOnly) return { path: request.path, identity, bytes: new Uint8Array(), digest: "" };
+      const truncated = Boolean(request.prefixOnly) && !request.hashOnly && identity.size > request.maxBytes;
+      const readLimit = truncated ? request.maxBytes : identity.size;
+      const bytes = request.hashOnly ? new Uint8Array() : new Uint8Array(readLimit);
+      const chunk = Buffer.alloc(Math.min(MIB, Math.max(1, readLimit)));
       const read = Buffer.alloc(4);
       let offset = 0;
-      while (offset < identity.size) {
-        const length = Math.min(chunk.length, identity.size - offset);
+      while (offset < readLimit) {
+        const length = Math.min(chunk.length, readLimit - offset);
         if (!k.ReadFile!(handle, ffi.ptr(chunk), length, ffi.ptr(read), null)) throw new InspectionRefusal("read-failed");
         const count = read.readUInt32LE(0);
         if (!count || count > length) throw new InspectionRefusal("read-failed");
-        hash.update(chunk.subarray(0, count));
         if (!request.hashOnly) bytes.set(chunk.subarray(0, count), offset);
+        if (!truncated) hash.update(chunk.subarray(0, count));
         offset += count;
       }
-      if (!k.ReadFile!(handle, ffi.ptr(chunk), 1, ffi.ptr(read), null) || read.readUInt32LE(0) !== 0) {
-        throw new InspectionRefusal("identity-changed");
+      if (!truncated) {
+        if (!k.ReadFile!(handle, ffi.ptr(chunk), 1, ffi.ptr(read), null) || read.readUInt32LE(0) !== 0) {
+          throw new InspectionRefusal("identity-changed");
+        }
       }
-      return { path: request.path, identity, bytes, digest: hash.digest("hex") };
+      return { path: request.path, identity, bytes, digest: truncated ? "" : hash.digest("hex") };
     });
     for (const file of files) {
       if (JSON.stringify(inspect(file.handle, false)) !== JSON.stringify(file.identity)) {

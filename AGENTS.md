@@ -339,9 +339,16 @@ than nudged.
   issues, so there is no freeform fallback).
 - **Opening a pull request:** fill every section of
   `.github/PULL_REQUEST_TEMPLATE.md` (Summary, Verification, Checklist).
-  `enforce-target` rejects empty, thin, or malformed descriptions, and a PR
-  whose title or description mentions `gui` must include a screenshot of the
-  UI change in the description. When the PR resolves an issue, add
+  `enforce-target` rejects empty, thin, or malformed descriptions. If the PR
+  changes files under `gui/`, include a screenshot of the UI change in the
+  description; the check re-runs on description edits until the screenshot is
+  present. Drag the image into the description editor rather than committing it:
+  an image on your branch rides the squash merge into `dev`. Maintainers
+  uploading from the command line use the `pr-assets` branch and link by commit
+  SHA. Never commit screenshot evidence to the PR branch — the squash merge carries
+  it into `dev`, which is how `docs/pr-assets/` and its siblings grew until
+  they were deleted; `tests/ci-workflows/repo-hygiene.test.ts` now rejects
+  those folders. When the PR resolves an issue, add
   `Closes #<number>` to link it. GitHub auto-closes the linked issue only
   when the PR merges into the default branch (`main`); PRs here target
   `dev`, so close the issue manually once the change is on `dev`.
@@ -379,8 +386,11 @@ commits in the description.
 
 The **`enforce-target`** CI check rejects pull requests whose head
 ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
-empty, thin, or malformed descriptions; PRs whose title or description
-mentions `gui` must include a screenshot of the UI change in the description.
+empty, thin, or malformed descriptions. If changed paths include files under
+`gui/`, include a screenshot of the UI change in the description; the check
+re-runs on description edits until the screenshot is present. Drag the image
+into the description editor rather than committing it, or, when uploading from
+the command line, use the `pr-assets` branch and link by commit SHA.
 Contributor PRs (authors without repository push permission) open in draft and
 stay there until a four-box review-readiness checklist in the description is
 complete: required local validation passed with its scope documented, branch

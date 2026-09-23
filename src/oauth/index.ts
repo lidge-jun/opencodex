@@ -38,6 +38,7 @@ import { loginChatGPT, refreshChatGPTToken, type ChatGPTLoginFlow } from "./chat
 import { loginAntigravity, refreshAntigravityToken } from "./google-antigravity";
 import { loginCursor, refreshCursorToken } from "./cursor";
 import { loginDevin, refreshDevinToken } from "./devin";
+import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
@@ -89,11 +90,12 @@ export interface OAuthAccessSnapshot {
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion" | "authType">;
   /**
-   * Allowlisted GitHub Copilot API origin belonging to THIS account.
+   * Allowlisted API origin belonging to THIS account.
    *
-   * Copilot pins its bearer to an account-scoped regional host. Initial routing, 401 refresh, and
-   * account failover must resolve transport from this same snapshot; rereading the active account
-   * can pair account A's token with account B's origin during a concurrent switch (#2568d).
+   * Copilot and Devin pin credentials to account-scoped regional or tenant hosts. Initial routing,
+   * discovery, refresh, and account failover must resolve transport from this same snapshot;
+   * rereading the active account can pair account A's token with account B's origin during a
+   * concurrent switch (#2568d).
    */
   apiBaseUrl?: string;
 }
@@ -177,6 +179,7 @@ export interface LoginOpts {
 }
 
 export interface LoginFlowLifecycle {
+  flowId?: string;
   /** Runs after background credential/config persistence settles, before status becomes done. */
   onSettled?: () => void | Promise<void>;
 }
@@ -480,16 +483,18 @@ function accessSnapshot(provider: string, accountId: string, cred: OAuthCredenti
   // Validated here, not at the call site: an unvalidated origin from a legacy or crafted
   // credential must never travel with a bearer, and dropping it makes the transport fall back to
   // the canonical host rather than to whatever the previous account was using.
-  const copilotApiBaseUrl = provider === "github-copilot"
+  const accountApiBaseUrl = provider === "github-copilot"
     ? validateCopilotApiBaseUrl(cred.apiBaseUrl)
-    : undefined;
+    : provider === "devin" || provider === "devin-cli"
+      ? validateDevinApiBaseUrl(cred.apiBaseUrl)
+      : undefined;
   return {
     provider,
     accountId,
     generation: credentialGeneration(cred),
     accessToken: cred.access,
     ...(cred.projectId ? { projectId: cred.projectId } : {}),
-    ...(copilotApiBaseUrl ? { apiBaseUrl: copilotApiBaseUrl } : {}),
+    ...(accountApiBaseUrl ? { apiBaseUrl: accountApiBaseUrl } : {}),
     // Stored account metadata remains authoritative. Metadata-less legacy/environment credentials
     // may use explicit environment routing, but never borrow the currently signed-in local CLI account.
     ...(provider === "kiro"
@@ -527,7 +532,9 @@ export function observeActiveOAuthAccessToken(
   if (account.credential.expires <= now) return { kind: "expired" };
   if (account.credential.expires <= now + REFRESH_SKEW_MS) return { kind: "near-expiry" };
 
-  const apiBaseUrl = validateCopilotApiBaseUrl(account.credential.apiBaseUrl);
+  const apiBaseUrl = provider === "github-copilot"
+    ? validateCopilotApiBaseUrl(account.credential.apiBaseUrl)
+    : undefined;
   return {
     kind: "available",
     snapshot: {
@@ -1813,17 +1820,18 @@ export function oauthLoginSummary(maskEmails = true): Array<{ provider: string; 
 }
 
 export function clearLoginState(provider: string): void {
-  loginAbort.get(provider)?.abort("cleared");
+  loginAbort.get(provider)?.controller.abort("cleared");
   loginAbort.delete(provider);
   clearManualCodeSlot(provider);
   loginState.delete(provider);
 }
 
-export function cancelLoginFlow(provider: string): boolean {
-  const ctrl = loginAbort.get(provider);
+export function cancelLoginFlow(provider: string, flowId?: string): boolean {
+  const active = loginAbort.get(provider);
   const existing = loginState.get(provider);
-  if (!ctrl && (!existing || existing.done)) return false;
-  ctrl?.abort("cancelled");
+  if (flowId !== undefined && active?.flowId !== flowId) return false;
+  if (!active && (!existing || existing.done)) return false;
+  active?.controller.abort("cancelled");
   loginAbort.delete(provider);
   clearManualCodeSlot(provider);
   loginState.set(provider, { done: true, error: "Login cancelled" });
@@ -1844,7 +1852,7 @@ export async function startLoginFlow(
   clearManualCodeSlot(provider);
   loginState.set(provider, { done: false });
   const abort = new AbortController();
-  loginAbort.set(provider, abort);
+  loginAbort.set(provider, { controller: abort, flowId: lifecycle?.flowId });
   if (provider === "kiro") kiroLoginSettling.add(provider);
   return new Promise((resolve, reject) => {
     let urlResolved = false;
@@ -1859,7 +1867,7 @@ export async function startLoginFlow(
       signal: abort.signal,
     };
     const abandonIfNotOwner = (error?: unknown): boolean => {
-      if (loginAbort.get(provider) === abort) return false;
+      if (loginAbort.get(provider)?.controller === abort) return false;
       if (!urlResolved) reject(error ?? new Error("OAuth login was superseded"));
       return true;
     };
@@ -1897,7 +1905,7 @@ export async function startLoginFlow(
     // Background: runLogin persists the credential + provider entry to disk. The lifecycle hook
     // lets a long-lived server config adopt that settled state before clients observe done=true.
     const assertCurrentOwner = (): void => {
-      if (loginAbort.get(provider) !== abort) throw new OAuthLoginSupersededError();
+      if (loginAbort.get(provider)?.controller !== abort) throw new OAuthLoginSupersededError();
     };
     void runLogin(provider, ctrl, opts, { assertCurrentOwner }).then(
       () => settle(),

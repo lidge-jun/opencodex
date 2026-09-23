@@ -451,3 +451,39 @@ The download `cline-config-bundle.json` contains two native document members: `s
 `providers.json`, and `catalog` for `models.json`. It is not itself a Cline settings file. Prefer
 the integration command for a journaled merge and rollback. Remote admission wiring is not
 supported by this generated integration; it requires unauthenticated loopback access.
+
+## GitHub Copilot App
+
+The GitHub Copilot desktop app can use opencodex as an OpenAI-compatible model provider. This is a
+manual client setup with no Integrations-tab switch, and it is separate from the upstream
+`github-copilot` provider, which uses a Copilot subscription as a backend for opencodex.
+
+1. Start opencodex and confirm it answers:
+
+   ```bash
+   curl http://127.0.0.1:10100/healthz
+   curl http://127.0.0.1:10100/v1/models
+   ```
+
+2. In the Copilot app, open **Settings → Model providers → Add provider** and enter:
+
+   | Field | Value |
+   |---|---|
+   | Name | any label, for example `OpenCodex` |
+   | Base URL | `http://127.0.0.1:10100/v1` (adjust the port to your bind) |
+   | API key | leave blank on loopback |
+
+3. Sync models from the endpoint, or add one by its `provider/model` id, and select it.
+
+The app uses `GET /v1/models` for discovery and `POST /v1/chat/completions` for turns. Those turns
+go through opencodex's normal model routing, so provider credentials, OAuth accounts and combos apply
+as they do for any other client. The accepted request fields are listed in the
+[proxy formats reference](/reference/proxy-formats/).
+
+If the app reports no models, check that the base URL ends in `/v1` rather than
+`/v1/chat/completions` and that `/v1/models` returns a non-empty `data` array. When opencodex
+listens on a non-loopback address, put a data-admission key (the token described under
+[remote access](/reference/configuration/server/#remote-access), or a dashboard-generated `ocx_…`
+key) in the app's API key field. The app sends it as `Authorization: Bearer`, which
+`/v1/chat/completions` accepts as proxy admission and never forwards upstream; see the
+[authentication matrix](/reference/proxy-formats/#authentication-matrix).

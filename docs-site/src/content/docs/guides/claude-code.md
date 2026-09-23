@@ -7,6 +7,18 @@ opencodex serves `POST /v1/messages` (plus `count_tokens`) alongside `/v1/respon
 Code can use every routed provider — OAuth logins, account pools, key failover and sidecars
 included — with zero extra auth work.
 
+For an Anthropic route on stored OAuth or an Anthropic API key, native Fast is available on
+`claude-opus-5-5`, `claude-opus-5`, and `claude-opus-4-8`: pick the model's `--fast` row (listed
+when Fast rows are enabled) or set `fastMode: true`. Claude Code's own `/fast` toggle is not
+translated on routed requests: the `speed` field it sends does not survive translation. The proxy sends Anthropic's Fast request and records the returned `usage.speed`; only
+confirmed Fast usage gets the 2x API-equivalent cost estimate. A recognized Fast-specific refusal
+in the main adapter request path gets one budgeted standard-speed resend, and a
+new turn may incur that refused round trip again. Pro/Max subscription accounts need usage credits;
+Team/Enterprise accounts need organization enablement, and API keys need provisioned
+research-preview access. See
+[Anthropic Fast configuration](/reference/configuration/providers/#anthropic-fast-anthropic-speed)
+for the exact model and recovery scope.
+
 ## Claude OAuth account pool (experimental)
 
 You can log in multiple Claude accounts via the Providers dashboard (`ocx login anthropic` /
@@ -50,7 +62,7 @@ Operational contract when enabled:
   selection and 429 recovery still consult `quotaWindow`, so the window is inert only under
   `round-robin`. `fill-first` evaluates its drain threshold in the selected window.
 
-See [Configuration](/reference/configuration/#anthropicaccountpool-experimental).
+See [Configuration](/reference/configuration/providers/#anthropicaccountpool-experimental).
 
 ## Quickstart
 
@@ -70,7 +82,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (optional; legacy `ANTHROPIC_SMALL_FAST_MODEL` too) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (optional) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` when `alwaysEnableEffort` is on (conditional) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` when set (conditional; off by default — see [MCP tool schemas fill the context](#mcp-tool-schemas-fill-the-context-on-turn-one)) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` when set (conditional; off by default — see [MCP tool schemas fill the context](#troubleshooting)) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | Legacy context override when `maxContextTokens` is set (conditional) |
 Variables you export yourself always win. Extra arguments pass through: `ocx claude -p "hello"`.
 
@@ -571,7 +583,7 @@ images are cached by backend, model, detail, image bytes, and request context, s
 image-and-context pair is not described again on every replay. Remote `https:` images are never
 cached because their contents can change.
 
-See the [configuration reference](/reference/configuration/#sidecars) for every key.
+See the [configuration reference](/reference/configuration/server/#sidecars) for every key.
 Anthropic-OAuth web search and image description reuse the repository's existing Claude Code OAuth
 fingerprint precedent, but should still be soak-tested with your account and workload before you
 depend on them for long unattended runs.

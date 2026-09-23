@@ -74,7 +74,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   // but stays inert (no load, no polling) whenever a shared controller was injected.
   const ownController = useCodexAccountPool(apiBase, !injectedController);
   const controller = injectedController ?? ownController;
-  const { accounts, activeId, loadState, refreshFailed, switchingId, pauseUpdatingId, priorityUpdatingId, pausingExhausted, activePinnedId, load } = controller;
+  const { accounts, activeId, loadState, refreshFailed, switchingId, pauseUpdatingId, priorityUpdatingId, autoSwitchUpdatingId, pausingExhausted, activePinnedId, load } = controller;
   // #3898: the native-main device reauth drives the dedicated namespace; a
   // completed flow refreshes the account list so the card leaves reauth state.
   const mainReauth = useMainDeviceReauth(apiBase, () => { void load(); });
@@ -273,6 +273,21 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
     }), result.ok ? "ok" : "err");
   };
 
+  const changeAccountAutoSwitchThreshold = async (
+    account: CodexAccountEntry,
+    threshold: number | null,
+  ) => {
+    if (threshold === account.autoSwitchThresholdOverride) return true;
+    const result = await controller.setAccountAutoSwitchThreshold(account.id, threshold);
+    if (!result.ok && result.reason === "busy") return false;
+    showActionFeedback(t(result.ok
+      ? "accountPool.autoSwitchUpdated"
+      : "accountPool.autoSwitchUpdateFailed", {
+      email: account.alias ?? account.email,
+    }), result.ok ? "ok" : "err");
+    return result.ok;
+  };
+
   const remove = async (id: string) => {
     const label = accounts.find(account => account.id === id)?.email ?? t("pws.accountOrdinal", { count: "1" });
     if (!(await confirmAction({ message: t("codexAuth.removeConfirm", { id: label }), confirmLabel: t("common.remove"), tone: "danger" }))) return;
@@ -442,7 +457,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
   const isMainActive = !main?.paused && (!activeId || activeId === "__main__");
   const switchActionLabel = t(accountModeState === "direct" ? "codexAuth.prepareForPool" : "codexAuth.setAsNext");
   const pauseBusy = pauseUpdatingId !== null || pausingExhausted;
-  const autoSwitchThreshold = autoSwitch.threshold ?? 0;
+  const autoSwitchThreshold = autoSwitch.threshold;
+  const accountAutoSwitchDisabled = !autoSwitch.hydrated || autoSwitchUpdatingId !== null;
   // The standalone Codex Auth page keeps the doctor-copy affordance; the embedded
   // Providers workspace account surface does not.
   const showDoctorCopy = !embedded;
@@ -503,6 +519,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             pauseBusy={pauseBusy}
             onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
             priorityUpdatingId={priorityUpdatingId}
+            onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
+            autoSwitchDisabled={accountAutoSwitchDisabled}
             switchingId={switchingId}
             pinnedId={activePinnedId}
             onOpenReset={openResetPopup}
@@ -545,6 +563,8 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
             pauseBusy={pauseBusy}
             onPriorityChange={(entry, priority) => { void changePriority(entry, priority); }}
             priorityUpdatingId={priorityUpdatingId}
+            onAutoSwitchThresholdChange={changeAccountAutoSwitchThreshold}
+            autoSwitchDisabled={accountAutoSwitchDisabled}
             switchingId={switchingId}
             pinnedId={activePinnedId}
             onReauth={openReauth}

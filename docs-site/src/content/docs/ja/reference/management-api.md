@@ -66,12 +66,16 @@ Authorization: Bearer <admin-token>
 | `POST /api/grok/apply` |管理された同期を通じて永続的な Grok 設定を適用する | 409 `grok_apply_busy`; 400/500 適用失敗 |
 | `GET /api/grok/reset-coupons?accountId=...` | アクティブまたは指定された xAI アカウントの残り Grok 請求リセット トークンと有効期限ウィンドウを読む | 400 アカウントがありません; 401 未認証; 502 上流 gRPC-Web エラー |
 | `POST /api/grok/reset-coupons/consume` | 対象となるリセット クーポンを換金します。本文は `{ accountId?, tokenId?, operationId? }`。任意の `operationId`（UUIDv4）により換金は冪等になります: 同じ ID を繰り返すと、二重換金せずに永続化された結果を再生します。 | 400 無効な JSON/UUID; 401 未認証; 409 `identity_mismatch`; 502 上流エラー; 503 台帳容量 |
+| `GET /api/anthropic/reset-grants?accountId=...` | 1 つの Anthropic OAuth アカウントの Claude 使用量上限リセット付与を読み取ります。対象資格、各付与の残り回数、有効期間、リセットされる使用量枠、再試行可能な未確定の試行が含まれます。 | 400 該当するアカウントなし; 401 再認証が必要; 502 上流を利用できません |
+| `POST /api/anthropic/reset-grants/consume` | リセット付与を 1 回分使用します。本文は `{ accountId, grantId, operationId }`。`operationId` はリクエスト ID として上流へ送信する UUIDv4 で、同じ値を繰り返すと同じ請求を再試行します。ダッシュボードセッションが必要です。 | 400 無効な本文; 401 再認証が必要; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 ジャーナルが使用中、利用不可、または満杯 |
 | `GET, PUT /api/claude-desktop` | Claude Desktop のルーティング/ネイティブ プロファイルを読み取るか永続化する | 400 無効または使用できない割り当て |
 | `POST /api/claude-desktop/apply` |保存したプロファイルを Claude Desktop の管理対象設定に書き込みます。 400/500 書き込み失敗 |
 | `GET /api/claude-desktop/status` |保存済みプロファイルと適用済みプロファイルおよびデスクトップの健全性を検査する | 400 ステータス読み取り失敗 |
 | `GET, PUT /api/claude-code` |クロード コードのゲートウェイ、認証モード、モデル マップ、コンテキスト、エージェント、サイドカー設定の読み取りまたは更新 | 400 無効なフィールドまたは図形 |
 
 ダッシュボードは **Providers > xAI Grok > Accounts** から両方のクーポン パスを操作します。サインイン済みの各アカウント行には残りのクーポン数を示すチケット バッジがあり、バッジは有効期限ウィンドウを一覧し、期限が最も近いクーポンを換金するダイアログを開きます。ダイアログはクライアントが発行した `operationId` を送り、再試行せずタイムアウト後に送信を止めます。ジャーナル記録がまだ開いている換金は再実行されてしまうためです。`ocx account grok-reset-coupons` はターミナル側の同等コマンドです。
+
+Claude の使用量リセットも **Providers > Anthropic > Accounts** から同様に操作できます。サインイン済みの各アカウント行には残りのリセット回数を示すチケットバッジがあり、ダイアログで再度確認した後に 1 回分を使用します。リセットすると、週次枠のリセット曜日を変えずに 5 時間枠と週次枠が補充されます。請求に応答がない場合、ダイアログは `operationId` を保持し、10 分間は同じ ID で再試行できます。Claude Code クライアント自体もこの方法で復旧し、その間は同じ付与に対する新しい操作が拒否されます。使用できるのはダッシュボードからのみで、管理者トークンだけでは `403 session_required` が返されます。
 
 モデルロスターと暗号化されたワーカータスクの動作の背後にある概念については、「[サブエージェントサーフェス](/guides/sub-agent-surface/)」を参照してください。
 
@@ -138,6 +142,21 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 
 ターゲット戦略、クールダウン、エイリアス、およびルーティングの失敗については、[コンボ](/guides/combos/) を参照してください。
 
+### Codex プロンプトレイヤー
+
+|メソッドとパス |目的 |注目すべきエラー |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | プロンプトレイヤーのスナップショット(レイヤー、基本バリアント、選択、drift 状態)を読み取ります | — |
+| `GET /api/codex-prompt/text` | `codex debug prompt-input` を介してモデルに表示されるプロンプトテキストをプローブします | fail-soft: 利用できないプローブは HTTP エラーではなく本文のステータスに低下します |
+| `PUT /api/codex-prompt/toggle` | 切り替え可能な 1 つのレイヤーを有効または無効にします | 400 無効な本文または不明なレイヤー; 409 `stale_revision`、`layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | カスタムレイヤーセットを置き換えます | 400 無効な本文、`invalid_characters`、正規化された UTF-8 レイヤーが 65,536 バイトを超えると `body_too_large`、131,072 バイトを超えると `composed_too_large`; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | デフォルトの基本プロンプトまたは保存された 1 つのバリアントを選択します | 400 無効な本文、保存されたバリアントに一致しない id には `unknown_layer`; 409 `stale_revision`、現在の base が外部の場合は `developer_instructions_not_owned` |
+| `PUT /api/codex-prompt/base` | 1 つの基本バリアントを作成(`id` 省略または `id: null`)、編集、または削除(`delete: true`)します。指定された `id` は編集専用で、保存されたバリアントを参照する必要があります。`body` は測定・保存前に正規化されます(タブ展開、CR/CRLF を LF に折りたたみ) | 400 無効な本文、`default` id または保存されたバリアントに一致しない id には `unknown_layer`、正規化された UTF-8 本文が 65,536 バイトを超えると `body_too_large`; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | `config.toml` の `developer_instructions` をカスタムレイヤーとしてインポートします | 400 無効な本文、`invalid_characters`、`body_too_large`、`composed_too_large`; 409 `config_unreadable`、`nothing_to_adopt`、`adopt_unsupported_form`、`stale_revision` |
+| `POST /api/codex-prompt/repair` | `config.toml` と所有された projection 間の drift を修復します | 400 無効な本文; 409 `config_unreadable`、`nothing_to_repair`、`repair_unsupported`、`stale_revision` |
+
+レイヤーモデルと各レイヤーが書き込むキーについては、[Codex プロンプトレイヤー](/ja/guides/codex-prompt/) を参照してください。
+
 ### 設定、起動、同期、更新
 
 |メソッドとパス |目的 |注目すべきエラー |
@@ -157,6 +176,11 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `GET, PUT /api/shadow-call-settings` |シャドウ コール インターセプト設定の読み取りまたは更新 | 400 無効な形状または値 |
 
 ### ログ、使用状況、およびストレージ
+
+リクエストログは、上流が応答したモデルを示した場合に `servedModel` を保持します。上流に送信したモデルが
+クライアントに提示したモデルと異なる場合は `wireModel` も保持します。両者が異なるとき、ダッシュボードには
+`wire → served` と表示され、ツールチップに両方の値が残ります。上流からモデルの情報が得られない場合、
+リクエストされたモデルから推測せず、その情報は記録しません。
 
 |メソッドとパス |目的 |注目すべきエラー |
 | --- | --- | --- |
@@ -290,7 +314,7 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `PUT /api/codex-auth/accounts/pause-exhausted` |クォータを使い果たしたアカウントを一時停止する |ミューテーションロックの失敗は 503 になります |
 | `POST /api/codex-auth/accounts/clear-cooldown` | 1 つのアカウントまたはすべてのアカウントのランタイム クールダウンをクリアする | 400 無効な ID |
 | `GET, PUT /api/codex-auth/active` |アクティブなアカウントを読み取るか選択します | 400 アカウントが無効または欠落しています。 409 一時停止/レガシー行の競合 |
-| `PUT /api/codex-auth/auto-switch` |自動アカウント切り替えのクォータしきい値を設定する | 400 無効なしきい値 |
+| `PUT /api/codex-auth/auto-switch` | `id` を省略した `{ threshold }` でグローバルしきい値、`{ id, threshold }` でアカウント別の上書き値を設定する。`id: '__main__'` は Codex Desktop アカウントを指定する。`id` を指定した場合、`threshold: null` は上書き値を削除してグローバル値の継承に戻す | 400 無効な ID/しきい値、404 アカウントなし |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex アカウントプールの選択戦略を更新 | 400 無効な戦略/構成 |
 | `PUT /api/codex-auth/failover` |アカウントのフェイルオーバーしきい値を設定する | 400 無効なしきい値 |
 | `GET /api/codex-auth/quota` |キャッシュされたクォータ状態をアカウントごとに読み取る | — |
@@ -298,7 +322,7 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `POST /api/codex-auth/reset-credits/consume` |対象となるリセット クレジットを消費する。任意の `operationId`（UUIDv4）を指定すると消費が冪等になります。同じ id は 2 つ目のクレジットを消費せず、保存済みの結果を 1 回再生します。 | 400 アカウント ID がありません、または `operationId` が不正です。id が別のアカウントに属する場合は 409 `identity_mismatch`。アップストリームステータスパススルー。 503 `server_busy`、`capacity`、`unavailable`; 500 消費失敗 |
 | `POST /api/codex-auth/login` | Codex のログインまたは再認証を開始する | 400 無効なリクエスト。競合/ビジー ログイン状態 |
 | `POST /api/codex-auth/login/code` | Codex ログイン フローの手動コードを送信する | 400 無効なフロー/コード |
-| `POST /api/codex-auth/login/cancel` | Codex ログイン フローをキャンセルする | — |
+| `POST /api/codex-auth/login/cancel` | `{ "flowId": "..." }` で指定した保留中の Codex ログインのみキャンセルする | 400 フロー ID が未指定、不明、または保留中ではない |
 | `GET /api/codex-auth/login-status` |フローまたはアカウントのログイン状態をポーリングする。新規アカウント完了時は回復が必要な場合だけ `catalogRefreshPending: true` を含みます。 |不明なフローは `expired` を報告します。アクティブなフローは `idle` を報告しません |
 
 新規 account の config row は保存されたものの credential setup を完了できない場合、OAuth の

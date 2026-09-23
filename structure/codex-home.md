@@ -78,8 +78,9 @@ treat it as destructive, not as an upgrade or restart command.
 Service install-state ownership uses this same resolver. In WSL, an unset `CODEX_HOME` may resolve
 to the single discoverable Windows Desktop home; recording Linux `~/.codex` instead would make a
 later repair or uninstall look foreign even though the service and runtime were started from the
-same environment. An explicit `CODEX_HOME` remains authoritative, and existing foreign ownership
-records are never migrated implicitly.
+same environment. A record written before that discovery still names Linux `~/.codex`; service
+commands refuse it and name the recorded home to rerun with, because stop and repair would otherwise
+restore a different home. An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly.
 
 > Decision record: [ADR-0006](decisions/ADR-0006-codex-home.md)
 
@@ -278,12 +279,13 @@ a deliberate user choice:
   `ocx status`.
 - Project-level Codex config that bypasses managed routing
   (`src/codex/project-config-warnings.ts`), surfaced by `ocx doctor` as a warning rather than an
-  override.
+  override. Project candidates and opened handles must be regular files of at most 1 MiB;
+  nonblocking descriptor reads reject changed size or timestamps. Global config reads are unchanged.
 
 Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
-Plan-based automatic exclusions leave native credential files untouched and preserve the native-main exemption in the [selection policy](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+Plan-based automatic exclusions leave native credential files untouched and preserve the native-main exemption in the [selection policy](providers/openai-accounts.md#automatic-pool-plan-exclusions).
 
 ## Prompt text probe
 
@@ -341,14 +343,16 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
-Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
+Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-accounts.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
-The account history response can include a [low-confidence effective capacity estimate](providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
-Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Upstream API-key usage follows the [physical-attempt account attribution contract](dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
+Stored Direct substitution follows the [credential identity contract](providers/openai-accounts.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
+
+Native-main owner claims and credential-generation backoff remain authoritative during [priority failback priming](providers/openai-accounts.md#ongoing-priority-failback); the preference grants no access through a fenced main profile.

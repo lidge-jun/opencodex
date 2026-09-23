@@ -81,6 +81,8 @@ GUI-сессия в стиле loopback не выпускается.
 | `POST /api/grok/apply` | Применить сохранённую конфигурацию Grok через managed sync | 409 `grok_apply_busy`; 400/500 apply failure |
 | `GET /api/grok/reset-coupons?accountId=...` | Прочитать оставшиеся токены сброса биллинга Grok и окна их действия для активного или указанного аккаунта xAI | 400 отсутствует аккаунт; 401 без аутентификации; 502 ошибка upstream gRPC-Web |
 | `POST /api/grok/reset-coupons/consume` | Обменять подходящий купон сброса. Тело `{ accountId?, tokenId?, operationId? }`. Необязательный `operationId` (UUIDv4) делает обмен идемпотентным: повтор того же идентификатора воспроизводит сохраненный результат без повторного обмена. | 400 некорректные JSON/UUID; 401 без аутентификации; 409 `identity_mismatch`; 502 ошибка upstream; 503 емкость реестра |
+| `GET /api/anthropic/reset-grants?accountId=...` | Прочитать сбросы лимитов Claude для одного OAuth-аккаунта Anthropic: доступность, число оставшихся сбросов для каждого гранта, срок действия и сбрасываемые окна, а также неподтверждённую попытку, которую ещё можно повторить | 400 подходящий аккаунт не найден; 401 требуется повторный вход; 502 вышестоящий сервис недоступен |
+| `POST /api/anthropic/reset-grants/consume` | Использовать один сброс. Тело `{ accountId, grantId, operationId }`; `operationId` — UUIDv4, который передаётся вышестоящему сервису как идентификатор запроса, поэтому повтор с ним возобновляет ту же попытку. Требуется сессия дашборда. | 400 некорректное тело; 401 требуется повторный вход; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 журнал занят, недоступен или заполнен |
 | `GET, PUT /api/claude-desktop` | Прочитать или сохранить routed/native-профиль Claude Desktop | 400 invalid or unavailable assignment |
 | `POST /api/claude-desktop/apply` | Записать сохранённый профиль в managed config Claude Desktop | 400/500 write failure |
 | `GET /api/claude-desktop/status` | Проверить согласованность saved-vs-applied profile и здоровье Desktop | 400 status read failure |
@@ -93,6 +95,8 @@ GUI-сессия в стиле loopback не выпускается.
 таймаута прекращает отправку вместо повторной попытки, потому что обмен, запись
 журнала которого ещё открыта, выполнился бы снова. `ocx account grok-reset-coupons`
 остаётся эквивалентом в терминале.
+
+Сбросы лимитов Claude аналогично доступны в **Providers > Anthropic > Accounts**. В строке каждого вошедшего аккаунта значок-билет показывает число оставшихся сбросов, а диалог использует один сброс после дополнительного подтверждения. Сброс восстанавливает 5-часовой и недельный лимиты, не меняя день недельного сброса. Если ответ на запрос не приходит, диалог сохраняет `operationId` и в течение десяти минут предлагает повторить попытку с тем же идентификатором — так восстанавливает запрос и сам клиент Claude Code. До этого момента новая операция с тем же грантом отклоняется. Использовать сброс можно только через дашборд: одного токена администратора недостаточно — ответом будет `403 session_required`.
 
 О принципах model roster и поведении encrypted worker-task см.
 [Поверхность подагентов](/guides/sub-agent-surface/).
@@ -162,6 +166,21 @@ GUI-сессия в стиле loopback не выпускается.
 
 О стратегиях целей, cooldown, alias и routing-failure см. [Combos](/guides/combos/).
 
+### Слои промпта Codex
+
+| Метод и путь | Назначение | Особые ошибки |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | Прочитать снимок слоёв промпта: слои, базовые варианты, выбор и состояние drift | — |
+| `GET /api/codex-prompt/text` | Проверить текст промпта, видимый модели, через `codex debug prompt-input` | Fail-soft: недоступный probe деградирует до статуса в теле, а не HTTP-ошибки |
+| `PUT /api/codex-prompt/toggle` | Включить или выключить один переключаемый слой | 400 invalid body или unknown layer; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | Заменить набор пользовательских слоёв | 400 invalid body, `invalid_characters`, `body_too_large`, когда нормализованный UTF-8 слой превышает 65 536 байт, `composed_too_large` свыше 131 072 байт; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | Выбрать базовый промпт по умолчанию или один сохранённый вариант | 400 invalid body, `unknown_layer` для id, не совпадающего ни с одним сохранённым вариантом; 409 `stale_revision`, `developer_instructions_not_owned`, когда текущий base внешний |
+| `PUT /api/codex-prompt/base` | Создать (`id` опущен или `id: null`), изменить или удалить (`delete: true`) один базовый вариант. Указанный `id` предназначен только для редактирования и должен ссылаться на сохранённый вариант. `body` нормализуется (табуляции раскрываются, CR/CRLF сворачиваются в LF) до измерения или сохранения | 400 invalid body, `unknown_layer` для id `default` или id, не совпадающего ни с одним сохранённым вариантом, `body_too_large`, когда нормализованное UTF-8 тело превышает 65 536 байт; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | Импортировать `developer_instructions` из `config.toml` как пользовательский слой | 400 invalid body, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | Устранить drift между `config.toml` и принадлежащей projection | 400 invalid body; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+О модели слоёв и ключах, которые записывает каждый слой, см. [Слои промпта Codex](/ru/guides/codex-prompt/).
+
 ### Конфигурация, startup, sync и updates
 
 | Метод и путь | Назначение | Особые ошибки |
@@ -181,6 +200,11 @@ GUI-сессия в стиле loopback не выпускается.
 | `GET, PUT /api/shadow-call-settings` | Прочитать или обновить настройки shadow-call interception | 400 invalid shape or value |
 
 ### Логи, usage и storage
+
+В журналах запросов поле `servedModel` сохраняется, когда вышестоящий сервис сообщает модель, которая ответила.
+Поле `wireModel` сохраняется, когда отправленная вышестоящему сервису модель отличается от модели, показанной клиенту.
+Если эти модели различаются, панель показывает `wire → served`, а подсказка сохраняет оба значения. Если вышестоящий
+сервис не сообщил модель ответа, она остаётся неизвестной и не выводится из запрошенной модели.
 
 | Метод и путь | Назначение | Особые ошибки |
 | --- | --- | --- |
@@ -329,7 +353,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Поставить на паузу аккаунты с исчерпанной квотой | Сбои mutation-lock превращаются в 503 |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Очистить runtime cooldown для одного аккаунта или для всех | 400 invalid id |
 | `GET, PUT /api/codex-auth/active` | Прочитать или выбрать активный аккаунт | 400 invalid or missing account; 409 paused/legacy-row conflict |
-| `PUT /api/codex-auth/auto-switch` | Задать порог квоты для автоматического переключения аккаунтов | 400 invalid threshold |
+| `PUT /api/codex-auth/auto-switch` | Задать глобальный порог через `{ threshold }` без `id` или переопределение аккаунта через `{ id, threshold }`; `id: '__main__'` выбирает аккаунт Codex Desktop. При указанном `id` значение `threshold: null` удаляет переопределение и восстанавливает наследование глобального порога | 400 invalid id/threshold; 404 missing account |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Обновить стратегию выбора в пуле аккаунтов Codex | 400 invalid strategy/config |
 | `PUT /api/codex-auth/failover` | Задать порог failover аккаунтов | 400 invalid threshold |
 | `GET /api/codex-auth/quota` | Прочитать кэшированное состояние квоты по аккаунтам | — |
@@ -337,7 +361,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `POST /api/codex-auth/reset-credits/consume` | Израсходовать доступный reset credit. Необязательный `operationId` (UUIDv4) делает списание идемпотентным: тот же id воспроизводит один сохранённый результат вместо расходования второго кредита. | 400 missing account id или некорректный `operationId`; 409 `identity_mismatch`, если id принадлежит другому аккаунту; upstream status passthrough; 503 `server_busy`, `capacity` или `unavailable`; 500 consume failure |
 | `POST /api/codex-auth/login` | Запустить login или reauthentication для Codex | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Отправить manual code для login-flow Codex | 400 invalid flow/code |
-| `POST /api/codex-auth/login/cancel` | Отменить login-flow Codex | — |
+| `POST /api/codex-auth/login/cancel` | Отменить только ожидающий вход Codex с `{ "flowId": "..." }` | 400 ID потока отсутствует, неизвестен или не ожидает завершения |
 | `GET /api/codex-auth/login-status` | Опрашивать flow или login-state аккаунта. Завершение нового аккаунта включает `catalogRefreshPending: true` только при необходимости восстановления. | Неизвестные flow'ы сообщаются как `expired`; отсутствие активного flow — как `idle` |
 
 Если config row нового аккаунта сохранён, но credential setup не завершён, OAuth `login-status`

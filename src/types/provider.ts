@@ -242,6 +242,12 @@ export interface TierObservationContext {
    * preserving the behaviour for the public API where the echo does mean what it says.
    */
   responseTierAuthoritative?: boolean;
+  /**
+   * Set when the upstream refused the fast wire earlier in this request and the proxy resent at
+   * standard speed (Anthropic `speed: "fast"` without entitlement). The resend's outcome is then
+   * a `response-declined` downgrade rather than an unavailable wire.
+   */
+  upstreamDeclinedFast?: boolean;
 }
 
 export type TierDecision =

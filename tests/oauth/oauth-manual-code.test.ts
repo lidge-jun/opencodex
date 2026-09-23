@@ -13,6 +13,7 @@ import {
   submitManualLoginCode,
 } from "../../src/oauth";
 import { parseCallbackInput } from "../../src/oauth/callback-server";
+import { loginState, waitForManualLoginCode } from "../../src/oauth/login-flow-state";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { findAvailablePort } from "../../src/server/ports";
@@ -188,6 +189,26 @@ describe("OAuth manual login code fallback", () => {
 
   test("submitManualLoginCode rejects empty input", () => {
     expect(submitManualLoginCode("xai", "   ")).toEqual({ ok: false, error: "empty code" });
+  });
+
+  test("Command Code callback JSON keeps hashes inside provider fields opaque", async () => {
+    loginState.set("command-code", { done: false });
+    const controller = new AbortController();
+    const pending = waitForManualLoginCode("command-code", controller.signal, "expected-state");
+    const callback = JSON.stringify({
+      apiKey: "key#segment",
+      state: "expected-state",
+      userId: "user-1",
+      userName: "alice#1",
+      keyName: "cli",
+    });
+    try {
+      expect(submitManualLoginCode("command-code", callback)).toEqual({ ok: true });
+      expect(await pending).toBe(callback);
+    } finally {
+      controller.abort("test complete");
+      clearLoginState("command-code");
+    }
   });
 
   test("OAuth pending code rejects 4097 UTF-8 bytes in the owner", async () => {

@@ -15,7 +15,7 @@ removing support for non-default WebSocket quota families.
 Key-auth hosted-search continuations validate account selection after pacing and report a failed
 terminal on drift; see [continuation binding contract](../providers-and-adapters.md#hosted-search-continuation-binding).
 
-Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Heartbeat and stall deadline
 
@@ -248,13 +248,21 @@ as `response.incomplete`, never synthetic success. The repair shares the per-tur
 budget, preserves backpressure, and composes ahead of item-id/snapshot rewrites so HTTP/SSE and
 WebSocket clients observe the same canonical lifecycle.
 
+When the hosted-search bridge is also armed, repair wraps the raw first leg BEFORE the bridge:
+the bridge suppresses an intercepted `web_search` lifecycle, so a complete call whose leg never
+closes would otherwise leave the grace timer unarmed and the turn stalled. The same wrap applies
+to every continuation leg the bridge's `send` returns — each leg gets its own grace window on the
+shared abort controller — so a terminal-less continuation cannot stall the bridged turn either.
+`tests/web-search/web-search-passthrough-bridge.test.ts` drives both legs through `handleResponses`
+with an injected scheduler and proves search execution, continuation dispatch, and final terminal.
+
 `ws-bridge.ts` preserves upstream `failed` and `incomplete` status values in the final WebSocket
 frame rather than always emitting `response.completed`. If the response status is `failed`, a
 `response.failed` frame is sent; otherwise `response.completed` carries through the original status.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
@@ -264,9 +272,9 @@ Chat helper admission in `src/server/responses/core.ts` follows the
 claims stored main, after terminal vision, routed vision and search exclusions.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](../transports/responses.md).
@@ -278,7 +286,7 @@ privately to final dispatch; preliminary route selection does not inject Go-only
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -521,4 +529,4 @@ independent API credentials, unavailable-mode diagnostics and safe probe outcome
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
-WebSocket [compaction routing selection](responses.md#compaction-routing-overrides) uses per-frame metadata; handshake metadata cannot supply a later frame's trigger.
+WebSocket [compaction routing selection](responses-failover.md#compaction-routing-overrides) uses per-frame metadata; handshake metadata cannot supply a later frame's trigger.

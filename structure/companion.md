@@ -8,14 +8,23 @@ filters. Companion preferences do not implicitly change general Usage API reques
 
 `src/companion/settings.ts` and `src/usage/timeline.ts` share model-id validation: a nonblank
 provider precedes the first slash, and the nonblank model remainder may contain more slashes.
+Timeline model grouping uses the base provider label, so historical pool-account rows for one
+model share one canonical `provider/model` series and one `availableModels` entry. A model filter
+containing an older account-qualified id selects that entire merged series. In `modelAccount`
+grouping, rows keep separate account labels: an explicit logged label wins, then the provider's
+`main` or `p<hex6>` suffix, then `unknown`. On load and settings PUT,
+`src/companion/settings.ts` maps saved model selections to canonical ids and removes duplicates,
+so clients filtering returned rows preserve older selections.
 The timeline's fixed bucket count includes the current partial interval. Its end is the next
 bucket boundary; `src/server/management/usage-timeline-routes.ts` retains the rounded cache
 anchor and 15-second lifetime.
 
 Repeated `hiddenProvider` query values are explicit, bounded to 100 entries and normalized.
-The accumulator excludes those attributions before available-model discovery, series allocation
-and the top-24 fold. Its additive `appliedFilters` response records normalized `models` and
-`hiddenProviders`; the response introduces no credential or account-identity field.
+Each exclusion matches either the raw logged provider or its base label: a base name hides all its
+pool accounts, while an account-qualified name hides only that account's attributions. The
+accumulator excludes them before available-model discovery, series allocation and the top-24 fold.
+Its additive `appliedFilters` response echoes the validated model ids as requested and records
+deduplicated, sorted `hiddenProviders`; it introduces no credential or account-identity field.
 
 Query builders in `gui/src/pages/usage-companion-utils.ts`,
 `desktop/src-tauri/src/companion_query.rs` and `app/Sources/MenuBarCore/ProxyClient.swift`
@@ -58,3 +67,11 @@ If display settings cannot be read, the native panel keeps independently fetched
 `src/usage/ledger-retention.ts` closes its source reader after copying and before publishing the retained file, allowing replacement on Windows. The final pathname revision check still refuses replacement after a concurrent append or file replacement.
 
 A partial settings PUT refuses unreadable or unsupported persisted content with `409 companion_settings_corrupt`. Only an explicit `reset:true` replaces that content with defaults.
+
+
+Timeline model rows and available ids merge historical pool providers under their base provider,
+while account grouping keeps separate labels. Legacy account-qualified model filters select the
+whole merged row; hiding a base provider removes all its accounts, and hiding a raw provider removes
+that account's attributions. Loaded and updated companion model selections normalize older
+account-qualified ids to canonical timeline ids and deduplicate them. Coverage: `tests/usage/usage-timeline.test.ts`
+and `tests/server/companion-settings.test.ts`.

@@ -1,4 +1,3 @@
-import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import { win32 } from "node:path";
 import { SHIM_MARKER } from "./shim-templates";
 import type { CodexCliInstallationIdentityInput } from "./cli-installation-identity";
@@ -27,32 +26,17 @@ export type CodexCliInstallationTargetDerivation =
 
 export interface CodexCliInstallationTargetDeps {
   readonly platform?: NodeJS.Platform;
-  readonly exists?: (path: string) => boolean;
+  /** `refused` means the probe could not decide; a PATH scan must stop rather than
+   *  attest a later candidate that the real launcher would never reach. */
+  readonly exists?: (path: string) => boolean | "refused" | "volume-unavailable" | Promise<boolean | "refused" | "volume-unavailable">;
   /** Bounded prefix read used only to recognize an OpenCodex-owned wrapper. */
-  readonly fileContains?: (path: string, marker: string) => boolean;
+  readonly fileContains?: (path: string, marker: string) =>
+    boolean | "unavailable" | Promise<boolean | "unavailable">;
 }
 
 const DEFAULT_PATH_EXT = ".COM;.EXE;.BAT;.CMD;.PS1";
 const SHIM_PROBE_BYTES = 8 * 1024;
 const CODEX_PACKAGE_SUFFIX = "\\node_modules\\@openai\\codex\\bin\\codex.js";
-
-function defaultFileContains(path: string, marker: string): boolean {
-  let descriptor: number | undefined;
-  let contains = false;
-  try {
-    descriptor = openSync(path, "r");
-    const bytes = Buffer.allocUnsafe(SHIM_PROBE_BYTES);
-    const count = readSync(descriptor, bytes, 0, bytes.length, 0);
-    contains = bytes.subarray(0, count).toString("utf8").includes(marker);
-  } catch {
-    contains = false;
-  } finally {
-    if (descriptor !== undefined) {
-      try { closeSync(descriptor); } catch { contains = false; }
-    }
-  }
-  return contains;
-}
 
 /**
  * First match wins, mirroring PATH resolution: directories in order, and within
@@ -60,12 +44,12 @@ function defaultFileContains(path: string, marker: string): boolean {
  * already carries an extension). Skipping a hit to keep scanning would attest
  * something other than the launcher that actually resolves.
  */
-function scanPath(
+async function scanPath(
   name: string,
   pathValue: string | null | undefined,
   pathExt: string | null | undefined,
-  exists: (path: string) => boolean,
-): string | null {
+  exists: (path: string) => boolean | "refused" | "volume-unavailable" | Promise<boolean | "refused" | "volume-unavailable">,
+): Promise<string | null> {
   const extensions = (pathExt ?? DEFAULT_PATH_EXT).split(";").map(value => value.trim()).filter(Boolean);
   const names = /\.[a-z0-9]+$/i.test(name) ? [name] : extensions.map(ext => name + ext.toLowerCase());
   for (const entry of (pathValue ?? "").split(";")) {
@@ -73,7 +57,10 @@ function scanPath(
     if (!dir) continue;
     for (const candidateName of names) {
       const candidate = win32.join(dir, candidateName);
-      if (exists(candidate)) return candidate;
+      const found = await exists(candidate);
+      if (found === "volume-unavailable") break;
+      if (found === "refused") return null;
+      if (found) return candidate;
     }
   }
   return null;
@@ -86,40 +73,57 @@ function scanPath(
  * false identity. No ambient environment is read: without a snapshot the result
  * is unavailable rather than silently trusting the child's environment.
  */
-export function deriveCodexCliInstallationInput(
+export async function deriveCodexCliInstallationInput(
   snapshot: CodexCliInstallationSnapshot,
   deps: CodexCliInstallationTargetDeps = {},
-): CodexCliInstallationTargetDerivation {
+): Promise<CodexCliInstallationTargetDerivation> {
   if ((deps.platform ?? process.platform) !== "win32") {
     return { kind: "unavailable", reason: "unsupported_platform" };
   }
-  const exists = deps.exists ?? existsSync;
-  const fileContains = deps.fileContains ?? defaultFileContains;
+  const safeRead = async (path: string, maxBytes: number, prefixOnly = false) => {
+    const { inspectWindowsInstallationFiles } = await import("./windows-installation-files");
+    return inspectWindowsInstallationFiles([{ path, maxBytes, metadataOnly: maxBytes === 0, prefixOnly }]);
+  };
+  const exists = deps.exists ?? (async (path: string) => {
+    const result = await safeRead(path, 0);
+    if (result.kind === "observed") return true;
+    return result.reason === "not-found" ? false
+      : result.reason === "volume-unavailable" ? "volume-unavailable" : "refused";
+  });
+  const fileContains = deps.fileContains ?? (async (path: string, marker: string) => {
+    const result = await safeRead(path, SHIM_PROBE_BYTES, true);
+    if (result.kind !== "observed") return "unavailable";
+    return Buffer.from(result.files[0]!.bytes).toString("utf8").includes(marker);
+  });
   const configured = snapshot.codexCliPath;
 
   let candidate: string | null;
   if (configured) {
     if (/^[a-z]:[\\/]/i.test(configured)) {
-      if (!exists(configured)) return { kind: "unavailable", reason: "candidate_unavailable" };
+      if (await exists(configured) !== true) return { kind: "unavailable", reason: "candidate_unavailable" };
       candidate = win32.normalize(configured);
     } else {
       if (configured.includes("/") || configured.includes("\\")) {
         return { kind: "unavailable", reason: "candidate_unavailable" };
       }
-      candidate = scanPath(configured, snapshot.path, snapshot.pathExt, exists);
+      candidate = await scanPath(configured, snapshot.path, snapshot.pathExt, exists);
       if (!candidate) return { kind: "unavailable", reason: "candidate_unavailable" };
     }
   } else {
-    candidate = scanPath("codex", snapshot.path, snapshot.pathExt, exists);
+    candidate = await scanPath("codex", snapshot.path, snapshot.pathExt, exists);
     if (!candidate) return { kind: "unavailable", reason: "candidate_unavailable" };
   }
 
   // An OpenCodex wrapper at the npm prefix is our own launcher, not the npm
   // artifact. The renamed original beside it is the file npm wrote.
-  if (/\.cmd$/i.test(candidate) && fileContains(candidate, SHIM_MARKER)) {
-    const backing = candidate.slice(0, -".cmd".length) + ".opencodex-real.cmd";
-    if (!exists(backing)) return { kind: "unavailable", reason: "unsupported_layout" };
-    candidate = backing;
+  if (/\.cmd$/i.test(candidate)) {
+    const marker = await fileContains(candidate, SHIM_MARKER);
+    if (marker === "unavailable") return { kind: "unavailable", reason: "candidate_unavailable" };
+    if (marker) {
+      const backing = candidate.slice(0, -".cmd".length) + ".opencodex-real.cmd";
+      if (await exists(backing) !== true) return { kind: "unavailable", reason: "unsupported_layout" };
+      candidate = backing;
+    }
   }
 
   const base = win32.basename(candidate).toLowerCase();
@@ -131,19 +135,19 @@ export function deriveCodexCliInstallationInput(
   } else {
     return { kind: "unavailable", reason: "unsupported_layout" };
   }
-  if (!exists(win32.join(prefix, "node_modules", "@openai", "codex", "package.json"))) {
+  if (await exists(win32.join(prefix, "node_modules", "@openai", "codex", "package.json")) !== true) {
     return { kind: "unavailable", reason: "unsupported_layout" };
   }
 
   // The npm cmd-shim itself prefers %dp0%\node.exe before falling back to PATH.
   let node = win32.join(prefix, "node.exe");
-  if (!exists(node)) {
-    const resolved = scanPath("node.exe", snapshot.path, null, exists);
+  if (await exists(node) !== true) {
+    const resolved = await scanPath("node.exe", snapshot.path, null, exists);
     if (!resolved) return { kind: "unavailable", reason: "toolchain_unresolved" };
     node = resolved;
   }
   const npmCli = win32.join(win32.dirname(node), "node_modules", "npm", "bin", "npm-cli.js");
-  if (!exists(npmCli)) return { kind: "unavailable", reason: "toolchain_unresolved" };
+  if (await exists(npmCli) !== true) return { kind: "unavailable", reason: "toolchain_unresolved" };
 
   return {
     kind: "derived",

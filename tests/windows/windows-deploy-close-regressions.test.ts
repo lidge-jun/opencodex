@@ -81,7 +81,7 @@ describe("server bind canonicalizes explicit localhost but preserves wildcards (
   const src = read("src/server/index.ts");
   test("literal localhost binds to 127.0.0.1; 0.0.0.0/:: exposure is untouched", () => {
     expect(src).toContain("const configuredHost = config.hostname?.trim();");
-    expect(src).toContain('!configuredHost || /^localhost$/i.test(configuredHost) ? "127.0.0.1"');
+    expect(src).toContain('!configuredHost || /^localhost\\.?$/i.test(configuredHost) ? "127.0.0.1"');
     // Must not blanket-rewrite the PUBLIC bind host — that would break intentional 0.0.0.0
     // exposure, which is the regression this guards.
     //

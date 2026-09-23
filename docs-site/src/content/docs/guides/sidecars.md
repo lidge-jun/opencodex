@@ -212,4 +212,4 @@ file directly. Anthropic-OAuth search and image description reuse the existing
 Claude Code OAuth fingerprint precedent, but should be soak-tested with the
 intended account and workload.
 
-See the [Configuration reference](/reference/configuration/#sidecars) for every field.
+See the [Configuration reference](/reference/configuration/server/#sidecars) for every field.

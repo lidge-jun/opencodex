@@ -111,9 +111,10 @@ Inside the macOS bundle, the sidecar sits beside the app binary in `Contents/Mac
 widget extension is `Contents/PlugIns/OpenCodexWidget.appex`. Removing the app removes both;
 it does not remove `~/.opencodex`, and it does not stop a service installed by the CLI.
 
-Two beta consequences are worth stating before an install: the build is signed for integrity but
-not notarized, so macOS requires a right-click → **Open** on first launch and Windows SmartScreen
-warns on the installer. Neither is a failure to route around by disabling a security setting on
+Two beta consequences are worth stating before an install: release builds of the macOS app are
+signed with a Developer ID and notarized, so macOS shows only its standard confirmation for a
+downloaded app (a local build is ad-hoc signed and may need **Open Anyway** in System Settings →
+Privacy & Security), and the Windows installer is not code-signed, so SmartScreen warns on it. Neither is a failure to route around by disabling a security setting on
 the user's behalf — relay it and let the user decide.
 
 ## Why this is a file and not a prompt

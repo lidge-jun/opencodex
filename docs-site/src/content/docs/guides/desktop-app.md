@@ -3,12 +3,11 @@ title: Desktop App
 description: Install and use the OpenCodex desktop app on macOS, Windows, and Linux.
 ---
 
-The OpenCodex desktop app combines a native tray with the web dashboard. It discovers an
-existing local proxy, or starts the bundled `ocx` sidecar when no proxy is running.
+The OpenCodex desktop app combines a native tray with the web dashboard. Its bundled CLI
+resolves an existing local proxy; the app starts its bundled runtime only when absence is proven.
 
-The dashboard remains available at [http://127.0.0.1:10100](http://127.0.0.1:10100).
-The desktop app does not replace the proxy; it is a local shell around the dashboard and
-its bundled runtime.
+The dashboard is served from the resolved local proxy endpoint (port `10100` by default).
+The desktop app is a local shell around that dashboard and its bundled runtime.
 
 ## Install
 
@@ -16,11 +15,11 @@ its bundled runtime.
 
 Download `OpenCodex-<version>-macos.dmg` from the
 [latest release](https://github.com/lidge-jun/opencodex/releases). Open the DMG and drag
-`OpenCodex.app` to Applications.
+`OpenCodex.app` to Applications. The app requires macOS 13 or later.
 
-On first launch, macOS Gatekeeper may warn that the developer cannot be verified. Right-click
-the app, choose **Open**, and confirm **Open**. This build is signed for integrity but is not
-yet notarized.
+Release builds of `OpenCodex.app` are signed with a Developer ID and notarized by Apple, so on
+first launch macOS normally asks only for the standard confirmation for a downloaded app. If macOS
+still blocks it, use **System Settings → Privacy & Security → Open Anyway**.
 
 ### Windows
 
@@ -50,9 +49,10 @@ The tray icon requires an AppIndicator-capable desktop environment.
 
 ## First launch
 
-The app first looks for an existing `ocx` proxy on loopback, using the runtime port
-metadata when available and falling back to port `10100`. If no proxy answers, it starts
-the bundled sidecar. The dashboard is then opened inside the app's webview.
+The app asks its bundled CLI to run `ocx resolve --json` and attaches to a reachable local
+proxy if one is already running. It starts the bundled runtime only when the CLI proves
+absence; an uncertain result is shown as a startup failure. The dashboard then opens in
+the app's webview at the resolved loopback endpoint.
 
 Use the tray's **Open dashboard** or **Open in browser** action to move between the
 embedded dashboard and your normal browser. The tray also provides update checks.
@@ -101,8 +101,8 @@ requires all four platforms to be signed.
 ## Widget
 
 The macOS app includes the OpenCodex WidgetKit extension. See the
-[macOS Menu Bar App guide](/opencodex/guides/macos-menu-bar/) for widget setup and the
-privacy-safe snapshot details.
+[macOS Menu Bar App guide](/guides/macos-menu-bar/) for widget setup and the
+local snapshot details.
 
 ## Uninstall
 

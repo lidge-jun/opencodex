@@ -1,6 +1,6 @@
 # ADR-0070 — decision recorded under "Same-provider combo quota fallback"
 
-- Contract owner: [transports/responses.md](../transports/responses.md#same-provider-combo-quota-fallback)
+- Contract owner: [transports/responses-failover.md](../transports/responses-failover.md#same-provider-combo-quota-fallback)
 
 ## Decision record
 

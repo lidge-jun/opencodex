@@ -6,6 +6,10 @@
   ],
   "absentPaths": [
     {
+      "path": "docs/",
+      "reason": "the root docs/ folder is retired; ops/docs-and-release.md documents where its material went and that no docs/ tree is tracked"
+    },
+    {
       "path": "go/",
       "reason": "the Go native-runtime experiment is retired; ops/docs-and-release.md documents that no go/ tree is tracked"
     }
@@ -98,7 +102,8 @@
         "src/update/",
         "src/usage/",
         "src/vision/",
-        "src/web-search/"
+        "src/web-search/",
+        "src/config/persisted-mutation.ts"
       ]
     },
     {
@@ -160,12 +165,45 @@
       "path": "transports/responses.md",
       "tier": 3,
       "title": "Responses Transport",
-      "scope": "The Responses HTTP/SSE data plane, combo failover, and streaming commit boundaries.",
+      "scope": "The Responses HTTP/SSE endpoint, dispatch, credential and upload boundaries, and core module ownership.",
+      "documents": [
+        "src/bridge.ts",
+        "src/bridge/",
+        "src/responses/",
+        "src/server/"
+      ]
+    },
+    {
+      "path": "transports/responses-wire-shapes.md",
+      "tier": 3,
+      "title": "Responses Wire Shapes",
+      "scope": "Mixed-wire model defaults, xAI agent-message continuation, declared-tool membership, and passthrough SSE stream shapes.",
       "documents": [
         "src/adapters/",
+        "src/bridge/",
         "src/lib/",
         "src/responses/",
         "src/server/"
+      ]
+    },
+    {
+      "path": "transports/responses-failover.md",
+      "tier": 3,
+      "title": "Responses Failover And Replay",
+      "scope": "Upstream reset retry, the ambiguous-resend gate, combo failover and commit boundaries, compaction routing, and output headroom.",
+      "documents": [
+        "src/lib/",
+        "src/server/",
+        "src/codex/"
+      ]
+    },
+    {
+      "path": "transports/responses-spend.md",
+      "tier": 3,
+      "title": "Responses Spend Reservations",
+      "scope": "Credential-hop and durable spend reservations, and what a spent budget tells the client.",
+      "documents": [
+        "src/lib/"
       ]
     },
     {
@@ -232,6 +270,7 @@
         "src/providers/",
         "src/responses/",
         "src/server/",
+        "src/types/",
         "src/web-search/"
       ]
     },
@@ -239,7 +278,16 @@
       "path": "providers/openai-tiers.md",
       "tier": 4,
       "title": "OpenAI Provider Account Modes",
-      "scope": "Pool/Direct account modes, API-key separation, wire identity, and quota evidence.",
+      "scope": "Pool/Direct account modes, API-key separation, and the public provider and quota contract.",
+      "documents": [
+        "src/codex/"
+      ]
+    },
+    {
+      "path": "providers/openai-accounts.md",
+      "tier": 4,
+      "title": "OpenAI Account Identity And Pool Operations",
+      "scope": "Migration and restore, wire identity, store concurrency, pool ordering and exclusions, quota observations, and account-bound retention.",
       "documents": [
         "src/codex/",
         "src/config.ts"
@@ -325,7 +373,7 @@
       "path": "gui-and-management-api.md",
       "tier": 5,
       "title": "GUI And Management API",
-      "scope": "Dashboard serving, authentication boundaries, /api/* ownership, and usage accounting.",
+      "scope": "Dashboard serving, authentication boundaries, /api/* ownership, and startup safety.",
       "documents": [
         "gui/",
         "src/companion/",
@@ -335,6 +383,20 @@
         "src/usage/",
         "src/usage/timeline.ts",
         "src/vision/"
+      ]
+    },
+    {
+      "path": "dashboard-and-usage.md",
+      "tier": 5,
+      "title": "Dashboard Surfaces And Usage",
+      "scope": "Dashboard page contracts, usage accounting and request metrics, and per-surface management settings.",
+      "documents": [
+        "gui/",
+        "src/codex/",
+        "src/lib/",
+        "src/quota/",
+        "src/server/",
+        "src/usage/"
       ]
     },
     {
@@ -376,7 +438,10 @@
       "title": "Background Service And Sidecars",
       "scope": "Service install/repair, platform launchers, tray, and sidecar processes.",
       "documents": [
-        "src/server/"
+        "src/server/",
+        "src/service-manager-probe.ts",
+        "src/sidecar/",
+        "src/update/"
       ]
     },
     {
@@ -393,8 +458,7 @@
         "src/cli/",
         "src/codex/",
         "src/lib/",
-        "src/service.ts",
-        "src/update/"
+        "src/service.ts"
       ]
     },
     {
@@ -427,6 +491,36 @@
         "app/",
         "desktop/"
       ]
+    },
+    {
+      "path": "config-proxy.md",
+      "tier": 2,
+      "title": "Proxy Configuration",
+      "scope": "Global proxy activation, start flags, and credential-safe CLI output.",
+      "documents": []
+    },
+    {
+      "path": "codex-account-controls.md",
+      "tier": 5,
+      "title": "Codex Account Controls",
+      "scope": "Account selection order, custom usage thresholds, and stable account-card editing.",
+      "documents": []
+    },
+    {
+      "path": "ops/cross-platform-ci.md",
+      "tier": 6,
+      "title": "Cross-platform CI",
+      "scope": "Test lanes, platform coverage, aggregate gating, and release CI proof.",
+      "documents": []
+    },
+    {
+      "path": "ops/test-sandbox-cleanup.md",
+      "tier": 6,
+      "title": "Test Sandbox Cleanup",
+      "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
+      "documents": [
+        "tests/"
+      ]
     }
   ],
   "contracts": {
@@ -441,9 +535,9 @@
         "dependents": [
           "catalog.md",
           "config.md",
-          "gui-and-management-api.md",
+          "dashboard-and-usage.md",
           "ops/docs-and-release.md",
-          "providers/openai-tiers.md",
+          "providers/openai-accounts.md",
           "runtime.md",
           "subagents.md"
         ]
@@ -501,32 +595,7 @@
     ]
   },
   "grace": {
-    "undocumentedSourceAreas": [
-      {
-        "path": "src/bridge.ts",
-        "reason": "no doc names this file; it is the legacy adapter bridge entry and its behavior is described under the adapter registry without a path reference"
-      },
-      {
-        "path": "src/bridge/",
-        "reason": "no doc names this directory; it holds the leaves moved out of the src/bridge.ts facade and inherits the same adapter-registry description the facade has"
-      },
-      {
-        "path": "src/quota/",
-        "reason": "no doc names a path here; quota evidence is described in providers/openai-tiers.md in prose only"
-      },
-      {
-        "path": "src/service-manager-probe.ts",
-        "reason": "no doc names this file; service probing is described in ops/service-and-sidecars.md without a path reference"
-      },
-      {
-        "path": "src/sidecar/",
-        "reason": "no doc names a path here; ops/service-and-sidecars.md describes sidecar behavior in prose only"
-      },
-      {
-        "path": "src/types/",
-        "reason": "shared declarations plus the tool-name and wire-pin resolvers, which no doc currently describes"
-      }
-    ],
+    "undocumentedSourceAreas": [],
     "unboundInvariants": [
       {
         "id": "INV-HOME-01",
@@ -537,11 +606,7 @@
         "reason": "no test constrains routed slug shape; the ten files that mention provider/model consume slugs rather than enforcing the form"
       }
     ],
-    "oversizeDocs": [
-      "gui-and-management-api.md",
-      "providers/openai-tiers.md",
-      "transports/responses.md"
-    ],
+    "oversizeDocs": [],
     "staleRefs": []
   }
 }
