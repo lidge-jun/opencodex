@@ -112,7 +112,7 @@ export interface SidecarData {
   webSearchModels?: WebSearchModelOption[];
 }
 export interface SidecarPatch {
-  webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean };
+  webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean; enabled?: boolean };
   vision?: {
     backend?: VisionBackend | null;
     model?: string;
@@ -235,6 +235,15 @@ export function visionReasoningPatch(reasoning: VisionReasoning): SidecarPatch {
 
 export function visionEnabledPatch(enabled: boolean): SidecarPatch {
   return { vision: { enabled } };
+}
+
+/**
+ * The web-search master switch, as the Dashboard's Off row sends it. Off is the operator saying
+ * "no native web search at all": OpenCodex stops intercepting it AND writes Codex's own
+ * `web_search` mode off, which is what lets an MCP search server be the only search path.
+ */
+export function webSearchEnabledPatch(enabled: boolean): SidecarPatch {
+  return { webSearch: { enabled } };
 }
 
 export function visionMaxDescriptionsPatch(maxDescriptionsPerTurn: number): SidecarPatch {

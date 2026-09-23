@@ -30,6 +30,7 @@ import {
   chooseCatalogPathForInjection,
   dominantEol,
   ensureFastModeFeature,
+  ensureRootWebSearchDisabled,
   normalizeServiceTier,
   removeProfileSection,
   setRootModelCatalogPath,
@@ -169,6 +170,10 @@ export function deriveCodexInjectionPlan(
   content = stripRootContextWindowOverrides(content);
   content = normalizeServiceTier(content);
   content = ensureFastModeFeature(content, config?.fastMode);
+  // Codex's own web-search switch follows the sidecar's master switch. While the sidecar is off,
+  // the client must not keep offering a native `web_search` tool that an MCP search server is
+  // meant to replace.
+  content = ensureRootWebSearchDisabled(content, config?.webSearchSidecar?.enabled === false);
 
   const catalogPath = chooseCatalogPathForInjection(
     content,

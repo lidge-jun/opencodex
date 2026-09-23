@@ -207,6 +207,24 @@ timeout, and limit.
 omitted keys unchanged. `timeoutMs` uses the runtime integer bounds
 (1–2147483647 ms).
 
+The web-search sidecar card carries the same control shape: the model picker's first row is
+**Off**. Off does two things, and the second one is the reason the row exists. OpenCodex stops
+intercepting `web_search`, and the Codex integration writes Codex's own
+`web_search = "disabled"` mode into `~/.codex/config.toml` — because Codex keeps declaring its
+native hosted `web_search` tool until its own mode says otherwise, and the tool a client
+advertises is the one the model reaches for. An operator who wants an MCP search server to be
+the only search path needs both halves; otherwise the model keeps calling the native tool.
+
+`web_search` is Codex's key with its own value space (`disabled`, `cached`, `indexed`, `live`).
+OpenCodex only ever writes `disabled` while the sidecar is off, and removes its marker-owned line
+again once the sidecar is back on — a re-enabled sidecar whose client still had the native tool
+switched off would have nothing to intercept. The write needs a managed `~/.codex/config.toml`
+(`ocx sync`); the management response reports it as `codexWebSearch`, and
+`ocx agent sidecar web --enabled off` prints whether it happened. A root `web_search` line the
+operator set by hand is replaced while the sidecar is off, since two root keys of the same name
+are not valid TOML; `ocx restore` replays the journal snapshot and brings that value back, like
+every other line the injection rewrites.
+
 You can still set `enabled: false` in `config.json` if you prefer to edit the
 file directly. Anthropic-OAuth search and image description reuse the existing
 Claude Code OAuth fingerprint precedent, but should be soak-tested with the

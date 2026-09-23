@@ -132,6 +132,14 @@ management API. Retirement does not migrate user-selected model ids or erase usa
 
 An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
 
+One further root key is conditional rather than part of either routing form. While the web-search
+sidecar is switched off (`webSearchSidecar.enabled: false`), the injection also owns Codex's own
+`web_search` mode and writes `web_search = "disabled"` — the only value that removes the native
+hosted tool from the model's tool list, which is what an operator running an MCP search server
+instead needs. Ownership follows the routing keys: the marker-owned pair is removed again once the
+sidecar is back on, and a user-owned root line is replaced only while the switch is off (two root
+keys of the same name are invalid TOML) and returns with the journal snapshot on `ocx restore`.
+
 `src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
 keeps its native provider id, which decides whether existing thread history still resolves.
 

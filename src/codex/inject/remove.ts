@@ -18,6 +18,7 @@ import {
   dominantEol,
   removeProfileSection,
   stripInjectedOpenaiBaseUrl,
+  stripInjectedRootWebSearch,
   stripOpencodexCatalogPath,
   stripRootRoutedModel,
 } from "./config-toml";
@@ -75,6 +76,7 @@ function stripOpencodexConfigResult(
   const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out)
     || (journaledBaseUrl !== null && rootTomlString(out, "openai_base_url") === journaledBaseUrl);
   out = stripInjectedOpenaiBaseUrl(out); // before removeOcxSection — it keys on the marker line too
+  out = stripInjectedRootWebSearch(out);
   out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl, journaledRealtimeWsBaseUrl);
   if (hasOcxProviderTable(out)) {
     out = removeOcxSection(out);

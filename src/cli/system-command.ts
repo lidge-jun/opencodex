@@ -1,5 +1,6 @@
 import {
   CliUsageError,
+  desktopSwitchApplyReason,
   printData,
   rejectArgs,
   runCliAction,
@@ -54,15 +55,6 @@ function desktopSwitchInertReason(reason: unknown): string {
     return "a non-loopback bind requires an admission token, so this flag is inert";
   }
   return "the stored setting is not effective in the current runtime configuration";
-}
-
-function desktopSwitchApplyReason(reason: unknown): string {
-  if (reason === "not_requested") return "no desktop switch rewrite was requested";
-  if (reason === "proxy_not_running") return "the proxy is not running";
-  if (reason === "integration_disabled") return "Codex integration is disabled";
-  if (reason === "write_lock_busy") return "the Codex config write lock is busy";
-  if (reason === "injection_refused") return "Codex config injection was refused";
-  return "the rewrite could not be completed";
 }
 
 function settingsUpdateLines(

@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import type { CatalogModel } from "../../codex/catalog";
 import { catalogModelSlug, invalidateCodexModelsCache, nativeContextLimits, nativeModelRows, uniqueCatalogModelsForPublicList } from "../../codex/catalog";
 import {
-  applyCodexDesktopSwitches,
+  applyCodexConfigInjection,
   describeCodexDesktopSwitches,
   type CodexDesktopSwitchApply,
 } from "../../codex/desktop-switches";
@@ -681,7 +681,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     // because coordinated Codex writes acquire the Codex write lock N before the config mutation
     // lock C — awaiting N while still holding C would invert that order.
     const desktopSwitchApply: CodexDesktopSwitchApply = desktopSwitchesChanged
-      ? await applyCodexDesktopSwitches(config)
+      ? await applyCodexConfigInjection(config)
       : { applied: false, reason: "not_requested", retryable: false };
     const codexDesktopSwitches = describeCodexDesktopSwitches(config, desktopSwitchApply);
     const catalogRefreshPending = catalogRefresh
@@ -807,7 +807,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (raw.webSearch !== undefined && !isPlainRecord(raw.webSearch)) return jsonResponse({ error: "webSearch must be an object" }, 400);
     if (raw.vision !== undefined && !isPlainRecord(raw.vision)) return jsonResponse({ error: "vision must be an object" }, 400);
     const body = raw as {
-      webSearch?: { model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
+      webSearch?: { enabled?: unknown; model?: unknown; backend?: unknown; reasoning?: unknown; streamRoutedModelOutput?: unknown; exaApiKey?: unknown; xSearch?: unknown };
       vision?: {
         model?: unknown;
         backend?: unknown;
@@ -828,6 +828,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     if (body.webSearch && body.webSearch.streamRoutedModelOutput !== undefined
       && typeof body.webSearch.streamRoutedModelOutput !== "boolean") {
       return jsonResponse({ error: "webSearch.streamRoutedModelOutput must be a boolean" }, 400);
+    }
+    if (body.webSearch && body.webSearch.enabled !== undefined && typeof body.webSearch.enabled !== "boolean") {
+      return jsonResponse({ error: "webSearch.enabled must be a boolean" }, 400);
     }
     if (body.vision && body.vision.backend !== undefined
       && body.vision.backend !== null && body.vision.backend !== "openai" && body.vision.backend !== "anthropic"
@@ -892,6 +895,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         : normalizeVisionReasoningForModel(model, sourceReasoning);
     }
 
+    // Read BEFORE the mutation below: the Codex-side key follows the switch, and a flip is the
+    // only case that owes a config.toml rewrite.
+    const webSearchEnabledBefore = config.webSearchSidecar?.enabled !== false;
     if (body.webSearch) {
       const pairTouched = body.webSearch.model !== undefined || body.webSearch.backend !== undefined;
       // Validate against the backend the caller SUBMITTED, across the whole
@@ -987,6 +993,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         if (body.webSearch.streamRoutedModelOutput) webSearchCandidate.streamRoutedModelOutput = true;
         else delete webSearchCandidate.streamRoutedModelOutput;
       }
+      if (typeof body.webSearch.enabled === "boolean") {
+        // `true` is the default — drop the key so a disable/re-enable cycle does not rewrite the
+        // file, exactly like the Vision master switch.
+        if (body.webSearch.enabled) delete webSearchCandidate.enabled;
+        else webSearchCandidate.enabled = false;
+      }
       config.webSearchSidecar = webSearchCandidate;
     }
     if (body.vision) {
@@ -1017,6 +1029,16 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       }
     }
     saveConfigPreservingClaudeCode(config);
+    // The sidecar's own switch is only half of what "off" means: Codex keeps declaring its native
+    // hosted `web_search` tool until its own mode says otherwise, and the tool a client advertises
+    // is the one the model reaches for — which is why an MCP search server needs the client-side
+    // key off too. The injection owns that root key, and a write that cannot happen is reported
+    // (the Desktop switches' contract) instead of being stored as if it had.
+    const webSearchEnabledChanged = typeof body.webSearch?.enabled === "boolean"
+      && webSearchEnabledBefore !== (config.webSearchSidecar?.enabled !== false);
+    const codexWebSearch: CodexDesktopSwitchApply = webSearchEnabledChanged
+      ? await applyCodexConfigInjection(config)
+      : { applied: false, reason: "not_requested", retryable: false };
     const ws = config.webSearchSidecar ?? {};
     const vision = await sidecarVisionResponseSettings(config);
     const savedWebSearchCandidates = await webSearchCandidateRows(config);
@@ -1029,6 +1051,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
         streamRoutedModelOutput: ws.streamRoutedModelOutput === true,
         ...(ws.xSearch ? { xSearch: ws.xSearch } : {}),
       },
+      codexWebSearch,
       vision: publicVisionSidecarSettings(config, vision),
       visionModels: vision.models,
       // Echoed for the same reason GET always carries it: the dashboard rebuilds

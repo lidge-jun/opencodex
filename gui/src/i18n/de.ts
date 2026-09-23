@@ -356,6 +356,7 @@ export const de: Record<TKey, string> = {
   "dash.visionModelHint": "Modell zur Beschreibung von Bildern für nur-Text-Routen. Erfordert ChatGPT-Login.",
   "dash.webSearchSidecar": "Websuche-Sidecar",
   "dash.webSearchSidecarHint": "Backend und Modell für die Websuche gerouteter Modelle auswählen.",
+  "dash.webSearchOff": "Aus",
   "dash.webSearchStream": "Antworten live streamen",
   "dash.webSearchStreamHint": "Führenden Text und Reasoning live streamen, bis das Modell über einen Tool-Aufruf entscheidet; der Rest bleibt für das Abfangen der Suche gepuffert. Text vor einer Suche kann sich teilweise wiederholen.",
   "dash.visionSidecar": "Vision-Sidecar",

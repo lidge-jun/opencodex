@@ -17,6 +17,7 @@ import {
   shadowCallModelOptions,
   webSearchSidecarSelectionForModel,
   updateJobLabel,
+  webSearchEnabledPatch,
   visionEnabledPatch,
   visionMaxDescriptionsPatch,
   visionReasoningLadder,
@@ -445,6 +446,9 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
   } = d;
   const visionEnabled = sidecar?.vision?.enabled !== false;
   const visionModel = visionEnabled ? (sidecar?.vision?.model ?? "gpt-5.6-luna") : "";
+  const webSearchEnabled = sidecar?.webSearch?.enabled !== false;
+  // Same shape as the Vision card: Off is a row in the picker, and choosing a model is the way back.
+  const webSearchModel = webSearchEnabled ? (sidecar?.webSearch?.model ?? "gpt-5.6-luna") : "";
   const persistedVisionReasoning = sidecar?.vision?.reasoning ?? "low";
   const visionLadder = visionReasoningLadder(models, visionModel);
   const visionReasoning = clampVisionReasoningToLadder(visionLadder, persistedVisionReasoning);
@@ -561,10 +565,17 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
           <div className="dash-delegation-controls">
             <div className="dash-sidecar-select-row">
               <Select
-                value={sidecar?.webSearch?.model ?? "gpt-5.6-luna"}
-                options={sidecarModels}
+                value={webSearchModel}
+                options={[{ value: "", label: t("dash.webSearchOff") }, ...sidecarModels]}
                 onChange={model => {
-                  void saveSidecar({ webSearch: webSearchSidecarSelectionForModel(models, sidecarModels, model) });
+                  if (model === "") {
+                    void saveSidecar(webSearchEnabledPatch(false));
+                    return;
+                  }
+                  const patch: SidecarPatch = { webSearch: webSearchSidecarSelectionForModel(models, sidecarModels, model) };
+                  // Choosing a model is the activation control: turning the sidecar back on from Off.
+                  if (!webSearchEnabled) patch.webSearch = { ...patch.webSearch, enabled: true };
+                  void saveSidecar(patch);
                 }}
                 disabled={!sidecar || sidecarSaving}
                 label={t("dash.sidecarModel")}
@@ -579,7 +590,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
                 onClick={() => {
                   void saveSidecar({ webSearch: { streamRoutedModelOutput: !sidecar?.webSearch?.streamRoutedModelOutput } });
                 }}
-                disabled={!sidecar || sidecarSaving}
+                disabled={!webSearchEnabled || !sidecar || sidecarSaving}
                 aria-label={t("dash.webSearchStream")}
                 aria-pressed={sidecar?.webSearch?.streamRoutedModelOutput === true}
               >

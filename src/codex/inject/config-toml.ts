@@ -304,6 +304,73 @@ export function setRootRealtimeWsBaseUrl(
 }
 
 /**
+ * Root key codex-rs reads for its web-search mode. The value opencodex writes is the only one that
+ * takes the native hosted tool away; the other modes keep it, so they are never written here.
+ */
+export const ROOT_WEB_SEARCH_KEY = "web_search";
+
+/** The one value opencodex writes for {@link ROOT_WEB_SEARCH_KEY}. */
+export const ROOT_WEB_SEARCH_DISABLED_LINE = 'web_search = "disabled"';
+
+export function isRootWebSearchLine(line: string): boolean {
+  return /^\s*web_search\s*=/.test(line);
+}
+
+/**
+ * Ensure the root `web_search` key follows the web-search sidecar's master switch.
+ *
+ * Codex reads this key (modes `disabled`/`cached`/`indexed`/`live`) to decide whether its native
+ * Responses `web_search` tool is offered at all; `disabled` is the only mode that removes the tool
+ * from the model's tool list. An operator who runs an MCP search server instead needs exactly that,
+ * because a native tool the client still advertises wins the model's attention away from the MCP
+ * one. So the switch is not advisory: while `webSearchSidecar.enabled` is false we own the value.
+ *
+ * Ownership, both directions:
+ * - `disabled` removes EVERY root `web_search` line (ours or the user's) and writes the marker-owned
+ *   pair. Two root keys of the same name are invalid TOML, so keeping a user line alongside ours
+ *   would stop Codex from loading the file at all — and the operator has just asked for this exact
+ *   value. A value the user owned is restored from the journal snapshot on `ocx restore`, like every
+ *   other line this injection rewrites.
+ * - enabled (or unset) removes only the marker-owned pair, so re-enabling the sidecar cannot leave
+ *   the native tool switched off — which would silently leave the sidecar with nothing to intercept.
+ */
+export function ensureRootWebSearchDisabled(content: string, disabled: boolean): string {
+  let lines = stripInjectedRootWebSearch(content).split("\n");
+  if (!disabled) return lines.join("\n");
+  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  lines = lines.filter((line, index) => index >= rootEnd || !isRootWebSearchLine(line));
+  const insertAt = lines.findIndex((line) => /^\s*\[/.test(line));
+  if (insertAt === -1) {
+    return `${lines.join("\n").replace(/\n+$/, "")}\n${OCX_ROUTING_MARKER_LINE}\n${ROOT_WEB_SEARCH_DISABLED_LINE}\n`;
+  }
+  let at = insertAt;
+  while (at > 0 && lines[at - 1].trim() === "") at -= 1;
+  lines.splice(at, 0, OCX_ROUTING_MARKER_LINE, ROOT_WEB_SEARCH_DISABLED_LINE);
+  return lines.join("\n");
+}
+
+/**
+ * Remove the marker-owned root `web_search` pair (marker line + the key line right after it).
+ * Same ownership rule as `stripInjectedOpenaiBaseUrl`: a user's own line has no marker above it and
+ * survives, so a hand-set mode is never reinterpreted as ours after an injection cycle.
+ */
+export function stripInjectedRootWebSearch(content: string): string {
+  const lines = content.split("\n");
+  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const drop = new Set<number>();
+  for (let i = 0; i + 1 < rootEnd; i += 1) {
+    if (lines[i].includes(OCX_SECTION_MARKER) && isRootWebSearchLine(lines[i + 1])) {
+      drop.add(i);
+      drop.add(i + 1);
+    }
+  }
+  if (drop.size === 0) return content;
+  return lines.filter((_, index) => !drop.has(index)).join("\n");
+}
+
+/**
  * Remove the marker-owned root `openai_base_url` (marker line + the key line right after it).
  * A user's own root override (no marker) survives; an orphaned marker with no key line after
  * it is dropped too so repeated strip/inject cycles cannot accumulate marker comments.

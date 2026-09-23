@@ -395,6 +395,23 @@ export function printData(value: unknown, wantsJson: boolean, lines?: string[]):
 }
 
 /**
+ * Operator text for the Codex-config apply report a management write returns.
+ *
+ * The report shape is shared by every route that re-runs the injection on the spot: the Desktop
+ * switches (`ocx system settings`) and the web-search sidecar's master switch. One vocabulary for
+ * both, so the same failure cannot read as two different things depending on which command the
+ * operator used -- and because the reason codes are internal, the human line never prints them.
+ */
+export function desktopSwitchApplyReason(reason: unknown): string {
+  if (reason === "not_requested") return "no desktop switch rewrite was requested";
+  if (reason === "proxy_not_running") return "the proxy is not running";
+  if (reason === "integration_disabled") return "Codex integration is disabled";
+  if (reason === "write_lock_busy") return "the Codex config write lock is busy";
+  if (reason === "injection_refused") return "Codex config injection was refused";
+  return "the rewrite could not be completed";
+}
+
+/**
  * Render untrusted diagnostic text without letting it control the operator's terminal. Catalog
  * values are hub-supplied and surface on more than one CLI path -- first-time `ocx connect` and the
  * connected `ocx sync` refresh both print them -- so the escaping sits beside `printData`, at the
