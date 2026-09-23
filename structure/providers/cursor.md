@@ -42,11 +42,15 @@ All four route to the `default` Cursor wire model. Explicit variants additionall
 parameterized-model channel used by current Cursor clients. Router rows are static capabilities and
 must survive a live `GetUsableModels` response that omits `default`.
 
-`cursor/grok-4.5-fast` and `cursor/grok-4.6-fast` are stable Codex-facing rows, but current Cursor
-clients do not request them as flat model slugs. OpenCodex sends the matching Grok base id through
+`cursor/grok-4.5-fast`, `cursor/grok-4.6-fast`, and `cursor/grok-4.7-fast` are stable Codex-facing rows.
+For 4.5 and 4.6 Fast, OpenCodex sends the matching Grok base id through
 `requested_model` with separate `effort` and `fast=true` parameters, leaving legacy `model_details`
-unset for that parameterized external selection. Grok 4.5 stops at `high`; Grok 4.6 additionally
-advertises and sends `xhigh`. Live discovery recognizes Cursor's flattened
+unset for that parameterized external selection. Grok 4.7 instead sends its flattened, unprefixed
+`grok-4.7-{effort}-fast` id directly. Grok 4.5 stops at `high`; Grok 4.6 and 4.7 additionally
+advertise and send `xhigh`. The 2026-09-23 Cursor roster and probes in
+`devlog/_plan/260923_grok47_parity/010_probe-evidence.md` show unprefixed
+`grok-4.7-{low,medium,high,xhigh}` and `grok-4.7-{low,medium,high,xhigh}-fast` wire ids;
+the bare `grok-4.7-fast` id is rejected. For 4.5 and 4.6, live discovery recognizes Cursor's flattened
 `cursor-grok-{version}-{effort}-fast` variants, plus the older
 `grok-{version}-fast-{effort}` ordering, as availability evidence only.
 

@@ -262,7 +262,7 @@ describe("main account protection setting", () => {
 
 function mainAccount(state: MainAccountHardLockStatus["state"]): CodexAccountEntry {
   return { id: "__main__", email: "fixture@example.test", isMain: true, paused: false,
-    priority: 0, hasCredential: true, plan: "plus",
+    priority: 0, autoSwitchThresholdOverride: null, hasCredential: true, plan: "plus",
     quota: { weeklyPercent: 100, shortPercent: 0, updatedAt: Date.now() },
     quotaAutoRefresh: { fiveHourAvailable: false, weeklyAvailable: false, fiveHourEnabled: false, weeklyEnabled: false },
     mainAccountHardLock: { enabled: state !== "off", state } };
@@ -271,7 +271,8 @@ function MainCard({ state }: { state: MainAccountHardLockStatus["state"] }) {
   return <CodexAccountPoolMainCard t={useT()} main={mainAccount(state)} isMainActive={false}
     accountModeState="pool" threshold={80} switchActionLabel="Use main" onSwitch={() => {}}
     onTogglePause={() => {}} pauseUpdatingId={null} pauseBusy={false} onPriorityChange={() => {}}
-    priorityUpdatingId={null} switchingId={null} onOpenReset={() => {}} />;
+    priorityUpdatingId={null} onAutoSwitchThresholdChange={async () => true}
+    autoSwitchDisabled={false} switchingId={null} onOpenReset={() => {}} />;
 }
 test.each([
   ["blocked", "Blocked by 99% protection", false],

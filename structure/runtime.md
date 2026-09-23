@@ -127,7 +127,7 @@ does not perform OAuth, and runtime credential resolution rereads the owned sour
 | `src/server/images.ts` | Standalone Images data plane: default OpenAI or explicit custom-provider selection, Codex account affinity, bounded opaque request relay, single-attempt upstream fetch, pool health recording, and safe response/cancellation relay. |
 | `src/server/audio-transcriptions.ts` | Standalone multipart transcription; audio-specific key admission, bounded upload/response, stored OpenAI credential resolution and lease-bound cancellation. See [audio contracts](data-planes/inbound-compat.md#standalone-file-transcription). |
 | `src/server/audio-live.ts`, `src/server/audio-dictation.ts` | External voice/dictation orchestration using the existing bounded socket relay, server-owned credentials, cancellation and opaque call ownership. See [streaming audio](data-planes/inbound-compat.md#streaming-audio). |
-| `src/config.ts` | Persisted `~/.opencodex/config.json` surface: the facade keeps the load/save/initialize entry points and re-exports, while schema lives in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`), defaults in `src/config/proxy-env.ts`, and replace-path persistence in `src/config/persist-unlocked.ts`. |
+| `src/config.ts`, `src/config/persisted-mutation.ts` | Persisted `~/.opencodex/config.json` surface: the facade keeps load/save/initialize entry points and re-exports the schema-valid mutation callback, types, and one-shot test seam; the leaf owns its bounded rebase under the shared lock. Schema lives in `src/config/schema/` (`config-schema.ts`, `leaf-validators.ts`), defaults in `src/config/proxy-env.ts`, and replace-path persistence in `src/config/persist-unlocked.ts`. |
 | `src/config/paths.ts` | Resolves `OPENCODEX_HOME`, `config.json`, and owner-only directory hardening. |
 | `src/config/atomic-write.ts` | Shared synchronous/asynchronous temp-harden-rename writer and residual-temp failure contract. The temp is ACL-hardened before it holds a byte and again before the rename, both `required: true`; the second call is a memo hit rather than a second icacls sequence because the writer re-asserts descriptor/path identity after the content write and re-attributes the harden through `reattributeHardenedSecretPath`. Windows takes no `chmod` on that path — it sets the read-only attribute, not the DACL, and its ChangeTime bump is what used to retire the memo. |
 | `src/config/process-state.ts` | Owns `ocx.pid`, `runtime-port.json`, cheap liveness, full command-line identity verification, and snapshot-guarded cleanup. |
@@ -158,7 +158,7 @@ there. Feature code is grouped by responsibility:
 | Evidence and contracts | `src/compatibility/`, `src/lab/` |
 | Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/`, `src/generated/` |
 
-`src/generated/` is build output committed for the runtime; it is not edited by hand.
+`src/generated/` is committed build output, not hand-edited; `scripts/generate-model-metadata.ts` derives `kimi-responses` → Moonshot metadata from the registry's `jawcodeBundle` while keeping its provider row distinct.
 
 `src/server/` is split by responsibility: `index.ts` owns the listener and the startup transaction
 while `index/serve-options.ts` owns route ordering; `responses.ts` and `responses/core.ts` compose
@@ -481,7 +481,7 @@ Regression coverage: `tests/vision/vision-cache.test.ts`, `tests/vision/vision-e
 
 Provider-scoped approval reviewer settings are projected by the [catalog owner](catalog.md#provider-scoped-approval-reviewer); this surface retains its existing routing, transport and account-selection behavior.
 
-Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence.
+Renamed fixed-key providers receive [missing reasoning metadata](catalog.md#renamed-destination-reasoning-metadata) during derivation; explicit per-model entries and provider defaults retain precedence. The [catalog sync owner](ops/docs-and-release.md) bootstraps supported destination effort metadata with a bounded wait before gathering; routed reads of an existing stale ladder request a background refresh, while missing snapshots wait for catalog sync.
 
 Translated audio/file admission follows the [final-adapter input contract](adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.
 ## Request-local target compatibility
@@ -597,4 +597,4 @@ registration succeeds.
 
 Bun updater lease and recovery behavior follows the [update transaction contract](ops/docs-and-release.md#bun-updater-ownership-transaction).
 
-Companion timeline and filtered totals follow the [companion usage contract](companion.md).
+Companion timeline and filtered totals follow the [companion usage contract](companion.md). [Ongoing priority failback](providers/openai-tiers.md#ongoing-priority-failback) reuses request-triggered quota priming and captured-account dispatch; it adds no periodic worker or mid-request account switch.

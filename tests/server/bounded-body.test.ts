@@ -22,6 +22,35 @@ function responseFromChunks(...chunks: Uint8Array[]): Response {
 }
 
 describe("readBoundedResponseBody", () => {
+	test("reportUtf8Validity is honoured on the fatal decode path at EOF", async () => {
+		const valid = await readBoundedResponseBody(responseFromChunks(encoder.encode('{"ok":true}')), {
+			fatalUtf8: true,
+			reportUtf8Validity: true,
+		});
+		expect(valid.utf8Valid).toBe(true);
+		let caught: unknown;
+		try {
+			await readBoundedResponseBody(responseFromChunks(new Uint8Array([0xff])), {
+				fatalUtf8: true,
+				reportUtf8Validity: true,
+			});
+		} catch (error) { caught = error; }
+		expect(boundedBodyDecodeFailure(caught)).toBe("invalid_utf8");
+	});
+
+	test("reportUtf8Validity reports a malformed body at EOF without rejecting it", async () => {
+		const valid = await readBoundedResponseBody(responseFromChunks(encoder.encode("ok")), {
+			reportUtf8Validity: true,
+		});
+		expect(valid).toMatchObject({ text: "ok", utf8Valid: true, displaySafe: true, truncated: false });
+		const malformed = await readBoundedResponseBody(responseFromChunks(new Uint8Array([0x6f, 0xff])), {
+			reportUtf8Validity: true,
+		});
+		expect(malformed).toMatchObject({ text: "o\uFFFD", utf8Valid: false, displaySafe: true, truncated: false });
+		const unrequested = await readBoundedResponseBody(responseFromChunks(encoder.encode("ok")));
+		expect(unrequested.utf8Valid).toBeUndefined();
+	});
+
 	test("only actual decoder exceptions carry the decode discriminator", async () => {
 		for (const bytes of [new Uint8Array([0xff]), new Uint8Array([0xe2, 0x82])]) {
 			let caught: unknown;

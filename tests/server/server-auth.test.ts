@@ -1,3 +1,4 @@
+import { createPoolRetryHarness, POOL_RETRY_MODEL } from "../helpers/codex-pool-retry";
 import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -57,15 +58,7 @@ import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debu
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { deferredResetSseUpstream } from "../helpers/deferred-reset-sse-upstream";
-import {
-  POOL_RETRY_MODEL,
-  POOL_RETRY_TEST_DIR,
-  canonicalDirect,
-  redirectCanonicalCodexTo,
-  startPoolRetryHarness,
-  stopPoolRetryHarness,
-  unsupportedModelBody,
-} from "../helpers/pool-retry-harness";
+import { POOL_RETRY_TEST_DIR, canonicalDirect, redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
@@ -166,19 +159,9 @@ afterEach(() => {
   if (existsSync(POOL_RETRY_TEST_DIR)) removeTreeWithRetry(POOL_RETRY_TEST_DIR);
 });
 
-function rejectionResponse(body: BodyInit, headers: Record<string, string> = {}): Response {
-  return new Response(body, {
-    status: 400,
-    statusText: "Account Model Rejected",
-    headers: { "content-type": "application/json", "x-pool-retry-test": "original", ...headers },
-  });
-}
-
-async function expectOriginal400(response: Response, body: string): Promise<void> {
-  expect(response.status).toBe(400);
-  expect(response.headers.get("x-pool-retry-test")).toBe("original");
-  expect(await response.text()).toBe(body);
-}
+const { startPoolRetryHarness, stopPoolRetryHarness, rejectionResponse, expectOriginal400, unsupportedModelBody } =
+  createPoolRetryHarness({ testDir: POOL_RETRY_TEST_DIR, originalFetch: originalGlobalFetch,
+    redirectCanonicalCodexTo, canonicalDirect });
 
 describe("Responses request identity handoff", () => {
   test("returns the generated request id and overwrites an upstream value", async () => {
@@ -2361,6 +2344,59 @@ describe("server local API auth", () => {
     } finally {
       await stopPoolRetryHarness(harness);
     }
+  });
+
+  test("Astra error-envelope refusal recovers once and avoids the refused account next turn", async () => {
+    const model = "gpt-6-astra";
+    const body = JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_request_error",
+      message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? rejectionResponse(body)
+      : Response.json({ id: "alternate-success", status: "completed", output: [] }));
+    try {
+      const first = await harness.request({ model });
+      expect(first.status).toBe(200);
+      expect((await first.json() as { id: string }).id).toBe("alternate-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      const next = await harness.request({ model });
+      expect(next.status).toBe(200);
+      await next.text();
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-b"]);
+      expect(harness.config.activeCodexAccountId).toBe("pool-a");
+    } finally { await stopPoolRetryHarness(harness); }
+  });
+
+  test("Astra error-envelope refusal can recover to the request-owned main account", async () => {
+    const model = "gpt-6-astra";
+    const body = JSON.stringify({ error: { type: "invalid_request_error",
+      message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+    const seen: Array<{ account: string; authorization: string | null }> = [];
+    const harness = await startPoolRetryHarness((account, request) => {
+      seen.push({ account, authorization: request.headers.get("authorization") });
+      return account === "acct-pool-a" ? rejectionResponse(body)
+        : Response.json({ id: "main-success", status: "completed", output: [] });
+    }, { secondAccount: false });
+    try {
+      const response = await harness.request({ model, headers: { "chatgpt-account-id": "acct-caller-main" } });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("main-success");
+      expect(seen).toEqual([
+        { account: "acct-pool-a", authorization: "Bearer pool-a-token" },
+        { account: "acct-caller-main", authorization: "Bearer inbound-token" },
+      ]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-a");
+    } finally { await stopPoolRetryHarness(harness); }
+  });
+
+  test("Astra error-envelope recovery still stops after one refused alternate", async () => {
+    const model = "gpt-6-astra";
+    const body = JSON.stringify({ error: { type: "invalid_request_error",
+      message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+    const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+    try {
+      await expectOriginal400(await harness.request({ model }), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+    } finally { await stopPoolRetryHarness(harness); }
   });
 
   test("#2097: account-gated model selection skips an unentitled active Pool account", async () => {

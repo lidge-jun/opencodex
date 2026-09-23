@@ -265,6 +265,16 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
       fast: { levels: ["low", "medium", "high", "xhigh"] },
     },
   },
+  // Live Cursor ids and xAI's 500k window: devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  "grok-4.7": {
+    displayName: "Cursor Grok 4.7",
+    window: CONTEXT_500K,
+    defaultVariant: "regular",
+    variants: {
+      regular: { levels: ["low", "medium", "high", "xhigh"] },
+      fast: { levels: ["low", "medium", "high", "xhigh"] },
+    },
+  },
   "gpt-5.1": {
     displayName: "GPT-5.1",
     window: CONTEXT_272K,
@@ -756,6 +766,8 @@ export function cursorGrokFastSelection(
   const kind = fast === true ? upgradeToFast(parsed.baseId, parsed.kind) : parsed.kind;
   if (!parsed.known || kind !== "fast") return undefined;
   const capability = CURSOR_CAPABILITIES[parsed.baseId];
+  // 4.7 has no cursor- prefix and uses a flattened effort-fast id instead:
+  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
   if (capability?.wirePrefix !== "cursor-") return undefined;
   const spec = capability.variants.fast;
   if (!spec) return undefined;

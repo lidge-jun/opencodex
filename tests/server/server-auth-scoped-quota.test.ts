@@ -8,10 +8,11 @@ import { resetDebugLogBufferForTests } from "../../src/lib/debug-log-buffer";
 import { resetDebugSettingsForTests } from "../../src/lib/debug-settings";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { createPoolRetryHarness } from "../helpers/codex-pool-retry";
 import {
   POOL_RETRY_TEST_DIR,
-  startPoolRetryHarness,
-  stopPoolRetryHarness,
+  canonicalDirect,
+  redirectCanonicalCodexTo,
 } from "../helpers/pool-retry-harness";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
@@ -20,6 +21,10 @@ const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
 const originalGlobalWebSocket = globalThis.WebSocket;
+const { startPoolRetryHarness, stopPoolRetryHarness } = createPoolRetryHarness({
+  testDir: POOL_RETRY_TEST_DIR, originalFetch: originalGlobalFetch,
+  redirectCanonicalCodexTo, canonicalDirect,
+});
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {

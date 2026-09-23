@@ -52,6 +52,7 @@ import {
   clientConnectionSchema,
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
+  codexAccountAutoSwitchThresholdsSchema,
   codexPoolSchema,
   codexQuotaAutoRefreshSchema,
   credentialGroupsSchema,
@@ -347,6 +348,13 @@ function codexAccountPrioritiesError(value: unknown): string | null {
       return schemaDiagnosticsError(parsed.error).replace("schema_invalid: ", "schema_invalid: codexAccountPriorities.");
     }
   }
+  if (raw.codexAccountAutoSwitchThresholds !== undefined) {
+    const parsed = codexAccountAutoSwitchThresholdsSchema.safeParse(raw.codexAccountAutoSwitchThresholds);
+    if (!parsed.success) {
+      return schemaDiagnosticsError(parsed.error)
+        .replace("schema_invalid: ", "schema_invalid: codexAccountAutoSwitchThresholds.");
+    }
+  }
   // Tested as a string rather than coerced: `String(123)` matches the id pattern, so a
   // coercing guard waves a non-string pin through to the schema, where `.catch(undefined)`
   // drops it and reports the write as a success — the exact silent-degrade this guards.
@@ -355,6 +363,14 @@ function codexAccountPrioritiesError(value: unknown): string | null {
     return "schema_invalid: activeCodexAccountPinned: must be an account id";
   }
   return null;
+}
+
+function codexAccountPriorityFailbackError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "codexAccountPriorityFailback")) return null;
+  const enabled = raw.codexAccountPriorityFailback;
+  if (enabled === undefined || typeof enabled === "boolean") return null;
+  return "schema_invalid: codexAccountPriorityFailback: must be a boolean or omitted";
 }
 
 /**
@@ -595,6 +611,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexPoolError(value)
     ?? googleAntigravityStaticCatalogVersionError(value)
     ?? codexAccountPrioritiesError(value)
+    ?? codexAccountPriorityFailbackError(value)
     ?? poolCredentialGroupsError(value)
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)

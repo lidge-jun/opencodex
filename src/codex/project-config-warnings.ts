@@ -1,4 +1,14 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+} from "node:fs";
 import path, { dirname, join, resolve } from "node:path";
 import { expandUserPath } from "../config";
 import { defaultCodexHome } from "./home";
@@ -8,6 +18,34 @@ import { truncateRetainedUtf8 } from "../lib/admission";
 const OCX_SECTION_MARKER = "# Auto-injected by opencodex";
 const DIAGNOSTICS_CACHE_TTL_MS = 30_000;
 const MAX_DIAGNOSTIC_VALUE_BYTES = 8 * 1024;
+const MAX_PROJECT_CONFIG_BYTES = 1024 * 1024;
+
+export function readBoundedProjectConfig(filePath: string): string | null {
+  let fd: number | undefined;
+  try {
+    // A candidate can become a FIFO after discovery; opening must not wait for a writer.
+    fd = openSync(filePath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.size > MAX_PROJECT_CONFIG_BYTES) return null;
+
+    const buffer = Buffer.allocUnsafe(stat.size + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      const count = readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+      if (count === 0) break;
+      bytesRead += count;
+    }
+    // Reject a file that changed while it was read, including a same-size rewrite.
+    const after = fstatSync(fd);
+    if (bytesRead !== stat.size || after.size !== stat.size
+      || after.mtimeMs !== stat.mtimeMs || after.ctimeMs !== stat.ctimeMs) return null;
+    return buffer.toString("utf-8", 0, bytesRead);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 
 function resolveCodexConfigPath(): string {
   const raw = process.env.CODEX_HOME?.trim();
@@ -359,6 +397,12 @@ export function discoverProjectCodexConfigPaths(options: {
   const globalConfigIdentity = normalizeExistingPath(codexConfigPath);
   const addIfExists = (projectRoot: string) => {
     const candidate = join(resolve(projectRoot), ".codex", "config.toml");
+    try {
+      const stat = lstatSync(candidate);
+      if (!stat.isFile() || stat.size > MAX_PROJECT_CONFIG_BYTES) return;
+    } catch {
+      return;
+    }
     const candidateIdentity = normalizeExistingPath(candidate);
     if (candidateIdentity && candidateIdentity !== globalConfigIdentity) found.add(candidate);
   };
@@ -397,12 +441,8 @@ export function collectProjectCodexConfigWarnings(options: {
 
   const warnings: ProjectCodexConfigWarning[] = [];
   for (const path of discoverProjectCodexConfigPaths({ cwd: options.cwd, codexConfigPath })) {
-    try {
-      const content = readFileSync(path, "utf-8");
-      warnings.push(...analyzeProjectCodexConfig(content, path));
-    } catch {
-      /* skip unreadable project config */
-    }
+    const content = readBoundedProjectConfig(path);
+    if (content !== null) warnings.push(...analyzeProjectCodexConfig(content, path));
   }
   return warnings;
 }

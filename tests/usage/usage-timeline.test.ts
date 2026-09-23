@@ -126,6 +126,54 @@ describe("usage timeline", () => {
     expect(result.series[0]?.id).toBe("openai/one · main");
   });
 
+  // INV-COMPANION-01
+  test("pool accounts of one model draw one series and still split under account grouping", () => {
+    const pooled = (provider: string, totalTokens: number, extra: Partial<PersistedUsageEntry> = {}) =>
+      entry({ requestId: provider, provider, model: "gpt-6-astra", totalTokens, ...extra });
+    const run = (params: string) => {
+      const query = parseTimelineQuery(new URLSearchParams(params), now);
+      if ("error" in query) throw new Error(query.error);
+      const acc = createTimelineAccumulator(query);
+      acc.add(pooled("openai-p6bc633", 10));
+      acc.add(pooled("openai-pe2d42f", 20));
+      acc.add(pooled("openai", 5));
+      acc.add(pooled("openai-main", 3));
+      acc.add(pooled("chatgpt", 2, { accountLogLabel: "pc272f0" }));
+      acc.add(entry({ requestId: "claude-a", provider: "anthropic-p111111", model: "claude-opus-5", totalTokens: 7 }));
+      acc.add(entry({ requestId: "claude-b", provider: "anthropic-p222222", model: "claude-opus-5", totalTokens: 6 }));
+      acc.add(entry({ provider: "xai", model: "grok-4.7", totalTokens: 1 }));
+      return acc.finish();
+    };
+
+    const merged = run("hours=6");
+    expect(merged.availableModels).toEqual(["anthropic/claude-opus-5", "openai/gpt-6-astra", "xai/grok-4.7"]);
+    expect(merged.series.map(row => [row.id, row.provider, row.total])).toEqual([
+      ["openai/gpt-6-astra", "openai", 40],
+      ["anthropic/claude-opus-5", "anthropic", 13],
+      ["xai/grok-4.7", "xai", 1],
+    ]);
+
+    // A selection saved while the chart still listed accounts selects the merged row, whole.
+    const legacy = run("hours=6&models=openai-p6bc633%2Fgpt-6-astra");
+    expect(legacy.appliedFilters.models).toEqual(["openai-p6bc633/gpt-6-astra"]);
+    expect(legacy.series.map(row => [row.id, row.total])).toEqual([["openai/gpt-6-astra", 40]]);
+
+    expect(run("hours=6&hiddenProvider=openai").series.map(row => row.id)).toEqual(["anthropic/claude-opus-5", "xai/grok-4.7"]);
+    expect(run("hours=6&hiddenProvider=openai-p6bc633").series[0]?.total).toBe(30);
+
+    const accounts = run("hours=6&grouping=modelAccount");
+    expect(accounts.series.map(row => [row.id, row.accountLogLabel, row.total])).toEqual([
+      ["openai/gpt-6-astra · pe2d42f", "pe2d42f", 20],
+      ["openai/gpt-6-astra · p6bc633", "p6bc633", 10],
+      ["anthropic/claude-opus-5 · p111111", "p111111", 7],
+      ["anthropic/claude-opus-5 · p222222", "p222222", 6],
+      ["openai/gpt-6-astra · unknown", "unknown", 5],
+      ["openai/gpt-6-astra · main", "main", 3],
+      ["openai/gpt-6-astra · pc272f0", "pc272f0", 2],
+      ["xai/grok-4.7 · unknown", "unknown", 1],
+    ]);
+  });
+
   test("counts missing measurements and folds excess series", () => {
     const query = parseTimelineQuery(new URLSearchParams("hours=6&metric=input"), now);
     if ("error" in query) throw new Error(query.error);

@@ -64,7 +64,8 @@ provider-wide fallback. Exact model output limits precede the provider default o
   account-qualified native ids hide only that selector row; BARE native slugs hide the bare row
   and all account-selector clones and drop that model family from raw `/v1/models`);
 - applies exact provider/model compatibility exclusions after live discovery and metadata
-  augmentation, so upstream-advertised but uncallable rows never enter dashboard or Codex pickers;
+  augmentation, so upstream-advertised but uncallable rows—including retired aliases retained in
+  generated metadata for historical accounting—never enter dashboard or Codex pickers;
 - strips native-only service tier and WebSocket metadata unless the final routed provider/model
   explicitly enables the verified OpenAI-compatible service tier;
 - backs up the pristine catalog once per catalog: the copy is keyed by a hash of the catalog path
@@ -535,7 +536,7 @@ Exact [model input declarations](config.md#explicit-per-model-capability-declara
 
 ## Renamed destination reasoning metadata
 
-`src/providers/derive.ts` fills missing reasoning tables for renamed providers accepted by the existing fixed-key destination matcher. Model entries are cloned and explicit user entries (including empty arrays) win. Provider-wide effort defaults fill only when undefined; Command Code unknown models therefore keep the registry's empty picker policy unless overridden. Identity, transport and other capability axes are unchanged. The gathered row drives client exports; this metadata contract does not prove arbitrary gateway routing.
+`src/providers/derive.ts` fills missing reasoning tables for renamed providers accepted by the existing fixed-key destination matcher. Model entries are cloned and explicit user entries (including empty arrays) win, matched case-insensitively. Provider-wide effort defaults fill only when undefined; Command Code unknown models therefore keep the registry's empty picker policy unless overridden. Identity, transport and other capability axes are unchanged. The gathered row drives client exports; this metadata contract does not prove arbitrary gateway routing.
 
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
 
@@ -547,3 +548,4 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 Compaction routing selects its configured model at Responses ingress under the
 [compaction routing contract](transports/responses.md#compaction-routing-overrides). Catalog selection remains conversation-owned.
+Subagent account previews and live routing share the [priority failback](providers/openai-tiers.md#ongoing-priority-failback) decision; model eligibility and fixed catalog selectors retain their existing meaning.

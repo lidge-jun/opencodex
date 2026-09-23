@@ -13,6 +13,7 @@ import {
   clampObservedModelLimits,
   resolveModelPolicy,
 } from "../../src/providers/resolved-model-policy";
+import { modelRecordValue } from "../../src/reasoning-effort";
 
 const MODEL = "vendor/model-a";
 
@@ -795,5 +796,62 @@ describe("resolved static model policy parity", () => {
     expect(Object.isFrozen(policy.model.inputModalities)).toBe(true);
     expect(JSON.stringify(policy)).not.toContain("secret-value");
     expect(JSON.stringify(policy)).not.toContain("account-like-private-id");
+  });
+
+  test("case-varied modelReasoningEffortMap override claims the registry row", () => {
+    const entry = registry({
+      modelReasoningEffortMap: { [MODEL]: { low: "registry-low", xhigh: "registry-xhigh" } },
+    });
+    const configured = provider({
+      modelReasoningEffortMap: { "VENDOR/Model-A": { xhigh: "custom" } },
+    });
+    const policy = resolve(configured, entry);
+    const map = policy.provider.modelReasoningEffortMap;
+    expect(map).not.toHaveProperty(MODEL);
+    expect(map?.["VENDOR/Model-A"]).toEqual({ low: "registry-low", xhigh: "custom" });
+    // The folded runtime lookup must resolve the operator row, not a registry-spelled shadow.
+    expect(modelRecordValue(map, MODEL)).toEqual({ low: "registry-low", xhigh: "custom" });
+  });
+
+  test("case-varied operator key reports operator provenance for the folded model id", () => {
+    const entry = registry({
+      modelContextWindows: { "claude-opus-5": 200_000 },
+    });
+    const configured = provider({
+      modelContextWindows: { "Claude-Opus-5": 150_000 },
+    });
+    const policy = resolveModelPolicy({
+      providerName: "anthropic",
+      modelId: "claude-opus-5",
+      provider: configured,
+      registryEntry: entry,
+      transportMatchedRegistry: true,
+    });
+    expect(policy.model.contextWindow).toBe(150_000);
+    expect(policy.provenance.model.contextWindow).toBe("operator");
+  });
+
+  test.each([50_000, 150_000])("case-varied API-key caps retain the lower limit for operator cap %i", (cap) => {
+    const operatorKey = "VENDOR/Model-A";
+    const entry = registry({ id: "openai-apikey" });
+    const configured = provider({
+      modelContextWindows: { [operatorKey]: cap },
+      modelMaxInputTokens: { [operatorKey]: cap - 10_000 },
+    });
+    for (const modelId of [MODEL, operatorKey, "Vendor/model-a"]) {
+      const policy = resolveModelPolicy({
+        providerName: "openai-apikey", modelId, provider: configured,
+        registryEntry: entry, transportMatchedRegistry: true,
+      });
+      expect(policy.model.contextWindow).toBe(Math.min(100_000, cap));
+      expect(policy.model.maxInputTokens).toBe(Math.min(80_000, cap - 10_000));
+      expect(policy.provider.modelContextWindows).not.toHaveProperty(MODEL);
+      expect(policy.provider.modelMaxInputTokens).not.toHaveProperty(MODEL);
+      expect(policy.provenance.model.contextWindow).toBe("operator");
+      expect(policy.provenance.model.maxInputTokens).toBe("operator");
+      expect(policy.provider.modelContextWindows?.["registry-only"]).toBe(90_000);
+    }
+    expect(configured.modelContextWindows).toEqual({ [operatorKey]: cap });
+    expect(entry.modelContextWindows?.[MODEL]).toBe(100_000);
   });
 });

@@ -58,6 +58,16 @@ describe("rich Logs filtering", () => {
     expect(filterLogs(attemptOnly, { ...DEFAULT_LOG_FILTER_STATE, model: "fallback-only" }, NOW).map(row => row.id)).toEqual(["attempt-only"]);
   });
 
+  test("offers and matches an upstream served model distinct from the routed model", () => {
+    const rows = [
+      { id: "rerouted", model: "requested", resolvedModel: "routed", servedModel: "UPSTREAM/model-v2" },
+      { id: "routed-only", model: "requested", resolvedModel: "routed" },
+    ];
+    expect(extractLogFilterOptions(rows).models).toEqual(["UPSTREAM/model-v2", "requested", "routed"]);
+    expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, model: "upstream/model-v2" }, NOW).map(row => row.id))
+      .toEqual(["rerouted"]);
+  });
+
   test("does not treat a stale or partial model selection as a substring query", () => {
     expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "terra" }, NOW)).toEqual([]);
     expect(filterLogs(logs, { ...DEFAULT_LOG_FILTER_STATE, model: "gpt-5.6-terra-old" }, NOW)).toEqual([]);

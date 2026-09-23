@@ -444,6 +444,10 @@ export interface CatalogEffortCompatibility {
   readonly affectedModels: readonly string[];
 }
 
+// These parser-valid sentinels do not appear in native model ladders, so absence from an
+// observed bundled catalog is not evidence that the selected Codex runtime rejects them.
+const CODEX_PARSER_SENTINEL_EFFORTS = new Set(["none", "minimal"]);
+
 /**
  * Report which reasoning efforts in a catalog the local Codex runtime would reject, without
  * changing anything.
@@ -463,9 +467,11 @@ export function catalogEffortCompatibility(
   const unsupported = new Set<string>();
   const affected: string[] = [];
   for (const entry of models) {
-    const rejected = catalogEntryEfforts(entry).filter(effort => !supported.has(effort));
+    const accepts = (effort: string): boolean => supported.has(effort)
+      || CODEX_PARSER_SENTINEL_EFFORTS.has(effort);
+    const rejected = catalogEntryEfforts(entry).filter(effort => !accepts(effort));
     const fallback = typeof entry.default_reasoning_level === "string"
-      && !supported.has(entry.default_reasoning_level)
+      && !accepts(entry.default_reasoning_level)
       ? [entry.default_reasoning_level]
       : [];
     if (rejected.length === 0 && fallback.length === 0) continue;

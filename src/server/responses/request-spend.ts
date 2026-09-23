@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RequestSendObserver } from "../../lib/request-execution-budget";
 import { sharedSpendLedger, type SpendReservationLedger } from "../../lib/spend-reservation-ledger";
+import { SpendLedgerOwnerError } from "../../lib/spend-ledger-owner";
 import { markLocalRequestLogRefusal, type RequestLogContext } from "../request-log";
 import { recordWorkflowRefusalEvent, workflowDenialSummary } from "../../lib/workflow-budget";
 
@@ -57,6 +58,7 @@ export function createRequestSpendTracker(
   const live: string[] = [];
   let refusals = 0;
   let resolved = false;
+  let terminalProcessed = false;
   /**
    * Confirm the sends this request has already moved past.
    *
@@ -135,21 +137,35 @@ export function createRequestSpendTracker(
     },
     settle(usage: TerminalSpendUsage | undefined): void {
       if (resolved) return;
-      resolved = true;
-      const terminal = live.pop();
-      if (terminal !== undefined) {
-        const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
-        if (reported) {
-          ledger().settle(terminal, {
-            inputTokens: usage?.inputTokens ?? 0,
-            outputTokens: usage?.outputTokens ?? 0,
-          });
-        } else {
-          // The response never reported usage. It may still have been billed.
-          ledger().markLost(terminal);
+      try {
+        if (!terminalProcessed && live.length > 0) {
+          const terminal = live[live.length - 1] as string;
+          const reported = typeof usage?.inputTokens === "number" || typeof usage?.outputTokens === "number";
+          if (reported) {
+            ledger().settle(terminal, {
+              inputTokens: usage?.inputTokens ?? 0,
+              outputTokens: usage?.outputTokens ?? 0,
+            });
+          } else {
+            // The response never reported usage. It may still have been billed.
+            ledger().markLost(terminal);
+          }
+          live.pop();
+          terminalProcessed = true;
         }
+        while (live.length > 0) {
+          ledger().markLost(live[live.length - 1] as string);
+          live.pop();
+        }
+        resolved = true;
+      } catch (error) {
+        // A deferred final log may arrive after server.stop released this ledger's lease.
+        // Only that ended ownership can discard sends already reserved by this tracker.
+        if (live.length === 0 || !(error instanceof SpendLedgerOwnerError)
+          || error.code !== "SPEND_LEDGER_OWNER_NOT_HELD") throw error;
+        live.length = 0;
+        resolved = true;
       }
-      for (const sendId of live.splice(0)) ledger().markLost(sendId);
     },
     get refusals(): number { return refusals; },
   };
