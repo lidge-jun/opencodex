@@ -47,6 +47,13 @@ import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
+import {
+  applyProviderCompatPatchFields,
+  carryProviderCompatFields,
+  providerCompatFieldConfigError,
+  providerOverwriteKeepsDestination,
+  sampleProviderOverwrite,
+} from "./provider-overwrite-carry";
 import { deriveProviderPresets, providerConfigSeed } from "../../providers/derive";
 import { initializeProviderModelSelection } from "../../providers/initial-model-selection";
 import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
@@ -742,21 +749,10 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
-  // The reasoning-replay lists (#5563). Unlike the lists above, an empty array is kept: it is
-  // the explicit opt-out that stops the registry seed from filling the field back in (see the
-  // note under OAUTH_RECONCILE_FIELDS in src/oauth/index.ts). null removes the field.
-  for (const field of ["preserveReasoningContentModels", "requiresReasoningPlaceholderModels"] as const) {
-    if (!Object.hasOwn(rawBody, field)) continue;
-    const value = rawBody[field];
-    if (value === null) {
-      delete next[field];
-    } else {
-      const error = nonBlankStringArrayConfigError(value, field);
-      if (error) return { error };
-      next[field] = normalizeNonBlankStringArray(value as string[]);
-    }
-    touched = true;
-  }
+  // The reasoning-replay lists, foldDeveloperRoleToSystem and reasoningWireFormat (#5563).
+  const compat = applyProviderCompatPatchFields(rawBody, next);
+  if ("error" in compat) return { error: compat.error };
+  if (compat.touched) touched = true;
 
   // headers is the one object-valued field in the mask. PATCH semantics merge it
   // shallowly into the existing block so a single fingerprint header can be added
@@ -1155,7 +1151,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const pinError = applyProviderPinFields(transportCandidate as unknown as OcxProviderConfig, body.provider, existing);
     if (pinError) return jsonResponse({ error: pinError }, 400);
     const providerError = providerManagementConfigError(name, transportCandidate)
-      ?? providerEmptyToolOutputConfigError(name, transportCandidate);
+      ?? providerEmptyToolOutputConfigError(name, transportCandidate)
+      ?? providerCompatFieldConfigError(body.provider as Record<string, unknown>);
     if (providerError) return jsonResponse({ error: providerError }, 400);
     const rawProvider = body.provider as Record<string, unknown>;
     if (rawProvider.upstreamWebsocket !== undefined && typeof rawProvider.upstreamWebsocket !== "boolean") {
@@ -1210,15 +1207,17 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // from "the registry supplied it" either. Without this sample, an unrelated edit that
     // omits the key resurrects the registry default over an operator's explicit `false`.
     const submittedAnnotateEmptyToolOutputs = Object.hasOwn(prov, "annotateEmptyToolOutputs");
-    // And for the two reasoning-replay lists, which enrichment fills from the registry seed.
-    const submittedPreserveReasoningContentModels = Object.hasOwn(prov, "preserveReasoningContentModels");
-    const submittedRequiresReasoningPlaceholderModels = Object.hasOwn(prov, "requiresReasoningPlaceholderModels");
+    // And for the compatibility settings, several of which enrichment fills from the registry
+    // seed (#5563); the sample also records whether the request named an auth mode.
+    const overwriteSample = sampleProviderOverwrite(prov);
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
-    // let the (possibly new) apiKey join the pool as the active entry.
+    // let the (possibly new) apiKey join the pool as the active entry. Only while the provider
+    // keeps its destination: those keys were issued for the previous upstream.
     const existingPool = config.providers[name]?.apiKeyPool;
-    if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
+    if (existingPool && !prov.apiKeyPool
+      && providerOverwriteKeepsDestination(prov, config.providers[name], overwriteSample)) prov.apiKeyPool = existingPool;
     // The same rule applies to user-configured price overlays: the dashboard's
     // add/edit form does not send modelCosts, so an overwrite must not silently
     // erase hand-edited per-model prices from Logs/Usage estimates.
@@ -1277,20 +1276,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!submittedUpstreamWebsocket && existing?.upstreamWebsocket !== undefined) {
       prov.upstreamWebsocket = existing.upstreamWebsocket;
     }
-    // The form sends neither reasoning-replay list either. Without the stored value a custom
-    // provider lost its list and a registry provider got the seed back, and the next tool turn
-    // on a thinking model failed upstream with nothing pointing at the save (#5563). Read the
-    // live row rather than `existing`, like the alias overlays below: a PATCH that saved either
-    // list while DNS validation awaited must not be undone. An empty list is an explicit
-    // opt-out, so any stored array is carried, `[]` included.
-    const livePreserveReasoningContentModels = config.providers[name]?.preserveReasoningContentModels;
-    if (!submittedPreserveReasoningContentModels && Array.isArray(livePreserveReasoningContentModels)) {
-      prov.preserveReasoningContentModels = [...livePreserveReasoningContentModels];
-    }
-    const liveRequiresReasoningPlaceholderModels = config.providers[name]?.requiresReasoningPlaceholderModels;
-    if (!submittedRequiresReasoningPlaceholderModels && Array.isArray(liveRequiresReasoningPlaceholderModels)) {
-      prov.requiresReasoningPlaceholderModels = [...liveRequiresReasoningPlaceholderModels];
-    }
+    // The form sends none of the compatibility settings either (#5563). Read the live row rather
+    // than `existing`, like the alias overlays below: a PATCH that saved one of them while DNS
+    // validation awaited must not be undone. Nothing is carried to a new destination.
+    carryProviderCompatFields(prov, config.providers[name], overwriteSample);
     if (existing?.modelContextWindows) {
       // When the client did send a map, its keys win and the user's other keys survive. When
       // it did not, the stored value is the user's map alone: merging the registry seed in

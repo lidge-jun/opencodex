@@ -1024,6 +1024,7 @@
     "management-model-roster-gather-race.test.ts": "server",
     "management-model-roster.test.ts": "server",
     "management-origin-tls.test.ts": "server",
+    "management-provider-compat-carry.test.ts": "server",
     "management-provider-pinsless-validation.test.ts": "server",
     "management-provider-proto-override.test.ts": "server",
     "management-provider-reasoning-lists.test.ts": "server",
