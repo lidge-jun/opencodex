@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../../src/codex/subagent-defaults";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -404,7 +405,11 @@ function runTransactionScenario(
     defaultProvider: "openai",
   };
   writeFileSync(configPath, `${JSON.stringify(originalConfig, null, 2)}\n`, "utf8");
-  if (stage !== "preflight") writeFileSync(join(codexHome, "config.toml"), 'model_provider = "openai"\n', "utf8");
+  // A missing config.toml is bootstrapped now (issue 5422), so the preflight fault is a
+  // deterministic injection refusal instead: ambiguous OpenCodex-managed sub-agent markers.
+  writeFileSync(join(codexHome, "config.toml"), stage === "preflight"
+    ? [MANAGED_AGENTS_TABLE_MARKER, "[agents]", MANAGED_SUBAGENT_DEFAULT_MARKER, "", 'default_subagent_model = "gpt-5.6-sol"', ""].join("\n")
+    : 'model_provider = "openai"\n', "utf8");
   // A catalog the user already had. Connect overwrites it; disconnect has to put it back.
   if (stage === "prior-catalog") {
     writeFileSync(join(codexHome, "opencodex-catalog.json"), PRIOR_CATALOG_BYTES, "utf8");

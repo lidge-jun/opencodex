@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, statSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   atomicWriteFile,
   loadConfig,
@@ -211,14 +212,15 @@ async function injectCodexConfigImpl(
   } catch (error) {
     return { success: false, message: error instanceof Error ? error.message : "Invalid Codex routing target" };
   }
-  if (!existsSync(CODEX_CONFIG_PATH)) {
-    return {
-      success: false,
-      message: `Codex config not found at ${CODEX_CONFIG_PATH}. Is Codex installed?`,
-    };
-  }
+  const missingConfig = !existsSync(CODEX_CONFIG_PATH)
+    ? missingCodexConfigAdmission()
+    : null;
+  if (missingConfig && !missingConfig.ok) return { success: false, message: missingConfig.message };
 
-  const rawContent = readFileSync(CODEX_CONFIG_PATH, "utf-8");
+  // An absent config.toml in an existing home is planned as an empty file. The file itself
+  // is created only inside the write boundary, after the pre-images are captured, so any
+  // later refusal or failure rolls it back to absent (issue 5422).
+  const rawContent = missingConfig ? "" : readFileSync(CODEX_CONFIG_PATH, "utf-8");
   const activeProvider = externalCodexModelProvider(rawContent);
   if (activeProvider) {
     // A launcher may have journaled before the provider manager took ownership. Never let shutdown
@@ -402,6 +404,7 @@ async function injectCodexConfigImpl(
    * flip included — before the result is reported.
    */
   const reconcileAndDerivePlan = (): { plan: CodexInjectionPlanOk; nativeInput: string } => {
+    if (missingConfig) createEmptyCodexConfigInBoundary();
     let nativeInput = rawContent;
     let plan = admittedPlan;
     if (v1Reconcile) {
@@ -860,3 +863,49 @@ export {
   setBeforeRestoreConfigForTests,
   skippedRestoreEnvelope,
 } from "./inject/restore";
+
+type MissingCodexConfig = { ok: true } | { ok: false; message: string };
+
+/**
+ * A fresh Codex install can have its home directory but no config.toml yet: Codex writes
+ * that file lazily, and a user who never signed in to OpenAI (authless Desktop with a
+ * third-party provider, issue 5422) may never get one. A missing optional file is not
+ * evidence that Codex is absent, so injection plans against an empty config.toml and
+ * creates it inside the write boundary. A missing home DIRECTORY is different: that is
+ * either an uninitialized install or the wrong home, and guessing would write provider
+ * state where Codex is not looking.
+ */
+function missingCodexConfigAdmission(): MissingCodexConfig {
+  const home = dirname(CODEX_CONFIG_PATH);
+  let homeIsDirectory = false;
+  try {
+    homeIsDirectory = statSync(home).isDirectory();
+  } catch {
+    homeIsDirectory = false;
+  }
+  if (homeIsDirectory) return { ok: true };
+  return {
+    ok: false,
+    message: `Codex home ${home} does not exist yet, so there is no config.toml to route. Start Codex once so it creates its home, then rerun 'ocx sync'. If Codex uses a different home, set CODEX_HOME to it.`,
+  };
+}
+
+/**
+ * Create the planned empty config.toml under the write boundary. It runs after the
+ * pre-images were captured (config absent), so compensation removes it again. The create is
+ * exclusive: a file that appeared since admission belongs to another writer, and this plan,
+ * derived from an absent file, must not replace it.
+ */
+function createEmptyCodexConfigInBoundary(): void {
+  try {
+    closeSync(openSync(CODEX_CONFIG_PATH, "wx", 0o600));
+  } catch (error) {
+    const appeared = (error as NodeJS.ErrnoException | null)?.code === "EEXIST";
+    throw new CodexInjectRefusal({
+      success: false,
+      message: appeared
+        ? `Codex config ${CODEX_CONFIG_PATH} appeared while injection was planned against its absence; nothing was changed. Rerun 'ocx sync'.`
+        : `Codex config not found at ${CODEX_CONFIG_PATH}, and creating it failed: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+}
