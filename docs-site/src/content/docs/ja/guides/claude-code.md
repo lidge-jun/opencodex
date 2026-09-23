@@ -174,7 +174,9 @@ Claude Code CLI 互換性は英語版ドキュメントを参照してくださ�
 ## /model ピッカー("From gateway")
 
 Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイモデルを探し、デフォルトの `/model`
-ピッカーの "From gateway" 項目に表示します。ピッカーは `claude` または `anthropic` で始まる ID のみ
+ピッカーに表示します。`description` のない行は "From gateway" と表示されます。opencodex は Claude Code CLI
+向けの各行に `description`（`Routed by OpenCodex to <provider>/<model>`、ネイティブ行は `Routed by OpenCodex to native <model>`、Fast 行は末尾に ` · Fast`、1M 行は元の説明のまま）を送り、Claude Code 2.1.257 以降は
+その内容を代わりに表示します。ピッカーは `claude` または `anthropic` で始まる ID のみ
 受け付けるため、opencodex はルーティングモデルを安定で元に戻せるエイリアスとして公開します。
 
 | 画面 | 形式 | 例 |

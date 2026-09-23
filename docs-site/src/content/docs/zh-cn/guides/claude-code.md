@@ -146,7 +146,9 @@ UI。真实 Anthropic 模型保留其原始 id。合成的 2026 日期是内部�
 中输入任意路由 id（Claude Code 会原样传递字符串）。
 
 Claude Code 2.1.129+ 通过 `GET /v1/models?limit=1000` 发现网关模型，并在原生 `/model`
-选择器中以“From gateway”标签列出。由于选择器只接受以 `claude` 或 `anthropic` 开头的 ID，
+选择器中列出。没有 `description` 的行显示为“From gateway”；opencodex 会为 Claude Code CLI 的每一行发送
+`description`（`Routed by OpenCodex to <provider>/<model>`；原生行为 `Routed by OpenCodex to native <model>`，Fast 行末尾加 ` · Fast`，1M 行沿用基础描述），Claude Code 2.1.257+ 会改为显示它。
+由于选择器只接受以 `claude` 或 `anthropic` 开头的 ID，
 opencodex 会将已路由模型公开为稳定且可逆的别名：
 
 | 界面 | 格式 | 示例 |

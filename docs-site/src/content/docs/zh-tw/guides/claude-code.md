@@ -222,7 +222,9 @@ apply、輪換/復原或直接 disconnect 均可處理，無須新參數或事�
 ## /model 選擇器（“From gateway”）
 
 Claude Code 2.1.129+ 透過 `GET /v1/models?limit=1000` 發現閘道器模型，並在原生 `/model`
-選擇器中以“From gateway”標籤列出。由於選擇器只接受以 `claude` 或 `anthropic` 開頭的 ID，
+選擇器中列出。沒有 `description` 的列會顯示為“From gateway”；opencodex 會為 Claude Code CLI 的每一列送出
+`description`（`Routed by OpenCodex to <provider>/<model>`；原生列為 `Routed by OpenCodex to native <model>`，Fast 列末尾加上 ` · Fast`，1M 列沿用基礎描述），Claude Code 2.1.257+ 會改為顯示它。
+由於選擇器只接受以 `claude` 或 `anthropic` 開頭的 ID，
 opencodex 會將已路由模型公開為穩定且可逆的別名：
 
 | 介面 | 格式 | 示例 |

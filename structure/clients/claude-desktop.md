@@ -263,6 +263,11 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) is scoped to Codex Responses metadata and original Responses ingress; Claude Messages replay retains its own routing.
+
 ## Routed bundled-skill text
 
 `src/claude/inbound.ts` bounds the text-carrier skill-directory probe to 4,096 UTF-16 code units, plus one character to recognize the terminating newline. A longer first line is preserved intact instead of being scanned or stubbed; normal POSIX, Windows, mixed and UNC separators retain their basename matching. The existing 10,000-character payload threshold and `claudeCode.blockedSkills` policy remain: `claude-api` is blocked by default, and an explicit empty list disables elision. Native Anthropic passthrough and tool-call/result pairing are unchanged. `tests/claude-integration/claude-inbound.test.ts` covers the exact 4,096/4,097 boundary and a long newline-free carrier.
+
+## Claude Code picker descriptions
+
+`src/claude/model-info.ts` gives every readable (`idStyle: "readable"`, Claude Code CLI) `/v1/models` row a `description` that Claude Code 2.1.257 and later shows under the picker entry instead of the generic "From gateway": `Routed by OpenCodex to native <slug>` for native rows and `Routed by OpenCodex to <provider>/<model>` for routed rows. The 1M copy keeps the base description and a Fast sibling appends ` · Fast`. Desktop 3P rows keep the ModelInfo shape without a description. `src/claude/gateway-cache.ts` preserves a string `description` when it refreshes and rewrites the gateway-model cache and drops any other type. `tests/claude-integration/claude-model-info.test.ts` and `tests/claude-integration/claude-gateway-cache.test.ts` cover both.
