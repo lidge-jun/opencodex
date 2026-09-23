@@ -383,6 +383,19 @@ export const COMMAND_CODE_IMAGE_MODELS = [
  * the user-message and tool-result paths (see the note at that entry). The
  * mechanism stays for the next route that measures text-only.
  */
+/**
+ * Command Code MiMo context windows from the live /provider/v1/models catalog (2026-09-23 fixture,
+ * tests/fixtures/commandcode-models.json). Model-keyed registry facts double as the router's native
+ * decode ids, so a cold start or failed discovery still turns `command-code/xiaomi-mimo-v2.6-pro`
+ * into `xiaomi/mimo-v2.6-pro` instead of sending the flattened slug upstream. They are not a roster.
+ */
+export const COMMAND_CODE_MIMO_CONTEXT_WINDOWS: Record<string, number> = {
+  "xiaomi/mimo-v2.6-pro": 1_048_576,
+  "xiaomi/mimo-v2.6-pro-ultraspeed": 1_048_576,
+  "xiaomi/mimo-v2.6-flash": 1_048_576,
+  "xiaomi/mimo-v2.5-pro": 1_000_000,
+  "xiaomi/mimo-v2.5": 1_000_000,
+};
 export const COMMAND_CODE_TEXT_ONLY_MODELS = [] as const;
 export const COMMAND_CODE_MODEL_INPUT_MODALITIES: Record<string, ["text"] | ["text", "image"]> = {
   ...Object.fromEntries(COMMAND_CODE_IMAGE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),

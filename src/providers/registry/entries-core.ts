@@ -53,6 +53,7 @@ import {
   DEEPSEEK_NATIVE_THINKING_MODELS,
   DEEPSEEK_GATEWAY_THINKING_MODELS,
   DEEPSEEK_VISION_PREVIEW_MODEL,
+  COMMAND_CODE_MIMO_CONTEXT_WINDOWS,
   COMMAND_CODE_MODEL_INPUT_MODALITIES,
   deepseekThinkingEffortsFor,
   deepseekReasoningMapFor,
@@ -400,6 +401,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // merge into deepseek-v4-flash later.
     modelContextWindows: {
       [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: 1_048_576,
+      ...COMMAND_CODE_MIMO_CONTEXT_WINDOWS,
     },
     modelInputModalities: COMMAND_CODE_MODEL_INPUT_MODALITIES,
     defaultMaxOutputTokens: 64_000,

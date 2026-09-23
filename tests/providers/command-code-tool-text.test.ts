@@ -654,3 +654,18 @@ describe("MiMo markup closed without </function>", () => {
     expect(calls(released)).toEqual([]);
   });
 });
+
+describe("Command Code MiMo markup handling by model family", () => {
+  test("applies to MiMo V2.5 as well as V2.6", async () => {
+    for (const model of ["xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v2.5"]) {
+      const events = await adapterEvents(CAPTURED, undefined, model);
+      expect(texts(events), model).toBe("");
+      expect(calls(events), model).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
+    }
+  });
+
+  test("leaves other models' text untouched", async () => {
+    const events = await adapterEvents(CAPTURED, undefined, "deepseek/deepseek-v4-flash");
+    expect(texts(events)).toContain("<tool_call><function=exec>");
+  });
+});

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { applyProviderConfigHints } from "../../src/codex/catalog";
 import { generatedModelMetadata } from "../../src/codex/catalog/parsing";
 import { getModelMetadata, resolveMetadataProvider } from "../../src/generated/model-metadata";
-import { enrichProviderFromRegistry } from "../../src/providers/derive";
+import { enrichProviderFromRegistry, providerConfigSeed } from "../../src/providers/derive";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import {
   CLINE_PASS_IMAGE_MODELS,
@@ -99,5 +99,19 @@ describe("Cline Pass static catalog", () => {
       expect(CLINE_PASS_MODEL_CONTEXT_WINDOWS[id], id).toBe(1_048_576);
       expect(CLINE_PASS_IMAGE_MODELS.has(id), id).toBe(false);
     }
+  });
+});
+
+describe("Command Code MiMo slugs decode without a discovery cache", () => {
+  test("both presets send the native MiMo id on a cold start", () => {
+    for (const provider of ["command-code", "commandcode"]) {
+      const seed = providerConfigSeed(entry(provider));
+      const config = { port: 10100, defaultProvider: provider, providers: { [provider]: { ...seed, apiKey: "k" } } } as OcxConfig;
+      for (const id of ["xiaomi/mimo-v2.6-pro", "xiaomi/mimo-v2.6-pro-ultraspeed", "xiaomi/mimo-v2.6-flash", "xiaomi/mimo-v2.5-pro", "xiaomi/mimo-v2.5"]) {
+        expect(routeModel(config, `${provider}/${id.replace("/", "-")}`).modelId, `${provider} ${id}`).toBe(id);
+      }
+    }
+    // Decode ids are not a roster: the OAuth preset still has no static model list.
+    expect(entry("command-code").models).toBeUndefined();
   });
 });
