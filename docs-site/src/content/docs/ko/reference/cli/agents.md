@@ -201,7 +201,7 @@ opencode는 `{env:OPENCODEX_OPENCODE_API_KEY}`를 보간합니다. opencodex가 
 `ocx export`는 실제 client config를 절대 쓰지 않습니다. 대상 경로는 손으로 병합하라고 출력되며, `--out`은 `--force` 없이 기존 파일을 덮어쓰지 않습니다. config를 바꾸어 덮어쓰면 이미 들어 있던 다른 provider, agent, MCP entry가 사라지기 때문입니다.
 :::
 
-어떤 key도 직렬화되지 않습니다. 생성되는 config에는 문서화된 env reference 또는 비밀이 아닌 loopback placeholder 중 하나가 들어갑니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. 클라이언트의 설정 형식이 지원하고 proxy가 loopback 외부에 바인딩하는 경우에만 참조된 환경변수를 설정하십시오. admission key 발급 방법은 [Remote access](/reference/configuration/#remote-access)를 참조하십시오. upstream provider 자체의 key는 별도로 설정하며, [Providers](/guides/providers/)에서 안내합니다.
+어떤 key도 직렬화되지 않습니다. 생성되는 config에는 문서화된 env reference 또는 비밀이 아닌 loopback placeholder 중 하나가 들어갑니다. loopback proxy(`127.0.0.1`, 기본값)는 admission key가 전혀 필요하지 않습니다. 클라이언트의 설정 형식이 지원하고 proxy가 loopback 외부에 바인딩하는 경우에만 참조된 환경변수를 설정하십시오. admission key 발급 방법은 [Remote access](/ko/reference/configuration/server/#remote-access)를 참조하십시오. upstream provider 자체의 key는 별도로 설정하며, [Providers](/guides/providers/)에서 안내합니다.
 
 생성된 gjc 연동은 비밀이 아닌 로컬 접속용 값을 사용하므로 환경변수가 필요하지 않습니다. 루프백 전용이며 원격 접속 인증은 설정하지 않습니다.
 

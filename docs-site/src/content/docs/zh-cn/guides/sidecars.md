@@ -127,4 +127,4 @@ Dashboard 和管理 API 都使用 `gpt-5.6-luna` 作为回退。启动时仍会�
 `PUT /api/sidecar-settings` 接受相同字段。部分更新会保留未提交的键。`timeoutMs` 使用运行时整数边界（1–2147483647 毫秒）。
 
 如果更想直接改文件，仍可在 `config.json` 中把 `enabled` 设为 `false`。Anthropic OAuth 搜索和图像描述沿用现有 Claude Code OAuth fingerprint 先例，但仍应使用目标账户和实际负载充分 soak test。所有字段见
-[配置参考](/zh-cn/reference/configuration/#sidecars)。
+[配置参考](/zh-cn/reference/configuration/server/#侧车)。

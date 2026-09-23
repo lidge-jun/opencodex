@@ -892,7 +892,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-When opencodex runs as a managed [background service](/reference/cli/#ocx-service), it sets
+When opencodex runs as a managed [background service](/reference/cli/lifecycle/#background-service), it sets
 `OCX_SERVICE=1` so a service-driven restart does **not** thrash the Codex config — only an explicit
 `ocx stop` / `ocx service stop` restores native Codex.
 

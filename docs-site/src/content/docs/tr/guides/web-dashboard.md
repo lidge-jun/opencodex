@@ -222,7 +222,7 @@ Sağlayıcılar genel bakışı, etkin hesabın ham kotası ve bir sonraki kapas
 kurtarmasının yanı sıra Havuz modu kullanımını salt görüntüleme amaçlı ağırlıklı
 bir kapasite tahmini olarak ayrı ayrı özetler. Görünür alanlar, eksik kapsam
 anlamı ve yönlendirme sınırı için [Sağlayıcılar genel bakış havuz
-kapasitesi](/tr/guides/providers/#saglayicilar-genel-bakis-havuz-kapasitesi)
+kapasitesi](/tr/guides/providers/#sağlayıcılar-genel-bakış-havuz-kapasitesi)
 bölümüne bakın.
 
 ## Yıldız vermek ajanın değil sizin kararınızdır

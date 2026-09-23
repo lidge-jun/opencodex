@@ -422,7 +422,7 @@ Bearer key。公开模型列表只保留同时报告 `model_type: chat` 和 `cha
 
 无需打开仪表盘，即可使用 `ocx account list`、`ocx account current` 和 `ocx account use` 查看或
 切换同一组 Codex、OAuth 和 API-key pool。完整命令、JSON 输出和新 session 生效规则请参阅
-[CLI 参考](/zh-cn/reference/cli/#ocx-account-subcommand)。
+[CLI 参考](/zh-cn/reference/cli/providers-accounts/#ocx-account-subcommand)。
 
 ### GPT-5.6 预览路径
 
@@ -475,7 +475,7 @@ HTTP/1.1 兼容路径时，可设置 `upstreamHttpVersion: "http1.1"`；该设�
 native read/write/delete/ls/grep/shell/fetch 执行默认禁用，因为它会绕过 Codex 的 approval 和
 sandbox 路径；只有在可信本地实验中，才应在 `~/.opencodex/config.json` 的 `providers.cursor`
 对象上设置 `unsafeAllowNativeLocalExec: true`，也可以在仪表盘的 **Providers → Cursor → Edit JSON**
-中设置。完整示例参见 [配置参考](/zh-cn/reference/configuration/#cursor-provider-adapter-cursor)。MCP、屏幕录制和 computer-use
+中设置。完整示例参见 [配置参考](/zh-cn/reference/configuration/providers/#cursor-提供者adapter-cursor)。MCP、屏幕录制和 computer-use
 通过 executor hook 暴露；没有配置本地 executor 时，opencodex 会返回 typed no-executor 结果。
 Cursor OAuth 和 live model discovery 已在这个实验性 adapter 中启用；Cursor 仍不会出现在 key-login
 列表中。

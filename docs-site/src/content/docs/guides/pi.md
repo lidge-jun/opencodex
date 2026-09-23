@@ -95,7 +95,7 @@ That name is Pi's alone. opencode uses a different variable
 **A loopback proxy needs no key at all.** opencodex binds `127.0.0.1` by default and authenticates
 nothing there, so the `$OPENCODEX_API_KEY` reference is inert and you can leave the variable unset.
 It matters only when `hostname` is set beyond loopback, which is also the case where the proxy
-refuses to start without a token — see [Remote access](/reference/configuration/#remote-access).
+refuses to start without a token — see [Remote access](/reference/configuration/server/#remote-access).
 
 ## Model metadata
 

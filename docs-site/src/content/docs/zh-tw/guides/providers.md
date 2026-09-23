@@ -37,7 +37,7 @@ description: opencodex 進行身分驗證並與 LLM 供應商通訊的所有方�
 window 的用量。
 
 此估算僅供顯示，不會改變帳號選擇、session affinity、自動切換、cooldown 或其他路由決策。個別帳號
-狀態與路由控制請使用 [Codex Auth 帳號池](/zh-tw/guides/web-dashboard/#codex-auth-and-account-pools)。
+狀態與路由控制請使用 [Codex Auth 帳號池](/zh-tw/guides/web-dashboard/#codex-auth-與帳號池)。
 
 shipped v1 設定會自動遷移到 marker 2 的 option-aware row。原始設定只會備份一次到
 `~/.opencodex/config.json.pre-openai-tiers-v2.bak`；可用下列命令恢復：
@@ -489,7 +489,7 @@ key-based provider 也能保存多個 key。透過 Providers 頁面新增 key �
 
 不必開啟儀表板，即可用 `ocx account list`、`ocx account current` 與 `ocx account use` 檢視或切換
 同一組 Codex、OAuth 與 API-key pool。完整 command、JSON output 與新 session 生效規則請參見
-[CLI 參考](/zh-tw/reference/cli/#ocx-account-subcommand)。
+[CLI 參考](/zh-tw/reference/cli/providers-accounts/#ocx-account-subcommand)。
 
 ### GPT-5.6 預覽路徑
 
@@ -538,7 +538,7 @@ Grok 4.7 在清單中沒有 `cursor-` 前綴，直接傳送 `grok-4.7-{effort}-f
 Cursor server-driven native read/write/delete/ls/grep/shell/fetch execution 預設停用，因為它會繞過 Codex
 approval 與 sandbox 路徑；只有可信本機實驗才應在 `~/.opencodex/config.json` 的 `providers.cursor`
 物件設定 `unsafeAllowNativeLocalExec: true`，也可以透過儀表板 **Providers → Cursor → Edit JSON** 設定。
-完整範例參見[設定參考](/zh-tw/reference/configuration/#cursor-provider-adapter-cursor)。MCP、螢幕錄製與
+完整範例參見[設定參考](/zh-tw/reference/configuration/providers/#cursor-供應商adapter-cursor)。MCP、螢幕錄製與
 computer-use 可透過 executor hook 使用；未設定本機 executor 時，opencodex 會回傳 typed no-executor
 result，而不是用 policy block request。Cursor OAuth 與即時 model discovery 已為此實驗性 adapter 啟用；
 Cursor 仍不會出現在 key-login list。

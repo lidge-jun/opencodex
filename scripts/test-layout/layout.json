@@ -763,6 +763,7 @@
     "exhaustive-deps-suppression.test.ts": "ci-workflows",
     "docs-provider-billing-claims.test.ts": "ci-workflows",
     "docs-provider-preset-counts.test.ts": "ci-workflows",
+    "docs-link-targets.test.ts": "ci-workflows",
     "docs-readme-translation-parity.test.ts": "ci-workflows",
     "docs-remote-hub-claims.test.ts": "ci-workflows",
     "doctor-codex-envkey-readiness.test.ts": "service",

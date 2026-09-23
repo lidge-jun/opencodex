@@ -171,7 +171,7 @@ cross-route credential fallback не существует. Строки API GPT-
 Провайдеры с API-key могут хранить literal key или environment-reference. OAuth-провайдеры
 используют credential store, заполняемый через `ocx login`; поведение subscription-backed launcher'а
 Claude Code настраивается через
-[`claudeCode.authMode`](/reference/configuration/server/#claude-code).
+[`claudeCode.authMode`](/ru/reference/configuration/server/#claude-code-claudecode).
 
 ## Безопасность исходящих диагностических запросов
 

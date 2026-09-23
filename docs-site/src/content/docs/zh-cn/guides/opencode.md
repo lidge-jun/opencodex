@@ -86,7 +86,7 @@ loopback 示例：
 
 真实值只会通过子进程环境传递。`OPENCODEX_API_AUTH_TOKEN` 优先，然后是加固后的服务 token 文件，最后才是配置的 API key - 而非 loopback 绑定正是需要这个 API key。
 
-loopback 绑定（`127.0.0.1`，默认值）不会进行任何认证，所以 `{env:…}` 引用是惰性的，你可以不设置该变量。它只在 `hostname` 超出 loopback 范围时才有意义；参见 [Remote access](/reference/configuration/#remote-access)。这个 admission key 是 opencodex 自己的，与在 [Providers](/guides/providers/) 下配置的上游 provider keys 无关。
+loopback 绑定（`127.0.0.1`，默认值）不会进行任何认证，所以 `{env:…}` 引用是惰性的，你可以不设置该变量。它只在 `hostname` 超出 loopback 范围时才有意义；参见 [Remote access](/zh-cn/reference/configuration/server/#远程访问)。这个 admission key 是 opencodex 自己的，与在 [Providers](/guides/providers/) 下配置的上游 provider keys 无关。
 
 ## 回滚
 

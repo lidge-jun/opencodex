@@ -403,7 +403,7 @@ provider 전체 parallel tool call이나 OpenAI `reasoning_effort`를 광고하�
 
 대시보드를 열지 않고도 `ocx account list`, `ocx account current`, `ocx account use`로 같은 Codex,
 OAuth, API-key pool을 확인하고 전환할 수 있습니다. 전체 명령, JSON 출력, 새 세션 적용 방식은
-[CLI 레퍼런스](/ko/reference/cli/#ocx-account-subcommand)를 참고하세요.
+[CLI 레퍼런스](/ko/reference/cli/providers-accounts/#ocx-account-subcommand)를 참고하세요.
 
 ### GPT-5.6 프리뷰 경로
 
@@ -459,7 +459,7 @@ effort 접미사가 붙은 wire id로만
 승인 및 sandbox 경로를 우회하므로 기본적으로 비활성화되어 있습니다. 신뢰한 로컬 실험에서만
 `~/.opencodex/config.json`의 `providers.cursor`에 `unsafeAllowNativeLocalExec: true`를 설정하세요.
 대시보드에서는 **Providers → Cursor → Edit JSON**에서 설정할 수 있습니다. 전체 예시는
-[설정 레퍼런스](/ko/reference/configuration/#cursor-provider-adapter-cursor)를 참고하세요.
+[설정 레퍼런스](/ko/reference/configuration/providers/#cursor-공급자-adapter-cursor)를 참고하세요.
 MCP, 화면 녹화, computer-use는 executor hook으로 열려 있으며, 로컬
 executor가 없으면 정책 차단이 아니라 typed no-executor 결과를 반환합니다. Cursor OAuth와 live
 model discovery는 이 실험적 어댑터에서 활성화되어 있으며, Cursor는 여전히 key-login 목록에는

@@ -99,21 +99,24 @@ ocx start                         # прокси + панель управлен
 Это нативная оболочка вокруг той же панели управления с расширением WidgetKit, которое
 показывает состояние прокси, расход за сегодня и квоты провайдеров без открытия браузера.
 Сам прокси не меняется: приложение находит уже запущенный экземпляр либо запускает встроенный
-сайдкар `ocx`, а панель по-прежнему доступна по адресу **http://localhost:10100**.
+сайдкар `ocx`, а панель остаётся доступной на порту прокси (**http://localhost:10100**,
+если вы не настроили другой порт).
 
-Это бета-версия. Сборки подписаны для проверки целостности, но не нотариализованы, поэтому
-при первом запуске macOS просит нажать правой кнопкой мыши и выбрать **«Открыть»**, а Windows
-SmartScreen предупреждает об установщике. Для виджета нужна macOS 14 или новее; его модель
-снимков находится в [`app/`](../app) (`MenuBarCore`).
+Это бета-версия. Релизные сборки приложения для macOS подписаны сертификатом Developer ID и
+нотариализованы (локальные сборки подписаны ad-hoc); установщик Windows пока не подписан
+цифровой подписью, поэтому SmartScreen предупреждает при первом запуске. Для виджета нужна
+macOS 14 или новее; его модель снимков находится в [`app/`](../app) (`MenuBarCore`).
 
 Скачайте приложение из [последнего релиза](https://github.com/lidge-jun/opencodex/releases) или
-соберите локально командой `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
+соберите локально: выполните `bun install && bun run build:gui` в корне репозитория, затем
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` в
+`desktop/`.
 
 Пути установки, файлы служб и всё остальное, что записывается на диск, перечислены в
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed). В
-[руководстве по настольному приложению](https://lidge-jun.github.io/opencodex/guides/desktop-app/) и
-[руководстве по приложению macOS в строке меню](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
-описаны установка на каждой платформе и запрос Gatekeeper.
+[руководстве по настольному приложению](https://opencodex.me/ru/guides/desktop-app/) и
+[руководстве по приложению macOS в строке меню](https://opencodex.me/ru/guides/macos-menu-bar/)
+описаны установка на каждой платформе и первый запуск.
 
 </details>
 
@@ -214,8 +217,9 @@ services:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -223,8 +227,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 

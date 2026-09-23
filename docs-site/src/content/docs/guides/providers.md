@@ -981,7 +981,7 @@ management API is `/api/providers/keys` and returns masked keys only.
 
 Use `ocx account list`, `ocx account current`, and `ocx account use` to inspect or switch the same
 Codex, OAuth, and API-key pools without opening the dashboard. See the
-[CLI reference](/reference/cli/#ocx-account-subcommand) for commands, JSON output, and
+[CLI reference](/reference/cli/providers-accounts/#ocx-account-subcommand) for commands, JSON output, and
 new-session behavior.
 
 #### Subscription tier in account listings
@@ -1066,7 +1066,7 @@ model's documented API default. Cursor server-driven native read/write/delete/ls
 is disabled by default because it bypasses Codex's approval and sandbox path; set
 `unsafeAllowNativeLocalExec: true` on the `providers.cursor` object in `~/.opencodex/config.json`
 only for trusted local experiments (or via **Providers → Cursor → Edit JSON** in the dashboard).
-See the [Configuration reference](/reference/configuration/#cursor-provider-adapter-cursor)
+See the [Configuration reference](/reference/configuration/providers/#cursor-provider-adapter-cursor)
 for a full example. MCP, screen recording, and computer-use are available as executor hooks; without a
 configured local executor, opencodex returns typed no-executor results instead of policy-blocking
 the request. Cursor OAuth and live model discovery are enabled for this experimental adapter;

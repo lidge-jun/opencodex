@@ -1,150 +1,56 @@
 ---
 title: macOS 菜单栏应用
-description: 在菜单栏中查看 OpenCodex 代理状态、用量和各提供商配额的原生应用。
+description: 使用 OpenCodex 桌面应用的 macOS 托盘、原生用量面板和 widget。
 ---
 
-菜单栏应用让你无需打开仪表板，就能看到代理状态、近期用量和各提供商的配额压力。
-
-它与代理是两个独立的程序。`ocx` 照常运行，菜单栏应用只是连接本地管理 API 的客户端。
-
-## 桌面应用（Tauri）
-
-同一个仪表板也可以在 OpenCodex 桌面应用中运行。用量面板会显示匹配操作系统的安装步骤；
-在桌面壳中选择**在浏览器中打开**，即可在普通浏览器中打开当前页面。
+macOS 菜单栏项目是 OpenCodex 桌面应用的一部分。它显示来自本地 proxy 的用量，并打开原生用量面板。同一应用还包含仪表盘和 WidgetKit 扩展。其他平台的安装方法见[桌面应用指南](/zh-cn/guides/desktop-app/)。
 
 ## 安装
 
-推荐使用 OpenCodex 桌面应用安装。从[发布页面](https://github.com/lidge-jun/opencodex/releases)下载 macOS 的
-`OpenCodex-<version>-macos.dmg`，打开 DMG 后将 `OpenCodex.app` 拖到「应用程序」文件夹。
-Windows 运行 `OpenCodex-<version>-windows-x64.msi`，Linux 使用 AppImage 或
-`OpenCodex-<version>-linux-amd64.deb`。
+从[最新版本](https://github.com/lidge-jun/opencodex/releases)下载 `OpenCodex-<version>-macos.dmg`。打开 DMG，将 `OpenCodex.app` 拖入“应用程序”。桌面应用要求 macOS 13 或更高版本；widget 要求 macOS 14 或更高版本。
 
-```bash
-chmod +x OpenCodex-<version>-linux-x86_64.AppImage
-sudo apt install ./OpenCodex-<version>-linux-amd64.deb
-```
+## 首次启动
 
-Windows SmartScreen 或 macOS Gatekeeper 可能显示警告。应用会连接现有的 `ocx` 代理；
-找不到代理时则启动内置 sidecar。
+发布版 `OpenCodex.app` 使用 Developer ID 签名和加固运行时，经 Apple 公证后，公证票据也会附加到应用上。首次启动时，macOS 通常只会显示从互联网下载应用的标准确认提示。如果仍被阻止，请打开 **System Settings → Privacy & Security**，为 OpenCodex 选择 **Open Anyway**。自行构建的应用使用临时签名；参见[从源码构建](#从源码构建)。
 
-## 首次启动：Gatekeeper
+打开应用时，窗口会显示启动进度。首次启动会自动启用一次 **Start at Login**；你可以从托盘菜单关闭。此后由登录项目启动时，窗口会隐藏，但托盘仍可使用。
 
-**首次启动会被阻止。** macOS 会提示：
+## 菜单栏与用量面板
 
-> 无法打开“OpenCodex.app”，因为无法验证开发者。
+菜单栏标题默认显示今日 token 总量。在仪表盘的 **Menu bar & widget** 设置中，可以选择请求数、token 数、估算费用、配额或仅显示图标。
 
-这是预期行为，所以这里说明原因而不是直接略过。Gatekeeper 需要 Apple 的 Developer ID 签名和
-公证（notarization）票据，两者都需要付费的 Apple Developer 账号。OpenCodex 没有该账号，因此
-应用以 ad-hoc 签名发布：程序包本身完整、签名有效，但 Apple 并未为发布者背书。
+使用托盘菜单中的 **Show Usage** 打开原生面板。面板会按照显示设置列出今日及近 30 天总量、用量图表、模型列表，以及 provider 和账户限额。总量包括 token 和请求数；启用后还会显示估算费用。配额行显示统计窗口、百分比和重置时间。缺失的测量值显示为 `—`，部分用量会标记为不完整。
 
-仍要打开：
+面板提供 **Refresh**、**Dashboard** 和 **Settings** 控件。**Dashboard** 会在桌面窗口中打开用量视图；**Settings** 会在其中打开配套设置。托盘菜单还提供 **Open Dashboard**、**Open in Browser**、**Start at Login**、**Stop proxy**、**Check for Updates…**、有更新时的 **Install update**，以及 **Quit**。**Stop proxy** 始终列在菜单中，但只有应用自行启动 proxy 时才可点击；你单独启动的 proxy 会继续运行。有托盘可用时，关闭窗口或按 Command-Q 只会隐藏应用；要退出，请使用托盘中的 **Quit**。
 
-1. 在 Finder 中右键点击（或按住 Control 点击）`OpenCodex.app`。
-2. 选择**打开**。
-3. 在弹出的对话框中再次点击**打开**。
+托盘标题每 60 秒刷新一次。原生面板打开期间，其数据也每 60 秒刷新；点击 **Refresh** 会立即请求更新。
 
-如果对话框没有「打开」按钮，请前往**系统设置 → 隐私与安全性**，找到被拦截的提示并点击
-**仍要打开**。
+## Widget
 
-macOS 会记住这个选择，因此每个版本只需操作一次。
+在 macOS 14 或更高版本中，先打开一次 OpenCodex.app，然后按住 Control 点击桌面空白处，选择 **Edit Widgets**，搜索 **OpenCodex** 并添加所需尺寸。不同尺寸的 widget 会以不同组合显示 proxy 状态、今日 token 和请求数、估算费用、配额及用量图表。扩展读取桌面应用写入的本地快照；快照只包含显示数据，不包含 API key 或原始账户数据。连接 proxy 期间，应用每经过五个 60 秒托盘刷新周期更新一次 widget 快照，约每五分钟一次。WidgetKit 也会在五分钟后请求新时间线。
 
-也可以在终端移除隔离属性：
+## 连接到 proxy
 
-```bash
-xattr -d com.apple.quarantine /Applications/OpenCodex.app
-```
+桌面应用让内置 CLI 运行 `ocx resolve --json`。如果已有可访问的本地 proxy，就连接到它；只有 CLI 证实没有运行时在监听，才会启动内置运行时。如果发现结果不确定，应用会报告启动问题，不会启动第二个 proxy。应用通过 `127.0.0.1` 上解析出的端口通信。
 
-如果两种方式都不想用，可以自行构建——本地构建不会带有隔离属性。参见[从源码构建](#从源码构建)。
-
-## 显示的内容
-
-菜单栏图标用形状而非颜色表示状态，因为 macOS 菜单栏图标按惯例是单色的：
-
-| 图标 | 含义 |
-| --- | --- |
-| 实心标记 | 运行中，路由受保护 |
-| 带缺口的实心标记 | 运行中，但路由保护存在风险 |
-| 轮廓标记 | 正在检查，或响应异常 |
-| 淡色轮廓 | 未运行，或需要 API 密钥 |
-
-点击图标会打开包含四个部分的面板。
-
-**状态** — 代理是否运行、应用正在使用的回环地址以及保护状态。当代理给出修复命令（例如
-`ocx service install`）时，会以可选中的文本显示。应用不会替你执行。
-
-**用量** — 最近 7 天的请求数、令牌数和预估成本，以及每日趋势。请求数后的 `~` 表示其中一部分
-是估算值，而非提供商上报的数据。
-
-默认情况下，菜单栏标题显示令牌总数；如果您更想查看请求数、成本、配额，或只显示图标，可在控制台 Usage 的 Companion 设置中更改标题指标。
-在 macOS 26 中，弹出面板和小组件采用 Liquid Glass；更早版本的 macOS 使用标准弹出面板材质。
-
-**配额** — 每个提供商一行，显示压力最大的那个窗口。如果某个提供商 5 小时额度用了 99%、月度
-额度只用了 10%，会显示 5 小时的数值，因为真正卡住你的是它。窗口名称标注在提供商下方，因此
-`API usage 的 42%` 和`一个月的 42%` 不会混淆。
-
-**提供商** — 可展开的列表，每个提供商带一个开关。默认提供商在启用状态下开关是锁定的，因为
-代理会拒绝停用默认提供商；请先在仪表板中更换默认值。
-
-## 可以做什么
-
-- **Dashboard** — 在浏览器中打开 Web 仪表板。
-- **Stop proxy** — 确认后停止代理。这里刻意不叫「重启」：停止会同时停掉 launchd 服务，代理不会
-  自动恢复。停止后面板会显示重新启动的命令。
-- **提供商开关** — 启用或停用某个提供商。
-
-账号、模型配置、存储等其余操作仍在仪表板中完成。
-
-## 小组件
-
-在桌面上右键点击，选择**编辑小组件**，然后添加 **OpenCodex**。它显示代理状态、今日用量和
-配额，并使用与菜单栏应用相同的隐私安全快照。应用轮询时小组件会刷新。需要 macOS 14 或更高
-版本；它不会接收 API 密钥或原始账户信息。
-
-## 连接到代理
-
-应用会自动查找。它读取 `~/.opencodex/runtime-port.json`（或
-`$OPENCODEX_HOME/runtime-port.json`），找不到则使用端口 `10100`。该文件只提供端口，主机始终
-为回环地址。
-
-如果代理绑定在非回环地址上，就需要 API 密钥。面板会说明这一点并提供前往仪表板的按钮。
-
-**该路径尚未支持。** 应用会从 macOS 钥匙串读取密钥并重试一次，但没有输入密钥的界面，也没有
-手动写入的办法——它是数据保护钥匙串条目，「钥匙串访问」无法创建。因此在非回环绑定下，面板会
-一直停在「Needs API key」。
-
-默认的回环代理不需要密钥。原生密钥输入已在计划中。
-
-## 轮询
-
-应用刻意保持安静。存活检查每 5 秒一次；开销较大的聚合数据（用量和配额）只在面板打开时获取，
-且最多每分钟一次。连续三次失败后会退避到 30 秒一次，以免不断敲打你主动停掉的代理。
+对于管理请求，应用首先尝试不携带 token。如果 proxy 返回 HTTP 401，它会使用应用环境中的 `OPENCODEX_ADMIN_AUTH_TOKEN`，或解析出的配置 home 中的 `admin-api-token` 文件重试。它不会使用 macOS Keychain 存储此 token。如果 proxy 只绑定到应用无法通过 loopback 访问的地址，桌面外壳便无法连接它。
 
 ## 从源码构建
 
-需要 macOS 13 或更高版本、Xcode Command Line Tools 以及 [Bun](https://bun.sh)：
+在 macOS 13 或更高版本中，准备好 Bun、Rust 和 macOS Swift/Xcode 工具，从仓库根目录构建仪表盘，再到 `desktop/` 运行桌面命令：
 
 ```bash
-git clone https://github.com/lidge-jun/opencodex.git
-cd opencodex
+bun install
+bun run build:gui
+cd desktop
+bun install
 bun run prepare-sidecar
 bun run prepare-widget
-bunx tauri build
+bun run build:local
 ```
 
-程序包会生成在 Tauri 的发布输出中，WidgetKit 扩展位于
-`OpenCodex.app/Contents/PlugIns/`。
-
-构建通用二进制（`UNIVERSAL=1`）需要完整的 Xcode。Command Line Tools 只包含当前架构的 Swift
-兼容库，此时构建会给出说明信息，而不是抛出链接器错误。
-
-如果钥匙串中有 Developer ID 证书，可以设置 `MACOS_SIGN_IDENTITY`，以 hardened runtime 签名
-替代 ad-hoc 签名：
-
-```bash
-MACOS_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" bun run prepare-widget
-```
+`build:local` 无需 Tauri 更新器签名密钥即可生成本地应用和 DMG。直接运行 `bunx tauri build` 则需要 `TAURI_SIGNING_PRIVATE_KEY`，因为它还会生成更新器产物。除非设置了 `MACOS_SIGN_IDENTITY`，否则 widget 构建会使用临时签名；本地桌面 bundle 也使用临时签名。应用可以运行，但 macOS 不会注册临时签名的 widget 扩展，因此本地构建通常看不到 OpenCodex widget。`build:local` 始终对应用使用临时签名，仅设置 `MACOS_SIGN_IDENTITY` 并无帮助：只有应用和扩展都由同一 Developer ID 团队签名时，widget 才会注册，就像发布版一样。需要 widget 时请使用发布版构建。
 
 ## 卸载
 
-把 `OpenCodex.app` 拖到废纸篓即可。应用不会留下偏好设置或其他状态文件，目前也不会在钥匙串中
-保存任何内容。
+如果启用了 **Start at Login**，先在托盘菜单中关闭它，再将“应用程序”中的 `OpenCodex.app` 移到废纸篓。这会移除内置 CLI 和 widget 扩展，但不会删除 proxy 的 `$OPENCODEX_HOME` 状态或单独安装的 `ocx` 服务。桌面应用还会在应用配置目录中写入安装 ID 和登录项目标记，并在 `~/Library/Containers/com.opencodex.desktop.widget/Data/Library/Application Support/OpenCodex/snapshot.json` 下写入 widget 快照；将应用移到废纸篓不会删除这些文件。

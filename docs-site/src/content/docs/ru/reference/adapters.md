@@ -227,7 +227,7 @@ authorization.
   session/thread и данные OAuth/authorization в checkpoint state не записываются. Live transport с
   OAuth и фильтрация live model discovery по аккаунту остаются экспериментальными. Настройки входа
   и transport описаны в [руководстве по провайдерам](/ru/guides/providers/) и
-  [конфигурации провайдера Cursor](/ru/reference/configuration/providers/#cursor-provider-adapter-cursor).
+  [конфигурации провайдера Cursor](/ru/reference/configuration/providers/#провайдер-cursor-adapter-cursor).
   Повторное использование checkpoint выполняется автоматически и не имеет пользовательской настройки.
 - Сохраняет `cursor/grok-4.5-fast` доступной для выбора, но отправляет Cursor каноническую модель
   `grok-4.5`, помещая отдельные значения `effort` и `fast=true` в `requested_model.parameters`.

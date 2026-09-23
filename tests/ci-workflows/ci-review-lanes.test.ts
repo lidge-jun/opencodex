@@ -98,6 +98,7 @@ describe("CI review lanes", () => {
     const ciPaths = [
       ".dockerignore",
       ".gitattributes",
+      ".github/ISSUE_TEMPLATE/**",
       ".github/scripts/**",
       ".github/workflows/**",
       ".npmignore",
@@ -113,7 +114,9 @@ describe("CI review lanes", () => {
       "docker/**",
       "gui/**",
       "package.json",
+      "readme/**",
       "scripts/**",
+      "skills/**",
       "src/**",
       "tests/**",
       "tsconfig.json",
