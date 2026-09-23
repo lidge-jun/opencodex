@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -141,6 +141,35 @@ function scriptedIo(options: {
 
 const DISCOVERY = [AUMID.replace("!App", ""), INSTALL, AUMID].join("\n");
 
+// The guard follows the test preload's OCX_TEST_HOME_GUARD, as the home guard does, rather than
+// NODE_ENV: Bun's test runner keeps an inherited NODE_ENV, and a real `NODE_ENV=test ocx ...`
+// must still restart the app.
+describe("the test-runner guard follows the test preload, not NODE_ENV", () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalGuard = process.env.OCX_TEST_HOME_GUARD;
+  afterEach(() => {
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
+    if (originalGuard === undefined) delete process.env.OCX_TEST_HOME_GUARD;
+    else process.env.OCX_TEST_HOME_GUARD = originalGuard;
+  });
+
+  test("an armed test process is guarded even when NODE_ENV was inherited as something else", () => {
+    process.env.NODE_ENV = "development";
+    const result = restartCodexDesktopApp({ lock: isolatedLock(), platform: "win32" });
+    expect(result.reason).toBe("test_environment");
+  });
+
+  test("a process the test preload did not arm restarts as usual even with NODE_ENV=test", () => {
+    process.env.NODE_ENV = "test";
+    process.env.OCX_TEST_HOME_GUARD = "0";
+    // discover() answers without exec, so this never reaches the OS.
+    const adapter = { ...windowsDesktopAppAdapter, discover: () => null };
+    const result = restartCodexDesktopApp({ lock: isolatedLock(), platform: "win32", adapter });
+    expect(result.reason).toBe("package_discovery_failed");
+  });
+});
+
 describe("Codex desktop app restart (#2292)", () => {
   // macOS and Linux are no longer no-ops: they have real adapters. What survives from the
   // original assertion is that a platform with NO adapter still refuses without execing
@@ -177,12 +206,13 @@ describe("Codex desktop app restart (#2292)", () => {
     expect(result.reason).toBe("test_environment");
   });
 
+  // win32 keeps this call away from the OS on macOS and Linux even if the guard regressed.
   test("the CLI says why nothing was restarted under the test runner", async () => {
     const out: string[] = [];
     const log = { log: (...a: unknown[]) => { out.push(a.join(" ")); }, error: (...a: unknown[]) => { out.push(a.join(" ")); } };
-    const result = await handleDesktopAppRestart(log);
+    const result = await handleDesktopAppRestart(log, { platform: "win32", lock: isolatedLock() });
     expect(result.reason).toBe("test_environment");
-    expect(out.join("\n")).toContain("NODE_ENV=test");
+    expect(out.join("\n")).toContain("OCX_TEST_HOME_GUARD");
   });
 
   test("fails closed when the package cannot be identified, killing nothing", () => {
