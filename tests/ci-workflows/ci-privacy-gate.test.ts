@@ -108,6 +108,7 @@ describe.skipIf(cannotRunAggregate)("the aggregate ci gate, executed", () => {
       LANE: "",
       CHANGES_CI: "false",
       CHANGES_NATIVE: "false",
+      CHANGES_DESKTOP: "false",
       CHANGES_PACKAGING: "false",
       CHANGES_DOCS: "false",
       CHANGES_STRUCTURE: "false",

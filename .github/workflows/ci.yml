@@ -182,6 +182,7 @@ jobs:
       # step. A missing or malformed filter output must fail this job instead
       # of silently making every expensive job skip.
       ci: ${{ steps.scope.outputs.ci }}
+      desktop: ${{ steps.scope.outputs.desktop }}
       native: ${{ steps.matrices.outputs.native }}
       # Matrix include lists for keyring-smoke and npm-global-smoke, built and
       # shape-checked by the same validation step as `native`.
@@ -265,6 +266,20 @@ jobs:
               - '.github/workflows/ci.yml'
             gui:
               - 'gui/**'
+            # Building both Linux package formats and booting their real payloads is
+            # substantially heavier than the Rust-only desktop-shell check. Keep it
+            # scoped to inputs that can change the packaged shell, dashboard or
+            # standalone sidecar. The workflow names itself so edits to this lane
+            # cannot skip their own E2E.
+            desktop:
+              - 'desktop/**'
+              - 'gui/**'
+              - 'src/**'
+              - 'scripts/build-standalone.ts'
+              - 'scripts/standalone-targets.ts'
+              - 'package.json'
+              - 'bun.lock'
+              - '.github/workflows/ci.yml'
             # The docs site is built by nothing else on a pull request. `ci` above
             # deliberately omits `docs-site/**` -- a prose edit has no business
             # starting the cross-platform suite -- and `deploy-docs.yml` triggers
@@ -342,6 +357,7 @@ jobs:
         shell: bash
         env:
           CI_SCOPE: ${{ steps.filter.outputs.ci }}
+          DESKTOP_SCOPE: ${{ steps.filter.outputs.desktop }}
         run: |
           set -euo pipefail
           case "$CI_SCOPE" in
@@ -350,6 +366,15 @@ jobs:
               ;;
             *)
               printf '::error::changes.outputs.ci was %q, expected true or false\n' "$CI_SCOPE"
+              exit 1
+              ;;
+          esac
+          case "$DESKTOP_SCOPE" in
+            true|false)
+              printf 'desktop=%s\n' "$DESKTOP_SCOPE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.desktop was %q, expected true or false\n' "$DESKTOP_SCOPE"
               exit 1
               ;;
           esac
@@ -1345,11 +1370,11 @@ jobs:
   desktop-shell:
     name: desktop shell
     needs: [changes, gates]
-    # Native-gated like platform-macos: the Rust shell is formatted, linted
-    # and tested only when native-capable paths changed.
-    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
+    # Native shell changes run the Rust checks; package-affecting changes also run the real Linux
+    # bundle acceptance. The aggregate gate below mirrors this union exactly.
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && (needs.changes.outputs.native == 'true' || needs.changes.outputs.desktop == 'true'))
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -1359,7 +1384,11 @@ jobs:
       - name: Install Tauri Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf dbus-x11 xvfb xauth wmctrl xdotool openbox
+
+      - name: Setup Bun for packaged E2E
+        if: needs.changes.outputs.desktop == 'true'
+        uses: ./.github/actions/setup-project-bun
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -1384,6 +1413,79 @@ jobs:
 
       - name: Run Rust tests
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
+
+      - name: Install packaged E2E dependencies
+        if: needs.changes.outputs.desktop == 'true'
+        run: |
+          bun install --frozen-lockfile
+          cd desktop
+          bun install --frozen-lockfile
+
+      - name: Build dashboard and bundled sidecar
+        if: needs.changes.outputs.desktop == 'true'
+        run: |
+          bun run build:gui
+          bun desktop/scripts/prepare-sidecar.ts --target x86_64-unknown-linux-gnu
+
+      # Build separately. One format failing must not delete or hide the other
+      # format's evidence, and neither verification artifact needs an updater key.
+      - name: Preserve the compiled Linux sidecar
+        if: needs.changes.outputs.desktop == 'true'
+        run: chmod +x desktop/scripts/appimage-patchelf.py
+
+      - name: Build Linux AppImage
+        if: needs.changes.outputs.desktop == 'true'
+        working-directory: desktop
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/opencodex-appimage-target
+          PATCHELF: ${{ github.workspace }}/desktop/scripts/appimage-patchelf.py
+        run: bunx tauri build --ci --bundles appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Build Linux deb
+        if: needs.changes.outputs.desktop == 'true'
+        working-directory: desktop
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/opencodex-deb-target
+        run: bunx tauri build --ci --bundles deb --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Stage isolated Linux bundles
+        if: needs.changes.outputs.desktop == 'true'
+        env:
+          APPIMAGE_BUNDLE: ${{ runner.temp }}/opencodex-appimage-target/release/bundle/appimage
+          DEB_BUNDLE: ${{ runner.temp }}/opencodex-deb-target/release/bundle/deb
+          BUNDLE_ROOT: ${{ runner.temp }}/opencodex-linux-bundles
+        run: |
+          set -euo pipefail
+          mkdir -p "$BUNDLE_ROOT/appimage" "$BUNDLE_ROOT/deb"
+          cp -a "$APPIMAGE_BUNDLE/." "$BUNDLE_ROOT/appimage/"
+          cp -a "$DEB_BUNDLE/." "$BUNDLE_ROOT/deb/"
+          chmod -R a-w "$BUNDLE_ROOT"
+
+      - name: Run Linux packaged-shell E2E
+        if: needs.changes.outputs.desktop == 'true'
+        env:
+          REPORT_PATH: ${{ runner.temp }}/opencodex-linux-e2e/report.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$REPORT_PATH")"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1440x900x24' bash -lc '
+            openbox >"$RUNNER_TEMP/opencodex-openbox.log" 2>&1 &
+            wm_pid=$!
+            trap '\''kill "$wm_pid" 2>/dev/null || true'\'' EXIT
+            bun desktop/scripts/linux-packaged-e2e.ts \
+              --bundle-root "$RUNNER_TEMP/opencodex-linux-bundles" \
+              --report "$REPORT_PATH" \
+              --version "$(jq -r .version package.json)"
+          '
+
+      - name: Upload Linux packaged-shell E2E report
+        if: always() && needs.changes.outputs.desktop == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-packaged-shell-e2e
+          path: ${{ runner.temp }}/opencodex-linux-e2e/report.json
+          if-no-files-found: warn
+          retention-days: 7
 
   ci:
     name: ci
@@ -1414,6 +1516,7 @@ jobs:
           CHANGES_SETUP_ACTION: ${{ needs.changes.outputs.setup_action }}
           CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
+          CHANGES_DESKTOP: ${{ needs.changes.outputs.desktop }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1434,14 +1537,18 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_CI" != "true" ]; then
             scoped=not-requested
           fi
-          # platform-macos, widget and desktop-shell carry a compound
-          # condition: the ordinary scope gate AND the native path filter.
+          # platform-macos and widget carry the ordinary scope gate AND the native path filter.
+          # desktop-shell accepts that native set plus the package-E2E set.
           # This mirrors that expression exactly; where it disagrees with the
           # jobs' own `if:`, the gate fails by name instead of demanding
           # success from a job that was deliberately left unselected.
           native=not-requested
           if [ "$EVENT_NAME" != "pull_request" ] || { [ "$CHANGES_CI" = "true" ] && [ "$CHANGES_NATIVE" = "true" ]; }; then
             native=requested
+          fi
+          desktop_shell=not-requested
+          if [ "$EVENT_NAME" != "pull_request" ] || { [ "$CHANGES_CI" = "true" ] && { [ "$CHANGES_NATIVE" = "true" ] || [ "$CHANGES_DESKTOP" = "true" ]; }; }; then
+            desktop_shell=requested
           fi
           packaging=not-requested
           if [ "$CHANGES_PACKAGING" = "true" ]; then
@@ -1499,8 +1606,9 @@ jobs:
               changes|select-windows-runner) echo requested ;;
               test|storage-policy|api-usage|gates|keyring-smoke|docker-smoke)
                 echo "$scoped" ;;
-              platform-macos|widget|desktop-shell)
+              platform-macos|widget)
                 echo "$native" ;;
+              desktop-shell) echo "$desktop_shell" ;;
               npm-global-smoke) echo "$packaging" ;;
               docs-site-build) echo "$docs" ;;
               structure-gate) echo "$structure" ;;

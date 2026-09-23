@@ -484,6 +484,7 @@
   "config.test.ts": "server",
   "configured-native-models.test.ts": "codex-integration",
   "gui-desktop-sidecar-signing.test.ts": "gui",
+  "linux-desktop-packaged-ci.test.ts": "ci-workflows",
   "probe-timeout-env.test.ts": "server",
   "subagent-roster-migration.test.ts": "routing",
   "consume-for-inspection-cancel.test.ts": "server",

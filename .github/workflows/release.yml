@@ -414,6 +414,7 @@ jobs:
       # and updater signatures require maintainer-owned credentials; builds without
       # those secrets remain useful for local validation but are not release assets.
       - name: Build desktop bundles
+        if: runner.os != 'Linux'
         working-directory: desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -429,9 +430,48 @@ jobs:
         # diagnostics on the first attempt; Apple signing commands stay non-verbose.
         run: bunx tauri ${{ runner.os == 'Linux' && '--verbose' || '' }} build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config "${{ runner.os == 'Windows' && format('{0}/opencodex-msi.json', runner.temp) || '{}' }}"
 
+      # Tauri patches a bundle-type marker into the application binary for each Linux format.
+      # Keep each format in its own Cargo target so the deb cannot inherit the AppImage marker
+      # and linuxdeploy cannot mutate the binary later consumed by the deb build.
+      - name: Build Linux AppImage bundle
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/opencodex-appimage-target
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bunx tauri build --ci --target ${{ matrix.target }} --bundles appimage
+
+      - name: Build Linux deb bundle
+        if: runner.os == 'Linux'
+        working-directory: desktop
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/opencodex-deb-target
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bunx tauri build --ci --target ${{ matrix.target }} --bundles deb
+
+      - name: Stage isolated Linux release bundles
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          DESKTOP_TARGET: ${{ matrix.target }}
+          APPIMAGE_TARGET: ${{ runner.temp }}/opencodex-appimage-target
+          DEB_TARGET: ${{ runner.temp }}/opencodex-deb-target
+        run: |
+          set -euo pipefail
+          bundle_root="$RUNNER_TEMP/opencodex-linux-release-bundles"
+          mkdir -p "$bundle_root/appimage" "$bundle_root/deb"
+          cp -a "$APPIMAGE_TARGET/$DESKTOP_TARGET/release/bundle/appimage/." "$bundle_root/appimage/"
+          cp -a "$DEB_TARGET/$DESKTOP_TARGET/release/bundle/deb/." "$bundle_root/deb/"
+          chmod -R a-w "$bundle_root"
+          echo "DESKTOP_BUNDLE_ROOT=$bundle_root" >> "$GITHUB_ENV"
+
+      # After the isolated AppImage exists, and against that staged copy: the default Cargo target
+      # holds no Linux bundle any more, so verifying there would fail or check a stale artifact.
       - name: Verify the packaged Linux sidecar
         if: runner.os == 'Linux'
-        run: bash desktop/scripts/verify-linux-sidecar.sh
+        run: bash desktop/scripts/verify-linux-sidecar.sh "$DESKTOP_BUNDLE_ROOT/appimage"
 
       - name: Rename release assets
         shell: bash
@@ -439,10 +479,15 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           DESKTOP_TARGET: ${{ matrix.target }}
         run: |
-          bun desktop/scripts/collect-release-assets.ts \
+          args=( \
             --version "$RELEASE_VERSION" \
             --target "$DESKTOP_TARGET" \
-            --out dist/release
+            --out dist/release \
+          )
+          if [[ -n "${DESKTOP_BUNDLE_ROOT:-}" ]]; then
+            args+=(--bundle-root "$DESKTOP_BUNDLE_ROOT")
+          fi
+          bun desktop/scripts/collect-release-assets.ts "${args[@]}"
 
       # After the bundle exists, not before: a sweep that runs first passes by finding nothing.
       - name: Verify every Mach-O in the bundle carries the release identity

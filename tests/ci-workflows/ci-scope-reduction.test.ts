@@ -52,7 +52,7 @@ const NATIVE_GATED = ["platform-macos", "widget", "desktop-shell"] as const;
 /** The two smoke jobs whose matrix legs shrink with the native selection. */
 const MATRIX_JOBS = ["keyring-smoke", "npm-global-smoke"] as const;
 
-type SelectionInputs = { event_name: string; ci: string; native: string };
+type SelectionInputs = { event_name: string; ci: string; native: string; desktop?: string };
 
 function term(source: string, inputs: SelectionInputs): string | boolean {
   const text = source.trim();
@@ -69,6 +69,7 @@ function term(source: string, inputs: SelectionInputs): string | boolean {
   if (output) {
     if (output[1] === "ci") return inputs.ci;
     if (output[1] === "native") return inputs.native;
+    if (output[1] === "desktop") return inputs.desktop ?? "false";
   }
   throw new Error(`unsupported expression term: ${text}`);
 }
@@ -345,9 +346,15 @@ describe("the native-gated jobs", () => {
   const condition = jobs["platform-macos"]?.if ?? "";
 
   test("are exactly platform-macos, widget and desktop-shell on one shared condition", () => {
-    for (const name of NATIVE_GATED) {
-      expect(`${name}:${jobs[name]?.if}`).toBe(`${name}:${condition}`);
-    }
+    expect(`widget:${jobs.widget?.if}`).toBe(`widget:${condition}`);
+    // desktop-shell widens only the native term: package-affecting changes also select it so the
+    // Linux packaged-shell E2E runs. Everything else about the condition is shared.
+    const widened = condition.replace(
+      "needs.changes.outputs.native == 'true'",
+      "(needs.changes.outputs.native == 'true' || needs.changes.outputs.desktop == 'true')",
+    );
+    expect(widened).not.toBe(condition);
+    expect(`desktop-shell:${jobs["desktop-shell"]?.if}`).toBe(`desktop-shell:${widened}`);
     // A fourth job carrying the native output would silently join the gate, and
     // a gate the aggregate does not know about is the failure this file exists
     // for — so name the full set rather than sampling it.
@@ -366,6 +373,20 @@ describe("the native-gated jobs", () => {
       }
     });
   }
+});
+
+describe("the packaged desktop selection", () => {
+  test("a pull request that changes only package inputs selects desktop-shell and nothing else native", () => {
+    const inputs = { event_name: "pull_request", ci: "true", native: "false", desktop: "true" };
+    expect(evaluate(jobs["desktop-shell"]?.if ?? "", inputs)).toBe(true);
+    expect(evaluate(jobs["platform-macos"]?.if ?? "", inputs)).toBe(false);
+    expect(evaluate(jobs.widget?.if ?? "", inputs)).toBe(false);
+  });
+
+  test("an out-of-scope pull request never selects desktop-shell through the package filter", () => {
+    const inputs = { event_name: "pull_request", ci: "false", native: "false", desktop: "true" };
+    expect(evaluate(jobs["desktop-shell"]?.if ?? "", inputs)).toBe(false);
+  });
 });
 
 describe("the smoke matrices", () => {
