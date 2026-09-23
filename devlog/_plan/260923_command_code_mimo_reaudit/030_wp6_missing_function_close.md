@@ -44,9 +44,9 @@ Architect: gpt-6-sol read-only subagent `01a0cc77-0ca8-7bb1-bdbd-35a27bcb4ca0` (
    - Params branch unchanged: every byte must belong to a complete pair.
    - Update the module comment to state the tolerated close.
 2. `tests/providers/command-code-tool-text.test.ts` (new cases, same file):
-   - parse: `…</parameter></tool_call>`, `…</tool_call>`, newline-wrapped, params body without `</function>` → parsed;
-     missing `</tool_call>`, trailing prose after `</tool_call>`, text before `<tool_call>`, nested `<function=`,
-     mixed params+prose without `</function>` → undefined.
+   - parse: `…</parameter></tool_call>`, `…</tool_call>`, newline-wrapped raw body → parsed;
+     params body without `</function>` (per the audit amendment below), missing `</tool_call>`, trailing prose
+     after `</tool_call>`, text before `<tool_call>`, nested `<function=` → undefined.
    - adapter: captured event order with the new text (no `</function>`) → exactly one `exec` call, zero text.
    - adapter: text-only variant (no native call) → restored `exec` call for declared freeform tool; same with an
      undeclared name → released as text.
