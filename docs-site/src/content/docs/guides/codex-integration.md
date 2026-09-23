@@ -98,6 +98,13 @@ is a `POST` to the canonical Responses URL or a configured WebSocket route, and 
 falls back to it when the request cannot be prepared, the `response.create` frame exceeds its size
 limit, or the proxy route cannot carry the socket.
 
+To keep the built-in ChatGPT provider on HTTP/SSE, set `providers.openai.upstreamWebsocket`
+to `false` in `~/.opencodex/config.json` and restart the proxy. Merge this field into the
+existing `openai` provider; preserve its account mode and other settings. Omit the field
+to restore the default upstream WebSocket selection. This setting does not change the
+client-facing `websockets` switch or the ChatGPT account used for the request. Native
+mid-turn steering and injection need upstream WebSocket and are unavailable while it is off.
+
 Local provider pacing can also hold a request before it is dispatched at all. So a slow first
 output has several possible contributors, and upstream queueing is only one of them. `ocx doctor`
 classifies configuration and measures none of these: compare actual transport, pacing, network,
