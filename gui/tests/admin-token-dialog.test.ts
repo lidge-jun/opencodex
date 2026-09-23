@@ -109,6 +109,53 @@ test("keeps the dialog open for whitespace and rejected tokens until one is acce
   expect(dialog.isConnected).toBe(false);
 });
 
+test("checked remember box persists the accepted token for standalone sign-in", async () => {
+  const pending = promptForAdminToken(async () => "accepted");
+  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+  const form = dialog.querySelector<HTMLFormElement>("form")!;
+  const password = form.elements.namedItem("password") as HTMLInputElement;
+  const remember = form.elements.namedItem("opencodex-admin-token-dialog-remember") as HTMLInputElement;
+
+  expect(remember.type).toBe("checkbox");
+  password.value = "stored-token";
+  remember.checked = true;
+  form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
+
+  expect(await pending).toBe("stored-token");
+  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBe("stored-token");
+});
+
+test("unchecked remember box clears any stale remembered token", async () => {
+  localStorage.setItem("opencodex.remembered-admin-token", "stale-token");
+
+  const pending = promptForAdminToken(async () => "accepted");
+  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+  const form = dialog.querySelector<HTMLFormElement>("form")!;
+  const password = form.elements.namedItem("password") as HTMLInputElement;
+  const remember = form.elements.namedItem("remember") as HTMLInputElement;
+
+  expect(remember.checked).toBe(true); // pre-checked because a stored value exists
+  remember.checked = false;
+  password.value = "fresh-token";
+  form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
+
+  expect(await pending).toBe("fresh-token");
+  expect(localStorage.getItem("opencodex.remembered-admin-token")).toBeNull();
+});
+
+test("remember checkbox has a form control name for consistency", async () => {
+  const pending = promptForAdminToken(async () => "accepted");
+  const dialog = document.querySelector<HTMLDialogElement>("#opencodex-admin-token-dialog")!;
+  const form = dialog.querySelector<HTMLFormElement>("form")!;
+  const remember = form.elements.namedItem("remember") as HTMLInputElement;
+  const password = form.elements.namedItem("password") as HTMLInputElement;
+
+  expect(remember.name).toBe("remember");
+  password.value = "x";
+  form.dispatchEvent(new testWindow.Event("submit", { bubbles: true, cancelable: true }));
+  await pending;
+});
+
 test("uses the active UI locale instead of re-detecting browser storage", async () => {
   localStorage.setItem("ocx-lang", "en");
   setActiveLocale("ko");
