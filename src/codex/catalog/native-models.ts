@@ -49,6 +49,17 @@ export const NATIVE_GPT6_LUNA_MODEL = "gpt-6-luna";
 export const NATIVE_GPT6_ASTRA_MINOR_MODEL = "gpt-6-astra-minor";
 
 /**
+ * Context pair every GPT-6 native ships in its upstream row: a 272,000-token default window
+ * against an 872,000-token ceiling (and input limit) reached only through the long-window opt-in.
+ * The built-in GPT-6 rows and every configured native (below) inherit this one value.
+ */
+export const NATIVE_GPT6_CONTEXT: Readonly<{ contextWindow: number; maxContextWindow: number; maxInputTokens: number }> =
+  Object.freeze({ contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 });
+
+/** Pinned row a configured native borrows its capability metadata from. */
+export const CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL = NATIVE_GPT6_SOL_MODEL;
+
+/**
  * Native ChatGPT/Codex ids whose availability is proven per authenticated account.
  *
  * Membership is expensive: it hides the row from the catalog, `/v1/models`, the dashboard and
@@ -132,7 +143,7 @@ export const NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS = Object.freeze(
 );
 
 export function isNativeOpenAiCapabilityAliasModel(slug: string): boolean {
-  return Object.hasOwn(NATIVE_OPENAI_CAPABILITY_SOURCES, slug);
+  return Object.hasOwn(NATIVE_OPENAI_CAPABILITY_SOURCES, slug) || configuredNativeSlugs.has(slug);
 }
 
 /**
@@ -151,7 +162,8 @@ export function hasNativeOpenAiCapabilityMetadata(slug: string): boolean {
 }
 
 export function nativeOpenAiCapabilitySourceSlug(slug: string): string {
-  return NATIVE_OPENAI_CAPABILITY_SOURCES[slug] ?? slug;
+  return NATIVE_OPENAI_CAPABILITY_SOURCES[slug]
+    ?? (configuredNativeSlugs.has(slug) ? CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL : slug);
 }
 
 /**
@@ -171,7 +183,22 @@ export const NATIVE_OPENAI_ALIAS_PRESENTATION: Readonly<Record<string, { display
 });
 
 export function nativeOpenAiAliasPresentation(slug: string): { displayName: string; description: string } | undefined {
-  return NATIVE_OPENAI_ALIAS_PRESENTATION[slug];
+  return NATIVE_OPENAI_ALIAS_PRESENTATION[slug]
+    ?? (configuredNativeSlugs.has(slug) ? configuredNativePresentation(slug) : undefined);
+}
+
+/** `gpt-6-nova` -> `GPT-6-Nova`, the same casing upstream uses for its own GPT-6 rows. */
+export function configuredNativeOpenAiDisplayName(slug: string): string {
+  return slug.split("-").map((part, index) => (
+    index === 0 ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1)
+  )).join("-");
+}
+
+function configuredNativePresentation(slug: string): { displayName: string; description: string } {
+  return {
+    displayName: configuredNativeOpenAiDisplayName(slug),
+    description: "OpenAI native model added through providers.openai.models; uses GPT-6-Sol capabilities.",
+  };
 }
 
 /**
@@ -190,16 +217,86 @@ export function nativeOpenAiAliasPresentation(slug: string): { displayName: stri
  *
  * Devlog: 260816_codexrs_multiagent_v2_and_history_perf/011 §4-bis.
  */
-export const NATIVE_OPENAI_MODELS = [
+const BUILT_IN_NATIVE_OPENAI_MODELS: readonly string[] = Object.freeze([
   "gpt-5.5",
   "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
   NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT6_ASTRA_MINOR_MODEL,
-];
+]);
+
+/**
+ * The built-in list plus every configured native, appended in config order. The array and the Set
+ * below are shared by reference across the catalog, `/v1/models` and the dashboard, so
+ * registration edits them in place rather than replacing them.
+ */
+export const NATIVE_OPENAI_MODELS: string[] = [...BUILT_IN_NATIVE_OPENAI_MODELS];
 
 export const SUPPORTED_NATIVE_OPENAI_SLUGS = new Set(NATIVE_OPENAI_MODELS);
+
+/**
+ * Configured natives: bare `gpt-*` ids an operator lists under `providers.openai.models` on the
+ * canonical Codex forward provider, so a new upstream GPT model needs a config entry rather than a
+ * release — the way a Claude id listed under `providers.anthropic.models` already works.
+ *
+ * A configured native borrows `gpt-6-sol`'s pinned row (ladder, modalities, instructions, speed
+ * tiers) under its own generated name, uses the GPT-6 272k/872k context pair, and is never
+ * account-gated. Filtering the config lives in `src/config/derived-registries.ts`; this module stays
+ * import-free because the GUI bundles it. Registration runs inside `loadConfig` and every config
+ * persist/reconcile path, so any process that loads config — `ocx ensure` included — sees it.
+ */
+const configuredNativeSlugs = new Set<string>();
+type ConfiguredNativeListener = (current: readonly string[], removed: readonly string[]) => void;
+const configuredNativeListeners: ConfiguredNativeListener[] = [];
+
+const CONFIGURED_NATIVE_SLUG = /^gpt-[a-z0-9][a-z0-9.-]*$/;
+
+/** Whether a bare id may become a configured native (shape, not built in, not retired or reserve). */
+export function isEligibleConfiguredNativeOpenAiModel(id: string): boolean {
+  return CONFIGURED_NATIVE_SLUG.test(id)
+    && !BUILT_IN_NATIVE_OPENAI_MODELS.includes(id)
+    && !RETIRED_NATIVE_OPENAI_MODELS.has(id)
+    && id !== NATIVE_RESERVE_MODEL;
+}
+
+export function configuredNativeOpenAiModels(): readonly string[] {
+  return [...configuredNativeSlugs];
+}
+
+export function isConfiguredNativeOpenAiModel(slug: string): boolean {
+  return configuredNativeSlugs.has(slug);
+}
+
+/** Replace the configured set. Ineligible ids are ignored; built-in entries are never touched. */
+export function setConfiguredNativeOpenAiModels(ids: readonly string[]): void {
+  const next = [...new Set(ids.filter(isEligibleConfiguredNativeOpenAiModel))];
+  const previous = [...configuredNativeSlugs];
+  if (next.length === previous.length && next.every((id, index) => id === previous[index])) return;
+  const removed = previous.filter(id => !next.includes(id));
+  for (const id of previous) {
+    configuredNativeSlugs.delete(id);
+    SUPPORTED_NATIVE_OPENAI_SLUGS.delete(id);
+    const index = NATIVE_OPENAI_MODELS.indexOf(id);
+    if (index >= 0) NATIVE_OPENAI_MODELS.splice(index, 1);
+  }
+  for (const id of next) {
+    configuredNativeSlugs.add(id);
+    SUPPORTED_NATIVE_OPENAI_SLUGS.add(id);
+    NATIVE_OPENAI_MODELS.push(id);
+  }
+  for (const listener of configuredNativeListeners) listener(next, removed);
+}
+
+/** Keep derived tables in step; the listener runs immediately with the current set. */
+export function subscribeConfiguredNativeOpenAiModels(listener: ConfiguredNativeListener): void {
+  configuredNativeListeners.push(listener);
+  listener(configuredNativeOpenAiModels(), []);
+}
+
+export function resetConfiguredNativeOpenAiModelsForTests(): void {
+  setConfiguredNativeOpenAiModels([]);
+}
 
 /**
  * Natives this runtime used to ship that upstream has since retired.

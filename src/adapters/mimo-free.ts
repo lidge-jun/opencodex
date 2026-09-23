@@ -105,11 +105,10 @@ export function resetMimoJwtCache(): void {
   inFlightJwt = null;
 }
 
-async function fetchJwt(signal?: AbortSignal): Promise<string> {
-  // Bounded bootstrap: request-abort propagates, and a stalled bootstrap can never
-  // hang past BOOTSTRAP_TIMEOUT_MS.
+async function fetchJwt(): Promise<string> {
+  // Bounded bootstrap: a stalled bootstrap can never hang past BOOTSTRAP_TIMEOUT_MS. It carries
+  // no caller signal because concurrent requests share it; each caller aborts its own wait.
   const timeout = AbortSignal.timeout(BOOTSTRAP_TIMEOUT_MS);
-  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const response = await fetch(BOOTSTRAP_URL, {
     method: "POST",
     redirect: "manual",
@@ -118,7 +117,7 @@ async function fetchJwt(signal?: AbortSignal): Promise<string> {
       "User-Agent": randomUserAgent(),
     },
     body: JSON.stringify({ client: getMimoClientId() }),
-    signal: combined,
+    signal: timeout,
   });
   if (!response.ok) {
     try { await response.body?.cancel(); } catch { /* already consumed */ }
@@ -159,25 +158,45 @@ async function fetchJwt(signal?: AbortSignal): Promise<string> {
   return data.jwt;
 }
 
+function abortReason(signal: AbortSignal): unknown {
+  return signal.reason ?? new DOMException("The operation was aborted.", "AbortError");
+}
+
+/** Wait for the shared bootstrap, or stop waiting when this caller aborts; the bootstrap keeps running. */
+function awaitForCaller(shared: Promise<string>, signal?: AbortSignal): Promise<string> {
+  if (!signal) return shared;
+  if (signal.aborted) return Promise.reject(abortReason(signal));
+  return new Promise<string>((resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    shared.then(
+      jwt => { signal.removeEventListener("abort", onAbort); resolve(jwt); },
+      error => { signal.removeEventListener("abort", onAbort); reject(error); },
+    );
+  });
+}
+
 export async function getMimoJwt(signal?: AbortSignal): Promise<string> {
   if (cachedJwt && Date.now() < jwtExpiresAt - JWT_EXPIRY_BUFFER_MS) {
     return cachedJwt;
   }
+  if (signal?.aborted) throw abortReason(signal);
   // Single-flight: concurrent callers await the same bootstrap instead of issuing
-  // parallel bootstraps.
+  // parallel bootstraps. One caller aborting must not fail the others, so the shared
+  // bootstrap is bound only to its timeout and each caller races it against its own signal.
   if (!inFlightJwt) {
-    inFlightJwt = (async () => {
-      try {
-        const jwt = await fetchJwt(signal);
-        cachedJwt = jwt;
-        jwtExpiresAt = parseJwtExp(jwt);
-        return jwt;
-      } finally {
-        inFlightJwt = null;
-      }
-    })();
+    const shared = fetchJwt().then(jwt => {
+      cachedJwt = jwt;
+      jwtExpiresAt = parseJwtExp(jwt);
+      return jwt;
+    });
+    inFlightJwt = shared;
+    // Registered before any waiter, so the slot is cleared first; it also handles a failure that
+    // arrives after every waiter has left. A reset during the flight owns the slot and is kept.
+    const release = () => { if (inFlightJwt === shared) inFlightJwt = null; };
+    shared.then(release, release);
   }
-  return inFlightJwt;
+  return awaitForCaller(inFlightJwt, signal);
 }
 
 /**
@@ -223,7 +242,7 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
     name: "mimo-free",
 
     async buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta): Promise<AdapterRequest> {
-      const jwt = await getMimoJwt();
+      const jwt = await getMimoJwt(incoming?.abortSignal);
 
       // Let the base adapter build the wire body (handles reasoning, tools, etc.)
       // but override the URL and headers after.

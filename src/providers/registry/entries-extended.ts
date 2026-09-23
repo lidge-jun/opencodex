@@ -47,6 +47,7 @@ import {
   DEEPSEEK_V4_LEGACY_MODELS,
   DEEPSEEK_GATEWAY_THINKING_MODELS,
   DEEPSEEK_VISION_PREVIEW_MODEL,
+  COMMAND_CODE_MIMO_CONTEXT_WINDOWS,
   COMMAND_CODE_MODEL_INPUT_MODALITIES,
   OPENCODE_FREE_DEEPSEEK_MODELS,
   OPENCODE_ZEN_TEXT_ONLY_MODELS,
@@ -170,6 +171,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // (merges into v4-flash later).
     modelContextWindows: {
       [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: 1_048_576,
+      ...COMMAND_CODE_MIMO_CONTEXT_WINDOWS,
     },
     modelInputModalities: COMMAND_CODE_MODEL_INPUT_MODALITIES,
     modelDiscovery: {
@@ -1139,7 +1141,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // narrower table that silently falls behind whenever the keyed one is updated.
     noJsonSchemaModels: [...DEEPSEEK_GATEWAY_THINKING_MODELS, ...OPENCODE_FREE_DEEPSEEK_MODELS],
   },
-  { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.5-pro" },
+  // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
+  // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
+  // Saved defaults are not rewritten; V2.5 stays listed until it stops answering.
+  // Both first-party presets read the xiaomi metadata bundle for window, output, modalities and price.
+  { id: "xiaomi", label: "Xiaomi MiMo", baseUrl: "https://api.xiaomimimo.com/anthropic", adapter: "anthropic", authKind: "key", dashboardUrl: "https://xiaomimimo.com", defaultModel: "mimo-v2.6-pro", models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5-pro", "mimo-v2.5"], jawcodeBundle: "xiaomi" },
   // Xiaomi's public OpenAI-compatible endpoint is a distinct transport from both the Anthropic
   // preset above and the paid token-plan host below. Keep a separate fixed-destination contract
   // so existing custom providers are never retargeted while the official route receives the
@@ -1151,8 +1157,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     adapter: "openai-chat",
     authKind: "key",
     dashboardUrl: "https://platform.xiaomimimo.com/console/balance",
-    defaultModel: "mimo-v2.5",
-    models: ["mimo-v2.5"],
+    defaultModel: "mimo-v2.6-flash",
+    models: ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5"],
+    jawcodeBundle: "xiaomi",
     reasoningEfforts: ["low", "medium", "high"],
     reasoningEffortMap: { xhigh: "high", max: "high", ultra: "high" },
     preserveCustomDestination: true,
@@ -1192,8 +1199,11 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     adapter: "openai-chat",
     authKind: "key",
     dashboardUrl: "https://xiaomimimo.com",
-    defaultModel: "mimo-v2.5-pro",
-    models: ["mimo-v2.5-pro", "mimo-v2.5"],
+    // Token-plan roster per Xiaomi's token-plan model list (V2.6 Pro and Flash). No jawcodeBundle,
+    // so no plan-specific facts are claimed; usage estimates still come from the model-level vendor
+    // price fallback (the pay-as-you-go equivalent), exactly as they did for V2.5.
+    defaultModel: "mimo-v2.6-pro",
+    models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.5-pro", "mimo-v2.5"],
     // The gateway validates the ladder strictly and rejects anything above `high`.
     reasoningEfforts: ["low", "medium", "high"],
     reasoningEffortMap: { xhigh: "high", max: "high", ultra: "high" },

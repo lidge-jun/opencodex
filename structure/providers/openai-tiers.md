@@ -393,6 +393,23 @@ exhaustion; pause, cooldown, reauthentication, quota refusal, and failover evide
 state normally. A paused or quota-drained main skips the request-owned credential exception and follows
 the ordinary Pool promotion path.
 
+Without a pin, that same bearer makes main an ordinary candidate rather than a last-resort fallback.
+A forwardable request-owned bearer IS main's live credential for that request — it is what would be
+sent if selection named main — so `requestOwnedMainCredentialIsLive` answers the pool-liveness
+question yes, and main is compared against the stored accounts on the operator's own usage, priority
+and reset ordering. Selecting main then serves it from the caller's credential without claiming,
+reading, reconciling or priming the stored profile, and without owning affinity or health state.
+Answering that question with the pin predicate instead scored main `main_credential_unavailable` on
+every unpinned request, so a pool with one stored sibling degraded to "stored account until it cannot
+serve, then main" whatever the usage numbers, the strategy or `codexAccountPriorities` said (#5019).
+
+Two things stay out of it. An account-gated model is still excluded, because main's roster is
+discovered from the stored credential this request may not read, so candidacy alone cannot produce a
+gated-model grant. Retained startup recovery and a draining profile still make main ineligible, since
+those fence the identity rather than the credential. Request preview answers this from the same shared
+expression: a preview that scored main differently would hand subagent fallback a different account
+than the one that serves, which is the divergence #4850 closed.
+
 > Decision record: [ADR-0086](../decisions/ADR-0086-public-provider-contract.md)
 
 ```text

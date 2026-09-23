@@ -61368,6 +61368,54 @@
 				"maxLevel": "xhigh"
 			}
 		},
+		"mimo-v2.6-flash": {
+			"id": "mimo-v2.6-flash",
+			"name": "MiMo-V2.6-Flash",
+			"api": "openai-completions",
+			"provider": "opencode-go",
+			"baseUrl": "https://opencode.ai/zen/go/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.14,
+				"output": 0.28,
+				"cacheRead": 0.0028,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"mimo-v2.6-pro": {
+			"id": "mimo-v2.6-pro",
+			"name": "MiMo-V2.6-Pro",
+			"api": "openai-completions",
+			"provider": "opencode-go",
+			"baseUrl": "https://opencode.ai/zen/go/v1",
+			"reasoning": true,
+			"input": [
+				"text"
+			],
+			"cost": {
+				"input": 0.435,
+				"output": 0.87,
+				"cacheRead": 0.003625,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
 		"minimax-m2.5": {
 			"id": "minimax-m2.5",
 			"name": "MiniMax M2.5",
@@ -72138,6 +72186,81 @@
 				"maxLevel": "high"
 			}
 		},
+		"xiaomi/mimo-v2.6-flash": {
+			"id": "xiaomi/mimo-v2.6-flash",
+			"name": "MiMo-V2.6-Flash",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.14,
+				"output": 0.28,
+				"cacheRead": 0.0028,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"xiaomi/mimo-v2.6-pro": {
+			"id": "xiaomi/mimo-v2.6-pro",
+			"name": "MiMo-V2.6-Pro",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.435,
+				"output": 0.87,
+				"cacheRead": 0.0036,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
+		"xiaomi/mimo-v2.6-pro-ultraspeed": {
+			"id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+			"name": "MiMo-V2.6-Pro-UltraSpeed",
+			"api": "openai-completions",
+			"provider": "openrouter",
+			"baseUrl": "https://openrouter.ai/api/v1",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4.35,
+				"output": 8.7,
+				"cacheRead": 0.036,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
+		},
 		"z-ai/glm-4-32b": {
 			"id": "z-ai/glm-4-32b",
 			"name": "Z.ai: GLM 4 32B",
@@ -82810,6 +82933,81 @@
 				"input": 1.305,
 				"output": 2.61,
 				"cacheRead": 0.0108,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"mimo-v2.6-flash": {
+			"id": "mimo-v2.6-flash",
+			"name": "MiMo-V2.6-Flash",
+			"api": "anthropic-messages",
+			"provider": "xiaomi",
+			"baseUrl": "https://api.xiaomimimo.com/anthropic",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.14,
+				"output": 0.28,
+				"cacheRead": 0.0028,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"mimo-v2.6-pro": {
+			"id": "mimo-v2.6-pro",
+			"name": "MiMo-V2.6-Pro",
+			"api": "anthropic-messages",
+			"provider": "xiaomi",
+			"baseUrl": "https://api.xiaomimimo.com/anthropic",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0.435,
+				"output": 0.87,
+				"cacheRead": 0.0036,
+				"cacheWrite": 0
+			},
+			"contextWindow": 1048576,
+			"maxTokens": 131072,
+			"thinking": {
+				"mode": "budget",
+				"minLevel": "minimal",
+				"maxLevel": "xhigh"
+			}
+		},
+		"mimo-v2.6-pro-ultraspeed": {
+			"id": "mimo-v2.6-pro-ultraspeed",
+			"name": "MiMo-V2.6-Pro-UltraSpeed",
+			"api": "anthropic-messages",
+			"provider": "xiaomi",
+			"baseUrl": "https://api.xiaomimimo.com/anthropic",
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 4.35,
+				"output": 8.7,
+				"cacheRead": 0.036,
 				"cacheWrite": 0
 			},
 			"contextWindow": 1048576,

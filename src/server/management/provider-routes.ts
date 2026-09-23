@@ -47,6 +47,14 @@ import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
+import {
+  applyProviderCompatPatchFields,
+  carryProviderCompatFields,
+  providerCompatFieldConfigError,
+  providerOverwriteKeepsDestination,
+  sampleProviderOverwrite,
+} from "./provider-overwrite-carry";
+import { shadowInterceptProviderDependency } from "./shadow-call-validation";
 import { deriveProviderPresets, providerConfigSeed } from "../../providers/derive";
 import { initializeProviderModelSelection } from "../../providers/initial-model-selection";
 import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
@@ -111,7 +119,7 @@ import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
   LOCAL_PROVIDER_RELOAD_PATH,
 } from "../../lib/local-provider-reload-contract";
-import { refreshUserCostOverlays } from "../../usage/user-cost-overlays";
+import { refreshConfigDerivedRegistries } from "../../config/derived-registries";
 import { redactSecretString } from "../../lib/redact";
 import {
   XAI_RESPONSES_OPT_IN_MODELS,
@@ -742,6 +750,10 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  // The reasoning-replay lists, foldDeveloperRoleToSystem and reasoningWireFormat (#5563).
+  const compat = applyProviderCompatPatchFields(rawBody, next);
+  if ("error" in compat) return { error: compat.error };
+  if (compat.touched) touched = true;
 
   // headers is the one object-valued field in the mask. PATCH semantics merge it
   // shallowly into the existing block so a single fingerprint header can be added
@@ -1003,7 +1015,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     reconcileLiveStateStores();
     // The complete disk snapshot owns display overlays, including providers that this
     // live routing instance deliberately does not adopt.
-    refreshUserCostOverlays(currentDiskConfig);
+    refreshConfigDerivedRegistries(currentDiskConfig);
     clearGatherRoutedModelsInflight();
     (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
     clearAccountQuotaCache(name);
@@ -1105,7 +1117,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
     adoptProviderEditorCandidate(config, outcome.value.config);
     reconcileLiveStateStores();
-    refreshUserCostOverlays(outcome.value.config);
+    refreshConfigDerivedRegistries(outcome.value.config);
     clearGatherRoutedModelsInflight();
     (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
     clearAccountQuotaCache();
@@ -1140,7 +1152,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const pinError = applyProviderPinFields(transportCandidate as unknown as OcxProviderConfig, body.provider, existing);
     if (pinError) return jsonResponse({ error: pinError }, 400);
     const providerError = providerManagementConfigError(name, transportCandidate)
-      ?? providerEmptyToolOutputConfigError(name, transportCandidate);
+      ?? providerEmptyToolOutputConfigError(name, transportCandidate)
+      ?? providerCompatFieldConfigError(body.provider as Record<string, unknown>);
     if (providerError) return jsonResponse({ error: providerError }, 400);
     const rawProvider = body.provider as Record<string, unknown>;
     if (rawProvider.upstreamWebsocket !== undefined && typeof rawProvider.upstreamWebsocket !== "boolean") {
@@ -1195,12 +1208,17 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // from "the registry supplied it" either. Without this sample, an unrelated edit that
     // omits the key resurrects the registry default over an operator's explicit `false`.
     const submittedAnnotateEmptyToolOutputs = Object.hasOwn(prov, "annotateEmptyToolOutputs");
+    // And for the compatibility settings, several of which enrichment fills from the registry
+    // seed (#5563); the sample also records whether the request named an auth mode.
+    const overwriteSample = sampleProviderOverwrite(prov);
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
-    // let the (possibly new) apiKey join the pool as the active entry.
+    // let the (possibly new) apiKey join the pool as the active entry. Only while the provider
+    // keeps its destination: those keys were issued for the previous upstream.
     const existingPool = config.providers[name]?.apiKeyPool;
-    if (existingPool && !prov.apiKeyPool) prov.apiKeyPool = existingPool;
+    if (existingPool && !prov.apiKeyPool
+      && providerOverwriteKeepsDestination(prov, config.providers[name], overwriteSample)) prov.apiKeyPool = existingPool;
     // The same rule applies to user-configured price overlays: the dashboard's
     // add/edit form does not send modelCosts, so an overwrite must not silently
     // erase hand-edited per-model prices from Logs/Usage estimates.
@@ -1259,6 +1277,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (!submittedUpstreamWebsocket && existing?.upstreamWebsocket !== undefined) {
       prov.upstreamWebsocket = existing.upstreamWebsocket;
     }
+    // The form sends none of the compatibility settings either (#5563). Read the live row rather
+    // than `existing`, like the alias overlays below: a PATCH that saved one of them while DNS
+    // validation awaited must not be undone. Nothing is carried to a new destination.
+    carryProviderCompatFields(prov, config.providers[name], overwriteSample);
     if (existing?.modelContextWindows) {
       // When the client did send a map, its keys win and the user's other keys survive. When
       // it did not, the stored value is the user's map alone: merging the registry seed in
@@ -1475,6 +1497,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // mask onto the newest provider under the mutation lock right before saving, so two
     // concurrent PATCHes updating different fields/headers both survive instead of the
     // later save clobbering the earlier snapshot.
+    // Read before the save: once the provider is disabled the target no longer resolves (#5618).
+    const shadowDependency = rawBody.disabled === true && config.providers[name]!.disabled !== true
+      ? shadowInterceptProviderDependency(config, name)
+      : null;
     let replayError: string | undefined;
     withConfigMutationLockSync(() => {
       const replay = applyProviderPatchFields(name, config.providers[name]!, rawBody, keys, config);
@@ -1540,6 +1566,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       name,
       disabled: config.providers[name]!.disabled === true,
       hasApiKey: !!config.providers[name]!.apiKey,
+      ...(shadowDependency ? { dependentShadowIntercept: shadowDependency } : {}),
       ...(name === "xai"
         ? { xaiResponsesOptInState: xaiResponsesOptInState(config.providers[name]!) }
         : {}),
@@ -1753,6 +1780,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }, 409);
     }
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
+    // Deleting still succeeds; the response names the shadow-call target left without a provider.
+    const shadowDependency = shadowInterceptProviderDependency(config, name);
     if (fallbackDefault) config.defaultProvider = fallbackDefault;
     delete config.providers[name];
     const { dropProviderCustomModels } = await import("../../providers/provider-id-rewrite");
@@ -1768,6 +1797,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       success: true,
       ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}),
       ...(droppedCustomModels > 0 ? { droppedCustomModels } : {}),
+      ...(shadowDependency ? { dependentShadowIntercept: shadowDependency } : {}),
       catalogRefresh,
     });
   }

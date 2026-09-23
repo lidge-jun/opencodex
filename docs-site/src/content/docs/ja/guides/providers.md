@@ -265,8 +265,12 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 
 同じモデルに至るサポートされた経路は、[opencode.ai/auth](https://opencode.ai/auth) で発行した OpenCode Zen API キーを使う **`opencode-zen`** プリセットです。OpenCode が後にキー不要の枠へのサードパーティ経路を公開すれば、opencodex もそれに従えます。それまでこのプリセットは制限を記録する役割を担います。上流の規約: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
-大半は bearer キーと共に `openai-chat` アダプターを使い、Anthropic 互換エンドポイントのみを公開する一部
-(例: **Xiaomi MiMo**)は `anthropic` アダプター(`x-api-key`)を使います。
+大半は bearer キーと共に `openai-chat` アダプターを使い、**Xiaomi MiMo**（`xiaomi`）などの
+Anthropic 互換プリセットは `anthropic` アダプター（`x-api-key`）を使います。Xiaomi には
+OpenAI Chat プリセットの `xiaomi-mimo` とトークンプランのプリセット `mimo` もあります。
+3 つともデフォルトは MiMo V2.6（`mimo-v2.6-pro`、`xiaomi-mimo` では `mimo-v2.6-flash`）です。
+Xiaomi は 2026-10-21 に `mimo-v2.5` と `mimo-v2.5-pro` をリダイレクトなしで廃止するため、
+保存済みの V2.5 デフォルトはそれまでに切り替えてください。opencodex は自動で書き換えません。
 Volcengine Coding Plan と Agent Plan は `openai-responses` アダプターでネイティブ Responses エンドポイントを使用します。検証済みの Ark Coding Plan のツール継続では、前のターンが返した Responses の `reasoning` item をそのまま返すと `400 InvalidParameter` になるため、Coding Plan プリセットは継続入力を転送する前にその item を取り除きます。そのターンの reasoning 状態は失われるので、`dropResponsesReasoningItems: false` で無効にできます。すでに `openai-chat` で保存されている Coding Plan の設定は書き換えられず Chat のままです。切り替えるときは `adapter` を `openai-responses` に、`responsesPath` を `/responses` に手動で変更するか、プリセットを削除して追加し直してください。
 
 > **Volcengine の 3 つの課金経路:** `volcengine` は従量課金 Ark API、
@@ -305,13 +309,22 @@ chat、image、embedding が混在するため、公式の tool-calling API 例�
 Nscale の service token は [Nscale Console](https://console.nscale.com) で作成し、Vultr の inference key は
 [Vultr Console](https://my.vultr.com) の subscription overview から取得します。
 
-**Command Code の discovery:** preset は Command Code の `/provider/v1/models` リストを固定の
-Provider API ホストから読み、スラッシュを含むネイティブモデル ID を保持し、live discovery を
-256 KiB と raw 256 行に制限します。`ocx login command-code` はブラウザーでの OAuth サインインを
-サポートします(既存の Command Code CLI ユーザー向けに `~/.commandcode/auth.json` からのローカル
-CLI 資格情報の取り込みも可能)。モデルカタログはアカウント単位で、ログイン後に認証済みの
-discovery エンドポイントから取得します。チャットリクエストは設定済みの bearer キーを使います。
-キーは [Command Code Studio](https://commandcode.ai/studio/) で作成します。
+**Command Code の discovery:** プリセットは固定の Provider API ホストから Command Code の
+`/provider/v1/models` リストを読み、プロバイダー固有のモデル ID を保持し、discovery を
+256 KiB と raw 256 行に制限します。`ocx login command-code` はブラウザーでの OAuth サインインに
+対応し、既存の Command Code CLI ユーザーは `~/.commandcode/auth.json` からローカルの資格情報を
+取り込むこともできます。モデルカタログはアカウント単位で、ログイン後に認証済みの discovery
+エンドポイントから取得します。Provider API プリセット（`commandcode`）は設定済みの有効なキーを
+送信します。大半のモデル ID には Bearer ヘッダーで Chat Completions を使いますが、`claude-*` の
+ID には `x-api-key` で Anthropic Messages を使います。Command Code がそれらを
+`/provider/v1/messages` でのみ提供するためです。別のエンドポイントに `commandcode` という名前を
+再利用したプロバイダーは、独自の通信方式を維持します。OAuth プリセット（`command-code`）は
+保存済みアカウントの bearer を使って認証付き discovery を行い、`/alpha/generate` からの生成を
+NDJSON としてストリーミングします。ゲートウェイがテキストとして返した MiMo のツール呼び出し
+マークアップは、実際の呼び出しと重複する場合に取り除きます。MiMo モデルでネイティブの呼び出しが
+存在しない完全な宣言済みツール呼び出しは、正常に終了した場合にのみ復元します。中断または
+フィルターされたターンではマークアップをテキストのまま残します。Provider API キーは
+[Command Code Studio](https://commandcode.ai/studio/) で作成します。
 
 **Command Code の quota:** ダッシュボードと `ocx account refresh` は、正規ホスト `https://api.commandcode.ai` 上の `/alpha/billing/credits` ウィンドウ（5時間と週次）を照会します。OAuth プリセット (`command-code`) は保存済みアカウント bearer を使い、Provider-API キープリセット (`commandcode`) は設定済みの有効キーを使います。ユーザーが編集した類似ホストは照会しません。期間支出が返る場合は、残りの monthly / purchased / free credits を USD ウィンドウとして表示します。
 

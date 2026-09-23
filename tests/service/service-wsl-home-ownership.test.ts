@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { assertServiceEnvironmentMatchesInstall } from "../../src/service/guards";
 import { repairService } from "../../src/service/repair";
 import { inspectNativeCodexOwnership } from "../../src/integrations/native/ownership-preflight";
@@ -22,9 +22,9 @@ describe("WSL service ownership after Windows home discovery", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-wsl-service-home-"));
     fixtureHome = root;
     process.env.OPENCODEX_HOME = root;
-    const linuxHome = join(root, "linux", ".codex");
-    const usersRoot = join(root, "windows", "Users");
-    const windowsHome = join(usersRoot, "profile", ".codex");
+    const linuxHome = "/home/fixture/.codex";
+    const usersRoot = "/mnt/c/Users";
+    const windowsHome = posix.join(usersRoot, "profile", ".codex");
     const recordedHome = recorded === "linux" ? linuxHome : windowsHome;
     const statePath = join(root, "service-state.json");
     writeFileSync(statePath, JSON.stringify({
@@ -35,9 +35,9 @@ describe("WSL service ownership after Windows home discovery", () => {
     const deps = {
       env: { WSL_DISTRO_NAME: "fixture" },
       platform: "linux" as const,
-      homedir: () => join(root, "linux"),
+      homedir: () => "/home/fixture",
       usersRoot,
-      existsSync: (path: string) => path === usersRoot || path === join(windowsHome, "config.toml"),
+      existsSync: (path: string) => path === usersRoot || path === posix.join(windowsHome, "config.toml"),
       readdirSync: () => ["profile"],
       statSync: (() => ({ isDirectory: () => true })) as never,
       realpathSync: (path: string) => path,

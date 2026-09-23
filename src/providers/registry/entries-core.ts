@@ -53,6 +53,7 @@ import {
   DEEPSEEK_NATIVE_THINKING_MODELS,
   DEEPSEEK_GATEWAY_THINKING_MODELS,
   DEEPSEEK_VISION_PREVIEW_MODEL,
+  COMMAND_CODE_MIMO_CONTEXT_WINDOWS,
   COMMAND_CODE_MODEL_INPUT_MODALITIES,
   deepseekThinkingEffortsFor,
   deepseekReasoningMapFor,
@@ -400,6 +401,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // merge into deepseek-v4-flash later.
     modelContextWindows: {
       [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: 1_048_576,
+      ...COMMAND_CODE_MIMO_CONTEXT_WINDOWS,
     },
     modelInputModalities: COMMAND_CODE_MODEL_INPUT_MODALITIES,
     defaultMaxOutputTokens: 64_000,
@@ -880,6 +882,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       // deepseek-v4-flash stays listed — that route rejects image_url upstream.
       "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
+      // V2.6 is multimodal first-party, but image forwarding on this gateway is unprobed:
+      // the sidecar describes images until a route probe proves native input.
+      "mimo-v2.6-pro", "mimo-v2.6-flash",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
     ],

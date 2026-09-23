@@ -1,13 +1,25 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex——適用於 Codex、Claude Code、Claude Desktop 與 Grok Build 的通用供應商代理" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>適用於 OpenAI Codex、Claude Code、Claude Desktop 與 Grok Build 的通用供應商代理</b><br>
 兩條命令，這四個就都能跑你指定的任何 LLM。</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="在 X 上關注 @claudeebum"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/github/v/release/lidge-jun/opencodex?label=desktop&logo=github&color=24292f" alt="最新桌面版發行"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm 版本"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="授權"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="Node 版本">
 </p>
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-macos.svg" alt="下載 macOS 版 OpenCodex" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-windows.svg" alt="下載 Windows 版 OpenCodex" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-linux.svg" alt="下載 Linux 版 OpenCodex" width="220"></a>
+</p>
+<p align="center"><sub>桌面應用程式（Beta）：macOS 通用 <code>.dmg</code> · Windows x64 <code>.msi</code> · Linux x86_64 <code>.AppImage</code> / <code>.deb</code>。偏好終端機？安裝 CLI：</sub></p>
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -76,7 +88,29 @@ Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 或任何其他 LLM。它�
 
 ## 快速開始
 
-### 個人安裝
+### 桌面應用程式（Beta）
+
+桌面應用程式是同一套代理與儀表板的原生視窗版本，附系統匣與內建的 `ocx`。
+它會接上已在執行的代理，或啟動內建的那一個；儀表板仍使用代理的連接埠
+（除非你設定了其他連接埠，否則為 **http://localhost:10100**）。請從
+[最新發行版](https://github.com/lidge-jun/opencodex/releases/latest)挑選適合你平台的檔案：
+
+| 平台 | 檔案 | 說明 |
+|---|---|---|
+| macOS 13+（Apple Silicon 與 Intel） | `OpenCodex-<version>-macos.dmg` | 通用建置，以 Developer ID 簽章並經過公證 |
+| Windows（x64） | `OpenCodex-<version>-windows-x64.msi` | 尚未經程式碼簽章：SmartScreen 會詢問一次，選擇 **More info → Run anyway** |
+| Linux（x86_64） | `OpenCodex-<version>-linux-x86_64.AppImage` 或 `-linux-amd64.deb` | 系統匣需要支援 AppIndicator 的桌面環境 |
+
+每個檔案在發行頁面上都附有 `.sha256`。在 macOS 14+ 上，應用程式還附帶
+WidgetKit 擴充套件，可顯示代理狀態、今日用量與供應商配額；它所呈現的快照模型位於
+[`app/`](../app)（`MenuBarCore`）。若要自行建置應用程式，先在儲存庫根目錄執行
+`bun install && bun run build:gui`，再於
+`desktop/` 執行：macOS 上用 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`，Windows 與 Linux 上用 `bun install && bun run prepare-sidecar && bun run build:local`（小工具步驟只能在 macOS 上執行）。
+[桌面應用程式指南](https://opencodex.me/zh-tw/guides/desktop-app/) 與
+[macOS 選單列應用程式指南](https://opencodex.me/zh-tw/guides/macos-menu-bar/) 涵蓋首次啟動，
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) 列出所有寫入磁碟的內容。
+
+### 個人安裝（CLI）
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+；Bun 執行環境會自動打包
@@ -88,29 +122,6 @@ ocx start                         # 代理 + 儀表板位於 localhost:10100
 開啟 **http://localhost:10100**，在網頁儀表板完成所有設定——新增供應商
 （40+ 內建，或任何 OpenAI 相容端點）、挑選模型、管理帳號。隨時可用 `ocx gui`
 重新開啟儀表板。
-
-<details>
-<summary><b>桌面應用程式與 macOS 小工具——Beta 版</b></summary>
-
-它是同一套儀表板的原生外殼，另附 WidgetKit 擴充套件，無需開啟瀏覽器就能查看代理狀態、
-今日用量與供應商配額。代理本身沒有改變：應用程式會尋找正在執行的代理，找不到便啟動隨附的
-`ocx` sidecar；儀表板仍使用代理的連接埠（除非你設定了其他連接埠，否則為 **http://localhost:10100**）。
-
-目前仍是 Beta 版。macOS 應用程式的發行版建置使用 Developer ID 簽章並經過公證（本機建置則使用 ad-hoc 簽章）；
-Windows 安裝程式尚未經程式碼簽章，因此首次執行時 SmartScreen 會顯示警告。小工具需要 macOS 14 或更新版本；它所呈現的快照模型位於
-[`app/`](../app)（`MenuBarCore`）。
-
-請從[最新發行版](https://github.com/lidge-jun/opencodex/releases)下載，或在本機建置：先在儲存庫根目錄執行
-`bun install && bun run build:gui`，再於 `desktop/` 執行
-`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`。
-
-安裝位置、服務檔案，以及其他寫入磁碟的內容，都列在
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)。
-[桌面應用程式指南](https://opencodex.me/zh-tw/guides/desktop-app/) 與
-[macOS 選單列應用程式指南](https://opencodex.me/zh-tw/guides/macos-menu-bar/)
-說明各平台的安裝方式與首次啟動步驟。
-
-</details>
 
 ### ChatGPT 帳號池
 
@@ -241,13 +252,13 @@ ocx init      # 互動式設定：寫入 ~/.opencodex/config.json 並接上 Code
 
 ## 支援平台
 
-| 作業系統 | 狀態 | 服務管理員 |
-|---|---|---|
-| macOS (arm64 / x64) | 完整支援 | launchd |
-| Linux (x64 / arm64) | 完整支援 | systemd（使用者單元） |
-| Windows (x64) | 完整支援 | Task Scheduler（隱藏）／可選原生服務（`--native`、WinSW） |
+| 作業系統 | 狀態 | 服務管理員 | 桌面應用程式（Beta） |
+|---|---|---|---|
+| macOS (arm64 / x64) | 完整支援 | launchd | 通用 `.dmg` |
+| Linux (x64 / arm64) | 完整支援 | systemd（使用者單元） | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | 完整支援 | Task Scheduler（隱藏）／可選原生服務（`--native`、WinSW） | x64 `.msi` |
 
-需要 [Node](https://nodejs.org) 18+。Bun 執行環境在 `npm install` 時一併打包——不必另外安裝
+CLI 安裝需要 [Node](https://nodejs.org) 18+；桌面應用程式則不需要 Node 或 Bun。Bun 執行環境在 `npm install` 時一併打包——不必另外安裝
 Bun，Windows 也不需要 WSL。若 npm 攔截了打包執行環境的安裝腳本，
 見[安裝文件](https://opencodex.me/zh-tw/getting-started/installation/)。
 

@@ -308,6 +308,10 @@ describe("applyProxyEnv", () => {
     // socks5h: the proxy resolves the name, so the fixture fails the request without local DNS.
     process.env[socksKey] = `socks5h://127.0.0.1:${address.port}`;
     Object.assign(process.env, inherited);
+    // Windows environment names are case-insensitive: ALL_PROXY and all_proxy are one variable,
+    // so the opposite-case HTTP value replaces the SOCKS one and no SOCKS proxy is left.
+    const collapsed = process.platform === "win32"
+      && Object.keys(inherited).some(key => key !== socksKey && key.toLowerCase() === socksKey.toLowerCase());
     applyProxyEnv(configWithProxy());
     // Beside an HTTP(S) proxy Bun reads NO_PROXY too, with suffix matching, so no bare localhost.
     expect(process.env.NO_PROXY).toBe(expectedNoProxy);
@@ -321,6 +325,16 @@ describe("applyProxyEnv", () => {
     try {
       expect(await (await configuredOutboundFetch(loopbackUrl, undefined, direct)).text()).toBe("direct");
       expect(directCalls).toBe(1);
+      if (collapsed) {
+        // Only the HTTP proxy remains, so nothing forces direct egress and Bun's own proxy
+        // environment (with the loopback NO_PROXY above) decides for both hosts.
+        expect(process.env[socksKey]).toBe("http://proxy.invalid:3128");
+        expect(directProxy).toBeUndefined();
+        expect(await (await configuredOutboundFetch("http://app.localhost:11434/v1/models", undefined, direct)).text()).toBe("direct");
+        expect(directCalls).toBe(2);
+        expect(directProxy).toBeUndefined();
+        return;
+      }
       if (forcedDirect) expect(directProxy).toBe(false);
       await expect(configuredOutboundFetch("http://app.localhost:11434/v1/models", undefined, direct)).rejects.toThrow();
       expect(directCalls).toBe(1);

@@ -102,6 +102,8 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
 
+Behavior that belongs to a wire asks the registry for the adapter's resolved wire (`effectiveAdapterContract()`, or `resolvedAdapterWire()` in `src/responses/continuation-ownership.ts`) instead of comparing adapter names, so a wrapper inherits it by declaring its parent. Responses opaque-blob recovery is one such consumer: Azure recovers from another provider's reasoning state because `azure-openai` declares `contractParent: "openai-responses"` (#5583).
+
 Codex Spark retirement removes model-specific exceptions from the Responses adapter, without
 changing contract inheritance or generic Responses Lite handling; see
 [Responses transport](../transports/responses.md#responses-httpsse).

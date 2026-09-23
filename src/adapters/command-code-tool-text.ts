@@ -15,6 +15,9 @@ import { validatesRestoredValue } from "./command-code-restored-schema";
  * schema — it forwards the markup as a `text-delta` block and then, in the observed case, a native
  * `tool-call` marked `invalid` carrying the same input. Relaying both put the call on screen as
  * assistant text (captured 2026-09-23 from `codex exec` on `xiaomi/mimo-v2.6-flash`).
+ * The echo can also omit `</function>` entirely (`<tool_call><function=exec>RAW</parameter></tool_call>`,
+ * captured the same day through the live proxy); a parameter-free body is read the same way then.
+ * Parameter bodies keep the canonical close, which SGLang's and vLLM's MiMo parsers require too.
  *
  * A text block that opens with `<tool_call>` is therefore held instead of streamed. It is dropped
  * when a native call proves it is a duplicate, or restored on an eligible clean MiMo finish when
@@ -41,7 +44,8 @@ function trimWrappingNewlines(value: string): string {
   return value.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
 }
 
-const WRAPPER = /^<tool_call>\s*<function=([^>\s]+)>([\s\S]*)<\/function>\s*<\/tool_call>$/;
+const WRAPPER = /^<tool_call>\s*<function=([^>\s]+)>([\s\S]*)<\/tool_call>$/;
+const FUNCTION_CLOSE = /<\/function>\s*$/;
 const PARAMETER = /<parameter=([^>]+)>([\s\S]*?)<\/parameter>/g;
 
 /** Parse one complete MiMo tool-call block, or undefined when the text is anything else. */
@@ -49,13 +53,17 @@ export function parseToolCallMarkup(text: string): ToolCallMarkup | undefined {
   const match = WRAPPER.exec(text.trim());
   if (!match) return undefined;
   const name = match[1]!;
-  const body = match[2]!;
-  if (body.includes(TOOL_CALL_MARKER) || body.includes("<function=")) return undefined;
+  // A trailing </function> is always the close, so a body can keep a literal one only inside a closed block.
+  const closed = FUNCTION_CLOSE.test(match[2]!);
+  const body = closed ? match[2]!.replace(FUNCTION_CLOSE, "") : match[2]!;
+  // A second </tool_call> means two blocks with text between them, never one call.
+  if (body.includes(TOOL_CALL_MARKER) || body.includes("</tool_call>") || body.includes("<function=")) return undefined;
   if (!body.includes("<parameter=")) {
     // A parameter-free body is a freeform input. The gateway's echo can close it with a stray
     // `</parameter>` that has no opening tag; that tag is markup, not input.
     return { name, kind: "raw", value: trimWrappingNewlines(body.replace(/<\/parameter>\s*$/, "")) };
   }
+  if (!closed) return undefined;
   const values: Record<string, string> = {};
   let consumed = "";
   for (const parameter of body.matchAll(PARAMETER)) {

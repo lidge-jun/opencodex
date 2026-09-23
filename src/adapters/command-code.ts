@@ -597,7 +597,9 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
     name: "command-code",
     async buildRequest(parsed: OcxParsedRequest): Promise<AdapterRequest> {
       if (!provider.apiKey) throw new Error("Command Code credential missing — run ocx login command-code");
-      restoreMiMoTools = /^xiaomi\/mimo-v2\.6-(?:flash|pro|pro-ultraspeed)$/i.test(canonicalCommandCodeModelId(parsed.modelId));
+      // Every MiMo generation Command Code serves writes the same <tool_call> grammar, and the
+      // text echo was reported on V2.5 as well as V2.6 (patlux/pi-commandcode-provider#110).
+      restoreMiMoTools = /^xiaomi\/mimo-/i.test(canonicalCommandCodeModelId(parsed.modelId));
       const cwd = currentWorkingDirectory();
       const tools = visibleTools(parsed);
       const toolNudge = buildNonOpenAIToolCatalogNudgeForTools(tools, parsed.options.toolChoice);

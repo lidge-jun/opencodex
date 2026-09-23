@@ -331,8 +331,13 @@ admission check，而不是取得授權。因此 opencodex 選擇如實回報限
 key，走帶 key 的 **`opencode-zen`** preset。若 OpenCode 日後公布 keyless tier 的第三方路徑，opencodex 可以
 跟進；在此之前，這個 preset 的作用是記錄該限制。上游條款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
-大多數 provider 使用帶 bearer key 的 `openai-chat` adapter；少數只提供 Anthropic-compatible endpoint 的
-provider，例如 **Xiaomi MiMo**，使用 `anthropic` adapter（`x-api-key`）。在已驗證的 Ark Coding Plan 工具 continuation 中，把上一輪 Responses 回傳的 `reasoning` item 原樣送回會得到 `400 InvalidParameter`，因此 Coding Plan preset 會在轉送 continuation input 前移除這類 item；該輪的 reasoning 狀態會因此遺失，可用 `dropResponsesReasoningItems: false` 關閉。已經以 `openai-chat` 儲存的 Coding Plan 設定不會被改寫，仍走 Chat；要切換請手動把 `adapter` 改成 `openai-responses`、`responsesPath` 設為 `/responses`，或刪除後重新加入該 preset。Volcengine Coding Plan 與 Agent Plan 透過
+大多數 provider 使用帶 bearer key 的 `openai-chat` adapter；**Xiaomi MiMo**（`xiaomi`）等
+相容 Anthropic 的 preset 則使用 `anthropic` adapter（`x-api-key`）。Xiaomi 另有 OpenAI Chat
+preset `xiaomi-mimo`，以及 token plan preset `mimo`。三者都預設使用 MiMo V2.6
+（`mimo-v2.6-pro`；`xiaomi-mimo` 使用 `mimo-v2.6-flash`）。Xiaomi 將於 2026-10-21 停用
+`mimo-v2.5` 和 `mimo-v2.5-pro`，且不提供重新導向；請在期限前更換已儲存的 V2.5 預設模型，
+opencodex 不會替你改寫。
+在已驗證的 Ark Coding Plan 工具 continuation 中，把上一輪 Responses 回傳的 `reasoning` item 原樣送回會得到 `400 InvalidParameter`，因此 Coding Plan preset 會在轉送 continuation input 前移除這類 item；該輪的 reasoning 狀態會因此遺失，可用 `dropResponsesReasoningItems: false` 關閉。已經以 `openai-chat` 儲存的 Coding Plan 設定不會被改寫，仍走 Chat；要切換請手動把 `adapter` 改成 `openai-responses`、`responsesPath` 設為 `/responses`，或刪除後重新加入該 preset。Volcengine Coding Plan 與 Agent Plan 透過
 `openai-responses` 使用原生 Responses endpoint。內建 DeepSeek preset 也會把 `deepseek-v4-flash` 路由到
 原生 Responses endpoint，並保持上游 SSE streaming。若該模型完成所有 output item 卻省略最後的
 Responses event，opencodex 會套用 5 秒、model-scoped 的 grace repair；malformed 或 partial stream 會以
@@ -380,12 +385,18 @@ Hyperbolic 另外的 image、audio 與 GPU endpoint 不在範圍內。可在
 [Nscale Console](https://console.nscale.com) 建立；Vultr inference key 可從
 [Vultr Console](https://my.vultr.com) 的 subscription overview 複製。
 
-**Command Code 探索。** preset 從固定 Provider API host 讀取 Command Code 的 `/provider/v1/models`
-列表，保留 provider-native id，並把 discovery 限制在 256 KiB／256 個 raw row。
-`ocx login command-code` 支援 browser sign-in OAuth；既有 Command Code CLI 使用者也可選擇從
-`~/.commandcode/auth.json` 匯入本機 CLI credential。模型 catalog 依帳號而定，登入後從經認證的 discovery
-endpoint 取得。Chat request 使用設定的 Bearer key。可在
-[Command Code Studio](https://commandcode.ai/studio/) 建立 key。
+**Command Code 探索。** preset 從固定的 Provider API 主機讀取 Command Code 的
+`/provider/v1/models` 清單，保留 provider 原生 ID，並將探索限制在 256 KiB／256 筆原始資料。
+`ocx login command-code` 支援透過瀏覽器登入 OAuth；既有 Command Code CLI 使用者也可選擇從
+`~/.commandcode/auth.json` 匯入本機 CLI 憑證。模型目錄依帳號而定，登入後由經認證的探索端點取得。
+Provider-API preset（`commandcode`）會傳送目前設定的有效金鑰：多數模型 ID 使用 Chat Completions
+及 Bearer 標頭；`claude-*` ID 則使用 Anthropic Messages 及 `x-api-key`，因為 Command Code 只在
+`/provider/v1/messages` 提供這些模型。若其他 provider 將 `commandcode` 名稱用於不同端點，
+仍沿用自己的傳輸格式。OAuth preset（`command-code`）使用已儲存的帳號 bearer 進行認證探索，
+並從 `/alpha/generate` 以 NDJSON 串流生成內容。若 gateway 將 MiMo 工具呼叫標記以文字回傳，
+且與實際呼叫重複，就會移除該標記。對 MiMo 模型而言，呼叫已宣告工具、內容完整但沒有對應原生呼叫的標記，
+只會在正常結束後還原；中斷或遭過濾的回合則保留標記文字。Provider-API 金鑰可在
+[Command Code Studio](https://commandcode.ai/studio/) 建立。
 
 **Command Code 配額。** 儀表板與 `ocx account refresh` 會在正規主機 `https://api.commandcode.ai` 探測 `/alpha/billing/credits` 視窗（5 小時與每週）。OAuth preset (`command-code`) 使用已儲存的帳號 bearer；Provider-API key preset (`commandcode`) 使用目前設定的有效 key。使用者改寫過的仿冒 base URL 不會被探測。當 Command Code 同時回報週期消耗時，剩餘的 monthly / purchased / free credits 會顯示為 USD 視窗。
 

@@ -904,6 +904,8 @@ function reportRestartFailure(result: Extract<ProxyRestartResult, { ok: false }>
     } else if (code === "restart_version_skew") {
       console.error("❌ The running proxy reports a different OpenCodex version than this CLI; restarting in place would respawn the old installation.");
       console.error("   Run `ocx stop` and then `ocx start` from this installation instead.");
+    } else if (code === "restart_package_tree_unsettled") {
+      console.error("❌ The proxy's package files are still being replaced; wait for the install to finish, then run `ocx restart` again.");
     } else {
       console.error("❌ Proxy restart request could not be confirmed; no fallback stop/start was attempted.");
     }
@@ -920,7 +922,7 @@ async function handleProxyRestart(
   const deadlineAt = Date.now() + PROXY_RESTART_OBSERVE_MS;
   const result = await runProxyRestart({
     findLive: () => discoverStableProxyForRestart({
-      findLive: () => findLiveProxy({ deadlineAt, attempts: 2 }),
+      findLive: () => findLiveProxy({ deadlineAt, attempts: 2, acceptPackageTreeFenced: true }),
       expired: () => Date.now() >= deadlineAt,
     }),
     startWhenStopped,
@@ -1292,7 +1294,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     const staleRuntimePid = readRuntimePort()?.pid ?? null;
     // Orphan recovery: a live proxy can outlive its pid file (crash, manual delete,
     // corrupt file). Identity-checked liveness still finds it via the runtime record.
-    const live = await findLiveProxy();
+    const live = await findLiveProxy({ acceptPackageTreeFenced: true });
     if (live?.pid) {
       try {
         // The probe already found where it answers, and on this path the runtime record is

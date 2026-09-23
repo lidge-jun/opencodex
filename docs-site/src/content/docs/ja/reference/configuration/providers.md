@@ -136,9 +136,9 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | キー認証の `openai-chat` および `openai-responses` プロバイダーのみ。`authMode: "forward"` のプロバイダー（ChatGPT アカウントプール）はこのオプションを読まず、既定の再試行段数を維持します。ストリーム開始前に上流から返される一時的なステータス（500、502、503、504、520、521、522）に対するオプトインの再試行です。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。最初の Responses リクエスト、ターミナルガード継続、ネイティブの `/v1/chat/completions`、および 429／アカウント回復時の再取得が対象です。`attempts` は最初の送信を含め、1 回のリクエストで許可される上流への送信総数です（1～10、デフォルトは 3）。接続リセット回復と共有するリクエスト単位の単一予算であるため、`3` を指定した場合、プロバイダーに到達する実リクエストは最大 3 回です。待機には 400 ms を基準とする固定式の指数バックオフを使用し、上限は 5 秒で、`Retry-After` に従います。レート制限を扱う `retryOn429` とは別の機能であり、ストリーム開始後の失敗は再送されません。 |
 | `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | ネイティブ `openai-responses` プロバイダー専用で、`authMode: "forward"` も含みます。呼び出し側が何も観測しないまま失敗した送信を、オプトインで置き換えます。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。レスポンスヘッダーが届く前に接続が切れた場合と、ヘッダー後に SSE 本文が制御イベントだけを運んだまま切れた場合の両方が対象です。置き換えるのは自己完結したリクエストだけで、`store: false`、完全な `input`、`previous_response_id` / `conversation` / `stream_id` がないこと、クライアントが実行するツールのみ、が条件です。`replacements` は、すべてのレッグとすべてのコンボ子リクエストを合わせて 1 つの論理リクエストが行える置き換え送信の回数です（1..2、デフォルトは 1）。レッグ単位の再試行回数でも送信予算でもないため、置き換え送信もそのレッグがすでに持つ送信許容量に収まる必要があります。すでに出力やツール呼び出しを送ったリクエストは、この値に関わらず置き換えません。元の送信がすでに開始されていた場合は置き換えた推論も課金される可能性があるため、既定では無効です。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` が `auto` または `none` のみを受け入れるモデル。強制的な選択は格下げされます。 |
-| `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。 |
+| `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。ダッシュボードから保存しても、保存済みのリスト（`[]` を含む）は保持されます。`PATCH /api/providers?name=<provider>` は配列、または消去するための `null` を受け付けます。 アダプター、ベース URL、または認証モードを変えて別の宛先に移す保存では保持されません（下の節を参照）。 |
 | `reasoningDetailsModels?` | `string[]` | thinking を構造化された `reasoning_details` 配列で返すモデル（`reasoning_split` 使用の MiniMax M シリーズ）。ストリーム差分は累積スナップショットとして prefix-diff され、保持された reasoning は `reasoning_content` 文字列ではなく `reasoning_details` 配列としてリプレイされます。 |
-| `requiresReasoningPlaceholderModels?` | `string[]` | `reasoning_content` を欠いた tool_call 継続を上流が拒否するモデル（DeepSeek thinking モード）。リプレイキャッシュが外れた場合に最小プレースホルダーを注入。未設定時は `preserveReasoningContentModels` を引き継ぎ、`[]` で明示的に無効化。 |
+| `requiresReasoningPlaceholderModels?` | `string[]` | `reasoning_content` を欠いた tool_call 継続を上流が拒否するモデル（DeepSeek thinking モード）。リプレイキャッシュが外れた場合に最小プレースホルダーを注入。未設定時は `preserveReasoningContentModels` を引き継ぎ、`[]` で明示的に無効化。ダッシュボードから保存しても、保存済みのリスト（`[]` を含む）は保持されます。`PATCH /api/providers?name=<provider>` は配列、または消去するための `null` を受け付けます。 アダプター、ベース URL、または認証モードを変えて別の宛先に移す保存では保持されません（下の節を参照）。 |
 | `thinkingToggleModels?` | `string[]` |エフォート ラダーではなく `thinking.enabled` を使用してモデルをチャットします。 |
 | `thinkingBudgetModels?` | `string[]` |整数 `thinking_budget` を使用したチャット モデル。労力は予算の一部にマッピングされます。 |
 | `noVisionModels?` | `string[]` |ビジョン サイドカーを通じて送信されるテキストのみのモデル。マッチングでは、Ollama `:size` タグが許容されます。 |
@@ -156,6 +156,20 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 プロバイダーの登録・置換（`POST /api/providers`）では、メモリやファイルの設定を変更する前に `responsesPath` と `chatCompletionsPath` を検証します。`PATCH /api/providers?name=<provider>` はリクエスト本文を保存済みのプロバイダーにマージします。`disabled` 以外のフィールドを変更する更新（`requestPacing` のみの更新を除く）では、保存前にマージ後のプロバイダーのパスを同じ方法で検証し、保持されているパスが無効な場合は `400` を返して設定を変更しません。設定ファイルの読み込みにも同じ経路の規則が適用されます。
 
 API キープロバイダーは、リテラルキーまたは環境参照を保持する場合があります。 OAuth プロバイダーは、`ocx login` によって設定された資格情報ストアを使用します。サブスクリプションに基づくクロード コードの起動動作は、[`claudeCode.authMode`](/ja/reference/configuration/server/#claude-code-claudecode) で構成されます。
+
+### プロバイダーの保存で保持されるもの
+
+既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 5 つは、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`。
+
+| 保存 | 5 つの設定 | 保存済みの `apiKeyPool` |
+| --- | --- | --- |
+| 同じ宛先、フィールド省略 | 保存済みの値を保持（明示的な `[]` や `false` を含む） | 保持 |
+| 新しい宛先、フィールド省略 | 保持しない。新しい宛先のレジストリ既定値が適用されることがあります | 保持しない |
+| リクエストでフィールドを送信 | リクエストの値 | リクエストの値 |
+
+宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 5 つの設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
+
+`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。5 つの設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
 
 ## プロバイダーによるアウトバウンドの安全性診断
 

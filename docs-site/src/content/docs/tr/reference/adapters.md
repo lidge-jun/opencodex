@@ -326,6 +326,9 @@ başlığından Cursor OAuth/erişim belirteci.
   çözümlenmemiş şablon yer tutucusu içermediğini doğrular ve `Authorization`'ı
   `api-key` ile değiştirir. Yapılandırılan URL doğrudan Azure'un v1 Responses
   API'sini hedefler, bu nedenle adaptör `api-version` eklemez.
+- Başka bir sağlayıcının ürettiği akıl yürütme durumu için Responses kurtarmasını paylaşır:
+  `400 invalid_encrypted_content` aldığında isteği bu durum olmadan (şifreli içerik ve akıl
+  yürütme öğesinin `rs_…` kimliği) yalnızca bir kez yeniden gönderir.
 
 ## Görsel yardımcıları (`image.ts`)
 

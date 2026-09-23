@@ -351,20 +351,32 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         || readyzPath !== undefined
         || url.pathname.startsWith("/v1/")
       )) {
-        const message = "OpenCodex package files changed while this proxy was running; restart OpenCodex before retrying.";
-        const response = url.pathname === "/healthz" || readyzPath !== undefined
+        const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
+        const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
+        const fencedHealth = url.pathname === "/healthz";
+        const response = fencedHealth || readyzPath !== undefined
           ? jsonResponse({
               status: "restart_required",
               service: "opencodex",
               version: VERSION,
               uptime: process.uptime(),
               pid: process.pid,
-              port: ctx.boundPort ?? requestServer.port ?? listenPort,
+              port: fencedPort,
+              // Identity stays attestable while readiness is fenced (#5496): the CLI can only
+              // restart or stop what it can prove it owns, and an unverified 503 body is not proof.
+              // installedVersion is what an in-place respawn will run from the replaced tree.
+              ...(fencedHealth ? {
+                restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION,
+                installedVersion: packageTreeIntegrity.installedVersion?.(),
+              } : {}),
               error: { code: "package_tree_changed", message },
             }, 503, req, policy)
           : packageTreeChangedResponse(req, policy, message);
         const headers = new Headers(response.headers);
         headers.set("Retry-After", "5");
+        const challenge = fencedHealth ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
+        const proof = challenge ? createLocalAttestationProof(localAttestationSecret, challenge, process.pid, fencedPort) : null;
+        if (proof) headers.set(LOCAL_ATTESTATION_PROOF_HEADER, proof);
         return new Response(response.body, { status: 503, headers });
       }
 
