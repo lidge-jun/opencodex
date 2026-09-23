@@ -108,9 +108,10 @@ Chaque fichier est accompagné d'un `.sha256` sur la page de la version. Sous ma
 également une extension WidgetKit qui affiche l'état du proxy, l'utilisation du jour et les quotas des
 fournisseurs ; le modèle de données des instantanés qu'elle affiche se trouve dans [`app/`](../app)
 (`MenuBarCore`). Pour compiler l'application vous-même, exécutez
-`bun install && bun run build:gui` à la racine du dépôt, puis
-`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` dans
-`desktop/`. Le [guide de l'application de bureau](https://opencodex.me/fr/guides/desktop-app/) et le
+`bun install && bun run build:gui` à la racine du dépôt, puis, dans `desktop/`,
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` sous macOS,
+ou `bun install && bun run prepare-sidecar && bun run build:local` sous Windows et Linux (l'étape du widget
+exige macOS). Le [guide de l'application de bureau](https://opencodex.me/fr/guides/desktop-app/) et le
 [guide de l'application macOS dans la barre des menus](https://opencodex.me/fr/guides/macos-menu-bar/) détaillent le premier lancement, et
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) répertorie tout ce qui est écrit sur le disque.
 

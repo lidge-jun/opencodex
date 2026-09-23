@@ -235,7 +235,7 @@ const docsMap = [
 		<div class="lp-hero-copy">
 			<a class="lp-announce" href="#download">
 				<span class="lp-announce-tag">{t('New', '새로 출시', '新', 'Новое', 'New', '新', 'Yeni')}</span>
-				{t('Desktop app beta for macOS, Windows and Linux', 'macOS·Windows·Linux 데스크톱 앱 베타', 'macOS、Windows 与 Linux 桌面应用 Beta', 'Бета десктопного приложения для macOS, Windows и Linux', 'macOS・Windows・Linux 向けデスクトップアプリ ベータ', 'macOS、Windows 與 Linux 桌面應用程式 Beta', 'macOS, Windows ve Linux için masaüstü uygulaması beta')}
+				<span class="lp-announce-text">{t('Desktop app beta for macOS, Windows and Linux', 'macOS, Windows, Linux용 데스크톱 앱 베타', 'macOS、Windows 与 Linux 桌面应用 Beta', 'Бета десктопного приложения для macOS, Windows и Linux', 'macOS・Windows・Linux 向けデスクトップアプリ ベータ', 'macOS、Windows 與 Linux 桌面應用程式 Beta', 'macOS, Windows ve Linux için masaüstü uygulaması beta')}</span>
 				<svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
 			</a>
 			{/* Product-word drum: the H1 performs the claim — the proxy serves both
@@ -320,7 +320,7 @@ const docsMap = [
 				<p class="lp-dl-meta">x86_64 · .AppImage</p>
 				<div class="lp-dl-actions">
 					<a class="lp-dl-btn" data-lp-asset="appimage" href="https://github.com/lidge-jun/opencodex/releases/latest"><svg class="lp-dl-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.download} /></svg>{t('Download', '다운로드', '下载', 'Скачать', 'ダウンロード', '下載', 'İndir')}<span class="lp-dl-btn-fmt">.AppImage</span></a>
-					<span class="lp-dl-links"><a class="lp-dl-alt" data-lp-asset="deb" href="https://github.com/lidge-jun/opencodex/releases/latest">{t('.deb package', '.deb 패키지', '.deb 软件包', 'Пакет .deb', '.deb パッケージ', '.deb 套件', '.deb paketi')}</a><span class="lp-dl-sep" aria-hidden="true"> · </span><a class="lp-dl-sha" data-lp-asset="appimage.sha256" href="https://github.com/lidge-jun/opencodex/releases/latest">SHA-256</a></span>
+					<span class="lp-dl-links"><a class="lp-dl-sha" data-lp-asset="appimage.sha256" href="https://github.com/lidge-jun/opencodex/releases/latest">AppImage SHA-256</a><a class="lp-dl-alt" data-lp-asset="deb" href="https://github.com/lidge-jun/opencodex/releases/latest">{t('.deb package', '.deb 패키지', '.deb 软件包', 'Пакет .deb', '.deb パッケージ', '.deb 套件', '.deb paketi')}</a><a class="lp-dl-sha" data-lp-asset="deb.sha256" href="https://github.com/lidge-jun/opencodex/releases/latest">.deb SHA-256</a></span>
 				</div>
 				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 추천', '推荐用于您的系统', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '推薦用於您的系統', 'Sisteminiz için önerilir')}</p>
 			</article>
@@ -543,7 +543,7 @@ const docsMap = [
 			: /linux|x11/i.test(uaPlatform)
 				? 'linux'
 				: '';
-	if (platform) {
+	const recommend = (platform: string) => {
 		const heroLabel = document.getElementById('lp-hero-download-label');
 		const heroBtn = document.getElementById('lp-hero-download');
 		const label = heroBtn?.dataset[`label${platform[0].toUpperCase()}${platform.slice(1)}`];
@@ -551,6 +551,24 @@ const docsMap = [
 		document
 			.querySelector<HTMLElement>(`.lp-dl-card[data-platform="${platform}"]`)
 			?.setAttribute('data-recommended', '');
+	};
+	// Linux builds are x86_64 only, so an ARM Linux desktop gets no recommendation.
+	// Chromium freezes the Linux user agent to "x86_64", so its architecture hint
+	// wins when present; other browsers report the real machine in the user agent.
+	const uaData = (navigator as Navigator & {
+		userAgentData?: { getHighEntropyValues?: (hints: string[]) => Promise<{ architecture?: string }> };
+	}).userAgentData;
+	if (platform === 'linux') {
+		if (uaData?.getHighEntropyValues) {
+			uaData
+				.getHighEntropyValues(['architecture'])
+				.then((hints) => { if (hints.architecture === 'x86') recommend('linux'); })
+				.catch(() => {});
+		} else if (/x86_64|amd64|x64/i.test(navigator.userAgent)) {
+			recommend('linux');
+		}
+	} else if (platform) {
+		recommend(platform);
 	}
 	fetch('https://api.github.com/repos/lidge-jun/opencodex/releases/latest')
 		.then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
@@ -563,6 +581,7 @@ const docsMap = [
 				appimage: /-linux-x86_64\.AppImage$/,
 				'appimage.sha256': /-linux-x86_64\.AppImage\.sha256$/,
 				deb: /-linux-amd64\.deb$/,
+				'deb.sha256': /-linux-amd64\.deb\.sha256$/,
 			};
 			for (const asset of release.assets ?? []) {
 				const key = Object.keys(patterns).find((k) => asset.name && patterns[k].test(asset.name));

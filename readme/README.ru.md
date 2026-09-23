@@ -110,9 +110,10 @@ Ollama или любую другую LLM с Codex, Claude Code, Claude Desktop 
 поставляется с расширением WidgetKit, которое показывает состояние прокси, расход за
 сегодня и квоты провайдеров; модель снимков, которую оно отображает, находится в
 [`app/`](../app) (`MenuBarCore`). Чтобы собрать приложение самостоятельно, выполните
-`bun install && bun run build:gui` в корне репозитория, затем
-`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` в
-`desktop/`. В [руководстве по настольному приложению](https://opencodex.me/ru/guides/desktop-app/) и
+`bun install && bun run build:gui` в корне репозитория, затем в `desktop/` выполните
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` на macOS
+или `bun install && bun run prepare-sidecar && bun run build:local` на Windows и Linux (шаг с виджетом
+работает только на macOS). В [руководстве по настольному приложению](https://opencodex.me/ru/guides/desktop-app/) и
 [руководстве по приложению macOS в строке меню](https://opencodex.me/ru/guides/macos-menu-bar/)
 описан первый запуск, а
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) перечисляет всё, что записывается на диск.

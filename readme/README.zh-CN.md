@@ -106,7 +106,7 @@ Codex 认证管理一个 **ChatGPT 账户池**：添加账户，在仪表板中�
 WidgetKit 扩展，可显示代理状态、今日用量和提供商配额；它所呈现的快照模型位于
 [`app/`](../app)（`MenuBarCore`）。如需自行构建应用，先在仓库根目录运行
 `bun install && bun run build:gui`，然后在
-`desktop/` 中运行 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`。
+`desktop/` 中运行：macOS 上用 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`，Windows 和 Linux 上用 `bun install && bun run prepare-sidecar && bun run build:local`（小组件步骤只能在 macOS 上执行）。
 [桌面应用指南](https://opencodex.me/zh-cn/guides/desktop-app/)和
 [macOS 菜单栏应用指南](https://opencodex.me/zh-cn/guides/macos-menu-bar/)介绍了首次启动，
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)列出了写入磁盘的所有内容。

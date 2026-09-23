@@ -107,7 +107,7 @@ Desktop、Grok Build から使えます。Codex 認証用の **ChatGPT アカウ
 今日の使用量、プロバイダーのクォータを表示する WidgetKit 拡張も付属します。表示に使う
 スナップショットモデルは [`app/`](../app)（`MenuBarCore`）にあります。アプリを自分でビルドするには、
 リポジトリのルートで `bun install && bun run build:gui` を実行し、
-`desktop/` で `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` を実行します。
+`desktop/` で macOS なら `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`、Windows と Linux なら `bun install && bun run prepare-sidecar && bun run build:local` を実行します（ウィジェットの手順は macOS 専用です）。
 [デスクトップアプリガイド](https://opencodex.me/ja/guides/desktop-app/)と
 [macOS メニューバーアプリガイド](https://opencodex.me/ja/guides/macos-menu-bar/)で初回起動について説明しています。
 [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) にはディスクに書き込まれるすべてのものをまとめています。

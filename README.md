@@ -106,9 +106,10 @@ platform from the [latest release](https://github.com/lidge-jun/opencodex/releas
 Every file has a `.sha256` next to it on the release page. On macOS 14+ the app also ships a
 WidgetKit extension that shows proxy status, today's usage and provider quotas; the snapshot model
 it renders lives in [`app/`](./app) (`MenuBarCore`). To build the app yourself, run
-`bun install && bun run build:gui` at the repository root, then
-`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` in
-`desktop/`. The [Desktop App guide](https://opencodex.me/guides/desktop-app/) and the
+`bun install && bun run build:gui` at the repository root, then in `desktop/` run
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` on macOS,
+or `bun install && bun run prepare-sidecar && bun run build:local` on Windows and Linux (the widget
+step needs macOS). The [Desktop App guide](https://opencodex.me/guides/desktop-app/) and the
 [macOS Menu Bar App guide](https://opencodex.me/guides/macos-menu-bar/) cover first launch, and
 [`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed) lists everything written to disk.
 

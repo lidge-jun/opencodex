@@ -107,8 +107,9 @@ başlatır; kontrol paneli proxy bağlantı noktasında kalır (başka bir tane 
 Her dosyanın yanında sürüm sayfasında bir `.sha256` bulunur. macOS 14 ve üzerinde uygulama ayrıca
 proxy durumunu, bugünkü kullanımı ve sağlayıcı kotalarını gösteren bir WidgetKit uzantısıyla gelir;
 görüntülediği anlık görüntü modeli [`app/`](../app) dizinindedir (`MenuBarCore`). Uygulamayı kendiniz
-derlemek için depo kökünde `bun install && bun run build:gui`, ardından `desktop/` içinde
-`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` çalıştırın.
+derlemek için depo kökünde `bun install && bun run build:gui`, ardından `desktop/` içinde macOS'ta
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`,
+Windows ve Linux'ta ise `bun install && bun run prepare-sidecar && bun run build:local` çalıştırın (widget adımı yalnızca macOS'ta çalışır).
 [Masaüstü uygulaması kılavuzu](https://opencodex.me/tr/guides/desktop-app/) ve
 [macOS menü çubuğu uygulaması kılavuzu](https://opencodex.me/tr/guides/macos-menu-bar/) ilk açılışı
 anlatır; [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) diske yazılan her

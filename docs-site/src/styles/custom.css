@@ -329,18 +329,22 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   font-size: var(--sl-text-sm);
   font-weight: 500;
   text-decoration: none;
-  white-space: nowrap;
+  text-wrap: balance;
   max-width: 100%;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+}
+@media (max-width: 30rem) {
+  .lp-announce { border-radius: 1.1rem; text-align: left; line-height: 1.35; }
 }
 .lp-announce svg { flex: none; opacity: 0.7; }
 :root[data-theme='dark'] .lp-announce,
 :root:not([data-theme='light']) .lp-announce { background-color: rgba(255, 255, 255, 0.94); }
 .lp-announce-tag {
+  flex: none;
   padding: 0.1rem 0.55rem;
   border-radius: var(--ocx-radius-pill);
   background-color: #e08b6d;
-  color: #ffffff;
+  color: #1a1a1a;
   font-size: var(--sl-text-2xs);
   font-weight: 650;
   letter-spacing: 0.02em;
@@ -925,11 +929,17 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   color: var(--sl-color-white);
 }
 .lp-dl-links {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.25rem;
+  gap: 0.2rem 0.75rem;
+  /* two lines reserved in every card so the download buttons share one row */
+  line-height: 1.5;
+  min-height: calc(3em + 0.2rem);
   font-size: var(--sl-text-xs);
 }
+.lp-dl-links > a { white-space: nowrap; }
+.lp-announce-text { min-width: 0; word-break: keep-all; overflow-wrap: anywhere; }
 .lp-dl-sep { color: var(--sl-color-gray-4); }
 .lp-dl-alt,
 .lp-dl-sha {
@@ -942,9 +952,8 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
 .lp-dl-sha:hover { text-decoration: underline; text-underline-offset: 3px; }
 .lp-dl-reco {
   display: none;
-  position: absolute;
-  top: 1rem;
-  right: 1.25rem;
+  order: -1;
+  align-self: flex-start;
   margin: 0;
   padding: 0.2rem 0.6rem;
   border-radius: var(--ocx-radius-pill);
