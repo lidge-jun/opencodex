@@ -333,6 +333,7 @@ export async function deliverPassthroughResponse(
         stream: clientRequestedStream,
         modelId: parsed._responseModelId ?? parsed.modelId,
         translatorBudget,
+        turnAdmissionLease: options.turnAdmissionLease,
       });
       if (policyRefusal) return policyRefusal;
       return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {

@@ -1073,6 +1073,7 @@ export async function prepareAdapterExchange(
         stream: clientRequestedStream,
         modelId: parsed._responseModelId ?? parsed.modelId,
         translatorBudget,
+        turnAdmissionLease: options.turnAdmissionLease,
       });
       if (policyRefusal) {
         // Codex-facing incomplete/content_filter. openai-responses passthrough

@@ -225,8 +225,10 @@ export function extractPolicyRefusalText(raw: string): string {
   } catch {
     /* not JSON */
   }
+  // The proxy's own error text wraps the upstream JSON (`Provider error 403: {"error": ...}`),
+  // so the remainder after the prefix gets the same unwrapping.
   const prefixed = trimmed.match(/^Provider error 403:\s*([\s\S]+)$/i);
-  if (prefixed?.[1]?.trim()) return prefixed[1].trim();
+  if (prefixed?.[1]?.trim()) return extractPolicyRefusalText(prefixed[1]);
   return trimmed;
 }
 
