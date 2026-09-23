@@ -1583,7 +1583,7 @@ async function handleUninstall() {
       // record (crash, manual delete, corrupt file), which is exactly why `ocx stop` falls
       // back to identity-checked discovery. Without this, uninstall restored shared config
       // and reported success while that proxy kept running (#3008).
-      const live = await findLiveProxy({ acceptPackageTreeFenced: true });
+      const live = await findLiveProxy();
       if (!live) {
         // A miss is not proof: `findLiveProxy` collapses a timeout and a transport failure
         // into the same null as a dead endpoint. Ask the tri-state probe, which only says
