@@ -30,10 +30,12 @@ let previousHome: string | undefined;
 let previousCodexHome: string | undefined;
 let previousFetch: typeof fetch;
 
+/** Build the minimal proxy configuration with main-account hard-lock recovery enabled. */
 function config(): OcxConfig {
   return { port: 10100, defaultProvider: "openai", providers: {}, codexMainAccountHardLock: true };
 }
 
+/** Encode synthetic account and expiry claims for the fixture; this is not a signed credential. */
 function bearer(expired = false): string {
   const payload = Buffer.from(JSON.stringify({
     exp: Math.floor(Date.now() / 1000) + (expired ? -120 : 86_400),
@@ -42,6 +44,7 @@ function bearer(expired = false): string {
   return `header.${payload}.signature`;
 }
 
+/** Write fixture credentials into the isolated home and reconcile the active main identity. */
 function writeMain(expired = false): void {
   writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: {
     access_token: bearer(expired), refresh_token: "fixture-refresh", account_id: accountId,
@@ -49,6 +52,7 @@ function writeMain(expired = false): void {
   reconcileMainCodexAccountRuntimeState();
 }
 
+/** Seed a 99% short-window block for the observed fixture identity, even though its reset elapsed. */
 function block(): void {
   const writer = captureMainQuotaWriter(accountId);
   if (!writer) throw new Error("Fixture identity must be observed");
@@ -61,6 +65,10 @@ function usage(percent = 0): Response {
   } });
 }
 
+/**
+ * Stub recovery HTTP calls, requiring a known metadata/token URL and an active native-main drain.
+ * Return the captured URL list so tests can verify the requests made by background recovery.
+ */
 function fetchWith(handler: (url: string, init?: RequestInit) => Promise<Response>) {
   const calls: string[] = [];
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {

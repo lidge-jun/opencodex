@@ -829,6 +829,11 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   return quota;
 }
 
+/**
+ * Normalize WHAM windows into the display snapshot, preserving declared short-window shape.
+ * Finite percentages are clamped for compatibility; policy callers must validate raw readings
+ * separately. Return null when neither a quota value/window nor reset credits are available.
+ */
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
   const resetCredits = typeof data.rate_limit_reset_credits?.available_count === "number"
     ? data.rate_limit_reset_credits.available_count

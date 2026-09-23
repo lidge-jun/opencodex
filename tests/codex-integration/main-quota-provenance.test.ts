@@ -51,8 +51,10 @@ let previousCodexHome: string | undefined;
 let pendingPersist: { run: () => void; timer: ReturnType<typeof setTimeout> } | undefined;
 let timerSpy: ReturnType<typeof installPersistenceClock>;
 
-// Exercise the real debounced serializer deterministically, without sleeping or exporting
-// a production flush hook. Only quota's 250ms timeout is captured; all others stay native.
+/**
+ * Capture quota's 250ms persistence callback for explicit flushing; leave other timers native.
+ * Return the timer spy so teardown restores scheduling after exercising the real serializer.
+ */
 function installPersistenceClock() {
   const nativeSetTimeout = globalThis.setTimeout;
   return spyOn(globalThis, "setTimeout").mockImplementation(((
