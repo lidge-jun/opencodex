@@ -214,6 +214,8 @@ from the OAuth adapter's session header and does not guarantee a provider cache 
 The OAuth `command-code` preset streams `/alpha/generate` as NDJSON. MiMo tool-call
 markup echoed by the gateway as text is removed when it duplicates a real call, or
 restored as a real call when a complete declared-tool call has no native counterpart.
+A freeform call echoed without its `</function>` close counts as complete once
+`</tool_call>` arrives.
 
 ## `anthropic`
 

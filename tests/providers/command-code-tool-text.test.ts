@@ -586,3 +586,71 @@ describe("Command Code MiMo tool-call text", () => {
     }
   }, 20_000);
 });
+
+// Captured 2026-09-23 on xiaomi/mimo-v2.6-flash through the live proxy: the gateway echoed a freeform call
+// closed by a stray </parameter> and </tool_call> with no </function>, and the text reached the user.
+const CLOSELESS = `<tool_call><function=exec>${JS}</parameter></tool_call>`;
+
+describe("MiMo markup closed without </function>", () => {
+  test("reads a parameter-free body closed only by </tool_call>", () => {
+    for (const text of [CLOSELESS, `<tool_call><function=exec>${JS}</tool_call>`, `<tool_call>\n<function=exec>\n${JS}\n</parameter>\n</tool_call>`]) {
+      expect(parseToolCallMarkup(text)).toEqual({ name: "exec", kind: "raw", value: JS });
+    }
+  });
+
+  test("keeps </function> required for parameter bodies and rejects everything else", () => {
+    expect(parseToolCallMarkup("<tool_call><function=read_file><parameter=path>a.ts</parameter></tool_call>")).toBeUndefined();
+    expect(parseToolCallMarkup(`<tool_call><function=exec>${JS}</parameter>`)).toBeUndefined();
+    expect(parseToolCallMarkup(`${CLOSELESS} and then prose`)).toBeUndefined();
+    expect(parseToolCallMarkup(`Calling: ${CLOSELESS}`)).toBeUndefined();
+    expect(parseToolCallMarkup("<tool_call><function=exec>a<tool_call><function=exec>b</tool_call>")).toBeUndefined();
+    expect(parseToolCallMarkup("<tool_call><function=exec>a<function=exec>b</tool_call>")).toBeUndefined();
+    // An inner </tool_call> means two blocks with text between them, never one call.
+    expect(parseToolCallMarkup("<tool_call><function=exec>a</tool_call> prose <b></tool_call>")).toBeUndefined();
+    expect(parseToolCallMarkup("<tool_call><function=exec>a</tool_call>b</function></tool_call>")).toBeUndefined();
+  });
+
+  test("reads a trailing </function> as the close, so a literal one survives only inside a canonical block", () => {
+    expect(parseToolCallMarkup("<tool_call><function=exec>x</function></function></tool_call>")).toEqual({ name: "exec", kind: "raw", value: "x</function>" });
+    expect(parseToolCallMarkup("<tool_call><function=exec>x</function></tool_call>")).toMatchObject({ value: "x" });
+  });
+
+  test("drops the echo when the native call carries the same input", async () => {
+    const events = await adapterEvents(CAPTURED.map(event => event.type === "text-delta" ? { ...event, text: CLOSELESS } : event));
+    expect(texts(events)).toBe("");
+    expect(calls(events)).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
+    expect(done(events)?.stopReason).toBe("tool_calls");
+  });
+
+  test("releases the echo when the native input differs", async () => {
+    const events = await adapterEvents([
+      { type: "tool-input-start", id: "a", toolName: "exec" },
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: CLOSELESS },
+      { type: "text-end", id: "t" },
+      { type: "tool-call", toolCallId: "a", toolName: "exec", input: "text('other');" },
+      { type: "finish", rawFinishReason: "tool_calls" },
+    ]);
+    expect(texts(events)).toBe(CLOSELESS);
+    expect(calls(events).map(call => call.args)).toEqual(["text('other');"]);
+  });
+
+  test("restores a text-only call for a declared freeform tool and releases an undeclared one", async () => {
+    const textOnly = (text: string) => [
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text },
+      { type: "text-end", id: "t" },
+      { type: "finish-step", rawFinishReason: "stop" },
+      { type: "finish", rawFinishReason: "stop" },
+    ];
+    const restored = await adapterEvents(textOnly(CLOSELESS));
+    expect(texts(restored)).toBe("");
+    expect(calls(restored)).toMatchObject([{ name: "exec", args: JSON.stringify({ input: JS }) }]);
+    expect(done(restored)?.stopReason).toBe("tool_calls");
+
+    const undeclared = CLOSELESS.replace("<function=exec>", "<function=shell>");
+    const released = await adapterEvents(textOnly(undeclared));
+    expect(texts(released)).toBe(undeclared);
+    expect(calls(released)).toEqual([]);
+  });
+});
