@@ -267,6 +267,22 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // 260813: grok-4.6 added per docs.x.ai/developers/grok-4-6. Context/vision still match
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: XAI_MODELS,
+    // Live 2026-09-20: Chat Completions rejects `stop` on grok-4.6
+    // (`400 invalid-argument "Model grok-4.6 does not support parameter stop."`).
+    // xAI documents `stop` as unsupported for reasoning models. Claude Code
+    // auto-mode always sends stop_sequences; forwarding that as `stop` makes
+    // the classifier treat Grok as temporarily unavailable while chat turns
+    // still work. Keep caller stop sequences on non-reasoning ids.
+    // Live 2026-09-23: grok-4.7 answers the same 400.
+    noStopModels: [
+      "grok-4.7",
+      "grok-4.6",
+      "grok-4.5",
+      "grok-4.3",
+      "grok-4.20-multi-agent-0309",
+      "grok-4.20-0309-reasoning",
+      "grok-build-0.1",
+    ],
     // Measured only on grok-4.6 against cli-chat-proxy.grok.com: even an invalid
     // `text.verbosity` value is accepted and low/high/omitted output length is non-monotonic.
     // Apply the resulting opt-out to the whole xAI lineup because `text.verbosity` is an OpenAI
