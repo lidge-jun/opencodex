@@ -315,14 +315,12 @@ export function captureTrustedOpenAiApiPolicy(
   });
 }
 
-function captureModelsRequest(
+export function captureModelsRequest(
   name: string,
   provider: OcxProviderConfig,
   observedAuth: ModelsAuthResolution | undefined,
 ): CapturedModelsRequest {
-  const observed = observedAuth
-    ? { oauthApiBaseUrl: observedAuth.oauthApiBaseUrl }
-    : undefined;
+  const observed = { oauthApiBaseUrl: observedAuth?.oauthApiBaseUrl };
   const withoutCredential = buildModelsRequest(provider, undefined, name, observed);
   const withCredential = buildModelsRequest(provider, REQUEST_CREDENTIAL_SENTINEL, name, observed);
   const method = withoutCredential.method ?? "GET";

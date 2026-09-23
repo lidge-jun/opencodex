@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { setFetchCursorUsableModelsForTests } from "../../src/adapters/cursor/live-models";
 import { setFetchQoderModelsForTests } from "../../src/adapters/qoder/live-models";
+import { clearCachedUserJwt } from "../../src/adapters/devin/cloud-direct/auth";
+import { setCachedCatalogForTests } from "../../src/adapters/devin/cloud-direct/catalog";
+import { encodeMessage, encodeString } from "../../src/adapters/devin/cloud-direct/wire";
+import * as oauth from "../../src/oauth";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { saveConfig } from "../../src/config";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
@@ -56,6 +60,97 @@ async function probe(config: OcxConfig, name: string): Promise<{ status: number;
 }
 
 describe("POST /api/providers/test (WP040 connectivity probe)", () => {
+  test("Devin probes its snapshot's EU tenant destination", async () => {
+    const baseUrl = "https://eu.windsurf.com/_route/api_server";
+    const urls: string[] = [];
+    const jwt = [
+      Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url"),
+      Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url"),
+      "fixture-signature",
+    ].join(".");
+    globalThis.fetch = (async input => {
+      const url = String(input);
+      urls.push(url);
+      return new Response(new Uint8Array(url.endsWith("/GetUserJwt")
+        ? encodeString(1, jwt)
+        : encodeMessage(1, Buffer.concat([encodeString(1, "tenant-model"), encodeString(22, "tenant-model")]))));
+    }) as typeof fetch;
+    await saveCredential("devin", {
+      access: "fixture-devin-eu", refresh: "fixture-devin-eu",
+      expires: Number.MAX_SAFE_INTEGER, apiBaseUrl: baseUrl,
+    });
+    const config = baseConfig({ devin: { ...structuredClone(OAUTH_PROVIDERS.devin!.providerConfig) } });
+    setCachedCatalogForTests(null);
+    clearCachedUserJwt();
+    try {
+      const { body } = await probe(config, "devin");
+      expect(urls.some(url => new URL(url).hostname === "server.codeium.com")).toBe(false);
+      expect(urls).toEqual([
+        `${baseUrl}/exa.auth_pb.AuthService/GetUserJwt`,
+        `${baseUrl}/exa.api_server_pb.ApiServerService/GetCascadeModelConfigs`,
+      ]);
+      expect(body).toMatchObject({ ok: true, models: 1 });
+    } finally {
+      setCachedCatalogForTests(null);
+      clearCachedUserJwt();
+    }
+  });
+
+  test("Copilot key probe uses the configured endpoint instead of a stored OAuth host", async () => {
+    const calls: { url: string; authorization: string | null }[] = [];
+    globalThis.fetch = (async (input, init) => {
+      calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+      return Response.json({ data: [{ id: "fixture-model" }] });
+    }) as typeof fetch;
+    await saveCredential("github-copilot", {
+      access: "fixture-oauth", refresh: "fixture-refresh", expires: Date.now() + 3_600_000,
+      apiBaseUrl: "https://api.business.githubcopilot.com",
+    });
+    const config = baseConfig({
+      "github-copilot": {
+        ...structuredClone(OAUTH_PROVIDERS["github-copilot"]!.providerConfig),
+        authMode: "key", apiKey: "fixture-row-key", baseUrl: "https://api.githubcopilot.com",
+      },
+    });
+
+    const { body } = await probe(config, "github-copilot");
+
+    expect(calls).toEqual([{ url: "https://api.githubcopilot.com/models", authorization: "Bearer fixture-row-key" }]);
+    expect(body).toMatchObject({ ok: true, models: 1 });
+  });
+
+  test("Copilot probe keeps account A's bearer and host when the active account switches to B", async () => {
+    const calls: { url: string; authorization: string | null }[] = [];
+    globalThis.fetch = (async (input, init) => {
+      calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization") });
+      return Response.json({ data: [{ id: "fixture-model" }] });
+    }) as typeof fetch;
+    await saveCredential("github-copilot", {
+      accountId: "account-a", access: "fixture-account-a", refresh: "fixture-refresh-a",
+      expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.githubcopilot.com",
+    });
+    const snapshot = await oauth.getValidAccessTokenSnapshot("github-copilot");
+    const resolveSnapshot = spyOn(oauth, "getValidAccessTokenSnapshot").mockImplementation(async () => {
+      await saveCredential("github-copilot", {
+        accountId: "account-b", access: "fixture-account-b", refresh: "fixture-refresh-b",
+        expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.business.githubcopilot.com",
+      });
+      return snapshot;
+    });
+    try {
+      const config = baseConfig({
+        "github-copilot": { ...structuredClone(OAUTH_PROVIDERS["github-copilot"]!.providerConfig) },
+      });
+      const { body } = await probe(config, "github-copilot");
+
+      expect(resolveSnapshot).toHaveBeenCalledTimes(1);
+      expect(calls).toEqual([{ url: "https://api.githubcopilot.com/models", authorization: "Bearer fixture-account-a" }]);
+      expect(body).toMatchObject({ ok: true, models: 1 });
+    } finally {
+      resolveSnapshot.mockRestore();
+    }
+  });
+
   test("Qoder probes the official CLI model list for the configured PAT", async () => {
     const calls: Array<{ providerId: string; token: string }> = [];
     setFetchQoderModelsForTests((profile, token) => {
