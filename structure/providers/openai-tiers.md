@@ -274,10 +274,10 @@ This stops partial weekly/Spark or credits-only refreshes from renewing obsolete
 5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows.
 
 The separately retained main-policy snapshot preserves omitted blocking short evidence even after
-its reset clock passes. Credits-only, weekly-only, and metadata-only updates cannot remove an
+its reset clock passes. Credits-only, partial weekly-only, and metadata-only updates cannot remove an
 existing blocking short usage reading or release its hard lock; a fresh short reading can replace
-it. Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking
-weekly reading.
+it. A validated long-primary WHAM snapshot can also retire the short tuple as described below.
+Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking weekly reading.
 
 The Codex writer explicitly asks `src/quota/reset-observer.ts` to retain an absent short window
 in `src/quota/reset-seen-store.ts`, with its original observation time. Detection compares only
@@ -300,6 +300,19 @@ inference or reset-credit consumption. Failed, missing, non-finite or out-of-ran
 release the block. Policy validation precedes legacy clamping. Supplementary monthly data cannot
 become the fallback governing window without a monthly-only plan or explicit primary-monthly evidence.
 Previously unobserved usage is unknown, not fabricated headroom.
+
+A single fresh valid WHAM response with an explicitly long primary window can replace an obsolete
+short-window tuple when secondary and tertiary windows are explicitly null or also explicitly long with a valid usage reading.
+Long means **at least 24 hours**, matching the parser's short/long discriminator; a one-day primary
+qualifies, not only a seven-day or monthly window. The policy trusts that one reported topology;
+it does not require repeated observations or independently confirm upstream window completeness.
+Omitted secondary/tertiary fields, a long auxiliary window without a usage reading, an unknown primary duration, partial headers, or invalid usage cannot prove that the
+short window disappeared. Replacement proof belongs only to that observation and is never persisted;
+the resulting weekly/monthly window still blocks at 99%. This prevents old short-window exhaustion
+from surviving indefinitely on a now weekly/monthly account. Coverage lives in
+`tests/codex-integration/main-quota-evidence-validation.test.ts`,
+`tests/codex-integration/main-quota-provenance.test.ts`, and
+`tests/codex-integration/main-account-hard-lock-recovery.test.ts`.
 
 The policy reads a separately retained identity-tagged quota snapshot, so the legacy rotation
 cache's six-hour expiry does not silently release a known block. A confirmed account transition

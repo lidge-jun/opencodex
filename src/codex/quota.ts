@@ -29,6 +29,8 @@ type QuotaDiskFile = {
 };
 
 type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
+/** Fresh WHAM topology proof is consumed by the merge, never retained in a cache or DTO. */
+type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true };
 let mainPolicyQuota: MainPolicyQuota | null = null;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -199,6 +201,12 @@ function isExplicitMonthlyWindow(window: WhamUsageWindow | null | undefined): bo
     && seconds >= MONTHLY_WINDOW_MIN_SECONDS;
 }
 
+/** Same 24h short/long boundary as the parser; this includes a declared one-day window. */
+function isExplicitLongWindow(window: WhamUsageWindow | null | undefined): boolean {
+  const seconds = window?.limit_window_seconds;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= WEEKLY_WINDOW_MIN_SECONDS;
+}
+
 function isExplicitMonthlyWindowMinutes(windowMinutes: unknown): boolean {
   const minutes = windowMinutes_(windowMinutes);
   return minutes !== undefined && minutes >= MONTHLY_WINDOW_MIN_MINUTES;
@@ -267,12 +275,17 @@ function snapshotHasCustom(quota: Omit<StoredAccountQuota, "updatedAt">): boolea
 function snapshotHasUsage(quota: Omit<StoredAccountQuota, "updatedAt">): boolean {
   return snapshotHasWeekly(quota) || snapshotHasMonthly(quota) || snapshotHasShort(quota) || snapshotHasCustom(quota);
 }
+/**
+ * Publish parsed display quota and separately validated main-policy evidence after writer checks.
+ * A null policy observation retains only the matching main identity's previous evidence;
+ * transient replacement markers are consumed during merging and never enter stored snapshots.
+ */
 export function setAccountQuotaFromParsed(
   accountId: string,
   quota: Omit<StoredAccountQuota, "updatedAt"> | null,
   writerGeneration = captureConfigGeneration(),
   mainWriter?: MainQuotaWriter,
-  policyQuota: Omit<StoredAccountQuota, "updatedAt"> | null = quota,
+  policyQuota: MainPolicyQuotaObservation | null = quota,
   historyEvidence?: QuotaObservationEvidence,
 ): void {
   quota = withoutRetiredCodexQuota(quota);
@@ -313,9 +326,13 @@ export function setAccountQuotaFromParsed(
   }
 }
 
-/** One partial-window merge contract for legacy quota and identity-bound policy evidence. */
+/**
+ * Merge a partial observation into the legacy or identity-bound policy snapshot.
+ * Policy mode retains omitted blocking short usage unless this observation authorizes replacement;
+ * the returned snapshot contains quota fields only, without the transient replacement marker.
+ */
 function mergeAccountQuota(
-  quota: Omit<StoredAccountQuota, "updatedAt">,
+  quota: MainPolicyQuotaObservation,
   existing: StoredAccountQuota | undefined,
   updatedAt: number,
   policyEvidence = false,
@@ -377,7 +394,7 @@ function mergeAccountQuota(
     }
     if (quota.shortResetAt !== undefined) next.shortResetAt = quota.shortResetAt;
     if (quota.shortWindowSeconds !== undefined) next.shortWindowSeconds = quota.shortWindowSeconds;
-  } else {
+  } else if (!policyEvidence || quota.shortWindowAbsent !== true) {
     // Unknown usage is not a lower reading. Retain the entire known tuple: pairing
     // its percentage with new metadata would silently extend or shorten its reset.
     // An elapsed reset is the exception. It describes a window that has already rolled over,
@@ -793,13 +810,38 @@ function filterMainPolicyMonthlyQuota(
   return hasKnownQuotaValue(filtered) || filtered.resetCredits !== undefined ? filtered : null;
 }
 
-/** Ordinary main policy rejects an entire message containing any invalid numeric window. */
-export function parseMainPolicyUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
+/**
+ * Parse ordinary main-policy usage, rejecting messages with invalid numeric window percentages.
+ * Mark a valid primary of at least 24h as replacement evidence only when both other windows
+ * are explicitly null or at least 24h. A null result supplies no usable policy observation.
+ */
+export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
-  return filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
+  const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
+  const [primary, secondary, tertiary] = windows;
+  // WHAM explicitly reports absent windows as null; omissions cannot prove replacement.
+  // Policy trusts one complete snapshot only when every non-null window is >=24h AND
+  // carries a valid usage reading: a long window without used_percent leaves that
+  // window's usage unknown, and unknown usage must never release a block.
+  // Headers never supply this proof, and reset time alone still cannot release a block.
+  if (quota && normalizeUsagePercent(primary?.used_percent) !== undefined && isExplicitLongWindow(primary)
+    && (secondary === null || isMeasuredLongWindow(secondary))
+    && (tertiary === null || isMeasuredLongWindow(tertiary))) {
+    return { ...quota, shortWindowAbsent: true };
+  }
+  return quota;
 }
 
+function isMeasuredLongWindow(window: WhamUsageWindow | null | undefined): boolean {
+  return isExplicitLongWindow(window) && normalizeUsagePercent(window?.used_percent) !== undefined;
+}
+
+/**
+ * Normalize WHAM windows into the display snapshot, preserving declared short-window shape.
+ * Finite percentages are clamped for compatibility; policy callers must validate raw readings
+ * separately. Return null when neither a quota value/window nor reset credits are available.
+ */
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
   const resetCredits = typeof data.rate_limit_reset_credits?.available_count === "number"
     ? data.rate_limit_reset_credits.available_count

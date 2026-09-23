@@ -28,10 +28,12 @@ import {
   getAccountQuota,
   getMainPolicyQuota,
   listAccountQuotas,
+  parseMainPolicyUsageQuota,
   parseUsageQuota,
   setAccountQuotaFromParsed,
   updateAccountQuota,
   type StoredAccountQuota,
+  type WhamUsageResponse,
 } from "../../src/codex/quota";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
 import { repoPath, repoRoot } from "../helpers/repo-root";
@@ -49,8 +51,10 @@ let previousCodexHome: string | undefined;
 let pendingPersist: { run: () => void; timer: ReturnType<typeof setTimeout> } | undefined;
 let timerSpy: ReturnType<typeof installPersistenceClock>;
 
-// Exercise the real debounced serializer deterministically, without sleeping or exporting
-// a production flush hook. Only quota's 250ms timeout is captured; all others stay native.
+/**
+ * Capture quota's 250ms persistence callback for explicit flushing; leave other timers native.
+ * Return the timer spy so teardown restores scheduling after exercising the real serializer.
+ */
 function installPersistenceClock() {
   const nativeSetTimeout = globalThis.setTimeout;
   return spyOn(globalThis, "setTimeout").mockImplementation(((
@@ -63,6 +67,7 @@ function installPersistenceClock() {
   }) as typeof setTimeout);
 }
 
+/** Run the captured quota persistence callback and read its actual disk snapshot without a sleep. */
 function flushPersistence(): string {
   if (!pendingPersist) throw new Error("Expected a scheduled quota persistence");
   const pending = pendingPersist;
@@ -72,6 +77,7 @@ function flushPersistence(): string {
   return readFileSync(join(testDir, "codex-quota-cache.json"), "utf8");
 }
 
+/** Bind a synthetic main identity and return its current generation-scoped quota writer. */
 function writerFor(accountId = "fixture-main-a"): MainQuotaWriter {
   observeMainQuotaIdentity(accountId);
   const writer = captureMainQuotaWriter(accountId);
@@ -295,6 +301,31 @@ describe("main policy quota writes", () => {
     expect(disk).not.toContain("identityGeneration");
     expect(Object.keys(JSON.parse(disk).mainPolicyQuota).sort()).toEqual(["identityKey", "quota"]);
   });
+});
+
+test("window replacement persists without carrying its proof into later partial updates", () => {
+  const cfg = { codexMainAccountHardLock: true };
+  const writer = writerFor();
+  /** Publish both parsed projections with the captured writer throughout the simulated restart. */
+  const publish = (data: WhamUsageResponse) => setAccountQuotaFromParsed(
+    MAIN, parseUsageQuota(data), undefined, writer, parseMainPolicyUsageQuota(data),
+  );
+  setAccountQuotaFromParsed(MAIN, { shortPercent: 100, shortWindowSeconds: 18_000, shortResetAt: 1 }, undefined, writer);
+  expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  publish({ rate_limit: {
+    primary_window: { used_percent: 35, limit_window_seconds: 604_800 }, secondary_window: null, tertiary_window: null,
+  } });
+  // Execute quota's actual debounced serializer through the existing deterministic clock.
+  const persisted = flushPersistence();
+  expect(JSON.parse(persisted).mainPolicyQuota.quota.weeklyPercent).toBe(35);
+  expect(persisted).not.toContain("shortWindowAbsent");
+  clearAccountQuota();
+  writeFileSync(join(testDir, "codex-quota-cache.json"), persisted);
+  expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
+  expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
+  publish({ rate_limit: { primary_window: { used_percent: 99, limit_window_seconds: 18_000 } } });
+  publish({ rate_limit: { primary_window: { used_percent: 0 } } });
+  expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
 });
 
 describe("main policy quota durability and lifecycle", () => {

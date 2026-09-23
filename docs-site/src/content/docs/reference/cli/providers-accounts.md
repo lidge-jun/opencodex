@@ -151,6 +151,13 @@ not erase an already measured blocking tuple. A predicted reset time alone does 
 While blocked, the existing once-per-minute background cycle checks fresh owned usage; failed or
 invalid readings retain the block. Other pause, reauthentication, and upstream limits remain independent.
 
+Protection treats one fresh valid WHAM usage response as a replacement for the old 5h reading when
+its primary window explicitly lasts **at least 24 hours** and secondary/tertiary windows are explicitly `null`
+or also explicitly last at least 24 hours and report their usage. This follows the parser's short/long boundary, so a
+one-day window qualifies as well as weekly/monthly windows. The current window still uses the same
+99% threshold. This relies on the single reported snapshot; repeated observations are not required.
+Omitted secondary/tertiary fields, an unknown primary duration, or partial response headers cannot clear a previous block.
+
 The persisted option is `"codexMainAccountHardLock": true` in OpenCodex's `config.json`; it is off
 by default. This protects new requests using the identified main account, not the last 1% itself:
 already-running requests, unmatched caller-owned keyring credentials, and traffic outside the
