@@ -266,7 +266,7 @@ to inject `ANTHROPIC_BASE_URL` and the related Claude Code environment variables
 New terminal windows and tabs therefore route plain `claude` commands through the proxy without
 requiring the `ocx claude` wrapper. Already-open shells are unaffected and must be reopened.
 Changing a model slot or lever (`smallFastModel`, `tierModels`, `maxContextTokens`, auto-context,
-`alwaysEnableEffort`) re-applies the injection right away: a key opencodex injected earlier is
+`autoCompactWindow`, `alwaysEnableEffort`) re-applies the injection right away: a key opencodex injected earlier is
 updated, or unset once the setting no longer produces it. A value you set yourself with
 `launchctl setenv` before opencodex injects that key is never overwritten or removed; a key
 opencodex injected stays opencodex-owned (refreshed, unset, and removed by `ocx stop`) even if
