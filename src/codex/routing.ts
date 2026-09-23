@@ -851,6 +851,12 @@ export function resolveCodexAccountForThreadDetailed(
   // An entitlement roster constrains only this model request. It must not rewrite
   // the operator's shared active/pin choice or the task's ordinary-model affinity.
   const modelScopedSelection = selectionOptions?.modelEligibleAccountIds !== undefined;
+  // A main that is live only through this request's own bearer serves this request alone; writing
+  // it back as the shared active account would route later requests through a credential they do
+  // not carry (see CodexAccountUsabilityOptions.requestOwnedMainCredential).
+  const sharesActiveSelection = (accountId: string): boolean => !(
+    accountId === MAIN_CODEX_ACCOUNT_ID && selectionOptions?.requestOwnedMainCredential === true
+  );
   let preserveExistingModelScopedAffinity = false;
   const sharedSelectionOptions: CodexAccountUsabilityOptions | undefined = modelScopedSelection
     ? sharedStateSelectionOptions(selectionOptions) ?? {}
@@ -1122,7 +1128,7 @@ export function resolveCodexAccountForThreadDetailed(
       // process-local cursor to whoever is actually serving and releases the pin; the
       // operator's persisted activeCodexAccountId is left untouched either way, which is
       // the thing the preference exists to protect.
-      promoteActiveCodexAccount(config, strategyPick);
+      if (sharesActiveSelection(strategyPick)) promoteActiveCodexAccount(config, strategyPick);
     }
     return { status: "selected", accountId: strategyPick, affinity: affinityAfterRelease(threadId, releaseReason) };
   }
@@ -1140,7 +1146,7 @@ export function resolveCodexAccountForThreadDetailed(
       return { status: "none", affinity: affinityOnNoAccount(threadId, releaseReason) };
     }
     if (!isIndependentCodexQuotaScope(quotaScope) && !modelScopedSelection) {
-      setActiveCodexAccount(config, selected);
+      if (sharesActiveSelection(selected)) setActiveCodexAccount(config, selected);
     }
     active = selected;
   }
@@ -1161,7 +1167,7 @@ export function resolveCodexAccountForThreadDetailed(
         && preserveSharedSelectionForModelDetour
         && activeHealthyForSharedSelection;
       if (!isIndependentCodexQuotaScope(quotaScope) && !modelOnlyMove) {
-        setActiveCodexAccount(config, fallback);
+        if (sharesActiveSelection(fallback)) setActiveCodexAccount(config, fallback);
       }
       active = fallback;
     } else if (

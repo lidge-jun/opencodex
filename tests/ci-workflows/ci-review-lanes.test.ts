@@ -248,13 +248,14 @@ describe("CI review lanes", () => {
     results["macos-control"] = { result: "skipped" };
     results["docs-site-build"] = { result: "skipped" };
     results["structure-gate"] = { result: "skipped" };
+    results["privacy-gate"] = { result: "skipped" };
     const run = (value: typeof results, packaging = "true") => spawnSync("bash", ["-c", step!.run!], {
       encoding: "utf8",
       env: {
         ...process.env, RESULTS: JSON.stringify(value),
         EVENT_NAME: "workflow_dispatch", LANE: "release-gates",
         CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: packaging,
-        CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
+        CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false", CHANGES_PRIVACY: "false",
       },
       timeout: 5_000,
     });

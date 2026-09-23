@@ -1104,6 +1104,76 @@ describe("comment stripping respects fenced code (regression)", () => {
   });
 });
 
+// #4443: the box used to ask for the exact `dev` tip while the gate cleared the
+// claim at up to READINESS_LATEST_DEV_BEHIND_MAX behind. On a fast-moving dev an
+// author reading the box literally resyncs for unrelated commits, every resync
+// moves the head, head-drift unticks all four boxes, and the exact-head CI
+// evidence is thrown away — with no reduction in merge risk, because the gate
+// was already satisfied.
+describe("the latest-dev readiness box states the condition the gate enforces", () => {
+  const {
+    READINESS_LATEST_DEV_BEHIND_MAX,
+    readinessClaimViolations,
+  } = require("./pr-quality-state.cjs");
+
+  const latestDevItem = () =>
+    REVIEW_READINESS_ITEMS[REVIEW_READINESS_CLAIM_INDEX.latest_dev];
+
+  it("no longer demands the exact tip", () => {
+    assert.ok(!/latest dev commit/i.test(latestDevItem()));
+  });
+
+  it("names the threshold the gate actually uses", () => {
+    // Derived, not transcribed: the sentence carries the same number
+    // `readinessClaimViolations` compares against.
+    assert.ok(latestDevItem().includes(String(READINESS_LATEST_DEV_BEHIND_MAX)));
+  });
+
+  it("promises exactly what the gate clears", () => {
+    // The sentence is only honest if the gate agrees at the boundary.
+    assert.deepEqual(
+      readinessClaimViolations({ behindBase: READINESS_LATEST_DEV_BEHIND_MAX }),
+      []
+    );
+    assert.deepEqual(
+      readinessClaimViolations({ behindBase: READINESS_LATEST_DEV_BEHIND_MAX + 1 }),
+      ["latest_dev"]
+    );
+  });
+
+  it("still leaves the exact tip available to a maintainer", () => {
+    assert.match(latestDevItem(), /maintainer/i);
+  });
+
+  it("keeps the four-box contract", () => {
+    assert.equal(REVIEW_READINESS_ITEMS.length, 4);
+    const section = buildReviewReadinessSection();
+    assert.equal((section.match(/^\s*[-*]\s+\[[ xX]\]\s+/gm) || []).length, 4);
+  });
+
+  it("does not disturb a checklist that already carries the old wording", () => {
+    // The compatibility contract: `extractReviewReadiness` reads box count and
+    // checked state, never item text, and appending is idempotent. An open PR
+    // keeps its sentence and its ticks.
+    const legacy = [
+      "Body.",
+      "",
+      "<!-- pr-quality-readiness-checklist:start -->",
+      "## Review readiness checklist",
+      "",
+      "- [x] All CI tests are green on my local testing.",
+      "- [x] I pushed my PR to the latest dev commit.",
+      "- [x] I resolved all correct Codex and CodeRabbit findings.",
+      "- [x] My PR is ready for review.",
+      "<!-- pr-quality-readiness-checklist:end -->",
+    ].join("\n");
+
+    const readiness = extractReviewReadiness(legacy);
+    assert.equal(readiness.complete, true);
+    assert.equal(readiness.total, 4);
+    assert.equal(appendReviewReadinessSection(legacy), legacy);
+  });
+});
 
 describe("managed checklist wording classification", () => {
   const oldItem = "All CI tests are green on my local testing.";

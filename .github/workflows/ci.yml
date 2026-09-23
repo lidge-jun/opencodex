@@ -196,6 +196,9 @@ jobs:
       # skipping the check it selects.
       setup_action: ${{ steps.narrow.outputs.setup_action }}
       remote_helper: ${{ steps.narrow.outputs.remote_helper }}
+      # Re-emitted by the scope step like `ci`: a missing value must fail this
+      # job, not read as "no devlog change" and skip the only scan that covers it.
+      privacy: ${{ steps.scope.outputs.privacy }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -316,6 +319,22 @@ jobs:
             # real only on macOS and Windows, so its job lints and tests the crate on all three.
             remote_helper:
               - 'native/remote-workspace-helper/**'
+            # `privacy:scan` is a step of `gates`, and `gates` is gated on `ci`
+            # above -- which does not list `devlog/**`. So the one diff class the
+            # scan exists for, adding public devlog prose, was the one class that
+            # never ran it: a devlog-only pull request skipped `gates` entirely and
+            # the aggregate still concluded success (#5468). AGENTS.md records that
+            # security triage once had to be excised from this directory before it
+            # could be published, so an inert gate here is the expensive direction
+            # to be wrong in.
+            #
+            # Widening `ci` would also close this and would also start the
+            # cross-platform matrix for a scan that takes seconds, which is the
+            # tradeoff `docs` and `structure` above already declined. Same shape
+            # here: its own filter, its own job. `.github/workflows/ci.yml` is
+            # listed for the same reason `docs` and `structure` list it.
+            privacy:
+              - 'devlog/**'
               - '.github/workflows/ci.yml'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
@@ -343,6 +362,7 @@ jobs:
         shell: bash
         env:
           CI_SCOPE: ${{ steps.filter.outputs.ci }}
+          PRIVACY_SCOPE: ${{ steps.filter.outputs.privacy }}
         run: |
           set -euo pipefail
           case "$CI_SCOPE" in
@@ -351,6 +371,15 @@ jobs:
               ;;
             *)
               printf '::error::changes.outputs.ci was %q, expected true or false\n' "$CI_SCOPE"
+              exit 1
+              ;;
+          esac
+          case "$PRIVACY_SCOPE" in
+            true|false)
+              printf 'privacy=%s\n' "$PRIVACY_SCOPE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.privacy was %q, expected true or false\n' "$PRIVACY_SCOPE"
               exit 1
               ;;
           esac
@@ -1164,6 +1193,32 @@ jobs:
       - name: Run Rust tests
         run: cargo test --locked --manifest-path native/remote-workspace-helper/Cargo.toml
 
+  # `gates` already runs `privacy:scan` on every event it runs for, so this job
+  # covers exactly the pull requests `gates` skips -- its condition is the
+  # complement of `gates`' own, restricted to a devlog change. A `ci.yml` edit
+  # sets both filters and must not scan twice; a push or dispatch always runs
+  # `gates`. The aggregate below derives the same expectation from `scoped`.
+  privacy-gate:
+    name: privacy gate
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.ci != 'true' && needs.changes.outputs.privacy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Privacy scan
+        run: bun run privacy:scan
+
   npm-global-smoke:
     name: npm-global ${{ matrix.os }}
     needs: changes
@@ -1367,7 +1422,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped`, which is the shape the step below is written to catch.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, npm-global-smoke, widget, desktop-shell, setup-action, remote-helper]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, privacy-gate, npm-global-smoke, widget, desktop-shell, setup-action, remote-helper]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1389,6 +1444,7 @@ jobs:
           CHANGES_SETUP_ACTION: ${{ needs.changes.outputs.setup_action }}
           CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
+          CHANGES_PRIVACY: ${{ needs.changes.outputs.privacy }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1438,6 +1494,13 @@ jobs:
           if [ "$CHANGES_REMOTE_HELPER" = "true" ]; then
             remote_helper=requested
           fi
+          # privacy-gate runs exactly where `gates` (scoped) does not, for a devlog
+          # change. Deriving it from `scoped` keeps the two scans complementary here
+          # as they are in the jobs' own conditions.
+          privacy=not-requested
+          if [ "$scoped" = not-requested ] && [ "$CHANGES_PRIVACY" = "true" ]; then
+            privacy=requested
+          fi
           dispatch=not-requested
           windows=not-requested
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
@@ -1459,6 +1522,7 @@ jobs:
           GATED_JOBS="$GATED_JOBS structure-gate widget"
           GATED_JOBS="$GATED_JOBS desktop-shell"
           GATED_JOBS="$GATED_JOBS setup-action remote-helper"
+          GATED_JOBS="$GATED_JOBS privacy-gate"
 
           expected_for() {
             case "$1" in
@@ -1472,6 +1536,7 @@ jobs:
               structure-gate) echo "$structure" ;;
               setup-action) echo "$setup_action" ;;
               remote-helper) echo "$remote_helper" ;;
+              privacy-gate) echo "$privacy" ;;
               macos-control) echo "$dispatch" ;;
               platform-windows) echo "$windows" ;;
               *) echo undeclared ;;
