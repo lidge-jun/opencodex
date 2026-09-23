@@ -299,6 +299,9 @@ Zorunlu/hesap ekleme girişi yerel CLI ikili dosyasına da ihtiyaç duyar:
 opencodex önce `PATH`'i kullanır, ardından
 `%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` ve `C:\Program
 Files\Kiro-Cli\kiro-cli.exe`'ye geri döner.
+Bu klasörlerin hiçbirinde `kiro-cli.exe` yoksa, aynı iki `Kiro-Cli` klasöründeki `kiro.exe`
+kullanılır. opencodex, `PATH` üzerinde veya paylaşılan macOS/Linux bin dizinlerinde bulunan kısa
+`kiro` ya da `kiro.exe` dosyasını asla çalıştırmaz; CLI'yi orada `kiro-cli` adıyla kurun veya bağlayın.
 
 Başarılı bir içe aktarmadan sonra opencodex içe aktarılan kimlik bilgisini
 `~/.opencodex/auth.json` dosyasına kalıcı hale getirir. Bu değişkenleri ve

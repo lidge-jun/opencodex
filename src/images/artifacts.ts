@@ -16,8 +16,9 @@ export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
 export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
 /**
  * Connect deadline for pinned HTTPS downloads: a TCP/TLS setup that never
- * completes fails fast instead of hanging past every idle timer, which only
- * starts once the connection exists. Callers can still override per call.
+ * completes fails with connect_timeout after 10 s instead of holding the
+ * download until the 60 s first-byte timer fires. Callers can still override
+ * per call.
  */
 export const DOWNLOAD_CONNECT_TIMEOUT_MS = 10_000;
 
@@ -334,9 +335,9 @@ async function connectPublicHttps(
       // cap entirely instead of inheriting a default. Keep the 50 MiB ceiling when a
       // caller omits a limit, and honour an explicit tighter one.
       maxBytes: options.maxBytes ?? MAX_DOWNLOAD_BYTES,
-      // Bound the TCP/TLS setup phase: without this, a peer that never completes
-      // the handshake hangs past every idle timer, which only starts once the
-      // connection exists. Covers image and video downloads (both go through here).
+      // Bound the TCP/TLS setup phase on its own: without this, a peer that never
+      // completes the handshake holds the download until the 60 s first-byte timer
+      // fires. Covers image and video downloads (both go through here).
       connectTimeoutMs: DOWNLOAD_CONNECT_TIMEOUT_MS,
       context: `${options.context} download`,
     }));

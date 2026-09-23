@@ -229,6 +229,9 @@ PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1' | iex`；接著以 `ki
 Windows 匯入會尋找 `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`。forced／add-account login 也需要本機 CLI
 binary：opencodex 先使用 `PATH`，再 fallback 到 `%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` 與
 `C:\Program Files\Kiro-Cli\kiro-cli.exe`。
+若兩個資料夾都沒有 `kiro-cli.exe`，會改用同樣這兩個 `Kiro-Cli` 資料夾內的 `kiro.exe`。
+opencodex 絕不執行在 `PATH` 或 macOS/Linux 共用 bin 目錄中找到的 `kiro` 或 `kiro.exe`，
+請在那裡以 `kiro-cli` 名稱安裝或連結 CLI。
 
 成功匯入後，opencodex 會把 credential 寫入 `~/.opencodex/auth.json`。
 

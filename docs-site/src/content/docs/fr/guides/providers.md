@@ -270,6 +270,9 @@ la source et la ligne du jeton :
 Sous Windows, l'importation recherche `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`. La connexion forcée ou par
 **Ajouter un compte** nécessite également le binaire local de la CLI : opencodex consulte d'abord `PATH`, puis se rabat sur
 `%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` et `C:\Program Files\Kiro-Cli\kiro-cli.exe`.
+Si aucun de ces dossiers ne contient `kiro-cli.exe`, un `kiro.exe` placé dans ces deux mêmes dossiers
+`Kiro-Cli` est utilisé. opencodex n'exécute jamais un `kiro` ou `kiro.exe` trouvé dans le `PATH`
+ou dans les répertoires bin partagés de macOS/Linux : installez ou liez la CLI sous le nom `kiro-cli`.
 
 Après une importation réussie, opencodex conserve les informations d'identification importées dans
 `~/.opencodex/auth.json`.

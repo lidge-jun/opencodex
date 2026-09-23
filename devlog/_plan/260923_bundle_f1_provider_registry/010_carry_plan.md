@@ -12,4 +12,3 @@
 Residual for the owner: #5362 changes fast routing for every client; the maintainer review asked for one direct Cursor fast tool turn to confirm it still answers. This lane does not spend live Cursor calls.
 
 Verification per commit: focused test files for the touched area and their consumers, then bun run typecheck, bun run structure:check, bun run privacy:scan, layout guards (tests/test-layout.test.ts, tests/test-layout-tooling.test.ts) and the file-size ratchet test. No full local suite (reserved for the owner after all lanes land).
-
