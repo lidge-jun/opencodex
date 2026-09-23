@@ -148,7 +148,8 @@ export function createResponsesSendBudget(
    * upstream state is unknown.
    */
   const claimAmbiguousResend = (limit: number): boolean =>
-    isRequestExecutionBudget(sendBudget) && sendBudget.claimAmbiguousResend?.(limit) === true;
+    isRequestExecutionBudget(sendBudget) && typeof sendBudget.ambiguousResendSpent === "boolean"
+      && sendBudget.claimAmbiguousResend?.(limit) === true;
   /**
    * A credential hop reserves the send its own replay will make, and that replay is a recovery
    * leg. The leg must SPEND the hop's reservation instead of taking a second one: the
@@ -315,7 +316,8 @@ function adapterDispatchBudgetView(
     get targetTransitions(): number { return budget.targetTransitions; },
     get lastTargetKey(): string | undefined { return budget.lastTargetKey; },
     remainingBaseSends: (cap: number): number => budget.remainingBaseSends(cap),
-    claimAmbiguousResend: (limit: number): boolean => budget.claimAmbiguousResend?.(limit) === true,
+    claimAmbiguousResend: (limit: number): boolean =>
+      typeof budget.ambiguousResendSpent === "boolean" && budget.claimAmbiguousResend?.(limit) === true,
     get ambiguousResendSpent(): boolean { return budget.ambiguousResendSpent === true; },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       // A dispatch whose upstream state is unknown is refused on its own merits. A hop that

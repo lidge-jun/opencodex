@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   createRequestExecutionBudget,
   deriveRequestExecutionBudget,
+  isRequestExecutionBudget,
   type RequestExecutionBudget,
   type SendClass,
 } from "../../src/lib/request-execution-budget";
@@ -17,6 +18,7 @@ import {
   TRANSIENT_RETRY_MAX_ATTEMPTS,
 } from "../../src/lib/upstream-retry";
 import { ambiguousResendAllowanceFor } from "../../src/server/responses/reset-replay";
+import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
 import { resetReplayPolicyFor } from "../../src/providers/key-failover";
 import { repoPath } from "../helpers/repo-root";
 import type { OcxProviderConfig } from "../../src/types";
@@ -151,6 +153,65 @@ describe("one resend budget across composed recovery legs", () => {
     expect(child.claimAmbiguousResend?.(GRANT)).toBe(true);
     expect(parent.ambiguousResendSpent).toBe(true);
   });
+
+  for (const view of ["derived scope", "adapter dispatch", "Responses send"] as const) {
+    const buildView = (parent: RequestExecutionBudget) => {
+      if (view === "derived scope") {
+        return deriveRequestExecutionBudget(parent, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+      }
+      const state = createResponsesSendBudget({
+        options: { sendBudget: parent },
+        req: new Request("http://localhost/v1/responses"),
+        logCtx: { model: "", provider: "" },
+      });
+      if (state instanceof Response) throw new Error("unexpected workflow refusal");
+      if (view === "Responses send") return state;
+      if (!state.adapterDispatchBudget) throw new Error("missing adapter dispatch budget");
+      return state.adapterDispatchBudget;
+    };
+    const handBuiltParent = () => ({
+      used: 0,
+      logicalRequestId: "stub",
+      policyVersion: "stub",
+      policy: CODEX_TEXT_GUARDED_BUDGET_POLICY,
+      reserveSpent: false,
+      alternateTargetSends: 0,
+      targetTransitions: 0,
+      lastTargetKey: undefined,
+      remainingBaseSends: () => 0,
+      reserveDispatch: () => ({ allowed: false, reason: "total-exhausted" }),
+      claimAmbiguousResend: mock((_limit: number) => true),
+    } satisfies RequestExecutionBudget);
+
+    test(`${view} refuses a claim when the parent omits its spent state`, () => {
+      const parent = handBuiltParent();
+      expect(isRequestExecutionBudget(parent)).toBe(true);
+      expect("ambiguousResendSpent" in parent).toBe(false);
+      const budget = buildView(parent);
+
+      expect(budget.ambiguousResendSpent).toBe(false);
+      expect(budget.claimAmbiguousResend?.(GRANT)).toBe(false);
+      expect(parent.claimAmbiguousResend).not.toHaveBeenCalled();
+      expect(budget.ambiguousResendSpent).toBe(false);
+    });
+
+    test(`${view} grants a claim when the parent exposes its spent state`, () => {
+      const parent = handBuiltParent();
+      const observableParent = {
+        ...parent,
+        get ambiguousResendSpent(): boolean { return parent.claimAmbiguousResend.mock.calls.length > 0; },
+      };
+      expect(isRequestExecutionBudget(observableParent)).toBe(true);
+      const budget = buildView(observableParent);
+
+      expect(budget.ambiguousResendSpent).toBe(false);
+      expect(budget.claimAmbiguousResend?.(GRANT)).toBe(true);
+      expect(parent.claimAmbiguousResend).toHaveBeenCalledTimes(1);
+      expect(parent.claimAmbiguousResend).toHaveBeenCalledWith(GRANT);
+      expect(budget.ambiguousResendSpent).toBe(true);
+      expect(observableParent.ambiguousResendSpent).toBe(true);
+    });
+  }
 
   test("the whole chain spends the grant once, whatever each leg was separately entitled to", async () => {
     silenceWarn();

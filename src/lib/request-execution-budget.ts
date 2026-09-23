@@ -454,8 +454,10 @@ function ledgerFor(parent: RequestExecutionBudget): SharedSendLedger {
     // observer genuinely cannot cross this boundary because they are private to the factory,
     // but the grant can -- `claimAmbiguousResend` is public on the parent. A parent that does
     // not implement it grants nothing, which is the fail-closed answer for a send whose
-    // upstream state is unknown.
-    claimAmbiguousResend: (limit: number): boolean => parent.claimAmbiguousResend?.(limit) === true,
+    // upstream state is unknown. So does a parent that cannot report the grant as spent: a claim
+    // nobody can read back would let combo failover hop after the replacement went out.
+    claimAmbiguousResend: (limit: number): boolean =>
+      typeof parent.ambiguousResendSpent === "boolean" && parent.claimAmbiguousResend?.(limit) === true,
     get ambiguousResendSpent(): boolean { return parent.ambiguousResendSpent === true; },
   };
 }
