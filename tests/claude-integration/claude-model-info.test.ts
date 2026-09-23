@@ -237,3 +237,31 @@ describe("saved picker order changes groups after identity selection", () => {
     expect(result.map(row => [row.id, row.display_name])).toEqual([["collision", "a (p)"]]);
   });
 });
+
+describe("Claude Code picker description (replaces the generic \"From gateway\" line)", () => {
+  test("readable rows describe the route OpenCodex serves them through", () => {
+    const infos = buildAnthropicModelInfos(["gpt-5.5"], [
+      { provider: "xai", id: "grok-4.7", contextWindow: 500_000 },
+    ], undefined, "readable");
+    const native = infos.find(i => i.display_name === "gpt-5.5 (native)");
+    const routed = infos.find(i => i.display_name === "grok-4.7 (xai)");
+    expect(native?.description).toBe("Routed by OpenCodex to native gpt-5.5");
+    expect(routed?.description).toBe("Routed by OpenCodex to xai/grok-4.7");
+  });
+
+  test("1M and Fast siblings keep their base row's description", () => {
+    const infos = buildAnthropicModelInfos([], [
+      { provider: "p", id: "big", contextWindow: 1_000_000 },
+    ], undefined, "readable", undefined, undefined, false, () => true);
+    expect(infos.map(i => [i.display_name, i.description])).toEqual([
+      ["big (p)", "Routed by OpenCodex to p/big"],
+      ["big (p) · 1M", "Routed by OpenCodex to p/big"],
+      ["big (p) · Fast", "Routed by OpenCodex to p/big"],
+    ]);
+  });
+
+  test("Desktop 3P rows stay unchanged (no description field)", () => {
+    const infos = buildAnthropicModelInfos(["gpt-5.5"], [{ provider: "xai", id: "grok-4.7" }], undefined, "desktop3p");
+    for (const info of infos) expect("description" in info).toBe(false);
+  });
+});

@@ -136,6 +136,9 @@ apply、轮换/恢复或直接 disconnect 均可处理，无需新参数或事�
 删除外部副本；如有需要，请另行在 hub 撤销。
 
 ## /model 选择器（“From gateway”）
+
+自 Claude Code 2.1.257 起，每一行还会显示其 `description`；opencodex 会为 Claude Code CLI 的每一行发送 `Routed by OpenCodex to <provider>/<model>`，因此这些行显示路由，而不是“From gateway”。
+
 每个条目带有诚实的显示名（如 `gemini-3-pro (gemini)`），并以官方 ModelInfo 形态附带模型能力
 信息（推理强度梯度、thinking 类型），使 Claude Desktop 的第三方网关模式能够启用推理强度选择
 UI。真实 Anthropic 模型保留其原始 id。合成的 2026 日期是内部槽位，不是发布日期。旧版哈希

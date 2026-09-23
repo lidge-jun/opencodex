@@ -311,6 +311,8 @@ gerekirse anahtarı hub'da ayrıca iptal edin.
 
 ## /model seçici ("From gateway")
 
+Claude Code 2.1.257 ve sonrası her satırın `description` alanını da gösterir; opencodex, Claude Code CLI satırları için `Routed by OpenCodex to <provider>/<model>` gönderdiğinden bu satırlarda "From gateway" yerine rota görünür.
+
 Claude Code 2.1.129+, `GET /v1/models?limit=1000` aracılığıyla ağ geçidi
 modellerini keşfeder ve bunları yerel `/model` seçicisinde "From gateway"
 etiketiyle listeler. Seçici yalnızca `claude` veya `anthropic` ile başlayan
