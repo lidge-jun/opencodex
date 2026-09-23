@@ -77,6 +77,10 @@ therefore sees whatever the previous release run published. The publish job repe
 those checks immediately before publishing, because tags, releases and registry state can still
 move while a run packages, and additionally requires a successful push-event Cross-platform CI run
 for the exact release commit (`GITHUB_SHA`) — a pull-request run does not qualify.
+After publication the registry smoke records the npm version read-back and the dist-tag as
+separate outputs, and the `release-outcomes` job, which runs after `publish` and `attach-release`
+whatever their result, reports the public GitHub release, the npm version and the npm dist-tag as
+separate summary rows. A row that is not confirmed warns without changing the run's result.
 This keeps release runs short and makes release a deployment of a verified commit after the required
 `dev` pre-move rather than a second CI pipeline.
 

@@ -1,5 +1,15 @@
 # 020 — Separate release outcomes (wp2)
 
+## Amendment after audit
+
+The audit found that a report step inside `attach-release` can never run when `publish` fails,
+because `attach-release` needs `publish`. The report is therefore its own job,
+`release-outcomes`: `needs: [publish, attach-release]`, `if: always() && inputs.dry-run != true`,
+`permissions: contents: read`, and it also prints both job results. Under a read token a draft
+release is invisible, so the GitHub row reads `published` or `not public (draft, missing or
+unreadable)`; no write permission is added to observe drafts. The sections below describe the
+original step placement; the job shape above supersedes it.
+
 ## Change map
 
 | Path | Action |

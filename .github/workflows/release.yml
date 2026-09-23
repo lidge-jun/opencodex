@@ -648,10 +648,47 @@ jobs:
             gh release edit "$release_tag" --draft=false
           fi
 
+  # One row per fact a release run can establish: the public GitHub release, the npm version read
+  # back from the registry, and the npm dist-tag. A green run used to read the same whichever of
+  # them were true, because the registry smoke continues to the GitHub release when its reads stay
+  # pending, which is the intended publishing behaviour. This job only reports; it never changes the
+  # run's result.
+  #
+  # A job of its own, not a step in attach-release: a failed publish skips attach-release entirely,
+  # and that is when the rows matter most. It reads with the job token at contents: read, so a draft
+  # release is invisible to it and reads as not public, which is the question the row answers.
+  release-outcomes:
+    name: release outcomes
+    needs: [publish, attach-release]
+    if: ${{ always() && inputs.dry-run != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Report release outcomes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+          NPM_VERSION_STATE: ${{ needs.publish.outputs.npm_version }}
+          NPM_DIST_TAG_STATE: ${{ needs.publish.outputs.npm_dist_tag }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          ATTACH_RESULT: ${{ needs.attach-release.result }}
+        run: bash scripts/ci/release-outcome-report.sh
+
   publish:
     needs: [validate-dispatch, verify-release]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      npm_version: ${{ steps.registry-smoke.outputs.npm_version }}
+      npm_dist_tag: ${{ steps.registry-smoke.outputs.npm_dist_tag }}
     permissions:
       contents: write
       actions: read
@@ -977,6 +1014,7 @@ jobs:
         if: ${{ inputs.dry-run != true && steps.publication.outputs.published == 'true' }}
         env:
           RELEASE_VERSION: ${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
           PUBLISHED: ${{ steps.publication.outputs.published }}
         run: |
           set -euo pipefail
@@ -993,14 +1031,35 @@ jobs:
               fi
               echo "registry version=$VERSION"
               echo "verification=verified" >> "$GITHUB_OUTPUT"
+              echo "npm_version=confirmed" >> "$GITHUB_OUTPUT"
               echo "Registry verified ${pkg_name}@${RELEASE_VERSION}." >> "$GITHUB_STEP_SUMMARY"
-              timeout --kill-after=2s 10s npm dist-tag ls "$pkg_name" --fetch-retries=0 --fetch-timeout=8000 || echo "::warning::Could not read npm dist-tags; exact version was verified"
+              # The dist-tag is its own outcome: a version can be on the registry while the tag
+              # still names the previous release.
+              dist_tag_state="unconfirmed"
+              if dist_tags="$(timeout --kill-after=2s 10s npm dist-tag ls "$pkg_name" --fetch-retries=0 --fetch-timeout=8000)"; then
+                printf '%s\n' "$dist_tags"
+                tagged="$(printf '%s\n' "$dist_tags" | awk -F': ' -v tag="$NPM_DIST_TAG" '$1 == tag { print $2; exit }')"
+                if [ "$tagged" = "$RELEASE_VERSION" ]; then
+                  dist_tag_state="confirmed"
+                elif [ -n "$tagged" ]; then
+                  dist_tag_state="mismatch"
+                  echo "::warning::npm dist-tag ${NPM_DIST_TAG} points at ${tagged}, not ${RELEASE_VERSION}"
+                else
+                  echo "::warning::npm dist-tag ${NPM_DIST_TAG} is not listed for ${pkg_name}"
+                fi
+              else
+                echo "::warning::Could not read npm dist-tags; exact version was verified"
+              fi
+              echo "npm_dist_tag=${dist_tag_state}" >> "$GITHUB_OUTPUT"
+              echo "npm dist-tag ${NPM_DIST_TAG}: ${dist_tag_state}." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
             echo "::notice::Registry lookup not confirmed (attempt $attempt/6)"
             if [ "$attempt" -lt 6 ]; then sleep 5; fi
           done
           echo "verification=pending" >> "$GITHUB_OUTPUT"
+          echo "npm_version=unconfirmed" >> "$GITHUB_OUTPUT"
+          echo "npm_dist_tag=unconfirmed" >> "$GITHUB_OUTPUT"
           echo "::warning::npm publish succeeded, but registry verification remains pending; continuing GitHub release creation without republishing"
           echo "Publication acknowledged for ${pkg_name}@${RELEASE_VERSION}; registry verification pending after bounded reads. Inspect the registry before announcing availability. Do not republish this version." >> "$GITHUB_STEP_SUMMARY"
 

@@ -1288,6 +1288,7 @@
     "release-desktop-scripts.test.ts": "ci-workflows",
     "release-helper.test.ts": "ci-workflows",
     "release-notes.test.ts": "ci-workflows",
+    "release-outcome-report.test.ts": "ci-workflows",
     "release-pipeline-contract.test.ts": "ci-workflows",
     "release-preflight.test.ts": "ci-workflows",
     "release-resume-identity.test.ts": "ci-workflows",
