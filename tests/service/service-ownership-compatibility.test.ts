@@ -162,7 +162,14 @@ describe("guarded service-manager binding", () => {
       })).toBe(expected);
     }
     expect(probeSystemdUnitInactive({ show: () => "ActiveState=inactive\nMainPID=0" })).toBe("inactive");
+    expect(probeSystemdUnitInactive({ show: () => "ActiveState=failed\nMainPID=0" })).toBe("inactive");
+    expect(probeSystemdUnitInactive({ show: () => "ActiveState=failed\nMainPID=42" })).toBe("active");
     expect(probeSystemdUnitInactive({ show: () => "ActiveState=active\nMainPID=42" })).toBe("active");
+    for (const state of ["activating", "deactivating", "reloading"]) {
+      expect(probeSystemdUnitInactive({ show: () => `ActiveState=${state}\nMainPID=0` })).toBe("active");
+    }
+    expect(probeSystemdUnitInactive({ show: () => "ActiveState=broken\nMainPID=0" })).toBe("unknown");
+    expect(probeSystemdUnitInactive({ show: () => "ActiveState=failed\nMainPID=oops" })).toBe("unknown");
     expect(probeSystemdUnitInactive({ show: () => { throw new Error("unreadable"); } })).toBe("unknown");
   });
 
@@ -187,5 +194,16 @@ describe("guarded service-manager binding", () => {
       winsw: () => "nonexistent",
     });
     expect(windows.kind).toBe("unknown");
+  });
+
+  test("a failed systemd unit with no PID is absent, but a live PID still blocks takeover", () => {
+    const failed = ["LoadState=loaded", "ActiveState=failed", "MainPID=0"].join("\n");
+    const deps = { platform: "linux" as const, verifyPid: (pid: number) => pid };
+    expect(inspectGuardedManagerTarget(42, 10100, {
+      ...deps, systemdShow: () => failed,
+    }).kind).toBe("absent");
+    expect(inspectGuardedManagerTarget(42, 10100, {
+      ...deps, systemdShow: () => failed.replace("MainPID=0", "MainPID=7"),
+    }).kind).toBe("unknown");
   });
 });

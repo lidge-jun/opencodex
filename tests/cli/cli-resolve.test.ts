@@ -184,6 +184,7 @@ describe("runResolve", () => {
 
   test("a proven-absent verdict is a successful answer, not a failure", async () => {
     const lines: string[] = [];
+    let managerProbes = 0;
     const code = await runResolve({ json: true }, {
       configDir: () => "/h",
       readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
@@ -192,12 +193,21 @@ describe("runResolve", () => {
       probeEndpoint: () => "dead",
       cliVersion: () => "1.2.3",
       ...ioOwnership(),
+      observeManagers: () => {
+        managerProbes++;
+        throw new Error("manager version probe must not run without a live runtime");
+      },
       stdout: { log: value => lines.push(value) },
     });
     expect(code).toBe(0);
-    const parsed = JSON.parse(lines[0]!) as { liveness: { status: string }; port: { effective: number } };
+    const parsed = JSON.parse(lines[0]!) as {
+      liveness: { status: string }; port: { effective: number };
+      takeover: { kind: string; reason: string };
+    };
     expect(parsed.liveness.status).toBe("absent-proven");
     expect(parsed.port.effective).toBe(RESOLVE_DEFAULT_PORT);
+    expect(parsed.takeover).toMatchObject({ kind: "blocked", reason: "runtime-absent" });
+    expect(managerProbes).toBe(0);
   });
 
   test("accepts async dead probes for every candidate endpoint", async () => {

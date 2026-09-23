@@ -290,7 +290,16 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
     ownership = { kind: "unknown", reason: error instanceof Error ? error.message : String(error) };
   }
   let takeover: ResolveTakeover;
-  if (ownership.kind === "unknown") {
+  if (!live) {
+    // A proven absence may authorize start, but there is no runtime to take over.
+    // Avoid synchronous managing-CLI version probes on this launch path.
+    takeover = {
+      kind: "blocked",
+      reason: "runtime-absent",
+      detail: "no live runtime is available for takeover",
+      minimumCliVersion: SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
+    };
+  } else if (ownership.kind === "unknown") {
     // The claim cannot be read, so nothing can be approved against it. This reason is a
     // wire answer, not a new member of the compatibility union.
     takeover = {

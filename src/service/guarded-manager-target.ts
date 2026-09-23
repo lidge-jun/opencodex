@@ -102,9 +102,10 @@ export function inspectGuardedManagerTarget(
       })))();
       const loaded = systemdProperty(output, "LoadState");
       const active = systemdProperty(output, "ActiveState");
-      const pid = positivePid(systemdProperty(output, "MainPID"));
-      if (loaded === "not-found" && active === "inactive") return { kind: "absent" };
-      if (loaded === "loaded" && active === "inactive" && systemdProperty(output, "MainPID") === "0") return { kind: "absent" };
+      const mainPid = systemdProperty(output, "MainPID");
+      const pid = positivePid(mainPid);
+      if (loaded === "not-found" && active === "inactive" && mainPid === "0") return { kind: "absent" };
+      if (loaded === "loaded" && (active === "inactive" || active === "failed") && mainPid === "0") return { kind: "absent" };
       if (loaded !== "loaded" || active !== "active" || pid === null
         || systemdProperty(output, "NeedDaemonReload") !== "no"
         || resolve(systemdProperty(output, "FragmentPath") ?? "") !== resolve(unitPath())) {
