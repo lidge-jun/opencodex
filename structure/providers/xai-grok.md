@@ -35,10 +35,19 @@ xAI documents that `presencePenalty`, `frequencyPenalty` and `stop` "cannot be u
 reasoning models" and answers them with `400 invalid-argument`. The registry seeds the documented
 reasoning ids (`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`,
 `grok-4.20-0309-reasoning`, `grok-build-0.1`) into `noPenaltyModels`, so the openai-chat
-adapter and the Chat passthrough omit `presence_penalty` / `frequency_penalty` for them.
+adapter, the Chat passthrough and the Responses passthrough omit `presence_penalty` / `frequency_penalty` for them.
 `grok-4.20-0309-non-reasoning` and `grok-composer-2.5-fast` keep caller penalties.
 Regression coverage: `tests/providers/xai/xai-transport.test.ts`
 ("xAI reasoning models reject penalty parameters").
+
+The same ids are seeded into `noStopModels` (provider config, registry, derive fill, resolved
+policy and `routedProviderConfig`, like `noTopPModels`). The openai-chat adapter and the Chat
+passthrough omit `stop`, and the Responses passthrough drops a `stop` that Claude inbound
+translated from `stop_sequences` (`stripRejectedSamplingParams` in
+`src/adapters/openai-responses/request-strips.ts`), because `grok-4.20-multi-agent-0309` has only
+the Responses wire. Claude Code auto-mode always sends `stop_sequences`; forwarding it made its
+classifier mark Grok temporarily unavailable. Regression coverage:
+`tests/providers/xai/xai-no-stop.test.ts`.
 
 `src/adapters/xai-web-search.ts` omits `auto`/`none` tool selection after normalization if no tools
 remain in either the top-level catalog or `additional_tools`. Cached-only search removal follows

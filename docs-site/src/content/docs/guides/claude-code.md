@@ -620,6 +620,8 @@ The proxy translates every Anthropic Messages API request into the Codex Respons
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 
+Claude Code auto-mode always sends `stop_sequences`. For models in the routed provider's `noStopModels` list, OpenCodex omits `stop` on both the Chat Completions and Responses wires, so xAI reasoning models such as grok-4.7 and grok-4.6 do not return `400 invalid-argument` and get marked temporarily unavailable. See [`noStopModels`](/reference/configuration/providers/).
+
 Replay preserves non-hidden signed blocks (including empty thinking) and opaque redacted blocks on the intended Anthropic adapter. `hideThinkingSummary` remains unchanged: locally hidden signed text is not exposed to Claude clients, and lossless replay through that hidden Claude boundary is not established. Older combined reasoning envelopes cannot recover original block order once streaming text has been emitted. `claudeCode.compatibility: "enforce"` still rejects thinking replay. This does not establish live Anthropic acceptance or cache-hit improvements; [#3719](https://github.com/lidge-jun/opencodex/issues/3719) remains open.
 
 **Error cases (400):** malformed JSON; missing/empty `model`; missing/empty `messages`; unsupported

@@ -408,6 +408,8 @@ Claude Code — это лишь учётные данные для доступ�
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 
+Автоматический режим Claude Code всегда отправляет `stop_sequences`. Для моделей из списка `noStopModels` маршрутизируемого провайдера OpenCodex опускает `stop` и в Chat Completions, и в Responses, поэтому модели рассуждения xAI, такие как grok-4.7 и grok-4.6, не возвращают `400 invalid-argument` и не помечаются как временно недоступные. См. [`noStopModels`](/ru/reference/configuration/providers/).
+
 На выбранном адаптере Anthropic сохраняются нескрытые подписанные блоки (включая пустой thinking) и непрозрачные блоки redacted. Политика `hideThinkingSummary` не меняется: локально скрытый подписанный текст не раскрывается клиентам Claude, а воспроизведение без потерь через эту границу пока не подтверждено. Старые объединённые конверты не восстанавливают порядок после отправки потокового текста. `claudeCode.compatibility: "enforce"` по-прежнему отклоняет thinking replay. Приём реальным Anthropic и улучшение кеша не доказаны; [#3719](https://github.com/lidge-jun/opencodex/issues/3719) остаётся открытым.
 
 **Случаи ошибок (400):** некорректный JSON; отсутствующий или пустой `model`; отсутствующий или

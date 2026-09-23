@@ -339,6 +339,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const noReasoningModels = staticPolicy.noReasoningModels;
   const noTemperatureModels = staticPolicy.noTemperatureModels;
   const noTopPModels = staticPolicy.noTopPModels;
+  const noStopModels = staticPolicy.noStopModels;
   const noPenaltyModels = staticPolicy.noPenaltyModels;
   const noJsonSchemaModels = staticPolicy.noJsonSchemaModels;
   const autoToolChoiceOnlyModels = staticPolicy.autoToolChoiceOnlyModels;
@@ -482,6 +483,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(noReasoningModels ? { noReasoningModels } : {}),
     ...(noTemperatureModels ? { noTemperatureModels } : {}),
     ...(noTopPModels ? { noTopPModels } : {}),
+    ...(noStopModels ? { noStopModels } : {}),
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
     ...(noJsonSchemaModels ? { noJsonSchemaModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),

@@ -125,6 +125,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `noReasoningModels?` | `string[]` |推論/思考パラメーターを拒否するモデル。 |
 | `noTemperatureModels?` | `string[]` |発信者指定の`temperature`を拒否するモデル。 |
 | `noTopPModels?` | `string[]` |発信者指定の`top_p`を拒否するモデル。 |
+| `noStopModels?` | `string[]` |発信者指定の`stop`を拒否するモデル。`openai-chat`アダプター、Chatパススルー、Responsesパススルーはこれらのモデルに対してこのフィールドを送りません。組み込みの`xai`プリセットは、xAIがこれを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。`grok-4.20-0309-non-reasoning`, `grok-composer-2.5-fast`は呼び出し元の`stop`をそのまま受け取ります。 |
 | `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 組み込みの`xai`プリセットは、xAIがこれらを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。非推論モデルは呼び出し元のペナルティをそのまま受け取ります。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` エンドポイントが `response_format` を拒否する正確なモデル ID。要求モデルが項目と完全一致する場合だけフィールドを省略し、その他の `openai-chat` モデルでは structured-output 変換を維持します。 |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` エンドポイントが `json_schema` 形式は拒否しつつ `json_object` は受け入れる正確なモデル ID。この要求はフィールドを削除せず `json_object` に降格して送るため、JSON を求めた呼び出し側は散文ではなく JSON を受け取れます。両方の一覧に載るモデルでは `noStructuredOutputModels` が優先します。`opencode go` / `opencode zen` / `opencode free` プリセットが DeepSeek 経路に既定で載せます。 |

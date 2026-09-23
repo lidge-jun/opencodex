@@ -144,7 +144,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (parsed.options.topP !== undefined && !modelInList(provider.noTopPModels, parsed.modelId)) {
           body.top_p = parsed.options.topP;
         }
-        if (parsed.options.stopSequences !== undefined) body.stop = parsed.options.stopSequences;
+        if (parsed.options.stopSequences !== undefined && !modelInList(provider.noStopModels, parsed.modelId)) {
+          body.stop = parsed.options.stopSequences;
+        }
         const reasoningDisabled = modelInList(provider.noReasoningModels, parsed.modelId);
         const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
         const explicitReasoning = applyExplicitChatReasoningWirePolicy({

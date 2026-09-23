@@ -601,6 +601,8 @@ dönüştürür:
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 
+Claude Code otomatik modu her zaman `stop_sequences` gönderir. Yönlendirilen sağlayıcının `noStopModels` listesindeki modeller için OpenCodex `stop` alanını hem Chat Completions hem de Responses hattında göndermez; böylece grok-4.7 ve grok-4.6 gibi xAI akıl yürütme modelleri `400 invalid-argument` döndürmez ve geçici olarak kullanılamaz diye işaretlenmez. Bkz. [`noStopModels`](/tr/reference/configuration/providers/).
+
 Hedeflenen Anthropic adaptöründe gizlenmemiş imzalı bloklar (boş thinking dahil) ve opak redacted blokları korunur. `hideThinkingSummary` değişmez: yerel olarak gizlenen imzalı metin Claude istemcilerine gösterilmez; bu sınır üzerinden kayıpsız yeniden oynatma doğrulanmamıştır. Eski birleşik zarflarda metin akışla gönderildikten sonra özgün blok sırası geri getirilemez. `claudeCode.compatibility: "enforce"` thinking yeniden oynatmasını hâlâ reddeder. Bu, gerçek Anthropic kabulünü veya önbellek iyileşmesini kanıtlamaz; [#3719](https://github.com/lidge-jun/opencodex/issues/3719) açık kalır.
 
 **Hata durumları (400):** hatalı biçimlendirilmiş JSON; eksik/boş `model`;

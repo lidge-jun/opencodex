@@ -407,6 +407,8 @@ Claude Code の `/effort` 設定はアダプターでも維持されます。
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 
+Claude Codeの自動モードは常に`stop_sequences`を送ります。ルーティング先プロバイダーの`noStopModels`リストにあるモデルでは、OpenCodexはChat CompletionsとResponsesの両方のワイヤーで`stop`を省きます。そのため、grok-4.7やgrok-4.6などのxAI推論モデルが`400 invalid-argument`を返したり、一時的に利用不可と判定されたりしません。[`noStopModels`](/ja/reference/configuration/providers/)を参照してください。
+
 意図した Anthropic アダプターでは、非表示でない署名付きブロック（空の thinking を含む）と不透明な redacted ブロックを保持します。`hideThinkingSummary` は変更しません。ローカルで隠した署名付きテキストは Claude クライアントに公開せず、この非表示境界での無損失再生は未確認です。旧形式の結合エンベロープは、テキスト送信後に元のブロック順を復元できません。`claudeCode.compatibility: "enforce"` は引き続き thinking 再生を拒否します。実際の Anthropic 受理やキャッシュ改善の証明ではなく、[#3719](https://github.com/lidge-jun/opencodex/issues/3719) は未解決です。
 
 **エラー条件(400):** 不正な JSON、欠落または空の `model`、欠落または空の `messages`、未サポートの

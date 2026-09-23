@@ -428,6 +428,8 @@ Claude Code 的 `/effort` 設定會完整保留並傳遞給適配器：
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
 
+Claude Code 自動模式總是傳送 `stop_sequences`。對於路由目標提供者 `noStopModels` 清單中的模型，OpenCodex 在 Chat Completions 與 Responses 兩種線路上都會省略 `stop`，因此 grok-4.7、grok-4.6 等 xAI 推理模型不會回傳 `400 invalid-argument` 並被標記為暫時無法使用。參見 [`noStopModels`](/zh-tw/reference/configuration/providers/)。
+
 在預期的 Anthropic 適配器上，保留未隱藏的簽名區塊（包括空 thinking）和不透明的 redacted 區塊。`hideThinkingSummary` 政策不變：不會向 Claude 用戶端公開本地隱藏的簽名文字，尚未證明經過此隱藏邊界的無損重播。舊版組合信封在串流文字發出後無法恢復原始區塊順序。`claudeCode.compatibility: "enforce"` 仍拒絕 thinking 重播。這不證明真實 Anthropic 接受請求或快取命中改善；[#3719](https://github.com/lidge-jun/opencodex/issues/3719) 仍未關閉。
 
 **錯誤情況（400）：**JSON 格式錯誤；缺少/空的 `model`；缺少/空的 `messages`；不支援的
