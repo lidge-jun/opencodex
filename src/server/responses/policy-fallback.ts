@@ -1,5 +1,6 @@
 import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import { linkRequestSessionLane } from "../request-log-conversation";
 import type { OcxConfig } from "../../types";
@@ -84,6 +85,8 @@ function errorCodeFromText(text: string): string | undefined {
 
 async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal): Promise<boolean> {
   if (response.status < 400 || signal?.aborted) return false;
+  // A response that must not be sent again cannot open a policy-candidate retry either.
+  if (isNonReplayableResponse(response)) return false;
   try {
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
     const text = inspected.displaySafe ? inspected.text : "";

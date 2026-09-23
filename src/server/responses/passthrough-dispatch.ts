@@ -112,6 +112,7 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
+  settleOperatorReplacement,
   refetchAfterProtocolSafeReset,
   prepareSameTarget429Wait,
   sleepWithAbort,
@@ -212,6 +213,7 @@ export async function preparePassthroughExchange(
     | "recoveryClassFor"
     | "sendBudgetExhausted"
     | "claimAmbiguousResend"
+    | "ambiguousResendSpent"
     | "reserveCredentialHop"
     | "pendingHopPermit"
     | "workflowRootId"
@@ -1554,7 +1556,8 @@ export async function preparePassthroughExchange(
       if (options.abortSignal?.aborted) return transportFailureResponse(options.abortSignal.reason);
       upstreamResponse = preflight.response;
       if (preflight.kind === "failed") {
-        if (!configuredTransientSendBudgetExhausted()) {
+        // A zero-output failure does not undo an ambiguous replacement already sent.
+        if (!configuredTransientSendBudgetExhausted() && !sendBudgetState.ambiguousResendSpent) {
           const streamedOpaqueRecovery = await attemptOpaqueBlobRecovery({
             response: upstreamResponse,
             outboundBody: request.body,
@@ -1574,6 +1577,8 @@ export async function preparePassthroughExchange(
         logCtx.terminalHttpStatus = preflightLog.terminalHttpStatus;
         logCtx.terminalErrorCode = preflightLog.terminalErrorCode;
         logCtx.terminalIncompleteReason = preflightLog.terminalIncompleteReason;
+        // The projected failure must not invite another send after the replacement was spent.
+        if (sendBudgetState.ambiguousResendSpent) upstreamResponse = settleOperatorReplacement(upstreamResponse);
       }
     }
     // Console Go (opencode-zen / opencode-go) intermittently rejects a body it accepts seconds

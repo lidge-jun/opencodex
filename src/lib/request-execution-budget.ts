@@ -187,6 +187,8 @@ export interface RequestExecutionBudget extends TransientSendBudget {
    * that cannot reach it has no operator override, which is the fail-closed answer.
    */
   claimAmbiguousResend?(limit: number): boolean;
+  /** True once any scope has claimed a replacement for this logical request. */
+  readonly ambiguousResendSpent?: boolean;
 }
 
 const RESERVE_FUNDED_CLASSES: ReadonlySet<SendClass> = new Set<SendClass>([
@@ -224,6 +226,7 @@ interface SharedSendLedger {
    * it in -- it has to ask whoever holds the request's grant.
    */
   claimAmbiguousResend(limit: number): boolean;
+  readonly ambiguousResendSpent: boolean;
   readonly observer?: RequestSendObserver;
 }
 
@@ -240,20 +243,23 @@ const sharedSendLedgers = new WeakMap<RequestExecutionBudget, SharedSendLedger>(
  * already spent the one replacement a strict row granted buy another as soon as a more
  * permissive row asked, which is a second duplicate inference of one turn.
  */
-function createAmbiguousResendGrant(): (limit: number) => boolean {
+function createAmbiguousResendGrant(): Pick<SharedSendLedger, "claimAmbiguousResend" | "ambiguousResendSpent"> {
   let claimed = 0;
   let ceiling: number | undefined;
-  return (limit: number): boolean => {
-    const presented = Number.isFinite(limit) ? Math.trunc(limit) : 0;
-    // A zero or nonsense ceiling refuses on its own and leaves the request's alone. It is a
-    // caller that cannot state a grant, not an operator narrowing this request: a leg with no
-    // policy is refused before it ever claims, so binding the request to a malformed number
-    // would only let such a caller cancel a grant an opted-in row really made.
-    if (presented <= 0) return false;
-    ceiling = ceiling === undefined ? presented : Math.min(ceiling, presented);
-    if (claimed >= ceiling) return false;
-    claimed += 1;
-    return true;
+  return {
+    get ambiguousResendSpent(): boolean { return claimed > 0; },
+    claimAmbiguousResend(limit: number): boolean {
+      const presented = Number.isFinite(limit) ? Math.trunc(limit) : 0;
+      // A zero or nonsense ceiling refuses on its own and leaves the request's alone. It is a
+      // caller that cannot state a grant, not an operator narrowing this request: a leg with no
+      // policy is refused before it ever claims, so binding the request to a malformed number
+      // would only let such a caller cancel a grant an opted-in row really made.
+      if (presented <= 0) return false;
+      ceiling = ceiling === undefined ? presented : Math.min(ceiling, presented);
+      if (claimed >= ceiling) return false;
+      claimed += 1;
+      return true;
+    },
   };
 }
 
@@ -302,6 +308,7 @@ function createRequestExecutionBudgetWithLedger(
     claimAmbiguousResend(limit: number): boolean {
       return counter.claimAmbiguousResend(limit);
     },
+    get ambiguousResendSpent(): boolean { return counter.ambiguousResendSpent; },
     reserveDispatch(intent: DispatchIntent): DispatchDecision {
       if (intent.replaySafe === false) return { allowed: false, reason: "not-replay-safe" };
       if (counter.spent >= policy.maxTotalModelSends) return { allowed: false, reason: "total-exhausted" };
@@ -396,10 +403,12 @@ export function createRequestExecutionBudget(
   logicalRequestId?: string,
   observer?: RequestSendObserver,
 ): RequestExecutionBudget {
+  const grant = createAmbiguousResendGrant();
   return createRequestExecutionBudgetWithLedger(policy, logicalRequestId, {
     spent: 0,
     pendingExternalSends: 0,
-    claimAmbiguousResend: createAmbiguousResendGrant(),
+    claimAmbiguousResend: grant.claimAmbiguousResend,
+    get ambiguousResendSpent(): boolean { return grant.ambiguousResendSpent; },
     ...(observer ? { observer } : {}),
   });
 }
@@ -447,6 +456,7 @@ function ledgerFor(parent: RequestExecutionBudget): SharedSendLedger {
     // not implement it grants nothing, which is the fail-closed answer for a send whose
     // upstream state is unknown.
     claimAmbiguousResend: (limit: number): boolean => parent.claimAmbiguousResend?.(limit) === true,
+    get ambiguousResendSpent(): boolean { return parent.ambiguousResendSpent === true; },
   };
 }
 

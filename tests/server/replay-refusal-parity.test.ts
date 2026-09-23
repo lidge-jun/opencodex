@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { startServer } from "../../src/server";
 import {
   REPLAY_REFUSAL_NO_RETRY_HEADER,
@@ -33,6 +34,8 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 
 beforeEach(() => {
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-replay-refusal-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-replay-refusal-"));
@@ -41,6 +44,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearComboSelectionState();
+  clearComboTargetCooldowns();
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -230,6 +235,129 @@ function comboReplayConfig(): OcxConfig {
     ] } },
   } as unknown as OcxConfig;
 }
+
+test("a combo refuses replay after a spent replacement's zero-output stream failure", async () => {
+  saveConfig(comboReplayConfig());
+  let firstSends = 0;
+  let secondSends = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes(COMBO_FIRST_HOST)) {
+      firstSends += 1;
+      if (firstSends === 1) preHeaderReset();
+      const failure = { type: "response.failed", response: {
+        id: "resp_failed", object: "response", status: "failed", output: [],
+        error: { code: "server_is_overloaded", message: "Server is overloaded" },
+      } };
+      return new Response(`event: response.failed\ndata: ${JSON.stringify(failure)}\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+    if (url.includes(COMBO_SECOND_HOST)) {
+      secondSends += 1;
+      return Response.json({ error: { code: "unexpected_second_target" } }, { status: 400 });
+    }
+    return originalFetch(input as RequestInfo, init);
+  }) as typeof fetch;
+  const server = startServer(0);
+  try {
+    const { response, attempts, json } = await sendWithClientRetries(new URL("/v1/responses", server.url), {
+      model: "combo/pair", store: false, stream: true, ...RESPONSES_TURN,
+    });
+    expect({ firstSends, secondSends, attempts }).toEqual({ firstSends: 2, secondSends: 0, attempts: 1 });
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
+    expect(json.error?.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBe(REPLAY_REFUSAL_NO_RETRY_VALUE);
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("a combo keeps a spent replacement's zero-output context overflow", async () => {
+  saveConfig(comboReplayConfig());
+  let firstSends = 0;
+  let secondSends = 0;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (url.includes(COMBO_FIRST_HOST)) {
+      firstSends += 1;
+      if (firstSends === 1) preHeaderReset();
+      const failure = { type: "response.failed", response: {
+        id: "resp_overflow", object: "response", status: "failed", output: [],
+        error: { type: "invalid_request_error", code: "context_length_exceeded",
+          message: "Input exceeds the model context window." },
+      } };
+      return new Response(`event: response.failed\ndata: ${JSON.stringify(failure)}\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+    if (url.includes(COMBO_SECOND_HOST)) {
+      secondSends += 1;
+      return Response.json({ error: { code: "unexpected_second_target" } }, { status: 400 });
+    }
+    return originalFetch(input as RequestInfo, init);
+  }) as typeof fetch;
+  const server = startServer(0);
+  try {
+    const { response, attempts, json } = await sendWithClientRetries(new URL("/v1/responses", server.url), {
+      model: "combo/pair", store: false, stream: true, ...RESPONSES_TURN,
+    });
+    expect({ firstSends, secondSends, attempts }).toEqual({ firstSends: 2, secondSends: 0, attempts: 1 });
+    expect(response.status).toBe(400);
+    expect(json.error?.code).toBe("context_length_exceeded");
+    expect(JSON.stringify(json)).toContain("Input exceeds the model context window.");
+  } finally {
+    await server.stop(true);
+  }
+});
+
+test("the direct path refuses replay after a spent replacement's decrypt failure", async () => {
+  const config = parityConfig();
+  config.providers.bridged.retryOnReset = {};
+  saveConfig(config);
+  let upstreamSends = 0;
+  const sends = countingUpstream(() => {
+    upstreamSends += 1;
+    if (upstreamSends === 1) preHeaderReset();
+    const failure = { type: "response.failed", response: {
+      id: "resp_decrypt_failed", status: "failed",
+      error: { type: "server_error", code: "upstream_server_error",
+        message: "Encrypted function output content could not be decrypted or decoded." },
+    } };
+    return new Response(`event: response.failed\ndata: ${JSON.stringify(failure)}\n\ndata: [DONE]\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    });
+  });
+  // Canonical key-independent Fernet structure, as in the opaque-blob recovery fixtures.
+  const encryptedContent = `${Buffer.concat([
+    Buffer.from([0x80]), Buffer.alloc(8), Buffer.alloc(16), Buffer.alloc(16), Buffer.alloc(32),
+  ]).toString("base64url")}==`;
+  const server = startServer(0);
+  try {
+    const response = await originalFetch(new URL("/v1/responses", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "bridged/model", store: false, stream: true,
+        input: [
+          { type: "function_call", call_id: "call-encrypted-output", name: "browser_capture", arguments: "{}" },
+          { type: "function_call_output", call_id: "call-encrypted-output", output: [
+            { type: "encrypted_content", encrypted_content: encryptedContent },
+            { type: "input_text", text: "visible tool output" },
+            { type: "input_image", image_url: "data:image/png;base64,AAAA", detail: "high" },
+          ] },
+          { role: "user", content: [{ type: "input_text", text: "continue" }] },
+        ],
+      }),
+    });
+    expect(sends()).toBe(2);
+    expect(response.status).toBe(REPLAY_REFUSED_STATUS);
+    expect((await response.json()).error.code).toBe(UPSTREAM_RESET_REPLAY_REFUSED_CODE);
+    expect(response.headers.get(REPLAY_REFUSAL_NO_RETRY_HEADER)).toBe(REPLAY_REFUSAL_NO_RETRY_VALUE);
+  } finally {
+    await server.stop(true);
+  }
+});
 
 test.each([
   { name: "a context overflow", status: 400, expectedStatus: 400 },
