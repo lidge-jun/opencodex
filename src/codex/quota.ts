@@ -200,6 +200,7 @@ function isExplicitMonthlyWindow(window: WhamUsageWindow | null | undefined): bo
     && seconds >= MONTHLY_WINDOW_MIN_SECONDS;
 }
 
+/** Same 24h short/long boundary as the parser; this includes a declared one-day window. */
 function isExplicitLongWindow(window: WhamUsageWindow | null | undefined): boolean {
   const seconds = window?.limit_window_seconds;
   return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= WEEKLY_WINDOW_MIN_SECONDS;
@@ -804,8 +805,8 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
   const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
   const [primary, secondary, tertiary] = windows;
-  // A complete, valid long-window WHAM response can retire an old 5h policy tuple.
-  // The primary must declare its duration; absent secondary windows may be null or omitted.
+  // Policy treats one valid WHAM snapshot as a replacement when all declared windows are >=24h.
+  // This trusts the reported topology; absent secondary windows may be null or omitted.
   // Headers never supply this proof, and reset time alone still cannot release a block.
   if (quota && normalizeUsagePercent(primary?.used_percent) !== undefined && isExplicitLongWindow(primary)
     && (secondary == null || isExplicitLongWindow(secondary))

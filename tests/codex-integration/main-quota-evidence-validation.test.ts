@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
@@ -160,6 +160,19 @@ describe("main policy window replacement", () => {
     expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
   }
 
+  test.each([86_399, 86_400, 86_401])("primary duration %s follows the exact 24h parser boundary", seconds => {
+    retainedShort();
+    const data = { rate_limit: {
+      primary_window: { used_percent: 20, limit_window_seconds: seconds }, secondary_window: null,
+    } };
+    const parsed = parseMainPolicyUsageQuota(data);
+    expect(parsed?.shortWindowAbsent).toBe(seconds >= 86_400 ? true : undefined);
+    publish(data);
+    expect(getMainPolicyQuota()?.shortPercent).toBe(seconds < 86_400 ? 20 : undefined);
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(seconds < 86_400 ? 35 : 20);
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
+  });
+
   for (const [field, seconds] of [["weeklyPercent", weeklySeconds], ["monthlyPercent", monthlySeconds]] as const) {
     test.each([0, 35, 98.99, 99, 100])(`fresh ${field}=%s replaces a retired persisted short window`, percent => {
       retainedShort();
@@ -218,23 +231,6 @@ describe("main policy window replacement", () => {
     applyAccountQuotaFromUpstreamHeaders(MAIN, new Headers({
       "x-codex-primary-used-percent": "35", "x-codex-primary-window-minutes": "10080",
     }), undefined, writerFor());
-    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
-  });
-
-  test("window replacement persists without carrying its proof into later partial updates", async () => {
-    retainedShort();
-    publish({ rate_limit: {
-      primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: null,
-    } });
-    await Bun.sleep(350);
-    const path = join(home, "codex-quota-cache.json");
-    const persisted = readFileSync(path, "utf8");
-    clearAccountQuota();
-    writeFileSync(path, persisted);
-    expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
-    expect(getMainPolicyQuota()).not.toHaveProperty("shortWindowAbsent");
-    publish({ rate_limit: { primary_window: { used_percent: 99, limit_window_seconds: 18_000 } } });
-    publish({ rate_limit: { primary_window: { used_percent: 0 } } });
     expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
   });
 

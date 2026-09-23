@@ -301,13 +301,17 @@ release the block. Policy validation precedes legacy clamping. Supplementary mon
 become the fallback governing window without a monthly-only plan or explicit primary-monthly evidence.
 Previously unobserved usage is unknown, not fabricated headroom.
 
-A fresh valid WHAM response with an explicitly long primary window can replace an obsolete
+A single fresh valid WHAM response with an explicitly long primary window can replace an obsolete
 short-window tuple when secondary and tertiary windows are absent or also explicitly long.
+Long means **at least 24 hours**, matching the parser's short/long discriminator; a one-day primary
+qualifies, not only a seven-day or monthly window. The policy trusts that one reported topology;
+it does not require repeated observations or independently confirm upstream window completeness.
 An unknown primary duration, partial headers, or invalid usage cannot prove that the
 short window disappeared. Replacement proof belongs only to that observation and is never persisted;
 the resulting weekly/monthly window still blocks at 99%. This prevents old short-window exhaustion
 from surviving indefinitely on a now weekly/monthly account. Coverage lives in
-`tests/codex-integration/main-quota-evidence-validation.test.ts` and
+`tests/codex-integration/main-quota-evidence-validation.test.ts`,
+`tests/codex-integration/main-quota-provenance.test.ts`, and
 `tests/codex-integration/main-account-hard-lock-recovery.test.ts`.
 
 The policy reads a separately retained identity-tagged quota snapshot, so the legacy rotation
