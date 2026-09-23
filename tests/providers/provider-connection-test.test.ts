@@ -134,17 +134,17 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     try {
       await saveCredential("github-copilot", {
         accountId: "account-a", access: "fixture-account-a-old", refresh: "fixture-refresh-a",
-        expires: Date.now() - 1, apiBaseUrl: "https://api.githubcopilot.com",
+        expires: Date.now() - 1, apiBaseUrl: "https://api.business.githubcopilot.com",
       });
       OAUTH_PROVIDERS["github-copilot"]!.refresh = async () => {
         refreshCalls += 1;
         await saveCredential("github-copilot", {
           accountId: "account-b", access: "fixture-account-b", refresh: "fixture-refresh-b",
-          expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.business.githubcopilot.com",
+          expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.githubcopilot.com",
         });
         return {
           accountId: "account-a", access: "fixture-account-a-new", refresh: "fixture-refresh-a",
-          expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.githubcopilot.com",
+          expires: Date.now() + 3_600_000, apiBaseUrl: "https://api.business.githubcopilot.com",
         };
       };
       const config = baseConfig({
@@ -153,7 +153,9 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
       const { body } = await probe(config, "github-copilot");
 
       expect(refreshCalls).toBe(1);
-      expect(calls).toEqual([{ url: "https://api.githubcopilot.com/models", authorization: "Bearer fixture-account-a-new" }]);
+      // Account A sits on the business host, away from the row's default, so a route that dropped the
+      // snapshot's origin fails here as surely as one that took account B's.
+      expect(calls).toEqual([{ url: "https://api.business.githubcopilot.com/models", authorization: "Bearer fixture-account-a-new" }]);
       expect(body).toMatchObject({ ok: true, models: 1 });
     } finally {
       OAUTH_PROVIDERS["github-copilot"]!.refresh = originalRefresh;
