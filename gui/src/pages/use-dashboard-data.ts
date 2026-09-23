@@ -47,6 +47,7 @@ import {
   defaultUpdateChannel,
   hashRequestsUpdateDialog,
   mergeSidecarSetting,
+  nextSidecarCodexApply,
   readDashboardSectionFromHash,
   requireJson,
   webSearchModelOptionsForPicker,
@@ -577,7 +578,9 @@ const [maBusy, setMaBusy] = useState(false);
       const data = await requireJson<SidecarData>(res, "save failed");
       // The Codex-side write is a separate outcome from the stored switch: it can be refused
       // while the setting is saved, and the card has to say so instead of implying it happened.
-      setSidecarCodexApply(data.codexWebSearch);
+      // A save that did not move this switch answers `not_requested` about a file it never
+      // touched, so it must not clear an earlier failure.
+      setSidecarCodexApply(previousReport => nextSidecarCodexApply(previousReport, data.codexWebSearch));
       setSidecar({
         webSearch: data.webSearch,
         vision: data.vision,

@@ -268,6 +268,21 @@ export function sidecarCodexWritePending(report: SidecarCodexApply | undefined):
   return report?.applied === false && report.reason !== "not_requested";
 }
 
+/**
+ * Which Codex-config report the Dashboard keeps after a save.
+ *
+ * A save that did not move the web-search switch (`not_requested`) says nothing about the Codex
+ * file — a Vision save answers that way while the failed web-search write is still outstanding. So
+ * a pending report outlives it instead of being cleared by an answer that never described the
+ * file. An applied write and the model sync both replace it with a settled report.
+ */
+export function nextSidecarCodexApply(
+  previous: SidecarCodexApply | undefined,
+  report: SidecarCodexApply | undefined,
+): SidecarCodexApply | undefined {
+  return report?.reason === "not_requested" && sidecarCodexWritePending(previous) ? previous : report;
+}
+
 export function visionMaxDescriptionsPatch(maxDescriptionsPerTurn: number): SidecarPatch {
   return { vision: { maxDescriptionsPerTurn } };
 }
