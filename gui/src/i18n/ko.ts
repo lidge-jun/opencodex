@@ -361,6 +361,7 @@ export const ko: Record<TKey, string> = {
   "dash.webSearchSidecar": "웹 검색 사이드카",
   "dash.webSearchSidecarHint": "라우팅 모델의 웹 검색에 쓸 백엔드와 모델을 고릅니다.",
   "dash.webSearchOff": "끔",
+  "dash.webSearchCodexSync": "저장했습니다. Codex 설정이 아직 다시 작성되지 않았습니다 — “모델 동기화”를 실행하세요.",
   "dash.webSearchStream": "응답 실시간 스트리밍",
   "dash.webSearchStreamHint": "모델이 도구 호출을 결정할 때까지 앞부분 텍스트와 추론을 실시간 스트리밍합니다. 이후는 검색 가로채기를 위해 버퍼링됩니다. 검색 전 텍스트가 일부 반복될 수 있습니다.",
   "dash.visionSidecar": "비전 사이드카",

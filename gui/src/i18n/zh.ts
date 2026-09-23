@@ -361,6 +361,7 @@ export const zh: Record<TKey, string> = {
   "dash.webSearchSidecar": "网页搜索附属服务",
   "dash.webSearchSidecarHint": "选择路由模型进行网页搜索时使用的后端和模型。",
   "dash.webSearchOff": "关闭",
+  "dash.webSearchCodexSync": "已保存。Codex 的配置尚未重写 — 请运行“同步模型”。",
   "dash.webSearchStream": "实时流式输出回答",
   "dash.webSearchStreamHint": "实时流式输出开头的文本和推理，直到模型决定调用工具；其余部分为拦截搜索而保持缓冲。搜索前的文本可能会部分重复。",
   "dash.visionSidecar": "视觉附属服务",

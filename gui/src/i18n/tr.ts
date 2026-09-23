@@ -367,6 +367,7 @@ export const tr: Record<TKey, string> = {
   "dash.webSearchSidecar": "Web arama yan aracı (sidecar)",
   "dash.webSearchSidecarHint": "Yönlendirilen modellerde web araması için kullanılan arka ucu ve modeli seçin.",
   "dash.webSearchOff": "Kapalı",
+  "dash.webSearchCodexSync": "Kaydedildi. Codex yapılandırması henüz yeniden yazılmadı — “Modelleri senkronize et”i çalıştırın.",
   "dash.webSearchStream": "Yanıtları canlı akıt",
   "dash.webSearchStreamHint": "Model bir araç çağrısına karar verene kadar baştaki metni ve akıl yürütmeyi canlı akıtır; kalanı arama yakalama için arabelleğe alınır. Aramadan önce yazılan metin kısmen tekrarlanabilir.",
   "dash.visionSidecar": "Görsel yan aracı (sidecar)",

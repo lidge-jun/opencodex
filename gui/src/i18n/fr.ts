@@ -359,6 +359,7 @@ export const fr: Record<TKey, string> = {
   "dash.webSearchSidecar": "Service auxiliaire de recherche Web",
   "dash.webSearchSidecarHint": "Choisissez le moteur et le modèle utilisés pour la recherche Web sur les modèles routés.",
   "dash.webSearchOff": "Désactivé",
+  "dash.webSearchCodexSync": "Enregistré. La config de Codex n'a pas été réécrite — lancez « Synchroniser les modèles ».",
   "dash.webSearchStream": "Diffuser les réponses en direct",
   "dash.webSearchStreamHint": "Diffuse en direct le texte initial et le raisonnement du modèle jusqu’à ce qu’il décide d’appeler un outil ; le reste du tour demeure en mémoire tampon pour intercepter la recherche. Le texte produit avant une recherche peut être partiellement répété.",
   "dash.visionSidecar": "Service auxiliaire de vision",

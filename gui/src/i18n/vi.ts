@@ -359,6 +359,7 @@ export const vi: Record<TKey, string> = {
   "dash.webSearchSidecar": "Web search sidecar",
   "dash.webSearchSidecarHint": "Chọn backend và model được sử dụng cho tìm kiếm web trên các models định tuyến.",
   "dash.webSearchOff": "Tắt",
+  "dash.webSearchCodexSync": "Đã lưu. Cấu hình Codex chưa được ghi lại — hãy chạy “Đồng bộ models”.",
   "dash.webSearchStream": "Phát trực tuyến (Stream) các câu trả lời trực tiếp",
   "dash.webSearchStreamHint": "Phát trực tuyến các văn bản dẫn dắt và quá trình lý luận của model cho đến khi nó quyết định gọi một công cụ; phần còn lại của lượt chạy sẽ được lưu đệm (buffered) để can thiệp tìm kiếm. Văn bản được viết trước một tìm kiếm có thể lặp lại một phần.",
   "dash.visionSidecar": "Vision sidecar",

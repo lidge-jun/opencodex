@@ -218,12 +218,14 @@ the only search path needs both halves; otherwise the model keeps calling the na
 `web_search` is Codex's key with its own value space (`disabled`, `cached`, `indexed`, `live`).
 OpenCodex only ever writes `disabled` while the sidecar is off, and removes its marker-owned line
 again once the sidecar is back on — a re-enabled sidecar whose client still had the native tool
-switched off would have nothing to intercept. The write needs a managed `~/.codex/config.toml`
-(`ocx sync`); the management response reports it as `codexWebSearch`, and
-`ocx agent sidecar web --enabled off` prints whether it happened. A root `web_search` line the
-operator set by hand is replaced while the sidecar is off, since two root keys of the same name
-are not valid TOML; `ocx restore` replays the journal snapshot and brings that value back, like
-every other line the injection rewrites.
+switched off would have nothing to intercept. The write needs a managed `~/.codex/config.toml` (`ocx
+sync`); the management response reports it as `codexWebSearch`, and both surfaces that can show it
+do: the Dashboard's web-search card warns when the write did not happen, and `ocx agent sidecar web
+--enabled off` prints whether it happened. Only a save that moves the switch triggers the write, so
+the ordinary "nothing changed" answer reports `not_requested` and prints nothing extra. A root
+`web_search` line the operator set by hand is replaced while the sidecar is off, since two root keys
+of the same name are not valid TOML; `ocx restore` replays the journal snapshot and brings that
+value back, like every other line the injection rewrites.
 
 You can still set `enabled: false` in `config.json` if you prefer to edit the
 file directly. Anthropic-OAuth search and image description reuse the existing

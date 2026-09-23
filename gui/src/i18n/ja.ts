@@ -366,6 +366,7 @@ export const ja: Record<TKey, string> = {
   "dash.webSearchSidecar": "ウェブ検索サイドカー",
   "dash.webSearchSidecarHint": "ルーティングモデルでウェブ検索に使うバックエンドとモデルを選択します。",
   "dash.webSearchOff": "オフ",
+  "dash.webSearchCodexSync": "保存しました。Codex の設定はまだ書き換えられていません —「モデルを同期」を実行してください。",
   "dash.webSearchStream": "回答をライブ配信",
   "dash.webSearchStreamHint": "モデルがツール呼び出しを決定するまで、先頭のテキストと推論をライブ配信します。以降は検索インターセプトのためバッファされます。検索前のテキストは一部繰り返される場合があります。",
   "dash.visionSidecar": "ビジョンサイドカー",

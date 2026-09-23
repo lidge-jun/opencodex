@@ -18,6 +18,7 @@ import {
   webSearchSidecarSelectionForModel,
   updateJobLabel,
   webSearchEnabledPatch,
+  sidecarCodexWritePending,
   visionEnabledPatch,
   visionMaxDescriptionsPatch,
   visionReasoningLadder,
@@ -442,6 +443,7 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
     t, settings, settingsSaving, syncing, toggleCodexAutoStart, toggleCodexDesktopAuthless,
     toggleCodexClientCompaction,
     sidecar, sidecarSaving, sidecarModels, visionModels, models, saveSidecar,
+    sidecarCodexApply,
     shadowCall, shadowCallSaving, shadowCallHelpTriggerRef, shadowCallHelpOpen, setShadowCallHelpOpen, saveShadowCall,
   } = d;
   const visionEnabled = sidecar?.vision?.enabled !== false;
@@ -557,6 +559,15 @@ export function DashboardSidecarPanels({ d }: { d: Dash }) {
           <div className="dash-sidecar-copy">
             <div className="font-semibold">{t("dash.webSearchSidecar")}</div>
             <div className="muted setting-hint">{t("dash.webSearchSidecarHint")}</div>
+            {/* The switch is stored even when Codex's own key was not rewritten. Saying nothing
+                here would read as "the native tool is off now", which is exactly the state the
+                operator asked for and may not have. */}
+            {sidecarCodexWritePending(sidecarCodexApply) && (
+              <div className="notice-warn" role="status">
+                <IconAlert />
+                <span>{t("dash.webSearchCodexSync")}</span>
+              </div>
+            )}
           </div>
           {/* Same two-row shape as the vision card: the model select owns the first row,
               and the secondary control sits right-aligned on its own row below. Sharing the

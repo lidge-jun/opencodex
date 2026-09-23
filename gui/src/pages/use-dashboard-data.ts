@@ -41,6 +41,7 @@ import {
   type UpdateCheckData,
   type UpdateJob,
   type UsageSummary30d,
+  type SidecarCodexApply,
   UPDATE_CHECK_MAX_AUTO_RETRIES,
   UPDATE_CHECK_RETRY_BASE_MS,
   defaultUpdateChannel,
@@ -177,6 +178,7 @@ export function useDashboardData(apiBase: string, refreshEpoch = 0) {
   const [shadowCall, setShadowCall] = useState<ShadowCallData | null>(() => cachedControls?.shadowCall ?? null);
   const [usage30d, setUsage30d] = useState<UsageSummary30d | null>(() => cachedUsage);
   const [sidecarSaving, setSidecarSaving] = useState(false);
+  const [sidecarCodexApply, setSidecarCodexApply] = useState<SidecarCodexApply | undefined>();
   const [shadowCallSaving, setShadowCallSaving] = useState(false);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -573,6 +575,9 @@ const [maBusy, setMaBusy] = useState(false);
         body: JSON.stringify(patch),
       });
       const data = await requireJson<SidecarData>(res, "save failed");
+      // The Codex-side write is a separate outcome from the stored switch: it can be refused
+      // while the setting is saved, and the card has to say so instead of implying it happened.
+      setSidecarCodexApply(data.codexWebSearch);
       setSidecar({
         webSearch: data.webSearch,
         vision: data.vision,
@@ -591,6 +596,7 @@ const [maBusy, setMaBusy] = useState(false);
       });
     } catch {
       setSidecar(previous);
+      setSidecarCodexApply(undefined);
     } finally {
       setSidecarSaving(false);
     }
@@ -787,6 +793,9 @@ const [maBusy, setMaBusy] = useState(false);
       setSyncResult(data);
       if (data.ok && data.status === "applied") {
         dispatchSettings({ type: "applied" });
+        // A successful sync rewrites the Codex config from the stored settings, which is exactly
+        // the write the sidecar card was still warning about.
+        setSidecarCodexApply(undefined);
       }
       if (data.projectConfigGrouped) setProjectConfigWarnings(data.projectConfigGrouped);
     } catch (err) {
@@ -930,6 +939,7 @@ maMode, maModeResolved, maBusy, setMaHelpOpen, maHelpOpen,
     effortCapHelpTriggerRef, updateTriggerRef, maHelpTriggerRef, shadowCallHelpTriggerRef,
     effortCapHelpDialogRef, updateDialogRef, maHelpDialogRef, shadowCallHelpDialogRef,
     filteredGroups, sidecarModels, visionModels,
+    sidecarCodexApply,
     saveSidecar, saveShadowCall, switchMaMode, toggleCodexAutoStart, toggleCodexDesktopAuthless,
     toggleCodexClientCompaction, runSync, clearSyncFeedback,
     fetchUpdateCheck, closeUpdateDialog, openUpdateDialog, changeUpdateChannel, runUpdate,

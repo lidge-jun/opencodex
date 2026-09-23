@@ -37,9 +37,11 @@ ocx agent sidecar web --enabled off
 `--enabled off` is the same switch as the Dashboard's Off row: OpenCodex stops running the
 sidecar and the Codex integration writes `web_search = "disabled"` into `~/.codex/config.toml`,
 which is what lets an MCP search server be the only search path. `--enabled on` removes that
-marker-owned line again. The command reports the Codex-side write (`codexWebSearch` in `--json`,
-a trailing `Codex config:` line otherwise) and points at `ocx sync` when it could not happen.
-The flag works for `vision` too.
+marker-owned line again. When the save actually moves the switch, the command reports the
+Codex-side write it triggered (`codexWebSearch` in `--json`, a trailing `Codex config:` line
+otherwise) and points at `ocx sync` when it could not happen; a save that leaves the switch
+where it was has nothing to report and prints no `Codex config:` line. The flag works for
+`vision` too.
 
 ### `ocx effort [status|set|clear]`
 

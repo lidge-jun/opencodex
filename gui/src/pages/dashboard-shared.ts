@@ -102,6 +102,9 @@ export interface WebSearchPickerOption {
 export interface SidecarData {
   webSearch: SidecarSetting;
   vision: SidecarSetting;
+  /** The Codex-side write a sidecar PUT attempted, when the switch actually moved.
+   *  Absent on an older server; the client then shows nothing rather than guessing. */
+  codexWebSearch?: SidecarCodexApply;
   /** Server-computed eligible describers. Optional: an older server omits it and
    *  the client falls back to the legacy provider-name list rather than showing
    *  an empty picker. */
@@ -110,6 +113,14 @@ export interface SidecarData {
    *  contract as visionModels: an older server omits the key and the client
    *  falls back to the legacy list; a current server's [] means none. */
   webSearchModels?: WebSearchModelOption[];
+}
+
+/** The Codex-config apply report a management write returns (same shape as the Desktop switches'). */
+export interface SidecarCodexApply {
+  applied?: boolean;
+  reason?: string;
+  retryable?: boolean;
+  detail?: string;
 }
 export interface SidecarPatch {
   webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean; enabled?: boolean };
@@ -244,6 +255,17 @@ export function visionEnabledPatch(enabled: boolean): SidecarPatch {
  */
 export function webSearchEnabledPatch(enabled: boolean): SidecarPatch {
   return { webSearch: { enabled } };
+}
+
+/**
+ * True when the last sidecar save asked for a Codex-config write and the write did not happen.
+ *
+ * The sidecar's own switch is stored either way — this is the client-side half that keeps an
+ * operator from reading a stored "Off" as a native `web_search` tool that is already gone. The
+ * ordinary "nothing moved" answer (`not_requested`) stays silent: it is not a failure.
+ */
+export function sidecarCodexWritePending(report: SidecarCodexApply | undefined): boolean {
+  return report?.applied === false && report.reason !== "not_requested";
 }
 
 export function visionMaxDescriptionsPatch(maxDescriptionsPerTurn: number): SidecarPatch {

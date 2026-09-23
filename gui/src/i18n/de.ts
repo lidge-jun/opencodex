@@ -357,6 +357,7 @@ export const de: Record<TKey, string> = {
   "dash.webSearchSidecar": "Websuche-Sidecar",
   "dash.webSearchSidecarHint": "Backend und Modell für die Websuche gerouteter Modelle auswählen.",
   "dash.webSearchOff": "Aus",
+  "dash.webSearchCodexSync": "Gespeichert. Codex' Config wurde nicht neu geschrieben – nutze „Modelle synchronisieren“.",
   "dash.webSearchStream": "Antworten live streamen",
   "dash.webSearchStreamHint": "Führenden Text und Reasoning live streamen, bis das Modell über einen Tool-Aufruf entscheidet; der Rest bleibt für das Abfangen der Suche gepuffert. Text vor einer Suche kann sich teilweise wiederholen.",
   "dash.visionSidecar": "Vision-Sidecar",
