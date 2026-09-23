@@ -120,14 +120,18 @@ function userMessage(): Record<string, unknown> {
  * `store` is deliberately omitted, as in the reporter's reproduction. With `store: false` every
  * item id is already removed, which is why the foreign id only surfaced on this shape.
  */
-function switchedRequest(provider: ProviderName, session = `session-${provider}`): Request {
+function switchedRequest(
+  provider: ProviderName,
+  session = `session-${provider}`,
+  options: { model?: string; input?: Array<Record<string, unknown>> } = {},
+): Request {
   return new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json", session_id: session },
     body: JSON.stringify({
-      model: `${provider}/gpt-5.6-sol`,
+      model: `${provider}/${options.model ?? "gpt-5.6-sol"}`,
       stream: false,
-      input: [foreignReasoningItem(), userMessage()],
+      input: options.input ?? [foreignReasoningItem(), userMessage()],
     }),
   });
 }
@@ -317,6 +321,58 @@ describe("switching a conversation onto a Responses destination through /v1/resp
       expect(response.status).not.toBe(200);
       expect(body).toContain("request_send_budget_exhausted");
       expect(budget.used).toBe(1);
+    });
+
+    test(`${provider}: a proven switch from another destination drops the blob and the id before the first send`, async () => {
+      const outbound: Array<Record<string, unknown>> = [];
+      statefulDestination(outbound);
+      const previous: ProviderName = provider === "azure" ? "responses" : "azure";
+      const session = `proven-switch-to-${provider}`;
+
+      // The conversation is first served by the other provider, which records its serving route.
+      const seeded = await handleResponses(
+        switchedRequest(previous, session, { input: [userMessage()] }),
+        config(),
+        { model: "", provider: "" },
+      );
+      expect(seeded.status).toBe(200);
+      await seeded.text();
+
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const response = await handleResponses(switchedRequest(provider, session), config(), logCtx);
+      expect(response.status).toBe(200);
+      await response.text();
+
+      expect(outbound).toHaveLength(2);
+      expect(carriesForeignBlob(outbound[1]!)).toBe(false);
+      expect(carriesForeignItemId(outbound[1]!)).toBe(false);
+      expect(logCtx.activeAttempt?.sendCount).toBe(1);
+    });
+
+    test(`${provider}: a model change on the same destination and credential keeps the item id`, async () => {
+      const outbound: Array<Record<string, unknown>> = [];
+      globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        outbound.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return success(`resp-${outbound.length}`);
+      }) as typeof fetch;
+      const session = `same-store-${provider}`;
+
+      const seeded = await handleResponses(
+        switchedRequest(provider, session, { model: "gpt-5.5", input: [userMessage()] }),
+        config(),
+        { model: "", provider: "" },
+      );
+      expect(seeded.status).toBe(200);
+      await seeded.text();
+      const response = await handleResponses(switchedRequest(provider, session), config(), { model: "", provider: "" });
+      expect(response.status).toBe(200);
+      await response.text();
+
+      // The model changed, so the blob is no longer trusted, but the store that holds the item
+      // is the same one and can still resolve its id.
+      expect(outbound).toHaveLength(2);
+      expect(carriesForeignBlob(outbound[1]!)).toBe(false);
+      expect(carriesForeignItemId(outbound[1]!)).toBe(true);
     });
   }
 });

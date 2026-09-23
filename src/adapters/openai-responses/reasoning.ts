@@ -36,8 +36,8 @@ export function sanitizeReasoningInputContent(
     dropNullContentChannel?: boolean;
     stripEncryptedContent?: boolean;
     /**
-     * Also remove `id` from an item whose `encrypted_content` this call removes. Set only after the
-     * destination rejected foreign opaque state; see `OcxParsedRequest._dropRejectedReasoningItemIds`.
+     * Also remove `id` from an item whose `encrypted_content` this call removes, because the id names
+     * an item in another store; see `OcxParsedRequest._dropForeignReasoningItemIds`.
      */
     dropStrippedItemId?: boolean;
   },

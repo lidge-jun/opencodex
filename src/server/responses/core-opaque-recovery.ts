@@ -410,9 +410,9 @@ export async function consoleGoUploadRejectionBody(
 
 export function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
   parsed._stripReasoningEncryptedContent = true;
-  // The destination rejected state the previous serving identity minted. A reasoning item's id
-  // came from that same identity, so it goes with the blob.
-  parsed._dropRejectedReasoningItemIds = true;
+  // The destination rejected state another serving identity minted. A reasoning item's id names
+  // an item in that identity's store, so it goes with the blob.
+  parsed._dropForeignReasoningItemIds = true;
   const rawBody = parsed._rawBody;
   if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) return;
   const input = (rawBody as { input?: unknown }).input;
