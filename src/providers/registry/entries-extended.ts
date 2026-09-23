@@ -824,15 +824,30 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // glm-5.3 carry live end-to-end evidence there (custom tools, reasoning replay, streaming,
     // multi-turn continuation).
     //
-    // That is deliberately NOT expressed as a modelWireDefaults pin. Pinning would move every
-    // existing Codex user of those models onto a different upstream with no config change, and
-    // one delta is unresolved: preserveReasoningContentModels below is read by the CHAT adapter,
-    // while the Responses serializer reads preserveResponsesReasoningContent, which this entry
-    // does not set. On the Responses wire those models would replay with blanked reasoning
-    // content -- less state than they carry today. Z.AI and DeepSeek set both flags together for
-    // exactly this reason. Until that flag is justified against this gateway, Responses stays a
-    // documented per-model modelAdapters opt-in;
-    // tests/providers/alibaba-token-plan-responses-optin.test.ts holds both halves.
+    // That evidence is now expressed as a modelWireDefaults pin scoped to Responses inbound
+    // only: Codex clients ride the native wire with zero translation hops, while chat and
+    // anthropic inbound keep the provider-wide chat wire and its measured prefix-cache
+    // behavior. The pin was held back until the one open delta was closed with its own live
+    // evidence: the Responses serializer replays reasoning content through the separate
+    // preserveResponsesReasoningContent flag, which the Chat-side preserveReasoningContentModels
+    // list does not cover. Measured 260922 on this gateway (#5188): a two-turn replay that
+    // round-trips a reasoning item WITH its plaintext content array is accepted (HTTP 200) and
+    // the model continues from it, so the flag is set beside the pins — the same pairing Z.AI
+    // and DeepSeek use. qwen3.7-plus is the one pinned model in thinkingBudgetModels, and its
+    // full low/medium/high/xhigh/max effort ladder is accepted as reasoning.effort strings on
+    // this wire (measured same day), so the Responses path does not need the numeric
+    // thinking_budget translation the Chat wire applies. The rest of the family stays a
+    // documented per-model modelAdapters opt-in; modelAdapters always wins over the pin in
+    // both directions.
+    // tests/providers/alibaba-token-plan-responses-optin.test.ts holds the opt-in half and the
+    // flag guard; tests/providers/alibaba-token-plan-wire-defaults.test.ts holds the pins.
+    // The intl sibling stays unpinned until the same four-axis verification runs against its
+    // gateway (its /responses route is registered, #5097).
+    modelWireDefaults: {
+      "qwen3.8-flash": { wire: "openai-responses", inbound: ["responses"] },
+      "qwen3.7-plus": { wire: "openai-responses", inbound: ["responses"] },
+      "glm-5.3": { wire: "openai-responses", inbound: ["responses"] },
+    },
     note: "Token Plan Personal Edition · China (Beijing)",
     modelInputModalities: ALIBABA_TOKEN_PLAN_INPUT_MODALITIES,
     modelContextWindows: ALIBABA_TOKEN_PLAN_CONTEXT_WINDOWS,
@@ -862,6 +877,10 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     directReasoningEffortModels: QWEN38_FAMILY,
     thinkingBudgetModels: ALIBABA_TOKEN_PLAN_QWEN_MODELS.filter(id => !QWEN38_FAMILY.includes(id)),
     preserveReasoningContentModels: ALIBABA_TOKEN_PLAN_PRESERVE_REASONING,
+    // Responses replay uses this provider-level flag, not the Chat-path model list above;
+    // measured live on this gateway (see the pin comment). The model list still covers a
+    // caller who opts back into Chat.
+    preserveResponsesReasoningContent: true,
     noVisionModels: ALIBABA_TOKEN_PLAN_NO_VISION,
     // The gateway accepts prompt_cache_key on every Token Plan chat model (probed 260902).
     promptCacheKey: true,

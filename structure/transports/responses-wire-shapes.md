@@ -15,6 +15,16 @@ different custom destination does not inherit its upstream assumptions. Object-f
 also narrow the decision by inbound protocol and authentication mode; an auth-scoped default must
 not leak from a subscription transport into an API-key or forwarded-credential route.
 
+Alibaba Token Plan (Beijing) keeps `openai-chat` provider-wide but defaults `qwen3.8-flash`,
+`qwen3.7-plus` and `glm-5.3` to `openai-responses` for Responses inbound only; Chat and Anthropic
+inbound stay on Chat and its measured prefix-cache behavior. The entry sets
+`preserveResponsesReasoningContent` beside the pins, because the Responses serializer reads that
+flag rather than the Chat-side `preserveReasoningContentModels` list, and this gateway accepted
+replayed plaintext reasoning content live. `qwen3.7-plus` sends effort as a `reasoning.effort`
+string on this wire instead of the numeric `thinking_budget` the Chat wire applies. The intl sibling
+stays unpinned. `tests/providers/alibaba-token-plan-wire-defaults.test.ts` covers the pins and the
+replay flag.
+
 xAI keeps `openai-chat` as its provider-wide compatibility wire, but Grok 4.5/4.6/4.7 subscription
 Responses requests default to native `openai-responses`. Existing namespace, hosted-search and
 reasoning-replay normalization remains in force. The reserved `xai` OAuth transport is name-pinned

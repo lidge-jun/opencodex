@@ -27,6 +27,7 @@
   "alibaba-region-migration.test.ts": "providers",
   "alibaba-region-startup.test.ts": "providers",
   "alibaba-token-plan-responses-optin.test.ts": "providers",
+  "alibaba-token-plan-wire-defaults.test.ts": "providers",
   "always-on-429-failover.test.ts": "routing",
   "ambiguous-resend-composition.test.ts": "lib",
   "ambiguous-resend-gate.test.ts": "lib",
