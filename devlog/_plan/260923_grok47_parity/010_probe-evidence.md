@@ -44,7 +44,8 @@ models.dev `xai/grok-4.7`: output limit 500,000 (same as grok-4.6), released 202
 | opencode-go / opencode-zen | public `/zen/go/v1/models` and `/zen/v1/models` list `grok-4.7` | listed (not configured locally, not probed) |
 | openrouter | public API `x-ai/grok-4.7`: 500000 ctx, max completion 450000, $1.6/$4.8/$0.4, >=200k $3.2/$9.6/$0.8, text+image+file | listed (not probed) |
 | github-copilot | models.dev `grok-4.7`: ctx 500000, input 372000, output 128000 | listed (not configured locally) |
-| kilo, vercel, zenmux | models.dev lists kilo `x-ai/grok-4.7` and vercel `spacexai/grok-4.7` | listed |
+| kilo, vercel | models.dev lists kilo `x-ai/grok-4.7` and vercel `spacexai/grok-4.7` | listed |
 
-Side finding, not changed in this unit: command-code `xai/grok-4.6` read the same grids 9/9 (user message) and 8/9
-(tool result), although model-seeds.ts records that route as verified-negative for images.
+Command Code `xai/grok-4.6` is included in `COMMAND_CODE_IMAGE_MODELS`: it read the grids 9/9
+(user message) and 8/9 (tool result) without a vision sidecar. The registry accepts native image
+input; 8/9 remains the measured limitation on the tool-result path.
