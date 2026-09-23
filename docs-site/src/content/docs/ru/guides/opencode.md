@@ -120,7 +120,7 @@ upstream-заголовка `Authorization`.
 
 Loopback-привязка (`127.0.0.1`, по умолчанию) не требует аутентификации, поэтому ссылка `{env:…}`
 остаётся инертной, и переменную можно не задавать. Она важна только когда `hostname` выходит за
-пределы loopback; см. [Удалённый доступ](/reference/configuration/#remote-access). Этот admission key
+пределы loopback; см. [Удалённый доступ](/ru/reference/configuration/server/#удалённый-доступ). Этот admission key
 относится к самому opencodex и не связан с upstream-ключами провайдеров, настраиваемыми в
 [Провайдерах](/guides/providers/).
 

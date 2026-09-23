@@ -3,6 +3,7 @@ import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAX_ACTIVE_TURNS, abortAndReleaseAllTurns, activeRegistryMetrics, trackStreamLifetime, tryAdmitTurn, unregisterTurn } from "../../src/server/lifecycle";
+import { workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
 import {
   MAX_TRACKED_CODEX_WEBSOCKETS,
   getTrackedCodexWebSocketCountForAccount,
@@ -125,14 +126,20 @@ describe("active registry admission", () => {
     try {
       const response = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          "x-codex-parent-thread-id": "stream-root",
+          "thread-id": "stream-child",
+        },
         body: JSON.stringify({ model: "fixture/model", input: "hello", stream: true }),
       });
       expect(response.status).toBe(200);
       expect(activeRegistryMetrics().activeTurns.active).toBe(before + 1);
+      expect(workflowBudgetSnapshot("stream-root")?.active).toBe(1);
       settle();
       expect(await response.text()).toBe("chunk");
       expect(activeRegistryMetrics().activeTurns.active).toBe(before);
+      expect(workflowBudgetSnapshot("stream-root")?.active).toBe(0);
     } finally {
       settle?.();
       await server.stop(true);
@@ -175,6 +182,21 @@ describe("active registry admission", () => {
     expect(activeRegistryMetrics().activeTurns.active).toBe(before + 1);
     await new Response(nested).arrayBuffer();
     expect(activeRegistryMetrics().activeTurns.active).toBe(before);
+  });
+
+  test("a transferred turn retains attached admission until its stream settles", async () => {
+    const lease = tryAdmitTurn()!;
+    let attachedReleases = 0;
+    lease.attach({ release() { attachedReleases += 1; } });
+    const source = new ReadableStream<Uint8Array>({ pull() {} });
+    const tracked = trackStreamLifetime(source, new AbortController(), undefined, lease);
+
+    expect(lease.isTransferred()).toBe(true);
+    expect(attachedReleases).toBe(0);
+    await tracked.cancel();
+    expect(attachedReleases).toBe(1);
+    lease.release();
+    expect(attachedReleases).toBe(1);
   });
 
   test("the 256-turn gate bounds concurrency, not sequential continuation count", () => {

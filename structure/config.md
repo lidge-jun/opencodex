@@ -90,6 +90,8 @@ A schema-invalid top-level JSON value is repairable only when it is a non-array 
 `loadConfig` backs up arrays, primitives, and null before using defaults, so the repair
 merge cannot turn them into a valid config while discarding the original bytes.
 
+`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-tiers.md#ongoing-priority-failback) requires quota strategy and a positive threshold.
+
 | Group | Keys | Resolution rule |
 | --- | --- | --- |
 | Listener | `port`, `hostname` | The listener owns the port; `runtime-port.json` reports where it actually landed. |
@@ -105,6 +107,12 @@ merge cannot turn them into a valid config while discarding the original bytes.
 
 Env values are resolved through `src/config/proxy-env.ts`, so a config value naming an env var never persists
 the secret itself.
+
+`ocx doctor` reports proxy state on three separate surfaces: its own process environment, the
+effective `config.proxy`, and the running proxy process environment (read from
+`/proc/<pid>/environ` on Linux and WSL, reported as unavailable elsewhere). Each proxy key is shown
+as present or absent only; `src/cli/doctor.ts` never prints or persists a proxy value, because proxy
+URLs can carry credentials.
 
 Malformed optional data-loopback and nested hub-management listener blocks are disabled in memory and reported by load-time warnings and read-only config diagnostics. Ingress warnings validate the raw ingress independently, so an invalid hub sibling does not falsely blame a valid ingress. The warning names only the field; unrelated providers and keys survive. Explicit writes remain strictly validated.
 
@@ -561,36 +569,4 @@ to the live `/api/settings` mutation surface.
 
 Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
 
-## SOCKS5 activation owner
-
-`src/config/proxy-env.ts` remains the single application owner for global proxy
-configuration. An explicit SOCKS5 or SOCKS5h URL selects ALL_PROXY and removes
-stale scheme-proxy variables; HTTP(S) settings retain their existing environment
-precedence. Activation keeps the existing Windows auto-discovery path and loopback
-NO_PROXY entries; the no-configured-proxy return merges all of them only when an inherited
-SOCKS proxy is the only inherited proxy; whenever Bun applies an inherited HTTP(S) scheme proxy
-or HTTP(S) `ALL_PROXY`/`all_proxy`, it matches by domain suffix, so activation adds only the
-loopback addresses (never `localhost`); a proxy-free
-process is left untouched. The in-process
-matcher treats a bare `localhost` or IP-literal entry as one host, never a suffix. When opposite-case
-`ALL_PROXY` and `all_proxy` provide SOCKS and HTTP(S) together, the SOCKS wrapper forces an exact
-`localhost` request direct while keeping the address-only environment bypass. An inherited non-empty
-lowercase `no_proxy`, which Bun fetch reads first with suffix matching, receives only the loopback
-addresses, never a name it would match as a suffix. When the
-environment no longer selects SOCKS, activation
-restores the native fetch; removing a saved field alone does not erase inherited
-process environment variables.
-SOCKS4 is rejected instead of being advertised as a working transport.
-
-`src/cli/start-args.ts` parses `ocx start --socks5 [host:port]` and the mutually
-exclusive `--socks5-off`. The start owner persists only an explicitly requested
-change; the off flag refuses to erase a non-SOCKS proxy. Invalid-address errors
-never echo user-supplied credentials, and status messages redact proxy URLs.
-The parser regression cases live in `tests/cli/start-args.test.ts`.
-The config CLI masks credential-bearing `proxy` URLs in show, get, and mutation output:
-userinfo is stripped while host and port stay visible, `direct` and credential-less values
-print unchanged, and a non-URL value that is not `direct` is masked whole. `config export`
-keeps the raw file so exports can restore credentials. Get and mutation output select
-redaction by the normalized final path segment, matching lookup and mutation semantics.
-
-`src/config/schema/config-schema.ts` accepts the opt-in `codexAccountPriorityFailback` preference and degrades a malformed value in a loaded file to false without discarding providers, while a write candidate carrying a non-boolean value is rejected. A malformed entry in `codexAccountAutoSwitchThresholds` is dropped on load with a warning and the valid entries are kept, so an unrelated save cannot erase them. Its [routing contract](providers/openai-tiers.md#ongoing-priority-failback) requires quota strategy and a positive threshold.
+Proxy activation and credential-safe CLI output follow [Proxy Configuration](config-proxy.md).

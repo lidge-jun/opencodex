@@ -17,6 +17,7 @@ import type { OcxConfig } from "../../src/types";
 import { serveGuiFile, serveSessionBootstrap } from "../../src/server/gui-static";
 import { isProxyAdmissionSecret } from "../../src/server/auth-cors";
 import {
+  createManagementSessionControl,
   initializeManagementAuthState,
   issueGuiSession,
   managementPrincipal,
@@ -1321,7 +1322,7 @@ describe("management and data-plane credential separation", () => {
     )).toBeNull();
   });
 
-  test("pairing burns a grant after five failures and rate-limits a source after ten guesses", () => {
+  test("pairing burns a grant after five failures and rate-limits allowed-origin guesses without locking out valid grants", () => {
     const config = hubConfig();
     const state = initializeManagementAuthState(config);
     if (!state.available) throw new Error("expected management auth state");
@@ -1354,6 +1355,50 @@ describe("management and data-plane credential separation", () => {
     }
     expect(consumeGuiPairingGrant(validOrigin, { grant: `ocx_pair_${"z".repeat(43)}` }, config, state, now + 10, guessContext))
       .toMatchObject({ allowed: false, reason: "source" });
+
+    const redeemable = createGuiPairingGrant("https://dashboard.example.test", config, state, now + 11);
+    // Redemption is a digest-keyed lookup, even after the source limiter has refused guesses.
+    // Scanning the grant map before that lookup is the regression; minting a session may still
+    // prune expired grants afterwards.
+    const grants = state.pairingGrants;
+    const nativeGet = grants.get.bind(grants);
+    let lookedUp = false;
+    Object.defineProperty(grants, "get", {
+      configurable: true,
+      value: (key: string) => { lookedUp = true; return nativeGet(key); },
+    });
+    Object.defineProperty(grants, Symbol.iterator, {
+      configurable: true,
+      value: () => {
+        if (!lookedUp) throw new Error("pairing lookup scanned grants");
+        return Map.prototype.entries.call(grants);
+      },
+    });
+    expect(consumeGuiPairingGrant(validOrigin, { grant: `ocx_pair_${"y".repeat(43)}` }, config, state, now + 11, guessContext))
+      .toMatchObject({ allowed: false, reason: "source" });
+    lookedUp = false;
+    expect(consumeGuiPairingGrant(validOrigin, { grant: redeemable.grant }, config, state, now + 12, guessContext))
+      .toMatchObject({ browserOrigin: "https://dashboard.example.test", issuance: "pairing" });
+
+    const untrustedOriginContext = { ...context, peerAddress: "192.0.2.12" };
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      expect(consumeGuiPairingGrant(
+        wrongOrigin,
+        { grant: `ocx_pair_${String(attempt).padStart(43, "b")}` },
+        config,
+        state,
+        now + attempt,
+        untrustedOriginContext,
+      )).toBeNull();
+    }
+    expect(consumeGuiPairingGrant(
+      validOrigin,
+      { grant: `ocx_pair_${"y".repeat(43)}` },
+      config,
+      state,
+      now + 11,
+      untrustedOriginContext,
+    )).toBeNull();
   });
 
   test("self logout revokes only the current GUI session and admin credentials get 403", async () => {
@@ -1530,6 +1575,12 @@ describe("management and data-plane credential separation", () => {
     expect(session.expiresAt).toBe(before);
     expect(authorizeGuiSessionRequest(request({}, "POST"), config, state, issuedAt + 5)).toMatchObject({ ok: true, principal: "gui-session" });
     expect(session.expiresAt).toBe(issuedAt + 5 + REMOTE_GUI_SESSION_TTL_MS);
+    const sessionControl = createManagementSessionControl(state);
+    expect(sessionControl.isPaired(request({}, "POST"), config)).toBe(true);
+    const storedSession = state.sessions.get(session.token)!;
+    storedSession.issuance = "tailscale-identity";
+    expect(sessionControl.isPaired(request({}, "POST"), config)).toBe(false);
+    storedSession.issuance = "pairing";
     session.expiresAt = issuedAt + 6;
     expect(authorizeGuiSessionRequest(request(), config, state, issuedAt + 7)).toMatchObject({ ok: false, reason: "expired" });
     expect(state.sessions.has(session.token)).toBe(false);
@@ -1915,3 +1966,26 @@ test("unavailable management authority rejects log cursors before parsing", asyn
     await server.stop(true);
   }
 }, SERVER_BUDGET_MS);
+
+test("a body exactly at the limit is still accepted for parsing", async () => {
+  saveConfig(remoteConfig());
+  const server = startServer(0);
+  try {
+    // Exactly 4096 bytes of valid JSON: the bound must reject over-limit bodies without
+    // also rejecting one that sits on the limit.
+    const filler = "a".repeat(4096 - '{"grant":""}'.length);
+    const atLimit = `{"grant":"${filler}"}`;
+    expect(Buffer.byteLength(atLimit)).toBe(4096);
+
+    const response = await fetch(new URL("/opencodex-session", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", Origin: "http://localhost" },
+      body: atLimit,
+    });
+
+    // 401, not 413: the body was read and parsed, and the grant simply does not exist.
+    expect(response.status).toBe(401);
+  } finally {
+    await server.stop(true);
+  }
+});

@@ -165,9 +165,12 @@ commit'leri belirtin.
   ve bir **Test planı** (veya eşdeğer içerik). Boş gövdeler, yalnızca yer tutucu
   metinler ve gerçek satır sonları yerine kaçışlı `\n` kullanan açıklamalar
   denetimden geçemez.
-- Başlık veya açıklama `gui`'den bahsediyorsa açıklamaya UI değişikliğinin bir
-  ekran görüntüsünü ekleyin; `enforce-target` denetimi ekran görüntüsü mevcut
-  olana kadar açıklama düzenlemelerinde yeniden çalışır.
+- Çekme isteği `gui/` altındaki dosyaları değiştiriyorsa UI değişikliğinin
+  ekran görüntüsünü açıklamaya ekleyin. `enforce-target`, ekran görüntüsü eklenene
+  kadar açıklama düzenlemelerinde yeniden çalışır. Görseli dala commit etmek
+  yerine açıklamaya sürükleyin: aksi hâlde squash merge ile `dev` dalına taşınır.
+  Komut satırından yükleyen bakımcılar `pr-assets` dalını kullanır ve commit
+  SHA'sına bağlantı verir.
 - Bu depodaki iş akışı değişiklikleri **`pull_request_target`** kullanır.
   Güncellenmiş zorlama mantığı yalnızca iş akışı depo varsayılan dalına
   yükseltildikten sonra geçerli olur — #631'de belgelenen operasyonel uyarı.
@@ -189,8 +192,8 @@ sahipliği `.github/CODEOWNERS` dosyasında bildirilmiştir.
 - **Sınırlarda asenkron hataları yakalayın** — sidecar'lar istek yoluna asla
   hata fırlatmaz; zarif bir işaretleyiciye indirgenirler.
 - **Yapı SOT** — geçerli bakımcı değişmezleri `structure/` dizininde yer alır.
-  Herkese açık kullanıcı iş akışlarını `docs-site/` dizininde ve geçmiş inceleme
-  notlarını `docs/` dizininde tutun.
+  Herkese açık kullanıcı iş akışlarını `docs-site/` dizininde, planlama ve inceleme
+  notlarını `devlog/` dizininde tutun.
 - **Dışa aktarımları (exports) koruyun** — diğer modüller bunlara bağımlı
   olabilir.
 

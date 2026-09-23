@@ -20,6 +20,7 @@ carry neither Retry-After nor quota-reset metadata.
 `/v1/responses` is the main Codex-facing endpoint. The server parses Responses input, routes to a
 provider, lets the selected adapter speak the upstream protocol, then bridges adapter events back to
 Responses-compatible streaming output. For an opted-in key-auth provider, a hosted-search continuation stays bound to the API-key selection that served the first leg; the contract is the [hosted-search continuation binding](../providers-and-adapters.md#hosted-search-continuation-binding).
+Inbound function-call history with a missing JSON object prefix is repaired for every provider when restoring it produces an object; other malformed argument strings replay as `{}` (`src/responses/parser.ts`).
 
 The `openai-responses` adapter preserves the incoming `User-Agent` as a non-credential fallback in
 both key and forward modes. A configured provider header with that name wins case-insensitively;
@@ -75,6 +76,8 @@ repository state. Consequently, the active-turn and session-lane gates are concu
 limits, the translator budget is a live retained-byte limit, the response-state caps are cache
 retention limits, and the stall watchdog is a silence limit. None is a cumulative continuation or
 semantic no-progress budget.
+Active-turn admission owns workflow admission, so both remain held until a streaming body finishes
+or is cancelled.
 
 > Decision record: [ADR-0031](../decisions/ADR-0031-responses-http-sse.md)
 

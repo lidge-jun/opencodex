@@ -210,7 +210,7 @@ batches bounded to 300 seconds, with dedicated worker-heavy families kept single
 dedicated batch steps set `OCX_TEST_NO_QUEUE=1`: their sequential
 processes are one logical runner, while each process still installs its own isolated home and test
 guards. The workflow contract and process bounds live in
-[`ops/docs-and-release.md`](ops/docs-and-release.md#cross-platform-ci).
+[`ops/cross-platform-ci.md`](ops/cross-platform-ci.md).
 
 `structure/manifest.json` declares both source-review coverage and cross-cutting contract authority.
 `scripts/structure-ssot.ts` validates that topology, and generated `structure/INDEX.md` publishes it.

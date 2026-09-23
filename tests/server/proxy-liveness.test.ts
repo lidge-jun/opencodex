@@ -7,6 +7,7 @@ import {
 import {
   DEFAULT_PROBE_TIMEOUT_MS,
   findLiveProxy,
+  isHealthzVersion,
   isOpencodexHealthz,
   isConnectionRefused,
   loopbackProbeHosts,
@@ -189,6 +190,14 @@ describe("proxyIdentityAt", () => {
     expect(identity).toEqual({ pid: 4242, version: "2.6.17" });
   });
 
+  test("does not propagate an unsafe version from the process holding the port", async () => {
+    const version = "9.9.9\nFAKE OK\u001b]52;c;SGVsbG8=\u0007";
+    const identity = await proxyIdentityAt(10100, {}, {
+      fetchFn: (async () => healthz({ ...OURS, version })) as typeof fetch,
+    });
+    expect(identity).toEqual({ pid: 4242 });
+  });
+
   test("rejects foreign 200s, non-OK responses, and pid mismatches", async () => {
     expect(await proxyIdentityAt(10100, {}, { fetchFn: (async () => healthz({ ok: true })) as typeof fetch })).toBeNull();
     expect(await proxyIdentityAt(10100, {}, { fetchFn: (async () => healthz(OURS, 503)) as typeof fetch })).toBeNull();
@@ -258,6 +267,14 @@ describe("proxyIdentityAt", () => {
     expect(identity).toBeNull();
     // First attempt spends the budget; remaining retries must not fire.
     expect(calls).toBe(1);
+  });
+});
+
+describe("isHealthzVersion", () => {
+  test("accepts bounded semver and rejects unsafe or oversized display text", () => {
+    expect(isHealthzVersion("2.35.0-preview.1+build.7")).toBe(true);
+    expect(isHealthzVersion("9.9.9\nFAKE OK\u001b]52;c;SGVsbG8=\u0007")).toBe(false);
+    expect(isHealthzVersion(`1.0.0-${"a".repeat(59)}`)).toBe(false);
   });
 });
 

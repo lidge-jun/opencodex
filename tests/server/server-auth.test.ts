@@ -23,6 +23,8 @@ import {
   recordCodexUpstreamOutcome,
 } from "../../src/codex/routing";
 import { loadConfig, saveConfig } from "../../src/config";
+import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
+import { settleServerAuthFixture, managementHeaders, startManagementServerFixture, type ManagementServerFixture } from "../helpers/server-auth-fixture";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, recordUpstreamHostFailure, upstreamHostHealthKey } from "../../src/codex/upstream-host-health";
 import { deriveProviderPresets } from "../../src/providers/derive";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
@@ -51,14 +53,16 @@ import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspec
 import { configuredAdminToken } from "../../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../../src/lib/system-restart-contract";
 import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../../src/lib/local-provider-reload-contract";
+import { LOCAL_ASIDE_SYNC_CAPABILITY_VERSION } from "../../src/lib/local-aside-sync-contract";
 import { GUI_PAIR_CAPABILITY_VERSION } from "../../src/lib/gui-pair-capability";
 import { resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
-import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../src/lib/debug-log-buffer";
-import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debug-settings";
+import { getDebugLogEntries } from "../../src/lib/debug-log-buffer";
+import { setDebugSettings } from "../../src/lib/debug-settings";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { deferredResetSseUpstream } from "../helpers/deferred-reset-sse-upstream";
-import { POOL_RETRY_TEST_DIR, canonicalDirect, redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
+import { serverAuthConfig as config } from "../helpers/server-auth-config";
+import { POOL_RETRY_TEST_DIR, redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
@@ -74,23 +78,7 @@ const originalGlobalWebSocket = globalThis.WebSocket;
 // isolation convention already used by tests/helpers/isolated-codex-home.ts.
 const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-server-auth-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
-
-function config(hostname?: string): OcxConfig {
-  return {
-    port: 10100,
-    hostname,
-    defaultProvider: "openai",
-    providers: {
-      openai: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.example.test/v1",
-        apiKey: "sk-secret-value",
-        headers: { "X-Custom": "provider-secret" },
-        defaultModel: "gpt-test",
-      },
-    },
-  };
-}
+let managementFixture: ManagementServerFixture | null = null;
 
 const REMOTE_CATALOG_BYTES = '{"models":[{"slug":"fixture/model","display_name":"Fixture Model","priority":1,"visibility":"list","base_instructions":"Fixture instructions","input_modalities":["text"]}]}';
 const REMOTE_DATA_KEY = "ocx_data_remote_catalog";
@@ -108,13 +96,12 @@ function writeRemoteCatalog(): void {
   writeFileSync(join(isolatedCodexHome.path, "opencodex-catalog.json"), REMOTE_CATALOG_BYTES);
 }
 
-function managementHeaders(initial?: HeadersInit): Headers {
-  const token = configuredAdminToken();
-  if (!token) throw new Error("management token was not initialized");
-  const headers = new Headers(initial);
-  headers.set("x-opencodex-api-key", token);
-  return headers;
-}
+const canonicalDirect = {
+  adapter: "openai-responses",
+  baseUrl: "https://chatgpt.com/backend-api/codex",
+  authMode: "forward",
+  codexAccountMode: "direct",
+} as const;
 
 function poolProviders(): OcxConfig["providers"] {
   return {
@@ -138,23 +125,20 @@ beforeEach(() => {
   isolatedCodexHome = installIsolatedCodexHome("ocx-server-auth-codex-");
 });
 
-afterEach(() => {
+afterEach(async () => {
+  if (managementFixture) {
+    await managementFixture.close();
+    managementFixture = null;
+  }
   globalThis.fetch = originalGlobalFetch;
   globalThis.WebSocket = originalGlobalWebSocket;
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
+  await settleServerAuthFixture(TEST_DIR, isolatedCodexHome?.path);
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  clearCodexUpstreamHealth();
-  clearThreadAccountMap();
-  clearAccountNeedsReauth("pool-a");
-  clearAccountNeedsReauth("pool-b");
-  clearAccountQuota();
-  resetCodexModelEntitlementCacheForTests();
-  resetDebugSettingsForTests();
-  resetDebugLogBufferForTests();
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
   if (existsSync(POOL_RETRY_TEST_DIR)) removeTreeWithRetry(POOL_RETRY_TEST_DIR);
 });
@@ -939,6 +923,7 @@ describe("server local API auth", () => {
       expect(health.status).toBe(200);
       const healthBody = await health.json() as Record<string, unknown>;
       expect(Object.keys(healthBody).sort()).toEqual([
+        "asideSyncCapability",
         "guiPairCapability",
         "pid",
         "port",
@@ -951,6 +936,7 @@ describe("server local API auth", () => {
       ]);
       expect(healthBody.restartCapability).toBe(SYSTEM_RESTART_CAPABILITY_VERSION);
       expect(healthBody.providerReloadCapability).toBe(LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION);
+      expect(healthBody.asideSyncCapability).toBe(LOCAL_ASIDE_SYNC_CAPABILITY_VERSION);
       expect(healthBody.guiPairCapability).toBe(GUI_PAIR_CAPABILITY_VERSION);
       expect("rss" in healthBody).toBe(false);
     } finally {
@@ -1103,64 +1089,82 @@ describe("server local API auth", () => {
     }
   });
 
-  test("management CORS echoes validated loopback Origin and covers delegated codex-auth responses", async () => {
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    saveConfig(config("127.0.0.1"));
-
-    const server = startServer(0);
-    const origin = `http://127.0.0.1:${server.port}`;
-    try {
-      const settings = await fetch(new URL("/api/settings", server.url), {
-        headers: managementHeaders({ origin }),
-      });
-      expect(settings.status).toBe(200);
-      expect(settings.headers.get("access-control-allow-origin")).toBe(origin);
-      expect(settings.headers.get("vary")).toContain("Origin");
-
-      const active = await fetch(new URL("/api/codex-auth/active", server.url), {
-        headers: managementHeaders({ origin }),
-      });
-      expect(active.status).toBe(200);
-      expect(active.headers.get("access-control-allow-origin")).toBe(origin);
-    } finally {
-      await server.stop(true);
-    }
-  });
-
-  test("non-loopback management API allows same-origin GUI requests with API token", async () => {
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
-    saveConfig({
-      ...config("0.0.0.0"),
-      port: 0,
+  describe("management CORS fixture", () => {
+    beforeEach(async () => {
+      managementFixture = await startManagementServerFixture(TEST_DIR, config("127.0.0.1"));
     });
 
-    const server = startServer(0);
-    const origin = `http://lan.example.test:${server.port}`;
-    try {
-      const missing = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
-        headers: {
-          host: `lan.example.test:${server.port}`,
-          origin,
-        },
-      });
-      expect(missing.status).toBe(401);
+    test("management CORS echoes validated loopback Origin and covers delegated codex-auth responses", async () => {
+      const fixture = managementFixture!;
+      const origin = `http://127.0.0.1:${fixture.server.port}`;
+      await fixture.run(async () => {
+        const settings = await fetch(new URL("/api/settings", fixture.server.url), {
+          headers: managementHeaders({ origin }), signal: fixture.signal,
+        });
+        expect(settings.status).toBe(200);
+        expect(settings.headers.get("access-control-allow-origin")).toBe(origin);
+        expect(settings.headers.get("vary")).toContain("Origin");
+        await settings.text();
 
-      const ok = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
-        headers: managementHeaders({
-          host: `lan.example.test:${server.port}`,
-          origin,
-        }),
+        const active = await fetch(new URL("/api/codex-auth/active", fixture.server.url), {
+          headers: managementHeaders({ origin }), signal: fixture.signal,
+        });
+        expect(active.status).toBe(200);
+        expect(active.headers.get("access-control-allow-origin")).toBe(origin);
+        await active.text();
       });
-      expect(ok.status).toBe(200);
-      expect(ok.headers.get("access-control-allow-origin")).toBe(origin);
-    } finally {
-      await server.stop(true);
-    }
+    });
+
+    test("management CORS fixture cancellation settles its body and releases the real spend lease", async () => {
+      const fixture = managementFixture!;
+      let aborted = false;
+      let settled = false;
+      const entered = Promise.withResolvers<void>();
+      const work = fixture.run(async () => {
+        const response = abortableSseUpstream("data: pending\n\n", fixture.signal, () => { aborted = true; });
+        const reading = response.text();
+        entered.resolve();
+        try { await reading; } finally { settled = true; }
+      });
+      await entered.promise;
+      expect(spendLedgerOwnerSnapshot().ownership).toBe("held");
+      const stopped = fixture.close();
+      expect(fixture.close()).toBe(stopped);
+      await stopped;
+      await work;
+      expect(aborted).toBe(true);
+      expect(settled).toBe(true);
+      expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
+    });
+  });
+
+  describe("non-loopback management fixture", () => {
+    beforeEach(async () => {
+      process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+      managementFixture = await startManagementServerFixture(TEST_DIR, { ...config("0.0.0.0"), port: 0 });
+    });
+
+    test("non-loopback management API allows same-origin GUI requests with API token", async () => {
+      const fixture = managementFixture!;
+      const server = fixture.server;
+      const origin = `http://lan.example.test:${server.port}`;
+      await fixture.run(async () => {
+        const missing = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
+          headers: { host: `lan.example.test:${server.port}`, origin },
+          signal: fixture.signal,
+        });
+        expect(missing.status).toBe(401);
+        await missing.text();
+
+        const ok = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
+          headers: managementHeaders({ host: `lan.example.test:${server.port}`, origin }),
+          signal: fixture.signal,
+        });
+        expect(ok.status).toBe(200);
+        expect(ok.headers.get("access-control-allow-origin")).toBe(origin);
+        await ok.text();
+      });
+    });
   });
 
   test("websocket upgrade rejects hostile Origin even with a valid API token", async () => {

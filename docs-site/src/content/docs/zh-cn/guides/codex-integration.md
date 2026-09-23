@@ -356,7 +356,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-当 opencodex 作为受管的 [background service](/reference/cli/#ocx-service) 运行时，它会设置
+当 opencodex 作为受管的 [background service](/zh-cn/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove) 运行时，它会设置
 `OCX_SERVICE=1`，这样由服务驱动的重启**不会**反复改写 Codex config——只有显式的
 `ocx stop` / `ocx service stop` 才会恢复原生 Codex。
 

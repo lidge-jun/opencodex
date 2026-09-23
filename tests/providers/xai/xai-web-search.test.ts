@@ -157,6 +157,34 @@ describe("credential pinning + loop fail-closed (review blockers)", () => {
       globalThis.fetch = realFetch;
     }
   });
+
+  test("non-OK response bodies are byte-bounded and canceled upstream", async () => {
+    let producedBytes = 0;
+    let canceled = false;
+    const chunk = new Uint8Array(1024).fill(0x61);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(new ReadableStream({
+      pull(controller) {
+        producedBytes += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    }), { status: 500 })) as typeof fetch;
+    try {
+      const { runXaiWebSearch } = await import("../../../src/web-search/xai-executor");
+      const out = await runXaiWebSearch("q", "xai", xaiProvider, { model: "grok-4.6", reasoning: "low", timeoutMs: 5000, describeImages: false });
+
+      expect(out.error).toContain("response body exceeded byte bound");
+      // The stream implementation may prefetch a small number of chunks, but it must
+      // stop near the cap rather than consume an arbitrarily large upstream body.
+      expect(producedBytes).toBeLessThanOrEqual(MAX_SIDECAR_RESPONSE_BYTES + (4 * chunk.byteLength));
+      expect(canceled).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
 });
 
 import { runWithWebSearch, type WebSearchLoopDeps } from "../../../src/web-search/loop";

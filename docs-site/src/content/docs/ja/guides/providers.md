@@ -408,7 +408,7 @@ model ごとに capability が異なるため、provider 全体の parallel tool
 
 ダッシュボードを開かずに `ocx account list`、`ocx account current`、`ocx account use` で同じ Codex、
 OAuth、API キープールを確認・切り替えできます。完全なコマンド、JSON 出力、新規セッション適用方式は
-[CLI リファレンス](/ja/reference/cli/#ocx-account-subcommand)を参照してください。
+[CLI リファレンス](/ja/reference/cli/providers-accounts/#ocx-account-subcommand)を参照してください。
 
 ### GPT-5.6 プレビュー経路
 
@@ -463,7 +463,7 @@ Cursor は Kimi K3 を effort サフィックス付きの wire id
 承認とサンドボックス経路をバイパスするためデフォルトで無効です。信頼できるローカル実験でのみ
 `~/.opencodex/config.json` の `providers.cursor` に `unsafeAllowNativeLocalExec: true` を設定してください。
 ダッシュボードからは **Providers → Cursor → Edit JSON** で設定できます。完全な例は
-[設定リファレンス](/ja/reference/configuration/#cursor-provider-adapter-cursor)を参照してください。
+[設定リファレンス](/ja/reference/configuration/providers/#cursor-プロバイダー-adapter-cursor)を参照してください。
 MCP、画面録画、computer-use はエグゼキューターフックで開かれており、ローカル
 エグゼキューターがない場合はポリシー遮断ではなく typed no-executor 結果を返します。Cursor OAuth とライブ
 モデルディスカバリはこの実験的アダプターで有効化されており、Cursor は引き続きキーログイン一覧には

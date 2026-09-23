@@ -31,7 +31,7 @@ sticky session affinity 與依用量的新工作階段選擇。它**不**控制 
 - 復原（包括 429 容錯移轉）會使用 `quotaWindow` 為合格的替代帳號排序，且不改變現有的冷卻或
   容錯移轉上限；`round-robin` 會忽略 `quotaWindow`。
 
-請見 [Configuration](/zh-tw/reference/configuration/#anthropicaccountpool-experimental)。
+請見 [Configuration](/zh-tw/reference/configuration/providers/#anthropicaccountpool實驗性)。
 
 ## 快速入門
 
@@ -392,7 +392,7 @@ Claude 入站的路由重放會把主 ChatGPT 登入附加到內部請求，因�
 進行中描述不會消耗配額。成功的 `data:` 圖像描述會按後端、模型、detail、圖像位元組和請求上下文
 快取，避免每次重放都重複描述同一圖像與上下文。內容可能變化的遠端 `https:` 圖像不會快取。
 
-全部設定項見[設定參考](/zh-tw/reference/configuration/#sidecars)。Anthropic OAuth Web
+全部設定項見[設定參考](/zh-tw/reference/configuration/server/#sidecar)。Anthropic OAuth Web
 Search 和圖像描述沿用儲存庫已有的 Claude Code OAuth fingerprint 先例，但在用於長時間無人值守任務前，
 仍應使用你的帳號和實際負載進行充分 soak test。
 

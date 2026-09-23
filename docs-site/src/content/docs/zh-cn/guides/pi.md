@@ -80,7 +80,7 @@ export OPENCODEX_API_KEY=<your key>
 
 这个名字只属于 Pi。opencode 使用不同的变量（`OPENCODEX_OPENCODE_API_KEY`，以 `{env:…}` 形式出现） - 见 [opencode 指南](/guides/opencode/)。
 
-**回环代理根本不需要 key。** opencodex 默认绑定 `127.0.0.1`，在那里不做任何认证，所以 `$OPENCODEX_API_KEY` 引用是无效的，你可以不设置这个变量。它只在 `hostname` 超出回环范围时才有意义，而这也是代理会在没有 token 的情况下拒绝启动的时候 - 见 [远程访问](/reference/configuration/#remote-access)。
+**回环代理根本不需要 key。** opencodex 默认绑定 `127.0.0.1`，在那里不做任何认证，所以 `$OPENCODEX_API_KEY` 引用是无效的，你可以不设置这个变量。它只在 `hostname` 超出回环范围时才有意义，而这也是代理会在没有 token 的情况下拒绝启动的时候 - 见 [远程访问](/zh-cn/reference/configuration/server/#远程访问)。
 
 ## 模型元数据
 

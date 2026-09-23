@@ -451,7 +451,7 @@ Providers, сохраняется в `provider.apiKeyPool`, становится
 Используйте `ocx account list`, `ocx account current` и `ocx account use`, чтобы просматривать и
 переключать те же пулы Codex, OAuth и API-ключей, не открывая дашборд. Команды, JSON-вывод и
 поведение в новых сессиях описаны в разделе
-[Справочник CLI](/ru/reference/cli/#ocx-account-subcommand).
+[Справочник CLI](/ru/reference/cli/providers-accounts/#ocx-account-subcommand).
 
 ### Превью-маршруты GPT-5.6
 
@@ -509,7 +509,7 @@ Kimi K3 только через wire id с суффиксом усилия, по
 обходит путь одобрений и песочницу Codex; устанавливайте `unsafeAllowNativeLocalExec: true` в
 объекте `providers.cursor` файла `~/.opencodex/config.json` только для доверенных локальных
 экспериментов (или через **Providers → Cursor → Edit JSON** в дашборде). Полный пример см. в
-[справочнике по конфигурации](/ru/reference/configuration/#cursor-provider-adapter-cursor).
+[справочнике по конфигурации](/ru/reference/configuration/providers/#провайдер-cursor-adapter-cursor).
 MCP, запись экрана и computer-use доступны как хуки исполнителя; без настроенного локального
 исполнителя opencodex возвращает типизированные результаты «нет исполнителя», а не блокирует запрос
 политикой. Для этого экспериментального адаптера включены Cursor OAuth и живое обнаружение моделей;

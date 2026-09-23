@@ -304,7 +304,7 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 | `POST /api/codex-auth/reset-credits/consume` | 消耗一個合格的 reset credit。選用的 `operationId`（UUIDv4）可讓兌換具備冪等性：相同 id 會重播同一筆持久化結果，而不會再消耗一個 credit。 | 400 缺失帳號 id 或無效的 `operationId`；若該 id 屬於其他帳號則 409 `identity_mismatch`；上游狀態 passthrough；503 `server_busy`、`capacity` 或 `unavailable`；500 消耗失敗 |
 | `POST /api/codex-auth/login` | 啟動 Codex 登入或重新認證 | 400 無效請求；衝突／忙碌登入狀態 |
 | `POST /api/codex-auth/login/code` | 為 Codex 登入流程提交手動碼 | 400 無效流程／碼 |
-| `POST /api/codex-auth/login/cancel` | 取消 Codex 登入流程 | — |
+| `POST /api/codex-auth/login/cancel` | 僅取消 `{ "flowId": "..." }` 指定的待處理 Codex 登入 | 400 流程 ID 缺少、未知或非待處理狀態 |
 | `GET /api/codex-auth/login-status` | 輪詢流程或帳號登入狀態 | 未知流程回報 `expired`；無活躍流程回報 `idle` |
 
 此委派家族下的設定寫入器或憑證重新整理鎖逾時回傳 HTTP 503 並附帶代碼 `CONFIG_MUTATION_LOCK_UNAVAILABLE`。客戶端應稍後重試，而非將該回應視為永久帳號失敗。

@@ -154,7 +154,7 @@ description.
 - Target **`dev`**. Do not open feature or fix pull requests against **`main`**.
 - Branch from the current **`dev`** tip, not from **`main`**. The required **`enforce-target`** check rejects heads whose merge base sits on the **`main`** tip while the branch is far behind the pull request base (the failure mode seen in #644).
 - Write a real description: a **Summary** of what changed and why, plus a **Test plan** (or equivalent substance). Empty bodies, placeholder-only text, and descriptions that use escaped `\n` instead of real line breaks fail the check.
-- If the title or description mentions `gui`, include a screenshot of the UI change in the description; the `enforce-target` check re-runs on description edits until the screenshot is present.
+- If the pull request changes files under `gui/`, include a screenshot of the UI change in the description; the `enforce-target` check re-runs on description edits until the screenshot is present. Drag the image into the description editor rather than committing it: an image on your branch rides the squash merge into `dev`. Maintainers uploading from the command line use the `pr-assets` branch and link by commit SHA.
 - Workflow changes in this repository use **`pull_request_target`**. Updated enforcement logic applies only after the workflow is promoted to the repository default branch — the same operational caveat documented in #631.
 
 ## Project maintainers
@@ -177,7 +177,7 @@ does not change `main`/`preview` review rules or allow direct pushes, force-push
 - **Handle async errors at boundaries** — sidecars never throw into the request path; they degrade to
   a graceful marker.
 - **Structure SOT** — current maintainer invariants live in `structure/`. Keep public user workflows
-  in `docs-site/` and historical investigation notes in `docs/`.
+  in `docs-site/` and planning and investigation notes in `devlog/`.
 - **Preserve exports** — other modules may depend on them.
 
 ## Adding a provider to the catalog

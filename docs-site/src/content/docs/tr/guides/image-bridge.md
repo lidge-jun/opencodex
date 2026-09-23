@@ -75,7 +75,7 @@ Görsel Köprüsü, yalnızca **OpenAI harici** bir model seçiliyken `/v1/respo
 araçlar dizisinde `image_generation` aracını içeren **Responses** turlarında
 devreye girer. Codex'in doğrudan `/v1/images/generations` uç noktasına istek
 atan yerleşik `image_gen` aracına müdahale **etmez** — bu yol [Codex
-Entegrasyonu](/tr/guides/codex-integration/#dahili-görsel-üretimi-image_gen)
+Entegrasyonu](/tr/guides/codex-integration/#yerleşik-görsel-oluşturma-image_gen)
 kılavuzunda ayrı olarak ele alınmıştır.
 
 1. Bir Responses isteği `tools` içinde `image_generation` içerdiğinde, OpenCodex

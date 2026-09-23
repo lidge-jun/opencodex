@@ -405,7 +405,7 @@ ChatGPT bearer는 메인 라우팅 프로바이더에는 전달하지 않아요.
 모델, detail, 이미지 바이트, 요청 문맥을 기준으로 캐시해 같은 이미지와 문맥을 매번 다시 설명하지
 않아요. 내용이 바뀔 수 있는 원격 `https:` 이미지는 캐시하지 않아요.
 
-전체 설정 키는 [설정 레퍼런스](/ko/reference/configuration/#sidecars)에서 확인할 수
+전체 설정 키는 [설정 레퍼런스](/ko/reference/configuration/server/#sidecars)에서 확인할 수
 있어요. Anthropic OAuth 웹 검색과 이미지 설명은 저장소에서 이미 사용 중인 Claude Code OAuth
 fingerprint 방식을 그대로 따르지만, 장시간 무인 작업에 쓰기 전에는 본인 계정과 실제 작업으로
 충분히 soak test하는 편이 좋아요.

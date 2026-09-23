@@ -76,7 +76,7 @@ Grok Build는 Responses API를 통해 opencodex와 통신합니다. 라우트가
 
 Grok Build는 루프백에서도 사용자 정의 모델에 비어 있지 않은 API 키를 요구합니다. 주입되는 항목에는 자리표시자(`opencodex-loopback`)가 들어갑니다. opencodex는 루프백 연결의 admission key를 무시하므로 실제 비밀값은 들어가지 않습니다.
 
-**자동 등록은 루프백 전용입니다.** opencodex가 비루프백 호스트에 바인드하면, 모든 인터페이스를 노출하는 와일드카드 `0.0.0.0`와 `::`를 포함해 요청은 실제 admission token을 필요로 하고, 관리 블록은 그 값을 안전하게 담을 수 없습니다. 토큰을 그대로 쓰면 비밀값이 `~/.grok/config.toml`에 들어가고, 다음 `ocx start`/`ensure`/`restart` 때 그 자리에 있던 값이 덮어써집니다. 그래서 opencodex는 그런 경우 아무 것도 쓰지 않고(이전에 루프백 바인드가 남긴 블록도 제거합니다), 사용자는 관리 마커 바깥에서 모델을 직접 설정해야 합니다. 이 위치에서는 opencodex가 어떤 일을 해도 그 설정을 덮어쓸 수 없습니다. 정확한 테이블은 [수동 설정](#manual-recipe-without-auto-registration)을 보시고, `base_url`(실제로 `grok`가 도달할 수 있는 호스트)과 `api_key`(사용자의 `OPENCODEX_API_AUTH_TOKEN`)를 함께 설정합니다.
+**자동 등록은 루프백 전용입니다.** opencodex가 비루프백 호스트에 바인드하면, 모든 인터페이스를 노출하는 와일드카드 `0.0.0.0`와 `::`를 포함해 요청은 실제 admission token을 필요로 하고, 관리 블록은 그 값을 안전하게 담을 수 없습니다. 토큰을 그대로 쓰면 비밀값이 `~/.grok/config.toml`에 들어가고, 다음 `ocx start`/`ensure`/`restart` 때 그 자리에 있던 값이 덮어써집니다. 그래서 opencodex는 그런 경우 아무 것도 쓰지 않고(이전에 루프백 바인드가 남긴 블록도 제거합니다), 사용자는 관리 마커 바깥에서 모델을 직접 설정해야 합니다. 이 위치에서는 opencodex가 어떤 일을 해도 그 설정을 덮어쓸 수 없습니다. 정확한 테이블은 [수동 설정](#수동-설정-자동-등록-없음)을 보시고, `base_url`(실제로 `grok`가 도달할 수 있는 호스트)과 `api_key`(사용자의 `OPENCODEX_API_AUTH_TOKEN`)를 함께 설정합니다.
 
 여기서는 `api_key`를 `env_key`로 바꾸지 마십시오. `env_key`가 해결되지 않아도 요청은 멈추지 않습니다. Grok가 사용자의 xAI 세션 토큰으로 넘어가서 항목이 가리키는 `base_url`로 보냅니다. LAN 배포에서는 그 `base_url`이 xAI가 아닌 평문 HTTP 엔드포인트입니다.
 

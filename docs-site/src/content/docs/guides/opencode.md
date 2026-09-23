@@ -171,7 +171,7 @@ a configured API key — which is what a non-loopback bind requires.
 
 A loopback bind (`127.0.0.1`, the default) authenticates nothing, so the `{env:…}` reference is
 inert and you can leave the variable unset. It matters only when `hostname` is set beyond loopback;
-see [Remote access](/reference/configuration/#remote-access). This admission key is opencodex's
+see [Remote access](/reference/configuration/server/#remote-access). This admission key is opencodex's
 own, and is unrelated to the upstream provider keys configured under
 [Providers](/guides/providers/).
 

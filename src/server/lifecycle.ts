@@ -35,6 +35,7 @@ export const MAX_ACTIVE_SESSION_LANES = 64;
 export const SESSION_LANE_ID_BYTES = 32;
 const turnGate = createAdmissionGate("active_turns", MAX_ACTIVE_TURNS);
 export interface ActiveTurnLease extends AdmissionLease {
+  attach(lease: AdmissionLease): void;
   bindAbortController(ac: AbortController): void;
   beginCodexAccountSelection(): CodexAccountSelectionAdmission;
   isTransferred(): boolean;
@@ -190,10 +191,15 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
     }
   }
   const controllers = new Set<AbortController>();
+  const attachedLeases = new Set<AdmissionLease>();
   let active = true;
   let transferred = false;
   let nativeMainClaimed = false;
   const lease: ActiveTurnLease = {
+    attach(attachedLease) {
+      if (!active) attachedLease.release();
+      else attachedLeases.add(attachedLease);
+    },
     bindAbortController(ac) {
       knownTurnControllers.add(ac);
       if (!active) {
@@ -238,6 +244,8 @@ export function tryAdmitTurn(sessionLaneId?: string): ActiveTurnLease | null {
         if (activeTurns.get(controller) === lease) activeTurns.delete(controller);
       }
       controllers.clear();
+      for (const attachedLease of attachedLeases) attachedLease.release();
+      attachedLeases.clear();
       nativeMainTurns.delete(lease);
       if (opaqueSessionLaneId) {
         const currentRefCount = activeSessionLaneRefCounts.get(opaqueSessionLaneId);

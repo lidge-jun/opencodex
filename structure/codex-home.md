@@ -78,8 +78,9 @@ treat it as destructive, not as an upgrade or restart command.
 Service install-state ownership uses this same resolver. In WSL, an unset `CODEX_HOME` may resolve
 to the single discoverable Windows Desktop home; recording Linux `~/.codex` instead would make a
 later repair or uninstall look foreign even though the service and runtime were started from the
-same environment. An explicit `CODEX_HOME` remains authoritative, and existing foreign ownership
-records are never migrated implicitly.
+same environment. A record written before that discovery still names Linux `~/.codex`; service
+commands refuse it and name the recorded home to rerun with, because stop and repair would otherwise
+restore a different home. An explicit `CODEX_HOME` remains authoritative; nothing migrates implicitly.
 
 > Decision record: [ADR-0006](decisions/ADR-0006-codex-home.md)
 

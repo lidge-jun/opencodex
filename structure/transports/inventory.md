@@ -307,7 +307,9 @@ Response constructor; this tunnel assembles the body from a socket, so a respons
 its upstream headers hands the coded bytes to whatever parses them. The request therefore asks
 for `identity` unless the caller chose an `accept-encoding` itself, a `gzip` or `deflate`
 response is decoded and stops advertising the coding and the coded length, and any other coding
-is refused by name rather than surfaced as bytes no caller can read.
+is refused by name rather than surfaced as bytes no caller can read. Buffered decoded SOCKS5
+bodies stop at 32 MiB; event streams may continue beyond that while decoded bytes stay within
+the greater of 32 MiB or 128 times the coded bytes consumed, so highly compressed bombs stop.
 
 ## Raw transport null-body statuses
 

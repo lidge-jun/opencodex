@@ -8,8 +8,10 @@ import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessa
 
 export type QoderAdapterDeps = CodingAgentDeps;
 
-export function buildQoderChildEnv(profile: QoderProfile, apiKey: string): Record<string, string> {
-  return { ...baseScopedEnv(), NO_COLOR: "1", [profile.tokenEnv]: apiKey };
+export function buildQoderChildEnv(profile: QoderProfile, apiKey: string, systemPrompt?: string): Record<string, string> {
+  const promptEnv = profile.region === "cn" ? "QODERCN_APPEND_SYSTEM_PROMPT" : "QODER_APPEND_SYSTEM_PROMPT";
+  return { ...baseScopedEnv(), NO_COLOR: "1", [profile.tokenEnv]: apiKey,
+    ...(systemPrompt ? { [promptEnv]: systemPrompt } : {}) };
 }
 
 /** Single-shot, tools-disabled Qoder CLI invocation; Codex remains the tool owner. */
@@ -27,8 +29,6 @@ export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderCo
   ];
   const effort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
   if (effort) args.push("--reasoning-effort", effort);
-  const system = buildSystemPrompt(parsed);
-  if (system) args.push("--append-system-prompt", system);
   return args;
 }
 
@@ -123,15 +123,18 @@ export function createQoderAdapter(provider: OcxProviderConfig, deps: QoderAdapt
         });
         return;
       }
+      // Qoder documents QODER_APPEND_SYSTEM_PROMPT for scoped child configuration.
+      // Keep the folded prompt out of argv and never inherit an ambient vendor prompt.
+      const system = buildSystemPrompt(parsed);
       await runCodingAgentTurn({
-        profiles: QODER_PROFILES,
-        provider,
-        parsed,
-        incoming,
-        emit: guardQoderScaffolding(emit),
-        buildArgs: (_profile, req, prov) => buildQoderArgs(req, prov),
-        buildEnv: (profile, apiKey) => buildQoderChildEnv(profile as QoderProfile, apiKey),
-        deps,
+          profiles: QODER_PROFILES,
+          provider,
+          parsed,
+          incoming,
+          emit: guardQoderScaffolding(emit),
+          buildArgs: (_profile, req, prov) => buildQoderArgs(req, prov),
+          buildEnv: (profile, apiKey) => buildQoderChildEnv(profile as QoderProfile, apiKey, system),
+          deps,
       });
     },
   };

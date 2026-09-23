@@ -43,7 +43,7 @@ Etkinleştirildiğinde operasyonel sözleşme:
   `round-robin` ise `quotaWindow` ayarını yok sayar.
 
 Bkz.
-[Yapılandırma](/tr/reference/configuration/#anthropicaccountpool-experimental).
+[Yapılandırma](/tr/reference/configuration/providers/#anthropicaccountpool-deneysel).
 
 ## Hızlı Başlangıç
 
@@ -564,7 +564,7 @@ görsel baytları ve istek bağlamına göre önbelleğe alınır; böylece ayn�
 bağlam çifti her tekrarda tekrar açıklanmaz. Uzak `https:` görselleri asla
 önbelleğe alınmaz çünkü içerikleri değişebilir.
 
-Her anahtar için [yapılandırma referansı](/tr/reference/configuration/#sidecars)
+Her anahtar için [yapılandırma referansı](/tr/reference/configuration/server/#sidecarlar)
 bölümüne bakın. Anthropic-OAuth web araması ve görsel açıklaması, deponun mevcut
 Claude Code OAuth parmak izi emsalini yeniden kullanır, ancak uzun gözetimsiz
 çalıştırmalar için bunlara güvenmeden önce hesabınız ve iş yükünüzle kapsamlı
