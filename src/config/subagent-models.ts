@@ -9,11 +9,11 @@ export const DEFAULT_SUBAGENT_MODELS = [NATIVE_GPT6_ASTRA_MODEL, NATIVE_GPT6_SOL
 /** Bare native families the version-2 upgrade removes from a roster. */
 const RETIRED_ROSTER_FAMILY = /^gpt-5\.[56](?:-|$)/;
 /** Retired rows whose GPT-6 successor takes their place. */
-const ROSTER_SUCCESSORS: Readonly<Record<string, string>> = {
-  "gpt-5.6-sol": NATIVE_GPT6_SOL_MODEL,
-  "gpt-5.6-luna": NATIVE_GPT6_LUNA_MODEL,
-};
-const SUCCESSOR_IDS = new Set(Object.values(ROSTER_SUCCESSORS));
+const ROSTER_SUCCESSORS: ReadonlyMap<string, string> = new Map([
+  ["gpt-5.6-sol", NATIVE_GPT6_SOL_MODEL],
+  ["gpt-5.6-luna", NATIVE_GPT6_LUNA_MODEL],
+]);
+const SUCCESSOR_IDS = new Set(ROSTER_SUCCESSORS.values());
 
 /**
  * Replace Sol/Luna with their GPT-6 rows and drop every other bare 5.5/5.6 id, in place order.
@@ -23,7 +23,7 @@ const SUCCESSOR_IDS = new Set(Object.values(ROSTER_SUCCESSORS));
 function upgradeRetiredRosterRows(models: readonly string[]): string[] {
   const upgraded: string[] = [];
   for (const model of models) {
-    const next = ROSTER_SUCCESSORS[model] ?? (RETIRED_ROSTER_FAMILY.test(model) ? null : model);
+    const next = ROSTER_SUCCESSORS.get(model) ?? (RETIRED_ROSTER_FAMILY.test(model) ? null : model);
     if (next === null || (SUCCESSOR_IDS.has(next) && upgraded.includes(next))) continue;
     upgraded.push(next);
   }
