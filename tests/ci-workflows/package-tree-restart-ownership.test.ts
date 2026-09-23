@@ -2,13 +2,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { PackageTreeObservation } from "../../src/lib/package-tree-integrity";
 import { createPackageTreeIntegrityGuardForServer } from "../../src/server/index/package-tree-guard";
 import { acceptSystemRestart, noteExplicitShutdownRequested, setSystemRestartIoForTests } from "../../src/server/management/system-restart";
+import { acquireTemporaryDrain, beginShutdownDrain, isDraining, isShutdownDraining, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
 
 const original: PackageTreeObservation = {
   device: 1n, inode: 1n, contentTimeNs: 1n, size: 1n,
 };
 const replacement: PackageTreeObservation = { ...original, inode: 2n };
 
-afterEach(() => setSystemRestartIoForTests());
+afterEach(() => { setSystemRestartIoForTests(); resetLifecycleDrainStateForTests(); });
 
 describe("automatic package-tree restart ownership", () => {
   function setup(owned: () => boolean, onDrain: () => void = () => {}) {
@@ -18,7 +19,12 @@ describe("automatic package-tree restart ownership", () => {
     setSystemRestartIoForTests({
       isShutdownDraining: () => false,
       getActiveTurnCount: () => 0,
-      beginShutdownDrain: () => { calls.push("fence"); return true; },
+      beginShutdownDrain: () => { if (!isDraining()) calls.push("fence"); return beginShutdownDrain(); },
+      acquireTemporaryDrain: () => {
+        const lease = acquireTemporaryDrain("package-tree-test");
+        if (lease) calls.push("fence");
+        return lease;
+      },
       schedule: callback => { scheduled = callback; },
       scheduleDeadline: () => () => {},
       drainAndShutdown: async () => { calls.push("drain"); onDrain(); },
@@ -54,6 +60,7 @@ describe("automatic package-tree restart ownership", () => {
     fixture.guard.dispose(); // server.stop() calls this before closing the listener
     await fixture.runScheduled();
     expect(fixture.calls).toEqual(["fence"]);
+    expect(isDraining()).toBe(false);
   });
 
   test("an explicit shutdown during the automatic drain vetoes the handoff", async () => {
@@ -61,6 +68,7 @@ describe("automatic package-tree restart ownership", () => {
     await fixture.replace();
     await fixture.runScheduled();
     expect(fixture.calls).toEqual(["fence", "drain"]);
+    expect(isShutdownDraining()).toBe(true);
     fixture.guard.dispose();
   });
 
@@ -99,6 +107,13 @@ describe("automatic package-tree restart ownership", () => {
     await fixture.runScheduled();
     expect(fixture.guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
     expect(fixture.calls).toEqual(["fence"]);
+    expect(isDraining()).toBe(false);
+    expect(acceptSystemRestart({
+      isShutdownDraining: isDraining,
+      getActiveTurnCount: () => 0,
+      schedule: () => {},
+      setDraining: () => {},
+    }).alreadyDraining).toBe(false);
     fixture.guard.dispose();
   });
 

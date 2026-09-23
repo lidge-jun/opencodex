@@ -181,6 +181,16 @@ async function refreshOwnedRaycastCatalog(
 
 initializeNodeLauncherContext();
 
+// The compiled executable is also the capture-only MCP server's launcher.
+// Handle this private entrypoint before CLI preflight or command dispatch.
+if (process.argv[2] === "__codebuddy-mcp") {
+  const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
+  await runCodeBuddyMcpServer(process.argv[3] ?? "");
+  // The MCP stdio loop owns this process until stdin closes; do not fall through
+  // to ordinary CLI dispatch or exit after the handshake completes.
+  await new Promise<never>(() => {});
+}
+
 // Head: version/help early exits, `ready` pre-parse (exit 64 before any
 // preflight), and the bounded Codex-shim auto-restore preflight live in
 // src/cli/root.ts (Phase 1 of the CLI deepening). runCli exits for

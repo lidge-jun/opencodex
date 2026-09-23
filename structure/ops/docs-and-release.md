@@ -1,5 +1,9 @@
 # Docs And Release
 
+Automatic package-tree restart holds a releasable data-plane drain until its scheduled
+service-home check succeeds. A veto releases that fence; a committed shutdown uses the
+permanent drain latch.
+
 macOS shards and control use the shared fresh-process batch runner described below.
 `scripts/ci/sample-macos-stall.sh` remains a standalone diagnostic helper with isolated
 observer regression coverage; it is not wired into those bounded batch steps. It samples

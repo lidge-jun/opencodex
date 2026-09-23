@@ -61,6 +61,10 @@ The hub automatically issues a per-client key. The client writes it to the exist
 filtered to that client's stable `apiKeyId`. After disconnect, usage comes from the local store.
 OpenCodex does not mirror usage between the two stores.
 
+If a client saved a remote `http://` Hub URL before the secure transport rule, its Hub
+operations now return `insecure_http_refused`. Run `ocx disconnect` locally, then reconnect
+to the Hub with `https://` (or use loopback HTTP when both sides are on the same machine).
+
 Rotate a connected client with a fresh transient authority:
 
 ```bash

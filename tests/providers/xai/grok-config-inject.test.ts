@@ -298,6 +298,21 @@ describe("Grok config injection", () => {
       expect((Bun.TOML.parse(written) as { models: { default: string } }).models.default).toBe("ocx-mine-2");
     });
 
+    test("retries nested alias reservation when reference rewriting cannot parse the first candidate", () => {
+      writeFileSync(configPath(), '[models]\ndefault = "ocx-mine"\n', "utf8");
+      injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+      const withNestedUser = readFileSync(configPath(), "utf8").replace(
+        BEGIN_MARKER,
+        '[model.ocx-mine.model]\nx = 1\n\n' + BEGIN_MARKER,
+      );
+      writeFileSync(configPath(), withNestedUser, "utf8");
+      const result = injectGrokConfig(10100, [{ id: "mine" }], { grokHome });
+      const written = readFileSync(configPath(), "utf8");
+      expect(result).toMatchObject({ ok: true, changed: true });
+      expect(written).toContain("[model.ocx-mine-2]");
+      expect((Bun.TOML.parse(written) as { models: { default: string } }).models.default).toBe("ocx-mine-2");
+    });
+
     test("suffixes when a user child table occupies a generated scalar field", () => {
       const userContent = "[model.ocx-mine.model]\nx = 1\n";
       writeFileSync(configPath(), userContent, "utf8");

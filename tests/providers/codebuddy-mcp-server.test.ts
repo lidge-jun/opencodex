@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CODEBUDDY_TOOL_LIMITS } from "../../src/adapters/codebuddy/tool-bridge";
+import { codeBuddyMcpInvocation } from "../../src/adapters/coding-agent/turn";
 
 const tempDirs: string[] = [];
 const serverPath = join(
@@ -53,6 +54,43 @@ afterEach(() => {
 });
 
 describe("CodeBuddy capture-only MCP server", () => {
+  test("compiled ocx exposes the same capture-only catalog", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-compiled-codebuddy-mcp-"));
+    tempDirs.push(dir);
+    const binary = join(dir, "ocx");
+    const compiled = Bun.spawnSync([process.execPath, "build", "--compile", join(import.meta.dir, "../../src/cli/index.ts"), "--outfile", binary]);
+    expect(compiled.exitCode).toBe(0);
+    if (process.platform === "darwin") {
+      const signed = Bun.spawnSync(["codesign", "--force", "--sign", "-", binary]);
+      expect(signed.exitCode).toBe(0);
+    }
+    const version = Bun.spawnSync([binary, "--version"]);
+    expect(version.exitCode).toBe(0);
+    expect(version.stderr.toString()).toBe("");
+    expect(version.stdout.toString()).toContain("opencodex");
+    const catalogPath = join(dir, "catalog.json");
+    writeFileSync(catalogPath, JSON.stringify([definition("lookup")]), { mode: 0o600 });
+    const probe = Bun.spawn({ cmd: [binary, ...codeBuddyMcpInvocation(serverPath, catalogPath, true)], stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+    probe.stdin.end();
+    const probeError = await new Response(probe.stderr).text();
+    const probeOutput = await new Response(probe.stdout).text();
+    expect({ exit: await probe.exited, stderr: probeError, stdout: probeOutput }).toEqual({ exit: 0, stderr: "", stdout: "" });
+    const transport = new StdioClientTransport({
+      command: binary,
+      args: codeBuddyMcpInvocation(serverPath, catalogPath, true),
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "compiled-codebuddy-test", version: "1.0.0" });
+    let bridgeStderr = "";
+    transport.stderr?.on("data", chunk => { bridgeStderr += String(chunk); });
+    try {
+      await client.connect(transport).catch(error => { throw new Error(`compiled bridge failed: ${String(error)}; stderr: ${bridgeStderr}`); });
+      expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(["lookup"]);
+    } finally {
+      await client.close();
+    }
+  });
+
   test("advertises only the private catalog, rejects unknown tools, and never executes known tools", async () => {
     const dir = mkdtempSync(join(tmpdir(), "opencodex-codebuddy-mcp-test-"));
     tempDirs.push(dir);

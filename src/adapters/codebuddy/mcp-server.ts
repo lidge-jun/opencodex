@@ -154,34 +154,27 @@ async function loadTools(path: string): Promise<ToolDefinition[]> {
   });
 }
 
-const catalogPath = process.argv[2];
-if (!catalogPath) throw new Error("missing tool catalog");
+export async function runCodeBuddyMcpServer(catalogPath: string): Promise<void> {
+  if (!catalogPath) throw new Error("missing tool catalog");
+  // The pinned SDK does not detect stdin EOF itself. The capture server must exit when
+  // the parent terminates its CLI, including after a captured message_stop.
+  const exitOnStdinClose = (): void => process.exit(0);
+  process.stdin.on("end", exitOnStdinClose);
+  process.stdin.on("close", exitOnStdinClose);
 
-// Exit when stdin closes. The MCP stdio binding expects servers to exit on stdin EOF, and the
-// pinned SDK (1.30.0) does not detect EOF itself: without this, the capture server would outlive
-// the CLI it serves — whenever the parent terminates the CLI (message_stop capture path, timeout,
-// crash), the pipe's write end closes, and this server must follow instead of lingering as an
-// orphaned bun process parked on the never-answering CallTool promise.
-const exitOnStdinClose = (): void => process.exit(0);
-process.stdin.on("end", exitOnStdinClose);
-process.stdin.on("close", exitOnStdinClose);
+  const tools = await loadTools(catalogPath);
+  const advertisedNames = new Set(tools.map(tool => tool.name));
+  const server = new Server(
+    { name: "opencodex-codebuddy-capture", version: "1.0.0" },
+    { capabilities: { tools: {} } },
+  );
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+  server.setRequestHandler(CallToolRequestSchema, async request => {
+    if (!advertisedNames.has(request.params.name)) throw new Error("unknown isolated tool");
+    // The external Codex client retains approval and execution ownership.
+    return await new Promise<never>(() => {});
+  });
+  await server.connect(new StdioServerTransport());
+}
 
-const tools = await loadTools(catalogPath);
-const advertisedNames = new Set(tools.map(tool => tool.name));
-
-const server = new Server(
-  { name: "opencodex-codebuddy-capture", version: "1.0.0" },
-  { capabilities: { tools: {} } },
-);
-
-server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
-server.setRequestHandler(CallToolRequestSchema, async request => {
-  if (!advertisedNames.has(request.params.name)) {
-    throw new Error("unknown isolated tool");
-  }
-  // A pending Promise does not execute anything and keeps the CodeBuddy turn
-  // parked until the parent has captured message_stop and terminates the tree.
-  return await new Promise<never>(() => {});
-});
-
-await server.connect(new StdioServerTransport());
+if (import.meta.main) await runCodeBuddyMcpServer(process.argv[2] ?? "");

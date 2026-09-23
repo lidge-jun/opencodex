@@ -23,6 +23,7 @@
  */
 import { spawn } from "node:child_process";
 import {
+  acquireTemporaryDrain,
   beginShutdownDrain,
   drainAndShutdown,
   getActiveTurnCount,
@@ -54,6 +55,7 @@ export interface ReplacementReadinessIo {
 }
 
 export interface SystemRestartIo {
+  acquireTemporaryDrain?: () => { release(): void } | null;
   drainAndShutdown?: typeof drainAndShutdown;
   /** True when a background service can actually respawn this process after exit(1). */
   isServiceViable?: () => boolean;
@@ -386,20 +388,34 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
 
   if (!alreadyDraining) {
     restartAccepted = true;
+    const automatic = Boolean(admission.onAccepted);
+    const temporaryDrain = automatic
+      ? (io.acquireTemporaryDrain ?? (() => acquireTemporaryDrain("automatic-restart")))()
+      : null;
+    const releasePending = () => {
+      temporaryDrain?.release();
+      restartAccepted = false;
+    };
+    if (automatic && !temporaryDrain) {
+      restartAccepted = false;
+      return { accepted: true, alreadyDraining: true, activeTurnCount, drainTimeoutMs: MEMORY_DRAIN_RESTART_MS };
+    }
     let pending = true;
     let vetoed = false;
     admission.onAccepted?.(() => {
       if (!pending) return;
       pending = false;
       vetoed = true;
-      restartAccepted = false;
+      releasePending();
     });
     const now = io.now ?? Date.now;
     const restartDeadlineMs = now() + MEMORY_DRAIN_RESTART_MS;
     // Reject new data-plane traffic immediately (503), before the 200ms response-flush delay.
-    if (io.beginShutdownDrain) io.beginShutdownDrain();
-    else if (io.setDraining) io.setDraining(true);
-    else beginShutdownDrain();
+    if (!automatic) {
+      if (io.beginShutdownDrain) io.beginShutdownDrain();
+      else if (io.setDraining) io.setDraining(true);
+      else beginShutdownDrain();
+    }
     schedule(async () => {
       if (vetoed) return;
       pending = false;
@@ -410,7 +426,12 @@ export function acceptSystemRestart(io: SystemRestartIo = restartIo, admission: 
         try { return admission.beforeScheduledDrain?.() ?? true; }
         catch { return false; } // Unknown ownership is not authority to restart.
       };
-      if (!canHandoff()) return;
+      if (!canHandoff()) { releasePending(); return; }
+      if (automatic) {
+        if (io.beginShutdownDrain) io.beginShutdownDrain();
+        else if (!io.setDraining) beginShutdownDrain();
+        temporaryDrain?.release();
+      }
       // Preserve the live binding before drainAndShutdown (or its deadline race)
       // closes the listener and makes both the server ref and runtime metadata stale.
       const restartPort = (io.listenPort ?? resolveListenPort)();

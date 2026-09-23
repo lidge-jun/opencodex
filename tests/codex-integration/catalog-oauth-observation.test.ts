@@ -315,6 +315,24 @@ describe("catalog gather OAuth observation", () => {
     expect(copilot.snapshot.apiBaseUrl).toBe(copilotHost);
   });
 
+  test("Devin invalid stored tenant uses the same fixed route for discovery and decoding", async () => {
+    const provider = { adapter: "devin", baseUrl: "https://windsurf.com",
+      authMode: "oauth", liveModels: true, models: [] } as OcxProviderConfig;
+    const destination = "https://server.codeium.com";
+    const authPath = join(opencodexHome, "auth.json");
+    writeFileSync(authPath, devinAuthStoreBytes("https://invalid.example"), { mode: 0o600 });
+    setCachedCatalogForTests(parseCatalogBuffer(
+      encodeMessage(1, Buffer.concat([encodeString(1, "fixed-route-only-model"), encodeString(22, "fixed-route-only-model")])),
+      "fixture-devin-key", destination,
+    ));
+    try {
+      expect((await fetchProviderModels("devin", provider, 60_000)).map(row => row.id)).toContain("fixed-route-only-model");
+      expect(knownModelIdsForProvider("devin", provider)).toContain("fixed-route-only-model");
+    } finally {
+      setCachedCatalogForTests(null);
+    }
+  });
+
   test("Devin catalog and routing cache follow the full tenant path with one token", async () => {
     const tenantA = "https://eu.windsurf.com/_route/api_server/tenant_a";
     const tenantB = "https://eu.windsurf.com/_route/api_server/tenant_b";

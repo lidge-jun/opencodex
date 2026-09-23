@@ -1212,9 +1212,13 @@ export function injectGrokConfig(
       nextContent = buildCandidate(userModelAliases(content, region, true));
     } else {
       const validCandidate = (includeNested: boolean): string | null => {
-        // Only the parse is guarded: a failure while building the block is not an alias
-        // collision and must surface unchanged.
-        const candidate = buildCandidate(userModelAliases(content, region, includeNested));
+        let candidate: string;
+        try {
+          candidate = buildCandidate(userModelAliases(content, region, includeNested));
+        } catch (error) {
+          if (error instanceof Error && error.message === "Grok config rewrite refused: Bun could not parse the TOML document safely.") return null;
+          throw error;
+        }
         try {
           Bun.TOML.parse(applyEol(candidate, eol));
           return candidate;

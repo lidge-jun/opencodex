@@ -295,7 +295,10 @@ export async function fetchProviderModelsWithAuth(
   if (prov.adapter === "devin") {
     if (!apiKey) return observed(configured, "degraded");
     // Both the credential and its validated tenant destination own this roster.
-    const destination = resolveDevinApiBaseUrl(auth.oauthApiBaseUrl ?? prov.baseUrl);
+    // The registered Devin route ignores a saved baseUrl override; discovery must
+    // use that same fixed destination when the stored tenant URL is invalid.
+    const configuredBase = name === "devin" ? getProviderRegistryEntry(name)?.baseUrl ?? prov.baseUrl : prov.baseUrl;
+    const destination = resolveDevinApiBaseUrl(auth.oauthApiBaseUrl ?? configuredBase);
     const authorityIdentity = createHash("sha256")
       .update(JSON.stringify([apiKey, destination])).digest("hex");
     const cachedDevin = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);

@@ -4,6 +4,12 @@ The capture-only bridge in `src/adapters/coding-agent/turn.ts` reports staging f
 the fixed `tool_bridge_setup_failed` error, never an OS error carrying private file paths.
 Failure prevents CLI spawn and settles the bridge's private directory; the CodeBuddy adapter
 also settles its prompt-file directory. Catalog and MCP-config write failures cover both owners.
+In a compiled executable, the bridge launches the private `__codebuddy-mcp` CLI entrypoint;
+source execution launches the MCP module with Bun. Both paths advertise only the request's
+isolated catalog and leave tool execution to the external client. Qoder appends the folded
+system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or
+`QODERCN_APPEND_SYSTEM_PROMPT` child environment,
+never through command-line arguments or inherited vendor variables.
 
 OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../types";
 import { commandInvocation } from "../../lib/win-exec";
+import { isStandaloneBinary } from "../../lib/standalone";
 import { modelRecordValue } from "../../reasoning-effort";
 import type { IncomingMeta } from "../base";
 import {
@@ -132,6 +133,10 @@ export interface CodingAgentToolBridgeInput {
   requireToolCall?: boolean;
 }
 
+export function codeBuddyMcpInvocation(serverModulePath: string, catalogPath: string, standalone = isStandaloneBinary()): string[] {
+  return standalone ? ["__codebuddy-mcp", catalogPath] : [serverModulePath, catalogPath];
+}
+
 /**
  * Run one headless coding-agent CLI turn as an OpenCodex `runTurn` (§七/§三十).
  *
@@ -222,7 +227,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             [toolBridge.serverName]: {
               type: "stdio",
               command: process.execPath,
-              args: [toolBridge.serverModulePath, catalogPath],
+              args: codeBuddyMcpInvocation(toolBridge.serverModulePath, catalogPath),
               defer_loading: false,
               alwaysLoad: true,
             },

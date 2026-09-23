@@ -1,7 +1,7 @@
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
 import { createHash } from "node:crypto";
 import { peekAuthStore } from "./oauth/store";
-import { resolveDevinApiBaseUrl } from "./oauth/devin/api-base";
+import { resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./oauth/devin/api-base";
 import {
   getCombo,
   isComboTargetInCooldown,
@@ -163,7 +163,7 @@ export function knownModelIdsForProvider(
       if (!account || account.needsReauth || !Number.isFinite(account.credential.expires)
         || account.credential.expires <= Date.now()) return undefined;
       key = account.credential.access;
-      if (routed.adapter === "devin") destination = account.credential.apiBaseUrl ?? routed.baseUrl;
+      if (routed.adapter === "devin") destination = validateDevinApiBaseUrl(account.credential.apiBaseUrl) ?? routed.baseUrl;
     }
     if (!key) return undefined;
     return createHash("sha256")

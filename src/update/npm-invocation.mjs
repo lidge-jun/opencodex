@@ -39,9 +39,10 @@ export function resolveNpmCommand(
   if (platform !== "win32") return "npm";
   const exists = deps.exists ?? existsSync;
   const cwd = deps.cwd ?? process.cwd();
-  const appDataNpm = env.APPDATA && win32.isAbsolute(env.APPDATA)
-    ? win32.join(env.APPDATA, "npm")
-    : null;
+  const trustedRoots = [env.APPDATA, env.LOCALAPPDATA, env.ProgramFiles, env["ProgramFiles(x86)"],
+    env.USERPROFILE && win32.join(env.USERPROFILE, "scoop", "shims")]
+    .filter(root => typeof root === "string" && win32.isAbsolute(root));
+  const trustedEntry = entry => trustedRoots.some(root => isInside(root, entry) && !isInside(root, cwd));
   const extensions = (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
     .split(";")
     .filter(Boolean);
@@ -53,7 +54,7 @@ export function resolveNpmCommand(
   for (const entry of pathEntries) {
     if (!win32.isAbsolute(entry)) continue;
     if (isSamePath(entry, cwd)) continue;
-    if (isInside(cwd, entry) && (!appDataNpm || !isSamePath(entry, appDataNpm))) continue;
+    if (isInside(cwd, entry) && !trustedEntry(entry)) continue;
     for (const extension of extensions) {
       const candidate = win32.join(entry, `npm${extension.toLowerCase()}`);
       if (exists(candidate)) return win32.resolve(candidate);

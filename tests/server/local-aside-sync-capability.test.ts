@@ -154,3 +154,26 @@ test("CLI default Aside sync attests the listener and sends a bodyless POST", as
   })).rejects.toMatchObject({ status: 503 });
   expect(posted).toBe(false);
 });
+
+test("CLI Aside sync applies one absolute deadline across attestation and POST", async () => {
+  if (!server) throw new Error("listener is not running");
+  const live = { pid: process.pid, port: server.port, hostname: "127.0.0.1", source: "runtime" as const };
+  let healthSignal: AbortSignal | undefined;
+  let postSignal: AbortSignal | undefined;
+  await expect(refreshAsideProfilesThroughServer({
+    findLiveProxy: async () => live,
+    exchangeDeadlineMs: 50,
+    directLocalFetch: async (input, init = {}) => {
+      if (new URL(input instanceof Request ? input.url : String(input)).pathname === "/healthz") {
+        healthSignal = init.signal ?? undefined;
+        return directLocalHttpFetch(input, init);
+      }
+      postSignal = init.signal ?? undefined;
+      return new Promise<Response>((_, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    },
+  })).rejects.toBeDefined();
+  expect(healthSignal).toBe(postSignal);
+  expect(postSignal?.aborted).toBe(true);
+});

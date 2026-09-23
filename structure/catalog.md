@@ -175,6 +175,8 @@ instead. Codex's own `models_cache.json` is a different cache, invalidated by ca
 Account-scoped discovery transports remain bound to the credential snapshot that supplied the
 token. In particular, Devin discovery uses the allowlisted tenant API base URL from that same
 snapshot rather than pairing a durable account key with the provider registry's default host.
+If that stored destination is invalid, registered Devin discovery and routing both use the
+registry's fixed base URL instead of a stale configured override.
 Entitlement-specific rosters (Qoder, Devin, Cursor) additionally bind their cache entry to an
 irreversible credential fingerprint (for Devin, of the credential plus its validated tenant
 destination URL): a credential or destination switch observes neither the fresh nor the stale

@@ -28,7 +28,7 @@ export interface CodexCliInstallationTargetDeps {
   readonly platform?: NodeJS.Platform;
   /** `refused` means the probe could not decide; a PATH scan must stop rather than
    *  attest a later candidate that the real launcher would never reach. */
-  readonly exists?: (path: string) => boolean | "refused" | Promise<boolean | "refused">;
+  readonly exists?: (path: string) => boolean | "refused" | "volume-unavailable" | Promise<boolean | "refused" | "volume-unavailable">;
   /** Bounded prefix read used only to recognize an OpenCodex-owned wrapper. */
   readonly fileContains?: (path: string, marker: string) =>
     boolean | "unavailable" | Promise<boolean | "unavailable">;
@@ -48,7 +48,7 @@ async function scanPath(
   name: string,
   pathValue: string | null | undefined,
   pathExt: string | null | undefined,
-  exists: (path: string) => boolean | "refused" | Promise<boolean | "refused">,
+  exists: (path: string) => boolean | "refused" | "volume-unavailable" | Promise<boolean | "refused" | "volume-unavailable">,
 ): Promise<string | null> {
   const extensions = (pathExt ?? DEFAULT_PATH_EXT).split(";").map(value => value.trim()).filter(Boolean);
   const names = /\.[a-z0-9]+$/i.test(name) ? [name] : extensions.map(ext => name + ext.toLowerCase());
@@ -58,6 +58,7 @@ async function scanPath(
     for (const candidateName of names) {
       const candidate = win32.join(dir, candidateName);
       const found = await exists(candidate);
+      if (found === "volume-unavailable") break;
       if (found === "refused") return null;
       if (found) return candidate;
     }
@@ -86,7 +87,8 @@ export async function deriveCodexCliInstallationInput(
   const exists = deps.exists ?? (async (path: string) => {
     const result = await safeRead(path, 0);
     if (result.kind === "observed") return true;
-    return result.reason === "not-found" ? false : "refused";
+    return result.reason === "not-found" ? false
+      : result.reason === "volume-unavailable" ? "volume-unavailable" : "refused";
   });
   const fileContains = deps.fileContains ?? (async (path: string, marker: string) => {
     const result = await safeRead(path, SHIM_PROBE_BYTES, true);

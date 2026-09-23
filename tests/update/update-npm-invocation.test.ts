@@ -56,6 +56,16 @@ describe("Windows npm update invocation", () => {
     })).toBe(appDataNpm);
   });
 
+  test.each([
+    ["C:\\Users\\dev", "C:\\Users\\dev\\AppData\\Local\\Volta\\bin", "LOCALAPPDATA", "C:\\Users\\dev\\AppData\\Local"],
+    ["C:\\", "C:\\Program Files\\nodejs", "ProgramFiles", "C:\\Program Files"],
+  ])("resolves trusted npm from broad cwd %s", (cwd, directory, envKey, root) => {
+    const npm = `${directory}\\npm.cmd`;
+    expect(resolveNpmCommand("win32", { PATH: directory, PATHEXT: ".CMD", [envKey]: root }, {
+      cwd, exists: path => path === npm,
+    })).toBe(npm);
+  });
+
   test("ignores npm candidates in current-directory subtrees", () => {
     const projectNpm = `${cwd}\\node_modules\\.bin\\npm.cmd`;
     const env = {

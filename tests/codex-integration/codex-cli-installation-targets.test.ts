@@ -81,6 +81,19 @@ describe("selected Codex CLI installation target derivation", () => {
     expect(result).toEqual({ kind: "unavailable", reason: "candidate_unavailable" });
   });
 
+  test("an unavailable PATH volume does not hide a later launcher", async () => {
+    const files = fixtureFiles();
+    const deps = depsFor(files);
+    const result = await deriveCodexCliInstallationInput(
+      snapshot({ path: "Z:\\stale;" + PREFIX + ";" + NODE_DIR }),
+      {
+        ...deps,
+        exists: path => path.startsWith("Z:\\") ? "volume-unavailable" : deps.exists(path),
+      },
+    );
+    expect(result.kind).toBe("derived");
+  });
+
   test("derives the npm-global layout from the configured candidate", async () => {
     const result = await deriveCodexCliInstallationInput(
       snapshot({ codexCliPath: PREFIX + "\\codex.cmd" }),

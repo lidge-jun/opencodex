@@ -1,9 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { Readable, Writable } from "node:stream";
-import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { buildQoderArgs, buildQoderChildEnv, createQoderAdapter } from "../../src/adapters/qoder/adapter";
 import { clearQoderBinaryCache, QODER_CN_PROFILE, QODER_GLOBAL_PROFILE, resolveQoderProfile } from "../../src/adapters/qoder/profiles";
@@ -47,17 +44,16 @@ describe("qoder adapter", () => {
     expect(args).not.toContain("--dangerously-skip-permissions");
   });
 
-  test("keeps system and developer prompts out of child-process arguments", async () => {
+  test("passes system and developer prompts only in the scoped child environment", async () => {
     const secretSystem = "private system instructions";
     const secretDeveloper = "private developer context";
     let args: readonly string[] = [];
-    let promptFromFile: Promise<string> | undefined;
+    let childEnv: NodeJS.ProcessEnv = {};
     const adapter = createQoderAdapter(provider(), {
       which: () => "/bin/qoder",
-      spawn: (_command, childArgs) => {
+      spawn: (_command, childArgs, options) => {
         args = childArgs;
-        const flag = childArgs.indexOf("--append-system-prompt-file");
-        promptFromFile = readFile(childArgs[flag + 1]!, "utf8");
+        childEnv = options.env ?? {};
         return fakeChild(['{"type":"result","subtype":"success","is_error":false}\n']);
       },
     });
@@ -71,54 +67,30 @@ describe("qoder adapter", () => {
       },
     }), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, () => {});
 
-    const promptPath = args[args.indexOf("--append-system-prompt-file") + 1]!;
     expect(args.join(" ")).not.toContain(secretSystem);
     expect(args.join(" ")).not.toContain(secretDeveloper);
-    expect(await readFile(promptPath, "utf8").catch(() => "removed")).toBe("removed");
-    expect(await promptFromFile).toBe(`${secretSystem}\n\n${secretDeveloper}`);
+    expect(args).not.toContain("--append-system-prompt-file");
+    expect(childEnv.QODER_APPEND_SYSTEM_PROMPT).toBe(`${secretSystem}\n\n${secretDeveloper}`);
   });
 
-  test("a staging write failure fails closed before spawn and cleans the temp dir", async () => {
-    // The exclusive-create write is the seam a same-name collision or a read-only
-    // temp dir hits. It must not reach spawn, must surface the shared staging code,
-    // must not leak the prompt, and must remove the directory it just made.
-    const secretSystem = "private system instructions";
-    let spawned = 0;
-    let attemptedPath: string | undefined;
-    let collisionContents: string | undefined;
-    const adapter = createQoderAdapter(provider(), {
-      which: () => "/bin/qoder",
-      spawn: () => { spawned++; return fakeChild([]); },
-      writeFile: async (path, data, options) => {
-        attemptedPath = String(path);
-        // Create the collision in the adapter's real temporary directory, then
-        // execute its exact write options. Removing flag:wx must fail this test.
-        await writeFile(path, "existing fixture contents", { flag: "wx" });
-        try {
-          await writeFile(path, data, options);
-        } finally {
-          collisionContents = await readFile(path, "utf8");
-        }
-      },
-    });
-    const events: AdapterEvent[] = [];
-    await adapter.runTurn!(parsed({
-      context: { systemPrompt: [secretSystem], messages: [{ role: "user", content: "hello", timestamp: 0 }] },
-    }), { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, event => events.push(event));
-
-    expect(spawned).toBe(0);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      type: "error",
-      status: 500,
-      errorType: "upstream_error",
-      code: "system_prompt_staging_failed",
-      retryable: false,
-    });
-    expect(events[0]!.type === "error" ? events[0]!.message : "").not.toContain(secretSystem);
-    expect(attemptedPath).toBeDefined();
-    expect(collisionContents).toBe("existing fixture contents");
-    expect(existsSync(dirname(attemptedPath!))).toBe(false);
+  test("never inherits an ambient Qoder prompt for either region", () => {
+    const previous = process.env.QODER_APPEND_SYSTEM_PROMPT;
+    const previousCn = process.env.QODERCN_APPEND_SYSTEM_PROMPT;
+    process.env.QODER_APPEND_SYSTEM_PROMPT = "ambient-secret";
+    process.env.QODERCN_APPEND_SYSTEM_PROMPT = "ambient-cn-secret";
+    try {
+      for (const profile of [QODER_GLOBAL_PROFILE, QODER_CN_PROFILE]) {
+        expect(buildQoderChildEnv(profile, "pat").QODER_APPEND_SYSTEM_PROMPT).toBeUndefined();
+        const promptEnv = profile.region === "cn" ? "QODERCN_APPEND_SYSTEM_PROMPT" : "QODER_APPEND_SYSTEM_PROMPT";
+        expect(buildQoderChildEnv(profile, "pat")[promptEnv]).toBeUndefined();
+        expect(buildQoderChildEnv(profile, "pat", "request-only")[promptEnv]).toBe("request-only");
+      }
+    } finally {
+      if (previous === undefined) delete process.env.QODER_APPEND_SYSTEM_PROMPT;
+      else process.env.QODER_APPEND_SYSTEM_PROMPT = previous;
+      if (previousCn === undefined) delete process.env.QODERCN_APPEND_SYSTEM_PROMPT;
+      else process.env.QODERCN_APPEND_SYSTEM_PROMPT = previousCn;
+    }
   });
 
   test("keeps Global and CN profiles, executables, destinations, and PAT variables isolated", async () => {
