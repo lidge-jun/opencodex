@@ -420,6 +420,9 @@ read-only. Two environment variables make the source and token row selection exp
 On Windows, import looks for `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`. Forced/add-account login
 also needs the local CLI binary: opencodex first uses `PATH`, then falls back to
 `%LOCALAPPDATA%\Kiro-Cli\kiro-cli.exe` and `C:\Program Files\Kiro-Cli\kiro-cli.exe`.
+If neither folder has `kiro-cli.exe`, a `kiro.exe` inside those same two `Kiro-Cli` folders is used.
+opencodex never runs a short `kiro` or `kiro.exe` found on `PATH` or in shared macOS/Linux bin
+directories, so install or link the CLI as `kiro-cli` there.
 
 After a successful import, opencodex persists the imported credential to
 `~/.opencodex/auth.json`.
