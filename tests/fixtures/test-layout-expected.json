@@ -1121,6 +1121,7 @@
   "release-helper.test.ts": "ci-workflows",
   "release-notes.test.ts": "ci-workflows",
   "release-pipeline-contract.test.ts": "ci-workflows",
+  "release-preflight.test.ts": "ci-workflows",
   "release-resume-identity.test.ts": "ci-workflows",
   "release-version-line.test.ts": "ci-workflows",
   "release-version-sources.test.ts": "ci-workflows",

@@ -74,8 +74,52 @@ jobs:
             process.exit(1);
           }
           NODE
-  package-standalone:
+
+  # Every publication precondition the dispatch can already decide, checked before any runner
+  # starts packaging: channel and dist-tag, every version source, the tag, the GitHub release,
+  # npm, the global tag ordering and the dev pre-move (scripts/ci/release-preflight.sh).
+  #
+  # Run 35783865160 packaged 2.62.0 for nineteen minutes and then failed the ordering gate in
+  # `publish` on v2.63.0-preview.20260923. That tag already existed when the run's first job
+  # started: the workflow-level `release` concurrency group above is one constant slot for every
+  # ref, so the stable run had waited for the preview run to finish. The runs were serialised;
+  # the check was in the wrong place. Because of that shared slot, this job sees whatever the
+  # previous release run published.
+  #
+  # It is an early answer, not the final one. Tags, releases and registry state can still move
+  # while a run packages (a hand-pushed tag, a first local publish), so `publish` repeats every
+  # one of these checks immediately before `npm publish`.
+  preflight:
+    name: release preflight
     needs: validate-dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+          fetch-tags: true
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Fetch the dev line
+        run: git fetch --no-tags --depth=1 origin +refs/heads/dev:refs/remotes/origin/dev
+
+      - name: Refuse a release that cannot publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          NPM_DIST_TAG: ${{ inputs.tag }}
+          DRY_RUN: ${{ inputs.dry-run }}
+          RESUME: ${{ inputs.resume-after-npm-publish }}
+        run: bash scripts/ci/release-preflight.sh
+
+  package-standalone:
+    needs: [validate-dispatch, preflight]
     strategy:
       fail-fast: false
       matrix:
@@ -181,7 +225,7 @@ jobs:
           retention-days: 7
 
   package-desktop:
-    needs: validate-dispatch
+    needs: [validate-dispatch, preflight]
     strategy:
       fail-fast: false
       matrix:

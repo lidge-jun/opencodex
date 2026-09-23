@@ -67,10 +67,16 @@ ocx help
 The CI intentionally does not build docs, run coverage, or perform remote Ubuntu/RDP smoke tests.
 Those stay outside the default gate until a concrete regression justifies the extra runtime.
 
-The Release workflow remains manual and publish-focused. Before any dry-run or publish step, it
-checks that the exact release commit (`GITHUB_SHA`) already has a successful push-event
-Cross-platform CI run — a pull-request run does not qualify — that `dev` already outranks the
-target, and that the target passes the fresh global tag-ordering gate.
+The Release workflow remains manual and publish-focused. Its `preflight` job runs right after
+dispatch validation and before either packaging job: `scripts/ci/release-preflight.sh` checks the
+channel and dist-tag, every version source, the tag, the GitHub release, npm, the fresh global
+tag ordering and the `dev` pre-move, so a release that can never publish fails in its first minute
+instead of after the packaging matrix. The workflow-level `release` concurrency group is one
+constant slot shared by every ref, which serialises stable and preview runs; the preflight
+therefore sees whatever the previous release run published. The publish job repeats every one of
+those checks immediately before publishing, because tags, releases and registry state can still
+move while a run packages, and additionally requires a successful push-event Cross-platform CI run
+for the exact release commit (`GITHUB_SHA`) — a pull-request run does not qualify.
 This keeps release runs short and makes release a deployment of a verified commit after the required
 `dev` pre-move rather than a second CI pipeline.
 
