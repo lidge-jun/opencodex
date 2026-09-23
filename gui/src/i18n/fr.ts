@@ -101,6 +101,7 @@ export const fr: Record<TKey, string> = {
   "auth.adminTokenTitle": "Jeton d’administration OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Compte",
   "auth.adminTokenFieldLabel": "Jeton d’administration",
+  "auth.adminTokenRemember": "Mémoriser sur cet appareil",
   "auth.adminTokenRejected": "Ce jeton d’administration a été refusé. Vérifiez-le et réessayez.",
   "auth.adminTokenUnavailable": "Le jeton d’administration n’a pas pu être vérifié. Réessayez.",
   "auth.adminTokenHelp": "Il s’agit du jeton d’administration de l’API de gestion OpenCodex, pas d’une clé API de fournisseur. Au premier démarrage, le proxy l’écrit dans ~/.opencodex/admin-api-token (ou $OPENCODEX_HOME/admin-api-token), et OPENCODEX_ADMIN_AUTH_TOKEN a la priorité.",

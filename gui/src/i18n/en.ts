@@ -104,6 +104,7 @@ export const en = {
   "auth.adminTokenTitle": "OpenCodex admin token (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Account",
   "auth.adminTokenFieldLabel": "Admin token",
+  "auth.adminTokenRemember": "Remember on this device",
   "auth.adminTokenRejected": "That admin token was rejected. Check it and try again.",
   "auth.adminTokenUnavailable": "The admin token could not be verified. Try again.",
   "auth.adminTokenHelp": "This is the OpenCodex management admin token, not a provider API key. The proxy writes it to ~/.opencodex/admin-api-token (or $OPENCODEX_HOME/admin-api-token) on first start, and OPENCODEX_ADMIN_AUTH_TOKEN overrides it.",

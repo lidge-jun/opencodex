@@ -101,6 +101,7 @@ export const vi: Record<TKey, string> = {
   "auth.adminTokenTitle": "Token quản trị OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Tài khoản",
   "auth.adminTokenFieldLabel": "Token quản trị",
+  "auth.adminTokenRemember": "Ghi nhớ trên thiết bị này",
   "auth.adminTokenRejected": "Token quản trị đó đã bị từ chối. Hãy kiểm tra lại và thử lại.",
   "auth.adminTokenUnavailable": "Không thể xác minh token quản trị. Hãy thử lại.",
   "auth.adminTokenHelp": "Đây là token quản trị quản lý OpenCodex, không phải là API key của provider. Proxy ghi nó vào ~/.opencodex/admin-api-token (hoặc $OPENCODEX_HOME/admin-api-token) trong lần khởi động đầu tiên và OPENCODEX_ADMIN_AUTH_TOKEN sẽ ghi đè nó.",

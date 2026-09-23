@@ -1,4 +1,4 @@
-import { promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
+import { clearRememberedAdminToken, getRememberedAdminToken, promptForAdminToken, type AdminTokenVerifier } from "./admin-token-dialog";
 import { createBoundedFetch } from "./bounded-fetch";
 import { adminTokenPromptAllowed, standaloneApiTargets, type ApiPlane, type ApiTarget, type ApiTargets } from "./api-targets";
 
@@ -253,13 +253,20 @@ async function reBootstrapSessionToken(plane: ApiPlane): Promise<RebootstrapResu
 
 async function verifyAdminToken(plane: ApiPlane, token: string): ReturnType<AdminTokenVerifier> {
   if (!rawFetch) return "unavailable";
+  const bounded = createBoundedFetch(rebootstrapTimeoutMs);
   try {
     const state = runtime(plane);
-    const [input, init] = withAuth(plane, `${state.target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`, { cache: "no-store" }, token);
+    const [input, init] = withAuth(
+      plane,
+      `${state.target.baseUrl}${ADMIN_TOKEN_VALIDATION_PATH}`,
+      { cache: "no-store", signal: bounded.signal },
+      token,
+    );
     const response = await rawFetch(input, init);
     if (response.status === 401) return "rejected";
     return response.ok ? "accepted" : "unavailable";
   } catch { return "unavailable"; }
+  finally { bounded.clear(); }
 }
 
 async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null, callerSignal?: AbortSignal): Promise<string | null> {
@@ -282,6 +289,23 @@ async function resolveTokenAfter401(plane: ApiPlane, failedToken: string | null,
       if (!adminTokenPromptAllowed()) {
         state.promptCancelled = true;
         return null;
+      }
+      const remembered = getRememberedAdminToken();
+      if (remembered) {
+        if (remembered === failedToken) {
+          // The stored token just caused this 401: it is revoked. Clear it
+          // now so it cannot linger until the next visit.
+          clearRememberedAdminToken();
+        } else {
+          const verdict = await verifyAdminToken(plane, remembered);
+          if (verdict === "accepted") {
+            state.session = { token: remembered, csrfToken: null, browserOrigin: null, serverOrigin: state.target.serverOrigin };
+            return remembered;
+          }
+          if (verdict === "rejected") clearRememberedAdminToken();
+          // "unavailable" (network/server error) leaves the stored token
+          // intact: a transient outage must not delete a valid credential.
+        }
       }
       const prompted = await requestAdminToken(token => verifyAdminToken(plane, token));
       if (prompted) {
