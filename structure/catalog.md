@@ -75,6 +75,8 @@ provider-wide fallback. Exact model output limits precede the provider default o
   native rows from the output without rewriting the pristine backup or unrelated snapshots;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.
 
+Cache invalidation reports an unchanged derived cache separately from a failed rewrite. `ocx sync-cache` treats identical bytes as a successful no-op, preserving the cache mtime and avoiding a needless app-server restart; malformed catalogs and write failures remain errors.
+
 `src/codex/catalog/model-visibility.ts` also excludes models owned by disabled providers, including custom rows. `src/codex/catalog/routed-gather.ts` does not inherit provider configuration into custom rows while that provider is disabled.
 
 On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's

@@ -334,6 +334,8 @@ and this session ends with the app.
 Invalidate Codex's local model picker cache so it is rebuilt from the active opencodex catalog. The
 same stale-`app-server` warning and optional restart flags as `ocx sync` apply.
 
+If the derived cache already has identical bytes, the command succeeds without rewriting it or restarting Codex. With `--json`, this is reported as `ok: true`, `wrote: false`, `skipped: true`, and `skippedReason: "unchanged"`; an invalid catalog or failed cache write still exits nonzero.
+
 ### `ocx catalog pull <https-url> [--auth-env <NAME>] [--json] [--restart-codex] [--restart-app-server-only]`
 
 Install a complete catalog served by another OpenCodex instance's `/v1/catalog` endpoint, then
