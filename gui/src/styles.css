@@ -2960,3 +2960,10 @@ button.prov-account-row.active { cursor: default; }
 .source-scope-group { border: 0; padding: 0; margin: 0; min-width: 12rem; }
 .source-scope-group legend { padding: 0; }
 .source-scope-group label { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 12px; padding: 2px 0; }
+/* Captioned controls: a visible label above each select keeps the summarizer model, the
+   trigger scope, the source scope, and the effort from reading as four unnamed pickers. */
+.compaction-routing-controls { align-items: flex-end; }
+.compaction-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.compaction-sources-block { margin-top: 12px; }
+.compaction-sources-block .compaction-sources-title { margin-bottom: 6px; }
+.compaction-sources-block .source-scope-groups { margin-top: 0; }

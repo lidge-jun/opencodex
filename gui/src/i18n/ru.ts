@@ -386,6 +386,7 @@ export const ru: Record<TKey, string> = {
   "compactionRouting.sourcesSaved": "Сохранённые селекторы вне текущего каталога",
   "compactionRouting.sourcesNone": "Выберите хотя бы один источник или вернитесь ко всем моделям диалога.",
   "compactionRouting.sourcesHint": "Ограничивает переопределение запросами сжатия из выбранных диалогов. provider/* охватывает все модели этого провайдера; остальные диалоги по-прежнему используют собственную модель.",
+  "compactionRouting.sourcesGridTitle": "Перенаправлять запросы сжатия из этих источников:",
   "compactionRouting.currentModel": "Использовать модель разговора",
   "compactionRouting.currentEffort": "Сохранить уровень из запроса",
   "compactionRouting.effortHint": "Уровень рассуждений применяется, если его поддерживает конечная точка сжатия. Модель должна вмещать весь разговор.",

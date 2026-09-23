@@ -395,6 +395,7 @@ export const en = {
   "compactionRouting.sourcesSaved": "Saved selectors not in the current catalog",
   "compactionRouting.sourcesNone": "Select at least one source, or switch back to all conversation models.",
   "compactionRouting.sourcesHint": "Scope the override to compaction requests from chosen conversations. provider/* covers every model of that provider; unlisted conversations keep using their own model.",
+  "compactionRouting.sourcesGridTitle": "Reroute compaction requests from these sources:",
   "compactionRouting.currentModel": "Use conversation model",
   "compactionRouting.currentEffort": "Keep request effort",
   "compactionRouting.effortHint": "Reasoning applies where supported by the compaction endpoint. The model must accept the full conversation.",

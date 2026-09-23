@@ -377,6 +377,7 @@ export const de: Record<TKey, string> = {
   "compactionRouting.sourcesSaved": "Gespeicherte Selektoren außerhalb des aktuellen Katalogs",
   "compactionRouting.sourcesNone": "Wähle mindestens eine Quelle oder wechsle zurück zu allen Konversationsmodellen.",
   "compactionRouting.sourcesHint": "Schränkt die Überschreibung auf Komprimierungsanfragen ausgewählter Konversationen ein. provider/* deckt alle Modelle dieses Anbieters ab; nicht aufgeführte Konversationen nutzen weiterhin ihr eigenes Modell.",
+  "compactionRouting.sourcesGridTitle": "Komprimierungsanfragen aus diesen Quellen umleiten:",
   "compactionRouting.currentModel": "Gesprächsmodell verwenden",
   "compactionRouting.currentEffort": "Anfrageaufwand beibehalten",
   "compactionRouting.effortHint": "Der Denkaufwand gilt, wenn der Komprimierungsendpunkt ihn unterstützt. Das Modell muss das gesamte Gespräch verarbeiten können.",

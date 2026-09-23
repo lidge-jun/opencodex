@@ -381,6 +381,7 @@ export const ko: Record<TKey, string> = {
   "compactionRouting.sourcesSaved": "현재 카탈로그에 없는 저장된 선택자",
   "compactionRouting.sourcesNone": "소스를 하나 이상 선택하거나 모든 대화 모델로 되돌리세요.",
   "compactionRouting.sourcesHint": "재정의를 선택한 대화의 압축 요청으로 제한합니다. provider/*는 해당 제공자의 모든 모델을 포함하며, 목록에 없는 대화는 계속 자체 모델로 압축합니다.",
+  "compactionRouting.sourcesGridTitle": "다음 소스에서 온 압축 요청을 리라우팅합니다:",
   "compactionRouting.currentModel": "대화 모델 사용",
   "compactionRouting.currentEffort": "요청의 추론 수준 유지",
   "compactionRouting.effortHint": "압축 엔드포인트가 지원하는 경우 추론 설정이 적용됩니다. 모델은 전체 대화를 수용할 수 있어야 합니다.",

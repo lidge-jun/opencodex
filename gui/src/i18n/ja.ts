@@ -386,6 +386,7 @@ export const ja: Record<TKey, string> = {
   "compactionRouting.sourcesSaved": "現在のカタログにない保存済みセレクター",
   "compactionRouting.sourcesNone": "ソースを少なくとも 1 つ選択するか、すべての会話モデルに戻してください。",
   "compactionRouting.sourcesHint": "上書きを選択した会話からの圧縮リクエストに限定します。provider/* はそのプロバイダーの全モデルを対象にし、リストにない会話は従来どおり自身のモデルで圧縮します。",
+  "compactionRouting.sourcesGridTitle": "以下のソースからの圧縮リクエストをリルートします：",
   "compactionRouting.currentModel": "会話のモデルを使用",
   "compactionRouting.currentEffort": "リクエストの推論強度を維持",
   "compactionRouting.effortHint": "圧縮エンドポイントが対応している場合に推論設定が適用されます。モデルは会話全体を受け入れられる必要があります。",

@@ -385,6 +385,7 @@ export const fr: Record<TKey, string> = {
   "compactionRouting.sourcesSaved": "Sélecteurs enregistrés absents du catalogue actuel",
   "compactionRouting.sourcesNone": "Sélectionnez au moins une source, ou revenez à tous les modèles de conversation.",
   "compactionRouting.sourcesHint": "Limite le remplacement aux requêtes de compaction des conversations choisies. provider/* couvre tous les modèles de ce fournisseur ; les conversations non listées gardent leur propre modèle.",
+  "compactionRouting.sourcesGridTitle": "Rerouter les requêtes de compaction issues de ces sources :",
   "compactionRouting.currentModel": "Utiliser le modèle de la conversation",
   "compactionRouting.currentEffort": "Conserver l’effort de la requête",
   "compactionRouting.effortHint": "Le raisonnement s’applique si le point de terminaison de compaction le prend en charge. Le modèle doit accepter toute la conversation.",

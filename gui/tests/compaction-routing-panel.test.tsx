@@ -95,6 +95,26 @@ test("saves model and optional effort, reloads, removes effort, and clears overr
   expect(container.querySelector<HTMLButtonElement>('#compaction-routing-effort')!.disabled).toBe(true);
 });
 
+test("names each control and the source grid so the summarizer and the covered sources are unmistakable", async () => {
+  await render();
+  // Visible captions, not just aria-labels: an unlabeled row of selects read as if every
+  // control picked the summarizer, and the checkbox grid read as candidate models.
+  const captions: Array<[string, string]> = [
+    ["model", "Compaction model"],
+    ["triggers", "Applies to"],
+    ["sources", "Sources"],
+    ["effort", "Reasoning effort"],
+  ];
+  for (const [id, text] of captions) {
+    const caption = [...container.querySelectorAll("label")].find(item => item.textContent === text);
+    expect(caption, "visible caption: " + text).toBeDefined();
+    expect(caption!.getAttribute("for")).toBe("compaction-routing-" + id);
+  }
+  await choose("model", "gateway/cheap");
+  await choose("sources", "Selected sources only");
+  expect(container.textContent).toContain("Reroute compaction requests from these sources:");
+});
+
 test("the trigger selection round-trips and discloses automatic compaction", async () => {
   await render();
   await choose("model", "gateway/cheap");

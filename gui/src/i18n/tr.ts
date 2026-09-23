@@ -387,6 +387,7 @@ export const tr: Record<TKey, string> = {
   "compactionRouting.sourcesSaved": "Geçerli katalogda olmayan kayıtlı seçiciler",
   "compactionRouting.sourcesNone": "En az bir kaynak seçin veya tüm konuşma modellerine dönün.",
   "compactionRouting.sourcesHint": "Geçersiz kılmayı seçilen konuşmaların sıkıştırma istekleriyle sınırlar. provider/* o sağlayıcının tüm modellerini kapsar; listelenmeyen konuşmalar kendi modelini kullanmaya devam eder.",
+  "compactionRouting.sourcesGridTitle": "Bu kaynaklardan gelen sıkıştırma isteklerini yeniden yönlendir:",
   "compactionRouting.currentModel": "Konuşma modelini kullan",
   "compactionRouting.currentEffort": "İsteğin düzeyini koru",
   "compactionRouting.effortHint": "Akıl yürütme, özetleme uç noktası destekliyorsa uygulanır. Model tüm konuşmayı kabul edebilmelidir.",

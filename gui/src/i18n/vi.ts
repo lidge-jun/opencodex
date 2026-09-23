@@ -385,6 +385,7 @@ export const vi: Record<TKey, string> = {
   "compactionRouting.sourcesSaved": "Bộ chọn đã lưu không có trong danh mục hiện tại",
   "compactionRouting.sourcesNone": "Chọn ít nhất một nguồn, hoặc quay lại tất cả model hội thoại.",
   "compactionRouting.sourcesHint": "Giới hạn ghi đè chỉ cho các yêu cầu nén từ những hội thoại đã chọn. provider/* bao gồm mọi model của nhà cung cấp đó; hội thoại không được liệt kê vẫn nén bằng model của chính nó.",
+  "compactionRouting.sourcesGridTitle": "Định tuyến lại các yêu cầu nén từ các nguồn sau:",
   "compactionRouting.currentModel": "Dùng model của cuộc trò chuyện",
   "compactionRouting.currentEffort": "Giữ mức suy luận của yêu cầu",
   "compactionRouting.effortHint": "Mức suy luận được áp dụng nếu điểm cuối nén hỗ trợ. Model phải tiếp nhận được toàn bộ cuộc trò chuyện.",

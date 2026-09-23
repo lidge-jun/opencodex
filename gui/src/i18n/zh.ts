@@ -381,6 +381,7 @@ export const zh: Record<TKey, string> = {
   "compactionRouting.sourcesSaved": "已保存但不在当前目录中的选择器",
   "compactionRouting.sourcesNone": "至少选择一个来源，或改回所有对话模型。",
   "compactionRouting.sourcesHint": "将覆盖限定为来自所选对话的压缩请求。provider/* 覆盖该提供商的全部模型；未列出的对话仍使用自身模型压缩。",
+  "compactionRouting.sourcesGridTitle": "改路由以下来源对话的压缩请求：",
   "compactionRouting.currentModel": "使用对话模型",
   "compactionRouting.currentEffort": "保留请求的推理强度",
   "compactionRouting.effortHint": "推理设置仅在压缩端点支持时生效。模型必须能容纳完整对话。",

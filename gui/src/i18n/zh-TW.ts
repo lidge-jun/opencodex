@@ -276,6 +276,7 @@ export const zhTW: Record<TKey, string> = {
   "compactionRouting.sourcesSaved": "已保存但不在目前目錄中的選取器",
   "compactionRouting.sourcesNone": "至少選擇一個來源，或改回所有對話模型。",
   "compactionRouting.sourcesHint": "將覆寫限定為來自所選對話的壓縮請求。provider/* 覆蓋該提供商的全部模型；未列出的對話仍使用自身模型壓縮。",
+  "compactionRouting.sourcesGridTitle": "改路由以下來源對話的壓縮請求：",
   "compactionRouting.currentModel": "使用對話模型",
   "compactionRouting.currentEffort": "保留請求的推理強度",
   "compactionRouting.effortHint": "推理設定僅在壓縮端點支援時生效。模型必須能容納完整對話。",
