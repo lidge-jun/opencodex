@@ -31,3 +31,12 @@ one healthy new runtime, or keeps the old install and service intact with a clea
 - Redesigning the automatic drain-and-restart guard (`src/server/index/package-tree-guard.ts`).
 - Changing the 2.59.0 updater that the #5624 report ran; only the current updater is hardened.
 - Source checkouts and standalone binaries remain outside the fence.
+
+## Status
+
+| Phase | State |
+|---|---|
+| wp0 | Done: roadmap audited (near-pass, no blockers) and locked |
+| wp1 | Next |
+| wp2 | Pending |
+| wp3 | Pending |
