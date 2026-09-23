@@ -329,28 +329,16 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   font-size: var(--sl-text-sm);
   font-weight: 500;
   text-decoration: none;
-  text-wrap: balance;
+  white-space: nowrap;
   max-width: 100%;
   box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
-}
-@media (max-width: 30rem) {
-  .lp-announce { border-radius: 1.1rem; text-align: left; line-height: 1.35; }
 }
 .lp-announce svg { flex: none; opacity: 0.7; }
 :root[data-theme='dark'] .lp-announce,
 :root:not([data-theme='light']) .lp-announce { background-color: rgba(255, 255, 255, 0.94); }
-.lp-announce-tag {
-  flex: none;
-  padding: 0.1rem 0.55rem;
-  border-radius: var(--ocx-radius-pill);
-  background-color: #e08b6d;
-  color: #1a1a1a;
-  font-size: var(--sl-text-2xs);
-  font-weight: 650;
-  letter-spacing: 0.02em;
-}
 .lp-announce:focus-visible,
-.lp-download a:focus-visible {
+.lp-download a:focus-visible,
+.lp-dl-more > summary:focus-visible {
   outline: 2px solid light-dark(#2f6fe4, #8ab0f5);
   outline-offset: 2px;
 }
@@ -862,6 +850,40 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   margin-top: 1.25rem;
 }
 @media (max-width: 48rem) { .lp-dl-grid { grid-template-columns: 1fr; } }
+/* Detected platform: its card stands alone; the others sit in the disclosure. */
+.lp-download:has(.lp-dl-more:not([hidden])) .lp-dl-grid { grid-template-columns: minmax(0, 28rem); }
+.lp-dl-more:not([hidden]) { display: block; margin-top: 1rem; }
+.lp-dl-more > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 44px;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--sl-text-sm);
+  font-weight: 500;
+  color: var(--sl-color-gray-2);
+  border-radius: var(--ocx-radius-pill);
+}
+.lp-dl-more > summary::-webkit-details-marker { display: none; }
+.lp-dl-more > summary::after {
+  content: '';
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+.lp-dl-more[open] > summary::after { transform: translateY(2px) rotate(-135deg); }
+.lp-dl-more > summary:hover { color: var(--sl-color-white); }
+.lp-dl-more-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.875rem;
+  max-width: 56rem;
+  margin-top: 0.5rem;
+}
+@media (max-width: 48rem) { .lp-dl-more-grid { grid-template-columns: 1fr; } }
 .lp-dl-card {
   position: relative;
   display: flex;
@@ -900,6 +922,10 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   gap: 0.5rem;
   margin-top: auto;
   padding-top: 0.625rem;
+  /* one link line reserved in every card (Linux carries the .deb link) so
+     the buttons share a row in the three- and two-column layouts */
+  min-height: calc(44px + 0.5rem + 0.625rem + 1.5 * var(--sl-text-xs));
+  justify-content: flex-start;
 }
 .lp-dl-btn {
   display: inline-flex;
@@ -928,31 +954,17 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   border-color: var(--sl-color-gray-5);
   color: var(--sl-color-white);
 }
-.lp-dl-links {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.2rem 0.75rem;
-  /* two lines reserved in every card so the download buttons share one row */
-  line-height: 1.5;
-  min-height: calc(3em + 0.2rem);
-  font-size: var(--sl-text-xs);
-}
-.lp-dl-links > a { white-space: nowrap; }
 .lp-announce-text { min-width: 0; }
 /* Korean breaks between words; Japanese and Chinese keep per-character breaks. */
-html:lang(ko) .lp-announce-text,
 html:lang(ko) .lp-download { word-break: keep-all; overflow-wrap: break-word; }
-.lp-dl-sep { color: var(--sl-color-gray-4); }
-.lp-dl-alt,
-.lp-dl-sha {
+.lp-dl-alt {
+  align-self: flex-start;
   font-size: var(--sl-text-xs);
+  line-height: 1.5;
   color: light-dark(#2f6fe4, #8ab0f5);
   text-decoration: none;
 }
-.lp-dl-sha { font-family: var(--sl-font-mono); }
-.lp-dl-alt:hover,
-.lp-dl-sha:hover { text-decoration: underline; text-underline-offset: 3px; }
+.lp-dl-alt:hover { text-decoration: underline; text-underline-offset: 3px; }
 .lp-dl-reco {
   display: none;
   order: -1;
