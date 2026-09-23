@@ -48,7 +48,7 @@ Trois configurations restent possibles, ce qui éclaire la forme de l'échec :
 
 | Topologie | v1 | v2 |
 | --- | --- | --- |
-| Parent ChatGPT vers enfant routé | fonctionne | **échoue** |
+| Parent ChatGPT vers enfant routé | fonctionne | **échoue par défaut** ; voir le relais optionnel ci-dessous |
 | Parent routé vers enfant routé | fonctionne | fonctionne |
 | Parent ChatGPT vers enfant ChatGPT | fonctionne | fonctionne — le backend peut déchiffrer ce qu'il a produit |
 

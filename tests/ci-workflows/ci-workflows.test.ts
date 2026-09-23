@@ -481,6 +481,7 @@ describe("GitHub Actions hardening", () => {
     const ciPaths = [
       ".dockerignore",
       ".gitattributes",
+      ".github/ISSUE_TEMPLATE/**",
       ".github/workflows/ci.yml",
       ".github/workflows/enforce-pr-target.yml",
       ".github/workflows/release.yml",
@@ -498,7 +499,9 @@ describe("GitHub Actions hardening", () => {
       "docker/**",
       "gui/**",
       "package.json",
+      "readme/**",
       "scripts/**",
+      "skills/**",
       "src/**",
       "tests/**",
       "tsconfig.json",

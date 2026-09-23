@@ -136,6 +136,6 @@ OpenCodex는 WAL 파일 크기를 별도로 보고하며 그 결과를 SSD 쓰�
 
 ## 공간 회수는 별개입니다
 
-Protect는 SQLite를 vacuum하거나 압축하지 않습니다. 후속 **Reclaim** 단계에서는 체크포인트와 무결성 검사를 포함한 명시적이고 제한된 오프라인 증분 vacuum 절차를 추가할 예정입니다.
+Protect는 SQLite를 vacuum하거나 압축하지 않습니다. [**Reclaim**](/ko/guides/codex-log-guard-reclaim/)에서 체크포인트와 무결성 검사를 포함한 명시적이고 제한된 오프라인 증분 vacuum 절차를 사용할 수 있습니다.
 
 Protect는 `VACUUM`을 실행하거나 Codex의 WAL을 직접 자르거나 삭제하지 않으며, 공간 회수를 예약 실행하지 않습니다.

@@ -136,6 +136,6 @@ OpenCodex は WAL ファイルサイズを別途報告しますが、その結�
 
 ## 容量回収は別の段階
 
-Protect は SQLite の VACUUM や圧縮を実行しません。後続の **Reclaim** 段階で、チェックポイントと整合性チェックを伴う、明示的でオフラインかつ範囲を限定したインクリメンタル VACUUM フローが追加されます。
+Protect は SQLite の VACUUM や圧縮を実行しません。[**Reclaim**](/ja/guides/codex-log-guard-reclaim/) では、チェックポイントと整合性チェックを伴う、明示的でオフラインかつ範囲を限定したインクリメンタル VACUUM を実行できます。
 
 Protect は `VACUUM` を実行せず、Codex の WAL を直接切り詰めたり削除したりせず、定期的な領域回収も行いません。

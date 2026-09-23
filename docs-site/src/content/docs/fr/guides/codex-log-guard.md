@@ -136,6 +136,6 @@ Un schéma inconnu n’est pas supposé compatible. Une version plus récente de
 
 ## Reclaim reste distinct
 
-Protect n’exécute ni `VACUUM` ni compactage SQLite. L’étape ultérieure **Reclaim** ajoutera un flux explicite, hors ligne et borné de compactage incrémental, avec checkpoints et contrôles d’intégrité.
+Protect n’exécute ni `VACUUM` ni compactage SQLite. [**Reclaim**](/fr/guides/codex-log-guard-reclaim/) fournit un flux explicite, hors ligne et borné de compactage incrémental, avec checkpoints et contrôles d’intégrité.
 
 Protect n’exécute jamais `VACUUM`, ne tronque ni ne supprime directement le WAL de Codex et ne planifie jamais de récupération d’espace.

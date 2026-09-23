@@ -117,7 +117,7 @@ Ce choix de protocole a un effet secondaire pour les lignes Claude : Cursor n’
 
 | Symptôme | Vérification |
 |---|---|
-| Réponse 401 de la passerelle | l’API Key ne correspond pas à `OPENCODEX_API_AUTH_TOKEN` ; pour une adresse loopback sans authentification API, toute valeur convient |
+| Réponse 401 de la passerelle | l’API Key envoyée n’est pas acceptée par la configuration d’authentification API active ; pour une adresse loopback sans authentification API, toute valeur convient |
 | sélecteur vide | opencodex n’est pas en cours d’exécution ou il manque `/v1` dans la Base URL ; appuyez sur Refresh model list après correction |
 | modèles présents, mais sans contrôle Reasoning | opencodex est antérieur à la v2.41, ou l’identifiant est absent de la table Cursor (le tableau de bord affiche —) ; activez `cursorEffortRows` ou définissez une valeur par défaut sur le fournisseur |
 | un changement de schéma n’est pas pris en compte | Cursor met en cache `/models` pour chaque chaîne Base URL sans expiration ; Refresh model list relit la liste. Sinon, redémarrez l’application ou enregistrez temporairement une autre forme de l’URL (`localhost` au lieu de `127.0.0.1`) |

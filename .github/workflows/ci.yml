@@ -50,6 +50,9 @@ on:
       - "bun.lock"
       - "tsconfig.json"
       - "README.md"
+      - "readme/**"
+      - "skills/**"
+      - ".github/ISSUE_TEMPLATE/**"
       - "LICENSE"
       - ".github/workflows/ci.yml"
       - ".github/workflows/release.yml"
@@ -236,6 +239,9 @@ jobs:
               - 'bun.lock'
               - 'tsconfig.json'
               - 'README.md'
+              - 'readme/**'
+              - 'skills/**'
+              - '.github/ISSUE_TEMPLATE/**'
               - 'LICENSE'
               - '.github/workflows/ci.yml'
               - '.github/workflows/release.yml'

@@ -136,6 +136,6 @@ Bilinmeyen bir şema tahmin yoluyla uyumlu sayılmaz. Böylece yeni bir Codex s�
 
 ## Geri kazanma ayrı bir aşama olarak kalır
 
-Protect, SQLite üzerinde vakumlama veya sıkıştırma yapmaz. Sonraki **Reclaim** aşaması, denetim noktaları ve bütünlük kontrolleri içeren açık, çevrimdışı ve sınırlı bir artımlı vakum akışı ekleyecektir.
+Protect, SQLite üzerinde vakumlama veya sıkıştırma yapmaz. [**Reclaim**](/tr/guides/codex-log-guard-reclaim/) denetim noktaları ve bütünlük kontrolleri içeren açık, çevrimdışı ve sınırlı bir artımlı vakum akışı sunar.
 
 Protect asla `VACUUM` çalıştırmaz, Codex'in WAL dosyasını doğrudan kesmez veya silmez ve zamanlanmış alan geri kazanma işlemi yapmaz.

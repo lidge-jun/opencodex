@@ -136,6 +136,6 @@ OpenCodex 會分別回報 WAL 檔案大小，**不會**把結果標示為 SSD �
 
 ## 空間回收仍是獨立階段
 
-Protect 不會對 SQLite 執行 vacuum 或壓縮。後續的 **Reclaim** 階段會新增明確、離線、有界且包含 checkpoint 與完整性檢查的增量 vacuum 流程。
+Protect 不會對 SQLite 執行 vacuum 或壓縮。[**Reclaim**](/zh-tw/guides/codex-log-guard-reclaim/) 已提供明確、離線、有界且包含 checkpoint 與完整性檢查的增量 vacuum 流程。
 
 Protect 絕不執行 `VACUUM`、直接截斷或刪除 Codex 的 WAL，也絕不排程空間回收。
