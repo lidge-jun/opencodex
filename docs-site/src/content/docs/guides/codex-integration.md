@@ -336,7 +336,7 @@ $CODEX_HOME/models_cache.json
 On WSL, if `CODEX_HOME` is unset and there is no Linux `~/.codex` directory, opencodex also
 checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.toml`. When exactly
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share
-the same config and auth files. Set `CODEX_HOME` explicitly to override this detection.
+the same config and auth files. Set `CODEX_HOME` explicitly to override this detection. When Windows Codex Desktop runs its app-server inside WSL, it ships the Linux Codex binary under that home as `bin/wsl/<hash>/codex`; opencodex finds it there when the service PATH has no `codex`, after any explicitly configured runtime and PATH.
 
 Codex can keep SQLite-backed thread state in a separate directory. OpenCodex history operations use
 the same precedence as Codex: root `sqlite_home` in `config.toml`, then `CODEX_SQLITE_HOME`, then the

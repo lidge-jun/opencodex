@@ -429,6 +429,7 @@
   "codex-routing-cache-affinity-detour.test.ts": "codex-integration",
   "codex-routing.test.ts": "codex-integration",
   "codex-runtime.test.ts": "codex-integration",
+  "codex-runtime-wsl-desktop.test.ts": "codex-integration",
   "codex-service-manager-probe-hardening.test.ts": "codex-integration",
   "codex-service-manager-probe.test.ts": "codex-integration",
   "codex-shim-autorestore.test.ts": "codex-integration",
