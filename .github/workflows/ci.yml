@@ -44,6 +44,8 @@ on:
       - "desktop/**"
       - "gui/**"
       - "assets/**"
+      - ".github/scripts/**"
+      - ".github/workflows/**"
       - ".gitattributes"
       - ".npmignore"
       - "package.json"
@@ -51,17 +53,13 @@ on:
       - "tsconfig.json"
       - "README.md"
       - "LICENSE"
-      - ".github/workflows/ci.yml"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/enforce-pr-target.yml"
-      - ".github/workflows/stale-needs-info.yml"
   workflow_dispatch:
     inputs:
       lane:
-        description: "all (default) or macos-control"
+        description: "all (default), release-gates, or macos-control"
         type: choice
         default: all
-        options: [all, macos-control]
+        options: [all, release-gates, macos-control]
 
 permissions:
   contents: read
@@ -230,6 +228,8 @@ jobs:
               - 'desktop/**'
               - 'gui/**'
               - 'assets/**'
+              - '.github/scripts/**'
+              - '.github/workflows/**'
               - '.gitattributes'
               - '.npmignore'
               - 'package.json'
@@ -237,10 +237,6 @@ jobs:
               - 'tsconfig.json'
               - 'README.md'
               - 'LICENSE'
-              - '.github/workflows/ci.yml'
-              - '.github/workflows/release.yml'
-              - '.github/workflows/enforce-pr-target.yml'
-              - '.github/workflows/stale-needs-info.yml'
             # Native-gated surface: platform-macos, widget and desktop-shell
             # only run when the code they build or bundle could have changed.
             # The listed src/ entries are what the bundled sidecar executes,
@@ -686,7 +682,10 @@ jobs:
   macos-control:
     name: macos control
     needs: changes
-    if: github.event_name == 'workflow_dispatch'
+    # Diagnostic-only lanes stay off the ordinary release gates: list every lane
+    # that should run this job, so a new lane defaults to skipping the diagnostic.
+    if: >-
+      github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')
     runs-on: macos-latest
     # Unsharded full-membership control, one worker in sequential fresh batches.
     # Long-lived Bun isolate pools repeatedly wedged while synchronously reaping
@@ -1314,8 +1313,11 @@ jobs:
           dispatch=not-requested
           windows=not-requested
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            dispatch=requested
-            # `lane=macos-control` is the one dispatch that deliberately omits Windows.
+            # Mirror the diagnostic job allowlist; release-gates requests neither suite.
+            if [ -z "$LANE" ] || [ "$LANE" = "all" ] || [ "$LANE" = "macos-control" ]; then
+              dispatch=requested
+            fi
+            # Only the default/all lane requests the nine Windows suite shards.
             if [ -z "$LANE" ] || [ "$LANE" = "all" ]; then
               windows=requested
             fi

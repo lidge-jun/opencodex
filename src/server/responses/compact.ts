@@ -709,6 +709,7 @@ export async function handleResponsesCompact(
     captureOpenAiVirtualWirePolicy(route, virtual);
     logCtx.model = virtual.selectedModelId;
     logCtx.resolvedModel = virtual.wireModelId;
+    logCtx.wireModel = virtual.wireModelId;
   } else {
     logCtx.resolvedModel = route.modelId;
   }

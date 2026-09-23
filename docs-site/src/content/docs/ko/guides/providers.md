@@ -83,8 +83,8 @@ ChatGPT 패스스루 카탈로그에는 GPT-5.6 Sol/Terra/Luna의 네임스페�
 
 ## 2. 계정 로그인 (OAuth)
 
-OAuth 로그인을 사용하는 프로바이더 프리셋은 여덟 개이며, 여기에 실험적 비공식 디바이스 플로우
-브리지를 쓰는 GitHub Copilot이 추가됩니다. 자격 증명은 `~/.opencodex/auth.json`에 저장되고
+프로바이더 프리셋은 계정 로그인을 쓸 수 있으며, 실험적 비공식 디바이스 플로우
+브리지를 쓰는 GitHub Copilot도 여기에 들어갑니다. 자격 증명은 `~/.opencodex/auth.json`에 저장되고
 자동으로 갱신됩니다. `ocx login codex`도 받지만 이건 위 프로바이더가 아닙니다. Codex 계정 풀
 로그인(`ocx account login codex`와 같은 흐름)으로 연결되고, 이 풀은 자체 계정 원장을 쓰기 때문에
 프록시가 실행 중이어야 합니다. `chatgpt`와 `openai`는 같은 경로의 별칭입니다.
@@ -108,7 +108,8 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth는 별도의 Grok CLI 구독 게이트웨이를 사용합니다. API 키 오버라이드는 `https://api.x.ai/v1`을 사용하며 Priority Processing을 주입할 수 있습니다. 실시간 목록을 우선 사용하며, 폴백 기본 모델은 `grok-4.5`입니다. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 모델; 실시간 모델 목록은 `/v1/models`에서 가져옵니다. |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 코딩 모델. |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code 모델입니다. `kimi-for-coding`은 현재 K2.8 Preview를 가리키며 100만 토큰 문맥, `low`/`high`/`max` 추론, 텍스트·이미지 입력을 지원합니다. `k3-256k`의 문맥 한도는 256K로 고정됩니다. |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | `kimi`와 동일한 OAuth 로그인과 모델 목록을 Responses 방식으로 사용합니다. 추론 내용은 서버 측에서 암호화된 상태로 유지되고 도구 호출과 결과는 볼 수 있습니다. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 구독 게이트웨이(Hermes Agent와 동일한 백엔드). `portal.nousresearch.com`에 대한 디바이스 그랜트 로그인; access 토큰은 요청별 inference JWT. 유료 + `:free` 모델 혼합 카탈로그(`tencent/hy3:free`, `stepfun/step-3.7-flash:free` 등)는 로그인한 계정에서 실시간으로 발견됩니다. Refresh 토큰은 단회 사용이며, 갱신할 때마다 회전됩니다. |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 최초 로그인은 설치하고 로그인한 `kiro-cli` 세션을 가져옵니다(Unix에서는 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash`, Windows PowerShell에서는 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`로 설치한 뒤 `kiro-cli login` 실행). **계정 추가**는 `kiro-cli`에서 로그아웃한 뒤 새 브라우저 로그인을 시작하여 `kiro-cli` 자체의 계정을 전환하고, 계정별 프로필 메타데이터를 저장합니다. 기존 OpenCodex 계정은 유지되며, 취소되거나 실패하면 이전 `kiro-cli` 세션을 복원합니다. |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | Google OAuth를 Cloud Code Assist wire로 사용합니다. 실시간 탐색은 인증된 CCA `v1internal:fetchAvailableModels` 엔드포인트를 사용하며 로그인한 계정에서 사용할 수 있는 agent 모델만 게시합니다. 유지 관리되는 카탈로그는 폴백으로 남습니다. |
@@ -143,6 +144,13 @@ Nous refresh가 종료 실패한 경우, `ocx login nous`로 재인증하세요.
 명시합니다. key가 없는 요청은 keyless 상태로 유지됩니다. opt-in한 업스트림이 이 필드를 거부해도
 opencodex는 필드를 제거해 재시도하거나 저장된 설정을 변경하지 않습니다. 다른 프로바이더는
 deny-by-default 상태로 유지됩니다.
+
+`kimi`, `kimi-code`, `kimi-responses`의 `k3`, `k3[1m]`, `k3-256k` 비용은 기본 5분 캐시 쓰기
+요금을 적용한 [API 가격](https://platform.kimi.ai/docs/pricing/chat) 기준 추정치입니다. Code Plan의
+실제 청구액이나 할당량은 아닙니다. K3의 1M 버전은 `k3-256k`보다 할당량을 약 두 배 소비합니다.
+`kimi-for-coding`은 K2.8 Preview로 전환되었으므로 이전 K2.7 가격을 적용하지 않습니다. 사용자가
+`modelCosts`를 지정하지 않으면 비용을 알 수 없으며, 미확인 비용을 제외하도록 설정한 라우팅 정책에서는
+이 별칭이 후보에서 빠질 수 있습니다.
 
 [웹 대시보드](/ko/guides/web-dashboard/)에서도 OAuth를 시작할 수 있습니다.
 
@@ -182,7 +190,7 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 96개 들어 있습니다. 키 방식 80개, OAuth 12개, 로컬 3개,
+opencodex에는 빌트인 프리셋이 97개 들어 있습니다. 키 방식 80개, OAuth 13개, 로컬 3개,
 기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
@@ -439,11 +447,13 @@ Cursor는 별도의 실험적 어댑터로 추적합니다. `adapter: "cursor"`�
 Provider picker에 실험적 local config 항목으로 표시되며, Cursor의 static fallback model catalog
 metadata를 저장합니다. Cursor access token이 설정되면 opencodex는 Cursor live HTTP/2 transport를
 사용합니다. 번들 폴백 목록에는 1M 컨텍스트의 `gpt-5.6-sol` / `terra` / `luna`, 500K 컨텍스트의
-Grok 4.5/4.6의 일반·Fast 항목, 262K 컨텍스트의 `kimi-k3`가 들어 있으며, 실시간 탐색 결과에 따라
-현재 계정에 표시할 모델을 결정합니다. Grok 4.6은 두 형식 모두 `low` / `medium` / `high` / `xhigh`를
-노출하고 4.5는 `high`까지만 노출합니다. Fast 요청은 일치하는 Grok 기본 모델과 별도의 `effort`,
-`fast=true` `requested_model` 파라미터를 전송합니다. 평탄화된 `cursor-grok-{version}-{effort}-fast` id는
-탐색 및 picker 식별자로만 사용됩니다. Cursor는 Kimi K3를 effort 접미사가 붙은 wire id로만
+Grok 4.5/4.6/4.7의 일반·Fast 항목, 262K 컨텍스트의 `kimi-k3`가 들어 있으며, 실시간 탐색 결과에 따라
+현재 계정에 표시할 모델을 결정합니다. Grok 4.6과 4.7은 두 형식 모두 `low` / `medium` / `high` / `xhigh`를
+노출하고 4.5는 `high`까지만 노출합니다. Grok 4.5와 4.6의 Fast 요청은 해당 기본 모델과 별도의
+`effort`, `fast=true` `requested_model` 파라미터를 전송합니다. 이 두 버전의 평탄화된
+`cursor-grok-{version}-{effort}-fast` id는 탐색 및 picker 식별자로만 사용됩니다. Grok 4.7은
+`cursor-` 접두사 없이 목록에 표시되며 `grok-4.7-{effort}-fast`를 직접 전송합니다. Cursor는 Kimi K3를
+effort 접미사가 붙은 wire id로만
 제공하므로 `cursor/kimi-k3`는 `low` / `high` / `max` 래더를 노출하고 기본값은 모델 문서의 API
 기본값과 같은 `max`입니다. Cursor 서버가 직접 보내는 native read/write/delete/ls/grep/shell/fetch 실행은 Codex
 승인 및 sandbox 경로를 우회하므로 기본적으로 비활성화되어 있습니다. 신뢰한 로컬 실험에서만

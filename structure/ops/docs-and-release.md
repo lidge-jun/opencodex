@@ -74,7 +74,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 96 total: 80 key-based, 12 OAuth, three local, and one default
+documented split is 97 total: 80 key-based, 13 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 
@@ -176,7 +176,7 @@ Those controls still have no owner, so there is no image-publish workflow or off
 
 | Workflow | Trigger | Purpose |
 | --- | --- | --- |
-| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`; manual dispatch | A pull request verifies Linux and TypeScript: Linux runs four suite shards plus `gates` alongside the scoped docs, structure, packaging, keyring, and npm-global jobs. The `platform-macos` macOS suite, the `widget` macOS widget + Tauri app-bundle build, and the `desktop-shell` Rust toolchain build are native-gated: they run on `main`/`preview` pushes and manual dispatch, and on a pull request only when the `changes` job's native path filter selects the change. `dev` pushes start nothing; dev integration is covered by the pull-request run, while `main` and `preview` must stay push triggers because `release.yml` requires a push-event run for the exact release SHA. Windows runs nine shards only on manual dispatch with `lane=all` (or empty), not on push events. Linux runs at-most-12-file processes with a 120-second process bound; Windows uses measured six-file/480-second processes and all-file scope so its full-suite contract is unchanged. The dedicated Windows batch step sets `OCX_TEST_NO_QUEUE=1` because its sequential processes are one logical runner; each process still creates an isolated home and arms the test guards before the lock boundary. No lane retries: a test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence. Aggregate `ci` is event-aware — it derives which jobs this event requested and requires `success` from each of them and `skipped` from the rest, and on a `lane=all` dispatch it reads the run's own job list and requires nine concrete successful `windows N/9` results. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. |
+| `.github/workflows/ci.yml` | Any `pull_request`; runtime/package `push` to `main`/`preview`; manual dispatch | A pull request verifies Linux and TypeScript: Linux runs four suite shards plus `gates` alongside the scoped docs, structure, packaging, keyring, and npm-global jobs. The `platform-macos` macOS suite, the `widget` macOS widget + Tauri app-bundle build, and the `desktop-shell` Rust toolchain build are native-gated: they run on `main`/`preview` pushes and manual dispatch, and on a pull request only when the `changes` job's native path filter selects the change. `dev` pushes start nothing; dev integration is covered by the pull-request run, while `main` and `preview` must stay push triggers because `release.yml` requires a push-event run for the exact release SHA. Windows runs nine shards only on manual dispatch with `lane=all` (or empty), not on push events. Linux runs at-most-12-file processes with a 120-second process bound; Windows uses measured six-file/480-second processes and all-file scope so its full-suite contract is unchanged. The dedicated Windows batch step sets `OCX_TEST_NO_QUEUE=1` because its sequential processes are one logical runner; each process still creates an isolated home and arms the test guards before the lock boundary. No lane retries: a test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence. Aggregate `ci` is event-aware — it derives which jobs this event requested and requires `success` from each of them and `skipped` from the rest, and on a `lane=all` dispatch it reads the run's own job list and requires nine concrete successful `windows N/9` results. `npm-global-smoke` remains GitHub-hosted because it mutates the global package prefix. Manual `lane=release-gates` keeps the ordinary native-gated jobs and selected dynamic keyring/packaging matrix legs, but skips the Windows suite and unsharded macOS control. Default `all` (or empty) still requests both diagnostics; `macos-control` requests the control without Windows suite shards. Release eligibility requires successful push-event CI on the exact release SHA; a manual lane does not authorize publishing. |
 | `.github/workflows/dev-version-bump.yml` | Manual dispatch with an intended version and `pre-move` or `repair` mode | Opens the reviewed pull request that moves `dev` past a release target. The default `pre-move` mode runs before promotion and publication; explicit `repair` mode retains the post-publish catch-up path. It is neither called by `release.yml` nor triggered by publication. |
 | `.github/workflows/release.yml` | Manual dispatch only | npm publish/dry-run workflow. It requires a successful push-event Cross-platform CI run for the exact `GITHUB_SHA` (a pull-request run does not qualify), requires `dev` to outrank the target, then checks the target against the freshly fetched global tag set before publish or dry-run. |
 | `.github/workflows/deploy-docs.yml` | `push` to `main` touching `docs-site/**` or the workflow, or manual dispatch | Build and publish the Astro/Starlight docs site to GitHub Pages. This is the deploy path; the pull-request build gate is the `docs-site-build` job in `ci.yml`. |
@@ -459,7 +459,19 @@ storage-policy and api-usage families to its dedicated jobs. The Windows step di
 user-scoped test-run queue with `OCX_TEST_NO_QUEUE=1`: the batches already run sequentially in one
 dedicated job, and queueing a new batch behind a surviving process from the preceding batch spends
 the process timeout without executing tests. The per-process home isolation and live-home/service
-manager guards remain active because the preload installs them before the lock boundary. A test
+manager guards remain active because the preload installs them before the lock boundary.
+`tests/preload.ts` resolves cleanup dependencies after home/lock admission and before test cases,
+then teardown awaits native-main startup releases and config hardening, followed by the sandbox's
+registered ACL child reaps before removing that root. Its synchronous exit fallback leaves an
+undrained root for ownership-checked stale recovery instead of blocking child cleanup with removal
+retries. `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
+`tests/helpers/test-sandbox-cleanup.ts` also exposes case-scoped lifecycle ownership: cancellation
+starts listener stops while owned asynchronous work settles, and repeated close/stop calls share
+one promise. After teardown starts only the lifecycle's own abort reason is absorbed; any other
+error, including a foreign AbortError, still fails its case.
+Callers settle that lifecycle before draining producers/reaps and restoring or removing a home;
+the helper does not replace fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
+A test
 failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
 batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
 failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
@@ -576,6 +588,14 @@ Native steering generation overrides, explicit public-API eligibility and the co
 The public server configuration reference documents the optional
 [compaction routing override](../transports/responses.md#compaction-routing-overrides). Its regression file is registered in both test-layout inventories.
 
+Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the optional
+`src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
+gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with
+the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
+`src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh
+only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do
+not fetch on the request path; catalog sync owns their bootstrap.
+
 ## Bun updater ownership transaction
 
 `src/update/ownership-transaction.ts` holds one mutation lease across the Bun updater's awaited
@@ -592,3 +612,4 @@ manual-runtime update still prints the existing restart hint.
 Linux release bundling enables Tauri verbosity on the primary attempt so linuxdeploy diagnostics remain visible. macOS signing verbosity and publication/signature gates are unchanged.
 
 Universal macOS release builds install both aarch64-apple-darwin and x86_64-apple-darwin Rust targets. Windows builds consume the private JSON override generated by `desktop/scripts/windows-installer-config.ts`: only WiX ProductVersion uses the validated numeric public version core. Public package/application versions, tags, asset names and updater manifests retain full SemVer. The pinned Tauri MSI template permits equal-core replacement; manual MSI installation does not enforce same-core preview/stable downgrade prevention.
+The existing `codex-routing`, `codex-auth-context` and `codex-quota-prime` tests cover [priority failback](../providers/openai-tiers.md#ongoing-priority-failback), including cache-default retention, stale evidence, main fencing and failed-attempt cadence.

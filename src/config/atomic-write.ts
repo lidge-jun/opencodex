@@ -277,8 +277,9 @@ function atomicWriteFileToTarget(
   target: string,
   io?: AtomicWriteIO,
   hooks: AtomicWriteHooks = {},
+  recordOwnership = true,
 ): void {
-  recordOwnedConfigPath(getConfigDir(), path);
+  if (recordOwnership) recordOwnedConfigPath(getConfigDir(), path);
   assertResolvedTargetAllowed(path, target);
   const tmp = `${target}.ocx.${process.pid}.${nextAtomicTempSequence()}.tmp`;
   let hardened = false;
@@ -397,6 +398,16 @@ export function atomicWriteFileNoFollow(
   // OS alias above the configured root (a home junction, /tmp) is legitimate
   // and Windows cannot exclusive-create a temp through a junction.
   atomicWriteFileToTarget(path, content, join(resolveWriteTarget(dirname(path)), basename(path)), io, hooks);
+}
+
+/**
+ * The no-follow replacement above, for rewriting a file whose uninstall ownership must stay as
+ * it was: it does not record the path in the owner manifest. Used to rewrite the OAuth downgrade
+ * backup, which a pre-registration install may have left deliberately unclaimed; claiming it
+ * here would let a later uninstall delete recovery data it never owned.
+ */
+export function atomicWriteFileNoFollowUnclaimed(path: string, content: string): void {
+  atomicWriteFileToTarget(path, content, join(resolveWriteTarget(dirname(path)), basename(path)), undefined, {}, false);
 }
 
 export interface AtomicWriteAsyncIO {

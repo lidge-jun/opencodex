@@ -925,6 +925,12 @@ export interface OcxConfig {
    */
   codexAccountPriorities?: Record<string, number>;
   /**
+   * Per-account proactive-switch threshold overrides. Missing account entry inherits
+   * `autoSwitchThreshold`; 0 disables usage-driven switching only for that account.
+   * Includes the synthetic `__main__` Desktop account. Range 0..100.
+   */
+  codexAccountAutoSwitchThresholds?: Record<string, number>;
+  /**
    * Account id the operator last selected by hand. Suppresses upward priority
    * preemption until that account crosses the auto-switch threshold. Stores the
    * id (not a flag) so a stale pin cannot outlive the selection it described.
@@ -1017,6 +1023,8 @@ export interface OcxConfig {
   activeCodexAccountId?: string;
   /** Auto-switch threshold (0-100). Default 80. 0 = disabled. */
   autoSwitchThreshold?: number;
+  /** Opt-in: return bound quota-strategy tasks to recovered higher-priority accounts. */
+  codexAccountPriorityFailback?: boolean;
   /** New-session account rotation strategy for the Codex pool. Default quota (today's behaviour). */
   accountPoolStrategy?: OcxAccountPoolRotationStrategy | "reset-first";
   /** Successful new-session binds retained on one round-robin selection. Default 1; range 1..100. */

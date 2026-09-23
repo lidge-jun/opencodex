@@ -81,6 +81,11 @@ with `multiAgentMode` field.
 The `multi_agent_v2` feature flag and the logical maximum thread count are separate from
 `multiAgentMode` (`src/codex/features.ts`): the mode decides which surface Codex advertises, while
 the flag and thread count decide what the native runtime allows.
+Because the global feature has precedence over catalog pins, Codex config injection reconciles it
+to disabled whenever the persisted OpenCodex mode explicitly selects v1. This includes a fresh
+install on a Codex home that had previously enabled v2; external-provider ownership and read-only
+injection preflight still prohibit that write. The transition runs inside the same write lock and
+preimage as the rest of the injection, so a later refusal rolls the flag back with the files.
 
 `keepNativeChatGptOnV1` makes mode `v2` a catalog-driven hybrid: OpenCodex disables the global
 `multi_agent_v2` override because codex-rs resolves that override before a model row's explicit
@@ -417,3 +422,4 @@ Startup provider-id migration preserves the account binding between configuratio
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](transports/responses.md#compaction-routing-overrides) uses explicit request-kind and trigger metadata, independently of spawned-child markers.
+[Ongoing priority failback](providers/openai-tiers.md#ongoing-priority-failback) keeps model-detour and independent-quota affinity isolated; preview remains read-only and no child changes an unrelated shared cursor.

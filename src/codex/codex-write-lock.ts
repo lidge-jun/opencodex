@@ -95,6 +95,18 @@ export interface CodexWriteLockOptions {
   readAdmissionUnderLock(): CodexWriteWitness;
   /** Positively authorized migration of an already-routed pre-substrate home. */
   adoption?: { readonly direction: "apply" | "remove" };
+  /**
+   * Synchronous filesystem compensation if publication or commit fails after the callback
+   * returns. Runs under N and C, before the coordinator transaction rolls back. Callers that
+   * need no compensation retain the existing commit boundary.
+   */
+  onPostCallbackFailure?: (error: unknown) => void;
+}
+
+let beforeCoordinatorCommitForTests: (() => void) | undefined;
+/** Test seam for a failure after the callback has returned but before SQLite commits. */
+export function setBeforeCoordinatorCommitForTests(hook: typeof beforeCoordinatorCommitForTests): void {
+  beforeCoordinatorCommitForTests = hook;
 }
 
 /**
@@ -357,11 +369,29 @@ export async function withCodexWriteLock<T>(
         if (result && typeof (result as { then?: unknown }).then === "function") {
           throw new TypeError("The Codex write-lock commit callback must be synchronous.");
         }
+        // Only compensating callers keep C through coordinator finalization: a failure
+        // must restore their filesystem preimages before either lock is released.
+        if (options.onPostCallbackFailure) {
+          try {
+            transaction!.assertPublished(expectation);
+            beforeCoordinatorCommitForTests?.();
+            transaction!.commit();
+          } catch (error) {
+            const compensation: unknown = options.onPostCallbackFailure(error);
+            if (compensation && typeof (compensation as { then?: unknown }).then === "function") {
+              void Promise.resolve(compensation).catch(() => {});
+              throw new TypeError("The Codex write-lock failure hook must be synchronous.");
+            }
+            throw error;
+          }
+        }
         return result;
       }));
 
-      transaction.assertPublished(expectation);
-      transaction.commit();
+      if (!options.onPostCallbackFailure) {
+        transaction.assertPublished(expectation);
+        transaction.commit();
+      }
       return { status: "acquired", value: value as T, waitedMs: waited(), lockId: target.lockId };
     } catch (error) {
       transaction.rollback();

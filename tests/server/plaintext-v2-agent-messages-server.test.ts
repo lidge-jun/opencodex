@@ -19,12 +19,21 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
 let releaseInheritedSpendHome: (() => void) | undefined;
+let previousCatalogStateOverride: string | undefined;
 // Taken per inherited-home dispatch because the pool retry row installs a different home. The
 // ??= keeps a second call inside one case idempotent rather than replacing the release callback
 // it would need; no row here calls it twice today, so this is defence, not a fixed regression.
 const takeInheritedSpendHome = (): void => { releaseInheritedSpendHome ??= acquireOwnedSpendHome(); };
-beforeEach(() => { clearResponseStateForTests(); });
+beforeEach(() => {
+  previousCatalogStateOverride = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  // Response rewriting is independent of the host's running Codex processes. Without
+  // this fixture, V2 guidance enumerates real Windows processes and can outlive a case.
+  process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
+  clearResponseStateForTests();
+});
 afterEach(() => {
+  if (previousCatalogStateOverride === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = previousCatalogStateOverride;
   // Released first so a failed row cannot leak its writer lease into the next case.
   releaseInheritedSpendHome?.();
   releaseInheritedSpendHome = undefined;

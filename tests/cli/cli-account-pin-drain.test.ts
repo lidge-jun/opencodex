@@ -9,7 +9,11 @@ import type { AccountDeps } from "../../src/cli/account-api";
  */
 const BASE_URL = "http://127.0.0.1:10100";
 
-function deps(putJson: Record<string, unknown>, thresholdJson: Record<string, unknown>): AccountDeps {
+function deps(
+  putJson: Record<string, unknown>,
+  thresholdJson: Record<string, unknown>,
+  accounts = [{ id: putJson.activeCodexAccountId, autoSwitchThresholdOverride: null as number | null }],
+): AccountDeps {
   return {
     baseUrl: BASE_URL,
     loadConfigImpl: () => ({ providers: { openai: { adapter: "codex" } } }) as never,
@@ -20,6 +24,9 @@ function deps(putJson: Record<string, unknown>, thresholdJson: Record<string, un
       }
       if (path === "/api/codex-auth/active") {
         return new Response(JSON.stringify(thresholdJson), { status: 200 });
+      }
+      if (path === "/api/codex-auth/accounts") {
+        return Response.json({ accounts });
       }
       return new Response("{}", { status: 404 });
     }) as unknown as typeof fetch,
@@ -70,6 +77,25 @@ describe("account use pin-drain reporting", () => {
     expect(result.code).toBe(0);
     expect(result.err).toContain("cannot currently be selected (needs_reauth)");
     expect(result.err).not.toContain("auto-switch threshold");
+  });
+
+  test("a reported quota drain names the selected account's override", async () => {
+    const result = await run(["use", "openai", "pool_hot"], deps({
+      ok: true,
+      activeCodexAccountId: "pool_hot",
+      pinDrained: true,
+      pinDrainReason: "quota_threshold",
+    }, { autoSwitchThreshold: 80 }, [
+      { id: "pool_other", autoSwitchThresholdOverride: 95 },
+      { id: "pool_hot", autoSwitchThresholdOverride: 60 },
+    ]));
+
+    expect(result.code).toBe(0);
+    expect(result.err).toContain("is at or above the auto-switch threshold (60%)");
+    expect(result.err).toContain("routing releases this pin on its next request");
+    expect(result.err).not.toContain("80%");
+    expect(result.err).not.toContain("95%");
+    expect(result.err).not.toContain("may override this pin");
   });
 
   test("no reported drain keeps the generic caveat", async () => {

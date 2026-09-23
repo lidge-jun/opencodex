@@ -45,27 +45,28 @@ export async function consumeComboFailure(
   // a second body read, so this mirrors its normalization: raw 402/429, or a 5xx whose intact,
   // display-safe body carries a recognized quota message.
   let quotaConfirmedByBody = false;
+  const serverError = response.status >= 500 && response.status < 600;
   try {
-    const body = await readBoundedResponseBody(response, {
-      signal,
-      // Match shouldRetryCodexPoolAccountQuota before treating a 5xx body as quota evidence.
-      fatalUtf8: response.status >= 500 && response.status < 600,
-    });
-    usage = usageFromComboFailureText(body.text);
-    if (
-      response.status >= 500 && response.status < 600
-      && body.displaySafe && !body.truncated
-    ) {
+    const body = await readBoundedResponseBody(response, { signal, reportUtf8Validity: serverError });
+    // A 5xx body counts as quota or classification evidence only when it decoded as valid
+    // UTF-8, matching shouldRetryCodexPoolAccountQuota. A malformed byte keeps the status-only
+    // fallback, with one exception: a cyber-policy refusal must still stop the combo, so the
+    // replacement-decoded text may carry that verdict and nothing else.
+    const utf8Trusted = !serverError || body.utf8Valid === true;
+    if (utf8Trusted) usage = usageFromComboFailureText(body.text);
+    if (serverError && utf8Trusted && body.displaySafe && !body.truncated) {
       const quotaMessage = codexQuotaFailureMessage(body.text);
       quotaConfirmedByBody = quotaMessage !== undefined
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
-    if (body.displaySafe) {
+    if (body.displaySafe && !body.truncated) {
       const normalized = normalizeUpstreamErrorText(body.text, fallback);
-      classificationText = normalized.safeText;
-      upstreamCode = normalized.code;
-      upstreamMessage = normalized.message;
-      upstreamType = normalized.type;
+      if (utf8Trusted || isCyberPolicyCode(normalized.code) || isCyberPolicyMessage(normalized.safeText)) {
+        classificationText = normalized.safeText;
+        upstreamCode = normalized.code;
+        upstreamMessage = normalized.message;
+        upstreamType = normalized.type;
+      }
     }
   } catch (error) {
     if (signal?.aborted) throw error;

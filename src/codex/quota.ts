@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isThirtyDayOnlyCodexPlan } from "./plan";
+import { stampCodexQuotaUsageObservation } from "./quota-observation-freshness";
 import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
 import { getObservedMainQuotaIdentityKey, isMainQuotaWriterLive, type MainQuotaWriter } from "./main-account-cache";
 
@@ -333,7 +334,7 @@ function mergeAccountQuota(
     assignCarriedShort(next, existing, updatedAt, policyEvidence);
     if (existing?.customWindows !== undefined) next.customWindows = existing.customWindows;
     next.resetCredits = quota.resetCredits;
-    return next;
+    return stampCodexQuotaUsageObservation(next, quota, existing);
   }
 
   if (snapshotHasWeekly(quota)) {
@@ -393,7 +394,7 @@ function mergeAccountQuota(
   if (quota.resetCredits !== undefined) next.resetCredits = quota.resetCredits;
   else if (existing?.resetCredits !== undefined) next.resetCredits = existing.resetCredits;
 
-  return next;
+  return stampCodexQuotaUsageObservation(next, quota, existing);
 }
 
 /**
@@ -612,6 +613,7 @@ export function updateAccountQuota(
   }
   if (resetCredits !== undefined) quota.resetCredits = resetCredits;
 
+  stampCodexQuotaUsageObservation(quota, { weeklyPercent: nextWeekly, monthlyPercent: nextMonthly }, existing);
   accountQuota.set(accountId, quota);
   // This legacy writer has no physical credential provenance.
   if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;

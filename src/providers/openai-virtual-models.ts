@@ -99,6 +99,7 @@ export function applyOpenAiVirtualModel(
 
   logCtx.model = resolution.selectedModelId;
   logCtx.resolvedModel = resolution.wireModelId;
+  logCtx.wireModel = resolution.wireModelId;
   route.modelId = resolution.wireModelId;
   captureOpenAiVirtualWirePolicy(route, resolution, inboundWire);
   parsed.modelId = resolution.wireModelId;

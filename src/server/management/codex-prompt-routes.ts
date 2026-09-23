@@ -403,7 +403,11 @@ export async function handleCodexPromptRoutes(ctx: ManagementContext): Promise<R
     }
     if (typeof body.title !== "string") return fail(ctx, "invalid_body", 400, "title must be a string");
     if (typeof body.body !== "string") return fail(ctx, "invalid_body", 400, "body must be a string");
-    return settle(ctx, writeBaseVariant({ id, title: body.title, body: body.body }, revision, paths(ctx)));
+    const normalized = normalizeBody(body.body);
+    if (utf8Bytes(normalized) > MAX_BODY_BYTES) {
+      return fail(ctx, "body_too_large", 400, `base variant exceeds ${MAX_BODY_BYTES} bytes`);
+    }
+    return settle(ctx, writeBaseVariant({ id, title: body.title, body: normalized }, revision, paths(ctx)));
   }
 
   if (url.pathname === "/api/codex-prompt/adopt" && req.method === "POST") {
