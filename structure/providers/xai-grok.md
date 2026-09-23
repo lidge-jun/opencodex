@@ -1,5 +1,8 @@
 # xAI Grok Provider
 
+Managed alias allocation retries nested-table reservation when rewriting references
+cannot parse the first candidate. Other rewrite failures still refuse the update.
+
 The Grok client picker forwards the `meta-muse` catalog's `max` effort through its existing managed-block export; this follows the [Muse provider contract](../providers-and-adapters.md).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
@@ -22,13 +25,24 @@ Codex-native retirement is scoped to OpenAI catalog/quota evidence. Shared Respo
 retains xAI provider behavior; see
 [the catalog boundary](../catalog.md#shared-catalog).
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
+
+## Responses request compatibility
+
+`src/adapters/xai-web-search.ts` omits `auto`/`none` tool selection after normalization if no tools
+remain in either the top-level catalog or `additional_tools`. Cached-only search removal follows
+the same rule. When an omitted `none` selector stated the turn's only client-call prohibition,
+the explicit empty `tools` catalog preserves that denial. Available forced function selectors remain intact.
+`src/adapters/openai-responses/request-strips.ts` preserves valid xAI custom-call item ids and
+repairs missing/invalid ids from a stable digest of the JSON-encoded `(call_id, name, input)`
+string tuple. Incomplete tuples remain unchanged, and call/result pairing uses the original call id.
+Other destinations retain their existing item-id behavior, including OpenAI `store:false`.
 
 ## xAI Grok hardening (official Grok Build contract parity)
 
 Grok's Responses path shares `src/responses/apply-patch-envelope.ts` for freeform restoration.
 The declared `input` field remains authoritative; alternate-field and outer-fence recovery is
-limited to unambiguous bare `exec` and `apply_patch` calls and does not rewrite foreign grammars.
+limited to unambiguous bare or `default.`-prefixed `exec` and `apply_patch` calls and does not rewrite foreign grammars.
 
 Grounded in the open-sourced official client (xai-org/grok-build); unit + evidence:
 `devlog/_fin/260716_grok_build_hardening/`.
@@ -97,9 +111,9 @@ byte-identical payloads pass through unchanged.
 - **Safety & Idempotency:** Managed via `src/grok/reset-coupon-ledger.ts` using UUIDv4 operation tracking before upstream dispatch to prevent duplicate consumption during network flakes.
 - **Surfaces:** `ocx account grok-reset-coupons` in the terminal, and the dashboard at Providers > xAI Grok > Accounts, where each OAuth row carries a ticket badge with its remaining count and opens a redemption dialog (`gui/src/hooks/useGrokResetCoupons.ts`, `gui/src/components/provider-workspace/GrokResetCoupons.tsx`). The dashboard reads one `GET /api/grok/reset-coupons` per account with at most three in flight, always sends an explicit `tokenId` and a client-minted `operationId`, and treats redemption truth as the settled `code` rather than HTTP 200 ??a replayed *failure* returns 200 with `replayed: true`. After a request times out it issues no further consume call, because a redemption whose ledger record is still `open` re-executes.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
@@ -111,9 +125,9 @@ claims stored main, after terminal vision, routed vision and search exclusions.
 Account-scoped OAuth quota remains display evidence for provider-level Combo selection; it does not acquire single-key inference-veto authority. See [scoped provider quota](../runtime.md#scoped-provider-quota-for-combo-selection).
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](openai-accounts.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](../transports/responses.md).
@@ -157,7 +171,8 @@ Renamed fixed-key providers receive [missing reasoning metadata](../catalog.md#r
 
 xAI's Priority Processing (`service_tier: "priority"` on Chat Completions and Responses,
 documented for the API-key product) is honored by the Grok OAuth subscription gateway on a
-probed model set (live probe 2026-09-13, `devlog/_fin/260913_xai_oauth_fast/`): grok-4.6,
+probed model set (live probes 2026-09-13 and 2026-09-23, `devlog/_fin/260913_xai_oauth_fast/`
+and `devlog/_plan/260923_grok47_parity/010_probe-evidence.md`): grok-4.7, grok-4.6,
 grok-4.5, grok-4.3, grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning, grok-build-0.1 and
 grok-composer-2.5-fast each echoed `priority` upstream. The registry entry classifies exactly
 that set in `modelSupportsServiceTier` and declares `chatServiceTier: true`, so the OAuth lane
@@ -173,7 +188,7 @@ The upstream tier echo relays to the client on every Chat Completions delivery s
 (`src/chat/outbound.ts` projections and `src/server/chat-native-sse.ts` chunks), matching
 what the Responses lane already relayed for responses-wire upstreams; the responses-lane
 assembly for chat-wire upstreams tracks the echo in attempt telemetry only.
-Pool quota producers and account commands follow the [bounded raw-observation contract](openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -192,5 +207,5 @@ Shared startup provider-id migration preserves the account binding between confi
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 Routed Grok compaction uses the existing adapter and summary contract after a same-provider
-[compaction routing model override](../transports/responses.md#compaction-routing-overrides); a
+[compaction routing model override](../transports/responses-failover.md#compaction-routing-overrides); a
 cross-provider override runs the portable summarizer on the selected provider instead.

@@ -165,8 +165,8 @@ jobs:
           # dist/release, where the artifact download lands these files flat; the
           # checksum therefore records the bare file name, which sha256sum takes
           # verbatim from its argument.
-          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
-          else sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.sha256"
+          if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip.sha256"
+          else sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz.sha256"
           fi
 
       - name: Upload standalone release
@@ -218,6 +218,18 @@ jobs:
       - name: Setup project Bun
         uses: ./.github/actions/setup-project-bun
 
+      # The desktop build takes its version from tauri.conf.json and Cargo.toml (the widget
+      # plist inherits it), not from package.json or this input, while the updater manifest is
+      # derived from the input. A mismatch ships an app that reports the previous version under a
+      # manifest naming this one, so the updater re-offers the same release forever. Refuse
+      # before anything is built. Bash on every runner: Windows would otherwise run PowerShell,
+      # where "$RELEASE_VERSION" is not the environment variable.
+      - name: Verify every version source matches the release
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bun scripts/release-version-sources.ts check "$RELEASE_VERSION"
+
       - name: Install project dependencies
         run: bun install --frozen-lockfile
 
@@ -228,6 +240,7 @@ jobs:
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
         with:
           toolchain: stable
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
@@ -244,6 +257,10 @@ jobs:
         run: |
           bun desktop/scripts/prepare-sidecar.ts --target aarch64-apple-darwin
           bun desktop/scripts/prepare-sidecar.ts --target x86_64-apple-darwin
+          lipo -create desktop/src-tauri/binaries/ocx-aarch64-apple-darwin \
+            desktop/src-tauri/binaries/ocx-x86_64-apple-darwin \
+            -output desktop/src-tauri/binaries/ocx-universal-apple-darwin
+          lipo desktop/src-tauri/binaries/ocx-universal-apple-darwin -verify_arch arm64 x86_64
 
       - name: Prepare sidecar
         if: runner.os != 'macOS'
@@ -336,6 +353,19 @@ jobs:
           echo "$description" | grep -q "flags=.*runtime"
           echo "$description" | grep -q "Timestamp="
 
+      - name: Prepare Windows installer version
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: bun desktop/scripts/windows-installer-config.ts "$RELEASE_VERSION" "$RUNNER_TEMP/opencodex-msi.json"
+
+      - name: Preserve the compiled Linux sidecar
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x desktop/scripts/appimage-patchelf.py
+          echo "PATCHELF=$GITHUB_WORKSPACE/desktop/scripts/appimage-patchelf.py" >> "$GITHUB_ENV"
+
       # Release signing is intentionally secret-gated. Developer ID, notarization,
       # and updater signatures require maintainer-owned credentials; builds without
       # those secrets remain useful for local validation but are not release assets.
@@ -351,7 +381,13 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           MACOS_SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: bunx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+        # linuxdeploy suppresses its own stderr at the default verbosity. Keep
+        # diagnostics on the first attempt; Apple signing commands stay non-verbose.
+        run: bunx tauri ${{ runner.os == 'Linux' && '--verbose' || '' }} build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config "${{ runner.os == 'Windows' && format('{0}/opencodex-msi.json', runner.temp) || '{}' }}"
+
+      - name: Verify the packaged Linux sidecar
+        if: runner.os == 'Linux'
+        run: bash desktop/scripts/verify-linux-sidecar.sh
 
       - name: Rename release assets
         shell: bash
@@ -554,7 +590,19 @@ jobs:
           # run: source. tests/ci-workflows.test.ts enforces this repo-wide.
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          gh release upload "v${RELEASE_VERSION}" dist/release/* --clobber
+          set -euo pipefail
+          release_tag="v${RELEASE_VERSION}"
+          gh release upload "$release_tag" dist/release/* --clobber
+
+          # A published release is immutable: GitHub rejects every later asset upload
+          # with HTTP 422, which is why v2.55.0 through v2.60.0 shipped with zero
+          # assets and left the desktop updater without anything to download. The
+          # release is therefore created as a draft and becomes public here, once the
+          # verified bundle is attached. The only edit permitted is this flip — the
+          # notes still come from the validated notes file written at creation.
+          if [ "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit "$release_tag" --draft=false
+          fi
 
   publish:
     needs: [validate-dispatch, verify-release]
@@ -616,14 +664,15 @@ jobs:
       - name: Dependency audit (high severity)
         run: bun run audit:high
 
-      - name: Verify version matches package.json
+      - name: Verify every version source matches the requested version
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          PKG=$(node -p "require('./package.json').version")
-          echo "package.json=$PKG  input=${RELEASE_VERSION}"
-          test "$PKG" = "$RELEASE_VERSION" || {
-            echo "::error::package.json ($PKG) != requested (${RELEASE_VERSION}) — bump package.json on main first";
+          # package.json plus the desktop sources (tauri.conf.json, Cargo.toml and the
+          # opencodex-desktop Cargo.lock entry). package-desktop already refused to build on a
+          # mismatch; this re-proves it on the commit that is about to publish.
+          bun scripts/release-version-sources.ts check "$RELEASE_VERSION" || {
+            echo "::error::a version source != requested (${RELEASE_VERSION}) — run scripts/release.ts, which moves all of them, on main first";
             exit 1;
           }
 
@@ -744,6 +793,7 @@ jobs:
       # PREREQUISITE: configure the Trusted Publisher for this repo + workflow on npmjs.com — possible
       # only AFTER the package's first version exists (do the first publish locally, see the runbook).
       - name: Preflight release metadata
+        id: metadata
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
@@ -792,6 +842,12 @@ jobs:
           fi
           if npm view "${pkg_name}@${RELEASE_VERSION}" version >/dev/null 2>&1; then
             if [ "$RESUME" = "true" ]; then
+              resume_git_head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000)" || {
+                echo "::error::Cannot verify the existing npm package source; resume refused"
+                exit 1
+              }
+              bun scripts/verify-release-resume.ts "$GITHUB_SHA" "$resume_git_head"
+              echo "resume_sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
               echo "::notice::${pkg_name}@${RELEASE_VERSION} is acknowledged on npm; resuming after the recorded partial publication"
             elif [ "$dry_run" = "true" ]; then
               echo "::notice::${pkg_name}@${RELEASE_VERSION} already exists on npm; dry-run only"
@@ -846,10 +902,15 @@ jobs:
           NPM_DIST_TAG: ${{ inputs.tag }}
           RESUME: ${{ inputs.resume-after-npm-publish }}
           RELEASE_VERSION: ${{ inputs.version }}
+          VERIFIED_RESUME_SHA: ${{ steps.metadata.outputs.resume_sha }}
         run: |
           set -euo pipefail
           pkg_name="$(node -p "require('./package.json').name")"
           if [ "$RESUME" = "true" ]; then
+            if [ -z "$VERIFIED_RESUME_SHA" ] || [ "$VERIFIED_RESUME_SHA" != "$GITHUB_SHA" ]; then
+              echo "::error::Resume has no matching registry source verification; publication remains unacknowledged"
+              exit 1
+            fi
             # npm publication was acknowledged by the earlier run and confirmed by the
             # preflight above; completing the GitHub side must never republish.
             echo "::notice::RESUME — npm publish skipped; publication already acknowledged"
@@ -945,6 +1006,9 @@ jobs:
               exit 1
             fi
           else
-            gh release create "$release_tag" --target "$GITHUB_SHA" --title "$release_tag" \
+            # Draft first. Publication freezes a release under GitHub's immutable
+            # releases, so attach-release attaches the verified bundle to the draft
+            # and publishes it afterwards.
+            gh release create "$release_tag" --draft --target "$GITHUB_SHA" --title "$release_tag" \
               --notes-file "$notes_file" ${prerelease_flag:+$prerelease_flag}
           fi

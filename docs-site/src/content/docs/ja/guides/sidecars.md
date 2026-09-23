@@ -138,4 +138,4 @@ OpenAI 実行経路、ダッシュボード、管理 API は `gpt-5.6-luna` を�
 `PUT /api/sidecar-settings` は同じフィールドを受け付けます。部分更新では省略したキーをそのまま残します。`timeoutMs` はランタイムの整数範囲（1–2147483647 ms）を使います。
 
 ファイルを直接編集したい場合は、これまでどおり `config.json` で `enabled` を `false` にできます。Anthropic OAuth 検索と画像説明は既存の Claude Code OAuth fingerprint 先例に従いますが、実際のアカウントと作業量で十分 soak test するのが無難です。全
-フィールドは[設定リファレンス](/ja/reference/configuration/#sidecars)を参照してください。
+フィールドは[設定リファレンス](/ja/reference/configuration/server/#サイドカー)を参照してください。

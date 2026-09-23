@@ -23,7 +23,7 @@ interface ProviderAdapter {
 `AdapterEvent`'lere yükseltir. `fetchResponse`, bir adaptörün yeniden
 denemelere/zaman aşımlarına sahip olmasına izin verirken `runTurn`, tek bir HTTP
 getirmesini takip eden tek bir yanıt akışı olarak temsil edilemeyen aktarımları
-destekler. [`bridge.ts`](/tr/reference/architecture/#kopru-bridge) daha sonra
+destekler. [`bridge.ts`](/tr/reference/architecture/#köprü-bridge) daha sonra
 olayları Responses SSE'ye dönüştürür.
 
 ## `openai-chat`
@@ -326,6 +326,9 @@ başlığından Cursor OAuth/erişim belirteci.
   çözümlenmemiş şablon yer tutucusu içermediğini doğrular ve `Authorization`'ı
   `api-key` ile değiştirir. Yapılandırılan URL doğrudan Azure'un v1 Responses
   API'sini hedefler, bu nedenle adaptör `api-version` eklemez.
+- Başka bir sağlayıcının ürettiği akıl yürütme durumu için Responses kurtarmasını paylaşır:
+  `400 invalid_encrypted_content` aldığında isteği bu durum olmadan (şifreli içerik ve akıl
+  yürütme öğesinin `rs_…` kimliği) yalnızca bir kez yeniden gönderir.
 
 ## Görsel yardımcıları (`image.ts`)
 

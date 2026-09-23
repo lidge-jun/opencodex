@@ -40,6 +40,15 @@ const CLASSIC_BODY = {
   ],
 } as const;
 
+/** Codex App MCP tool shape from the Muse callback failure: namespace plus child function. */
+const CODEX_APP_BODY = {
+  tools: [{
+    type: "namespace",
+    name: "mcp__codex_app",
+    tools: [{ type: "function", name: "send_message_to_thread", parameters: { type: "object" } }],
+  }],
+} as const;
+
 function declarationsOf(body: unknown): {
   declared: ReadonlySet<string>;
   declaredBare: ReadonlySet<string>;
@@ -107,6 +116,28 @@ describe("default-namespaced helper names under a code-mode catalog", () => {
     const item = { type: "function_call", call_id: "c1", name: "default.lookup", arguments: "{}" };
     expect(normalizedNames(CODE_MODE_BODY, item)).toEqual(["default.lookup"]);
     expect(guardVerdict(CODE_MODE_BODY, item)).toBe("default.lookup");
+  });
+});
+
+describe("default wrapper around a declared flattened namespace identity", () => {
+  const canonical = "mcp__codex_app__send_message_to_thread";
+  const wrapped = `default.${canonical}`;
+
+  test("the exact Muse callback name normalizes to the declared canonical identity", () => {
+    const item = { type: "function_call", call_id: "c1", name: wrapped, arguments: "{}" };
+    expect(normalizedNames(CODEX_APP_BODY, item)).toEqual([canonical]);
+    expect(guardVerdict(CODEX_APP_BODY, item)).toBeUndefined();
+  });
+
+  test("a namespace-dropping guess and an unknown suffix stay rejected", () => {
+    for (const name of [
+      "default.send_message_to_thread",
+      "default.mcp__codex_app__delete_everything",
+    ]) {
+      const item = { type: "function_call", call_id: "c1", name, arguments: "{}" };
+      expect(normalizedNames(CODEX_APP_BODY, item)).toEqual([name]);
+      expect(guardVerdict(CODEX_APP_BODY, item)).toBe(name);
+    }
   });
 });
 
@@ -197,6 +228,21 @@ describe("the streaming boundary the report actually crossed", () => {
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toContain('"name":"exec"');
     expect(emitted[0]).not.toContain("default.view_image");
+  });
+
+  test("the streamed Muse callback keeps its declared namespace identity", () => {
+    const { declared, declaredBare } = declarationsOf(CODEX_APP_BODY);
+    const rewrite = createUndeclaredToolCallGuardBlockRewrite(declared, undefined, undefined, declaredBare);
+    const emitted = blocks(rewrite, [{
+      type: "function_call",
+      id: "fc_1",
+      call_id: "c1",
+      name: "default.mcp__codex_app__send_message_to_thread",
+      arguments: "{}",
+    }]);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toContain('"name":"mcp__codex_app__send_message_to_thread"');
+    expect(emitted[0]).not.toContain("default.mcp__codex_app");
   });
 
   test("an unresolvable dotted name ends the turn instead of reaching the client", () => {

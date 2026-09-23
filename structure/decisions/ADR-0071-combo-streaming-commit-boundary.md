@@ -1,6 +1,6 @@
 # ADR-0071 — decision recorded under "Combo streaming commit boundary"
 
-- Contract owner: [transports/responses.md](../transports/responses.md#combo-streaming-commit-boundary)
+- Contract owner: [transports/responses-failover.md](../transports/responses-failover.md#combo-streaming-commit-boundary)
 
 ## Decision record
 

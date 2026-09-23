@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import type { Root } from "react-dom/client";
 import CodexAccountPool from "../src/components/CodexAccountPool";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
@@ -43,6 +43,7 @@ const mainAccount: CodexAccountEntry = {
   isMain: true,
   paused: false,
   priority: 0,
+  autoSwitchThresholdOverride: null,
   hasCredential: true,
   quota: null,
   quotaAutoRefresh: {
@@ -64,6 +65,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchingId: null,
     pauseUpdatingId: null,
     priorityUpdatingId: null,
+    autoSwitchUpdatingId: null,
     pausingExhausted: false,
     activeNeedsReauth: false,
     activePinnedId: null,
@@ -71,6 +73,7 @@ function makeController(overrides: Partial<CodexAccountPoolController> = {}): Co
     switchAccount: async () => ({ ok: true, activeId: null }),
     setAccountPaused: async () => ({ ok: true }),
     setAccountPriority: async () => ({ ok: true }),
+    setAccountAutoSwitchThreshold: async () => ({ ok: true }),
     pauseExhaustedAccounts: async () => ({ ok: true, pausedCount: 0 }),
     saveAlias: async () => ({ ok: true }),
     removeAccount: async () => ({ ok: true }),
@@ -149,7 +152,8 @@ async function mountController() {
   const apiBase = `stale-${Date.now()}-${baseCounter}`;
   const seen: { current: CodexAccountPoolController | null } = { current: null };
   function Probe() {
-    seen.current = useCodexAccountPool(apiBase, true);
+    const controller = useCodexAccountPool(apiBase, true);
+    useLayoutEffect(() => { seen.current = controller; }, [controller]);
     return null;
   }
   const { createRoot } = await import("react-dom/client");

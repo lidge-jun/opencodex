@@ -1,3 +1,4 @@
+import { recordCommittedDesktopGateway } from "../claude/desktop-gateway-state";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadConfig, mutatePersistedConfig, withConfigMutationLockSync } from "../config";
@@ -18,6 +19,7 @@ import {
 import { inspectDesktop3pConfigLibrary, removeDesktop3pStandardPivot, writeDesktop3pConfig, type Desktop3pConfigMode, parseDesktop3pModeArgs } from "../claude/desktop-3p";
 import {
   applyDesktopFirstParty,
+  captureDesktopFirstPartyRollback,
   isClaudeDesktopMode,
   recordClaudeDesktopMode,
   removeDesktopFirstParty,
@@ -70,6 +72,7 @@ function saveLocalDesktopProfile(
   expectedProfile: DesktopProfile | undefined,
   expectedConnection: ClientConnectionState,
   deps: ApplyProfileDeps,
+  gatewayWrite?: { fingerprint?: string },
 ): void {
   withClientLifecycleSync(() => {
     const outcome = mutatePersistedConfig(current => {
@@ -86,6 +89,10 @@ function saveLocalDesktopProfile(
       }
       if (JSON.stringify(current.claudeCode?.desktopProfile) !== JSON.stringify(expectedProfile)) {
         throw new Error("desktop_profile_changed");
+      }
+      if (gatewayWrite) {
+        recordCommittedDesktopGateway(current, profile, gatewayWrite.fingerprint, new Date().toISOString());
+        return { changed: true, value: undefined };
       }
       const changed = JSON.stringify(current.claudeCode?.desktopProfile) !== JSON.stringify(profile);
       if (changed) current.claudeCode = { ...(current.claudeCode ?? {}), desktopProfile: structuredClone(profile) };
@@ -250,17 +257,24 @@ async function applyFirstPartyDesktop(
   const config = loadConfig();
   const desired = setIntegrationEnabled("claude-desktop", true);
   if (!desired.ok) return { ok: false, path: "", reason: desired.message };
-  // First-party replaces gateway; the two must never be active together.
+  // Establish the replacement before deleting the working gateway. A refused
+  // cleanup restores only our managed env keys, preserving unrelated settings.
+  const rollback = captureDesktopFirstPartyRollback(config);
+  const applied = applyDesktopFirstParty(config);
+  if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason };
   const appliedFingerprint = config.claudeCode?.desktopProfile?.appliedFingerprint ?? null;
   const library = inspectDesktop3pConfigLibrary({ appliedFingerprint });
   if (library.kind === "gateway_ours" || library.kind === "gateway_drifted") {
     const removed = removeDesktop3pStandardPivot({ appliedFingerprint, replaceWhileEnabled: true });
     if (!removed.ok) {
-      return { ok: false, path: library.selectedProfilePath ?? "", reason: removed.kind === "cleanup_incomplete" ? "gateway_cleanup_incomplete" : `gateway_profile_active:${removed.reason ?? removed.kind}` };
+      const restored = removed.changed || !applied.changed || rollback();
+      const modeSaved = !removed.changed || saveDesktopMode("first-party", deps);
+      const warning = [restored ? "" : "first-party settings rollback did not complete",
+        modeSaved ? "" : "first-party is active but its mode marker was not saved"].filter(Boolean).join("; ");
+      return { ok: false, path: library.selectedProfilePath ?? "", reason: removed.kind === "cleanup_incomplete" ? "gateway_cleanup_incomplete" : `gateway_profile_active:${removed.reason ?? removed.kind}`,
+        ...(warning ? { warning } : {}) };
     }
   }
-  const applied = applyDesktopFirstParty(config);
-  if (!applied.ok) return { ok: false, path: applied.path, reason: applied.reason };
   const saved = saveDesktopMode("first-party", deps);
   return {
     ok: true,
@@ -275,13 +289,15 @@ export async function applyDesktop(
   deps: ApplyProfileDeps = {},
 ): Promise<{ ok: boolean; path: string; reason?: string; warning?: string }> {
   if (target.kind === "first-party") return applyFirstPartyDesktop(deps);
-  // Gateway replaces first-party; the two must never be active together.
-  const removed = removeDesktopFirstParty();
-  if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable" };
   const result = await applyProfile(profile, target.mode, deps);
-  if (result.ok && !saveDesktopMode("gateway", deps)) {
-    return { ...result, warning: [result.warning, "desktop mode marker was not saved"].filter(Boolean).join(" ") };
-  }
+  if (!result.ok) return result;
+  const modeSaved = saveDesktopMode("gateway", deps);
+  const warning = [result.warning, modeSaved ? "" : "desktop mode marker was not saved"].filter(Boolean).join(" ");
+  // The gateway mode is committed before retiring first-party settings.
+  const removed = removeDesktopFirstParty();
+  if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable",
+    warning: ["gateway applied; first-party cleanup remains incomplete", warning].filter(Boolean).join(" ") };
+  if (warning) return { ...result, warning };
   return result;
 }
 
@@ -355,8 +371,13 @@ export async function applyProfile(
     nativeContextLimits(config),
     deps.lifecycleLockDeps,
   );
+  let stateWarning: string | undefined;
+  if (result.written) {
+    try { saveLocalDesktopProfile(state.profile, state.profile, connection, deps, { fingerprint: result.fingerprint }); }
+    catch { stateWarning = "gateway applied but its committed mode/profile state was not saved"; }
+  }
   const policyState = (deps.probeClaudeDesktopPolicy ?? probeClaudeDesktopPolicy)();
-  const warning = result.written ? claudeDesktopPolicyWarning(policyState) : undefined;
+  const warning = [result.written ? claudeDesktopPolicyWarning(policyState) : undefined, stateWarning].filter(Boolean).join(" ");
   return {
     ok: result.written,
     path: result.path,
@@ -377,13 +398,15 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
   const applyInvocation = argv.length === 0 || command === "apply" || applyFlags.length > 0;
   if (applyInvocation) {
     const rest = argv.filter(arg => arg !== "apply");
-    const parsedTarget = parseDesktopApplyArgs(rest, loadConfig());
+    const preApplyConfig = loadConfig();
+    const parsedTarget = parseDesktopApplyArgs(rest, preApplyConfig);
     if ("error" in parsedTarget) { console.error(parsedTarget.error); return 2; }
     const { target } = parsedTarget;
     try {
       const result = await applyDesktop(undefined, target, deps);
       if (!result.ok) {
         console.error(`설정 적용 실패: ${result.reason ?? "unknown error"}`);
+        if (result.warning) console.warn(result.warning);
         if (result.reason?.startsWith("gateway_")) {
           console.error("The gateway profile could not be removed safely, so first-party mode was not applied. Turn the integration off (dashboard toggle) and retry, or keep gateway with `ocx claude desktop apply --gateway`.");
         } else if (result.reason === "foreign_env") {
@@ -402,7 +425,7 @@ export async function handleClaudeDesktopCommand(argv: string[], deps: ApplyProf
         console.log(`Claude Desktop gateway 설정을 적용했습니다: ${result.path}`);
         for (const line of gatewayModeExplanation({
           requestedExplicitly: applyFlags.some(flag => flag !== "--first-party"),
-          config: loadConfig(),
+          config: preApplyConfig,
         })) {
           console.log(line);
         }

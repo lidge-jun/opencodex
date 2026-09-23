@@ -275,6 +275,17 @@ enum TransportSuite {
             t.equal(StubProtocol.recorded.count, 2, "exactly one retry")
         }
 
+        t.test("requests: timeline encodes nested model and repeated hidden provider filters") {
+            StubProtocol.reset([])
+            let client = ProxyClient(endpoint: endpoint, session: makeSession(),
+                                     credentials: StubCredentials(key: nil, counter: .init()))
+            let settings = CompanionSettings(models: ["provider/vendor/model+one"], hiddenProviders: ["a+b", "hidden"])
+            _ = sync { try? await client.timeline(settings) }
+            let items = URLComponents(url: StubProtocol.recorded.first!.url!, resolvingAgainstBaseURL: false)!.queryItems!
+            t.equal(items.first { $0.name == "models" }?.value, "provider/vendor/model+one")
+            t.equal(items.filter { $0.name == "hiddenProvider" }.compactMap(\.value), ["a+b", "hidden"])
+        }
+
         t.test("requests: usage sends the enum range as a query item") {
             StubProtocol.reset([.init(status: 200, body: #"{"range":"7d"}"#, urlError: nil)])
             let client = ProxyClient(endpoint: endpoint, session: makeSession(),

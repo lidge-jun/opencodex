@@ -112,8 +112,11 @@ export async function* streamChatEventsWithResetRetry(
         && error.status === 429
         ? error
         : undefined;
+      // Prefer the typed field: trailer-derived errors are content-free now,
+      // so the parser preserved the stated delay there. The message scrape
+      // remains for errors whose text still carries a hint.
       const waitSec = retryableError
-        ? parseRetryAfterFromMessage(retryableError.message)
+        ? retryableError.retryAfterSeconds ?? parseRetryAfterFromMessage(retryableError.message)
         : undefined;
       const waitMs = waitSec === undefined ? undefined : waitSec * 1000;
       if (

@@ -156,6 +156,11 @@ blank strings and mixed encrypted/unknown parts are not partially converted.
 See [agent messages](/reference/configuration/providers/#routed-agent-messages)
 for the separate opt-in encrypted-task recovery behavior.
 
+For xAI Responses, `auto` or `none` tool selection is omitted when normalization leaves no tools
+in the request, including when cached-only search is removed. Valid forced function selections
+remain intact. Replayed custom tool calls with missing or invalid item ids receive stable ids
+when their call id, name, and input are strings; their call/result pairing is preserved.
+
 The canonical ChatGPT Codex forward destination also normalizes two public Responses shapes that
 its stricter backend rejects: fully textual `system` messages inside `input` are appended to the
 top-level `instructions` string in request order, and the top-level `truncation` field is removed.
@@ -201,9 +206,17 @@ classified that key as belonging to one conversation. Shared or unclassified cac
 keys do not establish session affinity; requests without a usable identity receive
 a fresh session ID. Recovery and cached-history replay preserve this classification.
 
-The API-key `commandcode` provider uses the `openai-chat` adapter and supports
-forwarding `prompt_cache_key`. This is separate from the OAuth adapter's session
-header and does not guarantee a provider cache hit.
+The API-key `commandcode` provider uses Chat Completions for most model ids and the
+Anthropic Messages adapter (`x-api-key`) for `claude-*` ids, which Command Code serves
+only on `/provider/v1/messages`; the pin applies only while the provider points at that
+endpoint. It supports forwarding `prompt_cache_key`; this is separate
+from the OAuth adapter's session header and does not guarantee a provider cache hit.
+The OAuth `command-code` preset streams `/alpha/generate` as NDJSON. MiMo tool-call
+markup echoed by the gateway as text is removed when it duplicates a real call. After a
+clean stop or tool-call finish, a complete declared-tool call with no native counterpart
+is restored as a real call; an interrupted or failed turn leaves the markup as text. A
+freeform call echoed without its `</function>` close counts as complete once
+`</tool_call>` arrives. This applies to every MiMo model Command Code serves.
 
 ## `anthropic`
 
@@ -411,6 +424,15 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   OAuth-backed live transport and account-filtered model discovery remain experimental; see the
   [provider guide](/guides/providers/) and [Cursor provider configuration](/reference/configuration/providers/#cursor-provider-adapter-cursor)
   for login and transport settings. Checkpoint reuse itself is automatic and has no user setting.
+- External-model tool continuations keep the latest actual user request in the active action;
+  automatic summaries and standalone ambient-browser context remain historical context.
+  Blank or image-only user input does not revive an older request. Grok 4.6 code-mode guidance
+  requires explicit result emission and never assumes an empty completed cell emitted output.
+  Missing output calls for a read-only state check, not replay of a completed side effect.
+  Repetition advice resets on a new user/developer turn and permits requested polling.
+  If carried checkpoint roots exceed the replay
+  budget, available history is rebuilt under the same limits. These repairs do not guarantee
+  identical wording or reasoning behavior between Cursor and xAI routes.
 - Honors `upstreamHttpVersion` for both live model discovery and inference. `auto`, `http2`, and `h2`
   preserve the existing HTTP/2 transport; only `http1.1` and `h1` select compatibility mode.
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
@@ -500,6 +522,9 @@ existing suffix precedence.
 - Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
   unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL
   targets Azure's v1 Responses API directly, so the adapter does not append `api-version`.
+- Shares the Responses recovery for reasoning state another provider produced: after a
+  `400 invalid_encrypted_content` it resends once without that state. See
+  [Proxy formats](/reference/proxy-formats/) under "Switching providers in an existing conversation".
 
 ## Image utilities (`image.ts`)
 

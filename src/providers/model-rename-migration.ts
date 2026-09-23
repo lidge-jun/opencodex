@@ -19,6 +19,7 @@
 // Everything else in the row is left alone.
 
 import { PROVIDER_REGISTRY } from "./registry";
+import { MODEL_KEYED_RECORDS, MODEL_ID_LISTS, MODEL_ID_SCALARS, MODEL_NESTED_RECORDS } from "./model-rename-fields";
 import { providerConfigSeed } from "./derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
@@ -136,40 +137,6 @@ export const MODEL_RENAMES: readonly ModelRename[] = [
     dropReasoningEffortMap: true,
   })),
 ];
-
-/** Provider fields that key metadata by model id. */
-const MODEL_KEYED_RECORDS = [
-  "modelContextWindows",
-  "modelMaxOutputTokens",
-  "modelInputModalities",
-  "modelReasoningEfforts",
-  "modelSuppressSyntheticMax",
-  "modelDefaultReasoningEfforts",
-  "modelReasoningEffortMap",
-] as const;
-
-/** Provider fields that are flat lists of model ids. */
-const MODEL_ID_LISTS = [
-  "models",
-  // A retired id left here is worse than a stale label: `filterCatalogModels` treats
-  // `selectedModels` as an exact-match allowlist, so a user who allowlisted only the
-  // retired model gets NO replacement row at all — the model silently vanishes from
-  // their catalog instead of being renamed. OAuth reconciliation does not cover this
-  // field, so the rename has to.
-  "selectedModels",
-  // Same reasoning as `selectedModels`: a retired id pinned here would be resurrected as a
-  // ghost row on every discovery instead of following the rename (#1690).
-  "retainModels",
-  "noVisionModels",
-  "noReasoningModels",
-  "noTemperatureModels",
-  "noTopPModels",
-  "noPenaltyModels",
-  "autoToolChoiceOnlyModels",
-  "preserveReasoningContentModels",
-  "thinkingBudgetModels",
-  "directReasoningEffortModels",
-] as const;
 
 function renameInList(value: unknown, from: string, to: string): string[] | null {
   if (!Array.isArray(value) || !value.includes(from)) return null;
@@ -404,8 +371,18 @@ export function projectModelRenames(
       row[field] = next;
       touched = true;
     }
-    if (prov.defaultModel === rename.from) {
-      prov.defaultModel = rename.to;
+    for (const field of MODEL_NESTED_RECORDS) {
+      const container = row[field];
+      if (!container || typeof container !== "object" || Array.isArray(container)) continue;
+      const nested = container as Record<string, unknown>;
+      const next = renameInRecord(nested.models, rename.from, rename.to);
+      if (!next) continue;
+      row[field] = { ...nested, models: next };
+      touched = true;
+    }
+    for (const field of MODEL_ID_SCALARS) {
+      if (row[field] !== rename.from) continue;
+      row[field] = rename.to;
       touched = true;
     }
     if (renameDisabledModels(config, rename)) touched = true;

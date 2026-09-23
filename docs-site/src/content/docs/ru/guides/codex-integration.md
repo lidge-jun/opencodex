@@ -407,7 +407,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-Когда opencodex работает как управляемая [фоновая служба](/reference/cli/#ocx-service), он
+Когда opencodex работает как управляемая [фоновая служба](/ru/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove), он
 устанавливает `OCX_SERVICE=1`, чтобы service-driven restart **не** дёргал конфигурацию Codex —
 только явный `ocx stop` / `ocx service stop` восстанавливает нативный Codex.
 

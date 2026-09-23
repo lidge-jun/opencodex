@@ -6,6 +6,9 @@
  * Legacy single-credential values (`{ access, refresh, expires, ... }`) normalize on load,
  * and the first new-shape persist writes a one-time `auth.json.pre-multiauth` backup so a
  * downgraded loader (which silently drops unknown shapes) cannot destroy refresh tokens.
+ * Destructive mutations (logout, account deletion, provider deletion) remove the affected
+ * provider's entry from that backup, and the file once nothing is left, so deleted
+ * credentials are not retained while other providers keep their downgrade recovery.
  *
  * Exceptions:
  * - `chatgpt` stays single-slot (always replaced): codex-auth-api uses it as a scratch slot
@@ -17,9 +20,10 @@
  *   both append distinct identified accounts under multiauth.
  */
 import { createHash, randomUUID } from "node:crypto";
-import { chmodSync, closeSync, copyFileSync, existsSync, fstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, constants as fsConstants, copyFileSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getConfigDir, atomicWriteFile, backupInvalidConfig, hardenConfigDir, hardenExistingSecret, withConfigMutationLockSync } from "../config";
+import { atomicWriteFileNoFollowUnclaimed } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { MAX_PENDING_OAUTH_MUTATIONS } from "../lib/translator-budget";
@@ -433,9 +437,11 @@ export function createOAuthRefreshIntentLock(provider:string,accountId:string,ov
 function backupLegacyOnce(): void {
   const path = getAuthStorePath();
   const backup = `${path}.pre-multiauth`;
-  if (!existsSync(path) || existsSync(backup)) return;
+  // Any existing entry, including a dangling symlink existsSync would call absent, is left
+  // alone, and the copy is exclusive, so credentials are never written through a link.
+  if (!existsSync(path) || directoryEntryExists(backup)) return;
   try {
-    copyFileSync(path, backup);
+    copyFileSync(path, backup, fsConstants.COPYFILE_EXCL);
     try { chmodSync(backup, 0o600); } catch { /* best-effort */ }
     try {
       // Register only the copy we just created. An unowned home still needs downgrade recovery.
@@ -446,6 +452,53 @@ function backupLegacyOnce(): void {
       console.warn("[oauth] Recovery backup created, but uninstall ownership registration failed.");
     }
   } catch { /* best-effort */ }
+}
+
+/**
+ * Destructive mutations (logout, account deletion, provider deletion) remove the affected
+ * providers from the downgrade backup: it holds a copy of the very credentials the user
+ * removed. Entries for other providers stay, so their downgrade recovery survives; the file
+ * goes once nothing is left. Account deletion drops the provider's whole legacy entry, since
+ * a refreshed token cannot be matched to the account it came from. A backup entry that is
+ * not a regular file is never followed or rewritten; a symlink is removed, while a directory
+ * is left in place with a warning. A regular backup is replaced atomically when providers
+ * remain and removed when none do. Best-effort like the create path: this runs after
+ * persist, so a failure must not report a failed logout for an account that is already
+ * gone; it warns instead. A stale uninstall-manifest entry is harmless:
+ * removeOwnedConfigState skips paths that no longer exist.
+ */
+function scrubLegacyBackup(providers: readonly string[]): void {
+  const backup = `${getAuthStorePath()}.pre-multiauth`;
+  try {
+    const remaining = readLegacyBackupEntries(backup);
+    for (const provider of providers) delete remaining[provider];
+    if (Object.keys(remaining).length > 0) atomicWriteFileNoFollowUnclaimed(backup, `${JSON.stringify(remaining, null, 2)}\n`);
+    else unlinkSync(backup);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") {
+      console.warn(`[oauth] could not remove deleted credentials from the legacy credential backup: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+}
+
+/** Provider entries of the backup; empty (so the file is removed) when unreadable or not a regular file. */
+function readLegacyBackupEntries(backup: string): Record<string, unknown> {
+  if (!lstatSync(backup).isFile()) return {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(backup, "utf-8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? { ...(parsed as Record<string, unknown>) } : {};
+  } catch {
+    return {};
+  }
+}
+
+function directoryEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    return errorCode(error) !== "ENOENT";
+  }
 }
 
 function isCredentialSource(value: unknown): value is OAuthCredentialSource {
@@ -712,7 +765,7 @@ function serializeMutation<T>(work: () => Promise<T>, retainedValues: readonly u
   drainOAuthMutations();
   return result;
 }
-export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
+export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValues: readonly unknown[] = [], options?: { waitMs?: number; assertBeforePersist?: () => void; scrubLegacyBackup?: (result: T) => readonly string[] }):Promise<T>{return serializeMutation(async()=>{const guard=await createOAuthFileLock({path:getAuthStoreLockPath(),staleAfterMs:30000}).acquire();try{
     const { store, hadLegacy } = loadAuthStoreInternal();
     if (hadLegacy) backupLegacyOnce();
     const selections = new Map(Object.entries(store).map(([provider, set]) => [provider, {
@@ -722,6 +775,9 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
       accountIds: set.accounts.map(account => account.id),
     }]));
     const result = await fn(store);
+    // Only providers whose credentials this mutation actually removed leave the downgrade
+    // backup; a no-op removal names none. The result decides, so it is read here.
+    const scrubbedProviders = options?.scrubLegacyBackup?.(result) ?? [];
     options?.assertBeforePersist?.();
     const changedProviders: string[] = [];
     for (const provider of new Set([...selections.keys(), ...Object.keys(store)])) {
@@ -743,6 +799,7 @@ export function mutateStore<T>(fn:(store:AuthStore)=>T|Promise<T>, retainedValue
       }
     }
     persist(store);
+    if (scrubbedProviders.length > 0) scrubLegacyBackup(scrubbedProviders);
     for (const provider of changedProviders) publishAccountSelection(provider, "oauth");
     return result;
   }finally{guard.release();}}, retainedValues, options?.waitMs);
@@ -886,7 +943,7 @@ export async function removeCredential(provider: string): Promise<"removed" | "n
     }
     set.activeAccountId = set.accounts[0]!.id;
     return "removed" as const;
-  }, [provider]);
+  }, [provider], { scrubLegacyBackup: result => result === "removed" ? [provider] : [] });
 }
 
 // ---------------------------------------------------------------------------
@@ -1029,19 +1086,26 @@ export async function removeAccount(provider: string, accountId: string): Promis
     }
     if (set.activeAccountId === accountId) set.activeAccountId = set.accounts[0]!.id;
     return true;
-  }, [provider, accountId]);
+  }, [provider, accountId], { scrubLegacyBackup: removed => removed ? [provider] : [] });
   return removed;
 }
 
-/** Replace or clear a provider account set (used for transactional Kiro add-account rollback). */
+/**
+ * Replace or clear a provider account set (provider deletion, transactional Kiro add-account
+ * rollback). Clearing a provider that had credentials is a destructive mutation, so it also removes
+ * the provider from the legacy downgrade backup, like logout and account deletion. A non-empty
+ * replacement leaves the backup alone: a future caller that removes accounts through a
+ * replacement needs its own decision here.
+ */
 export async function replaceProviderAccountSet(
   provider: string,
   set: ProviderAccountSet | null,
 ): Promise<void> {
   await mutateStore(store => {
     if (!set || set.accounts.length === 0) {
+      const cleared = store[provider] !== undefined;
       delete store[provider];
-      return;
+      return cleared;
     }
     store[provider] = {
       activeAccountId: set.activeAccountId,
@@ -1053,7 +1117,8 @@ export async function replaceProviderAccountSet(
         ...(account.addedAt !== undefined ? { addedAt: account.addedAt } : {}),
       })),
     };
-  }, [provider, set]);
+    return false;
+  }, [provider, set], { scrubLegacyBackup: cleared => cleared ? [provider] : [] });
 }
 
 export type ProviderCredentialRekeyOutcome = "moved" | "absent" | "conflict";

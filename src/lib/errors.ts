@@ -258,12 +258,14 @@ export function isClientClosedMessage(text: string): boolean {
 
 /**
  * Ambiguous-reset refusal wording owned by this proxy (src/lib/upstream-retry.ts):
- * the upstream connection closed before any response arrived, so the request may
- * already have been processed and automatic replay was stopped. Matched narrowly
- * so a provider-sent message is never relabeled by it.
+ * the upstream exchange did not complete reliably, so the request may already have
+ * been processed and automatic replay was stopped. Matched narrowly so a
+ * provider-sent message is never relabeled by it.
  */
 export function isUpstreamResetReplayRefusedMessage(text: string): boolean {
-  return text.toLowerCase().includes("connection closed before a response was received");
+  return text.toLowerCase().includes(
+    "the upstream exchange did not complete reliably. the request may already have been processed",
+  );
 }
 
 export function classifyError(status: number, type: string, message: string): OcxErrorPayload {

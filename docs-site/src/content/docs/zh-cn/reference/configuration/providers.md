@@ -35,8 +35,9 @@ ocx models provider openrouter on
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 将任意公开 model selector 映射到已保存 Codex account target 的可选配置。启用账户限定的选择器行后，target 存在的每个 selector 都会在 Codex picker 中添加独立的 `<selector>/<native-openai-model>` row，且每个 row 只使用对应账户。只要有 selector 生效，bare native row 就会在 picker 中隐藏；但除非显式禁用，其 id 仍可路由，并继续列在 raw `/v1/models` 中。 |
 | `codexAccountPickerEnabled?` | `boolean` | 映射为空时关闭 | 控制是否根据有效的 `codexAccountNamespaces` 映射生成账户限定的 Codex 选择器行。`true` 允许显示映射行。在非空映射中省略此字段时，为保持向后兼容会视为已启用；映射为空时则关闭。`false` 会隐藏生成行并恢复选择器中的裸原生行，但不会删除映射，也不会禁用精确的 `<selector>/<native-openai-model>` 路由。 |
 | `activeCodexAccountId?` | `string` | — | 为下一次请求手动选定的 Pool 账户。选择会清除线程亲和性；进行中的请求会保留捕获到的凭据。 |
-| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool 各账号的选择顺序：账号 ID → `-100` 到 `100` 的整数，**数值越大越先使用**，未设置即为 `0`。这是顺序边界而非资格边界：选择会把已经合格的账号收窄到仍有 quota 余量的最高 tier，再由 `accountPoolStrategy` 在该 tier 内挑选。只有当某个 tier 的所有成员都超过 `autoSwitchThreshold`、处于 cooldown、被 soft-avoid、已暂停或需要重新认证时，该 tier 才会被跳过；usage 未知不会让 tier 耗尽。顺序不会让不合格的账号变得可选，也不会重新绑定已经绑定账号的 thread。主账号 `__main__` 同样参与排序，因此可以让 Codex Desktop 登录账号最后才被用到。没有任何条目时，行为与以往完全一致。映射格式非法时会打印警告并关闭排序（不会触发 config 修复）。可通过 `ocx account priority` 和 Codex Auth 页面管理。 |
+| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool 各账号的选择顺序：账号 ID → `-100` 到 `100` 的整数，**数值越大越先使用**，未设置即为 `0`。这是顺序边界而非资格边界：选择会把已经合格的账号收窄到仍有 quota 余量的最高 tier，再由 `accountPoolStrategy` 在该 tier 内挑选。只有当某个 tier 的所有成员都达到各自非零的有效阈值（账号覆盖值，未设置则使用全局值）、处于 cooldown、被 soft-avoid、已暂停或需要重新认证时，该 tier 才会被跳过；usage 未知不会让 tier 耗尽。顺序不会让不合格的账号变得可选，也不会重新绑定已经绑定账号的 thread。主账号 `__main__` 同样参与排序，因此可以让 Codex Desktop 登录账号最后才被用到。没有任何条目时，行为与以往完全一致。映射格式非法时会打印警告并关闭排序（不会触发 config 修复）。可通过 `ocx account priority` 和 Codex Auth 页面管理。 |
 | `autoSwitchThreshold?` | `number` | `80` | 基于用量的主动切换阈值。`quota` 可在下一次请求中重新评估未绑定任务。已绑定任务默认（`pool.cacheAffinity`）在越过阈值后仍保留账号，直到该账号耗尽或无法继续服务，并且只改绑到确有额度余量且 usage 严格更低的账号。将 `pool.cacheAffinity` 设为 `false` 才会在该阈值重新评估已绑定任务。`fill-first` 仅把它用作未绑定分配的耗尽点；正常 `round-robin` 不使用它。分数取已知 5 小时、周或 30 天 quota window 的最高值。`0` 只关闭基于用量的主动切换，不关闭未绑定任务分配或故障恢复。 |
+| `codexAccountAutoSwitchThresholds?` | `Record<string,number>` | — | 各账号对 `autoSwitchThreshold` 的覆盖：账号 ID → `0`–`100` 的整数。没有条目时继承全局值；`0` 只关闭从该账号发起的基于用量的切换。支持主账号 `__main__`。可在 Codex Auth 的账号卡片中管理。 启用覆盖时，会将当前全局阈值复制为固定的账号值。覆盖值（包括 `0`）在之后修改全局阈值时仍优先。禁用时发送 `threshold: null`，删除条目，并恢复继承当前全局阈值及其未来的更改。 |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 新建/未绑定 Codex 请求的分配策略。没有 live `(parent thread id, quota scope)` affinity 的请求属于未绑定；代理重启或 affinity 重置后，已有可见任务也可能未绑定。`quota` 在没有活跃账号时选择已知 usage 最低的合格账号；活跃账号合格且低于 `autoSwitchThreshold` 时继续使用；达到阈值后，可把未绑定请求切换到 usage 更低的合格账号。已绑定任务默认会保留到账号耗尽（已知 usage 为 100%）或无法继续服务，改绑时只前往确有额度余量且 usage 严格更低的账号。关闭该标志后，也可在该阈值把已绑定任务的下一次请求改绑到确有额度余量且 usage 严格更低的账号。`round-robin` 均匀分配未绑定请求；`fill-first` 在 cooldown、不可用或耗尽阈值前持续分配给活跃账号。  `reset-first`: 在低于用量阈值的账号中，优先选择下次5小时或周额度重置最早的账号。已绑定任务遵循配置的亲和策略。独立模型额度按用量排序。 此排序不使用月额度重置时间。 |
 | `pool.cacheAffinity?` | `boolean` | `true` | 已绑定 Codex 线程的 cache-affinity 排序，独立于 `pool.kernel`。默认开启；省略该键或设为 `true` 即为开启，非法值视为开启。live 绑定优先于 quota 余量：`quota` 不会仅因用量越过 `autoSwitchThreshold` 就移动线程。账号暂停、不可用或真正耗尽（已知 usage 为 100%）时仍会离开，且只改绑到确有额度余量且 usage 严格更低的账号。用量未知的账号不会作为已绑定任务的改绑目标。设为 `false` 可恢复按阈值改绑。affinity 是重排而非钉死。 |
 | `accountPoolStickyLimit?` | `number` | `1` | 一次 round-robin 选择在推进前保留的新建/未绑定任务分配数。计数在任务绑定时增加，而不是在上游成功后增加。范围 1–100；仅当 `accountPoolStrategy` 为 `round-robin` 时生效。 |
@@ -45,6 +46,8 @@ ocx models provider openrouter on
 | `modelCacheTtlMs?` | `number` | `300000` | 每个提供者 `/models` 缓存的新鲜度窗口。 |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 提示缓存策略：禁用、5 分钟临时缓存，或 1 小时扩展缓存。 |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 关闭 | 可选的主动 OAuth 刷新与 Codex 账户预热策略。 |
+
+这些策略均使用各账户的有效阈值：存在 `codexAccountAutoSwitchThresholds` 条目时使用该值，否则继承全局 `autoSwitchThreshold`。覆盖值为 0 仅关闭基于用量的主动切换；启动绑定、硬锁、冷却、模型使用资格检查和故障恢复仍然生效。
 
 selector 名称是用户自定的公开 label；opencodex 不会为其赋予账户角色语义。
 `codexAccountNamespaces` 的 key 长度为 1–64 个字符，首尾必须是 ASCII 字母或数字，
@@ -112,7 +115,7 @@ selector，而不是分配一个新名称。
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | 将某个模型设为 `false`，即可停止暴露摘要并移除摘要交付字段。 |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | 按模型设置的 Responses 交付枚举；会重写现有的 delivery 字段。 |
 | `modelAdapters?` | `Record<string, string>` | 按模型设置的 `openai-chat` 或 `openai-responses` 线协议覆盖项，用于混合线协议网关。显式条目优先于注册表默认值；DeepSeek 预设可以为 `deepseek-v4-flash` 选择原生 Responses，GitHub Copilot 则为 模型（`gpt-5.3-codex`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.5`、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`）声明了 Responses 专用默认值，因为这些模型在代理流量下会拒绝 `/chat/completions`。没有内置默认值的模型（例如 `gpt-5.4-nano`）可以在此手动启用。单一线协议上游固定项和规范 ChatGPT forward 会拒绝覆盖。 |
-| xAI Responses 启用项（仪表板） | 开关 | 仅用于 `xai`，以原子方式设置或清除 `grok-4.5` 和 `grok-4.6` 的 `modelAdapters` 条目。若只存在一个条目，则显示混合状态，直到下次开关写入将两者统一。其他覆盖项和层级行为不变。 |
+| xAI Responses 启用项（仪表板） | 开关 | 仅用于 `xai`，以原子方式设置或清除 `grok-4.5` 和 `grok-4.6` 的 `modelAdapters` 条目。若只存在一个条目，则显示混合状态，直到下次开关写入将两者统一。其他覆盖项和层级行为不变。 Grok 4.7 在 OAuth 上通过注册表线协议默认使用 Responses，也可通过显式的 `modelAdapters["grok-4.7"] = "openai-chat"` 条目切换到 Chat。 |
 | `xaiResponsesXSearch?` | `boolean` | 默认禁用。在 xAI Responses 目标上，仅当有效的 `web_search` 工具在最终请求规范化后仍保留时，才附加由提供方托管的 `x_search` 声明。不会重复已有声明，绝不会扩大调用方的 `tool_choice`/`allowed_tools` 选择范围，并且此项独立于网络搜索辅助服务的 `search.xSearch` 选项。 |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | 非 forward Responses gateway 的精确模型 ID opt-in，用于上游预留 hosted tool namespace 的情况。目前只支持 `["image_generation"]`；匹配模型必须使用 `openai-responses` wire 且支持该 hosted 工具。它会移除冲突的客户端 `image_gen` 声明，并改写其 selector 以保持调用方的 tool choice。对于 OpenAI API 的虚拟 `-pro` 模型，先匹配所选公开 ID，未命中时才使用解析出的基础 wire-model ID 作为回退。`modelAdapters` 会先按公开 ID、再按基础 ID 解析；后一次结果决定最终 wire。未配置模型保持普通 alias 行为。 |
 | `annotateEmptyToolOutputs?` | `boolean` | 在工具结果到达模型之前，将存在但为空的结果替换为简短标记，以免空白结果被误认为缺失结果。适用于空白字符串和仅包含文本的部件数组；图像、文件和加密部件绝不会被修改。内置注册表中 `DeepSeek` 的默认值为 `true`，其他情况下不设置。设为 `false` 可让提供者退出此行为——后续编辑即使省略该字段，也会保留显式的 `false`。`PATCH /api/providers?name=<provider>` 接受 `true`、`false` 或 `null`；传入 `null` 可清除覆盖值并恢复注册表默认行为。 |
@@ -133,9 +136,9 @@ selector，而不是分配一个新名称。
 | `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 仅限使用 key 认证的 `openai-chat` 与 `openai-responses` 提供商。`authMode: "forward"` 的提供商（ChatGPT 账号池）从不读取此选项，保持默认重试次数。可选的流开始前上游瞬态状态码（500、502、503、504、520、521、522）重试：未配置时关闭；对象存在即启用，除非 `enabled: false`。覆盖初始 Responses 请求、终结守卫续接、原生 `/v1/chat/completions`，以及 429/账户恢复重新获取。`attempts` 是单个请求允许向上游发送的总次数，包含首次发送（1..10，默认 3）；它是与连接重置恢复共享的按请求预算，因此 `3` 表示最多只有三个实际请求到达提供商。等待采用固定 400 毫秒的指数退避，上限为 5 秒，并遵循 `Retry-After`。此选项独立于处理速率限制的 `retryOn429`；流开始后的故障绝不会重放。 |
 | `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | 仅限原生 `openai-responses` 提供商，包含 `authMode: "forward"`。可选地替换一次在调用方尚未观察到任何内容时就失败的发送：未配置时关闭；对象存在即启用，除非 `enabled: false`。涵盖两个不确定阶段——响应头到达前连接断开，以及响应头之后 SSE 正文只承载控制事件时断开。只有自包含的请求才会被替换：`store: false`、完整的 `input`、没有 `previous_response_id`／`conversation`／`stream_id`，且只使用由客户端执行的工具。`replacements` 是单个逻辑请求在所有环节和所有组合子请求中可以进行的替换发送次数（1..2，默认 1）；它既不是按环节的重试次数，也不是发送预算，因此替换发送仍必须落在该环节已有的发送额度之内。已经产生输出或工具调用的请求，无论此值为何都不会被替换。如果上游已经开始了第一次推理，被替换的推理仍可能计费，因此该选项默认关闭。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` 只接受 `auto` 或 `none` 的模型；强制选择会被降级。 |
-| `preserveReasoningContentModels?` | `string[]` | 需要在聊天历史中保留先前 assistant `reasoning_content` 的模型。 |
+| `preserveReasoningContentModels?` | `string[]` | 需要在聊天历史中保留先前 assistant `reasoning_content` 的模型。从仪表板保存时会保留已存储的列表（包括 `[]`）。`PATCH /api/providers?name=<provider>` 接受数组，或传入 `null` 清除该字段。将提供方改到其他适配器、base URL 或认证模式的保存不会保留该列表（见下文）。 |
 | `reasoningDetailsModels?` | `string[]` | 以结构化 `reasoning_details` 数组返回思考内容的模型（启用 `reasoning_split` 的 MiniMax M 系列）；流式增量为累积快照，按前缀差分处理，保留的推理以 `reasoning_details` 数组而非 `reasoning_content` 字符串回放。 |
-| `requiresReasoningPlaceholderModels?` | `string[]` | 上游会拒绝缺少 `reasoning_content` 的 tool_call 续接消息的模型（DeepSeek thinking 模式）；重放缓存 miss 时注入最小占位符。缺省沿用 `preserveReasoningContentModels`；设为 `[]` 可显式关闭。 |
+| `requiresReasoningPlaceholderModels?` | `string[]` | 上游会拒绝缺少 `reasoning_content` 的 tool_call 续接消息的模型（DeepSeek thinking 模式）；重放缓存 miss 时注入最小占位符。缺省沿用 `preserveReasoningContentModels`；设为 `[]` 可显式关闭。从仪表板保存时会保留已存储的列表（包括 `[]`）。`PATCH /api/providers?name=<provider>` 接受数组，或传入 `null` 清除该字段。将提供方改到其他适配器、base URL 或认证模式的保存不会保留该列表（见下文）。 |
 | `thinkingToggleModels?` | `string[]` | 使用 `thinking.enabled` 而不是 effort 阶梯的 chat 模型。 |
 | `thinkingBudgetModels?` | `string[]` | 使用整数 `thinking_budget` 的 chat 模型；effort 会映射为预算比例。 |
 | `noVisionModels?` | `string[]` | 经由视觉 sidecar 发送的纯文本模型；匹配时会容忍 Ollama 的 `:size` 标记。 |
@@ -152,7 +155,21 @@ selector，而不是分配一个新名称。
 
 注册或替换提供商（`POST /api/providers`）时，会先验证 `responsesPath` 和 `chatCompletionsPath`，再修改内存或磁盘中的配置。`PATCH /api/providers?name=<provider>` 会将请求体与已保存的提供商合并；除仅更新 `requestPacing` 的请求外，凡是修改 `disabled` 以外字段的更新，都会在保存前以同样方式验证合并后提供商的路径，若保留的既有路径无效则返回 `400`，且不更改配置。加载配置文件时也适用同样的路径规则。
 
-API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/reference/configuration/server/#claude-code) 下配置。
+API key 提供者可以持有字面量 key，或环境引用。OAuth 提供者使用由 `ocx login` 填充的凭据存储；基于订阅的 Claude Code 启动行为在 [`claudeCode.authMode`](/zh-cn/reference/configuration/server/#claude-code-claudecode) 下配置。
+
+### 保存提供方时会保留什么
+
+用已有提供方的名称调用 `POST /api/providers`，会用根据请求构建的行替换已存储的行。仪表板的添加/编辑表单无法发送所有字段，因此保存时会保留请求省略的部分已存储字段。其中五个记录的是某个上游的行为：`preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`。
+
+| 保存 | 五项设置 | 已存储的 `apiKeyPool` |
+| --- | --- | --- |
+| 目的地相同，字段省略 | 保留已存储的值，包括显式的 `[]` 或 `false` | 保留 |
+| 新目的地，字段省略 | 不保留；可能套用新目的地的注册表默认值 | 不保留 |
+| 请求中发送了该字段 | 请求中的值 | 请求中的值 |
+
+目的地指适配器、base URL（协议与主机名比较时不区分大小写，忽略末尾斜杠），以及请求中指定了时的认证模式。把提供方移到其他目的地时，描述旧上游的五项设置和为旧上游签发的密钥池都不会带过去。保存从不把旧行的其余部分合并进新行。
+
+`PATCH /api/providers?name=<provider>` 只修改它指定的字段，无论目的地如何都保留其他所有已存储字段。它接受全部五项设置，`null` 表示清除。对于两个推理列表，空数组会作为显式退出选项保存，而不会被删除。
 
 ## 提供者诊断出站安全性
 
@@ -305,6 +322,10 @@ Cursor 由服务端驱动的本地工具默认是禁用的。Codex 继续使用�
 :::caution[Security]
 默认的 loopback 绑定会让任何本地进程都能在没有认证的情况下接入，包括多用户主机上的其他用户。除非每个数据平面调用方都是受信任的，并且你明确接受绕过 Codex 的审批和沙箱语义，否则请保持本地执行关闭。
 :::
+
+## xAI Grok 4.7
+
+Grok 4.7 在 OAuth 上支持 Fast，提供 `low` / `medium` / `high` / `xhigh`，上下文窗口为 500,000。按 [xAI 标准价格](https://docs.x.ai/developers/models/grok-4.7)，每百万 token 的输入、缓存输入和输出费用分别为 $2.00、$0.50 和 $6.00；上下文达到 200,000 token 时分别为 $4.00 / $1.00 / $12.00。
 
 ## OpenRouter 提供者路由
 

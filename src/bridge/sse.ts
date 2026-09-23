@@ -24,6 +24,7 @@ import {
 import { progressiveFreeformInput } from "../responses/progressive-freeform-input";
 import { encodeCompactionSummary } from "../responses/compaction";
 import { compileCodeModeHelperInput, resolveCodeModeHelperName } from "../responses/code-mode-helper-compat";
+import { mayBecomeCodeModeShellInput } from "../responses/code-mode-shell-input";
 import { isTruncatedStopReason, truncationReasonFor } from "../responses/truncated-stop-reason";
 import { encodeReasoningEnvelope, type ReasoningEnvelope } from "../responses/reasoning-envelope";
 import { rememberReasoningForCall } from "../responses/reasoning-replay-cache";
@@ -47,7 +48,7 @@ import {
   type TranslatorBudget,
   type TranslatorBufferKind,
 } from "../lib/translator-budget";
-import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
+import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
 
 function sseEvent(name: string, data: Record<string, unknown>): string {
@@ -1055,10 +1056,17 @@ export function bridgeToResponsesSSE(
                   currentToolCall.callId,
                 ));
                 if (!currentToolCall.freeform && !currentToolCall.toolSearch) {
-                  emit("response.function_call_arguments.delta", {
-                    item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
-                    delta: event.arguments,
-                  });
+                  // Hold fragments whose accumulated buffer can never parse as JSON. Fragments
+                  // already streamed are retained by the client as history even when the item
+                  // fails at completion (the poisoned-replay loop behind inbound "non-JSON
+                  // arguments" warnings); holding costs nothing for healthy streams because the
+                  // completed item still carries the full arguments.
+                  if (toolCallArgumentsCouldBeJson(currentToolCall.args)) {
+                    emit("response.function_call_arguments.delta", {
+                      item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,
+                      delta: event.arguments,
+                    });
+                  }
                 }
                 if (currentToolCall.freeform && !currentToolCall.codeModeHelperName) {
                   // `progressiveFreeformInput` holds while the buffer is still an ambiguous prefix
@@ -1089,6 +1097,7 @@ export function bridgeToResponsesSSE(
                     // replaced by the normalized ones.
                     const mayNormalize = ownsFreeformGrammar && currentToolCall.name === "apply_patch";
                     if (!((mayCompile || mayNormalize) && mayBecomePatchEnvelope(full))
+                      && !(mayCompile && mayBecomeCodeModeShellInput(currentToolCall.args, full))
                       && full.startsWith(emitted) && full.length > emitted.length) {
                       emit("response.custom_tool_call_input.delta", {
                         item_id: currentToolCall.itemId, output_index: currentToolCall.outputIndex,

@@ -32,7 +32,7 @@ export function resolveWireProtocolOverride(
       ? { ...providerConfig, adapter: staticPolicy.model.adapter }
       : providerConfig;
   }
-  const pinned = pinnedWireAdapter(providerName, modelId);
+  const pinned = pinnedWireAdapter(providerName, modelId, providerConfig);
   if (pinned && providerConfig.adapter !== pinned) {
     return { ...providerConfig, adapter: pinned };
   }
@@ -47,7 +47,7 @@ export function resolveWireProtocolOverride(
   if (requested
     && MODEL_ADAPTER_OVERRIDE_ALLOWED.has(requested)
     && requested !== providerConfig.adapter
-    && !isWirePinnedModel(providerName, modelId)
+    && !isWirePinnedModel(providerName, modelId, providerConfig)
     // A forward provider hands the caller's own credential upstream; the chat adapter
     // only ever sends provider.apiKey, so switching wires here would drop the auth.
     && !isCanonicalOpenAiForwardProvider(providerConfig)) {

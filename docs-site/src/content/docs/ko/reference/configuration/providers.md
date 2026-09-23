@@ -35,8 +35,9 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `codexAccountNamespaces?` | `Record<string, string>` | — | 임의의 공개 model selector를 저장된 Codex 계정 target에 연결하는 선택적 map입니다. 계정 한정 선택기 행이 활성화되어 있으면 target이 존재하는 각 selector는 Codex picker에 별도의 `<selector>/<native-openai-model>` row를 추가하며, 각 row는 해당 계정만 사용합니다. selector가 하나라도 활성화되면 bare native row는 picker에서 숨겨지지만, 명시적으로 비활성화하지 않는 한 해당 id는 계속 routing 가능하고 raw `/v1/models`에 표시됩니다. |
 | `codexAccountPickerEnabled?` | `boolean` | map이 비어 있으면 꺼짐 | 유효한 `codexAccountNamespaces` 매핑에서 account-qualified Codex 선택기 행을 생성할지 제어합니다. `true`는 매핑된 행의 표시를 허용합니다. 비어 있지 않은 map에서 생략하면 이전 버전과의 호환성을 위해 활성화된 것으로 취급되며, map이 비어 있으면 꺼집니다. `false`는 매핑을 삭제하거나 명시적 `<selector>/<native-openai-model>` 라우팅을 비활성화하지 않은 채 생성 행을 숨기고 선택기에 bare native 행을 복원합니다. |
 | `activeCodexAccountId?` | `string` | — | 다음 요청에 수동으로 선택한 Pool 계정입니다. 선택하면 thread 결속이 해제되며, 진행 중인 요청은 캡처한 자격 증명을 유지합니다. |
-| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool의 계정별 선택 순서. 계정 ID → `-100`부터 `100`까지의 정수이며 **값이 클수록 먼저** 쓰이고, 항목이 없으면 `0`입니다. 이는 eligibility 경계가 아니라 순서 경계입니다. 선택은 이미 적격한 계정들을 quota 여유가 남은 최상위 tier로 좁히고, 그 tier 안에서 `accountPoolStrategy`가 계정을 고릅니다. tier를 건너뛰는 경우는 그 구성원 전부가 `autoSwitchThreshold` 초과, cooldown, soft-avoid, 일시 중지 또는 재인증 대기일 때뿐이며, usage를 알 수 없다고 해서 tier가 소진되지는 않습니다. 순서는 부적격 계정을 선택 가능하게 만들지 않고, 이미 계정에 묶인 thread를 다시 bind하지도 않습니다. 메인 `__main__` 계정도 동일한 조건으로 참여하므로 Codex Desktop 로그인을 마지막에 쓰도록 둘 수 있습니다. 항목이 하나도 없으면 동작은 이전과 같습니다. map이 잘못된 경우 경고를 출력하고 순서 지정을 끕니다(config 복구는 하지 않습니다). `ocx account priority`와 Codex Auth 페이지에서 관리합니다. |
+| `codexAccountPriorities?` | `Record<string,number>` | — | Codex pool의 계정별 선택 순서. 계정 ID → `-100`부터 `100`까지의 정수이며 **값이 클수록 먼저** 쓰이고, 항목이 없으면 `0`입니다. 이는 eligibility 경계가 아니라 순서 경계입니다. 선택은 이미 적격한 계정들을 quota 여유가 남은 최상위 tier로 좁히고, 그 tier 안에서 `accountPoolStrategy`가 계정을 고릅니다. tier를 건너뛰는 경우는 그 구성원 전부가 자신의 0이 아닌 유효 임계값(계정별 재정의 또는 전역 기본값) 이상, cooldown, soft-avoid, 일시 중지 또는 재인증 대기일 때뿐이며, usage를 알 수 없다고 해서 tier가 소진되지는 않습니다. 순서는 부적격 계정을 선택 가능하게 만들지 않고, 이미 계정에 묶인 thread를 다시 bind하지도 않습니다. 메인 `__main__` 계정도 동일한 조건으로 참여하므로 Codex Desktop 로그인을 마지막에 쓰도록 둘 수 있습니다. 항목이 하나도 없으면 동작은 이전과 같습니다. map이 잘못된 경우 경고를 출력하고 순서 지정을 끕니다(config 복구는 하지 않습니다). `ocx account priority`와 Codex Auth 페이지에서 관리합니다. |
 | `autoSwitchThreshold?` | `number` | `80` | 사용량 기반 선제 전환 임계값입니다. `quota`는 바인딩 없는 작업의 다음 요청을 재평가할 수 있습니다. 바인딩된 작업은 기본값(`pool.cacheAffinity`)에서 이 임계값을 넘어도 계정을 유지하며, 해당 계정이 소진되었거나 더 이상 처리할 수 없을 때에만 떠나고, 그때도 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. `pool.cacheAffinity: false`로 두면 임계값에서 바인딩된 작업도 재평가합니다. `fill-first`는 바인딩 없는 작업 배정의 소진 기준으로만 사용하며, 기본 `round-robin` 선택은 이 값을 사용하지 않습니다. 알려진 5시간, 주간, 30일 quota window 중 가장 높은 점수를 씁니다. `0`은 사용량 기반 전환만 끄며 바인딩 없는 작업 배정이나 실패 복구는 끄지 않습니다. |
+| `codexAccountAutoSwitchThresholds?` | `Record<string,number>` | — | 계정별 `autoSwitchThreshold` 재정의입니다(계정 ID → `0`~`100` 정수). 항목이 없으면 전역 값을 상속하고, `0`은 해당 계정에서 시작하는 사용량 기반 전환만 끕니다. 메인 `__main__` 계정도 지원합니다. Codex Auth의 계정 카드에서 관리합니다. 재정의를 켜면 현재 전역 임계값을 고정된 계정별 값으로 복사합니다. `0`을 포함한 재정의 값은 이후 전역 값이 바뀌어도 우선합니다. 끄면 `threshold: null`을 보내 항목을 삭제하고 현재 전역 임계값과 향후 변경 사항을 상속하는 상태로 돌아갑니다. |
 | `accountPoolStrategy?` | `"quota" \| "round-robin" \| "fill-first" \| "reset-first"` | `"quota"` | 새 작업/바인딩 없는 Codex 요청의 계정 배정 전략입니다. `(parent thread id, quota scope)`의 live affinity가 없으면 바인딩 없는 요청이며, 프록시 재시작이나 affinity 초기화 뒤에는 기존에 보이던 작업도 바인딩이 없어질 수 있습니다. `quota`는 활성 계정이 없을 때 알려진 usage가 가장 낮은 적격 계정을 선택하고, 적격 활성 계정이 `autoSwitchThreshold` 미만이면 유지합니다. 임계값 도달 뒤에는 바인딩 없는 요청을 옮길 수 있습니다. 바인딩된 작업은 기본값에서 계정이 소진되었거나(알려진 usage 100%) 더 이상 처리할 수 없을 때까지 유지되며, 떠날 때는 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. 플래그를 끄면 임계값에서 바인딩된 작업의 다음 요청도 실제 quota 여유가 있고 usage가 더 낮은 적격 계정으로 옮길 수 있습니다. `round-robin`은 바인딩 없는 요청을 균등 분배하고, `fill-first`는 cooldown, 사용 불가 또는 drain threshold까지 활성 계정에 배정합니다.  `reset-first`: 사용량 임계값 미만인 계정 중 다음 5시간·주간 초기화가 가장 가까운 계정을 고릅니다. 연결된 작업은 설정된 어피니티 정책을 따릅니다. 독립 모델 한도에는 사용량 순서를 적용합니다. 월간 초기화는 이 순서에 사용하지 않습니다. |
 | `pool.cacheAffinity?` | `boolean` | `true` | 바인딩된 Codex 스레드의 cache-affinity 순서입니다. `pool.kernel`과는 별개이며 기본값은 켜짐입니다. 잘못된 값은 켜진 것으로 읽습니다. live 바인딩이 quota 여유보다 우선하므로 `quota`는 사용량이 `autoSwitchThreshold`를 넘었다는 이유만으로 스레드를 옮기지 않습니다. 해당 계정이 일시 중지되었거나 사용할 수 없거나 실제로 소진된 경우(알려진 usage 100%)에는 떠나되, 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. `false`로 두면 임계값 재바인딩이 복원됩니다. affinity는 고정이 아니라 재정렬입니다. |
 | `accountPoolStickyLimit?` | `number` | `1` | 한 round-robin 선택이 다음으로 넘어가기 전에 유지하는 새 작업/바인딩 없는 작업 배정 수입니다. 카운터는 업스트림 성공 뒤가 아니라 작업을 바인딩할 때 증가합니다. 범위 1–100이며 `accountPoolStrategy`가 `round-robin`일 때만 적용됩니다. |
@@ -45,6 +46,8 @@ GUI에서 등록이나 OAuth 로그인을 마치면 Models 페이지로 이동�
 | `modelCacheTtlMs?` | `number` | `300000` | 공급자별 `/models` 캐시의 최신성 창입니다. |
 | `cacheRetention?` | `"none" \| "short" \| "long"` | `"short"` | Anthropic 프롬프트 캐시 정책입니다. 비활성, 5분짜리 임시, 1시간짜리 확장 중 하나입니다. |
 | `tokenGuardian?` | `OcxTokenGuardianConfig` | 꺼짐 | 선택적 선제 OAuth 갱신과 Codex 계정 워밍업 정책입니다. |
+
+각 전략의 계정별 유효 임계값은 `codexAccountAutoSwitchThresholds` 항목이 있으면 그 값이며, 없으면 전역 `autoSwitchThreshold`입니다. 0은 사용량 기반 사전 전환만 비활성화합니다. 시작 바인딩, 하드 잠금, 쿨다운, 모델 사용 권한 검사와 장애 복구는 계속 적용됩니다.
 
 selector 이름은 사용자가 정하는 공개 label이며, opencodex는 여기에 계정 역할 의미를 부여하지 않습니다.
 `codexAccountNamespaces` 키는 길이가 1~64자이고 시작과 끝은 ASCII 영숫자여야
@@ -112,7 +115,7 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `modelSupportsReasoningSummaries?` | `Record<string, boolean>` | 모델을 `false`로 두면 summary 광고를 멈추고 summary 전달 필드를 제거합니다. |
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | 모델별 Responses 전달 enum입니다. 기존 delivery 필드를 다시 씁니다. |
 | `modelAdapters?` | `Record<string, string>` | 혼합 와이어 게이트웨이를 위한 모델별 `openai-chat` 또는 `openai-responses` 와이어 재정의입니다. 명시적 항목이 레지스트리 기본값보다 우선합니다. DeepSeek 프리셋은 `deepseek-v4-flash`에 네이티브 Responses를 선택할 수 있고, GitHub Copilot은 모델(`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)을 Responses 전용 기본값으로 선언합니다. 이 모델들은 에이전트 트래픽에서 `/chat/completions`를 거부하기 때문입니다. `gpt-5.4-nano`처럼 기본값이 없는 모델은 여기서 직접 옵트인할 수 있습니다. 단일 와이어 상위 항목과 정식 ChatGPT forward는 재정의를 거부합니다. |
-| xAI Responses 옵트인(대시보드) | 스위치 | `xai`에서만 `grok-4.5`와 `grok-4.6`의 `modelAdapters` 항목을 원자적으로 설정하거나 지웁니다. 한 항목만 있으면 다음 스위치 쓰기가 둘을 정규화할 때까지 혼합 상태로 표시됩니다. 다른 재정의와 티어 동작은 바뀌지 않습니다. |
+| xAI Responses 옵트인(대시보드) | 스위치 | `xai`에서만 `grok-4.5`와 `grok-4.6`의 `modelAdapters` 항목을 원자적으로 설정하거나 지웁니다. 한 항목만 있으면 다음 스위치 쓰기가 둘을 정규화할 때까지 혼합 상태로 표시됩니다. 다른 재정의와 티어 동작은 바뀌지 않습니다. Grok 4.7은 OAuth에서 레지스트리 와이어 기본값으로 Responses를 사용하며, 명시적 `modelAdapters["grok-4.7"] = "openai-chat"` 항목으로 Chat으로 전환할 수 있습니다. |
 | `xaiResponsesXSearch?` | `boolean` | 기본적으로 비활성화됩니다. xAI Responses 대상에서는 최종 요청 정규화 후에도 실제 `web_search` 도구가 남아 있을 때만 공급자가 호스팅하는 `x_search` 선언을 추가합니다. 기존 선언은 중복하지 않고, 호출자의 `tool_choice`/`allowed_tools` 선택기 범위를 확장하지 않으며, 웹 검색 사이드카의 `search.xSearch` 옵션과는 별개입니다. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | hosted tool namespace를 예약하는 non-forward Responses gateway용 정확한 모델 ID opt-in입니다. 현재 `["image_generation"]`만 허용하며, 일치하는 모델은 `openai-responses` wire를 사용하고 해당 hosted tool을 지원해야 합니다. 충돌하는 클라이언트 `image_gen` 선언을 제거하고 호출자의 tool choice를 유지하도록 selector도 다시 씁니다. OpenAI API 가상 `-pro` 모델은 선택한 공개 ID를 먼저 일치시키고, 해석된 기본 wire-model ID를 대체값으로 사용합니다. `modelAdapters`는 공개 ID를 먼저, 그 다음 기본 ID를 해석하며, 두 번째 결과가 최종 wire를 결정합니다. 설정하지 않은 모델은 일반 alias 동작을 유지합니다. |
 | `annotateEmptyToolOutputs?` | `boolean` | 존재하지만 비어 있는 도구 결과가 모델에 도달하기 전에 짧은 표시로 바꿔, 빈 결과를 누락된 결과로 해석하지 않도록 합니다. 빈 문자열과 텍스트 전용 파트 배열에 적용되며, 이미지·파일·암호화된 파트는 절대 변경하지 않습니다. 기본 제공 레지스트리에 따라 DeepSeek의 기본값은 `true`이며, 그 외에는 설정되지 않습니다. 공급자를 이 동작에서 제외하려면 `false`로 설정합니다. 명시적인 `false`는 이후 해당 필드를 생략한 편집에서도 유지됩니다. `PATCH /api/providers?name=<provider>`는 `true`, `false`, 또는 `null`을 받아 재정의를 지우고 레지스트리 기본 동작으로 되돌릴 수 있습니다. |
@@ -133,9 +136,9 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 | `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | 키 인증 `openai-chat` 및 `openai-responses` 프로바이더 전용입니다. `authMode: "forward"` 프로바이더(ChatGPT 계정 풀)는 이 옵션을 읽지 않고 기본 재시도 단계를 유지합니다. 스트림 시작 전의 일시적인 업스트림 상태(500, 502, 503, 504, 520, 521, 522)를 선택적으로 재시도합니다. 이 옵션이 없으면 꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다. 최초 Responses 요청, 터미널 가드 연속 요청, 네이티브 `/v1/chat/completions`, 429/계정 복구 재조회를 포함합니다. `attempts`는 최초 전송을 포함하여 요청 하나에 허용되는 업스트림 전송의 총횟수(1..10, 기본값 3)입니다. 연결 재설정 복구와 요청 단위 예산 하나를 공유하므로 `3`이면 실제로 프로바이더에 도달하는 요청은 최대 세 번입니다. 대기에는 400ms로 고정된 지수 백오프를 사용하고 상한은 5초이며 `Retry-After`를 따릅니다. 속도 제한을 처리하는 `retryOn429`와는 별개이며, 스트림 도중의 실패는 절대 재전송하지 않습니다. |
 | `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | 네이티브 `openai-responses` 프로바이더 전용이며 `authMode: "forward"`도 포함합니다. 호출자가 아무것도 관측하지 못한 채 실패한 전송을 선택적으로 대체합니다. 이 옵션이 없으면 꺼져 있고, 객체가 있으면 `enabled: false`가 아닌 한 활성화됩니다. 응답 헤더가 오기 전에 연결이 끊어진 경우와, 헤더 이후 SSE 본문이 제어 이벤트만 실은 채 끊어진 경우를 모두 다룹니다. 자체 완결된 요청만 대체합니다. `store: false`, 완전한 `input`, `previous_response_id`·`conversation`·`stream_id` 없음, 클라이언트가 실행하는 도구만 해당합니다. `replacements`는 모든 구간과 모든 콤보 자식을 합쳐 논리 요청 하나가 만들 수 있는 대체 전송 횟수입니다(1..2, 기본값 1). 구간별 재시도 횟수도 전송 예산도 아니므로, 대체 전송도 해당 구간이 이미 가진 전송 허용량 안에 들어가야 합니다. 이미 출력이나 도구 호출을 내보낸 요청은 이 값과 무관하게 대체하지 않습니다. 원본 전송이 이미 시작됐다면 대체한 추론도 과금될 수 있어서 기본값은 꺼짐입니다. |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice`가 `auto` 또는 `none`만 받는 모델입니다. 강제 선택은 낮은 수준으로 바뀝니다. |
-| `preserveReasoningContentModels?` | `string[]` | chat 기록에서 이전 assistant `reasoning_content`가 필요한 모델입니다. |
+| `preserveReasoningContentModels?` | `string[]` | chat 기록에서 이전 assistant `reasoning_content`가 필요한 모델입니다. 대시보드에서 저장해도 저장된 목록(`[]` 포함)은 유지됩니다. `PATCH /api/providers?name=<provider>`는 배열 또는 지우기 위한 `null`을 받습니다. 어댑터, 기본 URL, 인증 모드를 바꿔 다른 목적지로 옮기는 저장에서는 유지되지 않습니다(아래 절 참고). |
 | `reasoningDetailsModels?` | `string[]` | thinking을 구조화된 `reasoning_details` 배열로 반환하는 모델(`reasoning_split` 사용 MiniMax M 시리즈). 스트림 델타는 누적 스냅샷이라 prefix-diff로 처리하고, 보존된 reasoning은 `reasoning_content` 문자열 대신 `reasoning_details` 배열로 리플레이합니다. |
-| `requiresReasoningPlaceholderModels?` | `string[]` | `reasoning_content`가 없는 tool_call 연속을 업스트림이 거부하는 모델(DeepSeek thinking 모드). 리플레이 캐시 미스 시 최소 플레이스홀더를 주입합니다. 미설정 시 `preserveReasoningContentModels`를 따르며 `[]`로 명시적 해제 가능. |
+| `requiresReasoningPlaceholderModels?` | `string[]` | `reasoning_content`가 없는 tool_call 연속을 업스트림이 거부하는 모델(DeepSeek thinking 모드). 리플레이 캐시 미스 시 최소 플레이스홀더를 주입합니다. 미설정 시 `preserveReasoningContentModels`를 따르며 `[]`로 명시적 해제 가능. 대시보드에서 저장해도 저장된 목록(`[]` 포함)은 유지됩니다. `PATCH /api/providers?name=<provider>`는 배열 또는 지우기 위한 `null`을 받습니다. 어댑터, 기본 URL, 인증 모드를 바꿔 다른 목적지로 옮기는 저장에서는 유지되지 않습니다(아래 절 참고). |
 | `thinkingToggleModels?` | `string[]` | effort 계층 대신 `thinking.enabled`를 쓰는 chat 모델입니다. |
 | `thinkingBudgetModels?` | `string[]` | 정수 `thinking_budget`를 쓰는 chat 모델입니다. effort는 예산 비율로 매핑됩니다. |
 | `noVisionModels?` | `string[]` | vision sidecar로 보내는 텍스트 전용 모델입니다. 일치 판정은 Ollama `:size` 태그도 허용합니다. |
@@ -152,7 +155,21 @@ managed map을 활성화하면 privacy-safe selector를 만들고, 이후 계정
 
 공급자 등록·교체(`POST /api/providers`)는 `responsesPath`와 `chatCompletionsPath`를 검증한 뒤 메모리와 파일의 설정을 변경합니다. `PATCH /api/providers?name=<provider>`는 요청 본문을 저장된 공급자에 병합합니다. `disabled` 외의 필드를 변경하는 업데이트(`requestPacing`만 변경하는 업데이트 제외)는 저장 전에 병합된 공급자의 경로를 같은 방식으로 검증하며, 유지된 경로가 유효하지 않으면 `400`을 반환하고 설정을 변경하지 않습니다. 설정 파일을 읽을 때도 같은 경로 규칙을 적용합니다.
 
-API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ocx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/reference/configuration/server/#claude-code)에서 설정합니다.
+API 키 공급자는 리터럴 키나 환경 참조를 둘 수 있습니다. OAuth 공급자는 `ocx login`으로 채워지는 자격 증명 저장소를 사용합니다. 구독 기반 Claude Code 실행 동작은 [`claudeCode.authMode`](/ko/reference/configuration/server/#claude-code-claudecode)에서 설정합니다.
+
+### 프로바이더 저장이 유지하는 것
+
+기존 프로바이더 이름으로 `POST /api/providers`를 보내면 저장된 행이 요청으로 만든 행으로 바뀝니다. 대시보드의 추가/편집 폼은 모든 필드를 보낼 수 없으므로, 요청이 빠뜨린 저장 필드 일부는 저장할 때 이어서 유지됩니다. 그중 다섯 가지는 특정 업스트림의 동작을 기록한 설정입니다: `preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`.
+
+| 저장 | 다섯 가지 설정 | 저장된 `apiKeyPool` |
+| --- | --- | --- |
+| 같은 목적지, 필드 생략 | 저장된 값 유지(명시적인 `[]`나 `false` 포함) | 유지 |
+| 새 목적지, 필드 생략 | 유지하지 않음. 새 목적지의 레지스트리 기본값이 적용될 수 있음 | 유지하지 않음 |
+| 요청에 필드를 보냄 | 요청의 값 | 요청의 값 |
+
+목적지는 어댑터, 기본 URL(스킴과 호스트는 대소문자를 구분하지 않고, 끝의 슬래시는 무시), 그리고 요청이 지정한 경우 인증 모드입니다. 프로바이더를 다른 목적지로 옮기면 이전 업스트림을 설명하는 다섯 가지 설정과, 그 업스트림용으로 발급된 키 풀을 가져가지 않습니다. 저장은 이전 행의 나머지를 새 행에 병합하지 않습니다.
+
+`PATCH /api/providers?name=<provider>`는 지정한 필드만 바꾸고, 목적지와 상관없이 나머지 저장 필드는 모두 유지합니다. 다섯 가지 설정을 모두 받고, `null`로 지웁니다. 두 추론 목록에서 빈 배열은 삭제되지 않고 명시적인 옵트아웃으로 저장됩니다.
 
 ## 공급자 진단용 외부 요청 안전성
 
@@ -190,7 +207,7 @@ affinity 초기화 뒤의 기존 작업도 포함될 수 있습니다. 출력 �
 적격 활성 계정이 `autoSwitchThreshold` 미만이면 유지합니다. 임계값 도달 뒤에는 바인딩 없는 요청을 옮길 수 있습니다. 기본값에서 cache affinity가 quota 여유보다 우선하며, 바인딩된 작업은 계정이 소진되었거나(알려진 usage 100%) 처리할 수 없을 때까지 유지되고, 떠날 때는 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 옮깁니다. usage를 모르는 계정은 바인딩된 작업의 목적지가 되지 않으며, 모든 계정이 임계값 위이면 그대로 둡니다. 플래그를 끄면 바인딩된 작업의 다음 요청도 임계값에서 옮길 수 있지만, 그때도 실제 quota 여유가 있고 usage가 더 낮은 계정으로만 갑니다.
 `round-robin`은 바인딩 없는 요청을 균등 분배하며 임계값은 기본 순환에 영향을 주지 않습니다.
 `accountPoolStickyLimit`(기본 `1`, 1–100)은 성공 응답이 아니라 배정/바인딩 횟수를 셉니다.
-`fill-first`는 바인딩 없는 요청을 cooldown, 재인증 또는 drain threshold까지 활성 계정에 배정하고,
+`fill-first`는 바인딩 없는 요청을 cooldown, 재인증 또는 해당 계정의 유효 drain threshold(계정별 재정의 또는 전역 기본값)까지 활성 계정에 배정하고,
 정상적인 바인딩 작업은 affinity를 유지합니다. 이 전략들은 provider enforcement를 우회하지 않으며
 다계정 사용은 ToS 위반일 수 있습니다.
 
@@ -305,6 +322,10 @@ Cursor 서버 주도 로컬 도구는 기본값으로 비활성화됩니다. Cod
 :::caution[보안]
 기본 loopback 바인드는 다른 사용자를 포함한 인증되지 않은 로컬 프로세스라면 무엇이든 허용합니다. 데이터 평면 호출자가 모두 신뢰된 경우가 아니고, Codex 승인과 샌드박스 의미를 의도적으로 우회할 생각이 아니라면 로컬 실행은 꺼 두십시오.
 :::
+
+## xAI Grok 4.7
+
+Grok 4.7은 OAuth에서 Fast를 지원하며, `low` / `medium` / `high` / `xhigh`와 500,000토큰 컨텍스트 창을 제공합니다. [xAI 표준 요금](https://docs.x.ai/developers/models/grok-4.7)은 100만 토큰당 입력 $2.00, 캐시 입력 $0.50, 출력 $6.00이며, 컨텍스트가 200,000토큰 이상이면 각각 $4.00 / $1.00 / $12.00입니다.
 
 ## OpenRouter 공급자 라우팅
 
@@ -464,3 +485,16 @@ Vercel AI Gateway는 하나의 모델을 여러 기반 추론 공급자에 걸�
   "visionSidecar": { "enabled": true }
 }
 ```
+
+## 진행 중 작업의 우선순위 계정 복귀
+
+최상위 `codexAccountPriorityFailback: true`는 `quota` 전략과 현재 source 계정의 양수 유효 임계값에서만
+진행 중인 작업을 복구된 상위 우선순위 계정으로 옮기도록 명시적으로 허용합니다. 기본값은 꺼짐이며,
+활성화하면 현재 계정이 정상이어도 따뜻한 프롬프트 캐시를 포기할 수 있습니다. 최근 관측된 쿼터 여유가
+있어야 하며 오래된 관측, 알 수 없는 쿼터, 수동 고정, 모델 제한, 쿨다운·재인증 제한은 우회하지 않습니다.
+해당 복귀용 쿼터 확인은 요청이 있을 때 최대 5분에 한 번 시작하고 실패한 시도도 간격에 포함합니다.
+진행 중인 요청의 계정은 바꾸지 않으며, 정확한 계정 지정 경로와 Direct 모드에는 적용하지 않습니다.
+source 재정의가 0이면 꺼지고, 전역 0이어도 source에 양수 재정의가 있으면 적용합니다.
+후보의 양수 유효 임계값은 사용량 상한이며, 후보 0은 그 선호만 끕니다. 후보 0도 알 수 없거나
+소진된 사용량을 허용하지 않습니다. 판단에 쓰는 각 quota window는 이 프로세스에서 최근 관측되어야
+하며, credit-only 갱신이나 다른 window의 부분 갱신은 오래된 사용량을 새 관측으로 만들지 않습니다.

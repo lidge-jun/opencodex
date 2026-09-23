@@ -16,7 +16,6 @@
 //! contract that lands fills a hole rather than reshaping this file.
 
 use serde::Deserialize;
-use tauri::AppHandle;
 
 /// Who a claim names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
@@ -47,13 +46,24 @@ pub struct Claim {
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Recorded {
     /// No claim. The CLI install that registered the service owns the runtime, which is also what
-    /// every record written before the field existed says.
-    None,
+    /// every record written before the field existed says. The revision is the record's own
+    /// sequence, and a later `service claim` carries it as `expect-revision`.
+    None { revision: u64 },
     /// A claim, whoever it names.
-    Owned { ownership: Claim },
+    Owned { ownership: Claim, revision: u64 },
     /// The claim could not be read for a decision. This is not "nobody owns it": an unreadable
     /// path, a corrupt anchor record and paths naming different owners all land here.
     Unknown { reason: String },
+}
+
+impl Default for Recorded {
+    /// A resolve document that carries no ownership field at all did not answer the question —
+    /// the older bundled CLI predates it — and an unanswered question is not a claim.
+    fn default() -> Self {
+        Self::Unknown {
+            reason: "the bundled CLI did not report ownership".to_owned(),
+        }
+    }
 }
 
 /// The comparison `ownershipGrantedTo` defines: same owner, same install id.
@@ -83,8 +93,8 @@ pub enum Consent {
 pub fn consent(recorded: &Recorded, install_id: &str) -> Consent {
     match recorded {
         Recorded::Unknown { .. } => Consent::Refuse,
-        Recorded::None => Consent::AskFirstTime,
-        Recorded::Owned { ownership } => {
+        Recorded::None { .. } => Consent::AskFirstTime,
+        Recorded::Owned { ownership, .. } => {
             if granted_to(Some(ownership), Owner::Desktop, install_id) {
                 Consent::Held
             } else {
@@ -94,35 +104,19 @@ pub fn consent(recorded: &Recorded, install_id: &str) -> Consent {
     }
 }
 
-/// Read the recorded claim through the bundled CLI.
-///
-/// Empty on purpose. Lane A publishes the machine-readable resolve the shell drives, and this is
-/// the one call site that changes when it lands: it has to return the CLI's own answer, including
-/// its refusals, rather than a verdict computed here. Until then the answer is *unavailable*, which
-/// is not [`Recorded::None`] — the shell has not been told that nobody owns the runtime, it has not
-/// asked — so no takeover is attempted and nothing is recorded.
-pub fn resolve(_app: &AppHandle) -> Option<Recorded> {
-    None
-}
-
 /// One line for the startup state and for the diagnostic.
-pub fn describe(recorded: Option<&Recorded>, install_id: Option<&str>) -> String {
+pub fn describe(recorded: &Recorded, install_id: Option<&str>) -> String {
     let installation = match install_id {
         Some(id) => format!("installation {id}"),
         None => "installation id unavailable".to_owned(),
     };
     let verdict = match (recorded, install_id) {
-        (None, _) => {
-            "recorded owner not read: the bundled CLI's resolve contract has not landed".to_owned()
-        }
-        (Some(Recorded::Unknown { reason }), _) => {
+        (Recorded::Unknown { reason }, _) => {
             format!("recorded owner could not be read ({reason}), so nothing is claimed")
         }
-        (Some(_), None) => {
-            "recorded owner read, but this installation has no id to compare".to_owned()
-        }
-        (Some(recorded), Some(id)) => match (consent(recorded, id), recorded) {
-            (Consent::Held, Recorded::Owned { ownership }) => format!(
+        (_, None) => "recorded owner read, but this installation has no id to compare".to_owned(),
+        (_, Some(id)) => match (consent(recorded, id), recorded) {
+            (Consent::Held, Recorded::Owned { ownership, .. }) => format!(
                 "this installation owns the runtime (consent generation {})",
                 ownership.consent_generation
             ),
@@ -134,9 +128,27 @@ pub fn describe(recorded: Option<&Recorded>, install_id: Option<&str>) -> String
     format!("{installation}; {verdict}")
 }
 
+/// Who the recorded claim names, for the consent panel.
+pub fn owner_label(recorded: &Recorded) -> String {
+    match recorded {
+        Recorded::None { .. } => "no recorded owner (an npm or standalone ocx install)".to_owned(),
+        Recorded::Owned { ownership, .. } => match ownership.owner {
+            Owner::Cli => format!(
+                "the OpenCodex CLI install (installation {})",
+                ownership.install_id
+            ),
+            Owner::Desktop => format!(
+                "another OpenCodex desktop installation (installation {})",
+                ownership.install_id
+            ),
+        },
+        Recorded::Unknown { reason } => format!("unknown ({reason})"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{consent, describe, granted_to, Claim, Consent, Owner, Recorded};
+    use super::{consent, describe, granted_to, owner_label, Claim, Consent, Owner, Recorded};
 
     fn owned(owner: Owner, install_id: &str, generation: u64) -> Recorded {
         Recorded::Owned {
@@ -145,6 +157,7 @@ mod tests {
                 install_id: install_id.to_owned(),
                 consent_generation: generation,
             },
+            revision: 4,
         }
     }
 
@@ -178,7 +191,10 @@ mod tests {
             consent(&owned(Owner::Desktop, "abc", 1), "abc"),
             Consent::Held
         );
-        assert_eq!(consent(&Recorded::None, "abc"), Consent::AskFirstTime);
+        assert_eq!(
+            consent(&Recorded::None { revision: 0 }, "abc"),
+            Consent::AskFirstTime
+        );
     }
 
     #[test]
@@ -199,21 +215,21 @@ mod tests {
             reason: "a service state path could not be read".to_owned(),
         };
         assert_eq!(consent(&unknown, "abc"), Consent::Refuse);
-        assert!(describe(Some(&unknown), Some("abc")).contains("could not be read"));
+        assert!(describe(&unknown, Some("abc")).contains("could not be read"));
     }
 
     #[test]
     fn the_wire_shape_is_the_one_the_cli_records() {
         let resolution: Recorded = serde_json::from_str(
-            r#"{"kind":"owned","ownership":{"owner":"desktop","installId":"abc","consentGeneration":3}}"#,
+            r#"{"kind":"owned","ownership":{"owner":"desktop","installId":"abc","consentGeneration":3},"revision":4}"#,
         )
         .expect("the recorded resolution");
         assert_eq!(resolution, owned(Owner::Desktop, "abc", 3));
         assert_eq!(consent(&resolution, "abc"), Consent::Held);
-        assert!(describe(Some(&resolution), Some("abc")).contains("consent generation 3"));
+        assert!(describe(&resolution, Some("abc")).contains("consent generation 3"));
         assert_eq!(
-            serde_json::from_str::<Recorded>(r#"{"kind":"none"}"#).expect("no claim"),
-            Recorded::None
+            serde_json::from_str::<Recorded>(r#"{"kind":"none","revision":0}"#).expect("no claim"),
+            Recorded::None { revision: 0 }
         );
         assert_eq!(
             serde_json::from_str::<Recorded>(r#"{"kind":"unknown","reason":"why"}"#)
@@ -225,12 +241,50 @@ mod tests {
     }
 
     #[test]
-    fn the_description_separates_not_asked_from_nobody_owns_it() {
-        let not_asked = describe(None, Some("abc"));
-        let unowned = describe(Some(&Recorded::None), Some("abc"));
-        assert!(not_asked.contains("abc"));
-        assert_ne!(not_asked, unowned);
-        assert!(describe(None, None).contains("unavailable"));
+    fn a_resolve_document_without_an_ownership_answer_reads_unknown() {
+        assert_eq!(
+            Recorded::default(),
+            Recorded::Unknown {
+                reason: "the bundled CLI did not report ownership".to_owned()
+            }
+        );
+        assert!(serde_json::from_str::<Recorded>(r#"{"kind":"none"}"#).is_err());
+    }
+
+    #[test]
+    fn the_description_separates_not_read_from_nobody_owns_it() {
+        let unread = describe(
+            &Recorded::Unknown {
+                reason: "why".to_owned(),
+            },
+            Some("abc"),
+        );
+        let unowned = describe(&Recorded::None { revision: 0 }, Some("abc"));
+        assert!(unread.contains("abc"));
+        assert_ne!(unread, unowned);
+        assert!(describe(&Recorded::None { revision: 0 }, None).contains("unavailable"));
+    }
+
+    #[test]
+    fn owner_label_names_who_the_claim_is_for() {
+        assert_eq!(
+            owner_label(&Recorded::None { revision: 0 }),
+            "no recorded owner (an npm or standalone ocx install)"
+        );
+        assert_eq!(
+            owner_label(&owned(Owner::Cli, "npm-1", 1)),
+            "the OpenCodex CLI install (installation npm-1)"
+        );
+        assert_eq!(
+            owner_label(&owned(Owner::Desktop, "other", 2)),
+            "another OpenCodex desktop installation (installation other)"
+        );
+        assert_eq!(
+            owner_label(&Recorded::Unknown {
+                reason: "why".to_owned()
+            }),
+            "unknown (why)"
+        );
     }
 
     #[test]

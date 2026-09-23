@@ -48,6 +48,7 @@ import {
 import { runCursorTurnWithRetry } from "./cursor/transport-retry";
 import { cursorRequestHasShellAlias, cursorRequestUsesCodeMode } from "./cursor/tool-definitions";
 import {
+  CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES,
   CURSOR_ECHO_RETRY_CONTINUATION_TEXT,
   CURSOR_ROUTING_COMMENTARY_RETRY_TEXT,
   CursorEnvelopeEchoSniffer,
@@ -315,6 +316,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             ? new CursorRoutingCommentarySniffer()
             : undefined;
           let guardHeld: AdapterEvent[] = [];
+          let guardHeldBytes = 0;
+          const guardEncoder = new TextEncoder();
           // Exactly-once observation: every client-bound text delta passes through here
           // exactly once — held deltas only on release, ordinary deltas at emit time.
           const emitTextObserved = (event: AdapterEvent): void => {
@@ -327,7 +330,49 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
               emitTextObserved(held);
             }
             guardHeld = [];
+            guardHeldBytes = 0;
           };
+          // A single frame can carry a multi-megabyte payload (the transport accepts up to the
+          // 16 MiB Cursor message bound), so the serialized size is projected — object overhead
+          // plus raw payload length — BEFORE any encoded copy exists. Escapes only inflate the
+          // exact figure, making the raw length a safe lower bound for the overflow decision.
+          const GUARD_EVENT_OVERHEAD_BYTES = 64;
+          const projectedGuardEventBytes = (event: AdapterEvent): number =>
+            GUARD_EVENT_OVERHEAD_BYTES
+            + (event.type === "text_delta"
+              ? Buffer.byteLength(event.text, "utf8")
+              : event.type === "thinking_delta"
+                ? Buffer.byteLength(event.thinking, "utf8")
+                : 0);
+          const holdGuardEvent = (event: AdapterEvent) => {
+            if (guardHeldBytes + projectedGuardEventBytes(event) > CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES) {
+              // Too large to retain even unescaped: settle the sniffers, release what was held,
+              // and pass this event through without ever encoding it.
+              echoSniffer?.finish();
+              routingCommentarySniffer?.finish();
+              releaseGuardHeld();
+              if (event.type !== "heartbeat") emittedOutput = true;
+              emitTextObserved(event);
+              return false;
+            }
+            guardHeld.push(event);
+            // Count the complete retained representation, including per-event overhead, so an
+            // upstream cannot evade the cap with empty or non-text reasoning frames.
+            guardHeldBytes += guardEncoder.encode(JSON.stringify(event)).byteLength;
+            if (guardHeldBytes <= CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES) return true;
+            echoSniffer?.finish();
+            routingCommentarySniffer?.finish();
+            releaseGuardHeld();
+            return false;
+          };
+          // Bound each feed before a sniffer copies or encodes it. Their normal 40 B / 512 B
+          // hold thresholds are checked after classification, so one large frame previously
+          // let a late match inspect an arbitrary tail. Only these leading UTF-16 prefixes
+          // now participate in corrective retry; later text remains ordinary output.
+          const ECHO_SNIFF_FEED_MAX_CHARS = 512;
+          const ROUTING_SNIFF_FEED_MAX_CHARS = 2048;
+          const boundedSniffText = (text: string, maxChars: number): string =>
+            text.length > maxChars ? text.slice(0, maxChars) : text;
           const guardsSettled = () =>
             (!echoSniffer || echoSniffer.settled)
             && (!routingCommentarySniffer || routingCommentarySniffer.settled);
@@ -368,27 +413,30 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                 }
                 if (!guardsSettled()) {
                   if (event.type === "text_delta") {
-                    guardHeld.push(event);
+                    // Classify the delta before the aggregate-cap check: an oversized first
+                    // delta must still pass the armed sniffers (echo/hallucination detection is
+                    // prefix-based), so the cap cannot disarm them before they see the text.
                     if (echoSniffer && !echoSniffer.settled) {
-                      const decision = echoSniffer.feed(event.text);
+                      const decision = echoSniffer.feed(boundedSniffText(event.text, ECHO_SNIFF_FEED_MAX_CHARS));
                       if (decision.kind === "echo") {
                         guardHeld = [];
                         throw new CursorToolResultEchoError(decision.marker);
                       }
                     }
                     if (routingCommentarySniffer && !routingCommentarySniffer.settled) {
-                      const decision = routingCommentarySniffer.feed(event.text);
+                      const decision = routingCommentarySniffer.feed(boundedSniffText(event.text, ROUTING_SNIFF_FEED_MAX_CHARS));
                       if (decision.kind === "hallucination") {
                         guardHeld = [];
                         throw new CursorRoutingCommentaryError();
                       }
                     }
+                    if (!holdGuardEvent(event)) continue;
                     if (guardsSettled()) releaseGuardHeld();
                     continue;
                   } else if (event.type === "thinking_delta" || event.type === "heartbeat") {
                     // Reasoning before first text stays ordered; liveness still passes through.
                     if (event.type === "thinking_delta") {
-                      guardHeld.push(event);
+                      holdGuardEvent(event);
                       continue;
                     }
                   } else {

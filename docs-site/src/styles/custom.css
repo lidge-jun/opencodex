@@ -314,6 +314,34 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   align-items: center;
   text-align: center;
 }
+/* announcement pill over the headline: same chrome as the provider chips,
+   emphasis via the filled tag segment — no capsule borders on children */
+.lp-announce {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+  padding: 0.35rem 0.9rem;
+  border-radius: var(--ocx-radius-pill);
+  border: 0;
+  background-color: rgba(255, 255, 255, 0.95);
+  color: #1a1a1a;
+  font-size: var(--sl-text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  max-width: 100%;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.06);
+}
+.lp-announce svg { flex: none; opacity: 0.7; }
+:root[data-theme='dark'] .lp-announce,
+:root:not([data-theme='light']) .lp-announce { background-color: rgba(255, 255, 255, 0.94); }
+.lp-announce:focus-visible,
+.lp-download a:focus-visible,
+.lp-dl-more > summary:focus-visible {
+  outline: 2px solid light-dark(#2f6fe4, #8ab0f5);
+  outline-offset: 2px;
+}
 .lp-hero-copy h1 {
   margin: 0;
   font-size: clamp(2.25rem, 5.5vw, 4rem);
@@ -784,6 +812,203 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   max-width: 64ch;
 }
 
+/* ---- download sheet -------------------------------------------------------
+   Opaque sheet in the scene stack (same surface as .lp-quick) so it covers
+   the pinned hero while scrolling by. Cards reuse the bento cell chrome;
+   the recommended card keeps the same radius and gets an accent tint. */
+.lp-download {
+  padding: clamp(2rem, 6vh, 4rem) clamp(1.25rem, 4vw, 3.5rem);
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 24px;
+  background-color: var(--ocx-surface);
+  scroll-margin-top: calc(var(--sl-nav-height) + 1rem);
+  text-align: center;
+}
+/* Section chrome is centred; card copy stays left-aligned for reading. */
+.lp-dl-card { text-align: start; }
+.lp-download-title {
+  margin: 0;
+  font-size: var(--sl-text-3xl);
+  font-weight: 650;
+  line-height: 1.15;
+  color: var(--sl-color-white);
+  text-wrap: balance;
+}
+.lp-download-sub {
+  margin: 0.625rem 0 0;
+  color: var(--sl-color-gray-3);
+  line-height: 1.6;
+}
+.lp-download-version {
+  margin: 0.375rem 0 0;
+  min-height: 1.25rem;
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-4);
+}
+.lp-dl-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.875rem;
+  margin-top: 1.25rem;
+}
+@media (max-width: 48rem) { .lp-dl-grid { grid-template-columns: 1fr; } }
+/* Detected platform: its card stands alone; the others sit in the disclosure. */
+.lp-download:has(.lp-dl-more:not([hidden])) .lp-dl-grid {
+  grid-template-columns: minmax(0, 28rem);
+  justify-content: center;
+}
+.lp-download:has(.lp-dl-more:not([hidden])) .lp-dl-grid .lp-dl-actions { min-height: 0; }
+.lp-dl-more:not([hidden]) { display: block; margin-top: 1rem; }
+.lp-dl-more > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 44px;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--sl-text-sm);
+  font-weight: 500;
+  color: var(--sl-color-gray-2);
+  border-radius: var(--ocx-radius-pill);
+}
+.lp-dl-more > summary::-webkit-details-marker { display: none; }
+.lp-dl-more > summary::after {
+  content: '';
+  width: 0.45rem;
+  height: 0.45rem;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: translateY(-2px) rotate(45deg);
+}
+.lp-dl-more[open] > summary::after { transform: translateY(2px) rotate(-135deg); }
+.lp-dl-more > summary:hover { color: var(--sl-color-white); }
+.lp-dl-more-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.875rem;
+  max-width: 56rem;
+  margin: 0.5rem auto 0;
+}
+@media (max-width: 48rem) { .lp-dl-more-grid { grid-template-columns: 1fr; } }
+.lp-dl-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1.25rem 1.375rem;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: var(--ocx-radius);
+  background-color: var(--ocx-raised);
+  min-width: 0;
+}
+.lp-dl-card[data-recommended] {
+  border-color: light-dark(#2f6fe4, #8ab0f5);
+  background-color: color-mix(in srgb, light-dark(#2f6fe4, #8ab0f5) 8%, var(--ocx-raised));
+}
+.lp-dl-mark { width: 28px; height: 28px; color: var(--sl-color-white); }
+.lp-dl-card h3 {
+  margin: 0;
+  font-size: var(--sl-text-base);
+  font-weight: 650;
+  color: var(--sl-color-white);
+}
+.lp-dl-meta,
+.lp-dl-note {
+  margin: 0;
+  font-size: var(--sl-text-sm);
+  line-height: 1.55;
+  color: var(--sl-color-gray-3);
+}
+.lp-dl-note { color: var(--sl-color-gray-4); font-size: var(--sl-text-xs); }
+/* Actions (primary button + secondary links) pin to the card bottom so the
+   three buttons share one baseline regardless of per-card copy length. */
+.lp-dl-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.625rem;
+  /* one link line reserved in every card (Linux carries the .deb link) so
+     the buttons share a row in the three- and two-column layouts */
+  min-height: calc(44px + 0.5rem + 0.625rem + 1.5 * var(--sl-text-xs));
+  justify-content: flex-start;
+}
+.lp-dl-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0.55rem 1.25rem;
+  border: 1px solid transparent;
+  border-radius: var(--ocx-radius-pill);
+  background-color: var(--sl-color-accent-high);
+  color: var(--sl-color-text-invert);
+  font-weight: 500;
+  font-size: var(--sl-text-sm);
+  font-family: var(--sl-font);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.lp-dl-btn-icon { width: 16px; height: 16px; flex: none; }
+.lp-dl-btn-fmt { font-weight: 400; opacity: 0.72; }
+/* Once one card is flagged recommended, the other cards demote to a
+   secondary hairline button. With no flag (JS off, unknown platform)
+   every button keeps the primary fill. */
+.lp-download:has(.lp-dl-card[data-recommended]) .lp-dl-card:not([data-recommended]) .lp-dl-btn {
+  background-color: transparent;
+  border-color: var(--sl-color-gray-5);
+  color: var(--sl-color-white);
+}
+.lp-announce-text { min-width: 0; }
+/* Korean breaks between words; Japanese and Chinese keep per-character breaks. */
+html:lang(ko) .lp-download { word-break: keep-all; overflow-wrap: break-word; }
+.lp-dl-alt {
+  align-self: flex-start;
+  font-size: var(--sl-text-xs);
+  line-height: 1.5;
+  color: light-dark(#2f6fe4, #8ab0f5);
+  text-decoration: none;
+}
+.lp-dl-alt:hover { text-decoration: underline; text-underline-offset: 3px; }
+.lp-dl-reco {
+  display: none;
+  order: -1;
+  align-self: flex-start;
+  margin: 0;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--ocx-radius-pill);
+  background-color: color-mix(in srgb, light-dark(#2f6fe4, #8ab0f5) 14%, transparent);
+  font-size: var(--sl-text-xs);
+  font-weight: 500;
+  color: light-dark(#2f6fe4, #8ab0f5);
+}
+.lp-dl-card[data-recommended] .lp-dl-reco { display: block; }
+.lp-dl-foot {
+  margin: 1.5rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 0.375rem 1rem;
+  font-size: var(--sl-text-sm);
+  color: var(--sl-color-gray-3);
+}
+.lp-dl-foot code {
+  font-family: var(--sl-font-mono);
+  font-size: var(--sl-text-xs);
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--ocx-radius-sm);
+  background-color: var(--sl-color-bg-inline-code);
+  color: var(--sl-color-white);
+}
+.lp-dl-foot a {
+  color: light-dark(#2f6fe4, #8ab0f5);
+  text-decoration: none;
+}
+.lp-dl-foot a:hover { text-decoration: underline; text-underline-offset: 3px; }
+
 /* ---- footer --------------------------------------------------------------- */
 footer.sl-flex .meta { color: var(--sl-color-gray-4); }
 
@@ -832,9 +1057,13 @@ footer.sl-flex .meta { color: var(--sl-color-gray-4); }
   }
   .lp-btn-primary, .lp-btn-ghost { transition: transform 0.15s, opacity 0.15s, border-color 0.15s; }
   .lp-btn-primary:hover, .lp-btn-ghost:hover { transform: translateY(-1px); }
+  .lp-dl-btn, .lp-announce { transition: transform 0.15s, opacity 0.15s, border-color 0.15s; }
+  .lp-dl-btn:hover, .lp-announce:hover { transform: translateY(-1px); }
 
   /* quiet below-scene reveals (sections after the scene stack) */
   @supports (animation-timeline: view()) {
+    .lp-download-title,
+    .lp-dl-grid,
     .lp-bento-title,
     .lp-next h2,
     .lp-next-grid,

@@ -62,7 +62,7 @@ describe("registry capability reaches saved configs without overriding them", ()
     expect(optedIn.supportsServiceTier).toBe(true);
   });
 
-  test("OpenRouter stays provider-unclassified and declares only its three OpenAI-backed slugs", () => {
+  test("OpenRouter stays provider-unclassified and declares only its OpenAI-backed slugs", () => {
     const entry = getProviderRegistryEntry("openrouter")!;
     expect(entry.supportsServiceTier).toBeUndefined();
     expect(entry.chatServiceTier).toBeUndefined();
@@ -70,6 +70,8 @@ describe("registry capability reaches saved configs without overriding them", ()
       "openai/gpt-5.6-sol": true,
       "openai/gpt-5.6-terra": true,
       "openai/gpt-5.6-luna": true,
+      "openai/gpt-6-sol": true,
+      "openai/gpt-6-luna": true,
     });
     expect(entry.modelSupportsServiceTier).not.toHaveProperty("anthropic/claude-sonnet-5");
     expect(providerConfigSeed(entry).modelSupportsServiceTier).toBeUndefined();
@@ -121,6 +123,7 @@ describe("xAI Fast capability follows the captured authentication transport", ()
     // (devlog/_fin/260913_xai_oauth_fast/020_probe-evidence.md), never provider-wide.
     expect(entry.chatServiceTier).toBe(true);
     expect(entry.modelSupportsServiceTier).toEqual({
+      "grok-4.7": true,
       "grok-4.6": true,
       "grok-4.5": true,
       "grok-4.3": true,
@@ -140,6 +143,11 @@ describe("xAI Fast capability follows the captured authentication transport", ()
 
     const oauthPolicy = fastPolicyForModel(xaiProvider("oauth"), "grok-4.6", "xai");
     expect(oauthPolicy).toMatchObject({
+      capability: true,
+      eligibility: "eligible",
+      forwardCallerTier: true,
+    });
+    expect(fastPolicyForModel(xaiProvider("oauth"), "grok-4.7", "xai")).toMatchObject({
       capability: true,
       eligibility: "eligible",
       forwardCallerTier: true,

@@ -166,10 +166,9 @@ describe("a client that moved its provider store", () => {
     expect(readIntegrationState(input())).toMatchObject({ state: "absent" });
   });
 
-  test("only a regular file counts as the store", () => {
+  test("a non-file store is refused rather than treated as an absent store", () => {
     installZcode();
-    // A directory at that path is not a provider list the client loaded, and
-    // refusing over it would block an apply that would have worked.
+    // A directory does not prove that the client will import the legacy file.
     mkdirSync(storePath(), { recursive: true });
     const resolved = resolveIntegrationTarget({
       clientId: "zcode",
@@ -179,9 +178,22 @@ describe("a client that moved its provider store", () => {
       env: TEST_ENV,
       home,
     });
-    expect(resolved.ineffective).toBeNull();
+    expect(resolved.ineffective?.why).toBe("unestablished-schema");
     expect(resolved.configPath).toBe(spec().configPath(TEST_ENV, home));
-    expect(applyIntegration(input()).ok).toBe(true);
+    expect(applyIntegration(input()).ok).toBe(false);
+  });
+
+  test("a failed store observation cannot write the legacy file", () => {
+    const configPath = installZcode();
+    const currentStore = storePath();
+    const io = store.io();
+    const observed = input({ io: {
+      ...io, statKind: path => path === currentStore ? "failed" : io.statKind(path),
+    } });
+    expect(previewIntegration(observed, { operation: "apply" }).canApply).toBe(false);
+    expect(applyIntegration(observed).ok).toBe(false);
+    expect(existsSync(configPath)).toBe(false);
+    expect(Object.keys(store.readRecords())).not.toContain("zcode");
   });
 
   test("a relative store override is refused rather than resolved against a guess", () => {

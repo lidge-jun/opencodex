@@ -147,8 +147,16 @@ function validateKeyName(
   return { value };
 }
 
+function metaMuseConsentRequired(provider: string, principal: ManagementContext["principal"]): Response | null {
+  if (provider !== "meta-muse" || principal === "gui-session") return null;
+  return jsonResponse({
+    error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
+    code: "oauth_consent_required",
+  }, 403);
+}
+
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, principal, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/accounts/events" && req.method === "GET") {
     const { accountSelectionStream } = await import("./account-selection-stream");
@@ -172,6 +180,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    // Muse may import a local Keychain credential or start a device grant; add-account
+    // and reauth skip the import. All management login paths require the dashboard
+    // principal before credential acquisition. A raw token proves administration,
+    // not acknowledgement; caller-supplied headers are not consent evidence.
+    const consentRequired = metaMuseConsentRequired(provider, principal);
+    if (consentRequired) return consentRequired;
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
     if (namespaceCollision) return jsonResponse({ error: namespaceCollision }, 409);
     const accountId = body.accountId?.trim();
@@ -242,6 +256,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const consentRequired = metaMuseConsentRequired(provider, principal);
+    if (consentRequired) return consentRequired;
     const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
     // Authorization responses are measured in hundreds of bytes; never accept the
     // generic management-body allowance here.
@@ -956,8 +972,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readJsonBody(req);
     if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
     if (typeof body.id !== "string" || !body.id) return jsonResponse({ error: "id required" }, 400, req, config);
-    const entry = (config.apiKeys ?? []).find(k => k.id === body.id);
-    if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const existing = (config.apiKeys ?? []).find(k => k.id === body.id);
+    if (!existing) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const entry = { ...existing };
     // Rename and scope are independent edits. A scope-only PATCH must not have
     // to restate the name, and a rename must not silently widen a scope, so
     // each field is applied only when the caller actually sent it.
@@ -986,6 +1003,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (normalized.length === 0) delete entry[field];
       else entry[field] = normalized;
     }
+    // Publish the validated replacement only after every field is accepted.
+    config.apiKeys = config.apiKeys!.map(key => key === existing ? entry : key);
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     // Never echo key material from a rename.

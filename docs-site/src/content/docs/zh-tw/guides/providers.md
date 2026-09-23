@@ -37,7 +37,7 @@ description: opencodex 進行身分驗證並與 LLM 供應商通訊的所有方�
 window 的用量。
 
 此估算僅供顯示，不會改變帳號選擇、session affinity、自動切換、cooldown 或其他路由決策。個別帳號
-狀態與路由控制請使用 [Codex Auth 帳號池](/zh-tw/guides/web-dashboard/#codex-auth-and-account-pools)。
+狀態與路由控制請使用 [Codex Auth 帳號池](/zh-tw/guides/web-dashboard/#codex-auth-與帳號池)。
 
 shipped v1 設定會自動遷移到 marker 2 的 option-aware row。原始設定只會備份一次到
 `~/.opencodex/config.json.pre-openai-tiers-v2.bak`；可用下列命令恢復：
@@ -107,7 +107,8 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth 使用獨立的 Grok CLI 訂閱 gateway。API key 覆寫使用 `https://api.x.ai/v1`，並可能注入 Priority Processing。優先使用即時 Grok catalog；fallback 預設為 `grok-4.5`。 |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude 模型；即時模型列表從 `/v1/models` 取得。 |
-| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi K2.7/K2.6/K2.5 coding 模型。 |
+| `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code 模型。`kimi-for-coding` 目前指向 K2.8 Preview，支援 100 萬 token 上下文、`low`/`high`/`max` 推理及文字、圖片輸入。`k3-256k` 的上下文上限固定為 256K。 |
+| `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | 以 Responses 協定共用 `kimi` 的 OAuth 登入與模型清單。推理內容在伺服器端維持加密，工具呼叫及結果仍可見。 |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research 訂閱 gateway（Hermes Agent 使用相同 backend）。透過 `portal.nousresearch.com` 做 device-grant 登入；access token 是每次請求使用的 inference JWT。混合付費與 `:free` 模型 catalog（`tencent/hy3:free`、`stepfun/step-3.7-flash:free` 等）會從已登入帳號即時探索。Refresh token 為單次使用，每次 refresh 都會輪換。 |
 | `kiro` | `kiro` | `https://runtime.us-east-1.kiro.dev` | 初次登入會匯入已安裝且已登入的 `kiro-cli` session。Unix 可用 `curl -fsSL https://cli.kiro.dev/install` &#124; `bash` 安裝；Windows PowerShell 使用 `irm 'https://cli.kiro.dev/install.ps1'` &#124; `iex`，再執行 `kiro-cli login`。**Add account** 會先登出 `kiro-cli`、啟動新的 browser login，切換 `kiro-cli` 所使用的帳號並保存 account-scoped profile metadata。既有 OpenCodex 帳號會保留；取消或失敗時會恢復先前的 `kiro-cli` session。 |
 | `google-antigravity` | `google` | `https://daily-cloudcode-pa.googleapis.com` | 透過 Cloud Code Assist wire 使用 Google OAuth。即時探索使用 CCA 經認證的 `v1internal:fetchAvailableModels` 端點，發布目前登入帳號可用的 agent 模型；維護中的 catalog 作為 fallback。 |
@@ -138,6 +139,12 @@ Vertex 或 Cloud Code Assist 修復會輸出同樣不含內容的 `google-tool-s
 提供且穩定的 `prompt_cache_key` 轉送到 Chat Completions 請求，絕不自行產生。Kimi 文件指出，穩定的
 session／task key 有助提升 Code Plan cache hit rate；沒有 key 的請求仍保持 keyless。若已 opt-in 的上游
 拒絕此欄位，opencodex 不會移除欄位後重試，也不會修改已儲存設定。其他 provider 預設 deny-by-default。
+
+`kimi`、`kimi-code` 和 `kimi-responses` 的 `k3`、`k3[1m]`、`k3-256k` 費用是採用預設五分鐘
+快取寫入費率的 [API 價格](https://platform.kimi.ai/docs/pricing/chat)估算，並非 Code Plan 的實際
+帳單或額度用量。K3 的 1M 版本約耗用 `k3-256k` 兩倍額度。`kimi-for-coding` 已轉為 K2.8 Preview，
+因此不再套用舊 K2.7 價格；除非使用者設定 `modelCosts`，其費用估算會維持未知。排除未知費用的
+路由規則可能因此略過這個別名。
 
 也可以從 [web 儀表板](/zh-tw/guides/web-dashboard/) 啟動 OAuth。
 
@@ -239,7 +246,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 96 個 preset：80 個 key-based、12 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 97 個 preset：80 個 key-based、13 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -324,8 +331,13 @@ admission check，而不是取得授權。因此 opencodex 選擇如實回報限
 key，走帶 key 的 **`opencode-zen`** preset。若 OpenCode 日後公布 keyless tier 的第三方路徑，opencodex 可以
 跟進；在此之前，這個 preset 的作用是記錄該限制。上游條款：[opencode.ai/docs/zen](https://opencode.ai/docs/zen/)。
 
-大多數 provider 使用帶 bearer key 的 `openai-chat` adapter；少數只提供 Anthropic-compatible endpoint 的
-provider，例如 **Xiaomi MiMo**，使用 `anthropic` adapter（`x-api-key`）。在已驗證的 Ark Coding Plan 工具 continuation 中，把上一輪 Responses 回傳的 `reasoning` item 原樣送回會得到 `400 InvalidParameter`，因此 Coding Plan preset 會在轉送 continuation input 前移除這類 item；該輪的 reasoning 狀態會因此遺失，可用 `dropResponsesReasoningItems: false` 關閉。已經以 `openai-chat` 儲存的 Coding Plan 設定不會被改寫，仍走 Chat；要切換請手動把 `adapter` 改成 `openai-responses`、`responsesPath` 設為 `/responses`，或刪除後重新加入該 preset。Volcengine Coding Plan 與 Agent Plan 透過
+大多數 provider 使用帶 bearer key 的 `openai-chat` adapter；**Xiaomi MiMo**（`xiaomi`）等
+相容 Anthropic 的 preset 則使用 `anthropic` adapter（`x-api-key`）。Xiaomi 另有 OpenAI Chat
+preset `xiaomi-mimo`，以及 token plan preset `mimo`。三者都預設使用 MiMo V2.6
+（`mimo-v2.6-pro`；`xiaomi-mimo` 使用 `mimo-v2.6-flash`）。Xiaomi 將於 2026-10-21 停用
+`mimo-v2.5` 和 `mimo-v2.5-pro`，且不提供重新導向；請在期限前更換已儲存的 V2.5 預設模型，
+opencodex 不會替你改寫。
+在已驗證的 Ark Coding Plan 工具 continuation 中，把上一輪 Responses 回傳的 `reasoning` item 原樣送回會得到 `400 InvalidParameter`，因此 Coding Plan preset 會在轉送 continuation input 前移除這類 item；該輪的 reasoning 狀態會因此遺失，可用 `dropResponsesReasoningItems: false` 關閉。已經以 `openai-chat` 儲存的 Coding Plan 設定不會被改寫，仍走 Chat；要切換請手動把 `adapter` 改成 `openai-responses`、`responsesPath` 設為 `/responses`，或刪除後重新加入該 preset。Volcengine Coding Plan 與 Agent Plan 透過
 `openai-responses` 使用原生 Responses endpoint。內建 DeepSeek preset 也會把 `deepseek-v4-flash` 路由到
 原生 Responses endpoint，並保持上游 SSE streaming。若該模型完成所有 output item 卻省略最後的
 Responses event，opencodex 會套用 5 秒、model-scoped 的 grace repair；malformed 或 partial stream 會以
@@ -373,12 +385,18 @@ Hyperbolic 另外的 image、audio 與 GPU endpoint 不在範圍內。可在
 [Nscale Console](https://console.nscale.com) 建立；Vultr inference key 可從
 [Vultr Console](https://my.vultr.com) 的 subscription overview 複製。
 
-**Command Code 探索。** preset 從固定 Provider API host 讀取 Command Code 的 `/provider/v1/models`
-列表，保留 provider-native id，並把 discovery 限制在 256 KiB／256 個 raw row。
-`ocx login command-code` 支援 browser sign-in OAuth；既有 Command Code CLI 使用者也可選擇從
-`~/.commandcode/auth.json` 匯入本機 CLI credential。模型 catalog 依帳號而定，登入後從經認證的 discovery
-endpoint 取得。Chat request 使用設定的 Bearer key。可在
-[Command Code Studio](https://commandcode.ai/studio/) 建立 key。
+**Command Code 探索。** preset 從固定的 Provider API 主機讀取 Command Code 的
+`/provider/v1/models` 清單，保留 provider 原生 ID，並將探索限制在 256 KiB／256 筆原始資料。
+`ocx login command-code` 支援透過瀏覽器登入 OAuth；既有 Command Code CLI 使用者也可選擇從
+`~/.commandcode/auth.json` 匯入本機 CLI 憑證。模型目錄依帳號而定，登入後由經認證的探索端點取得。
+Provider-API preset（`commandcode`）會傳送目前設定的有效金鑰：多數模型 ID 使用 Chat Completions
+及 Bearer 標頭；`claude-*` ID 則使用 Anthropic Messages 及 `x-api-key`，因為 Command Code 只在
+`/provider/v1/messages` 提供這些模型。若其他 provider 將 `commandcode` 名稱用於不同端點，
+仍沿用自己的傳輸格式。OAuth preset（`command-code`）使用已儲存的帳號 bearer 進行認證探索，
+並從 `/alpha/generate` 以 NDJSON 串流生成內容。若 gateway 將 MiMo 工具呼叫標記以文字回傳，
+且與實際呼叫重複，就會移除該標記。對 MiMo 模型而言，呼叫已宣告工具、內容完整但沒有對應原生呼叫的標記，
+只會在正常結束後還原；中斷或遭過濾的回合則保留標記文字。Provider-API 金鑰可在
+[Command Code Studio](https://commandcode.ai/studio/) 建立。
 
 **Command Code 配額。** 儀表板與 `ocx account refresh` 會在正規主機 `https://api.commandcode.ai` 探測 `/alpha/billing/credits` 視窗（5 小時與每週）。OAuth preset (`command-code`) 使用已儲存的帳號 bearer；Provider-API key preset (`commandcode`) 使用目前設定的有效 key。使用者改寫過的仿冒 base URL 不會被探測。當 Command Code 同時回報週期消耗時，剩餘的 monthly / purchased / free credits 會顯示為 USD 視窗。
 
@@ -482,7 +500,7 @@ key-based provider 也能保存多個 key。透過 Providers 頁面新增 key �
 
 不必開啟儀表板，即可用 `ocx account list`、`ocx account current` 與 `ocx account use` 檢視或切換
 同一組 Codex、OAuth 與 API-key pool。完整 command、JSON output 與新 session 生效規則請參見
-[CLI 參考](/zh-tw/reference/cli/#ocx-account-subcommand)。
+[CLI 參考](/zh-tw/reference/cli/providers-accounts/#ocx-account-subcommand)。
 
 ### GPT-5.6 預覽路徑
 
@@ -521,16 +539,17 @@ Copilot 的 catalog 混合多種 wire：模型（`gpt-5.3-codex`、`gpt-5.4`、`
 Cursor 另以實驗性 adapter 追蹤。`adapter: "cursor"` 會在 `ocx init` 與 dashboard Add Provider picker
 出現為實驗性 local config，並帶 Cursor static fallback model catalog metadata。設定 Cursor access token
 後，opencodex 使用 Cursor 即時 HTTP/2 transport。bundled fallback seed 包含 1M context 的
-`gpt-5.6-sol`／`terra`／`luna`、500K 的 Grok 4.5/4.6 一般與 Fast 項目，以及 262K 的 `kimi-k3`；即時探索
-決定哪些模型對帳號保持可見。Grok 4.6 的兩種形式都提供 `low`／`medium`／`high`／`xhigh`，4.5 則最高到
-`high`。Fast 請求會傳送對應的 Grok 基礎模型，並使用獨立的 `effort` 與 `fast=true` `requested_model`
-參數；扁平化的 `cursor-grok-{version}-{effort}-fast` id 僅作為探索與 picker 識別。Cursor 的 Kimi K3
+`gpt-5.6-sol`／`terra`／`luna`、500K 的 Grok 4.5/4.6/4.7 一般與 Fast 項目，以及 262K 的 `kimi-k3`；即時探索
+決定哪些模型對帳號保持可見。Grok 4.6 與 4.7 的兩種形式都提供 `low`／`medium`／`high`／`xhigh`，4.5 則最高到
+`high`。Grok 4.5 與 4.6 的 Fast 請求會傳送對應的基礎模型，並使用獨立的 `effort` 與 `fast=true`
+`requested_model` 參數；這兩個版本扁平化的 `cursor-grok-{version}-{effort}-fast` id 僅作為探索與 picker 識別。
+Grok 4.7 在清單中沒有 `cursor-` 前綴，直接傳送 `grok-4.7-{effort}-fast`。Cursor 的 Kimi K3
 只以帶 effort suffix 的 wire id 提供，因此
 `cursor/kimi-k3` 暴露 `low`／`high`／`max` ladder，預設為 `max`，符合該模型文件化的 API default。
 Cursor server-driven native read/write/delete/ls/grep/shell/fetch execution 預設停用，因為它會繞過 Codex
 approval 與 sandbox 路徑；只有可信本機實驗才應在 `~/.opencodex/config.json` 的 `providers.cursor`
 物件設定 `unsafeAllowNativeLocalExec: true`，也可以透過儀表板 **Providers → Cursor → Edit JSON** 設定。
-完整範例參見[設定參考](/zh-tw/reference/configuration/#cursor-provider-adapter-cursor)。MCP、螢幕錄製與
+完整範例參見[設定參考](/zh-tw/reference/configuration/providers/#cursor-供應商adapter-cursor)。MCP、螢幕錄製與
 computer-use 可透過 executor hook 使用；未設定本機 executor 時，opencodex 會回傳 typed no-executor
 result，而不是用 policy block request。Cursor OAuth 與即時 model discovery 已為此實驗性 adapter 啟用；
 Cursor 仍不會出現在 key-login list。

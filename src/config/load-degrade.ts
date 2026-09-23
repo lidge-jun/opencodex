@@ -17,7 +17,7 @@ import { MODEL_ALIAS_PATTERN } from "../providers/default-aliases";
 import { MODEL_DISCOVERY_MAX_MODELS } from "../providers/model-discovery-limits";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport, registryModelServiceTierCapabilityApplies } from "../providers/registry";
 import { isCodexReasoningEffort } from "../reasoning-effort";
-import { refreshUserCostOverlays } from "../usage/user-cost-overlays";
+import { refreshConfigDerivedRegistries } from "./derived-registries";
 import { type OcxClaudeCodeConfig, type OcxConfig } from "../types";
 import {
   agentTaskRecoverySchema,
@@ -26,6 +26,7 @@ import {
   isUsableApiKeySecret,
   managementIngressSchema,
   codexPoolSchema,
+  codexAccountAutoSwitchThresholdsSchema,
   providerModelCostsConfigError,
   credentialGroupsSchema,
   hubConfigSchema,
@@ -389,6 +390,12 @@ export function degradedCodexAccountPriorityWarnings(rawParsed: unknown, validat
   if (raw !== undefined && validated.codexAccountPriorities === undefined) {
     warnings.push("codexAccountPriorities is invalid (expected account ids mapped to integers between -100 and 100) — account selection order is disabled");
   }
+  const rawThresholds = record?.codexAccountAutoSwitchThresholds;
+  if (rawThresholds !== undefined && !codexAccountAutoSwitchThresholdsSchema.safeParse(rawThresholds).success) {
+    warnings.push(validated.codexAccountAutoSwitchThresholds === undefined
+      ? "codexAccountAutoSwitchThresholds is invalid (expected account ids mapped to integers between 0 and 100) — per-account usage thresholds are disabled"
+      : "codexAccountAutoSwitchThresholds contains invalid entries (expected account ids mapped to integers between 0 and 100) — invalid entries were ignored");
+  }
   return warnings;
 }
 
@@ -420,10 +427,9 @@ export function degradedCredentialGroupsWarning(rawParsed: unknown): string | nu
   if (!pool || pool.credentialGroups === undefined) return null;
   const parsed = credentialGroupsSchema.safeParse(pool.credentialGroups);
   if (parsed.success) return null;
-  // Every issue message is redacted before it is joined. The custom messages embed the
-  // offending member through `JSON.stringify`, so a malformed credential string that
-  // happens to carry secret material would otherwise be printed verbatim at config load
-  // — a config file is exactly where a pasted token ends up in the wrong field.
+  // Every issue message is redacted before it is joined. The custom messages now name
+  // group/member positions instead of the offending strings; the redaction stays as a
+  // second layer for any schema default message that still embeds a value.
   const details = parsed.error.issues.map(issue => redactSecretString(issue.message)).join("; ");
   return `pool.credentialGroups is invalid (${details}) — declared quota grouping is disabled; other pool settings were preserved`;
 }
@@ -935,6 +941,6 @@ export function sanitizeModelDisplayNamesForLoad(raw: unknown): void {
 
 /** Refresh the user cost-overlay registry from `config` and return it unchanged. */
 export function withRefreshedCostOverlays(config: OcxConfig): OcxConfig {
-  refreshUserCostOverlays(config);
+  refreshConfigDerivedRegistries(config);
   return config;
 }

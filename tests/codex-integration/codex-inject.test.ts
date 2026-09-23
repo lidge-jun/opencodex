@@ -21,7 +21,10 @@ import {
   buildProviderTableBlockForTarget,
   resolveCodexProviderDisplayName,
 } from "../../src/codex/inject/config-toml";
-import { extractOcxProviderTableBlock } from "../../src/codex/inject/remove";
+import {
+  appendOcxProviderTableBlock,
+  extractOcxProviderTableBlock,
+} from "../../src/codex/inject/remove";
 import { OCX_ROUTING_MARKER_LINE, OCX_SECTION_MARKER, stripJournaledOpenaiBaseUrl } from "../../src/codex/injected-marker";
 import {
   MANAGED_AGENTS_TABLE_MARKER,
@@ -709,6 +712,51 @@ describe("Design B openai_base_url injection", () => {
       '"x-opencodex-api-key" = "OPENCODEX_API_AUTH_TOKEN"',
       "",
     ].join("\n"));
+  });
+
+  test("provider-table retention refuses to rebind tagged threads to a different table", () => {
+    const captured = [
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const restored = [
+      "[model_providers.opencodex]",
+      'name = "Unrelated Provider"',
+      'base_url = "https://unrelated.invalid/v1"',
+      "",
+    ].join("\n");
+
+    expect(() => appendOcxProviderTableBlock(restored, captured)).toThrow(
+      "native config already defines a different [model_providers.opencodex] table",
+    );
+    expect(appendOcxProviderTableBlock(captured, captured)).toBe(captured);
+  });
+
+  test("provider-table retention accepts a table that differs only in blank-line count", () => {
+    // Semantic comparison ignores cosmetic spacing outside values while keeping
+    // the existing bytes; capture never collapses newlines inside string contents.
+    const captured = [
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+    ].join("\n");
+    const current = [
+      "# Auto-injected by opencodex",
+      "[model_providers.opencodex]",
+      'name = "OpenCodex Proxy"',
+      'base_url = "http://127.0.0.1:10100/v1"',
+      "",
+      "",
+      "",
+    ].join("\n");
+
+    expect(extractOcxProviderTableBlock(current)).toBe(captured);
+    expect(appendOcxProviderTableBlock(current, captured)).toBe(current);
   });
 
   test("legacy marker directly before the provider table survives the root strip order (removeOcxSection keeps its anchor)", () => {

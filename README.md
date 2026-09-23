@@ -1,13 +1,25 @@
+<p align="center">
+  <img src="assets/banner.png" alt="opencodex — universal provider proxy for Codex, Claude Code, Claude Desktop and Grok Build" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>Universal provider proxy for OpenAI Codex, Claude Code, Claude Desktop &amp; Grok Build</b><br>
 Two commands, and every one of them runs any LLM you point it at.</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Follow @claudeebum on X"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/github/v/release/lidge-jun/opencodex?label=desktop&logo=github&color=24292f" alt="Latest desktop release"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm version"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="license"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node version">
 </p>
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="assets/download-macos.svg" alt="Download OpenCodex for macOS" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="assets/download-windows.svg" alt="Download OpenCodex for Windows" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="assets/download-linux.svg" alt="Download OpenCodex for Linux" width="220"></a>
+</p>
+<p align="center"><sub>Desktop app (beta): macOS universal <code>.dmg</code> · Windows x64 <code>.msi</code> · Linux x86_64 <code>.AppImage</code> / <code>.deb</code>. Prefer the terminal? Install the CLI:</sub></p>
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -78,7 +90,30 @@ account while existing threads stay pinned to the account that started them.
 
 ## Quick start
 
-### Personal install
+### Desktop app (beta)
+
+The desktop app is the same proxy and dashboard in a native window, with a tray and bundled `ocx`.
+It attaches to a proxy that is already running, or starts its bundled one, and the dashboard stays
+on the proxy port (**http://localhost:10100** unless you configured another). Pick the file for your
+platform from the [latest release](https://github.com/lidge-jun/opencodex/releases/latest):
+
+| Platform | File | Notes |
+|---|---|---|
+| macOS 13+ (Apple Silicon and Intel) | `OpenCodex-<version>-macos.dmg` | Universal build, signed with a Developer ID and notarized |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Not code-signed yet: SmartScreen asks once, choose **More info → Run anyway** |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` or `-linux-amd64.deb` | The tray needs an AppIndicator-capable desktop |
+
+Every file has a `.sha256` next to it on the release page. On macOS 14+ the app also ships a
+WidgetKit extension that shows proxy status, today's usage and provider quotas; the snapshot model
+it renders lives in [`app/`](./app) (`MenuBarCore`). To build the app yourself, run
+`bun install && bun run build:gui` at the repository root, then in `desktop/` run
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` on macOS,
+or `bun install && bun run prepare-sidecar && bun run build:local` on Windows and Linux (the widget
+step needs macOS). The [Desktop App guide](https://opencodex.me/guides/desktop-app/) and the
+[macOS Menu Bar App guide](https://opencodex.me/guides/macos-menu-bar/) cover first launch, and
+[`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed) lists everything written to disk.
+
+### Personal install (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
@@ -90,30 +125,6 @@ Use `ocx service` to run it in the background.
 Open **http://localhost:10100** and configure everything in the web dashboard — add providers
 (40+ built-ins, or any OpenAI-compatible endpoint), pick models, manage accounts. `ocx gui`
 re-opens the dashboard at any time.
-
-<details>
-<summary><b>Desktop app and macOS widget — beta</b></summary>
-
-A native shell around the same dashboard, plus a WidgetKit extension that shows proxy status,
-today's usage and provider quotas without opening a browser. The proxy is unchanged: the app
-finds a running one or starts the bundled `ocx` sidecar, and the dashboard stays at
-**http://localhost:10100**.
-
-It is beta. Builds are signed for integrity but not notarized, so macOS asks for a
-right-click → **Open** on first launch and Windows SmartScreen warns on the installer. The
-widget needs macOS 14 or newer; the snapshot model it renders lives in [`app/`](./app)
-(`MenuBarCore`).
-
-Download it from the [latest release](https://github.com/lidge-jun/opencodex/releases), or build
-it locally with `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
-
-Install locations, service files and everything else written to disk are listed in
-[`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed). The
-[Desktop App guide](https://lidge-jun.github.io/opencodex/guides/desktop-app/) and the
-[macOS Menu Bar App guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/) cover
-per-platform installation and the Gatekeeper prompt.
-
-</details>
 
 ### ChatGPT account pool
 
@@ -207,8 +218,9 @@ setup, authenticated acceptance checks, remote management, and rollback.
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -216,8 +228,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -249,13 +262,13 @@ when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the r
 
 ## Supported platforms
 
-| OS | Status | Service manager |
-|---|---|---|
-| macOS (arm64 / x64) | Fully supported | launchd |
-| Linux (x64 / arm64) | Fully supported | systemd (user unit) |
-| Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) |
+| OS | Status | Service manager | Desktop app (beta) |
+|---|---|---|---|
+| macOS (arm64 / x64) | Fully supported | launchd | Universal `.dmg` |
+| Linux (x64 / arm64) | Fully supported | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) | x64 `.msi` |
 
-Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled on `npm install` — no separate
+The CLI install requires [Node](https://nodejs.org) 18+; the desktop app needs neither Node nor Bun. The Bun runtime is bundled on `npm install` — no separate
 Bun install needed, no WSL needed on Windows. If npm blocked the bundled runtime's install scripts,
 see the [installation docs](https://opencodex.me/getting-started/installation/).
 

@@ -113,7 +113,7 @@ the variable unset.
 It matters only when `hostname` is set beyond loopback, which is also the case
 where the proxy
 refuses to start without a token — see [Remote
-access](/reference/configuration/#remote-access).
+access](/tr/reference/configuration/server/#uzaktan-erişim).
 
 ## Model metadata
 

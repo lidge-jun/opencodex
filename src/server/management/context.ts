@@ -10,7 +10,7 @@ import type { refreshOwnedCatalogIntegrations } from "../../integrations/catalog
 import type { Paths as CodexPromptPaths } from "../../codex/prompt-layers";
 import type { injectGrokConfig } from "../../grok/inject";
 import type { removeDesktop3pStandardPivot, writeDesktop3pConfig } from "../../claude/desktop-3p";
-import type { probeClaudeDesktopPolicy } from "../../claude/desktop-policy";
+import type { ClaudeDesktopPolicyProbeOptions, ClaudeDesktopPolicyState } from "../../claude/desktop-policy";
 import type { RuntimePortState } from "../../config/process-state";
 import type { CursorInstall } from "../../integrations/cursor-detect";
 import type { CursorEffortTable } from "../../integrations/cursor-effort-table";
@@ -74,7 +74,9 @@ export interface ManagementApiDeps {
   removeDesktop3pStandardPivot?: typeof removeDesktop3pStandardPivot;
   writeDesktop3pConfig?: typeof writeDesktop3pConfig;
   /** Read-only Windows MDM policy seam for status/apply tests. */
-  probeClaudeDesktopPolicy?: typeof probeClaudeDesktopPolicy;
+  probeClaudeDesktopPolicy?: (
+    options?: ClaudeDesktopPolicyProbeOptions,
+  ) => ClaudeDesktopPolicyState | Promise<ClaudeDesktopPolicyState>;
   /**
    * Runtime-state seam: the fence must name the host/port the RUNNING process
    * bound (agent-settings-routes.ts:99-103 pattern), and a test must not depend

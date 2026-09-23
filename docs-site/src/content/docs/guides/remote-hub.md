@@ -61,6 +61,10 @@ The hub automatically issues a per-client key. The client writes it to the exist
 filtered to that client's stable `apiKeyId`. After disconnect, usage comes from the local store.
 OpenCodex does not mirror usage between the two stores.
 
+If a client saved a remote `http://` Hub URL before the secure transport rule, its Hub
+operations now return `insecure_http_refused`. Run `ocx disconnect` locally, then reconnect
+to the Hub with `https://` (or use loopback HTTP when both sides are on the same machine).
+
 Rotate a connected client with a fresh transient authority:
 
 ```bash
@@ -110,6 +114,18 @@ the request and shows matching cached hub state, or `unavailable` if no matching
 Bind the data listener to the hub's Tailscale address, enable the loopback companion so the hub's
 own processes reach that same port without a credential, and publish management separately. The
 values below are examples:
+
+:::danger[Use a dedicated single-tenant host]
+The loopback companion is unauthenticated: every process and OS user on this machine can use the
+hub's provider credentials and account quota, and can exhaust the shared turn capacity that
+authenticated remote clients depend on. Do not enable it on a shared or multi-tenant host. If the
+host is shared, leave the `unauthenticatedLoopbackListener` setting disabled and do not run the hub's local
+integrations.
+
+Binding to `127.0.0.1` means the kernel refuses remote connections, but it does not stop a browser:
+a page you visit can make your browser connect to `127.0.0.1`. The listener therefore applies the
+same `Host` and `Origin` checks as an ordinary loopback bind.
+:::
 
 ```bash
 ocx config set runtimeRole hub
@@ -215,6 +231,9 @@ separate ports:
 ```bash
 ocx config set unauthenticatedLoopbackListener '{"enabled":true,"port":10104}'
 ```
+
+The ported form is the same unauthenticated surface: the dedicated-host warning above applies to
+this command too.
 
 With a `port` set, the local integrations follow the listener and write `http://127.0.0.1:10104`
 instead. The port must differ from the proxy port and is never OS-assigned: an ephemeral port would

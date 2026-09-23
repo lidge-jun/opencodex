@@ -8,11 +8,18 @@ export interface ModelTitleTierOutcome {
 export interface ModelTitleEntry {
   model: string;
   resolvedModel?: string;
+  servedModel?: string;
+  wireModel?: string;
   requestedServiceTier?: string;
   configuredServiceTier?: string;
   responseServiceTier?: string;
   modelSupportsServiceTier?: boolean;
   tierOutcome?: ModelTitleTierOutcome;
+}
+
+/** The upstream answered with a model other than the one sent on the wire. */
+export function isModelRerouted(log: Pick<ModelTitleEntry, "model" | "servedModel" | "wireModel">): boolean {
+  return log.servedModel !== undefined && log.servedModel !== (log.wireModel ?? log.model);
 }
 
 /**
@@ -38,8 +45,11 @@ function tierConfirmationSuffix(outcome: ModelTitleEntry["tierOutcome"], t: TFn)
 
 export function modelTitle(log: ModelTitleEntry, t: TFn): string {
   const details = [
+    isModelRerouted(log) ? t("logs.modelRerouteTitle") : undefined,
     `${t("logs.modelTooltip.model")}=${log.model}`,
     log.resolvedModel ? `${t("logs.modelTooltip.resolvedModel")}=${log.resolvedModel}` : undefined,
+    log.servedModel ? `${t("logs.modelTooltip.servedModel")}=${log.servedModel}` : undefined,
+    log.wireModel ? `${t("logs.modelTooltip.wireModel")}=${log.wireModel}` : undefined,
     log.requestedServiceTier ? `${t("logs.modelTooltip.requestedTier")}=${log.requestedServiceTier}` : undefined,
     log.configuredServiceTier ? `${t("logs.modelTooltip.configuredTier")}=${log.configuredServiceTier}` : undefined,
     log.responseServiceTier

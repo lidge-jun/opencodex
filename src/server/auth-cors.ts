@@ -818,6 +818,8 @@ export function providerManagementConfigError(
   if (reasoningSummariesError) return `provider ${name} ${reasoningSummariesError}`;
   const suppressSyntheticMaxError = booleanRecordConfigError(raw.modelSuppressSyntheticMax, "modelSuppressSyntheticMax");
   if (suppressSyntheticMaxError) return `provider ${name} ${suppressSyntheticMaxError}`;
+  const verbositySupportError = booleanRecordConfigError(raw.modelSupportsVerbosity, "modelSupportsVerbosity");
+  if (verbositySupportError) return `provider ${name} ${verbositySupportError}`;
   const reasoningSummaryDeliveryError = reasoningSummaryDeliveryRecordConfigError(
     raw.modelReasoningSummaryDelivery,
     raw.modelSupportsReasoningSummaries,
@@ -1060,6 +1062,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   transientRetryOn5xx: "editor",
   retryOnReset: "editor",
   reasoningSplitModels: "editor",
+  inlineThinkTagModels: "editor",
   reasoningDetailsModels: "editor",
   thinkingToggleModels: "editor",
   thinkingBudgetModels: "editor",

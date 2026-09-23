@@ -3,6 +3,7 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
 import { getAccountCredential, getAccountSet } from "../../oauth/store";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
+import { CLAUDE_CLI_USER_AGENT } from "../claude-cli-identity";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
@@ -224,6 +225,8 @@ function parseClaudeBucket(value: unknown): { percent?: number; resetAt?: number
   return { percent, resetAt };
 }
 
+const TERMINAL_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/gu;
+
 function parseClaudeLimit(value: unknown): { label: string; percent: number; resetAt?: number } | null {
   const rec = asRecord(value);
   if (!rec) return null;
@@ -231,13 +234,18 @@ function parseClaudeLimit(value: unknown): { label: string; percent: number; res
   if (percent === undefined) return null;
   const scope = asRecord(rec.scope);
   const model = asRecord(scope?.model);
-  const rawLabel = String(model?.display_name ?? "").trim();
+  const rawLabel = String(model?.display_name ?? "")
+    .replace(TERMINAL_CONTROL_CHARACTERS, "")
+    .trim();
   if (!rawLabel) return null;
   const lowerLabel = rawLabel.toLowerCase();
   const label = lowerLabel.includes("fable") ? "Fable"
     : lowerLabel.includes("opus") ? "Opus"
       : lowerLabel.includes("sonnet") ? "Sonnet"
-        : rawLabel;
+        : null;
+  // An unrecognized display_name is never published as a quota label: stripping
+  // control characters still leaves attacker-chosen residue on the quota line.
+  if (label === null) return null;
   const resetAt = normalizeResetAt(rec.resets_at);
   return { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) };
 }
@@ -269,7 +277,7 @@ export async function fetchAnthropicUsageQuota(accessToken: string): Promise<Pro
       headers: {
         Accept: "application/json, text/plain, */*",
         "Content-Type": "application/json",
-        "User-Agent": "claude-cli/2.1.63 (external, cli)",
+        "User-Agent": CLAUDE_CLI_USER_AGENT,
         "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05",
         Authorization: `Bearer ${accessToken}`,
       },

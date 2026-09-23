@@ -5,10 +5,14 @@ let package = Package(
     name: "OpenCodexWidget",
     platforms: [.macOS(.v14)],
     products: [
+        .library(name: "NativeTray", type: .static, targets: ["NativeTray"]),
+        .executable(name: "NativeTrayTests", targets: ["NativeTrayTests"]),
         .executable(name: "OpenCodexWidget", targets: ["OpenCodexWidget"]),
         .executable(name: "MenuBarCoreTests", targets: ["MenuBarCoreTests"]),
     ],
     targets: [
+        .target(name: "NativeTray", path: "Sources/NativeTray"),
+        .executableTarget(name: "NativeTrayTests", dependencies: ["NativeTray"], path: "Sources/NativeTrayTests"),
         .target(name: "MenuBarCore", path: "Sources/MenuBarCore"),
         .executableTarget(
             name: "OpenCodexWidget",

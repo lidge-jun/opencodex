@@ -1,6 +1,6 @@
 use crate::{
     exit::{self, ExitReason},
-    formatting,
+    formatting, popup,
     proxy::ProxyClient,
     updater, widget, window,
 };
@@ -68,10 +68,19 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     )?;
     let install_update =
         MenuItem::with_id(app, "install-update", "Install update", false, None::<&str>)?;
+    // Every platform needs a menu path to the popup, not only Linux.
+    //
+    // On macOS the icon click cannot be the only way in: `tray-icon` assigns the menu to the
+    // NSStatusItem itself, so AppKit pops that menu on mouse-down before the crate's own click
+    // handler runs, and `show_menu_on_left_click(false)` cannot take it back. Linux tray hosts
+    // differ in whether a click reaches the application at all. That leaves Windows as the only
+    // platform where the icon alone would have worked.
+    let show_usage = MenuItem::with_id(app, "show-usage", "Show Usage", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
+            &show_usage,
             &open,
             &browser,
             &PredefinedMenuItem::separator(app)?,
@@ -92,23 +101,66 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         });
     }
 
-    let tray = TrayIconBuilder::with_id("main")
+    let builder = TrayIconBuilder::with_id("main")
         .icon(icon())
         .icon_as_template(true)
-        .menu(&menu)
+        .menu(&menu);
+    // Attaching a menu makes the left click open that menu by default, which swallows the click
+    // before `on_tray_icon_event` can do anything visible. On macOS and Windows that left the
+    // usage popup with no way to open at all: the icon showed the menu, and the menu item that
+    // opens the popup is Linux-only. Left click is the popup, right click is the menu.
+    //
+    // Linux keeps the default. Its StatusNotifier hosts deliver no usable click event, so the
+    // menu is the entire interaction there and turning it off would remove the only way in.
+    #[cfg(not(target_os = "linux"))]
+    let builder = builder.show_menu_on_left_click(false);
+    let tray = builder
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
+                position,
                 ..
             } = event
             {
-                if let Some(window) = tray.app_handle().get_webview_window("main") {
-                    window::show(&window);
+                // The icon opens the usage popup rather than the dashboard. Reading the
+                // current numbers is the reason to look at a tray icon at all, and the
+                // dashboard remains one menu item away. With no runtime resolved there is
+                // nothing to report, so the window stays the answer.
+                let app = tray.app_handle();
+                match app
+                    .state::<crate::AppState>()
+                    .proxy()
+                    .map(|proxy| proxy.endpoint())
+                {
+                    Some(endpoint) => {
+                        let _ = popup::toggle(app, endpoint, position);
+                    }
+                    None => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            window::show(&window);
+                        }
+                    }
                 }
             }
         })
         .on_menu_event(move |app, event| match event.id().as_ref() {
+            "show-usage" => {
+                let Some(endpoint) = app
+                    .state::<crate::AppState>()
+                    .proxy()
+                    .map(|proxy| proxy.endpoint())
+                else {
+                    return;
+                };
+                // Anchor on the icon the user just clicked. A zero anchor clamps the popup into
+                // the top-left corner of the work area, which reads as a misplaced window rather
+                // than a menu, and on macOS the menu is now the ordinary way in rather than a
+                // fallback. Hosts that cannot report a rect still get the clamped corner, which
+                // is the best available answer there.
+                let anchor = tray_anchor(app);
+                let _ = popup::show(app, endpoint, anchor);
+            }
             "open-dashboard" => {
                 if let Some(window) = app.get_webview_window("main") {
                     window::show(&window);
@@ -282,44 +334,62 @@ fn refresh_title(tray: &tauri::tray::TrayIcon<Wry>, proxy: &ProxyClient) {
         let Ok(settings) = proxy.companion_settings().await else {
             return;
         };
-        let Ok(usage) = proxy.usage_summary().await else {
+        let Ok(usage) = proxy.usage_today().await else {
             return;
         };
         let quotas = proxy.quotas().await.unwrap_or(Value::Null);
-        if let Some(title) = render_title(&settings, &usage, &quotas) {
-            let _ = tray.set_title(Some(&title));
-        }
+        let title = render_title(&settings, &usage, &quotas);
+        let _ = tray.set_title(title.as_deref());
     });
 }
 
 pub(crate) fn render_title(settings: &Value, usage: &Value, quotas: &Value) -> Option<String> {
+    let settings = settings.get("settings").unwrap_or(settings);
     let metric = settings
-        .pointer("/settings/menuBarMetric")
+        .get("menuBarMetric")
         .and_then(Value::as_str)
         .unwrap_or("tokens");
-    let summary = usage.get("summary").unwrap_or(usage);
-    let quota = quota_percent(quotas);
-    let value = match metric {
-        "requests" => formatting::count(summary.get("requests").and_then(Value::as_i64)),
-        "cost" => formatting::cost(summary.get("estimatedCostUsd").and_then(Value::as_f64)),
-        "quota" => format_percent(quota),
-        "none" => return None,
-        _ => formatting::tokens(summary.get("totalTokens").and_then(Value::as_i64)),
-    };
+    let visible_summary = crate::companion_usage::filtered_summary(usage, settings);
+    let summary = visible_summary.as_ref().unwrap_or(&Value::Null);
+    let quota = quota_percent(quotas, settings);
     let template = settings
-        .pointer("/settings/menuBarTemplate")
+        .get("menuBarTemplate")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty());
+    let value = match metric {
+        "requests" => formatting::count(
+            summary
+                .get("requests")
+                .and_then(crate::companion_usage::integer),
+        ),
+        "cost" => formatting::cost(summary.get("estimatedCostUsd").and_then(Value::as_f64)),
+        "quota" => format_percent(quota),
+        "none" if template.is_none() => return None,
+        "none" => String::new(),
+        _ => formatting::tokens(
+            summary
+                .get("totalTokens")
+                .and_then(crate::companion_usage::integer),
+        ),
+    };
     let rendered = template
         .map(|value| {
             value
                 .replace(
                     "{requests}",
-                    &formatting::count(summary.get("requests").and_then(Value::as_i64)),
+                    &formatting::count(
+                        summary
+                            .get("requests")
+                            .and_then(crate::companion_usage::integer),
+                    ),
                 )
                 .replace(
                     "{totalTokens}",
-                    &formatting::tokens(summary.get("totalTokens").and_then(Value::as_i64)),
+                    &formatting::tokens(
+                        summary
+                            .get("totalTokens")
+                            .and_then(crate::companion_usage::integer),
+                    ),
                 )
                 .replace(
                     "{costUsd}",
@@ -327,11 +397,19 @@ pub(crate) fn render_title(settings: &Value, usage: &Value, quotas: &Value) -> O
                 )
                 .replace(
                     "{inputTokens}",
-                    &formatting::tokens(summary.get("inputTokens").and_then(Value::as_i64)),
+                    &formatting::tokens(
+                        summary
+                            .get("inputTokens")
+                            .and_then(crate::companion_usage::integer),
+                    ),
                 )
                 .replace(
                     "{outputTokens}",
-                    &formatting::tokens(summary.get("outputTokens").and_then(Value::as_i64)),
+                    &formatting::tokens(
+                        summary
+                            .get("outputTokens")
+                            .and_then(crate::companion_usage::integer),
+                    ),
                 )
                 .replace("{quotaPercent}", &format_percent(quota))
         })
@@ -349,10 +427,16 @@ pub(crate) fn render_title(settings: &Value, usage: &Value, quotas: &Value) -> O
     }
 }
 
-fn quota_percent(value: &Value) -> Option<f64> {
+fn quota_percent(value: &Value, settings: &Value) -> Option<f64> {
     let reports = value.get("reports")?.as_array()?;
     let mut values = Vec::new();
     for report in reports {
+        if crate::companion_usage::hidden(
+            settings,
+            crate::companion_usage::text(report, "provider"),
+        ) {
+            continue;
+        }
         let Some(quota) = report.get("quota") else {
             continue;
         };
@@ -381,4 +465,158 @@ fn format_percent(value: Option<f64>) -> String {
 fn icon() -> tauri::image::Image<'static> {
     tauri::image::Image::from_bytes(include_bytes!("../icons/tray/icon.png"))
         .expect("valid tray icon")
+}
+
+/// Centre of the tray icon in physical pixels, for anchoring the popup.
+///
+/// Returns the origin when the platform cannot report a rect. `popup::geometry` clamps that into
+/// the work area, so the window still appears; it simply cannot point at anything.
+fn tray_anchor(app: &AppHandle) -> tauri::PhysicalPosition<f64> {
+    app.tray_by_id("main")
+        .and_then(|tray| tray.rect().ok().flatten())
+        .map(|rect| {
+            let position: tauri::PhysicalPosition<f64> = match rect.position {
+                tauri::Position::Physical(value) => {
+                    tauri::PhysicalPosition::new(value.x as f64, value.y as f64)
+                }
+                tauri::Position::Logical(value) => tauri::PhysicalPosition::new(value.x, value.y),
+            };
+            let size: tauri::PhysicalSize<f64> = match rect.size {
+                tauri::Size::Physical(value) => {
+                    tauri::PhysicalSize::new(value.width as f64, value.height as f64)
+                }
+                tauri::Size::Logical(value) => tauri::PhysicalSize::new(value.width, value.height),
+            };
+            tauri::PhysicalPosition::new(
+                position.x + size.width / 2.0,
+                position.y + size.height / 2.0,
+            )
+        })
+        .unwrap_or_else(|| tauri::PhysicalPosition::new(0.0, 0.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_title;
+    use serde_json::json;
+
+    #[test]
+    fn icon_only_clears_the_title_but_a_template_and_unavailable_data_keep_their_meaning() {
+        let usage = json!({"summary":{"requests":7,"totalTokens":12}});
+        assert_eq!(
+            render_title(
+                &json!({"settings":{"menuBarMetric":"none"}}),
+                &usage,
+                &json!({})
+            ),
+            None
+        );
+        assert_eq!(
+            render_title(
+                &json!({"settings":{"menuBarMetric":"none","menuBarTemplate":"{requests}"}}),
+                &usage,
+                &json!({})
+            ),
+            Some("7".into())
+        );
+        assert_eq!(
+            render_title(
+                &json!({"settings":{"menuBarMetric":"tokens","hiddenProviders":["hidden"]}}),
+                &usage,
+                &json!({})
+            ),
+            Some("—".into())
+        );
+    }
+
+    #[test]
+    fn title_uses_filtered_whole_counts_and_ignores_hidden_quota_reports() {
+        let settings =
+            json!({"settings":{"menuBarMetric":"requests","hiddenProviders":["hidden"]}});
+        let usage = json!({"summary":{"requests":99},"models":[
+            {"provider":"hidden","model":"m","requests":97},
+            {"provider":"visible","model":"m","requests":2}
+        ]});
+        assert_eq!(
+            render_title(&settings, &usage, &json!({})),
+            Some("2".into())
+        );
+        let settings = json!({"settings":{"menuBarMetric":"quota","hiddenProviders":["hidden"]}});
+        let quotas = json!({"reports":[{"provider":"hidden","quota":{"weeklyPercent":1}}, {"provider":"visible","quota":{"weeklyPercent":75}}]});
+        assert_eq!(render_title(&settings, &usage, &quotas), Some("75%".into()));
+    }
+
+    /// This file's own source, read at compile time, with the test module cut off.
+    ///
+    /// Slicing at the test attribute matters: the assertions below quote the very call names they
+    /// look for, so scanning the whole file would find the test's own string literals and pass
+    /// after the real calls were deleted.
+    fn production_source() -> &'static str {
+        include_str!("tray.rs")
+            .split("#[cfg(te")
+            .next()
+            .expect("source has a production half")
+    }
+
+    /// A tray with a menu opens that menu on left click unless the builder says otherwise, and
+    /// nothing in the type system connects the two calls. The usage popup was unreachable on
+    /// macOS and Windows for exactly that reason, and the failure is quiet: the icon still
+    /// responds to the click, just with the wrong surface. The menu item that opens the popup is
+    /// Linux-only, so there was no second way in.
+    #[test]
+    fn attaching_a_menu_leaves_the_left_click_for_the_popup() {
+        let source = production_source();
+        assert!(
+            source.contains(".menu(&menu)"),
+            "tray.rs no longer attaches a menu; this pairing may no longer apply"
+        );
+        // The call site, not the name: the comments above explain why the flag is inert on
+        // macOS, and a bare substring matched that prose instead of the builder.
+        assert!(
+            source.contains("builder.show_menu_on_left_click(false)"),
+            "a tray with a menu must release the left click, or the popup cannot open"
+        );
+        assert!(
+            source.contains("#[cfg(not(target_os = \"linux\"))]"),
+            "Linux delivers no usable click event, so it must keep the menu on left click"
+        );
+    }
+
+    /// macOS pops the attached menu from AppKit before the crate's click handler runs, so the
+    /// icon click cannot be the only way to the popup. The menu item is the path that works
+    /// everywhere, and platform-gating it once already left two platforms with no way in.
+    #[test]
+    fn the_usage_menu_item_is_not_platform_gated() {
+        let source = production_source();
+        let declaration = source
+            .lines()
+            .position(|line| line.contains("let show_usage ="))
+            .expect("the menu no longer declares the usage item");
+        let lines: Vec<&str> = source.lines().collect();
+        // Every line that mentions the item: its declaration, its place in the menu, and the
+        // event arm. None of them may sit under a platform attribute.
+        let mentions = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.contains("show_usage") || line.contains("\"show-usage\""))
+            .map(|(index, _)| index);
+        for index in mentions {
+            let previous = lines[..index]
+                .iter()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .copied()
+                .unwrap_or_default();
+            assert!(
+                !previous.trim_start().starts_with("#[cfg("),
+                "the usage item is platform-gated at line {}; every platform needs a menu path \
+                 to the popup",
+                index + 1
+            );
+        }
+        assert!(
+            declaration > 0,
+            "the declaration is the first line of the file"
+        );
+    }
 }

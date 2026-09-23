@@ -207,7 +207,10 @@ export async function deliverPassthroughResponse(
 
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
     const resolvedModel = headers.get("openai-model")?.trim();
-    if (resolvedModel && !logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
+    if (resolvedModel) {
+      logCtx.servedModel = resolvedModel;
+      if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
+    }
     if (isUsageDebugEnabled()) {
       const upstreamContentType = upstreamResponse.headers.get("content-type");
       if (upstreamContentType) logCtx.usageDebugContentType = upstreamContentType;
@@ -380,36 +383,62 @@ export async function deliverPassthroughResponse(
       });
       // Capture the binding that actually served the first leg, after its permitted reselection.
       const webSearchBridgeBinding = requestBindings.get(nativeExchange.request);
-      // The bridge wraps the RAW upstream body, so terminal repair below still owns the single
-      // client-facing terminal — the bridge drops the terminal of every intercepted leg.
-      const upstreamSseBody = webSearchBridgePlan
+      // Repair must observe the raw first leg before the bridge suppresses an intercepted search
+      // lifecycle. Otherwise a provider that leaves that complete call open never arms repair's
+      // grace timer, so the bridge cannot execute the search or begin its continuation.
+      let passthroughSseBody = terminalRepairPolicy
+        ? relayResponsesSseWithTerminalRepair(
+          upstreamResponse.body,
+          upstream,
+          terminalRepairPolicy,
+          translatorBudget,
+          options.responsesTerminalRepairScheduler,
+        )
+        : upstreamResponse.body;
+      passthroughSseBody = webSearchBridgePlan
         ? createPassthroughWebSearchBridgeStream({
           plan: webSearchBridgePlan,
-          firstLeg: upstreamResponse.body,
+          firstLeg: passthroughSseBody,
           requestBody: nativeExchange.request.body,
           // Continuation legs replay the same built request with the executed search appended.
           // The first leg already passed the recovery ladder, the outbound size ceiling, and the
           // host circuit; a KEY-auth destination has no OAuth refresh to replay on a later leg.
-          send: (continuationBody: string) => fetchWithHeaderTimeout(
-            nativeExchange.request.url,
-            { method: nativeExchange.request.method, headers: nativeExchange.request.headers, body: continuationBody },
-            upstream.signal,
-            connectMs,
-            true,
-            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              // Pacing can outlive a manual selection change. A continuation must retain the
-              // first leg's key and appended search result, never rebuild from the original turn.
-              beforeDispatch: () => {
-                if (webSearchBridgeBinding?.kind !== "api-key"
-                  || !providerApiKeySelectionIsCurrent(config, route.providerName, webSearchBridgeBinding.provider)) {
-                  throw new Error("API key selection changed during a web-search continuation");
-                }
-              },
-              providerName: route.providerName,
-              modelId: route.modelId,
-            }),
-            false,
-          ),
+          send: async (continuationBody: string) => {
+            const continuation = await fetchWithHeaderTimeout(
+              nativeExchange.request.url,
+              { method: nativeExchange.request.method, headers: nativeExchange.request.headers, body: continuationBody },
+              upstream.signal,
+              connectMs,
+              true,
+              providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                // Pacing can outlive a manual selection change. A continuation must retain the
+                // first leg's key and appended search result, never rebuild from the original turn.
+                beforeDispatch: () => {
+                  if (webSearchBridgeBinding?.kind !== "api-key"
+                    || !providerApiKeySelectionIsCurrent(config, route.providerName, webSearchBridgeBinding.provider)) {
+                    throw new Error("API key selection changed during a web-search continuation");
+                  }
+                },
+                providerName: route.providerName,
+                modelId: route.modelId,
+              }),
+              false,
+            );
+            // The same provider can leave a complete continuation open without a terminal, which
+            // stalls the bridge's decide loop exactly like the first leg — so every leg gets the
+            // same repair, not only the intercepted first one.
+            if (!terminalRepairPolicy || !continuation.ok || !continuation.body) return continuation;
+            return new Response(
+              relayResponsesSseWithTerminalRepair(
+                continuation.body,
+                upstream,
+                terminalRepairPolicy,
+                translatorBudget,
+                options.responsesTerminalRepairScheduler,
+              ),
+              continuation,
+            );
+          },
           execute: createPassthroughWebSearchBridgeExecutor(webSearchBridgePlan, {
             providerApiKey: route.provider.apiKey ?? "",
             auth: webSearchBridgeAuth,
@@ -417,10 +446,9 @@ export async function deliverPassthroughResponse(
             describeImages: requiresVisionPreprocessing(config, route.provider, route.modelId, route.providerName),
             sidecar: config.webSearchSidecar,
           }),
-          // Scope the executed-search memo to this exact upstream (#4587). The Responses adapter
-          // derives the same scope from the same base URL before the NEXT turn is dispatched, so
-          // a replayed hosted cell can be turned back into the destination's own call and result.
-          destinationScope: bridgeSearchReplayScope(route.provider.baseUrl),
+          // Snapshot the bound conversation, provider, model, destination, and credential. The
+          // next turn must match every dimension before its hosted cell can recover this result.
+          destinationScope: bridgeSearchReplayScope(parsed._reasoningReplayScope),
           // Appending a search result can push the continuation past the ceiling the first leg
           // was admitted under, so the same limit is re-applied before every later send.
           checkOutboundBody: (continuationBody: string) => {
@@ -433,16 +461,7 @@ export async function deliverPassthroughResponse(
           onFinalize: () => releaseCodexAuthContextProbeLease(openAiSidecar?.authContext),
           signal: upstream.signal,
         })
-        : upstreamResponse.body;
-      const passthroughSseBody = terminalRepairPolicy
-        ? relayResponsesSseWithTerminalRepair(
-          upstreamSseBody,
-          upstream,
-          terminalRepairPolicy,
-          translatorBudget,
-          options.responsesTerminalRepairScheduler,
-        )
-        : upstreamSseBody;
+        : passthroughSseBody;
       const repairConfig = route.provider.responsesItemIdRepair;
       // Grok Build renders deltas live but reconstructs its durable assistant
       // turn from the completed response snapshot. Native Responses streams

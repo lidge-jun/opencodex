@@ -31,6 +31,11 @@ export interface OcxReasoningReplayIdentity {
  */
 export interface OcxReasoningReplayScopeRef {
   /**
+   * Process-local caller principal from resolveContextPrincipal. Absent when the caller presented
+   * no identity (keyless loopback); replay state keyed by it then fails closed.
+   */
+  readonly clientPrincipalId?: string;
+  /**
    * Conversation namespace for replay state. Historically this was always the Codex parent-thread
    * id; headerless Responses callers use a raw sanitized thread/Cursor/session fallback, never the
    * hashed request-log conversation id.
@@ -85,6 +90,16 @@ export interface OcxParsedRequest {
    * prepareOpaqueBlobRecovery after an authoritative rejection; consumers strip replayed blobs.
    */
   _stripReasoningEncryptedContent?: boolean;
+  /**
+   * Set when replayed reasoning item ids name items in a store this destination cannot read: by
+   * prepareOpaqueBlobRecovery before the one recovery rebuild, and by bindRouteReasoningReplayScope
+   * while the rejection memo is live or after a proven switch to a different destination or
+   * credential. The Responses passthrough then removes the `id` of every replayed reasoning item,
+   * whether or not it carries a blob. A stateful destination resolves a replayed id against its own
+   * store, so keeping it turns the send into `Item with id 'rs_…' not found` (#5583). A model
+   * change on the same destination and credential does not set this.
+   */
+  _dropForeignReasoningItemIds?: boolean;
   /** Final-route opt-in: emit v2 collaboration message arguments as plaintext on ChatGPT. */
   _plaintextV2AgentMessages?: boolean;
   /**

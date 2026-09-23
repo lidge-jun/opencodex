@@ -13,6 +13,7 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
 import type { CodexModelEntitlementSnapshot } from "../../src/codex/model-entitlements";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SUBAGENT_MODELS_VERSION } from "../../src/config/subagent-models";
 
 const emptyEntitlements = (): CodexModelEntitlementSnapshot => ({
   modelsByAccount: new Map(), clientVersionByAccount: new Map(),
@@ -135,7 +136,7 @@ describe("Desktop snapshot through authenticated model discovery", () => {
   function launch(enabled = true, pickerOrder?: string[]): void {
     saveConfig({
       port: 0, hostname: "0.0.0.0", defaultProvider: "test", runtimeRole: "hub",
-      ...(pickerOrder ? { modelPickerOrder: pickerOrder, subagentModels: [], subagentModelsVersion: 1 } : {}),
+      ...(pickerOrder ? { modelPickerOrder: pickerOrder, subagentModels: [], subagentModelsVersion: SUBAGENT_MODELS_VERSION } : {}),
       providers: {
         test: { adapter: "openai-chat", baseUrl: `http://127.0.0.1:${upstream.port}/v1`, apiKey: "fixture", allowPrivateNetwork: true, models: ["model-123", "model-155"] },
       },

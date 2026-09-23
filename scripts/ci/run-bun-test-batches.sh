@@ -6,6 +6,8 @@ readonly BATCH_SIZE="${BUN_TEST_BATCH_SIZE:-12}"
 readonly BATCH_TIMEOUT_SECONDS="${BUN_TEST_BATCH_TIMEOUT_SECONDS:-120}"
 readonly BATCH_KILL_GRACE_SECONDS="${BUN_TEST_BATCH_KILL_GRACE_SECONDS:-15}"
 readonly TEST_FILE_SCOPE="${BUN_TEST_FILE_SCOPE:-general}"
+readonly TEST_PARALLEL="${BUN_TEST_PARALLEL:-}"
+readonly PARALLEL_ARG="${TEST_PARALLEL:+--parallel=$TEST_PARALLEL}"
 # Runtime under test. Defaults to whatever `bun` PATH resolves to; the Bun 1.4
 # qualification lane sets OPENCODEX_BUN_PATH so the batches actually execute on
 # the candidate binary. Without this the lane would export an override, run the
@@ -47,14 +49,80 @@ if [[ "$TEST_FILE_SCOPE" != "general" && "$TEST_FILE_SCOPE" != "all" ]]; then
   echo "BUN_TEST_FILE_SCOPE must be general or all, got: $TEST_FILE_SCOPE" >&2
   exit 64
 fi
-
-HAS_GNU_TIMEOUT=0
-if command -v timeout >/dev/null 2>&1 && timeout --signal=TERM --kill-after=1s 1s true >/dev/null 2>&1; then
-  HAS_GNU_TIMEOUT=1
-else
-  echo "::warning::GNU timeout is unavailable; Bun test batches will run without the outer ${BATCH_TIMEOUT_SECONDS}s process deadline."
+if [[ -n "$TEST_PARALLEL" && ! "$TEST_PARALLEL" =~ ^[1-9][0-9]*$ ]]; then
+  echo "BUN_TEST_PARALLEL must be a positive integer" >&2
+  exit 64
 fi
-readonly HAS_GNU_TIMEOUT
+
+# Every batch runs under a process deadline. GNU timeout provides it on Linux and in Git for
+# Windows; the probe runs the exact option shape used below, so a BSD or busybox `timeout` that
+# rejects it falls through to the portable deadline instead of failing each batch.
+if command -v timeout >/dev/null 2>&1 && timeout --signal=TERM --kill-after=1s 1s true >/dev/null 2>&1; then
+  BATCH_DEADLINE=gnu
+elif command -v perl >/dev/null 2>&1; then
+  BATCH_DEADLINE=portable
+  echo "::notice::GNU timeout is unavailable; each batch keeps its ${BATCH_TIMEOUT_SECONDS}s deadline through the portable process-group fallback."
+else
+  echo "GNU timeout, or perl for the portable fallback, is required to bound Bun test batches." >&2
+  exit 69
+fi
+readonly BATCH_DEADLINE
+
+# Stand-in for `timeout --signal=TERM --kill-after=GRACE SECONDS cmd...` where GNU timeout is
+# unavailable (macOS ships none). It keeps the contract the disposition below reads: the command
+# leads its own process group, the whole group gets TERM at the deadline and KILL after the grace
+# period, and a timed-out run reports 124 -- or 137 when the command itself needed KILL, which is
+# what GNU timeout reports because it signals its own group. Unlike GNU it also KILLs group members
+# still alive after the command exits on TERM, so a hung batch cannot leave children behind.
+run_with_batch_deadline() {
+  local seconds="$1"
+  local grace="$2"
+  shift 2
+  local marker child watchdog status=0
+
+  marker="$(mktemp -t ocx-bun-test-deadline.XXXXXX)"
+  perl -e 'setpgrp(0, 0) or die "setpgrp: $!\n"; exec { $ARGV[0] } @ARGV or die "exec $ARGV[0]: $!\n";' -- "$@" &
+  child=$!
+
+  # Output goes to /dev/null so the watchdog never holds the caller's tee pipe open.
+  (
+    nap=""
+    trap '[[ -z "$nap" ]] || kill "$nap" 2>/dev/null; exit 0' TERM
+    sleep "$seconds" & nap=$!
+    wait "$nap" || exit 0
+    nap=""
+    kill -0 -- "-$child" 2>/dev/null || exit 0
+    echo timeout > "$marker"
+    kill -TERM -- "-$child" 2>/dev/null || true
+    kill -CONT -- "-$child" 2>/dev/null || true
+    waited=0
+    while (( waited < grace )) && kill -0 -- "-$child" 2>/dev/null; do
+      sleep 1
+      waited=$(( waited + 1 ))
+    done
+    kill -KILL -- "-$child" 2>/dev/null || true
+  ) >/dev/null 2>&1 &
+  watchdog=$!
+
+  trap 'kill -TERM -- "-$child" 2>/dev/null || true' INT TERM HUP
+  # A trapped signal interrupts wait with a status above 128 while the command still runs (or is
+  # an unreaped zombie, which kill -0 still sees); wait again for its real status.
+  while :; do
+    wait "$child" && status=0 || status=$?
+    kill -0 "$child" 2>/dev/null || break
+  done
+  trap - INT TERM HUP
+
+  if [[ -s "$marker" ]]; then
+    wait "$watchdog" 2>/dev/null || true
+    if (( status == 137 )); then status=137; else status=124; fi
+  else
+    kill -TERM "$watchdog" 2>/dev/null || true
+    wait "$watchdog" 2>/dev/null || true
+  fi
+  rm -f -- "$marker"
+  return "$status"
+}
 
 is_general_test_file() {
   local path="$1"
@@ -102,12 +170,13 @@ run_test_once() {
   printf '  %s\n' "${files[@]}"
 
   set +e
-  if (( HAS_GNU_TIMEOUT == 1 )); then
+  if [[ "$BATCH_DEADLINE" == "gnu" ]]; then
     timeout --signal=TERM --kill-after="${BATCH_KILL_GRACE_SECONDS}s" \
       "${BATCH_TIMEOUT_SECONDS}s" \
-      "$BUN_BIN" test --isolate --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
+      "$BUN_BIN" test --isolate ${PARALLEL_ARG:+"$PARALLEL_ARG"} --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
   else
-    "$BUN_BIN" test --isolate --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
+    run_with_batch_deadline "$BATCH_TIMEOUT_SECONDS" "$BATCH_KILL_GRACE_SECONDS" \
+      "$BUN_BIN" test --isolate ${PARALLEL_ARG:+"$PARALLEL_ARG"} --timeout 60000 "${files[@]}" 2>&1 | tee "$log_file"
   fi
   status="${PIPESTATUS[0]}"
   set -e
@@ -179,6 +248,32 @@ attribute_batch_file_by_file() {
   fi
 }
 
+serial_manifest="$("$BUN_BIN" -e 'import { SERIAL_FULL_SUITE_FILES } from "./scripts/test.ts"; console.log(SERIAL_FULL_SUITE_FILES.join("\n"));')"
+[[ -n "$serial_manifest" ]] || { echo 'Empty isolated test manifest' >&2; exit 1; }
+SERIAL_FILES=()
+while IFS= read -r file; do
+  if [[ ! "$file" =~ ^[[:alnum:]_./-]+$ || "$file" == /* || "/$file/" == *"/../"* || "/$file/" == *"/./"* || ! -f "tests/$file" ]]; then
+    echo 'Invalid or missing isolated test path' >&2; exit 1
+  fi
+  for ((entry_index = 0; entry_index < ${#SERIAL_FILES[@]}; entry_index += 1)); do
+    [[ "${SERIAL_FILES[$entry_index]}" != "$file" ]] || { echo 'Duplicate isolated test path' >&2; exit 1; }
+  done
+  SERIAL_FILES+=("$file")
+done <<< "$serial_manifest"
+
+is_serial_test_file() {
+  local entry
+  # Dedicated worker-heavy families remain isolated when an unsharded platform
+  # control selects all files rather than delegating them to Linux-only jobs.
+  case "$1" in
+    */api-storage-policy*.test.ts|*/api-storage.test.ts|*/api-usage.test.ts) return 0 ;;
+  esac
+  for entry in "${SERIAL_FILES[@]}"; do
+    [[ "$1" != "tests/$entry" ]] || return 0
+  done
+  return 1
+}
+
 ALL_TEST_FILES=()
 while IFS= read -r -d '' path; do
   ALL_TEST_FILES+=("$path")
@@ -205,14 +300,39 @@ if (( ${#SELECTED_FILES[@]} == 0 )); then
   exit 1
 fi
 
-readonly TOTAL_BATCHES=$(( (${#SELECTED_FILES[@]} + BATCH_SIZE - 1) / BATCH_SIZE ))
+# Keep shard ownership and sorted execution order; split only the process boundary.
+BATCH_STARTS=()
+BATCH_LENGTHS=()
+pending_start=0
+pending_count=0
+for ((index = 0; index < ${#SELECTED_FILES[@]}; index += 1)); do
+  if is_serial_test_file "${SELECTED_FILES[$index]}"; then
+    if (( pending_count > 0 )); then
+      BATCH_STARTS+=("$pending_start"); BATCH_LENGTHS+=("$pending_count")
+      pending_count=0
+    fi
+    BATCH_STARTS+=("$index"); BATCH_LENGTHS+=(1)
+  else
+    if (( pending_count == 0 )); then pending_start=$index; fi
+    ((pending_count += 1))
+    if (( pending_count == BATCH_SIZE )); then
+      BATCH_STARTS+=("$pending_start"); BATCH_LENGTHS+=("$pending_count")
+      pending_count=0
+    fi
+  fi
+done
+if (( pending_count > 0 )); then
+  BATCH_STARTS+=("$pending_start"); BATCH_LENGTHS+=("$pending_count")
+fi
+readonly TOTAL_BATCHES=${#BATCH_STARTS[@]}
 echo "Shard ${SHARD_SPEC}: ${#SELECTED_FILES[@]} files in ${TOTAL_BATCHES} primary Bun processes (scope ${TEST_FILE_SCOPE}, batch size <= ${BATCH_SIZE}, timeout ${BATCH_TIMEOUT_SECONDS}s)."
 echo "Nothing here is retried. A test failure, a process timeout and a Bun runtime crash each fail this shard on their first occurrence."
 echo "A timeout or a crash is additionally swept one file per process for attribution, after the shard has already failed; that sweep cannot turn it green."
 
 for ((batch_index = 0; batch_index < TOTAL_BATCHES; batch_index += 1)); do
-  start=$(( batch_index * BATCH_SIZE ))
-  batch=("${SELECTED_FILES[@]:start:BATCH_SIZE}")
+  start=${BATCH_STARTS[$batch_index]}
+  length=${BATCH_LENGTHS[$batch_index]}
+  batch=("${SELECTED_FILES[@]:start:length}")
   batch_number=$(( batch_index + 1 ))
 
   if run_test_once "$batch_number" "" "${batch[@]}"; then

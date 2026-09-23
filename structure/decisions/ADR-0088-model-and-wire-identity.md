@@ -1,6 +1,6 @@
 # ADR-0088 — decision recorded under "Model and wire identity"
 
-- Contract owner: [providers/openai-tiers.md](../providers/openai-tiers.md#model-and-wire-identity)
+- Contract owner: [providers/openai-accounts.md](../providers/openai-accounts.md#model-and-wire-identity)
 
 ## Decision record
 

@@ -1,13 +1,25 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex — Codex, Claude Code, Claude Desktop ve Grok Build için evrensel sağlayıcı proxy'si" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>OpenAI Codex, Claude Code, Claude Desktop ve Grok Build için evrensel sağlayıcı proxy'si</b><br>
 İki komut, ve hepsi işaret ettiğiniz LLM ile çalışır.</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="X üzerinde @claudeebum hesabını takip et"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/github/v/release/lidge-jun/opencodex?label=desktop&logo=github&color=24292f" alt="En güncel masaüstü sürümü"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm sürümü"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="lisans"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="node sürümü">
 </p>
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-macos.svg" alt="macOS için OpenCodex'i indir" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-windows.svg" alt="Windows için OpenCodex'i indir" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-linux.svg" alt="Linux için OpenCodex'i indir" width="220"></a>
+</p>
+<p align="center"><sub>Masaüstü uygulaması (beta): macOS evrensel <code>.dmg</code> · Windows x64 <code>.msi</code> · Linux x86_64 <code>.AppImage</code> / <code>.deb</code>. Terminali mi tercih ediyorsunuz? CLI'yı kurun:</sub></p>
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -78,7 +90,32 @@ kullanılan sağlıklı hesaba kendiliğinden gitsin; mevcut dizilerse onları b
 
 ## Hızlı başlangıç
 
-### Kişisel kurulum
+### Masaüstü uygulaması (beta)
+
+Masaüstü uygulaması; aynı proxy ve kontrol panelini yerel bir pencerede, menü çubuğu simgesi ve
+paketlenmiş `ocx` ile sunar. Zaten çalışan bir proxy'ye bağlanır ya da kendi paketlenmiş proxy'sini
+başlatır; kontrol paneli proxy bağlantı noktasında kalır (başka bir tane yapılandırmadıysanız
+**http://localhost:10100**). Platformunuza uygun dosyayı
+[en güncel sürümden](https://github.com/lidge-jun/opencodex/releases/latest) seçin:
+
+| Platform | Dosya | Notlar |
+|---|---|---|
+| macOS 13+ (Apple Silicon ve Intel) | `OpenCodex-<version>-macos.dmg` | Evrensel derleme, Developer ID ile imzalı ve noter onaylı |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Henüz kod imzalı değil: SmartScreen bir kez sorar, **Diğer bilgiler → Yine de çalıştır** seçin |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` veya `-linux-amd64.deb` | Menü çubuğu simgesi AppIndicator destekli bir masaüstü gerektirir |
+
+Her dosyanın yanında sürüm sayfasında bir `.sha256` bulunur. macOS 14 ve üzerinde uygulama ayrıca
+proxy durumunu, bugünkü kullanımı ve sağlayıcı kotalarını gösteren bir WidgetKit uzantısıyla gelir;
+görüntülediği anlık görüntü modeli [`app/`](../app) dizinindedir (`MenuBarCore`). Uygulamayı kendiniz
+derlemek için depo kökünde `bun install && bun run build:gui`, ardından `desktop/` içinde macOS'ta
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`,
+Windows ve Linux'ta ise `bun install && bun run prepare-sidecar && bun run build:local` çalıştırın (widget adımı yalnızca macOS'ta çalışır).
+[Masaüstü uygulaması kılavuzu](https://opencodex.me/tr/guides/desktop-app/) ve
+[macOS menü çubuğu uygulaması kılavuzu](https://opencodex.me/tr/guides/macos-menu-bar/) ilk açılışı
+anlatır; [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) diske yazılan her
+şeyi listeler.
+
+### Kişisel kurulum (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; Bun çalışma zamanı otomatik olarak paketlenir
@@ -91,29 +128,6 @@ Arka planda çalıştırmak için `ocx service` kullanın.
 ekleyin (40'tan fazla hazır sağlayıcı ya da herhangi bir OpenAI uyumlu uç nokta), model seçin, hesap
 yönetin. `ocx gui` paneli istediğiniz zaman yeniden açar.
 
-<details>
-<summary><b>Masaüstü uygulaması ve macOS widget'ı — beta</b></summary>
-
-Aynı kontrol panelini sarmalayan yerel uygulamaya ek olarak, tarayıcı açmadan proxy durumunu,
-bugünkü kullanımı ve sağlayıcı kotalarını gösteren bir WidgetKit uzantısı sunulur. Proxy'nin çalışma
-şekli değişmez: uygulama çalışan bir proxy bulur ya da paketlenmiş `ocx` sidecar'ını başlatır;
-kontrol paneli yine **http://localhost:10100** adresinde kalır.
-
-Bu bir beta sürümüdür. Derlemeler bütünlük için imzalanır ancak noter tasdikli değildir; bu nedenle
-macOS ilk açılışta sağ tıklayıp **Aç**'ı seçmenizi ister, Windows SmartScreen ise yükleyici için uyarı
-gösterir. Widget için macOS 14 veya üzeri gerekir; görüntülediği anlık görüntü modeli
-[`app/`](../app) dizinindedir (`MenuBarCore`).
-
-Uygulamayı [en güncel sürümden](https://github.com/lidge-jun/opencodex/releases) indirin veya
-`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` komutuyla yerel olarak derleyin.
-
-Kurulum konumları, servis dosyaları ve diske yazılan diğer her şey
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) dosyasında listelenir.
-[Masaüstü uygulaması kılavuzu](https://lidge-jun.github.io/opencodex/guides/desktop-app/) ve
-[macOS menü çubuğu uygulaması kılavuzu](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/),
-platforma göre kurulumu ve Gatekeeper istemini açıklar.
-
-</details>
 
 ### ChatGPT hesap havuzu
 
@@ -209,8 +223,9 @@ uzaktan yönetim ve geri alma için
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -218,8 +233,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -252,13 +268,13 @@ ulaşamadıklarında sıfırdan farklı bir kodla çıkar). `ocx status` / `ocx 
 
 ## Desteklenen platformlar
 
-| İşletim sistemi | Durum | Servis yöneticisi |
-|---|---|---|
-| macOS (arm64 / x64) | Tam destekleniyor | launchd |
-| Linux (x64 / arm64) | Tam destekleniyor | systemd (kullanıcı birimi) |
-| Windows (x64) | Tam destekleniyor | Görev Zamanlayıcı (gizli) / isteğe bağlı yerel servis (`--native`, WinSW) |
+| İşletim sistemi | Durum | Servis yöneticisi | Masaüstü uygulaması (beta) |
+|---|---|---|---|
+| macOS (arm64 / x64) | Tam destekleniyor | launchd | Evrensel `.dmg` |
+| Linux (x64 / arm64) | Tam destekleniyor | systemd (kullanıcı birimi) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | Tam destekleniyor | Görev Zamanlayıcı (gizli) / isteğe bağlı yerel servis (`--native`, WinSW) | x64 `.msi` |
 
-[Node](https://nodejs.org) 18 veya üzeri gerekir. Bun çalışma zamanı `npm install` sırasında paketlenir —
+CLI kurulumu [Node](https://nodejs.org) 18 veya üzerini gerektirir; masaüstü uygulamasının ne Node'a ne de Bun'a ihtiyacı vardır. Bun çalışma zamanı `npm install` sırasında paketlenir —
 ayrıca Bun kurmanıza gerek yok, Windows'ta WSL de gerekmez. npm, paketlenmiş çalışma zamanının kurulum
 betiklerini engellediyse [kurulum belgelerine](https://opencodex.me/tr/getting-started/installation/) bakın.
 

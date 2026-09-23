@@ -86,10 +86,17 @@ describe("desktop CLI contracts", () => {
 
   test("the startup sequence refuses to start on anything but a proven absence", () => {
     const startup = code(STARTUP);
-    const run = startup.slice(startup.indexOf("async fn run(app: &AppHandle)"));
+    // Anchor on the name, not the full signature: a parameter added to the sequence is not a
+    // change to the order this case is about, and `indexOf` returning -1 silently slices the
+    // last character instead of failing, so every index below reads -1 and the case passes
+    // vacuously. That is exactly what it did when `run` gained its start instant.
+    const at = startup.indexOf("async fn run(app: &AppHandle");
+    expect(at).toBeGreaterThan(-1);
+    const run = startup.slice(at);
     const unknown = run.indexOf("let Some(answer) = resolution.resolved() else {");
     const attach = run.indexOf("match resolve::live_verdict(&resolution) {");
-    const guard = run.indexOf("if !resolve::may_start(&resolution) {");
+    // A takeover proves its own absence by stopping what was there, so it skips this guard.
+    const guard = run.indexOf("if !took_over && !resolve::may_start(&resolution) {");
     const spawn = run.indexOf("spawn_runtime(app, endpoint, &watch)");
     expect(unknown).toBeGreaterThan(-1);
     expect(attach).toBeGreaterThan(unknown);
@@ -116,13 +123,13 @@ describe("desktop CLI contracts", () => {
     expect(reader).toContain("(Outcome::Stopped, Proxy::Stopped)");
     expect(reader).toContain("(Outcome::NotRunning, Proxy::NotRunning)");
     expect(reader).toContain("StopResult::Failed");
-    const stopped = reader.indexOf("StopResult::Stopped(summary)");
+    const stopped = reader.indexOf("StopResult::Stopped(Box::new(summary))");
     expect(stopped).toBeGreaterThan(reader.indexOf("if exit_code != Some(0)"));
   });
 
   test("the outcomes the shell can be handed are the outcomes the CLI can emit", () => {
     expect(stopTs).toContain(
-      'outcome: "stopped" | "not-running" | "history-incomplete" | "history-deferred" | "failed"',
+      'outcome: "stopped" | "not-running" | "history-incomplete" | "history-deferred" | "failed" | "approval-changed" | "manager-still-active"',
     );
     // The shell does not re-derive the outcome; it carries the CLI's own words into its diagnostic.
     expect(stopRs).toContain("summary.outcome");

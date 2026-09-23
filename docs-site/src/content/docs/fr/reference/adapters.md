@@ -166,6 +166,7 @@ conserve les instructions de réflexion bornées existantes, car ce niveau natif
 **Authentification :** `key` au moyen de l’en-tête `api-key` (et non Bearer).
 
 - Délègue la construction de la requête au relais Responses, vérifie que `baseUrl` ne contient aucun espace réservé de modèle non résolu et remplace `Authorization` par `api-key`. L’URL configurée cible directement l’API Responses v1 d’Azure ; l’adaptateur n’ajoute donc pas `api-version`.
+- Partage la récupération Responses pour l’état de raisonnement produit par un autre fournisseur : après un `400 invalid_encrypted_content`, il renvoie la requête une seule fois sans cet état (contenu chiffré et identifiant `rs_…` de l’élément de raisonnement).
 
 ## Utilitaires d’image (`image.ts`)
 

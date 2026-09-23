@@ -38,7 +38,7 @@ export function rootArrayEntries(configBytes: string | null, key: string): strin
 const PARSE_FAILED = Symbol("toml-parse-failed");
 
 /** A root-scope value, `undefined` when the key is absent, `PARSE_FAILED` when the file will not parse. */
-function rootValue(configBytes: string | null, key: string): unknown {
+export function rootValue(configBytes: string | null, key: string): unknown {
   if (configBytes === null) return undefined;
   let parsed: unknown;
   try {

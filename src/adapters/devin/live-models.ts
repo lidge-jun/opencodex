@@ -21,12 +21,16 @@ export const DEVIN_STATIC_MODELS = [
   "gpt-5-6-sol",
   "gpt-5-6-luna",
   "gpt-5-6-terra",
+  // 260923 preemptive: GPT-6 Sol and Luna (OpenAI announced 2026-09-22) added ahead of this provider's own catalog; mirrors the GPT-5.6 Sol/Luna rows.
+  "gpt-6-sol",
+  "gpt-6-luna",
   "claude-opus-4-8",
   "claude-fable-5-1",
   "claude-sonnet-5",
   "glm-5-2",
   "kimi-k2-7",
   "grok-4-5",
+  "grok-4-7",
 ] as const;
 
 /**
@@ -55,7 +59,11 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-5-6-luna": 1_000_000,
   "gpt-5-6-terra": 1_000_000,
   "gpt-6-astra": 1_000_000,
+  "gpt-6-sol": 1_000_000,
+  "gpt-6-luna": 1_000_000,
   "claude-opus-4-8": 1_000_000,
+  // 260923: read from the live catalog (devin/claude-opus-5-5 context_length 1_000_000).
+  "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,
   "claude-fable-5-1": 1_000_000,
   "claude-sonnet-5": 1_000_000,
@@ -66,6 +74,9 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gemini-3-8-flash": 1_048_576,
   "grok-4-5": 500_000,
   "grok-4-6": 500_000,
+  // Live Devin catalog context_length, 2026-09-23:
+  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  "grok-4-7": 500_000,
 };
 
 /**
@@ -128,6 +139,9 @@ export function sortDevinRungs(rungs: Iterable<string>): string[] {
  */
 export const DEVIN_MODEL_EFFORTS: Record<string, string[]> = {
   "swe-2": ["medium", "high", "max"],
+  // Live Devin catalog, 2026-09-23:
+  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  "grok-4-7": ["low", "medium", "high", "xhigh", "max"],
 };
 
 /**

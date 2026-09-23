@@ -36,12 +36,14 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         public let bucketSeconds: Int
         public let style: String
         public let series: [Series]
+        public let incomplete: Bool?
 
-        public init(start: Double, bucketSeconds: Int, style: String, series: [Series]) {
+        public init(start: Double, bucketSeconds: Int, style: String, series: [Series], incomplete: Bool? = nil) {
             self.start = start
             self.bucketSeconds = bucketSeconds
             self.style = style
             self.series = series
+            self.incomplete = incomplete
         }
 
         public struct Series: Codable, Equatable, Sendable {
@@ -95,18 +97,13 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
         case .degraded: state = "degraded"
         }
         let report = snapshot.today ?? snapshot.usage
-        let today = report?.summary.map {
+        let today = report?.filteredSummary(snapshot.settings).map {
             Today(requests: $0.requests, totalTokens: $0.totalTokens, estimatedCostUsd: $0.estimatedCostUsd)
         }
         let quotas = snapshot.quotaRows.map {
             Quota(providerLabel: $0.providerLabel, windowLabel: $0.windowLabel, percent: $0.percent, resetAt: $0.resetAt?.timeIntervalSince1970)
         }
-        let chart = snapshot.timeline.map {
-            Chart(
-                start: $0.start, bucketSeconds: $0.bucketSeconds, style: snapshot.settings.chartStyle.rawValue,
-                series: Array($0.series.prefix(6)).map { Chart.Series(id: $0.id, points: $0.points) }
-            )
-        }
+        let chart = snapshot.timeline?.projected(snapshot.settings).mapChart(style: snapshot.settings.chartStyle.rawValue)
         return WidgetSnapshot(
             schemaVersion: 1, generatedAt: now.timeIntervalSince1970,
             state: state, stateTitle: snapshot.state.title, detail: snapshot.state.detail,
@@ -186,5 +183,13 @@ private extension WidgetSnapshot {
             detail: detail, endpointDisplay: endpointDisplay, menuTitle: menuTitle, today: today,
             quotas: quotas, chart: chart, lastUpdated: lastUpdated
         )
+    }
+}
+
+private extension UsageTimeline {
+    func mapChart(style: String) -> WidgetSnapshot.Chart {
+        WidgetSnapshot.Chart(start: start, bucketSeconds: bucketSeconds, style: style,
+            series: Array(series.prefix(6)).map { .init(id: $0.id, points: $0.points) },
+            incomplete: truncated == true || missingMeasurements > 0 ? true : nil)
     }
 }

@@ -35,6 +35,22 @@ describe("QoderScaffoldFilter", () => {
     expect(first.text + filter.flush().text).toBe("Before.After.");
   });
 
+  test("uses original-string offsets when Unicode lowercasing would expand", () => {
+    const expandingPrefix = "İ".repeat(64);
+    const filter = new QoderScaffoldFilter();
+    const result = filter.push(`${expandingPrefix}${REMINDER}After.`);
+    expect(result.fail).toBeNull();
+    expect(result.text + filter.flush().text).toBe(`${expandingPrefix}After.`);
+    expect(result.text).not.toContain("internal-notes");
+  });
+
+  test("uses original-string offsets to find a closer after expanding Unicode", () => {
+    const filter = new QoderScaffoldFilter();
+    const result = filter.push(`<system-reminder>${"İ".repeat(64)}</SYSTEM-REMINDER>After.`);
+    expect(result.fail).toBeNull();
+    expect(result.text + filter.flush().text).toBe("After.");
+  });
+
   test("catches a marker split across deltas", () => {
     const filter = new QoderScaffoldFilter();
     // The opening tag arrives in three pieces; a per-delta scan would miss it entirely.
@@ -136,6 +152,25 @@ describe("QoderScaffoldFilter", () => {
     expect(result.fail).toContain("<invoke>");
   });
 
+  test("folds a Kelvin-sign spelling of invoke the way lowercasing did", () => {
+    // U+212A lowercases to an ASCII k in one code unit, so the old lowercased scan caught it.
+    const kelvin = "\u212A";
+    const filter = new QoderScaffoldFilter();
+    const result = filter.push(`Checking.\n<invo${kelvin}e>\ncd /srv/private && git status\n</invo${kelvin}e>`);
+    expect(result.text).toBe("Checking.\n");
+    expect(result.text).not.toContain("git status");
+    expect(result.fail).not.toBeNull();
+  });
+
+  test("holds a Kelvin-sign invoke prefix split across deltas", () => {
+    const kelvin = "\u212A";
+    const filter = new QoderScaffoldFilter();
+    const first = filter.push("Checking.\n<invo");
+    const second = filter.push(`${kelvin}e>\ncd /srv/private && git status`);
+    expect(first.text + second.text).toBe("Checking.\n");
+    expect(second.fail).not.toBeNull();
+  });
+
   test("does not open a block on a word that merely starts with the tag name", () => {
     // The opener is matched without its ">", so it needs a token boundary of its own.
     const filter = new QoderScaffoldFilter();
@@ -159,6 +194,17 @@ describe("QoderScaffoldFilter", () => {
 });
 
 describe("guardQoderScaffolding", () => {
+  test("never emits a reminder after a Unicode case-folding expansion", () => {
+    const { events, emit } = collect();
+    const guarded = guardQoderScaffolding(emit);
+    const prefix = "İ".repeat(64);
+    guarded({ type: "text_delta", text: `${prefix}${REMINDER}` });
+    guarded({ type: "done", stopReason: "stop" });
+    expect(textOf(events)).toBe(prefix);
+    expect(textOf(events)).not.toContain("internal-notes");
+    expect(events[events.length - 1]!.type).toBe("done");
+  });
+
   test("strips the reminder and still completes the turn", () => {
     const { events, emit } = collect();
     const guarded = guardQoderScaffolding(emit);

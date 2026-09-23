@@ -10,7 +10,7 @@ Request-local adapter bindings are separate from registry authority in the Respo
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. Cursor's localized native-shell names follow the [routing-commentary guard contract](../providers/cursor.md#cursor-native-exec).
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Decision
 
@@ -40,8 +40,8 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   does not. `devin-cli` survives only as a deprecated alias — `ocx login devin-cli` routes to
   `devin`, and a startup merge migration rewrites any saved row still keyed under the old
   provider id, so the registry carries one Devin provider, not two.
-  Its `GetChatMessage` inference POSTs, including the two bounded pre-output stated-reset
-  replays, pass through the request's provider executor and shared physical-send budget.
+  Its `GetChatMessage` inference POSTs pass through the provider executor and shared send budget.
+  The adapter allows no reset wait; the shared helper retains bounded replays for opted-in callers.
   Catalog and JWT RPCs remain adapter support traffic rather than inference sends.
   `AdapterFactoryContext.providerId` still tells the shared adapter which configured row it is
   serving: the Cognition tenant is recorded on the credential, not in the registry, so the
@@ -85,6 +85,9 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   rows each base model's collapsed UID gathers — the EFFORT_TOKENS suffixes, tier rows
   like `-1m` included: unmeasured rows abstain, unanimous measured rows advertise
   `["text"]` or `["text", "image"]`, and measured disagreement stays unadvertised.
+  The degraded static roster includes `grok-4-7` with its catalog-measured ladder but
+  omits `grok-4-6` until a Devin-specific ladder is measured; live discovery can still
+  return 4.6 for an account that offers it.
 
   At dispatch the adapter reads the same per-account/host cache once more for the
   exact selected wire UID and forwards `completionOpts.maxInputTokens`: the smallest
@@ -92,10 +95,14 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   hints, so `CompletionConfiguration` field #3 no longer serializes the encoder's
   128000 fallback. Smaller operator hints cap live evidence and never enlarge it;
   with no evidence the adapter hint is omitted and the encoder still serializes
-  its own 128000 fallback for field #3. Investigation and limits:
+  its own 128000 fallback for field #3. Connect trailer diagnostics expose only an
+  allowlisted error code, hexadecimal trace id and typed `retryAfterSeconds`, optionally rendered as
+  generated `retry after ~Ns` wording; raw text stays internal because it can reflect credentials. Investigation and limits:
   `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
+
+Behavior that belongs to a wire asks the registry for the adapter's resolved wire (`effectiveAdapterContract()`, or `resolvedAdapterWire()` in `src/responses/continuation-ownership.ts`) instead of comparing adapter names, so a wrapper inherits it by declaring its parent. Responses opaque-blob recovery is one such consumer: Azure recovers from another provider's reasoning state because `azure-openai` declares `contractParent: "openai-responses"` (#5583).
 
 Codex Spark retirement removes model-specific exceptions from the Responses adapter, without
 changing contract inheritance or generic Responses Lite handling; see
@@ -134,9 +141,9 @@ so the schema is not something a user can fix from configuration (issue #2673).
 
 > Decision record: [ADR-0093](../decisions/ADR-0093-moonshot-ref-with-siblings-normalization.md)
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
@@ -154,9 +161,9 @@ Chat helper admission in `src/server/responses/core.ts` follows the
 claims stored main, after terminal vision, routed vision and search exclusions.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](../transports/responses.md).
 
@@ -170,7 +177,7 @@ privately to final dispatch; preliminary route selection does not inject Go-only
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -243,4 +250,4 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 The registered Devin implementation in `src/adapters/devin.ts` maps data URLs to its native image field. Its textual fallback accepts only bounded HTTPS references and emits a fixed-size omission marker for unsupported or oversized values.
 
-A [compaction routing override](../transports/responses.md#compaction-routing-overrides) selects its target before adapter resolution and uses the existing registry factory.
+A [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) selects its target before adapter resolution and uses the existing registry factory.

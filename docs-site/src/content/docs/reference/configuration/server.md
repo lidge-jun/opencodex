@@ -76,7 +76,7 @@ requests such as vision and web search are replayed normally, because repeating 
 duplicate a turn.
 
 A native Responses provider can opt into replacing that send with
-[`retryOnReset`](providers.md#provider-entries-ocxproviderconfig). The same grant covers the
+[`retryOnReset`](/reference/configuration/providers/#provider-entries-ocxproviderconfig). The same grant covers the
 case where the connection survives the header and the SSE body then dies carrying only control
 events, because the caller has observed nothing in either one. A replacement happens only when
 the request is self-contained (`store: false`, complete input, client-executed tools only, no
@@ -601,7 +601,9 @@ input size and content. Restart the proxy after editing
 Codex uses small helper models for tasks such as titles and commit messages. Enable
 `shadowCallIntercept` to redirect recognized source-model prefixes to another configured model. The
 replacement keeps the request's configured reasoning effort. Set `sourceModels` only when a client
-uses different helper ids.
+uses different helper ids. A non-empty `sourceModels` replaces the default prefixes instead of
+extending them, so include `gpt-5.6-luna` in the list when current clients should still be
+intercepted.
 Interception is model-based: every request whose bare model id matches `sourceModels` can be
 redirected, including normal `request_kind: "turn"` requests. `x-codex-turn-metadata` does not exempt
 a matching request.
@@ -615,6 +617,24 @@ a matching request.
   }
 }
 ```
+
+### When the target is unavailable
+
+The replacement is the one destination the operator chose, so a target that stops resolving fails
+the helper call instead of sending it elsewhere. When the target's provider is disabled or deleted,
+or its combo no longer exists, an intercepted request returns `409` with error code
+`intercept_target_unavailable` before anything is sent upstream. The request log records the same
+code. The request is not passed through to the native helper model and does not fall back to the
+default provider, because either would change the destination, credentials and cost without your
+choice. A combo or routing-profile target still fails over among its own members. A qualified
+target such as `provider/model` whose provider segment names nothing configured is treated the same
+way, and the settings API refuses to save one. A bare model id that resolves through the default
+provider stays valid.
+
+Disabling (`PATCH /api/providers?name=<provider>` with `disabled: true`) or deleting a provider that the
+target resolves to still succeeds; the response adds `dependentShadowIntercept: { model, enabled }`
+and the dashboard shows a warning. Re-enabling the provider, or choosing another target, restores
+interception.
 
 ## Sidecars
 
@@ -714,6 +734,6 @@ wildcard `hostname`, where the public listener already holds `127.0.0.1:<port>`.
 
 `codexNativeSteering` and `codexNativeInjection` enable separate, default-off native
 WebSocket control paths. See the canonical guide for
-[supported steering routes and settings](../../guides/codex-integration.md#steering-continuation-settings-and-public-api),
-[typed result and approval continuations](../../guides/codex-integration.md#rich-tool-results-and-explicit-approvals-after-response-completion),
-and [confirmation deadlines and retained context](../../guides/codex-integration.md#steering-confirmation-deadlines-and-retained-context).
+[supported steering routes and settings](/guides/codex-integration/#steering-continuation-settings),
+[typed result and approval continuations](/guides/codex-integration/#rich-tool-results-and-explicit-approvals-after-response-completion),
+and [confirmation deadlines and retained context](/guides/codex-integration/#steering-confirmation-deadlines-and-retained-context).

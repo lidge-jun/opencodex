@@ -47,6 +47,7 @@ export interface DerivedKeyLoginProvider {
   requiresReasoningPlaceholderModels?: string[];
   showThinkingSummary?: boolean;
   reasoningSplitModels?: string[];
+  inlineThinkTagModels?: string[];
   reasoningDetailsModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
@@ -113,13 +114,17 @@ function cloneRecordOfArrays(input: Record<string, string[]>): Record<string, st
  * is how a partially customized `modelInputModalities` could leave a
  * vision-capable model advertising no image support, which in turn collapses any
  * combo containing it to text-only. Routing already merges these maps per key
- * (`mergeRecordFill` in src/router.ts); catalog enrichment now matches.
+ * (`mapFill` in src/providers/resolved-model-policy-merge.ts); catalog enrichment now matches.
  */
 function fillRecordOfArrays(
   seed: Record<string, string[]>,
   user: Record<string, string[]> | undefined,
 ): Record<string, string[]> {
-  return { ...cloneRecordOfArrays(seed), ...(user ? cloneRecordOfArrays(user) : {}) };
+  const userKeys = new Set(Object.keys(user ?? {}).map(key => key.toLowerCase()));
+  const defaults = Object.fromEntries(
+    Object.entries(seed).filter(([key]) => !userKeys.has(key.toLowerCase())),
+  );
+  return { ...cloneRecordOfArrays(defaults), ...(user ? cloneRecordOfArrays(user) : {}) };
 }
 
 function cloneNestedRecord(input: Record<string, Record<string, string>>): Record<string, Record<string, string>> {
@@ -286,6 +291,7 @@ export function providerConfigSeed(entry: ProviderRegistryEntry): OcxProviderCon
     ...(entry.requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels: [...entry.requiresReasoningPlaceholderModels] } : {}),
     ...(entry.showThinkingSummary !== undefined ? { showThinkingSummary: entry.showThinkingSummary } : {}),
     ...(entry.reasoningSplitModels ? { reasoningSplitModels: [...entry.reasoningSplitModels] } : {}),
+    ...(entry.inlineThinkTagModels ? { inlineThinkTagModels: [...entry.inlineThinkTagModels] } : {}),
     ...(entry.reasoningDetailsModels ? { reasoningDetailsModels: [...entry.reasoningDetailsModels] } : {}),
     ...(entry.thinkingToggleModels ? { thinkingToggleModels: [...entry.thinkingToggleModels] } : {}),
     ...(entry.thinkingBudgetModels ? { thinkingBudgetModels: [...entry.thinkingBudgetModels] } : {}),
@@ -336,6 +342,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
       ...(entry.requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels: [...entry.requiresReasoningPlaceholderModels] } : {}),
       ...(entry.showThinkingSummary !== undefined ? { showThinkingSummary: entry.showThinkingSummary } : {}),
       ...(entry.reasoningSplitModels ? { reasoningSplitModels: [...entry.reasoningSplitModels] } : {}),
+      ...(entry.inlineThinkTagModels ? { inlineThinkTagModels: [...entry.inlineThinkTagModels] } : {}),
       ...(entry.reasoningDetailsModels ? { reasoningDetailsModels: [...entry.reasoningDetailsModels] } : {}),
       ...(entry.thinkingToggleModels ? { thinkingToggleModels: [...entry.thinkingToggleModels] } : {}),
       ...(entry.thinkingBudgetModels ? { thinkingBudgetModels: [...entry.thinkingBudgetModels] } : {}),
@@ -534,7 +541,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   // Per-model fill for the same reason as modelInputModalities above: an all-or-nothing
   // copy let ONE customized model hide the registry's ladder for every other model on the
   // provider. That split the two planes apart — routing merges these maps per key
-  // (mergeRecordFill in src/router.ts), so the wire honored the effort while /v1/models and
+  // (mapFill in src/providers/resolved-model-policy-merge.ts), so the wire honored the effort while /v1/models and
   // every client export showed no effort control at all.
   if (resolvedStatic.modelReasoningEfforts) prov.modelReasoningEfforts = cloneRecordOfArrays(resolvedStatic.modelReasoningEfforts);
   if (!prov.modelDefaultReasoningEfforts && seed.modelDefaultReasoningEfforts) prov.modelDefaultReasoningEfforts = { ...seed.modelDefaultReasoningEfforts };
@@ -602,6 +609,7 @@ export function enrichProviderFromRegistry(name: string, prov: OcxProviderConfig
   if (!prov.preserveReasoningContentModels && seed.preserveReasoningContentModels) prov.preserveReasoningContentModels = [...seed.preserveReasoningContentModels];
   if (!prov.requiresReasoningPlaceholderModels && seed.requiresReasoningPlaceholderModels) prov.requiresReasoningPlaceholderModels = [...seed.requiresReasoningPlaceholderModels];
   if (!prov.reasoningSplitModels && seed.reasoningSplitModels) prov.reasoningSplitModels = [...seed.reasoningSplitModels];
+  if (!prov.inlineThinkTagModels && seed.inlineThinkTagModels) prov.inlineThinkTagModels = [...seed.inlineThinkTagModels];
   if (!prov.reasoningDetailsModels && seed.reasoningDetailsModels) prov.reasoningDetailsModels = [...seed.reasoningDetailsModels];
   if (!prov.thinkingToggleModels && seed.thinkingToggleModels) prov.thinkingToggleModels = [...seed.thinkingToggleModels];
   if (!prov.thinkingBudgetModels && seed.thinkingBudgetModels) prov.thinkingBudgetModels = [...seed.thinkingBudgetModels];

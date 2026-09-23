@@ -603,11 +603,15 @@ describe("legacy pool contract goldens (#wp5)", () => {
     }
   });
 
-  test("a bad strategy and a bad stickyLimit are rejected identically on every kind", async () => {
+  test("a bad strategy and a bad stickyLimit are rejected identically on every kind, with one null exception", async () => {
     // One validator, three adapters. The kinds keep their own request and response shapes --
     // that is what the goldens above pin -- but the VALUE rules are now a single implementation,
     // so "quota, round-robin, fill-first" and the 1..100 sticky bound cannot drift apart per
     // kind. Before this, the generic kind carried a private copy of both.
+    // ONE deliberate exception: `strategy: null` is not a bad value on the legacy generic
+    // endpoint -- it clears the saved strategy and answers 200. Codex, Anthropic, and the
+    // unified /api/pool/settings route all reject the same null with 400. A future reader
+    // who sees the 200 must not "fix" it back without deciding that contract first.
     const codex = async (payload: Record<string, unknown>) => {
       const req = new Request("http://localhost/api/codex-auth/pool-strategy", {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
@@ -615,19 +619,45 @@ describe("legacy pool contract goldens (#wp5)", () => {
       const resp = await handleCodexAuthAPI(req, new URL(req.url), makeCodexConfig());
       return resp!.status;
     };
-    const server = startServer(0);
+    const previousHome = process.env.OPENCODEX_HOME;
+    const testDir = mkdtempSync(join(tmpdir(), "ocx-pool-validator-"));
+    let server: ReturnType<typeof startServer> | undefined;
     try {
+      process.env.OPENCODEX_HOME = testDir;
+      saveConfig({
+        port: 0,
+        hostname: "127.0.0.1",
+        defaultProvider: "google-antigravity",
+        providers: {
+          "google-antigravity": { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" },
+        },
+      } as OcxConfig);
+      server = startServer(0);
       const oauth = async (payload: Record<string, unknown>) => {
         const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
           method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
         });
         return res.status;
       };
-      for (const strategy of ["weighted", "", 3, null]) {
+      const oauthJson = async (payload: Record<string, unknown>) => {
+        const res = await fetch(new URL("/api/oauth/accounts/pool", server.url), {
+          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+        });
+        return { status: res.status, body: await res.json() as { strategy?: unknown } };
+      };
+      for (const strategy of ["weighted", "", 3]) {
         expect(await codex({ strategy })).toBe(400);
         expect(await oauth({ provider: "anthropic", strategy })).toBe(400);
         expect(await oauth({ provider: "google-antigravity", strategy })).toBe(400);
       }
+      expect(await codex({ strategy: null })).toBe(400);
+      expect(await oauth({ provider: "anthropic", strategy: null })).toBe(400);
+      // The generic legacy contract: null clears the saved strategy. Prove the clear actually
+      // happened -- a 200 that left the old strategy in place would be a silent no-op.
+      expect(await oauth({ provider: "google-antigravity", strategy: "round-robin" })).toBe(200);
+      const cleared = await oauthJson({ provider: "google-antigravity", strategy: null });
+      expect(cleared.status).toBe(200);
+      expect(cleared.body).toHaveProperty("strategy", null);
       // 0 and 101 sit just outside the shared bound; 1 and 100 are the edges that must pass.
       for (const stickyLimit of [0, 101, 1.5]) {
         expect(await codex({ stickyLimit })).toBe(400);
@@ -638,7 +668,13 @@ describe("legacy pool contract goldens (#wp5)", () => {
         expect(await codex({ stickyLimit })).toBe(200);
       }
     } finally {
-      await server.stop(true);
+      try {
+        await server?.stop(true);
+      } finally {
+        if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = previousHome;
+        removeTreeWithRetry(testDir);
+      }
     }
   });
 

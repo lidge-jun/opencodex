@@ -985,9 +985,15 @@ function buildPiClientConfig(ctx: ExportContext, sendSessionAffinityHeaders = fa
   };
 }
 
+/** Do not let provider-controlled catalog text become an environment lookup. */
+function containsEnvInterpolation(value: string): boolean {
+  return value.includes("${");
+}
+
 function buildHermesClientConfig(ctx: ExportContext): HermesGeneratedConfig {
   const models: Record<string, HermesModelEntry> = {};
   for (const model of normalizeExportModels(ctx.models)) {
+    if (containsEnvInterpolation(model.namespaced)) continue;
     const declared = model.inputModalities;
     models[model.namespaced] = declared && declared.length > 0
       ? { supports_vision: declared.includes("image") }
@@ -1009,15 +1015,17 @@ function buildHermesClientConfig(ctx: ExportContext): HermesGeneratedConfig {
 }
 
 function buildOpenclawClientConfig(ctx: ExportContext): OpenclawGeneratedConfig {
-  const models: OpenclawModelEntry[] = normalizeExportModels(ctx.models).map(model => {
+  const models: OpenclawModelEntry[] = normalizeExportModels(ctx.models).flatMap(model => {
+    const name = exportModelLabel(model);
+    if (containsEnvInterpolation(model.namespaced) || containsEnvInterpolation(name)) return [];
     const context = authoritativeContextWindow(model.contextWindow);
     const input = [...new Set(model.inputModalities?.filter(value => ["text", "image", "video", "audio"].includes(value)))];
-    return {
+    return [{
       id: model.namespaced,
-      name: exportModelLabel(model),
+      name,
       ...(context !== undefined ? { contextWindow: context } : {}),
       ...(input.length > 0 ? { input } : {}),
-    };
+    }];
   });
   const headers = proxyAdmissionHeaders(ctx.config, OPENCLAW_API_KEY_ENV_REF);
   return {

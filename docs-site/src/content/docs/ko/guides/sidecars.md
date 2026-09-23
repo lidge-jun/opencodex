@@ -141,4 +141,4 @@ OpenAI 실행 경로, Dashboard, 관리 API는 `gpt-5.6-luna`를 폴백으로 �
 
 파일을 직접 고치고 싶다면 이전처럼 `config.json`에서 `enabled`를 `false`로 두면 됩니다. Anthropic OAuth 검색과 이미지 설명은 기존 Claude Code OAuth
 fingerprint 선례를 따르지만, 실제 계정과 작업량으로 충분히 soak test하는 편이 좋습니다. 전체
-필드는 [설정 레퍼런스](/ko/reference/configuration/#sidecars)를 참고하세요.
+필드는 [설정 레퍼런스](/ko/reference/configuration/server/#sidecars)를 참고하세요.

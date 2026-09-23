@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import type { OcxConfig } from "../types";
-import { refreshUserCostOverlays, withPreservedDiskOnlyProviders } from "../usage/user-cost-overlays";
+import { withPreservedDiskOnlyProviders } from "../usage/user-cost-overlays";
+import { refreshConfigDerivedRegistries } from "./derived-registries";
 import { atomicWriteFile, isMissingPathError } from "./atomic-write";
 import { getConfigPath } from "./paths";
 import { configRebaseDeletionKeys, projectConfigRebaseProvenance } from "./rebase-provenance";
@@ -81,12 +82,12 @@ export function persistConfigUnlocked(config: OcxConfig): boolean {
   // the same bytes (e.g. before a proxy notification), and Logs/Usage must
   // adopt the overlay without waiting for a changed save or restart.
   if (unchanged) {
-    refreshUserCostOverlays(persisted);
+    refreshConfigDerivedRegistries(persisted);
     return false;
   }
   atomicWriteFile(configPath, bytes);
   // For changed saves, refresh only AFTER the write succeeded so a failed
   // write cannot leave estimates reflecting configuration never persisted.
-  refreshUserCostOverlays(persisted);
+  refreshConfigDerivedRegistries(persisted);
   return true;
 }

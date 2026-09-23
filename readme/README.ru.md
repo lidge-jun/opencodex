@@ -1,13 +1,25 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex — универсальный прокси провайдеров для Codex, Claude Code, Claude Desktop и Grok Build" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>Универсальный прокси провайдеров для OpenAI Codex, Claude Code, Claude Desktop и Grok Build</b><br>
 Две команды — и каждый из них работает на любой LLM, которую вы укажете.</p>
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Подписывайтесь на @claudeebum в X"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/github/v/release/lidge-jun/opencodex?label=desktop&logo=github&color=24292f" alt="Последний релиз настольного приложения"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="версия npm"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="лицензия"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="версия Node">
 </p>
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-macos.svg" alt="Скачать OpenCodex для macOS" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-windows.svg" alt="Скачать OpenCodex для Windows" width="220"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-linux.svg" alt="Скачать OpenCodex для Linux" width="220"></a>
+</p>
+<p align="center"><sub>Настольное приложение (бета): универсальный <code>.dmg</code> для macOS · <code>.msi</code> для Windows x64 · <code>.AppImage</code> / <code>.deb</code> для Linux x86_64. Предпочитаете терминал? Установите CLI:</sub></p>
 
 ```bash
 npm install -g @bitkyc08/opencodex
@@ -80,7 +92,33 @@ Ollama или любую другую LLM с Codex, Claude Code, Claude Desktop 
 
 ## Быстрый старт
 
-### Личная установка
+### Настольное приложение (бета)
+
+Настольное приложение — это тот же прокси и та же панель управления в нативном окне,
+с иконкой в трее и встроенным `ocx`. Оно подключается к уже запущенному прокси либо
+запускает встроенный, а панель остаётся на порту прокси (**http://localhost:10100**,
+если вы не настроили другой). Выберите файл для своей платформы в
+[последнем релизе](https://github.com/lidge-jun/opencodex/releases/latest):
+
+| Платформа | Файл | Примечания |
+|---|---|---|
+| macOS 13+ (Apple Silicon и Intel) | `OpenCodex-<version>-macos.dmg` | Универсальная сборка, подписана Developer ID и нотариализована |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Пока без цифровой подписи: SmartScreen спросит один раз — выберите **Подробнее → Выполнить в любом случае** |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` или `-linux-amd64.deb` | Для трея нужен рабочий стол с поддержкой AppIndicator |
+
+Рядом с каждым файлом на странице релиза есть `.sha256`. На macOS 14+ приложение также
+поставляется с расширением WidgetKit, которое показывает состояние прокси, расход за
+сегодня и квоты провайдеров; модель снимков, которую оно отображает, находится в
+[`app/`](../app) (`MenuBarCore`). Чтобы собрать приложение самостоятельно, выполните
+`bun install && bun run build:gui` в корне репозитория, затем в `desktop/` выполните
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` на macOS
+или `bun install && bun run prepare-sidecar && bun run build:local` на Windows и Linux (шаг с виджетом
+работает только на macOS). В [руководстве по настольному приложению](https://opencodex.me/ru/guides/desktop-app/) и
+[руководстве по приложению macOS в строке меню](https://opencodex.me/ru/guides/macos-menu-bar/)
+описан первый запуск, а
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) перечисляет всё, что записывается на диск.
+
+### Личная установка (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; рантайм Bun подключается автоматически
@@ -92,30 +130,6 @@ ocx start                         # прокси + панель управлен
 Откройте **http://localhost:10100** и настройте всё в веб-панели: добавьте провайдеров
 (40+ встроенных или любой OpenAI-совместимый endpoint), выберите модели, управляйте
 аккаунтами. `ocx gui` в любой момент снова откроет панель.
-
-<details>
-<summary><b>Настольное приложение и виджет macOS — бета-версия</b></summary>
-
-Это нативная оболочка вокруг той же панели управления с расширением WidgetKit, которое
-показывает состояние прокси, расход за сегодня и квоты провайдеров без открытия браузера.
-Сам прокси не меняется: приложение находит уже запущенный экземпляр либо запускает встроенный
-сайдкар `ocx`, а панель по-прежнему доступна по адресу **http://localhost:10100**.
-
-Это бета-версия. Сборки подписаны для проверки целостности, но не нотариализованы, поэтому
-при первом запуске macOS просит нажать правой кнопкой мыши и выбрать **«Открыть»**, а Windows
-SmartScreen предупреждает об установщике. Для виджета нужна macOS 14 или новее; его модель
-снимков находится в [`app/`](../app) (`MenuBarCore`).
-
-Скачайте приложение из [последнего релиза](https://github.com/lidge-jun/opencodex/releases) или
-соберите локально командой `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
-
-Пути установки, файлы служб и всё остальное, что записывается на диск, перечислены в
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed). В
-[руководстве по настольному приложению](https://lidge-jun.github.io/opencodex/guides/desktop-app/) и
-[руководстве по приложению macOS в строке меню](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
-описаны установка на каждой платформе и запрос Gatekeeper.
-
-</details>
 
 ### Пул аккаунтов ChatGPT
 
@@ -214,8 +228,9 @@ services:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -223,8 +238,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -257,13 +273,13 @@ ocx init      # интерактивная настройка: пишет ~/.ope
 
 ## Поддерживаемые платформы
 
-| ОС | Статус | Менеджер служб |
-|---|---|---|
-| macOS (arm64 / x64) | Полная поддержка | launchd |
-| Linux (x64 / arm64) | Полная поддержка | systemd (пользовательский unit) |
-| Windows (x64) | Полная поддержка | Task Scheduler (скрыто) / опциональная нативная служба (`--native`, WinSW) |
+| ОС | Статус | Менеджер служб | Настольное приложение (бета) |
+|---|---|---|---|
+| macOS (arm64 / x64) | Полная поддержка | launchd | Универсальный `.dmg` |
+| Linux (x64 / arm64) | Полная поддержка | systemd (пользовательский unit) | `.AppImage` / `.deb` для x86_64 |
+| Windows (x64) | Полная поддержка | Task Scheduler (скрыто) / опциональная нативная служба (`--native`, WinSW) | `.msi` для x64 |
 
-Требуется [Node](https://nodejs.org) 18+. Рантайм Bun добавляется автоматически при `npm install` —
+Для установки CLI требуется [Node](https://nodejs.org) 18+; настольному приложению не нужны ни Node, ни Bun. Рантайм Bun добавляется автоматически при `npm install` —
 отдельно устанавливать Bun не нужно, WSL на Windows тоже не нужен. Если npm заблокировал
 скрипты установки встроенного рантайма, см. [документацию по установке](https://opencodex.me/ru/getting-started/installation/).
 

@@ -78,6 +78,59 @@ afterEach(() => {
 });
 
 describe("models.dev reasoning metadata", () => {
+  test("an expired snapshot read refreshes in the background with Codex integration off; a missing snapshot does not", async () => {
+    const stale = snapshotFile({
+      "opencode-go": {
+        [MUSE_SPARK]: { reasoning: true, options: [{ type: "effort", values: ["low", "high"] }] },
+      },
+    });
+    stale.fetchedAt = Date.now() - 25 * 60 * 60 * 1000;
+    const { effort, metadata } = await load({
+      "config.json": JSON.stringify({ clientIntegrations: { codex: false } }),
+      "reasoning-metadata-cache.json": JSON.stringify(stale),
+    });
+    const previousFetch = globalThis.fetch;
+    let requests = 0;
+    try {
+      globalThis.fetch = (() => {
+        requests += 1;
+        return Promise.reject(new Error("offline fixture"));
+      }) as typeof fetch;
+      expect(effort.configuredReasoningEfforts(ZEN_GO, MUSE_SPARK)).toEqual(["low", "high"]);
+      expect(requests).toBe(1);
+
+      await load({ "config.json": JSON.stringify({ clientIntegrations: { codex: false } }) });
+      expect(effort.configuredReasoningEfforts(ZEN_GO, MUSE_SPARK)).toBeUndefined();
+      expect(effort.configuredReasoningEfforts({ ...ZEN_GO, thinkingToggleModels: [MUSE_SPARK] }, MUSE_SPARK)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+      expect(requests).toBe(1);
+    } finally {
+      globalThis.fetch = previousFetch;
+      metadata.resetReasoningMetadataCachesForTests();
+    }
+  });
+
+  test("a hung fetch cannot hold either a new or coalesced bounded refresh", async () => {
+    const { metadata } = await load();
+    const previousFetch = globalThis.fetch;
+    let releaseFetch: (() => void) | undefined;
+    try {
+      globalThis.fetch = (() => new Promise((_resolve, reject) => {
+        releaseFetch = () => reject(new Error("fixture released"));
+      })) as typeof fetch;
+      const fresh = metadata.refreshReasoningMetadata({ force: true, waitMs: 25 });
+      const coalesced = metadata.refreshReasoningMetadata({ force: true, waitMs: 25 });
+      expect(await Promise.all([fresh, coalesced])).toEqual([
+        { ok: false, reason: "wait budget exceeded" },
+        { ok: false, reason: "wait budget exceeded" },
+      ]);
+    } finally {
+      releaseFetch?.();
+      globalThis.fetch = previousFetch;
+      await new Promise(resolve => setTimeout(resolve, 0));
+      metadata.resetReasoningMetadataCachesForTests();
+    }
+  });
+
   test("advertises the published effort rungs and strips the none/minimal sentinels", async () => {
     const { effort } = await load(metadataFile({
       "opencode-go": {

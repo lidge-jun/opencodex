@@ -19,12 +19,21 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 const originalFetch = globalThis.fetch;
 let releaseInheritedSpendHome: (() => void) | undefined;
+let previousCatalogStateOverride: string | undefined;
 // Taken per inherited-home dispatch because the pool retry row installs a different home. The
 // ??= keeps a second call inside one case idempotent rather than replacing the release callback
 // it would need; no row here calls it twice today, so this is defence, not a fixed regression.
 const takeInheritedSpendHome = (): void => { releaseInheritedSpendHome ??= acquireOwnedSpendHome(); };
-beforeEach(() => { clearResponseStateForTests(); });
+beforeEach(() => {
+  previousCatalogStateOverride = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  // Response rewriting is independent of the host's running Codex processes. Without
+  // this fixture, V2 guidance enumerates real Windows processes and can outlive a case.
+  process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = "fresh";
+  clearResponseStateForTests();
+});
 afterEach(() => {
+  if (previousCatalogStateOverride === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
+  else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = previousCatalogStateOverride;
   // Released first so a failed row cannot leak its writer lease into the next case.
   releaseInheritedSpendHome?.();
   releaseInheritedSpendHome = undefined;
@@ -219,6 +228,31 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
     expect(clientBody).toContain('"namespace":"collaboration"');
     expect(clientBody).toContain('"name":"spawn_agent"');
     expect(clientBody).toContain('"encrypted_function_args":[]');
+  });
+
+  test("rewrites a Responses Lite default catalog and restores its delegated call", async () => {
+    takeInheritedSpendHome();
+    let sent: Record<string, any> | undefined;
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
+      sent = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify(completedResponsePayload()), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+    const { tools, ...body } = await collaborationRequest().json() as Record<string, any>;
+    body.input.unshift({ type: "additional_tools", role: "developer", tools });
+    const request = new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+    });
+    const response = await handleResponses(request, config(true), { model: "", provider: "" });
+    expect(response.status).toBe(200);
+    expect(sent?.tools).toBeUndefined();
+    expect(sent?.input[0].tools[0].name).toBe(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+    expect(sent?.input[0].tools[0].tools[0].parameters.properties.message.encrypted).toBeUndefined();
+    const result = await response.json() as { output: Array<Record<string, unknown>> };
+    expect(result.output[0]!.namespace).toBe("collaboration");
+    expect(result.output[0]!.name).toBe("spawn_agent");
+    expect(result.output[0]!.encrypted_function_args).toEqual([]);
   });
 
   test("restores the namespace in bounded JSON responses", async () => {

@@ -107,11 +107,11 @@ describe("DigitalOcean and Scaleway providers", () => {
       },
     });
     const digitaloceanModels = discoveryAllowlist(registryEntry("digitalocean"));
-    // 28 since glm-5.3-flash was seeded into this allowlist. The seeding commit added
-    // the id to both the DigitalOcean and Scaleway lists and moved neither length
+    // 29 since #5584 seeded openai-gpt-6-sol/-luna. An earlier seeding commit added
+    // glm-5.3-flash to both the DigitalOcean and Scaleway lists and moved neither length
     // assertion; Scaleway's happened to still match, so only this one went red - and it
     // stayed red on dev, which is how a broken shard reached the branch that noticed it.
-    expect(digitaloceanModels).toHaveLength(27);
+    expect(digitaloceanModels).toHaveLength(29);
     expect(digitaloceanModels).toContain("glm-5.3-flash");
     expect(digitaloceanModels).toContain("openai-gpt-5.6-sol");
     expect(digitaloceanModels).toContain("meta-llama/Meta-Llama-3.1-8B-Instruct");

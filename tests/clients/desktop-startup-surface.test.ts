@@ -17,7 +17,10 @@ const LIB = repoPath(`${SRC}/lib.rs`);
 const SIDECAR = repoPath(`${SRC}/sidecar.rs`);
 const STARTUP = repoPath(`${SRC}/startup.rs`);
 const PROXY = repoPath(`${SRC}/proxy.rs`);
-const PAGE = repoPath("desktop/ui/main.js");
+// The startup surface is one file: the page and its script ship together in index.html,
+// because a script loaded from a second file is not named by the policy the webview is
+// actually served and never runs on some platforms. Read the page as the oracle for both.
+const PAGE = repoPath("desktop/ui/index.html");
 const CONFIG = repoPath("desktop/src-tauri/tauri.conf.json");
 
 function code(path: string): string {
@@ -97,7 +100,9 @@ describe("desktop startup surface", () => {
 
   test("one deadline covers the whole sequence and bounds every probe under it", () => {
     expect(startup).toContain("pub const DEADLINE: Duration");
-    expect(startup).toContain("let deadline = started + DEADLINE;");
+    // `mut` because a takeover prompt moves the ceiling by however long the user thought — the
+    // budget bounds the machinery, not the person deciding.
+    expect(startup).toContain("let mut deadline = started + DEADLINE;");
     // The budget for finding an existing runtime is the CLI's now, not a second one here: the
     // tuned probe budgets exist because a shell-side reimplementation answered "nobody is
     // listening" twice and started duplicate proxies.
@@ -154,6 +159,65 @@ describe("desktop startup surface", () => {
     expect(page).toContain("progress.failedPhase");
   });
 
+  test("the snapshot answers with a state rather than with nothing", () => {
+    // The page returns early on a falsy progress, so an absent answer was not a neutral one: it
+    // was a window frozen on its own markup, with no diagnostic in it and no event coming.
+    expect(lib).toContain("fn startup_snapshot(app: tauri::AppHandle) -> startup::Progress");
+    expect(lib).not.toContain("Option<startup::Progress>");
+    expect(lib).toContain("unwrap_or_else(startup::unavailable)");
+    expect(startup).toContain("pub fn unavailable() -> Progress");
+  });
+
+  test("not having started is a state of its own, and not a checklist row", () => {
+    // Seeding the state with the first phase made "has not started" render exactly like "started,
+    // and registering". A row for it would instead be a step that never completes.
+    expect(startup).toContain('Self::NotStarted => "not-started"');
+    const list = startup.indexOf("pub const PHASES");
+    expect(list).toBeGreaterThan(-1);
+    expect(startup.slice(list, startup.indexOf("];", list))).not.toContain("NotStarted");
+    expect(startup).not.toContain("Progress::new(Phase::Registering, 0)");
+  });
+
+  test("the run publishes before anything it does can return", () => {
+    // The lookup below used to come first, so a run that returned there had said nothing at all
+    // and the page could not tell that from a run still going.
+    const at = startup.indexOf("async fn run(app: &AppHandle");
+    expect(at).toBeGreaterThan(-1);
+    const body = startup.slice(at, startup.indexOf("async fn register(", at));
+    const published = body.indexOf("report(app, started, Phase::Registering, None);");
+    expect(published).toBeGreaterThan(-1);
+    expect(body.indexOf("try_state::<AppState>()")).toBeGreaterThan(published);
+  });
+
+  test("a run that reports nothing is still a run that ends", () => {
+    // Every early return in the sequence, and every step that outlives the ceiling, used to leave
+    // the surface on its last state for as long as the process lived.
+    const begin = startup.slice(
+      startup.indexOf("pub fn begin("),
+      startup.indexOf("fn settle(app:"),
+    );
+    expect(begin).toContain("run(&app, started).await;");
+    expect(begin.slice(begin.indexOf("run(&app, started).await;"))).toContain("settle(");
+    // The consent wait moves the ceiling. The expiry check, the consent state and the terminal
+    // publish share one critical section, so a prompt posted or an answer consumed can never
+    // meet a failure already in flight.
+    expect(begin).toContain("startup.set_deadline(started + DEADLINE)");
+    expect(begin).toContain("startup.expire_run(");
+    expect(begin).toContain("Expiry::Blocked");
+    expect(begin).toContain("Expiry::Waiting");
+    expect(begin).toContain("Expiry::Fired");
+    expect(begin).toContain("sleep_until(wake)");
+    // Idempotent, and bound to the run it was started for: it may not overwrite a real result,
+    // and a guard left over from an earlier run may not fail the retry that replaced it.
+    const settle = startup.slice(
+      startup.indexOf("fn settle(&self"),
+      startup.indexOf("async fn run("),
+    );
+    expect(settle).toContain("live.is_settled()");
+    expect(settle).toContain("generation.load(Ordering::Acquire) != generation");
+    expect(settle).toContain("Progress::new(Phase::Failed, elapsed_ms)");
+  });
+
   test("the retry, the snapshot and the phase list are reachable from the page", () => {
     const handler = lib.slice(
       lib.indexOf("generate_handler!["),
@@ -180,9 +244,10 @@ describe("desktop startup surface", () => {
   test("every call into the shell can fail without leaving the page blank", () => {
     const page = readFileSync(PAGE, "utf8");
     expect(page).toContain("function reportPageFailure");
-    // Both entry points — the first load and the retry — have to catch, because either one
-    // failing silently leaves a window that says "Starting…" forever.
-    expect(page.match(/reportPageFailure\(/g) || []).toHaveLength(3);
+    // Every entry point — the first load, the retry and the takeover decision — has to catch,
+    // because any one failing silently leaves a window that says "Starting…" forever. The count
+    // includes the function definition itself.
+    expect(page.match(/reportPageFailure\(/g) || []).toHaveLength(4);
     const retry = page.slice(page.indexOf('retry.addEventListener'));
     expect(retry.slice(0, 400)).toContain("catch");
   });
@@ -214,6 +279,18 @@ describe("the bootstrap page reports only what it was told", () => {
 
   test("the failure block honours its hidden attribute", () => {
     expect(/#failure\[hidden\][^{]*\{[^}]*display:\s*none/.test(markup)).toBe(true);
+  });
+
+  test("the bootstrap script carries the nonce token the shell replaces", () => {
+    // The webview is served a policy the configuration file does not contain. Tauri appends its
+    // own hashes and nonces to script-src, and a hash or nonce in that directive makes
+    // 'unsafe-inline' inert, so nothing loads unless it is named. Its injector only tags
+    // script[src^='http'], and this page loads its script by relative path, so the page has to
+    // carry the token itself; the shell replaces it with a real nonce and adds that nonce to the
+    // directive. Without it the surface renders as static markup on the platforms where the
+    // asset origin does not satisfy 'self' — observed on Linux, where the page never ran a line.
+    expect(markup).not.toContain("./main.js");
+    expect(markup).toMatch(/<script nonce="__TAURI_SCRIPT_NONCE__">/);
   });
 
   test("the handshake with the shell is bounded", () => {

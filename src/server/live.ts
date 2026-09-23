@@ -27,7 +27,7 @@ import { codexCompatibleUrl } from "../codex/context-compat";
  * - `GET /v1/realtime?model=` — RealtimeV2 standalone (no intent)
  * - `GET /v1/live?model=` — Frameless standalone
  */
-import { appendFileSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, openSync, statSync, writeSync } from "node:fs";
 import { formatErrorResponse } from "../bridge";
 import {
   CodexAccountCooldownError,
@@ -42,6 +42,7 @@ import {
 import { formatCodexProviderForLog } from "../codex/routing";
 import { cancelBodyOnAbort, signalWithTimeout } from "../lib/abort";
 import { sidecarEnter } from "../lib/sidecar-tracker";
+import { hardenSecretPath } from "../lib/windows-secret-acl";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectOpenAiImagesProvider } from "../providers/openai-sidecar";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential, type DataPlaneAdmission } from "./auth-cors";
@@ -103,9 +104,58 @@ export const LIVE_CLIENT_PROTOCOL_HEADERS = [
  * JSONL record: direction, frame kind, byte length, and whether the payload contains U+FFFD.
  * Privacy: no frame content is written, including excerpts around replacement characters.
  * For binary frames, U+FFFD may also be introduced by UTF-8 decoding; the flag alone does not
- * identify the source of corruption. Disabled entirely when the env var is unset.
+ * identify the source of corruption. The log is created with owner-only permissions and is
+ * disabled entirely when the env var is unset.
  */
 export const LIVE_FRAME_LOG_ENV = "OCX_LIVE_FRAME_LOG";
+/**
+ * Append one JSONL record with owner-only permissions. `appendFileSync`'s `mode` only applies
+ * when it creates the file, so an existing permissive log would stay readable by other local
+ * users. Open for append, harden the target, and verify that the path still names
+ * the opened file before writing. A failed harden or identity check writes nothing. On Windows
+ * the hardened file's identity is remembered, so a replaced file is hardened again but an
+ * unchanged one does not spawn icacls for every frame.
+ */
+/** Windows ACL hardening spawns icacls; remember the file already hardened so frames do not. */
+let hardenedWindowsFrameLog: { path: string; dev: bigint; ino: bigint } | undefined;
+
+export function appendOwnerOnly(
+  path: string,
+  line: string,
+  harden: (fd: number, path: string) => void = hardenLogDescriptor,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  const fd = openSync(path, "a", 0o600);
+  try {
+    const before = fstatSync(fd, { bigint: true });
+    const memo = hardenedWindowsFrameLog;
+    const alreadyHardened = platform === "win32" && memo !== undefined && memo.path === path
+      && before.ino !== 0n && memo.dev === before.dev && memo.ino === before.ino;
+    if (!alreadyHardened) {
+      hardenedWindowsFrameLog = undefined;
+      harden(fd, path);
+    }
+    const opened = fstatSync(fd, { bigint: true });
+    const named = statSync(path, { bigint: true });
+    if (!opened.isFile() || !named.isFile() || opened.ino === 0n || named.ino === 0n
+      || opened.dev !== named.dev || opened.ino !== named.ino) {
+      throw new Error("Frame log path changed during hardening.");
+    }
+    if (platform === "win32") hardenedWindowsFrameLog = { path, dev: opened.dev, ino: opened.ino };
+    writeSync(fd, line);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function hardenLogDescriptor(fd: number, path: string): void {
+  if (process.platform === "win32") {
+    hardenSecretPath(path, { required: true });
+    return;
+  }
+  fchmodSync(fd, 0o600);
+}
+
 export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
   const logPath = process.env[LIVE_FRAME_LOG_ENV];
   if (!logPath) return;
@@ -134,7 +184,7 @@ export function logLiveSidebandFrame(dir: "c2u" | "u2c", data: unknown): void {
       bytes,
       fffd,
     };
-    appendFileSync(logPath, `${JSON.stringify(record)}\n`);
+    appendOwnerOnly(logPath, `${JSON.stringify(record)}\n`);
   } catch {
     // Frame forensics must never break the relay.
   }
@@ -168,7 +218,7 @@ export function logLiveSidebandStage(
     const record: Record<string, unknown> = { ts: new Date().toISOString(), stage };
     if (detail?.status !== undefined) record.status = detail.status;
     if (detail?.code !== undefined) record.code = detail.code;
-    appendFileSync(logPath, JSON.stringify(record) + "\n");
+    appendOwnerOnly(logPath, JSON.stringify(record) + "\n");
   } catch {
     // Diagnostics must never break the relay.
   }

@@ -26,6 +26,12 @@ import { providerWebSearchBridgeConfigError, validateConfigCandidate } from "../
 import { mapOllamaSearchResponse } from "../../src/web-search/ollama-executor";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../src/server/responses-undeclared-tool-guard";
 import { handleResponses } from "../../src/server/responses";
+import { resolveContextPrincipal } from "../../src/server/auth-cors";
+import { providerConfigSeed } from "../../src/providers/derive";
+import { getProviderRegistryEntry } from "../../src/providers/registry";
+import type { ResponsesTerminalRepairScheduler } from "../../src/server/responses-terminal-repair";
+import { bridgeSearchReplayScope, clearBridgeSearchReplayCacheForTests, peekBridgeSearchReplay } from "../../src/responses/bridge-search-replay-cache";
+import { reasoningReplayDestinationIdentity, reasoningReplayKeyCredentialIdentity } from "../../src/responses/reasoning-replay-cache";
 import {
   resetProviderRequestPacingForTest,
   setProviderRequestPacingRuntimeForTest,
@@ -1467,6 +1473,214 @@ describe("the reported turn, end to end through handleResponses", () => {
     expect(String(output!.output)).toContain("opencodex 2.50.0");
     expect(continuation.input.some(item =>
       item.type === "function_call" && item.name === "web_search")).toBe(true);
+  });
+
+  test("a complete but terminal-less leg still repairs, on the first leg AND the continuation", async () => {
+    clearBridgeSearchReplayCacheForTests();
+    // Repair is registry-gated, so only a registry-keyed provider arms it: deepseek carries
+    // modelResponsesTerminalRepair for the V4 flash ids. The fixture legs below emit a fully
+    // complete item lifecycle and then stay open — the reported stall — with no terminal and
+    // no [DONE]. Before the fix the repaired first leg could fire the search, but the raw
+    // continuation leg never got a grace window, so the turn still hung.
+    class ManualScheduler implements ResponsesTerminalRepairScheduler {
+      private current = 0;
+      private nextId = 1;
+      private readonly jobs = new Map<number, { at: number; callback: () => void }>();
+      nowMs(): number { return this.current; }
+      schedule(callback: () => void, delayMs: number): unknown {
+        const id = this.nextId++;
+        this.jobs.set(id, { at: this.current + delayMs, callback });
+        return id;
+      }
+      cancel(handle: unknown): void { this.jobs.delete(handle as number); }
+      pending(): number { return this.jobs.size; }
+      advance(ms: number): void {
+        this.current += ms;
+        for (const [id, job] of [...this.jobs.entries()]) {
+          if (job.at > this.current || !this.jobs.delete(id)) continue;
+          job.callback();
+        }
+      }
+    }
+
+    const openSse = (): { stream: ReadableStream<Uint8Array>; push: (text: string) => void; end: () => void } => {
+      const encoder = new TextEncoder();
+      let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
+      return {
+        stream: new ReadableStream<Uint8Array>({ start(next) { controller = next; } }),
+        push(text) { controller?.enqueue(encoder.encode(text)); },
+        end() { try { controller?.close(); } catch { /* already closed */ } },
+      };
+    };
+
+    // Every item must reach a COMPLETE output_item.done or repair never arms — the status
+    // field is what isCompleteItem actually requires.
+    const donePreamble = { ...preamble, status: "completed" };
+    const doneSearchCall = { ...searchCall, status: "completed" };
+    const doneAnswer = { ...answer, status: "completed" };
+    const blocks = (...frames: string[]): string => frames.join("\n\n") + "\n\n";
+    const openSearchLeg = blocks(
+      frame("response.created", { response: { id: "resp_1", status: "in_progress" } }),
+      frame("response.output_item.added", { output_index: 0, item: { ...donePreamble, content: [] } }),
+      frame("response.output_item.done", { output_index: 0, item: donePreamble }),
+      frame("response.output_item.added", { output_index: 1, item: { ...doneSearchCall, arguments: "" } }),
+      frame("response.function_call_arguments.done", {
+        output_index: 1, item_id: "fc_1", arguments: searchCall.arguments,
+      }),
+      frame("response.output_item.done", { output_index: 1, item: doneSearchCall }),
+    );
+    const openAnswerLeg = blocks(
+      frame("response.created", { response: { id: "resp_2", status: "in_progress" } }),
+      frame("response.output_item.added", { output_index: 0, item: { ...doneAnswer, content: [] } }),
+      frame("response.output_item.done", { output_index: 0, item: doneAnswer }),
+    );
+
+    const firstLeg = openSse();
+    const continuationLeg = openSse();
+    const scheduler = new ManualScheduler();
+    const outbound: string[] = [];
+    let searches = 0;
+    const savedFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL ? input.href : (input as Request).url;
+      if (url.includes("api.exa.ai/search")) {
+        searches += 1;
+        return new Response(JSON.stringify({
+          results: [{ title: "Releases", url: "https://example.test/rel", content: "opencodex 2.50.0", text: "opencodex 2.50.0" }],
+        }), { headers: { "content-type": "application/json" } });
+      }
+      outbound.push(String(init?.body ?? ""));
+      return new Response(outbound.length === 1 ? firstLeg.stream : continuationLeg.stream, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    }) as unknown as typeof fetch;
+    const cfg = {
+      port: 0,
+      defaultProvider: "deepseek",
+      // Replay is scoped to a caller principal. On loopback a caller has one only when it presents
+      // a configured opencodex API key; a keyless caller gets no retained replay at all.
+      apiKeys: [{ id: "repair-caller", name: "repair-caller", key: "caller-inbound", createdAt: "2026-01-01T00:00:00Z" }],
+      providers: {
+        deepseek: {
+          ...providerConfigSeed(getProviderRegistryEntry("deepseek")!),
+          apiKey: "fixture-key",
+          webSearchBridge: { enabled: true, backend: "exa" },
+        },
+      },
+      webSearchSidecar: { exaApiKey: "exa-canary" },
+    } as unknown as OcxConfig;
+    const releaseSpendHome = acquireOwnedSpendHome();
+    const decoder = new TextDecoder();
+    const readUntil = async (reader: ReadableStreamDefaultReader<Uint8Array>, pattern: string): Promise<string> => {
+      let out = "";
+      while (!out.includes(pattern)) {
+        const { done, value } = await reader.read();
+        if (done) throw new Error(`stream closed before ${pattern}`);
+        out += decoder.decode(value, { stream: true });
+      }
+      return out;
+    };
+    const flush = async (condition: () => boolean): Promise<void> => {
+      for (let attempts = 0; attempts < 50 && !condition(); attempts += 1) await Bun.sleep(0);
+    };
+    try {
+      const admission = { kind: "loopback", source: "loopback" } as const;
+      const callerRequest = new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer caller-inbound", "thread-id": "thread-repaired-search" },
+        body: JSON.stringify({
+          model: "deepseek/deepseek-v4-flash",
+          stream: true,
+          input: [{ role: "user", content: [{ type: "input_text", text: "what is the latest release?" }] }],
+          tools: [{ type: "web_search" }],
+        }),
+      });
+      const callerPrincipal = resolveContextPrincipal(callerRequest, cfg, admission);
+      if (!callerPrincipal) throw new Error("fixture inbound API key did not resolve a principal");
+      const response = await handleResponses(callerRequest, cfg, { model: "", provider: "" }, {
+        responsesTerminalRepairScheduler: scheduler,
+        admission,
+      });
+      const reader = response.body!.getReader();
+      try {
+        // First leg: the complete search lifecycle streams through while the leg stays open.
+        firstLeg.push(openSearchLeg);
+        const opened = await readUntil(reader, "web_search_call");
+        expect(opened).toContain("\"type\":\"web_search_call\"");
+        await flush(() => scheduler.pending() === 1);
+        expect(scheduler.pending()).toBe(1);
+        // The grace window is what ends the leg — before it fires, no search may run.
+        expect(searches).toBe(0);
+        scheduler.advance(5_000);
+        await flush(() => searches === 1 && outbound.length === 2);
+        expect(searches).toBe(1);
+        expect(outbound).toHaveLength(2);
+        const continued = JSON.parse(outbound[1]!) as { input: Record<string, unknown>[] };
+        expect(continued.input.some(item => item.type === "function_call_output"
+          && String(item.output).includes("opencodex 2.50.0"))).toBe(true);
+
+        // Continuation leg: a complete answer that also never sends its terminal. Without
+        // repair on send() this is where the turn hangs.
+        continuationLeg.push(openAnswerLeg);
+        await flush(() => scheduler.pending() === 1);
+        expect(scheduler.pending()).toBe(1);
+        scheduler.advance(5_000);
+        const rest = await Promise.race([
+          (async () => {
+            let out = "";
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) return out + decoder.decode();
+              out += decoder.decode(value, { stream: true });
+            }
+          })(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("continuation never repaired")), 5_000)),
+        ]);
+        expect(rest).toContain("response.completed");
+        expect(rest).toContain("The current release is 2.50.0.");
+        expect(rest).toContain("[DONE]");
+        const hosted = clientEvents(opened + rest).find(event =>
+          event.type === "response.output_item.added"
+          && (event.item as Record<string, unknown> | undefined)?.type === "web_search_call");
+        const cellId = (hosted?.item as Record<string, unknown> | undefined)?.id;
+        expect(typeof cellId).toBe("string");
+        const scope = {
+          clientPrincipalId: callerPrincipal, clientThreadId: "thread-repaired-search",
+          current: {
+            providerName: "deepseek", adapterName: "openai-responses", modelId: "deepseek-v4-flash",
+            providerDestinationIdentity: reasoningReplayDestinationIdentity(cfg.providers.deepseek!.baseUrl),
+            credentialIdentity: reasoningReplayKeyCredentialIdentity({ apiKey: "fixture-key" }),
+          },
+        };
+        // Results produced by repaired legs retain the same caller/serving boundary as
+        // ordinary search legs; knowing the emitted cell id does not widen that boundary.
+        expect(peekBridgeSearchReplay(bridgeSearchReplayScope(scope), cellId as string)?.output)
+          .toContain("opencodex 2.50.0");
+        // A keyless caller on the same thread resolves no principal, so it cannot form a scope.
+        const keylessPrincipal = resolveContextPrincipal(
+          new Request("http://localhost/v1/responses", { headers: { "thread-id": "thread-repaired-search" } }),
+          cfg,
+          admission,
+        );
+        expect(keylessPrincipal).toBeUndefined();
+        expect(bridgeSearchReplayScope({ ...scope, clientPrincipalId: keylessPrincipal })).toBeUndefined();
+        for (const changedScope of [
+          { ...scope, clientPrincipalId: "another-caller" },
+          { ...scope, clientThreadId: "another-thread" },
+          { ...scope, current: { ...scope.current, credentialIdentity: "another-key" } },
+        ]) expect(peekBridgeSearchReplay(bridgeSearchReplayScope(changedScope), cellId as string)).toBeUndefined();
+      } finally {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        firstLeg.end();
+        continuationLeg.end();
+      }
+    } finally {
+      releaseSpendHome();
+      globalThis.fetch = savedFetch;
+      clearBridgeSearchReplayCacheForTests();
+    }
   });
 
   const selectionChanges: Array<[string, (ocxConfig: OcxConfig) => void]> = [

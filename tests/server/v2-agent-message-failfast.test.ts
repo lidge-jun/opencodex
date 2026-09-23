@@ -19,10 +19,11 @@ const takeSpendHome = (): void => { releaseSpendHome ??= acquireOwnedSpendHome()
  * block + HMAC. Bytes are synthetic, so this validates wire shape without
  * publishing a real captured task or claiming the HMAC is authentic.
  */
-function fernetFixture(ciphertextBytes = 16, version = 0x80): string {
+function fernetFixture(ciphertextBytes = 16, version = 0x80, variant = 0): string {
   const raw = Buffer.alloc(57 + ciphertextBytes, 0x5a);
   raw[0] = version;
   raw.writeBigUInt64BE(1_720_000_000n, 1);
+  if (variant !== 0) raw.writeUInt32BE(variant, 25);
   const unpadded = raw.toString("base64url");
   return `${unpadded}${"=".repeat((4 - (unpadded.length % 4)) % 4)}`;
 }
@@ -228,6 +229,29 @@ describe("V2 routed agent-message ciphertext guard", () => {
     expect(fetchCalls).toBe(0);
     expect(raw).not.toContain(FERNET_TASK);
     expect(raw).not.toContain("gAAAA");
+  });
+
+  test("65 Fernet runs in a tail task are refused before upstream dispatch", async () => {
+    const tokens = Array.from({ length: 65 }, (_, index) => fernetFixture(16, 0x80, index));
+    const input = agentMessage([
+      { type: "input_text", text: ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: tokens.join(".") },
+    ]);
+    expect(new Set(tokens).size).toBe(65);
+    expect(hasUnreadableEncryptedAgentTask(input)).toBe(true);
+
+    let fetchCalls = 0;
+    globalThis.fetch = (async () => {
+      fetchCalls += 1;
+      throw new Error("provider dispatch must not happen");
+    }) as typeof fetch;
+
+    const response = await post(routedConfig(), "xai/grok-4.5", input);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: { type: "invalid_request_error", code: "unreadable_encrypted_agent_task" },
+    });
+    expect(fetchCalls).toBe(0);
   });
 
   test("filters a combo to a decrypt-capable native target before dispatch", async () => {

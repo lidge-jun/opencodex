@@ -27,6 +27,9 @@ function buildBody(provider: OcxProviderConfig, rawBody: Record<string, unknown>
     context: { messages: [] },
     stream: true,
     options: {},
+    previousResponseId: typeof rawBody.previous_response_id === "string"
+      ? rawBody.previous_response_id
+      : undefined,
     _rawBody: { model: MODEL, ...rawBody },
   } as Parameters<ReturnType<typeof createResponsesPassthroughAdapter>["buildRequest"]>[0], {
     headers: new Headers(),
@@ -89,6 +92,25 @@ describe("xAI Responses tool-result adjacency", () => {
     const output = { type: "function_call_output", call_id: "call_exec", output: "ok" };
     const body = buildBody(provider, { input: [call, injected, output] });
     expect(body.input).toEqual([call, output, injected]);
+  });
+
+  test("preserves output-only continuations whose call remains in xAI state", () => {
+    const functionOutput = { type: "function_call_output", call_id: "call_stored", output: "result" };
+    const customOutput = { type: "custom_tool_call_output", call_id: "custom_stored", output: "patch" };
+    const body = buildBody(xaiOauthResponses({ requiresPairedResponsesToolResults: true }), {
+      previous_response_id: "resp_xai_store",
+      store: true,
+      input: [functionOutput, customOutput],
+    });
+
+    expect(body.previous_response_id).toBe("resp_xai_store");
+    expect(body.store).toBe(true);
+    expect(body.input).toEqual([functionOutput, customOutput]);
+
+    const standalone = buildBody(xaiOauthResponses({ requiresPairedResponsesToolResults: true }), {
+      input: [functionOutput],
+    });
+    expect(standalone.input).toEqual([expect.objectContaining({ type: "message", role: "user" })]);
   });
 
   test("keeps call_id pairing for two outstanding replayed calls and synthesizes only the missing output", () => {

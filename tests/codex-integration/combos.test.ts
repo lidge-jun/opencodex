@@ -291,7 +291,7 @@ describe("combo request cloning", () => {
     expect(concrete).toEqual({
       model: "a/m1",
       input: [{ role: "user", content: "hi" }],
-      reasoning: { effort: "high" },
+      reasoning: { effort: "high", summary: "auto" },
     });
     expect(raw).toEqual({ model: "combo/free", input: [{ role: "user", content: "hi" }] });
     expect(concrete.input).not.toBe(raw.input);
@@ -430,15 +430,15 @@ describe("combo request cloning", () => {
    */
   test("a combo default above the target ladder is downgraded, not dropped (#3108)", () => {
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "max", ["low", "medium", "high"]).reasoning)
-      .toEqual({ effort: "high" });
+      .toEqual({ effort: "high", summary: "auto" });
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", ["low", "medium"]).reasoning)
-      .toEqual({ effort: "medium" });
+      .toEqual({ effort: "medium", summary: "auto" });
     // Exact support is still passed through untouched.
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "max", ["high", "max"]).reasoning)
-      .toEqual({ effort: "max" });
+      .toEqual({ effort: "max", summary: "auto" });
     // Never raises: a request below everything supported takes the lowest rung, not a higher one.
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "low", ["high", "max"]).reasoning)
-      .toEqual({ effort: "high" });
+      .toEqual({ effort: "high", summary: "auto" });
     // A caller-supplied effort still wins over the combo default.
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { effort: "low" } }, target, "max", ["low", "medium", "high"],

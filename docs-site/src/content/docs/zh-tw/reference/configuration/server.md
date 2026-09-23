@@ -142,7 +142,7 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 | `claudeCode.authModeMigratedAt?` | `string` | 未設定 | 內部一次性升級標記。請勿手動設定。 |
 | `claudeCode.subagentEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max"` | 繼承 | 寫入生成的 `~/.claude/agents/ocx-*.md` 的 effort；與 Codex guidance 與代理上限分開。透過 `ocx claude` 重啟以重新生成。 |
 
-自動認證在找到已儲存的 Claude 認證時選擇訂閱，無認證時選擇 proxy，偵測不明確時選擇訂閱並附帶警告。請見[Claude Code 認證模式](/zh-tw/guides/claude-code/#auth-mode)。
+自動認證在找到已儲存的 Claude 認證時選擇訂閱，無認證時選擇 proxy，偵測不明確時選擇訂閱並附帶警告。請見[Claude Code 認證模式](/zh-tw/guides/claude-code/#認證模式)。
 
 ## Shadow call
 
@@ -157,6 +157,12 @@ Codex 使用小型 helper 模型處理如標題與 commit 訊息等任務。啟�
   }
 }
 ```
+
+### 目標無法使用時
+
+替換目標是操作者選定的唯一目的地，因此無法再解析的目標會讓輔助呼叫失敗，而不是把它送到別處。當目標的供應商被停用或刪除，或其組合已不存在時，被攔截的請求會在向上游送出任何內容之前回傳 `409` 與錯誤代碼 `intercept_target_unavailable`。請求記錄會記下相同代碼。請求不會直通給原生輔助模型，也不會退回預設供應商，因為兩者都會在你未選擇的情況下改變目的地、憑證與費用。組合或路由設定檔目標仍會在自身成員之間容錯移轉。像 `provider/model` 這樣的限定目標，若其供應商部分未指向任何已設定項目，也以相同方式處理，設定 API 會拒絕儲存。透過預設供應商解析的不帶前綴模型 ID 仍然有效。
+
+停用（帶 `disabled: true` 的 `PATCH /api/providers?name=<provider>`）或刪除目標所解析到的供應商仍會成功；回應會加入 `dependentShadowIntercept: { model, enabled }`，儀表板會顯示警告。重新啟用該供應商或選擇其他目標即可恢復攔截。
 
 ## Sidecar
 

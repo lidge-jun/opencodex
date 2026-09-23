@@ -4,6 +4,7 @@ import { applyExplicitChatReasoningWirePolicy } from "./openai-chat/reasoning-wi
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import { modelInList } from "../types";
+import { createInlineThinkContentSplitter, splitInlineThinkContent } from "./inline-think-tags";
 import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
@@ -355,6 +356,12 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       // Gate on the routed model, not list length: a mixed openai-chat provider
       // can list MiniMax ids without putting every sibling on MiniMax semantics.
       const reasoningDetailsOptIn = modelInList(provider.reasoningDetailsModels, lastRequestedModelId ?? "");
+      // A gateway with no server-side reasoning parser leaves thinking inline in `content` as
+      // <think> blocks, which would otherwise render as the answer. Passthrough unless opted in.
+      const inlineThink = createInlineThinkContentSplitter(provider.inlineThinkTagModels, lastRequestedModelId, budget);
+      const emitContent = function* (events: AdapterEvent[]): Generator<AdapterEvent> {
+        for (const event of events) { if (event.type === "text_delta") sawUserFacingOutput = true; yield event; }
+      };
 
       const handleDataLine = function* (line: string): Generator<AdapterEvent, "continue" | "terminate"> {
         const rawPayload = sseFieldValue(line, "data");
@@ -362,6 +369,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const payload = rawPayload.trim();
         if (payload.length === 0) return "continue";
         if (payload === "[DONE]") {
+          yield* emitContent(inlineThink.flush());
           if ((yield* flushToolCalls()) === "terminate") return "terminate";
           const stopReason = stopReasonFor(finishReason);
           yield { type: "done", usage: pendingUsage, ...(stopReason ? { stopReason } : {}) };
@@ -422,8 +430,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             if (reasoningText !== undefined) yield { type: "reasoning_raw_delta", text: reasoningText };
           }
           if (typeof delta.content === "string" && delta.content.length > 0) {
-            sawUserFacingOutput = true;
-            yield { type: "text_delta", text: delta.content };
+            yield* emitContent(inlineThink.feed(delta.content));
           }
 
           const rawToolCalls = delta.tool_calls;
@@ -562,6 +569,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         }
 
         if (typeof choice.finish_reason === "string" && choice.finish_reason) {
+          yield* emitContent(inlineThink.flush());
           if ((yield* flushToolCalls()) === "terminate") return "terminate";
         }
         return "continue";
@@ -605,6 +613,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (buffer.length > 0) {
           if ((yield* handleDataLine(buffer)) === "terminate") return;
         }
+        yield* emitContent(inlineThink.flush());
         const sawFinish = finishReason !== undefined;
         if (!sawFinish && pendingToolCalls.length > 0) {
           // Some OpenAI-compatible gateways close immediately after a complete function-call
@@ -652,6 +661,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       } finally {
         budget.releaseRetained(bufferBytes, { kind: "live_transient" });
         reasoningDetailTracker.release();
+        inlineThink.dispose();
         closeToolCalls();
         reader.releaseLock();
       }
@@ -738,7 +748,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           if (segments.length > 0) reasoningText = segments.map(s => s.text).join("");
         }
         if (reasoningText !== undefined) events.push({ type: "reasoning_raw_delta", text: reasoningText });
-        if (typeof msg.content === "string") events.push({ type: "text_delta", text: msg.content });
+        if (typeof msg.content === "string") events.push(...splitInlineThinkContent(provider.inlineThinkTagModels, lastRequestedModelId, budget, msg.content));
         const rawToolCalls = msg.tool_calls;
         if (rawToolCalls !== undefined && rawToolCalls !== null) {
           if (!Array.isArray(rawToolCalls)) {

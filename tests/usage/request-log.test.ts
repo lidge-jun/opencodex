@@ -832,7 +832,7 @@ describe("request log metadata", () => {
     expect(requestLogErrorCode(429)).toBe("rate_limit_exceeded");
     expect(requestLogErrorCode(
       429,
-      "The upstream connection closed before a response was received. The request may already have been processed; automatic replay was stopped.",
+      "The upstream exchange did not complete reliably. The request may already have been processed; automatic replay was stopped.",
     )).toBe("upstream_reset_replay_refused");
     expect(requestLogErrorCode(499)).toBe("client_closed_request");
     expect(requestLogErrorCode(502, "client closed request during web-search")).toBe("client_closed_request");

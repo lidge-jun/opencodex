@@ -185,7 +185,7 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
   受限的 Desktop fallback 只保存进程本地由 HMAC 派生的 owner；原始 session/thread header 与
   OAuth/authorization 材料不会写入 checkpoint state。基于 OAuth 的 live transport 和按账号过滤的
   live model discovery 仍是实验功能；登录与 transport 设置参见[提供商指南](/zh-cn/guides/providers/)
-  和 [Cursor 提供商配置](/zh-cn/reference/configuration/providers/#cursor-provider-adapter-cursor)。
+  和 [Cursor 提供商配置](/zh-cn/reference/configuration/providers/#cursor-提供者adapter-cursor)。
   checkpoint 复用本身是自动的，没有用户设置。
 - 模型实时发现和推理都会遵守 `upstreamHttpVersion`。`auto`、`http2` 与 `h2` 保持原有 HTTP/2
   transport；只有 `http1.1` 与 `h1` 会选择兼容模式。
@@ -215,6 +215,8 @@ Cursor 的 HTTP/1.1 兼容传输：通过 `agent.v1.AgentService/RunSSE` 接收 
 - 把请求构建交给 Responses passthrough，验证 `baseUrl` 不含未解析的 template placeholder，
   再用 `api-key` 替换 `Authorization`。配置的 URL 直接指向 Azure v1 Responses API，因此 adapter
   不会追加 `api-version`。
+- 与 Responses 共用针对其他 provider 所生成推理状态的恢复：收到 `400 invalid_encrypted_content`
+  后，去掉该状态（加密内容和推理项的 `rs_…` id）并只重发一次。
 
 ## 图像工具（`image.ts`）
 

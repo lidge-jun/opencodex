@@ -46,14 +46,46 @@ Shared parsing and streaming follow the [request-copy](../transports/byte-accoun
 
 ## Reasoning and tool-result compatibility
 
+### Inline think-tag recovery
+
+A gateway that serves a thinking model without a server-side reasoning parser returns the chain
+of thought inside `message.content` as `<think>` / `<thinking>` / `<reasoning>` blocks and sends
+neither `reasoning_content` nor `reasoning_details`. `src/adapters/openai-chat.ts` recovers those
+blocks into reasoning only for models listed in `inlineThinkTagModels`. An explicit operator list,
+including `[]`, replaces matching registry defaults. The option is off by default because registry
+providers share this adapter and a gateway that does parse reasoning
+must keep its visible content byte-exact. Once enabled the splitter still engages only for a
+response that opens with a thinking tag (optionally preceded by whitespace), so ordinary prose or
+code fences before a tag leave the entire response untouched. Whitespace before that initial tag
+and after every closing tag remains answer text;
+after it engages it keeps splitting later blocks, because M-series models interleave thinking with
+answer segments, including same-line interleaving. Once engaged, tags are protocol delimiters even
+inside subsequent code fences or quoted examples: this explicit opt-in does not parse Markdown.
+Gateways producing ambiguous literals should use structured reasoning instead. A moving cursor
+scans each upstream chunk without copying the remaining response after every block. Only undecided
+leading input or a trailing tag fragment is retained and charged to the translator budget.
+Undecided leading whitespace is charged one incoming segment at a time and joined only when
+the initial format is decided or the stream ends.
+A block left unterminated at end of stream flushes as reasoning rather than being
+dropped. In interleaved Chat mode, whitespace after the leading block and after later blocks
+remains answer text, including indentation and blank lines. Kiro uses single-block mode and
+retains its existing first-answer normalization.
+`src/adapters/inline-think-tags.ts` owns the parser and is shared with the Kiro adapter,
+which consumes it in single-block mode with its existing leading/first-answer normalization.
+Regression coverage is in `tests/adapters/openai/openai-chat-inline-think-tags.test.ts` and
+`tests/adapters/openai/inline-think-boundaries.test.ts`.
+
 Google tool-declaration narrowing is observed by the Google final compiler, not this shared Chat
 compatibility layer. Its endpoint profile and privacy boundary are specified in the
 [Google provider contract](google.md#google-tool-schema-loss-reporting).
 
 Chat models sometimes return a freeform call body under a common alternate field or wrap the whole
 body in a Markdown fence. Restoration in `src/responses/apply-patch-envelope.ts` is deliberately
-narrow: only bare `exec` and `apply_patch` accept one recognized alternate field or one complete
+narrow: only bare or `default.`-prefixed `exec` and `apply_patch` accept one recognized alternate field or one complete
 outer fence, while ambiguous wrappers and provider-owned freeform grammars remain byte-exact.
+Structured shell arguments mistakenly sent to code-mode `exec` follow the shared
+[Responses restoration contract](../transports/responses.md#responses-httpsse), including preview
+holding and preservation of valid JavaScript fallback fields.
 
 Kiro groups only consecutive original-message tool results whose raw call ID exactly matches
 the originating call. Its wire-ID map retains the original ID privately so replacement or
@@ -153,6 +185,22 @@ switch therefore costs one extra upstream round trip and one turn of degraded re
 wedging the thread; unrelated 4xx responses and requests whose outbound body carries no blob never
 enter this recovery.
 
+Recovery is admitted for every adapter whose registry contract resolves to the Responses wire
+(`adapterSpeaksResponsesWire` in `src/server/responses/core-opaque-recovery.ts`, through
+`resolvedAdapterWire`), not for one adapter name. `openai-responses` qualifies directly and
+`azure`/`azure-openai` through `contractParent`; before #5583 a name check left Azure's wrapper of
+the same passthrough outside recovery. Once the destination itself has rejected foreign opaque
+state, replayed reasoning items also lose their `id`, with or without a blob: the id names an item
+in the refused identity's store,
+and without `store: false` a stateful destination resolves it against its own store and answers
+`Item with id 'rs_…' not found` on the recovered send. `_dropForeignReasoningItemIds` carries that
+signal from `prepareOpaqueBlobRecovery` and from the rejection memo below into
+`sanitizeReasoningInputContent`. A proven route switch sets it only when the durable destination or
+credential changed (`reasoningReplayItemStoreChanged`): that is when the id names another store. A
+model or adapter change on the same destination and credential strips the blob but keeps the id,
+which that store can still resolve.
+`tests/responses/responses-azure-opaque-blob-recovery.test.ts` runs the switch on both adapters.
+
 After a self-identified opaque-blob rejection, the proxy also keeps a five-minute rejection memo.
 The memo key is the resolved conversation identity plus the durable serving identity: provider,
 destination, adapter, model, and credential. It is recorded only when the blobless recovery resend
@@ -207,8 +255,11 @@ xAI's public Responses API is stateful (`store` defaults true; `previous_respons
 stored conversation), so the provider is not marked `statelessResponses`. The pairing repair
 synthesizes an honest unknown-status placeholder without touching `store` or
 `previous_response_id`: repairing an interrupted history must not cost the thread its server-side
-state. Forward auth suppresses the synthesis regardless of the flag, because the backend that holds
-the conversation can resolve the pair itself.
+state. An output-only continuation is preserved because its call may live in that server-side state;
+pairing only synthesizes results for calls present in the current input. Forward auth suppresses the
+synthesis regardless of the flag, because the backend that holds the conversation can resolve the
+pair itself. Replay-miss reasoning cleanup remains independent of whether orphan outputs are
+converted. A retained previous-response ID does not override an explicit custom-tool denial below.
 
 > Decision record: [ADR-0052](../decisions/ADR-0052-reasoning-and-tool-result-compatibility.md)
 
@@ -244,6 +295,13 @@ and nothing explaining why. That is the `codexToolMode` lesson from #2106.
 This capability is independent of `supportsResponsesCustomTools`, which denies native `custom`
 tools and `custom_tool_call` items. A gateway that rejects both sets both; neither implies the
 other.
+
+When that capability is explicitly false, `src/responses/custom-tool-compat.ts` also lowers valid
+historical custom-call/result pairs absent from the live catalog, without adding their names to
+current declaration or restoration sets. Malformed or duplicate call identities and collisions
+with live function names fail closed. Unmapped custom outputs request full replay; residual native
+items fail the final outbound guard and map to HTTP 400. True or unspecified support preserves the
+existing native path. Nested tool-output JSON remains data, not a protocol item to rewrite.
 
 ## OpenRouter provider routing
 
@@ -308,10 +366,21 @@ First-party Kimi and Moonshot Chat destinations normalize a `$ref` with sibling 
 their wire rejects that valid JSON Schema 2020-12 shape. Inlining preserves conjunction semantics:
 `required` members are unioned, lower numeric bounds take the maximum, upper numeric bounds take the
 minimum, and overlapping `properties` recurse with the same rules. The walk remains depth-, node-,
-and expansion-bounded. Unresolvable or cyclic references keep the existing bare-`$ref` fallback,
-and unrelated OpenAI-compatible providers retain the caller's schema unchanged.
+expansion-, and inline-byte-bounded: each inlined reference is charged its serialized size against
+one 1 MiB allowance shared by every tool in the request. Raw target bytes are reserved before
+normalization. A candidate expansion restores its byte, node, and expansion allowances when
+it falls back; nested retained copies spend the allowance once, and only additional outer growth
+is charged. Moonshot's validator requires an explicit object termination type for recursive
+unions, so a schema carrying `properties` or `additionalProperties`, or an `allOf` with such a
+member, is emitted with `type: "object"`. This narrows scalar instances that JSON Schema would
+permit; tool-argument schemas do not rely on those scalar instances. Non-object `allOf`
+compositions, such as string constraints, remain untyped. An over-budget reference keeps the
+bare-`$ref` fallback.
+Unresolvable or cyclic references do the same, and unrelated OpenAI-compatible providers
+retain the caller's schema unchanged.
 
 > Decision record: [ADR-0064](../decisions/ADR-0064-chat-structured-output-compatibility.md)
+> Decision record: [ADR-0355](../decisions/ADR-0355-chat-structured-output-compatibility.md)
 
 The `openai-chat` adapter translates Responses `text.format` and Chat Completions
 `response_format` through one internal format, then emits `response_format` on the upstream chat
@@ -351,7 +420,10 @@ measurement rather than allocating a serialized copy just to measure it.
 
 > Decision record: [ADR-0067](../decisions/ADR-0067-reasoning-display-parity-hidethinkingsummary.md)
 
-`hideThinkingSummary` (request reasoning summary absent/"none" — the routed catalog default) is
+`hideThinkingSummary` is set for explicit summary "none", or omitted summary without a validated
+active effort. Accepted minimal/low/medium/high/xhigh/max (including ultra normalized to max)
+allow raw visibility when summary is omitted; none and invalid efforts do not. Explicit "auto"
+still permits raw visibility independently of effort. This flag is
 honored by BOTH reasoning paths: anthropic `thinking_delta` AND raw `reasoning_raw_delta`
 (openai-chat `reasoning_content`, kiro tags). Hidden reasoning emits an envelope-only reasoning
 item (`summary: []`, txt-only `ocxr1:` `encrypted_content`, no text deltas) — invisible in the
@@ -364,6 +436,10 @@ the desktop thinking band shows the "Thinking…" placeholder, and raw text appe
 #45 display intent, intentionally reverted 260911) put unsummarized thinking in the desktop band,
 which only fits native OpenAI providers that author real summaries. Diagnosis and codex-rs
 grouping evidence: `devlog/_fin/260709_native_response_pattern/`.
+
+For models that require a reasoning placeholder, a preserved thinking-only assistant turn with no
+plaintext receives that placeholder even when it has no tool call. Otherwise the Chat serializer
+drops the turn and strict DeepSeek continuations can reject the following request (#5421).
 
 The process-local raw-reasoning fallback is fail-closed unless a request has an explicit client
 thread plus an exact provider destination, wire adapter, final model, and physical credential
@@ -457,6 +533,6 @@ refusal of original images is unchanged.
 
 Canonical Responses identity sanitation and narrowly scoped pre-output combo recovery follow [request-local target compatibility](../runtime.md#request-local-target-compatibility); other adapter contracts remain unchanged.
 
-Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.

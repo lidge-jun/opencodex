@@ -96,7 +96,7 @@ export OPENCODEX_API_KEY=<your key>
 바인드하고 그곳에서는 아무 것도 인증하지 않으므로, `$OPENCODEX_API_KEY` 참조는
 실제로는 비어 있어도 됩니다. 이 값은 `hostname`이 루프백 바깥으로 설정될 때만
 의미가 있으며, 그 경우에는 프록시가 토큰 없이 시작하지 않습니다. 자세한 내용은
-[Remote access](/reference/configuration/#remote-access)를 보세요.
+[Remote access](/ko/reference/configuration/server/#remote-access)를 보세요.
 
 ## 모델 메타데이터
 

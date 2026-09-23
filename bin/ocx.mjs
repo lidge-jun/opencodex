@@ -49,7 +49,8 @@ import {
   runNpmCachePreflight,
 } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
-import { bootRestoreProbe, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
+import { bootRestoreProbe, launcherUsableAfterNpmUpdate, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
+import { npmUpdateFailureGuidance } from "../src/update/update-failure-guidance.mjs";
 import {
   CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
   isCodexCliUpdateInspectionArgv,
@@ -549,6 +550,7 @@ function runPackageManagerSelfUpdate(manager) {
   };
 
   let res;
+  let npmFailure = null;
   try {
     // Stop authority is decided under the same lease the child joins. A takeover between the
     // earlier preflight and this boundary therefore blocks stop before it is sent.
@@ -726,9 +728,8 @@ function runPackageManagerSelfUpdate(manager) {
           },
           log: (line) => console.log(line),
         });
-        postUpdateLauncherUsable = tx.ok
-          || tx.rolledBack === true
-          || ["stage", "verify", "swap-backup"].includes(tx.phase);
+        postUpdateLauncherUsable = launcherUsableAfterNpmUpdate(tx);
+        if (!tx.ok) npmFailure = tx;
         if (tx.ok) {
           res = { status: 0 };
         } else if (tx.phase === "stage" || tx.phase === "verify") {
@@ -820,6 +821,13 @@ function runPackageManagerSelfUpdate(manager) {
     process.exit(0);
   }
   if (trayBeforeUpdate.restoreOnFailure && postUpdateLauncherUsable) runTrayLifecycle(postUpdateLauncher, "start");
+  if (npmFailure) {
+    // Phase-specific next step (#5624): whether the previous version is still in place decides
+    // between "retry" and "restore", and a bare reinstall must follow a stop (#5496).
+    const guidance = npmUpdateFailureGuidance({ ...npmFailure, pkgName: PKG, version: latest || undefined, tag });
+    console.error(`\nUpdate failed (npm ${npmFailure.phase}). ${guidance.lines.join(" ")}`);
+    process.exit(1);
+  }
   const manual = manager === "pnpm"
     ? `pnpm add -g --allow-build=bun ${PKG}@${tag}`
     : `npm install -g --allow-scripts=bun ${PKG}@${tag}`;

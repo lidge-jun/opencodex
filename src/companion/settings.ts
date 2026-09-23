@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import {
   TIMELINE_HOURS,
+  isTimelineModelId,
+  normalizeTimelineModelId,
   type TimelineAggregation,
   type TimelineGrouping,
   type TimelineMetric,
@@ -64,7 +66,7 @@ function validModels(value: unknown, key: string): value is string[] | null {
   return value === null
     || (Array.isArray(value)
       && value.length <= 100
-      && value.every(model => typeof model === "string" && /^[^/\s]+\/[^/\s]+$/.test(model)));
+      && value.every(isTimelineModelId));
 }
 
 function validateValue(key: keyof CompanionSettings, value: unknown): string | null {
@@ -103,7 +105,11 @@ export function applyCompanionSettingsPatch(
     const error = validateValue(key as keyof CompanionSettings, values[key]);
     if (error) return invalid(error);
   }
-  return { ...current, ...values } as CompanionSettings;
+  const next = { ...current, ...values } as CompanionSettings;
+  // Every companion re-filters timeline rows against these ids, so a selection saved while the chart
+  // still split pool accounts has to name the merged row the timeline now returns.
+  if (next.models !== null) next.models = [...new Set(next.models.map(normalizeTimelineModelId))];
+  return next;
 }
 
 export function loadCompanionSettings(): { settings: CompanionSettings; updatedAt: number | null; corrupt?: true } {
