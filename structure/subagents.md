@@ -63,6 +63,13 @@ The override is applied as a final pass in both `buildCatalogEntries` (live `/v1
 ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from routed entries) does
 not clobber the forced value.
 
+A forced pass records each row's pre-override value once, in `opencodex_multi_agent_version_origin`
+(a string pin, or null for none); repeated forced passes never replace it. Returning to `"default"`
+consumes the record. Pristine baseline and native pins still win; the record only decides a native
+row the baseline predates, which previously kept the forced stamp because an absent baseline entry
+cannot tell a stale forced value from a genuine pin (issue 5636). Rows written before the record
+existed keep that non-destructive read.
+
 `getDefaultConfig()` (`src/config/proxy-env.ts`) writes `multiAgentMode: "v1"` explicitly, using the version
 constant from `src/config/multi-agent-surface.ts`, so v1 is the install default while a v2
 native-to-routed child task is undeliverable ciphertext. The repair and salvage merges in

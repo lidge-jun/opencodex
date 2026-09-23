@@ -1078,6 +1078,7 @@
     "moonshot-tool-schema.test.ts": "providers",
     "multi-agent-compat.test.ts": "codex-integration",
     "multi-agent-keep-native-v1.test.ts": "codex-integration",
+    "multi-agent-origin.test.ts": "codex-integration",
     "muse-passive-quota-cache.test.ts": "providers",
     "muse-passive-quota-observation.test.ts": "providers",
     "muse-spark-web-search-compat.test.ts": "providers",
