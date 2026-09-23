@@ -30,7 +30,7 @@ disturb the exact-equality check on bare native ids.
 
 Tests. `tests/server/config.test.ts` sits exactly at its file-size cap, so the
 "Astra-first subagent upgrade" describe moves into
-`tests/server/subagent-roster-migration.test.ts` (registered in
+`tests/routing/subagent-roster-migration.test.ts` (registered in
 `scripts/test-layout/layout.json` explicit and
 `tests/fixtures/test-layout-expected.json`); the moved block is then edited so
 that:
@@ -53,7 +53,7 @@ section gains the version-2 rule. Locale pages link to the English anchor.
 
 ## Verification
 
-`bun test tests/server/config.test.ts tests/server/subagent-roster-migration.test.ts
+`bun test tests/server/config.test.ts tests/routing/subagent-roster-migration.test.ts
 tests/server/server-startup-reconcile-resilience.test.ts tests/routing/subagent-roster-retention.test.ts
 tests/test-layout.test.ts tests/test-layout-tooling.test.ts`, the file-size ratchet test,
 `bun run test:changed`, `bun run typecheck`, `bun run structure:check`.
