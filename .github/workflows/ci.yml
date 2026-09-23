@@ -386,9 +386,10 @@ jobs:
 
   # The suite, split by file across four Linux runners.
   #
-  # `scripts/ci/run-bun-test-batches.sh` mirrors Bun's sorted round-robin shard
-  # assignment, then runs each shard in small batches so every batch gets a fresh
-  # Bun process. The helper prints the exact files before each batch and retries
+  # `scripts/ci/run-bun-test-batches.sh` assigns files to shards by the per-file
+  # durations recorded in `scripts/ci/test-durations.tsv` (sorted round-robin when
+  # nothing is recorded), then runs each shard in small batches so every batch gets
+  # a fresh Bun process. The helper prints the exact files before each batch and retries
   # nothing: a test failure, a process timeout and a Bun runtime crash each fail
   # the shard where they happen. A timeout or a crash is additionally swept one
   # file per process, after the shard has already failed, to attribute it.

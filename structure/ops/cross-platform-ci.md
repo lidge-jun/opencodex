@@ -33,6 +33,12 @@ manager guards remain active because the preload installs them before the lock b
 Test teardown follows the [sandbox cleanup contract](test-sandbox-cleanup.md).
 `tests/preload.ts` resolves cleanup dependencies after home/lock admission and before test cases; teardown awaits native-main startup releases and config hardening, then the sandbox's registered ACL child reaps before removing that root. Its synchronous exit fallback leaves an undrained root for ownership-checked stale recovery instead of blocking child cleanup with removal retries. `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
 `tests/helpers/test-sandbox-cleanup.ts` exposes case-scoped lifecycle ownership: cancellation starts listener stops while owned asynchronous work settles, and repeated close/stop calls share one promise. After teardown starts, only the lifecycle's own abort reason is absorbed; any other error, including a foreign AbortError, still fails its case. Callers settle that lifecycle before draining producers/reaps and restoring or removing a home. The helper does not replace fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
+Shard membership follows recorded duration: `scripts/ci/test-durations.tsv` weighs each file,
+the heaviest file goes to the least-loaded shard, and a file without a row weighs the table's
+median, so an empty table reproduces sorted round-robin exactly. Every shard computes the whole
+assignment and refuses to run unless it covers every selected file once. A batch also closes
+before its predicted duration passes half the process timeout, which only adds process
+boundaries. `scripts/ci/test-durations.ts refresh` regenerates the table from hosted job logs.
 A test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
 batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
 failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
