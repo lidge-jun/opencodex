@@ -939,7 +939,10 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   font-size: var(--sl-text-xs);
 }
 .lp-dl-links > a { white-space: nowrap; }
-.lp-announce-text { min-width: 0; word-break: keep-all; overflow-wrap: anywhere; }
+.lp-announce-text { min-width: 0; }
+/* Korean breaks between words; Japanese and Chinese keep per-character breaks. */
+html:lang(ko) .lp-announce-text,
+html:lang(ko) .lp-download { word-break: keep-all; overflow-wrap: break-word; }
 .lp-dl-sep { color: var(--sl-color-gray-4); }
 .lp-dl-alt,
 .lp-dl-sha {
