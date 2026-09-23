@@ -133,8 +133,7 @@ describe("shouldUseCodexWsUpstream", () => {
   });
 
   test("keeps configured provider endpoints on bounded HTTP SSE", () => {
-    // The canonical backend ignores the flag.
-    expect(shouldUseCodexWsUpstream(CODEX_URL, streamingInit(), false)).toBe(true);
+    expect(shouldUseCodexWsUpstream(CODEX_URL, streamingInit(), false)).toBe(false);
     // Bun cannot reject oversized messages before assembling them, so even an
     // opted-in provider cannot join the WebSocket lane.
     expect(shouldUseCodexWsUpstream("https://sub2api.example.com/v1/responses", streamingInit(), true)).toBe(false);
@@ -274,19 +273,20 @@ describe("providerFetch routing", () => {
     } as unknown as OcxProviderConfig;
     const wrapped = providerFetch(provider, BOUNDED_WS_RUNTIME);
 
-    // Eligible: WS adapter serves it, base fetch untouched.
     const wsResponse = await wrapped(CODEX_URL, streamingInit());
     expect(wsResponse.headers.get("content-type")).toContain("text/event-stream");
     expect(baseCalls).toHaveLength(0);
     expect(FakeWebSocket.instances).toHaveLength(1);
 
-    // Non-streaming body: base fetch.
     await wrapped(CODEX_URL, { method: "POST", body: JSON.stringify({ model: "m" }) });
-    // Different host: base fetch.
     await wrapped("https://api.openai.com/v1/responses", streamingInit());
-    // Request-object input: base fetch (WS path only handles string URLs).
     await wrapped(new Request(CODEX_URL, streamingInit() as RequestInit));
     expect(baseCalls).toHaveLength(3);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    provider.upstreamWebsocket = false;
+    const httpOnly = providerFetch(provider, BOUNDED_WS_RUNTIME);
+    expect(await (await httpOnly(CODEX_URL, streamingInit())).text()).toBe("base");
+    expect(baseCalls).toHaveLength(4);
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 

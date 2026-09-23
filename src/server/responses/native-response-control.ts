@@ -31,9 +31,9 @@ export function markNativeControlResponse(response: Response): Response { native
 /** Recognize a marked native response by identity, not by caller-controlled content. */
 export function isNativeControlResponse(response: Response): boolean { return nativeControlResponses.has(response); }
 
-/** Preserve canonical ChatGPT eligibility; only injection may use the separately billed public API. */
+/** Canonical ChatGPT needs its upstream WS enabled; only injection may use the separately billed public API. */
 export function nativeResponseControlEligible(provider: OcxProviderConfig, control?: NativeResponseControl): boolean {
-  if (isCanonicalOpenAiForwardProvider(provider)) return true;
+  if (isCanonicalOpenAiForwardProvider(provider)) return provider.upstreamWebsocket !== false;
   return control?.kind === "injection" && provider.adapter === "openai-responses"
     && provider.upstreamWebsocket === true && provider.authMode !== "forward"
     && provider.baseUrl?.replace(/\/+$/, "") === "https://api.openai.com/v1";
