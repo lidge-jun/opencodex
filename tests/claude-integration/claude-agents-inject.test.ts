@@ -9,6 +9,7 @@ import { fetchProviderModels } from "../../src/codex/catalog/provider-fetch";
 import { OAUTH_PROVIDERS } from "../../src/oauth";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { DEFAULT_SUBAGENT_MODELS } from "../../src/config/subagent-models";
 
 const dirs: string[] = [];
 function tempDir(): string {
@@ -134,7 +135,7 @@ describe("buildClaudeAgentDefs (devlog 070 + audit 071)", () => {
   test("unset roster seeds the defaults; explicit [] respected; no default model -> no self", () => {
     const dir = tempDir(); // empty: no settings.json, no claudeCode.model
     const seeded = buildClaudeAgentDefs(cfg(), {}, dir);
-    expect(seeded.length).toBe(5); // 5 defaults, no self (unresolvable)
+    expect(seeded.length).toBe(DEFAULT_SUBAGENT_MODELS.length); // the defaults, no self (unresolvable)
     const explicit = buildClaudeAgentDefs(cfg({ subagentModels: [], claudeCode: { model: "mock/big" } }), {}, dir);
     expect(explicit.map(d => d.name)).toEqual(["ocx-self"]);
     expect(explicit[0]!.model).toBe("mock/big"); // config fallback when settings absent
