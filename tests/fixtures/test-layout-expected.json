@@ -1172,6 +1172,7 @@
   "responses-account-change-scrub.test.ts": "responses",
   "responses-account-label.test.ts": "responses",
   "responses-anthropic-fast-downgrade.test.ts": "responses",
+  "responses-azure-opaque-blob-recovery.test.ts": "responses",
   "responses-bare-echo-helper-fence.test.ts": "responses",
   "responses-canonical-only-top-level-fields.test.ts": "responses",
   "responses-code-mode-patch-compile.test.ts": "responses",
