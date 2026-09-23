@@ -6,7 +6,7 @@
   `src/update/transactional-install.mjs`) stages into a sibling `.ocx-staging-<timestamp>`
   prefix, verifies, and swaps with rollback. Our code never creates `@bitkyc08/.opencodex-*`;
   that name is npm's own rename-aside during a direct global install.
-- Stage cleanup is `rmSync(..., { force: true })` inside `try {} catch {}`. A locked file (the
+- Stage cleanup is a `rmSync(..., { force: true })` whose errors are swallowed. A locked file (the
   reported `bunx.exe`, EPERM) leaves the staging tree in place silently and nothing sweeps it.
 - `mkdirSync(stageRoot, { recursive: true })` would reuse an existing directory of the same
   name instead of failing.

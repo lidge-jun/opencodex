@@ -37,6 +37,6 @@ one healthy new runtime, or keeps the old install and service intact with a clea
 | Phase | State |
 |---|---|
 | wp0 | Done: roadmap audited (near-pass, no blockers) and locked |
-| wp1 | Next |
-| wp2 | Pending |
-| wp3 | Pending |
+| wp1 | Done: ca7f4e3024 (fenced identity, tests, INV-FENCE-01) |
+| wp2 | Done: 91a2f3c47f (owned leftovers, failure guidance) and 9d80cc61ac (troubleshooting page) |
+| wp3 | PR #5643; hosted CI on the exact head is the proof (local checks: NOT RUN) |
