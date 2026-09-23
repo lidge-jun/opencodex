@@ -317,6 +317,29 @@ lookalike hosts, and custom proxy paths fail validation. A model override replac
 merges the provider-wide default, keeping precedence deterministic. With no preference configured,
 the request body is byte-for-byte unchanged in this area and OpenRouter retains its default routing.
 
+## Serialized tool-call content
+
+Some Chat gateways expose one model-produced call twice: as a complete
+`<tool_call><function=…>…</function></tool_call>` content block and as a structured `tool_calls`
+entry. `src/adapters/openai-chat/serialized-tool-call-content.ts` recognizes bare blocks at the
+start of a line outside Markdown fences; inline, quoted and indented examples remain unchanged.
+It holds a possible serialized block, resumes ordinary text delivery when the header cannot match,
+and removes the block only when its function name and
+freeform body match a structured call's parsed `input` in the same response. If the gateway also prefixes the structured call's JSON
+arguments with the same freeform body, the adapter keeps the JSON suffix only when the block body,
+prefix, and wrapper's `input` value all agree. Mismatched markup and arguments remain byte-exact.
+Silent held-content frames emit adapter heartbeats. Terminal errors and transport read failures
+drain all held text, including matching serialized blocks, because pending tools are not dispatched.
+The held bytes use the shared translator budget. For a model opted into inline `<think>` splitting,
+reconciliation sees only the answer text the splitter emits. A reasoning event that arrives while
+a block candidate is held waits behind it and is released in its original position, so event order
+never changes and a duplicate is not exposed early; line and fence context carry across the
+answer text on both sides of a think section. Streaming and buffered responses use the same
+matching and repair rules; regression coverage enters through `/v1/responses` in
+`tests/responses/responses-chat-tool-call-content.test.ts`.
+
+> Decision record: [ADR-5548](../decisions/ADR-5548-serialized-tool-call-content.md)
+
 ## Kimi Coding Plan prompt-cache affinity
 
 The canonical `kimi` OAuth and `kimi-code` API-key presets opt into forwarding the internal
