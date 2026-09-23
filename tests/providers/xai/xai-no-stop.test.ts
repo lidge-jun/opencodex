@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { createOpenAIChatAdapter, buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat";
-import { PROVIDER_REGISTRY } from "../../src/providers/registry";
-import { routedProviderConfig } from "../../src/router";
-import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import { createOpenAIChatAdapter, buildOpenAIChatPassthroughRequest } from "../../../src/adapters/openai-chat";
+import { PROVIDER_REGISTRY } from "../../../src/providers/registry";
+import { routedProviderConfig } from "../../../src/router";
+import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 
 const XAI_NO_STOP_MODELS = [
   "grok-4.7",
