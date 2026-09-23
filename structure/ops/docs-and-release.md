@@ -589,18 +589,7 @@ the existing snapshot; the fetch retains its own abort deadline. Routed effort r
 only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do
 not fetch on the request path; catalog sync owns their bootstrap.
 
-## Bun updater ownership transaction
-
-`src/update/ownership-transaction.ts` holds one mutation lease across the Bun updater's awaited
-stop, package replacement and recovery work. The parent never puts its token in the global
-environment. Fixed stop/service/direct-recovery children can join it; package-manager and
-ancillary children receive environments without the capability. Refusals return through the
-lease boundary before exiting, and thrown failures release it after owner-aware recovery.
-Replacement and recovery inspect both the captured endpoint and the freshly read runtime record.
-Malformed or unreadable records remain unknown. Recovery requires the same complete owner
-identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.
-Direct recovery retains the lease until readiness or its bounded deadline. The normal successful
-manual-runtime update still prints the existing restart hint.
+Bun updater ownership and recovery follow the [service transaction contract](service-and-sidecars.md#bun-updater-ownership-transaction).
 
 Linux release bundling enables Tauri verbosity on the primary attempt so linuxdeploy diagnostics remain visible. macOS signing verbosity and publication/signature gates are unchanged.
 

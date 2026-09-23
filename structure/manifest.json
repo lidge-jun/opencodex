@@ -387,9 +387,10 @@
       "path": "ops/service-and-sidecars.md",
       "tier": 6,
       "title": "Background Service And Sidecars",
-      "scope": "Service install/repair, platform launchers, tray, and sidecar processes.",
+      "scope": "Service install/repair, platform launchers, tray, sidecars, and updater ownership.",
       "documents": [
-        "src/server/"
+        "src/server/",
+        "src/update/"
       ]
     },
     {
@@ -406,8 +407,7 @@
         "src/cli/",
         "src/codex/",
         "src/lib/",
-        "src/service.ts",
-        "src/update/"
+        "src/service.ts"
       ]
     },
     {
