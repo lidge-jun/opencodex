@@ -198,6 +198,12 @@ peut être redirigée, y compris une requête normale portant `request_kind: "tu
 }
 ```
 
+### Quand la cible est indisponible
+
+Le remplacement est la seule destination choisie par l'opérateur : une cible qui ne se résout plus fait échouer l'appel auxiliaire au lieu de l'envoyer ailleurs. Lorsque le fournisseur de la cible est désactivé ou supprimé, ou que son combo n'existe plus, une requête interceptée renvoie `409` avec le code d'erreur `intercept_target_unavailable` avant tout envoi en amont. Le journal des requêtes enregistre le même code. La requête n'est pas transmise au modèle auxiliaire natif et ne se replie pas sur le fournisseur par défaut, car l'un comme l'autre changerait la destination, les identifiants et le coût sans votre choix. Une cible combo ou profil de routage continue de basculer entre ses propres membres. Une cible qualifiée comme `provider/model` dont le segment fournisseur ne désigne rien de configuré est traitée de la même façon, et l'API des réglages refuse de l'enregistrer. Un identifiant de modèle nu résolu via le fournisseur par défaut reste valide.
+
+Désactiver (`PATCH /api/providers?name=<provider>` avec `disabled: true`) ou supprimer un fournisseur vers lequel la cible se résout réussit toujours ; la réponse ajoute `dependentShadowIntercept: { model, enabled }` et le tableau de bord affiche un avertissement. Réactiver le fournisseur, ou choisir une autre cible, rétablit l'interception.
+
 ## Services auxiliaires
 
 ### `images` (`OcxImagesConfig`)
