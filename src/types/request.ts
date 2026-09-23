@@ -90,6 +90,16 @@ export interface OcxParsedRequest {
    * prepareOpaqueBlobRecovery after an authoritative rejection; consumers strip replayed blobs.
    */
   _stripReasoningEncryptedContent?: boolean;
+  /**
+   * Set when the destination itself rejected replayed opaque state: by prepareOpaqueBlobRecovery
+   * before the one recovery rebuild, and by bindRouteReasoningReplayScope while the rejection memo
+   * for this conversation and serving identity is live. The Responses passthrough then removes a
+   * reasoning item's `id` together with the `encrypted_content` it strips. Both were minted by the
+   * identity the destination refused, and a stateful destination resolves a replayed id against
+   * its own store, so keeping it turns a recovered send into `Item with id 'rs_…' not found`
+   * (#5583). A proven route switch alone does not set this.
+   */
+  _dropRejectedReasoningItemIds?: boolean;
   /** Final-route opt-in: emit v2 collaboration message arguments as plaintext on ChatGPT. */
   _plaintextV2AgentMessages?: boolean;
   /**

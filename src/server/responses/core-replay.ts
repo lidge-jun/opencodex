@@ -140,6 +140,7 @@ export function bindRouteReasoningReplayScope(args: {
   }
   if (reasoningReplayOpaqueBlobRejectionMemoized(parsed._reasoningReplayScope)) {
     parsed._stripReasoningEncryptedContent = true;
+    parsed._dropRejectedReasoningItemIds = true;
   }
   bindProviderContinuationForRoute(parsed, continuationOwner);
 }
