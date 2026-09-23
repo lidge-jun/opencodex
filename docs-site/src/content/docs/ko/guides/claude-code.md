@@ -115,6 +115,8 @@ hook을 제거해요. Claude Desktop은 별도 profile을 사용하며 shell hoo
 프록시 admission 헤더도 유효해야 해요. 그래서 `ocx claude`를
 사용할 때 "claude.ai connectors are disabled" 경고도 더 이상 나타나지 않아요.
 
+본문에서 바꾸는 것은 도구 호출 ID뿐이에요. Anthropic이 거부할 `tool_use.id`나 `tool_result.tool_use_id`(`a-zA-Z0-9_-` 밖의 문자가 있거나 64자를 넘는 ID, 예를 들어 세션 앞부분에서 라우팅 모델이 만든 ID)는 호출과 결과의 짝을 유지한 채 규칙에 맞는 ID로 바꿔요. 규칙에 맞는 ID는 그대로 보내고, 빈 ID에는 로컬에서 400을 돌려줘요.
+
 `claudeCode.nativePassthrough: false`로 끌 수 있고, `claudeCode.anthropicBaseUrl`로 다른 주소를
 지정할 수 있어요.
 

@@ -233,6 +233,8 @@ la résolution par alias et carte des modèles renvoie le même modèle sans mod
 l'en-tête d'admission dédié du proxy est valide. Par conséquent, l'avertissement
 « Les connecteurs claude.ai sont désactivés » n'apparaît plus avec `ocx claude`.
 
+La seule modification du corps concerne les identifiants d'appel d'outil. Un `tool_use.id` ou `tool_result.tool_use_id` qu'Anthropic refuserait (caractères hors de `a-zA-Z0-9_-`, ou plus de 64), par exemple créé plus tôt dans la session par un modèle routé, est réécrit en identifiant conforme sans rompre l'appariement appel/résultat. Les identifiants conformes sont envoyés tels quels, et un identifiant vide reçoit une erreur 400 locale.
+
 Désactivez ce comportement avec `claudeCode.nativePassthrough: false` ; définissez une autre destination avec
 `claudeCode.anthropicBaseUrl`.
 

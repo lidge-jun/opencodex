@@ -170,6 +170,8 @@ Anthropic。若任一供應商標頭含有代理許可密鑰，該密鑰會被�
 解析後回傳的模型保持不變；且在非回環綁定上，專用代理許可標頭有效。這也意味著使用 `ocx claude` 時不再出現
 “claude.ai connectors are disabled”警告。
 
+請求本文中唯一會改動的是工具呼叫 ID。Anthropic 會拒絕的 `tool_use.id` 或 `tool_result.tool_use_id`（含 `a-zA-Z0-9_-` 以外的字元或超過 64 個字元，例如工作階段早先由路由模型產生的 ID）會被改寫為合規 ID，並保持呼叫與結果的配對。合規 ID 原樣送出，空 ID 會在本地直接回傳 400。
+
 可以設定 `claudeCode.nativePassthrough: false` 來停用；也可以透過
 `claudeCode.anthropicBaseUrl` 指向其他位置。
 

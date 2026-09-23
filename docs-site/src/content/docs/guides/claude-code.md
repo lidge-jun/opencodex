@@ -315,6 +315,8 @@ alias/model-map resolution returns the same model unchanged; and, on a non-loopb
 dedicated proxy admission header is valid. This also means the
 "claude.ai connectors are disabled" warning no longer appears with `ocx claude`.
 
+The one change to the body is tool-call ids. A `tool_use.id` or `tool_result.tool_use_id` that Anthropic would reject (characters outside `a-zA-Z0-9_-`, or longer than 64), such as one a routed model minted earlier in the session, is rewritten to a conforming id with its call/result pairing kept. Conforming ids are sent unchanged, and an empty id is answered with a local 400.
+
 Disable with `claudeCode.nativePassthrough: false`; point elsewhere with
 `claudeCode.anthropicBaseUrl`.
 

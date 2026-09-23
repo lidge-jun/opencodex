@@ -249,6 +249,12 @@ geri döngü olmayan bir bağlantıda özel proxy kabul başlığı geçerli old
 aynı zamanda "claude.ai connectors are disabled" uyarısının artık `ocx claude`
 ile görünmediği anlamına gelir.
 
+Gövdede yapılan tek değişiklik araç çağrısı kimlikleridir. Anthropic'in reddedeceği bir `tool_use.id`
+veya `tool_result.tool_use_id` (`a-zA-Z0-9_-` dışında karakter içeren ya da 64 karakteri aşan;
+örneğin oturumun başında yönlendirilen bir modelin ürettiği) çağrı/sonuç eşleşmesi korunarak uygun
+bir kimlikle yeniden yazılır. Uygun kimlikler değiştirilmeden gönderilir, boş bir kimliğe yerel olarak
+400 döner.
+
 `claudeCode.nativePassthrough: false` ile devre dışı bırakın;
 `claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin.
 
