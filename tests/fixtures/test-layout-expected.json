@@ -858,6 +858,7 @@
   "management-origin-tls.test.ts": "server",
   "management-provider-pinsless-validation.test.ts": "server",
   "management-provider-proto-override.test.ts": "server",
+  "management-provider-reasoning-lists.test.ts": "server",
   "management-provider-reset-replay.test.ts": "server",
   "management-provider-synthetic-max.test.ts": "server",
   "management-provider-validation.test.ts": "server",

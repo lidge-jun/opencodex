@@ -742,6 +742,21 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  // The reasoning-replay lists (#5563). Unlike the lists above, an empty array is kept: it is
+  // the explicit opt-out that stops the registry seed from filling the field back in (see the
+  // note under OAUTH_RECONCILE_FIELDS in src/oauth/index.ts). null removes the field.
+  for (const field of ["preserveReasoningContentModels", "requiresReasoningPlaceholderModels"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (value === null) {
+      delete next[field];
+    } else {
+      const error = nonBlankStringArrayConfigError(value, field);
+      if (error) return { error };
+      next[field] = normalizeNonBlankStringArray(value as string[]);
+    }
+    touched = true;
+  }
 
   // headers is the one object-valued field in the mask. PATCH semantics merge it
   // shallowly into the existing block so a single fingerprint header can be added
@@ -1195,6 +1210,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // from "the registry supplied it" either. Without this sample, an unrelated edit that
     // omits the key resurrects the registry default over an operator's explicit `false`.
     const submittedAnnotateEmptyToolOutputs = Object.hasOwn(prov, "annotateEmptyToolOutputs");
+    // And for the two reasoning-replay lists, which enrichment fills from the registry seed.
+    const submittedPreserveReasoningContentModels = Object.hasOwn(prov, "preserveReasoningContentModels");
+    const submittedRequiresReasoningPlaceholderModels = Object.hasOwn(prov, "requiresReasoningPlaceholderModels");
     enrichProviderFromCatalog(name, prov);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     // Overwriting an existing provider must not drop its multi-key pool: carry it over, then
@@ -1258,6 +1276,20 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // keeps an operator's explicit false from being treated as absent.
     if (!submittedUpstreamWebsocket && existing?.upstreamWebsocket !== undefined) {
       prov.upstreamWebsocket = existing.upstreamWebsocket;
+    }
+    // The form sends neither reasoning-replay list either. Without the stored value a custom
+    // provider lost its list and a registry provider got the seed back, and the next tool turn
+    // on a thinking model failed upstream with nothing pointing at the save (#5563). Read the
+    // live row rather than `existing`, like the alias overlays below: a PATCH that saved either
+    // list while DNS validation awaited must not be undone. An empty list is an explicit
+    // opt-out, so any stored array is carried, `[]` included.
+    const livePreserveReasoningContentModels = config.providers[name]?.preserveReasoningContentModels;
+    if (!submittedPreserveReasoningContentModels && Array.isArray(livePreserveReasoningContentModels)) {
+      prov.preserveReasoningContentModels = [...livePreserveReasoningContentModels];
+    }
+    const liveRequiresReasoningPlaceholderModels = config.providers[name]?.requiresReasoningPlaceholderModels;
+    if (!submittedRequiresReasoningPlaceholderModels && Array.isArray(liveRequiresReasoningPlaceholderModels)) {
+      prov.requiresReasoningPlaceholderModels = [...liveRequiresReasoningPlaceholderModels];
     }
     if (existing?.modelContextWindows) {
       // When the client did send a map, its keys win and the user's other keys survive. When
