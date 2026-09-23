@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { isStandaloneBinary } from "./standalone";
 
 export interface PackageTreeObservation {
@@ -14,6 +14,13 @@ export type PackageTreeIntegrityStatus =
 
 export interface PackageTreeIntegrityGuard {
   status(): PackageTreeIntegrityStatus;
+  /**
+   * Version recorded in the package manifest that is on disk NOW, when it reads as a
+   * bounded semver. A fenced proxy reports it so `ocx restart` compares the CLI with the
+   * files an in-place respawn would run, not with the version this process booted from.
+   * Undefined while the manifest is unreadable or malformed (a replacement still in flight).
+   */
+  installedVersion?(): string | undefined;
   /**
    * Permanently disarms the guard: cancels any pending restart timer and
    * invalidates queued callbacks. Called from `server.stop()` so a still-queued
@@ -41,12 +48,27 @@ export interface PackageTreeIntegrityOptions {
    * instead of leaving it queued behind a generation check.
    */
   schedule?: (callback: () => void, delayMs: number) => (() => void) | void;
+  /** Test seam for `installedVersion()`; production reads the package manifest. */
+  readInstalledVersion?: () => string | undefined;
 }
 
 export type ObservePackageTree = () => PackageTreeObservation | null;
 export type PackageTreeRuntimeInstall = "bun" | "npm" | "pnpm" | "source";
 
 const packageManifestUrl = new URL("../../package.json", import.meta.url);
+
+const INSTALLED_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+function readInstalledManifestVersion(): string | undefined {
+  try {
+    const version = (JSON.parse(readFileSync(packageManifestUrl, "utf8")) as { version?: unknown }).version;
+    return typeof version === "string" && version.length <= 64 && INSTALLED_VERSION_PATTERN.test(version)
+      ? version
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function observePackageManifest(): PackageTreeObservation | null {
   try {
@@ -108,6 +130,7 @@ export function createPackageTreeIntegrityGuard(
   let waitingForReadableTree = false;
   let replacementCandidate: PackageTreeObservation | null = null;
   const restartDelayMs = options.replacedRestartDelayMs ?? 5_000;
+  const readInstalledVersion = options.readInstalledVersion ?? readInstalledManifestVersion;
   const schedule = options.schedule ?? ((callback, delayMs) => {
     const timer = setTimeout(callback, delayMs);
     timer.unref?.();
@@ -185,6 +208,7 @@ export function createPackageTreeIntegrityGuard(
   };
 
   return {
+    installedVersion: () => readInstalledVersion(),
     dispose(): void {
       resetRestartTimer();
       notified = true;

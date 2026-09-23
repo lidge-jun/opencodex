@@ -154,6 +154,10 @@ export interface StartServerDeps {
   observePackageTree?: ObservePackageTree;
   /** Test-only restart acceptor; production uses the normal drain-and-restart path. */
   acceptSystemRestart?: typeof import("../management/system-restart").acceptSystemRestart;
+  /** Test-only: whether this process is a service child, for the package-tree restart. */
+  packageTreeServiceChild?: () => boolean;
+  /** Test-only: whether this service child still owns its service home. */
+  packageTreeServiceHomeOwned?: () => boolean;
   /** Test-only seam for observing quota-worker registration ownership. */
   registerCodexQuotaAutoRefreshWorker?: typeof registerCodexQuotaAutoRefreshWorker;
 }
