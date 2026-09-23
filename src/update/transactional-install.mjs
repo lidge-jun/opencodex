@@ -289,12 +289,14 @@ export function sweepUpdateLeftovers({ packageDir, pkgName, log = () => {}, deps
       result.notOwned.push(full);
     }
   }
-  for (const path of result.removed) log("Removed a staging directory left by an earlier update: " + path);
+  // Names only: the full path under a user-scoped npm prefix carries the account name, and
+  // this logger is the launcher's console.
+  for (const path of result.removed) log("Removed a staging directory left by an earlier update: " + basename(path));
   for (const entry of result.inUse) {
-    log("Left an earlier update's staging directory in place (" + entry.code + "; a file inside is still in use); the next update retries it: " + entry.path);
+    log("Left an earlier update's staging directory in place (" + entry.code + "; a file inside is still in use); the next update retries it: " + basename(entry.path));
   }
   for (const path of result.notOwned) {
-    log("Not removing " + path + ": this updater did not create it. Delete it by hand once no OpenCodex process is running from it.");
+    log("Not removing " + basename(path) + " next to the package: this updater did not create it. Delete it by hand once no OpenCodex process is running from it.");
   }
   return result;
 }
@@ -417,11 +419,11 @@ export function transactionalNpmUpdate({
   const discardStage = () => {
     const removal = removeOwnedStage(stageRoot, deps);
     if (!removal.removed) {
-      log("Left this update's staging directory in place (" + removal.code + "; a file inside is still in use); the next update removes it: " + stageRoot);
+      log("Left this update's staging directory in place (" + removal.code + "; a file inside is still in use); the next update removes it: " + basename(stageRoot));
     }
   };
   const spec = pkgName + "@" + (targetVersion || tag);
-  log("Staging " + spec + " into " + stageRoot);
+  log("Staging " + spec + " into " + basename(stageRoot) + " next to the package");
   // npm 12 blocks lifecycle scripts by default. Bun's postinstall copies the selected
   // @oven/bun-* executable into bun/bin, so a successful npm exit without this narrow
   // approval leaves the staged tree intentionally incomplete. Allow only the package

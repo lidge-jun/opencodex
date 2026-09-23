@@ -8,7 +8,7 @@ import {
   existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   STALE_STAGE_MIN_AGE_MS,
   UPDATE_OWNER_MARKER,
@@ -283,7 +283,9 @@ describe("#5624 leftovers from earlier update attempts", () => {
       expect(existsSync(join(outside, "keep.txt"))).toBe(true);
       expect(liveVersion(backup)).toBe("0.8.0");
       for (const path of [legacy, renameAside, foreign, link]) {
-        expect(lines.some(line => line.startsWith("Not removing " + path))).toBe(true);
+        expect(lines.some(line => line.startsWith("Not removing " + basename(path) + " "))).toBe(true);
+        // Folder names only: a user-scoped prefix path carries the account name.
+        expect(lines.some(line => line.includes(scopeDir))).toBe(false);
       }
     } finally {
       removeTreeWithRetry(outside);

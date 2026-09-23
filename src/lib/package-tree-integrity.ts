@@ -15,10 +15,14 @@ export type PackageTreeIntegrityStatus =
 export interface PackageTreeIntegrityGuard {
   status(): PackageTreeIntegrityStatus;
   /**
-   * Version recorded in the package manifest that is on disk NOW, when it reads as a
-   * bounded semver. A fenced proxy reports it so `ocx restart` compares the CLI with the
-   * files an in-place respawn would run, not with the version this process booted from.
-   * Undefined while the manifest is unreadable or malformed (a replacement still in flight).
+   * Version recorded in the package manifest that is on disk NOW, once the replacement has
+   * settled. A fenced proxy reports it so `ocx restart` compares the CLI with the files an
+   * in-place respawn would run, not with the version this process booted from.
+   *
+   * A readable manifest is not an install-completion signal: npm can write package.json while
+   * it is still extracting the rest of the tree. So this stays undefined until the guard's own
+   * stability debounce has seen the same replacement identity for the full interval, and again
+   * whenever the tree has moved since. Undefined also covers an unreadable or malformed manifest.
    */
   installedVersion?(): string | undefined;
   /**
@@ -129,6 +133,8 @@ export function createPackageTreeIntegrityGuard(
   let cancelScheduled: (() => void) | null = null;
   let waitingForReadableTree = false;
   let replacementCandidate: PackageTreeObservation | null = null;
+  /** The replacement identity that survived a full stability interval (see installedVersion). */
+  let settledReplacement: PackageTreeObservation | null = null;
   const restartDelayMs = options.replacedRestartDelayMs ?? 5_000;
   const readInstalledVersion = options.readInstalledVersion ?? readInstalledManifestVersion;
   const schedule = options.schedule ?? ((callback, delayMs) => {
@@ -180,6 +186,7 @@ export function createPackageTreeIntegrityGuard(
         armRestartTimer();
         return;
       }
+      settledReplacement = current;
       try {
         options.onReplaced?.();
         notified = true;
@@ -208,7 +215,12 @@ export function createPackageTreeIntegrityGuard(
   };
 
   return {
-    installedVersion: () => readInstalledVersion(),
+    installedVersion: () => {
+      if (settledReplacement === null) return undefined;
+      const current = observe();
+      if (current === null || !sameObservation(settledReplacement, current)) return undefined;
+      return readInstalledVersion();
+    },
     dispose(): void {
       resetRestartTimer();
       notified = true;

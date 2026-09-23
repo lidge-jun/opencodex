@@ -38,6 +38,9 @@ Server (`src/server/index/serve-options.ts`, fenced branch, `/healthz` only):
 Guard (`src/lib/package-tree-integrity.ts`): optional `installedVersion()` on the guard interface;
 the runtime guard reads `package.json` version (bounded semver or undefined); the option
 `readInstalledVersion` is a test seam. `package-tree-guard.ts` forwards it.
+Review follow-up: a readable manifest is not an install-completion signal, so `installedVersion()`
+stays undefined until the guard's stability debounce has seen the same replacement identity for the
+full interval, and again whenever the tree has moved since.
 
 CLI liveness (`src/server/proxy-liveness.ts`):
 - `LivenessIo.acceptPackageTreeFenced` (opt-in). When set and the 503 body is an opencodex

@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
-import type { PackageTreeObservation } from "../../src/lib/package-tree-integrity";
+import { createPackageTreeIntegrityGuard, type PackageTreeObservation } from "../../src/lib/package-tree-integrity";
 import { createLocalAttestationSecret } from "../../src/lib/local-management-attestation";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../../src/lib/system-restart-contract";
 import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
@@ -122,7 +122,8 @@ function ownedLiveness(port: number, recordSecret = secret): LivenessIo {
   };
 }
 
-async function replaceTreeAndObserveFence(port: number): Promise<Record<string, unknown>> {
+/** Returns the first fenced body (before the guard settled) and one fetched after it settled. */
+async function replaceTreeAndObserveFence(port: number): Promise<{ first: Record<string, unknown>; settled: Record<string, unknown> }> {
   const healthy = await fetch(`http://127.0.0.1:${port}/healthz`);
   expect(healthy.status).toBe(200);
   await healthy.text();
@@ -130,9 +131,12 @@ async function replaceTreeAndObserveFence(port: number): Promise<Record<string, 
   await Bun.sleep(1_100); // outlive the guard's cached healthy observation
   const fenced = await fetch(`http://127.0.0.1:${port}/healthz`);
   expect(fenced.status).toBe(503);
-  const body = await fenced.json() as Record<string, unknown>;
+  const first = await fenced.json() as Record<string, unknown>;
   await Promise.resolve(); // the guard verifies the replacement in a microtask
-  return body;
+  const again = await fetch(`http://127.0.0.1:${port}/healthz`);
+  expect(again.status).toBe(503);
+  const settled = await again.json() as Record<string, unknown>;
+  return { first, settled };
 }
 
 describe("package-tree fence, real order (#5496)", () => {
@@ -141,8 +145,11 @@ describe("package-tree fence, real order (#5496)", () => {
     const io = ownedLiveness(port);
     expect(await findLiveProxy(io)).toMatchObject({ pid: process.pid, port, source: "runtime" });
 
-    const body = await replaceTreeAndObserveFence(port);
-    expect(body).toMatchObject({
+    const { first, settled } = await replaceTreeAndObserveFence(port);
+    // The first observation of a replacement cannot know the install finished.
+    expect(first).toMatchObject({ status: "restart_required", error: { code: "package_tree_changed" } });
+    expect(first.installedVersion).toBeUndefined();
+    expect(settled).toMatchObject({
       status: "restart_required",
       pid: process.pid,
       port,
@@ -188,5 +195,41 @@ describe("package-tree fence, real order (#5496)", () => {
     const stillFenced = await fetch(`http://127.0.0.1:${port}/healthz`);
     expect(stillFenced.status).toBe(503);
     await stillFenced.text();
+  });
+});
+
+describe("installed version is reported only for a settled replacement (#5496)", () => {
+  test("undefined while the replacement is new or still moving, defined once it held for the debounce", async () => {
+    let observed: PackageTreeObservation = BOOT;
+    const pending: Array<() => void> = [];
+    let clock = 0;
+    const guard = createPackageTreeIntegrityGuard(() => observed, () => clock, {
+      onReplaced: () => {},
+      replacedRestartDelayMs: 5_000,
+      schedule: callback => { pending.push(callback); },
+      readInstalledVersion: () => INSTALLED_VERSION,
+    });
+    const runNext = async () => {
+      pending.shift()?.();
+      await Promise.resolve();
+    };
+
+    expect(guard.status()).toEqual({ ok: true });
+    expect(guard.installedVersion?.()).toBeUndefined();
+
+    // npm has written a new manifest; the rest of the tree may still be extracting.
+    observed = REPLACED;
+    clock += 2_000;
+    expect(guard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
+    expect(guard.installedVersion?.()).toBeUndefined();
+
+    // The identity held for the full interval: settled.
+    await runNext();
+    expect(guard.installedVersion?.()).toBe(INSTALLED_VERSION);
+
+    // Any later movement withdraws it again.
+    observed = { ...REPLACED, contentTimeNs: 300n };
+    expect(guard.installedVersion?.()).toBeUndefined();
+    guard.dispose();
   });
 });
