@@ -51,10 +51,16 @@ describe("Xiaomi presets move to V2.6", () => {
     expect(resolveMetadataProvider("xiaomi")).toBe("xiaomi");
     expect(resolveMetadataProvider("xiaomi-mimo")).toBe("xiaomi");
     expect(resolveMetadataProvider("mimo")).toBeUndefined();
+    // The token plan keeps the model-level fallback it already used for V2.5: a pay-as-you-go
+    // equivalent estimate, not a plan price.
+    expect(resolveMatchedPrice("mimo", "mimo-v2.6-pro")).toMatchObject({ cost4: PRO, status: "verified-derived" });
   });
 
   test("defaults and rosters lead with V2.6 and keep V2.5 until its retirement", () => {
-    expect(entry("xiaomi").defaultModel).toBe("mimo-v2.6-pro");
+    expect(entry("xiaomi")).toMatchObject({
+      defaultModel: "mimo-v2.6-pro",
+      models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5-pro", "mimo-v2.5"],
+    });
     expect(entry("xiaomi-mimo")).toMatchObject({
       defaultModel: "mimo-v2.6-flash",
       models: ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5"],

@@ -17,8 +17,8 @@ Write scope: files below. Budget: one cycle.
 2. `src/providers/registry/entries-extended.ts`:
    - `xiaomi` and `xiaomi-mimo`: `jawcodeBundle: "xiaomi"` so first-party presets read context/output/modalities/price
      from the vendor bundle. Chain: `deriveJawcodeAliases` (`src/providers/derive.ts:629`) → generator alias map (regenerated)
-     → `resolveMetadataProvider` → `model-hints.ts` and `cost.ts`. Token plan (`mimo`) stays unmapped: plan billing is not the
-     pay-as-you-go price (model-level vendor fallback, unchanged, still applies as today).
+     → `resolveMetadataProvider` → `model-hints.ts` and `cost.ts`. Token plan (`mimo`) stays unmapped: no plan-specific facts are
+     claimed, and its estimates keep coming from the model-level vendor fallback (pay-as-you-go equivalent), as for V2.5.
    - `xiaomi`: `defaultModel: "mimo-v2.6-pro"`.
    - `xiaomi-mimo`: `defaultModel: "mimo-v2.6-flash"`,
      `models: ["mimo-v2.6-flash", "mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed", "mimo-v2.5"]`.
