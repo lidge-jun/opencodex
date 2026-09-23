@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,11 +7,6 @@ import { startServer } from "../../src/server";
 import { PROVIDER_INPUT_TOO_LARGE_MESSAGE } from "../../src/server/responses/context-overflow";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { SERVER_BUDGET_MS } from "../helpers/test-budget";
-
-// Every case here binds a real listener and drives it over HTTP, so the file-wide budget is
-// the server budget; the assertions themselves are unchanged.
-setDefaultTimeout(SERVER_BUDGET_MS);
 
 let testDir = "";
 let previousOcxHome: string | undefined;
