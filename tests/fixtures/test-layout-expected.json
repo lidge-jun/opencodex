@@ -397,6 +397,7 @@
   "codex-plugins-doctor.test.ts": "codex-integration",
   "codex-pool-plan-exclusion.test.ts": "codex-integration",
   "codex-pool-refresh-backoff.test.ts": "codex-integration",
+  "codex-pool-request-owned-main.test.ts": "codex-integration",
   "codex-pool-rotation.test.ts": "codex-integration",
   "codex-priority-failback.test.ts": "codex-integration",
   "codex-prompt-adopt.test.ts": "codex-integration",
