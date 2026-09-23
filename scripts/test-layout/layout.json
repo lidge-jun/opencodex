@@ -791,6 +791,7 @@
     "doctor-service-memory-contract.test.ts": "service",
     "doctor.test.ts": "codex-integration",
     "download-cap-default.test.ts": "images",
+    "download-connect-deadline-default.test.ts": "images",
     "dsh-path-contract.test.ts": "ci-workflows",
     "dsh-rc6-compat-script.test.ts": "ci-workflows",
     "dsh-writer-lock.test.ts": "ci-workflows",
