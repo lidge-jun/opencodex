@@ -17,11 +17,12 @@ The previous default list therefore becomes Astra, Sol, Terra, Luna, 5.5.
 An unset legacy list receives the current defaults; an explicit empty legacy list becomes
 `["gpt-6-astra"]`. Existing Astra entries are not duplicated.
 
-The current default is `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`. A stored list
-that still matches the earlier generated default exactly (`gpt-6-astra`,
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, in that order)
-is replaced with it on the first start after upgrading. Any other list, including
-a reordered, shortened, or empty one, is kept as saved.
+The current default is `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`. On the first
+start after upgrading, a stored list is cleaned of retired rows: `gpt-5.6-sol` and
+`gpt-5.6-luna` become `gpt-6-sol` and `gpt-6-luna` in the same position, and every
+other `gpt-5.5` or `gpt-5.6` model is removed. Ids with a `/` (routed
+`provider/model` or account-qualified choices) are left as written. A list that
+held only retired rows receives the current default; an empty list stays empty.
 
 The internal `subagentModelsVersion` marker (currently `2`) makes each step a
 one-time upgrade. Afterwards you can reorder, remove Astra, or save an empty list
