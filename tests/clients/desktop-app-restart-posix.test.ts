@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,6 +59,8 @@ function psRows(rows: Array<[number, number, string]>): string {
  * signalled for real on whatever machine ran the suite.
  */
 const kills: Array<[number, string]> = [];
+beforeEach(() => { setDarwinKillForTests((pid, signal) => { kills.push([pid, signal]); }); });
+afterEach(() => { setDarwinKillForTests(null); });
 
 function darwinIo(options: {
   calls: Call[];
