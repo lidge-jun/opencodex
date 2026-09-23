@@ -3120,4 +3120,12 @@ export const ja: Record<TKey, string> = {
   "remote.event.status": "状態",
   "remote.event.tool": "リモートツール",
   "remote.event.error": "エラー",
+  "quotaSummary.aria": "プロバイダークォータ概要",
+  "quotaSummary.updated": "{time} 更新",
+  "quotaSummary.dataAt": "{time} 時点のデータ",
+  "quotaSummary.observedAt": "{time} に観測",
+  "quotaSummary.warn": "70%以上使用",
+  "quotaSummary.critical": "90%以上使用",
+  "quotaSummary.credits": "クレジット",
+  "quotaSummary.refreshFailed": "最新の更新に失敗しました。前回の値を表示しています",
 };

@@ -3085,4 +3085,12 @@ export const zhTW: Record<TKey, string> = {
   "remote.event.status": "狀態",
   "remote.event.tool": "遠端工具",
   "remote.event.error": "錯誤",
+  "quotaSummary.aria": "供應商配額概覽",
+  "quotaSummary.updated": "{time} 更新",
+  "quotaSummary.dataAt": "{time} 的資料",
+  "quotaSummary.observedAt": "{time} 觀測",
+  "quotaSummary.warn": "已用 70% 以上",
+  "quotaSummary.critical": "已用 90% 以上",
+  "quotaSummary.credits": "額度",
+  "quotaSummary.refreshFailed": "最近一次重新整理失敗，顯示上次資料",
 };

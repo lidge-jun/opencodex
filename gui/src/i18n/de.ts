@@ -3099,4 +3099,12 @@ export const de: Record<TKey, string> = {
   "remote.event.status": "Status",
   "remote.event.tool": "Remote-Werkzeug",
   "remote.event.error": "Fehler",
+  "quotaSummary.aria": "Anbieter-Kontingentübersicht",
+  "quotaSummary.updated": "Aktualisiert {time}",
+  "quotaSummary.dataAt": "Daten von {time}",
+  "quotaSummary.observedAt": "Beobachtet um {time}",
+  "quotaSummary.warn": "Über 70 % genutzt",
+  "quotaSummary.critical": "Über 90 % genutzt",
+  "quotaSummary.credits": "Guthaben",
+  "quotaSummary.refreshFailed": "Letzte Aktualisierung fehlgeschlagen; vorheriger Stand wird angezeigt",
 };

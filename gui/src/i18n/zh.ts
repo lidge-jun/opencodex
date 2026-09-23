@@ -3120,4 +3120,12 @@ export const zh: Record<TKey, string> = {
   "remote.event.status": "状态",
   "remote.event.tool": "远程工具",
   "remote.event.error": "错误",
+  "quotaSummary.aria": "提供商配额概览",
+  "quotaSummary.updated": "{time} 更新",
+  "quotaSummary.dataAt": "{time} 的数据",
+  "quotaSummary.observedAt": "{time} 观测",
+  "quotaSummary.warn": "已用 70% 以上",
+  "quotaSummary.critical": "已用 90% 以上",
+  "quotaSummary.credits": "额度",
+  "quotaSummary.refreshFailed": "最近一次刷新失败，显示上次数据",
 };

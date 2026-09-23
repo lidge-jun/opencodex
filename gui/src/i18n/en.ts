@@ -3133,6 +3133,14 @@ export const en = {
   "remote.event.status": "Status",
   "remote.event.tool": "Remote tool",
   "remote.event.error": "Error",
+  "quotaSummary.aria": "Provider quota summary",
+  "quotaSummary.updated": "Updated {time}",
+  "quotaSummary.dataAt": "Data from {time}",
+  "quotaSummary.observedAt": "Observed at {time}",
+  "quotaSummary.warn": "70%+ used",
+  "quotaSummary.critical": "90%+ used",
+  "quotaSummary.credits": "Credits",
+  "quotaSummary.refreshFailed": "Last refresh failed; showing the previous reading",
 } as const;
 
 export type TKey = keyof typeof en;

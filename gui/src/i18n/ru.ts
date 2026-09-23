@@ -3122,4 +3122,12 @@ export const ru: Record<TKey, string> = {
   "remote.event.status": "Состояние",
   "remote.event.tool": "Удалённый инструмент",
   "remote.event.error": "Ошибка",
+  "quotaSummary.aria": "Сводка квот провайдеров",
+  "quotaSummary.updated": "Обновлено в {time}",
+  "quotaSummary.dataAt": "Данные на {time}",
+  "quotaSummary.observedAt": "Замечено в {time}",
+  "quotaSummary.warn": "Использовано более 70%",
+  "quotaSummary.critical": "Использовано более 90%",
+  "quotaSummary.credits": "Кредиты",
+  "quotaSummary.refreshFailed": "Последнее обновление не удалось; показаны предыдущие данные",
 };
