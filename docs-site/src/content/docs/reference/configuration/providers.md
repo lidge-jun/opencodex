@@ -139,6 +139,30 @@ The same `providerContextCaps.openai`, `modelContextWindows` and `modelAutoCompa
 levers apply as for Astra. There are no `openai-apikey/` rows or built-in price estimates for Sol
 or Luna yet.
 
+When OpenAI ships a GPT model that this release does not know yet, add it through config instead of
+waiting for an update, the same way a new Claude id goes under `providers.anthropic.models`:
+
+```json
+{
+  "providers": {
+    "openai": {
+      "adapter": "openai-responses",
+      "authMode": "forward",
+      "baseUrl": "https://chatgpt.com/backend-api/codex",
+      "models": ["gpt-6-nova"]
+    }
+  }
+}
+```
+
+Each bare `gpt-*` id listed there on the Codex-login provider appears as a native model (here
+**GPT-6-Nova**) with GPT-6 Sol's reasoning ladder and modalities, a 272,000-token default context
+and an 872,000-token opt-in ceiling. Raise or narrow it with `modelContextWindows`, for example
+`"modelContextWindows": { "gpt-6-nova": 872000 }`. It is never account-gated: if your account
+cannot use the model, the request still goes out and you see the upstream error. Ids that are
+already built in are ignored, and removing an id from the list removes the model. A combo
+`nativeAlias` cannot point at a configured id.
+
 `gpt-6-astra-minor` (**GPT-6-Astra-Minor**) is an unreleased Astra variant. It is account-gated:
 it stays hidden, and requests for it are refused locally, until an authenticated Codex roster for
 your account lists it. When it appears it uses Astra's context, ladder and modalities.

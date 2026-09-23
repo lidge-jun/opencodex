@@ -111,7 +111,7 @@ import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
   LOCAL_PROVIDER_RELOAD_PATH,
 } from "../../lib/local-provider-reload-contract";
-import { refreshUserCostOverlays } from "../../usage/user-cost-overlays";
+import { refreshConfigDerivedRegistries } from "../../config/derived-registries";
 import { redactSecretString } from "../../lib/redact";
 import {
   XAI_RESPONSES_OPT_IN_MODELS,
@@ -1003,7 +1003,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     reconcileLiveStateStores();
     // The complete disk snapshot owns display overlays, including providers that this
     // live routing instance deliberately does not adopt.
-    refreshUserCostOverlays(currentDiskConfig);
+    refreshConfigDerivedRegistries(currentDiskConfig);
     clearGatherRoutedModelsInflight();
     (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
     clearAccountQuotaCache(name);
@@ -1105,7 +1105,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
     adoptProviderEditorCandidate(config, outcome.value.config);
     reconcileLiveStateStores();
-    refreshUserCostOverlays(outcome.value.config);
+    refreshConfigDerivedRegistries(outcome.value.config);
     clearGatherRoutedModelsInflight();
     (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
     clearAccountQuotaCache();
