@@ -115,6 +115,34 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     expect(await admitted?.json()).toEqual({ error: "Unknown account for reauth" });
   });
 
+  test("Meta Muse manual code submission requires a GUI session", async () => {
+    const cfg = config();
+    const submit = spyOn(oauth, "submitManualLoginCode").mockReturnValue({ ok: true });
+    const request = (provider = "meta-muse") => new Request("http://localhost/api/oauth/login/code", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ provider, input: "synthetic-code" }),
+    });
+    try {
+      const denied = request();
+      const response = await handleManagementAPI(denied, new URL(denied.url), cfg, {}, "admin-token");
+      expect(response?.status).toBe(403);
+      expect(await response?.json()).toEqual({
+        error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
+        code: "oauth_consent_required",
+      });
+      expect(submit).not.toHaveBeenCalled();
+
+      const admitted = request();
+      expect((await handleManagementAPI(admitted, new URL(admitted.url), cfg, {}, "gui-session"))?.status).toBe(200);
+      expect(submit).toHaveBeenCalledWith("meta-muse", "synthetic-code");
+
+      const other = request("xai");
+      expect((await handleManagementAPI(other, new URL(other.url), cfg, {}, "admin-token"))?.status).toBe(200);
+      expect(submit).toHaveBeenLastCalledWith("xai", "synthetic-code");
+    } finally { submit.mockRestore(); }
+  });
+
   test.each([
     ["plain", {}, false],
     ["add-account", { addAccount: true }, true],
