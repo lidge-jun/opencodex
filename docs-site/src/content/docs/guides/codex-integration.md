@@ -8,7 +8,7 @@ opencodex makes Codex route through the proxy by editing two things Codex reads:
 idempotent and reversible.
 
 The **Integrations** overview has a Codex switch for this native integration. Its switch shows
-the desired state from OpenCodex's configuration, while the badge reports whether Codex is
+the latest saved desired state from OpenCodex's configuration, including immediately after a toggle, while the badge reports whether Codex is
 currently observed using the proxy; during cleanup those can briefly differ while the badge
 continues to report the observed state. Disabling names the effective Codex config
 file, removes OpenCodex's generated routing artifacts, and leaves the proxy running for other

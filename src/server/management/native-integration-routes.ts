@@ -19,7 +19,8 @@ import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-sta
  * 011 (Claude Code), 012 (Grok).
  */
 import { join } from "node:path";
-import { loadConfig, mutatePersistedConfig, saveConfigPreservingClaudeCode } from "../../config";
+import { existsSync } from "node:fs";
+import { getConfigPath, loadConfig, mutatePersistedConfig, saveConfigPreservingClaudeCode } from "../../config";
 import { readRuntimePort } from "../../config/process-state";
 import { desktopVisibleNativeSlugs, filterCatalogVisibleModels, nativeContextLimits } from "../../codex/catalog";
 import { getCodexHome } from "../../codex/paths";
@@ -183,11 +184,26 @@ function claudeStatus(config: ManagementContext["config"], configPath: string): 
   };
 }
 
+/**
+ * The state the latest Codex toggle in this process reported, keyed by the intent it
+ * applied. Intent alone cannot describe an apply or restore that did not complete: the
+ * PUT reports `absent` for a skipped or failed enable and `unsafe` for an incomplete
+ * restore, and the next GET must not turn those into `current` or `absent`. It applies
+ * only while the persisted intent still matches; a restart re-runs startup convergence.
+ */
+let codexLastToggle: { desiredEnabled: boolean; state: NativeStatus["state"] } | null = null;
+
+function rememberCodexToggle(desiredEnabled: boolean, state: NativeStatus["state"]): NativeStatus["state"] {
+  codexLastToggle = { desiredEnabled, state };
+  return state;
+}
+
 function codexStatus(config: ManagementContext["config"], configPath: string): NativeStatus {
   const desiredEnabled = config.clientIntegrations?.codex !== false;
+  const reported = codexLastToggle?.desiredEnabled === desiredEnabled ? codexLastToggle.state : null;
   return {
     clientId: "codex",
-    state: desiredEnabled ? "current" : "absent",
+    state: reported ?? (desiredEnabled ? "current" : "absent"),
     installed: true,
     configPath,
     desiredEnabled,
@@ -356,7 +372,7 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
       if (applied.status === "skipped") {
         return jsonResponse({
           ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
-          state: "absent",
+          state: rememberCodexToggle(true, "absent"),
           desiredEnabled: enabled,
           message: "Codex integration is OFF; enable did not change Codex.",
           reason: "apply_incomplete",
@@ -364,7 +380,7 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
       }
       return jsonResponse({
         ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
-        state: applied.ok ? "current" : "absent",
+        state: rememberCodexToggle(true, applied.ok ? "current" : "absent"),
         desiredEnabled: enabled,
         message: applied.ok
           ? "Codex now routes through opencodex"
@@ -379,6 +395,7 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
     if (durable && persisted.status === "unchanged") {
       const { classifyNativeRoutedResidue } = await import("../../codex/native-residue");
       if (classifyNativeRoutedResidue().kind === "clean") {
+        rememberCodexToggle(false, "absent");
         return jsonResponse({
           ok: true, clientId: "codex", changed: false, state: "absent", desiredEnabled: false,
           message: "Codex integration is already OFF and native; no Codex files changed.",
@@ -390,7 +407,7 @@ async function handleCodexToggle(ctx: ManagementContext): Promise<Response> {
     const restored = await restoreNativeCodexAsync({ revalidateDesiredState: true });
     return jsonResponse({
       ok: true, clientId: "codex", changed: durable && persisted.status === "committed",
-      state: restored.success ? "absent" : "unsafe",
+      state: rememberCodexToggle(false, restored.success ? "absent" : "unsafe"),
       desiredEnabled: enabled,
       message: restored.success
         ? `Codex restored to its native path; the proxy is still serving other clients. ${OCX_NATIVE_REPLAY_RECOVERY_NOTE}`
@@ -777,14 +794,30 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
   }
 }
 
+function persistedIntentConfig(snapshot: ManagementContext["config"]): ManagementContext["config"] {
+  // Only the per-client intent is refreshed; every other field keeps the snapshot the
+  // rest of this request already reasons about.
+  try {
+    // No config file means no persisted intent: loadConfig would return defaults, which
+    // must not override the in-memory intent this request carries.
+    if (!existsSync(getConfigPath())) return snapshot;
+    return { ...snapshot, clientIntegrations: loadConfig().clientIntegrations };
+  } catch {
+    return snapshot;
+  }
+}
+
 export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
 
   if (url.pathname === "/api/native-integrations" && req.method === "GET") {
-    const { getConfigPath } = await import("../../config");
     const codexConfigPath = join(getCodexHome(), "config.toml");
+    // The Codex, Grok and Claude Desktop toggles persist intent independently of the
+    // server's startup config snapshot. Read that intent once so the next dashboard
+    // refresh reflects a completed PUT; fall back to the snapshot if the file is unreadable.
+    const persisted = persistedIntentConfig(config);
     return jsonResponse({
-      clients: [claudeStatus(config, getConfigPath()), grokStatus(config), codexStatus(config, codexConfigPath), desktopStatus(config)],
+      clients: [claudeStatus(config, getConfigPath()), grokStatus(persisted), codexStatus(persisted, codexConfigPath), desktopStatus(persisted)],
     } satisfies NativeStatusListEnvelope);
   }
 

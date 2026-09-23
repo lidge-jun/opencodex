@@ -12,7 +12,7 @@
  * act on — rather than artifacts the next start silently undoes.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -142,6 +142,69 @@ describe("request validation", () => {
 });
 
 describe("turning Codex off", () => {
+  test("the status read reflects the persisted switch after a toggle with a stale server config", async () => {
+    const serverConfig = baseConfig();
+    const disabled = await put(serverConfig, { enabled: false });
+    expect(disabled.body).toMatchObject({ state: "absent", desiredEnabled: false });
+    expect(persistedCodexIntent()).toBe(false);
+
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({
+      state: "absent",
+      desiredEnabled: false,
+    });
+  });
+
+  test("the status read follows an off-then-on round trip against the same stale server config", async () => {
+    const serverConfig = baseConfig();
+    await put(serverConfig, { enabled: false });
+    await put(serverConfig, { enabled: true });
+    expect(persistedCodexIntent()).not.toBe(false);
+
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({
+      state: "current",
+      desiredEnabled: true,
+    });
+  });
+
+  test("a failed native restore stays unsafe on the next status read", async () => {
+    // A directory where Codex's config file belongs makes the native restore fail.
+    mkdirSync(join(codexHome, "config.toml"));
+    const serverConfig = baseConfig();
+    const disabled = await put(serverConfig, { enabled: false });
+    expect(disabled.body).toMatchObject({ state: "unsafe", reason: "restore_incomplete", desiredEnabled: false });
+
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({
+      state: "unsafe",
+      desiredEnabled: false,
+    });
+  });
+
+  test("an enable that did not apply stays absent on the next status read", async () => {
+    // A hub does not rewrite its own Codex config, so the enable is saved but skipped.
+    writeFileSync(join(fixtureRoot, "config.json"), JSON.stringify({ ...baseConfig(), runtimeRole: "hub" }, null, 2));
+    const serverConfig = { ...baseConfig(), runtimeRole: "hub" } as OcxConfig;
+    const enabled = await put(serverConfig, { enabled: true });
+    expect(enabled.body).toMatchObject({ state: "absent", desiredEnabled: true, reason: "apply_incomplete" });
+
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; state: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")).toMatchObject({ state: "absent", desiredEnabled: true });
+  });
+
+  test("without a config file the status read keeps the request's in-memory intent", async () => {
+    rmSync(join(fixtureRoot, "config.json"));
+    const serverConfig = { ...baseConfig(), clientIntegrations: { codex: false } } as OcxConfig;
+    const response = await dispatch(serverConfig, "/api/native-integrations");
+    const body = await response!.json() as { clients: { clientId: string; desiredEnabled: boolean }[] };
+    expect(body.clients.find(client => client.clientId === "codex")?.desiredEnabled).toBe(false);
+  });
+
   test("persists the decision so it survives the next start", async () => {
     const result = await put(baseConfig(), { enabled: false });
     expect(result.status).toBe(200);
