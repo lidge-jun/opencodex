@@ -149,13 +149,17 @@ describe("xAI policy-refusal 403", () => {
     expect(isUpstreamPolicyRefusal(403, "   ")).toBe(false);
   });
 
-  // The two xAI plan phrases joined isSubscriptionGateMessage, which classifyError shares, so
-  // they also become subscription_required everywhere else a 403 is classified.
+  // The two xAI plan phrases joined isSubscriptionGateMessage, which classifyError and the
+  // message-only status inference share, so they also become 403 subscription_required on both.
   test("classifies the xAI subscription-gate phrases as subscription_required", () => {
     for (const message of ["You need a Grok subscription.", "You have run out of credits."]) {
       expect(classifyError(403, "upstream_error", message)).toMatchObject({
         type: "permission_error",
         code: "subscription_required",
+      });
+      expect(adapterFailureFromMessage(message)).toMatchObject({
+        httpStatus: 403,
+        error: { type: "permission_error", code: "subscription_required" },
       });
     }
   });
