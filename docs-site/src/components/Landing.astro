@@ -533,7 +533,9 @@ const docsMap = [
 		.userAgentData?.platform || navigator.userAgent || '';
 	// Phones, tablets and ChromeOS cannot run the desktop builds; iOS user agents
 	// also say "like Mac OS X", so they are ruled out before the desktop tests.
-	const handheld = /iphone|ipad|ipod|android|cros|mobile/i.test(`${uaPlatform} ${navigator.userAgent}`);
+	// iPadOS in desktop mode reports a Mac user agent; a touch screen gives it away.
+	const handheld = /iphone|ipad|ipod|android|cros|mobile/i.test(`${uaPlatform} ${navigator.userAgent}`)
+		|| (/mac/i.test(uaPlatform) && navigator.maxTouchPoints > 1);
 	const platform = handheld
 		? ''
 		: /mac/i.test(uaPlatform)
