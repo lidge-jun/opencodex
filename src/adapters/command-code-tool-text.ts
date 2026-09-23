@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AdapterEvent } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import { validatesRestoredValue } from "./command-code-restored-schema";
 
 /**
  * MiMo tool-call markup on the Command Code /alpha/generate stream.
@@ -155,50 +156,16 @@ function decodeParameter(raw: string, schema: unknown): unknown {
   const types = schemaTypes(schema);
   if (!types) {
     const parsed = tryJson(raw);
-    const value = parsed === undefined ? raw : parsed;
-    return satisfiesConstraints(value, schema) ? value : DECODE_FAILED;
+    if (parsed !== undefined && validatesRestoredValue(parsed, schema)) return parsed;
+    return validatesRestoredValue(raw, schema) ? raw : DECODE_FAILED;
   }
   // Non-string types first: MiMo writes them as JSON, and a string type would accept anything.
   const ordered = [...types.filter(type => type !== "string"), ...types.filter(type => type === "string")];
   for (const type of ordered) {
     const decoded = decodeTyped(raw, type);
-    if (decoded !== DECODE_FAILED && satisfiesConstraints(decoded, schema)) return decoded;
+    if (decoded !== DECODE_FAILED && validatesRestoredValue(decoded, schema)) return decoded;
   }
   return DECODE_FAILED;
-}
-
-/**
- * The supported value constraints a restored call must honour: types, `enum`, `const`, numeric
- * bounds, and complete anyOf/oneOf alternatives. Nested object properties are not walked.
- */
-function satisfiesConstraints(value: unknown, schema: unknown): boolean {
-  if (!schema || typeof schema !== "object") return true;
-  const record = schema as Record<string, unknown>;
-  if (schemaTypes({ type: record.type })?.every(type => !matchesType(value, type))) return false;
-  if (Array.isArray(record.enum) && !record.enum.some(option => deepEqual(option, value))) return false;
-  if (Object.hasOwn(record, "const") && !deepEqual(record.const, value)) return false;
-  if (typeof value === "number") {
-    if (typeof record.minimum === "number" && value < record.minimum) return false;
-    if (typeof record.maximum === "number" && value > record.maximum) return false;
-    if (typeof record.exclusiveMinimum === "number" && value <= record.exclusiveMinimum) return false;
-    if (typeof record.exclusiveMaximum === "number" && value >= record.exclusiveMaximum) return false;
-  }
-  if (Array.isArray(record.anyOf) && !record.anyOf.some(branch => satisfiesConstraints(value, branch))) return false;
-  if (Array.isArray(record.oneOf) && record.oneOf.filter(branch => satisfiesConstraints(value, branch)).length !== 1) return false;
-  return true;
-}
-
-function matchesType(value: unknown, type: string): boolean {
-  switch (type) {
-    case "string": return typeof value === "string";
-    case "integer": return typeof value === "number" && Number.isSafeInteger(value);
-    case "number": return typeof value === "number" && Number.isFinite(value);
-    case "boolean": return typeof value === "boolean";
-    case "null": return value === null;
-    case "object": return value !== null && typeof value === "object" && !Array.isArray(value);
-    case "array": return Array.isArray(value);
-    default: return false;
-  }
 }
 
 /**
@@ -217,7 +184,8 @@ export function salvagedArguments(markup: ToolCallMarkup, tool: CommandCodeDecla
   if (tool.freeform) {
     if (markup.kind !== "raw") return undefined;
     const keys = Object.keys(properties);
-    return JSON.stringify({ [keys.length === 1 ? keys[0]! : "input"]: markup.value });
+    const output = { [keys.length === 1 ? keys[0]! : "input"]: markup.value };
+    return validatesRestoredValue(output, tool.schema) ? JSON.stringify(output) : undefined;
   }
   if (markup.kind !== "params") return undefined;
   const output: Record<string, unknown> = {};
@@ -228,7 +196,7 @@ export function salvagedArguments(markup: ToolCallMarkup, tool: CommandCodeDecla
     output[key] = decoded;
   }
   if (required.some(key => !Object.hasOwn(output, key))) return undefined;
-  return JSON.stringify(output);
+  return validatesRestoredValue(output, tool.schema) ? JSON.stringify(output) : undefined;
 }
 
 interface TextBlock {
@@ -240,6 +208,31 @@ interface TextBlock {
   candidates: Set<string>;
 }
 
+interface TextChunk {
+  kind: "chunk";
+  block: TextBlock;
+  text: string;
+  bytes: number;
+}
+
+interface NativeCall {
+  kind: "native";
+  id: string;
+  name: string;
+  argumentsText: string;
+  /** Retained only while an earlier text block blocks delivery. */
+  bytes: number;
+}
+
+interface QueuedEvent {
+  kind: "event";
+  event: AdapterEvent;
+  bytes: number;
+}
+
+interface Terminal { kind: "finish"; restore: boolean }
+type Pending = TextChunk | NativeCall | QueuedEvent | Terminal;
+
 const DEFAULT_TEXT_ID = "\u0000default";
 const encoder = new TextEncoder();
 
@@ -249,8 +242,8 @@ export class CommandCodeToolTextFilter {
   private readonly blocks = new Map<string, TextBlock>();
   /** Held blocks in arrival order, including ended ones awaiting a verdict. */
   private held: TextBlock[] = [];
-  /** Held blocks and later text in wire order; bounded together by MAX_HELD_TOOL_TEXT_BYTES. */
-  private pending: TextBlock[] = [];
+  /** Every output-bearing event shares this wire-order queue. */
+  private pending: Pending[] = [];
 
   constructor(
     private readonly budget: TranslatorBudget,
@@ -266,7 +259,6 @@ export class CommandCodeToolTextFilter {
     const events = this.blocks.has(key) ? this.textEnd(key) : [];
     const block: TextBlock = { text: "", bytes: 0, state: "probing", ended: false, candidates: new Set(this.openInputs.keys()) };
     this.blocks.set(key, block);
-    if (this.pending.length > 0) this.pending.push(block);
     return events;
   }
 
@@ -276,31 +268,30 @@ export class CommandCodeToolTextFilter {
     if (!block) {
       block = { text: "", bytes: 0, state: "probing", ended: false, candidates: new Set(this.openInputs.keys()) };
       this.blocks.set(key, block);
-      if (this.pending.length > 0) this.pending.push(block);
     }
-    if (block.state === "streaming") {
-      if (this.pending.length === 0) return [{ type: "text_delta", text }];
-      block.state = "queued";
-      this.pending.push(block);
+    if (block.state === "streaming" && this.pending.length === 0) {
+      return [{ type: "text_delta", text }];
     }
-    // A duplicate can be dropped behind an earlier held block. Its later text still belongs
-    // at this position in the ordered queue and must be released once that barrier clears.
-    if (block.state === "dropped") block.state = "queued";
+    // Once a duplicate is dropped, later text is a new chunk at its own wire position.
+    if (block.state === "dropped" || block.state === "streaming") {
+      block = { text: "", bytes: 0, state: "queued", ended: false, candidates: new Set() };
+      this.blocks.set(key, block);
+    }
+    const preceding = this.makeRoom(encoder.encode(text).byteLength);
     this.retain(block, text);
-    if (block.state === "queued") return this.limitPending();
+    this.pending.push({ kind: "chunk", block, text, bytes: encoder.encode(text).byteLength });
     const lead = block.text.trimStart();
     if (block.state === "probing") {
       if (lead.length > 0 && !lead.startsWith(TOOL_CALL_MARKER) && !TOOL_CALL_MARKER.startsWith(lead)) {
-        if (this.pending.includes(block)) { block.state = "queued"; return this.limitPending(); }
-        return this.stream(block);
+        block.state = "queued";
+        block.text = "";
       }
-      if (lead.startsWith(TOOL_CALL_MARKER)) {
+      if (block.state === "probing" && lead.startsWith(TOOL_CALL_MARKER)) {
         block.state = "held";
         this.held.push(block);
-        if (!this.pending.includes(block)) this.pending.push(block);
       }
     }
-    return this.limitPending();
+    return [...preceding, ...this.limitPending()];
   }
 
   textEnd(id: unknown): AdapterEvent[] {
@@ -311,8 +302,9 @@ export class CommandCodeToolTextFilter {
     block.ended = true;
     // A block that never committed to the marker (whitespace, or a marker prefix) is ordinary text.
     if (block.state === "probing") {
-      if (this.pending.includes(block)) { block.state = "queued"; return this.drain(); }
-      return this.release(block);
+      block.state = "queued";
+      block.text = "";
+      return this.drain();
     }
     if (block.state === "queued") return this.drain();
     return [];
@@ -320,6 +312,31 @@ export class CommandCodeToolTextFilter {
 
   /** Called before a native call is relayed; returns text that must precede it. */
   toolCall(id: string, name: string, input: unknown): AdapterEvent[] {
+    this.matchNative(id, name, input);
+    return this.drain();
+  }
+
+  /** Put the native call at its wire position, after matching any earlier held markup. */
+  nativeCall(id: string, name: string, input: unknown): AdapterEvent[] {
+    this.matchNative(id, name, input);
+    const argumentsText = typeof input === "string" ? input : JSON.stringify(input);
+    const preceding = this.makeRoom(encoder.encode(argumentsText).byteLength);
+    const bytes = this.pending.length > 0 ? encoder.encode(argumentsText).byteLength : 0;
+    if (bytes > 0) this.retainQueued(bytes);
+    this.pending.push({ kind: "native", id, name, argumentsText, bytes });
+    return [...preceding, ...this.limitPending()];
+  }
+
+  /** Reasoning shares the same ordering barrier as text and native calls. */
+  enqueueEvent(event: AdapterEvent, textValue: string): AdapterEvent[] {
+    const preceding = this.makeRoom(encoder.encode(textValue).byteLength);
+    const bytes = this.pending.length > 0 ? encoder.encode(textValue).byteLength : 0;
+    if (bytes > 0) this.retainQueued(bytes);
+    this.pending.push({ kind: "event", event, bytes });
+    return [...preceding, ...this.limitPending()];
+  }
+
+  private matchNative(id: string, name: string, input: unknown): void {
     this.openInputs.delete(id);
     const remaining: TextBlock[] = [];
     for (const block of this.held) {
@@ -337,52 +354,68 @@ export class CommandCodeToolTextFilter {
       block.candidates.delete(id);
       if (block.candidates.size === 0) {
         block.state = "queued";
+        block.text = "";
       } else {
         remaining.push(block);
       }
     }
     this.held = remaining;
-    return this.drain();
   }
 
   /** Release every held block as text, without restoring any call (used when the turn failed). */
   releaseAll(): AdapterEvent[] {
-    const pending = [...this.pending, ...[...this.blocks.values()].filter(block => block.state === "probing" && !this.pending.includes(block))];
-    this.held = [];
-    this.pending = [];
-    this.blocks.clear();
-    return pending.flatMap(block => this.release(block));
+    return this.settle(false).events;
   }
 
   /** Terminal verdict for every block still held: restore it as a call when it qualifies, else release it. */
   finish(): { events: AdapterEvent[]; salvaged: boolean } {
+    return this.settle(true);
+  }
+
+  private settle(restore: boolean): { events: AdapterEvent[]; salvaged: boolean } {
     const events: AdapterEvent[] = [];
     let salvaged = false;
-    const pending = [...this.pending, ...[...this.blocks.values()].filter(block => block.state === "probing" && !this.pending.includes(block))];
+    let lastTextBlock: TextBlock | undefined;
+    this.pending.push({ kind: "finish", restore });
+    const pending = this.pending;
     this.held = [];
     this.pending = [];
     this.blocks.clear();
-    for (const block of pending) {
-      const markup = block.state === "held" ? parseToolCallMarkup(block.text) : undefined;
-      const tool = markup ? this.declared?.get(markup.name) : undefined;
-      const args = markup && tool ? salvagedArguments(markup, tool) : undefined;
-      if (markup && args !== undefined) {
-        this.drop(block);
-        const callId = `call_ocx_${randomUUID().replace(/-/g, "")}`;
-        events.push({ type: "tool_call_start", id: callId, name: markup.name });
-        this.budget.openCall(callId);
-        try {
-          const reservation = this.budget.reserveTransient(encoder.encode(args).byteLength, { kind: "tool_args", callId });
-          reservation.commitRetained();
+    for (const item of pending) {
+      if (item.kind === "finish") break;
+      if (item.kind === "native") { events.push(...this.emitNative(item)); lastTextBlock = undefined; continue; }
+      if (item.kind === "event") { this.releaseQueued(item.bytes); events.push(item.event); lastTextBlock = undefined; continue; }
+      const block = item.block;
+      if (block.state === "held") {
+        const markup = restore ? parseToolCallMarkup(block.text) : undefined;
+        const tool = markup ? this.declared?.get(markup.name) : undefined;
+        const args = markup && tool ? salvagedArguments(markup, tool) : undefined;
+        if (markup && args !== undefined) {
+          this.drop(block);
+          block.state = "dropped";
+          const callId = `call_ocx_${randomUUID().replace(/-/g, "")}`;
+          events.push({ type: "tool_call_start", id: callId, name: markup.name });
           events.push({ type: "tool_call_delta", arguments: args });
           events.push({ type: "tool_call_end" });
-        } finally {
-          this.budget.closeCall(callId);
+          salvaged = true;
+          lastTextBlock = undefined;
+        } else {
+          block.state = "queued";
+          block.text = "";
         }
-        salvaged = true;
+      } else if (block.state === "probing") {
+        block.state = "queued";
+        block.text = "";
+      }
+      if (block.state === "dropped") {
+        lastTextBlock = undefined;
         continue;
       }
-      events.push(...this.release(block));
+      const emitted = this.releaseChunk(item);
+      if (emitted && lastTextBlock === block && events.at(-1)?.type === "text_delta") {
+        (events.at(-1) as { type: "text_delta"; text: string }).text += emitted.text;
+      } else if (emitted) events.push(emitted);
+      lastTextBlock = block;
     }
     return { events, salvaged };
   }
@@ -391,7 +424,7 @@ export class CommandCodeToolTextFilter {
     const bytes = encoder.encode(text).byteLength;
     const reservation = this.budget.reserveTransient(bytes, { kind: "live_transient" });
     reservation.commitRetained();
-    block.text += text;
+    if (block.state === "probing" || block.state === "held") block.text += text;
     block.bytes += bytes;
   }
 
@@ -401,33 +434,70 @@ export class CommandCodeToolTextFilter {
     block.text = "";
   }
 
-  private release(block: TextBlock): AdapterEvent[] {
-    const text = block.text;
-    this.drop(block);
-    return text ? [{ type: "text_delta", text }] : [];
+  private releaseChunk(chunk: TextChunk): { type: "text_delta"; text: string } | undefined {
+    if (chunk.block.state === "dropped") return undefined;
+    this.budget.releaseRetained(chunk.bytes, { kind: "live_transient" });
+    chunk.block.bytes = Math.max(0, chunk.block.bytes - chunk.bytes);
+    return chunk.text ? { type: "text_delta", text: chunk.text } : undefined;
   }
 
-  private stream(block: TextBlock): AdapterEvent[] {
-    block.state = "streaming";
-    return this.release(block);
+  private retainQueued(bytes: number): void {
+    this.budget.reserveTransient(bytes, { kind: "live_transient" }).commitRetained();
+  }
+
+  private releaseQueued(bytes: number): void {
+    if (bytes > 0) this.budget.releaseRetained(bytes, { kind: "live_transient" });
+  }
+
+  private emitNative(call: NativeCall): AdapterEvent[] {
+    this.releaseQueued(call.bytes);
+    return [
+      { type: "tool_call_start", id: call.id, name: call.name },
+      { type: "tool_call_delta", arguments: call.argumentsText },
+      { type: "tool_call_end" },
+    ];
   }
 
   private drain(): AdapterEvent[] {
     const events: AdapterEvent[] = [];
+    let lastTextBlock: TextBlock | undefined;
     while (this.pending.length > 0) {
-      const block = this.pending[0]!;
-      if (block.state === "held" || block.state === "probing") break;
+      const item = this.pending[0]!;
+      if (item.kind === "finish" || (item.kind === "chunk" && (item.block.state === "held" || item.block.state === "probing"))) break;
       this.pending.shift();
-      events.push(...this.stream(block));
+      if (item.kind === "chunk") {
+        const emitted = this.releaseChunk(item);
+        if (emitted && lastTextBlock === item.block && events.at(-1)?.type === "text_delta") {
+          (events.at(-1) as { type: "text_delta"; text: string }).text += emitted.text;
+        } else if (emitted) events.push(emitted);
+        if (item.block.state === "queued" && item.block.bytes === 0 && !item.block.ended) item.block.state = "streaming";
+        lastTextBlock = item.block.state === "dropped" ? undefined : item.block;
+      } else if (item.kind === "native") { events.push(...this.emitNative(item)); lastTextBlock = undefined; }
+      else { this.releaseQueued(item.bytes); events.push(item.event); lastTextBlock = undefined; }
     }
     return events;
   }
 
   private limitPending(): AdapterEvent[] {
-    if (this.pending.reduce((sum, block) => sum + block.bytes, 0) <= MAX_HELD_TOOL_TEXT_BYTES) return [];
+    if (this.pendingBytes() <= MAX_HELD_TOOL_TEXT_BYTES) return this.drain();
+    return this.flushPendingAsText();
+  }
+
+  private pendingBytes(): number {
+    return this.pending.reduce((sum, item) => sum + ("bytes" in item ? item.bytes : 0), 0);
+  }
+
+  private makeRoom(additionalBytes: number): AdapterEvent[] {
+    return this.pendingBytes() + additionalBytes > MAX_HELD_TOOL_TEXT_BYTES ? this.flushPendingAsText() : [];
+  }
+
+  private flushPendingAsText(): AdapterEvent[] {
     // Drop restoration once the ordered queue fills, then release all text in arrival order.
     this.held = [];
-    for (const block of this.pending) if (block.state === "held" || block.state === "probing") block.state = "queued";
+    for (const item of this.pending) if (item.kind === "chunk" && (item.block.state === "held" || item.block.state === "probing")) {
+      item.block.state = "queued";
+      item.block.text = "";
+    }
     return this.drain();
   }
 }

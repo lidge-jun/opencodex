@@ -939,6 +939,22 @@ describe("Command Code provider", () => {
       .toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
+  test("later profile refreshes do not reintroduce a previously rejected effort", async () => {
+    const page = "Reasoning efforts low, medium, high, xhigh, max are supported; no mapping.";
+    const fetch = (async () => new Response(page)) as typeof globalThis.fetch;
+    expect(await refreshCommandCodeReasoningEfforts("Qwen/Qwen3.8-Flash", fetch, "max"))
+      .toEqual(["low", "medium", "high", "xhigh"]);
+    expect(await refreshCommandCodeReasoningEfforts("qwen/qwen3.8-flash", fetch, "high"))
+      .toEqual(["low", "medium", "xhigh"]);
+    expect(commandCodeReasoningEfforts("Qwen/Qwen3.8-Flash")).toEqual(["low", "medium", "xhigh"]);
+    expect(await refreshCommandCodeReasoningEfforts("Qwen/Qwen3.8-Flash", async () => new Response("unavailable", { status: 503 }), "xhigh"))
+      .toBeUndefined();
+    expect(commandCodeReasoningEfforts("Qwen/Qwen3.8-Flash")).toEqual(["low", "medium"]);
+    resetCommandCodeReasoningEffortsForTest();
+    expect(await refreshCommandCodeReasoningEfforts("Qwen/Qwen3.8-Flash", fetch))
+      .toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
   test("uses the 2026-09-23 profile ladders for newly cataloged models", async () => {
     const cases: Array<[string, string[]]> = [
       ["claude-fable-5-1", ["low", "medium", "high", "xhigh", "max"]],

@@ -162,6 +162,7 @@ export const COMMAND_CODE_MODEL_REASONING_EFFORTS: Record<string, string[]> = Ob
 );
 
 const refreshedEfforts = new Map<string, string[]>();
+const rejectedEfforts = new Map<string, Set<string>>();
 
 function keyFor(modelId: string): string {
   return modelId.trim().toLowerCase();
@@ -169,12 +170,13 @@ function keyFor(modelId: string): string {
 
 export function commandCodeReasoningEfforts(modelId: string): readonly string[] | undefined {
   const key = keyFor(modelId);
+  const rejected = rejectedEfforts.get(key);
   const refreshed = refreshedEfforts.get(key);
-  if (refreshed !== undefined) return refreshed;
+  if (refreshed !== undefined) return rejected ? refreshed.filter(effort => !rejected.has(effort)) : refreshed;
   // Case-insensitive: the table keys match the EXACT upstream ids (e.g. `zai-org/GLM-5.3`),
   // but callers may pass either case.
   for (const [id, efforts] of Object.entries(COMMAND_CODE_MODEL_REASONING_EFFORTS)) {
-    if (keyFor(id) === key) return efforts;
+    if (keyFor(id) === key) return rejected ? efforts.filter(effort => !rejected.has(effort)) : efforts;
   }
   return undefined;
 }
@@ -265,6 +267,11 @@ export async function refreshCommandCodeReasoningEfforts(
     }
   }
   if (!profile) return undefined;
+  if (rejectedEffort) {
+    const rejected = rejectedEfforts.get(key) ?? new Set<string>();
+    rejected.add(rejectedEffort);
+    rejectedEfforts.set(key, rejected);
+  }
   try {
     const response = await fetchFn(profile.profileUrl, {
       headers: { Accept: "text/html" },
@@ -281,7 +288,7 @@ export async function refreshCommandCodeReasoningEfforts(
     if (efforts === undefined) return undefined;
     const accepted = commandCodeReasoningEfforts(modelId) ?? [];
     const merged = [...new Set([...accepted, ...efforts])]
-      .filter(effort => effort !== rejectedEffort);
+      .filter(effort => !rejectedEfforts.get(key)?.has(effort));
     refreshedEfforts.set(key, merged);
     return merged;
   } catch {
@@ -291,4 +298,5 @@ export async function refreshCommandCodeReasoningEfforts(
 
 export function resetCommandCodeReasoningEffortsForTest(): void {
   refreshedEfforts.clear();
+  rejectedEfforts.clear();
 }

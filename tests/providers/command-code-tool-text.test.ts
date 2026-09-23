@@ -261,6 +261,36 @@ describe("Command Code MiMo tool-call text", () => {
     expect(texts(events)).toBe("after");
   });
 
+  test("text, native calls and terminal events retain wire order across held markup", async () => {
+    const held = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    const partial = "<tool_call><function=exec>incomplete";
+    const text = (id: string, value: string) => [
+      { type: "text-start", id }, { type: "text-delta", id, text: value }, { type: "text-end", id },
+    ];
+    const native = (id: string, input = JS) => ({ type: "tool-call", toolCallId: id, toolName: "exec", input });
+    const sequence = (events: AdapterEvent[]) => events.flatMap(event => {
+      if (event.type === "text_delta") return [`text:${event.text}`];
+      if (event.type === "tool_call_start") return [`tool:${event.id}`];
+      if (event.type === "done") return [`done:${event.stopReason ?? ""}`];
+      if (event.type === "error") return ["error"];
+      return [];
+    });
+    const cases: Array<{ name: string; wire: unknown[]; expected: string[] }> = [
+      { name: "text-held-text", wire: [...text("pre", "before"), ...text("held", partial), ...text("post", "after"), { type: "finish", rawFinishReason: "stop" }], expected: ["text:before", `text:${partial}`, "text:after", "done:stop"] },
+      { name: "held-native-text", wire: [...text("held", partial), native("c"), ...text("post", "after"), { type: "finish", rawFinishReason: "length" }], expected: [`text:${partial}`, "tool:c", "text:after", "done:length"] },
+      { name: "duplicate call", wire: [{ type: "tool-input-start", id: "a", toolName: "exec" }, ...text("held", held), native("a"), ...text("post", "after"), { type: "finish", rawFinishReason: "tool_calls" }], expected: ["tool:a", "text:after", "done:tool_calls"] },
+      { name: "native before held", wire: [native("c"), ...text("held", partial), { type: "finish", rawFinishReason: "stop" }], expected: ["tool:c", `text:${partial}`, "done:stop"] },
+      { name: "native after held", wire: [...text("held", partial), native("c"), { type: "finish", rawFinishReason: "stop" }], expected: [`text:${partial}`, "tool:c", "done:stop"] },
+      { name: "held text before unrelated native", wire: [{ type: "tool-input-start", id: "a", toolName: "exec" }, ...text("held", held), ...text("post", "after"), native("c"), native("a"), { type: "finish", rawFinishReason: "tool_calls" }], expected: ["text:after", "tool:c", "tool:a", "done:tool_calls"] },
+      { name: "ordinary chunks straddle native", wire: [{ type: "tool-input-start", id: "a", toolName: "exec" }, ...text("held", held), { type: "text-start", id: "post" }, { type: "text-delta", id: "post", text: "before" }, native("c"), { type: "text-delta", id: "post", text: "after" }, { type: "text-end", id: "post" }, native("a"), { type: "finish", rawFinishReason: "tool_calls" }], expected: ["text:before", "tool:c", "text:after", "tool:a", "done:tool_calls"] },
+      { name: "held chunks straddle native on length", wire: [{ type: "text-start", id: "held" }, { type: "text-delta", id: "held", text: "<tool" }, native("c"), { type: "text-delta", id: "held", text: held.slice(5) }, { type: "text-end", id: "held" }, { type: "finish", rawFinishReason: "length" }], expected: ["text:<tool", "tool:c", `text:${held.slice(5)}`, "done:length"] },
+      { name: "error finish", wire: [...text("held", held), { type: "finish", rawFinishReason: "error" }], expected: [`text:${held}`, "error"] },
+      { name: "length finish", wire: [...text("held", held), { type: "finish", rawFinishReason: "length" }], expected: [`text:${held}`, "done:length"] },
+      { name: "EOF", wire: [...text("held", held)], expected: [`text:${held}`, "done:"] },
+    ];
+    for (const entry of cases) expect(sequence(await adapterEvents(entry.wire)), entry.name).toEqual(entry.expected);
+  });
+
   test("the ordered queue releases as text when its byte bound is exceeded", () => {
     const budget = createTestTranslatorBudget();
     const filter = new CommandCodeToolTextFilter(budget, new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]]));
@@ -270,6 +300,20 @@ describe("Command Code MiMo tool-call text", () => {
     expect(filter.textDelta("b", later)).toEqual([
       { type: "text_delta", text: markup }, { type: "text_delta", text: later },
     ]);
+    expect(filter.finish()).toEqual({ events: [], salvaged: false });
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("a large native call flushes an earlier held block before reserving queue bytes", () => {
+    const budget = createTestTranslatorBudget();
+    const filter = new CommandCodeToolTextFilter(budget, new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]]));
+    const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    filter.toolInputStart("a", "exec");
+    expect(filter.textDelta("t", markup)).toEqual([]);
+    const large = "x".repeat(MAX_HELD_TOOL_TEXT_BYTES);
+    const events = filter.nativeCall("c", "exec", large);
+    expect(events.map(event => event.type)).toEqual(["text_delta", "tool_call_start", "tool_call_delta", "tool_call_end"]);
+    expect(events[0]).toEqual({ type: "text_delta", text: markup });
     expect(filter.finish()).toEqual({ events: [], salvaged: false });
     expect(budget.snapshot().currentBytes).toBe(0);
   });
@@ -392,6 +436,39 @@ describe("Command Code MiMo tool-call text", () => {
     tool.schema.properties.mode = { oneOf: [{ type: "string", const: "read" }, { type: "string", const: "write" }] };
     expect(salvagedArguments(markup("write"), tool)).toBe('{"mode":"write"}');
     expect(salvagedArguments(markup("delete"), tool)).toBeUndefined();
+  });
+
+  test("restored arguments fail closed on declared nested and unsupported constraints", () => {
+    const markup = (raw: string) => parseToolCallMarkup(`<tool_call><function=t><parameter=value>${raw}</parameter></function></tool_call>`)!;
+    const cases: Array<{ schema: Record<string, unknown>; raw: string }> = [
+      { schema: { type: "string", pattern: "^/workspace/" }, raw: "/etc/passwd" },
+      { schema: { type: "string", minLength: 3 }, raw: "x" },
+      { schema: { type: "object", properties: { path: { type: "string", pattern: "^/workspace/" } }, required: ["path"] }, raw: "{}" },
+      { schema: { type: "object", properties: { optional: { type: "string", format: "uri" } } }, raw: "{}" },
+      { schema: { allOf: [{ type: "integer", minimum: 1 }, { maximum: 5 }] }, raw: "8" },
+      { schema: { type: "string", format: "uri" }, raw: "anything" },
+    ];
+    for (const { schema, raw } of cases) {
+      const tool = { freeform: false, schema: { type: "object", properties: { value: schema }, required: ["value"] } };
+      expect(salvagedArguments(markup(raw), tool), JSON.stringify(schema)).toBeUndefined();
+    }
+    const safe = { freeform: false, schema: { type: "object", properties: { value: { type: "string", pattern: "^/workspace/", minLength: 12 } }, required: ["value"] } };
+    expect(salvagedArguments(markup("/workspace/a"), safe)).toBe('{"value":"/workspace/a"}');
+    const freeform = { freeform: true, schema: { type: "object", properties: { input: { type: "string", pattern: "^SAFE" } }, required: ["input"] } };
+    expect(salvagedArguments(parseToolCallMarkup("<tool_call><function=t>unsafe</function></tool_call>")!, freeform)).toBeUndefined();
+    expect(salvagedArguments(parseToolCallMarkup("<tool_call><function=t>SAFE input</function></tool_call>")!, freeform)).toBe('{"input":"SAFE input"}');
+  });
+
+  test("an invalid declared schema leaves markup as text at the adapter boundary", async () => {
+    const tool = { name: "read_file", description: "Read a file", parameters: {
+      type: "object", properties: { path: { type: "string", pattern: "^/workspace/" } }, required: ["path"],
+    } };
+    const markup = "<tool_call><function=read_file><parameter=path>/elsewhere</parameter></function></tool_call>";
+    const events = await adapterEvents([
+      { type: "text-delta", id: "t", text: markup }, { type: "finish", rawFinishReason: "stop" },
+    ], [tool]);
+    expect(texts(events)).toBe(markup);
+    expect(calls(events)).toEqual([]);
   });
 
   test("releases held text when the turn fails", () => {

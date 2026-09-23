@@ -385,6 +385,30 @@ function isToolCallFinishReason(reason: string | undefined): boolean {
   return reason === "tool_calls" || reason === "tool-calls" || reason === "tool_use";
 }
 
+/** Deliver the queue's ordered events while keeping native and restored call bytes charged until yielded. */
+async function* emitOrderedToolEvents(events: AdapterEvent[], budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
+  for (let index = 0; index < events.length; index++) {
+    const event = events[index]!;
+    if (event.type !== "tool_call_start") { yield event; continue; }
+    const delta = events[index + 1];
+    const end = events[index + 2];
+    if (delta?.type !== "tool_call_delta" || end?.type !== "tool_call_end") {
+      throw new Error("Command Code ordered tool call is incomplete");
+    }
+    yield event;
+    budget.openCall(event.id);
+    try {
+      budget.reserveTransient(new TextEncoder().encode(delta.arguments).byteLength,
+        { kind: "tool_args", callId: event.id }).commitRetained();
+      yield delta;
+      yield end;
+    } finally {
+      budget.closeCall(event.id);
+    }
+    index += 2;
+  }
+}
+
 async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenerator<Record<string, unknown>> {
   if (!response.body) throw new Error("Command Code response body missing");
   const reader = response.body.getReader();
@@ -661,20 +685,27 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       const toolText = new CommandCodeToolTextFilter(budget, lastDeclaredTools);
       for await (const event of ndjson(response, budget)) {
         switch (event.type) {
-          case "text-start": if (restoreMiMoTools) yield* toolText.textStart(event.id); break;
+          case "text-start": if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.textStart(event.id), budget); break;
           case "text-delta": if (typeof event.text === "string") {
-            if (restoreMiMoTools) yield* toolText.textDelta(event.id, event.text);
+            if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.textDelta(event.id, event.text), budget);
             else yield { type: "text_delta", text: event.text };
           } break;
-          case "text-end": if (restoreMiMoTools) yield* toolText.textEnd(event.id); break;
+          case "text-end": if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.textEnd(event.id), budget); break;
           case "tool-input-start": if (restoreMiMoTools) toolText.toolInputStart(event.id, event.toolName); break;
-          case "reasoning-delta": if (typeof event.text === "string") yield { type: "thinking_delta", thinking: event.text }; break;
+          case "reasoning-delta": if (typeof event.text === "string") {
+            const thinking: AdapterEvent = { type: "thinking_delta", thinking: event.text };
+            if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.enqueueEvent(thinking, event.text), budget);
+            else yield thinking;
+          } break;
           case "tool-call": {
             const id = typeof event.toolCallId === "string" ? event.toolCallId : randomUUID();
             const name = typeof event.toolName === "string" ? event.toolName : "tool";
             const input = event.input ?? event.args ?? {};
             // MiMo markup the gateway echoed as text for this same call must not reach the client.
-            if (restoreMiMoTools) yield* toolText.toolCall(id, name, input);
+            if (restoreMiMoTools) {
+              yield* emitOrderedToolEvents(toolText.nativeCall(id, name, input), budget);
+              break;
+            }
             const argumentsText = typeof input === "string" ? input : JSON.stringify(input);
             yield { type: "tool_call_start", id, name };
             budget.openCall(id);
@@ -703,7 +734,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             // upstream error as a content filter and rejected it from the replay cache for the
             // wrong reason.
             if (stopReason === "error") {
-              yield* toolText.releaseAll();
+              yield* emitOrderedToolEvents(toolText.releaseAll(), budget);
               // Keep the usage: a failed turn still consumed tokens, and dropping it makes the
               // turn look free in accounting and reports zeros to the client.
               yield {
@@ -717,7 +748,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             }
             const restored = (stopReason === "stop" || isToolCallFinishReason(stopReason)) && restoreMiMoTools
               ? toolText.finish() : { events: toolText.releaseAll(), salvaged: false };
-            yield* restored.events;
+            yield* emitOrderedToolEvents(restored.events, budget);
             // Markup restored as a call ends the step on a tool call even when the model's own
             // finish reason says it stopped, because the call is what it meant to send.
             if (restored.salvaged && !isToolCallFinishReason(stopReason)) stopReason = "tool_calls";
@@ -725,7 +756,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             break;
           }
           case "error": {
-            yield* toolText.releaseAll();
+            yield* emitOrderedToolEvents(toolText.releaseAll(), budget);
             const message = eventError(event.error);
             if (isMissingToolResultError(message)) {
               // Provider-side tool-result validation: the request carried an assistant tool
@@ -742,7 +773,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
       // A stream that ends without a finish event still needs a terminal done so the
       // server does not wait on an adapter that silently stopped emitting.
       if (!sawFinish) {
-        yield* toolText.releaseAll();
+        yield* emitOrderedToolEvents(toolText.releaseAll(), budget);
         yield { type: "done", usage: undefined, stopReason: undefined };
       }
     },
