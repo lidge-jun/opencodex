@@ -28,7 +28,7 @@ body:
     attributes:
       label: Documentation location
       description: Public documentation URL or repository path.
-      placeholder: "https://opencodex.me/providers/ or docs/providers.md"
+      placeholder: "https://opencodex.me/guides/providers/ or docs-site/src/content/docs/guides/providers.md"
     validations:
       required: true
 

@@ -23,6 +23,7 @@ import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib
 import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
+  hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
@@ -253,11 +254,11 @@ export async function executeResponsesRunTurn(
         `${route.providerName}|${route.modelId}|runturn-oauth-429`,
       );
       if (!hop.allowed) {
-        // The roster bound above already said this credential set may rotate again; the shared
-        // request budget is what refused. Returning false lets the preflight 429 reach the
-        // client unchanged, which is right, but it used to leave a log indistinguishable from
-        // a request where no rotation was ever available (#5044).
-        noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
+        // The activation quorum deliberately ignores cooldowns. Attribute a withheld recovery
+        // only when the non-mutating selector proves a usable alternate exists right now.
+        if (hasEligibleGenericOAuthFailoverTarget(
+          route.providerName, transportState.genericFailoverAccountId, Date.now(), route.modelId,
+        )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
         return false;
       }
       const nextAccountId = rotateGenericOAuthAccountOn429(

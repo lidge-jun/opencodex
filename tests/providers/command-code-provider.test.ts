@@ -11,7 +11,8 @@ import { budgetOwner } from "../helpers/send-budget-owner";
 import type { OcxConfig } from "../../src/types";
 import { commandCodeSessionId, createCommandCodeAdapter } from "../../src/adapters/command-code";
 import { loginCommandCode, parseCommandCodeCallback, shouldImportLocalCommandCodeAuth } from "../../src/oauth/command-code";
-import { buildModelsRequest, OAUTH_PROVIDERS } from "../../src/oauth";
+import { buildModelsRequest, OAUTH_PROVIDERS, submitManualLoginCode } from "../../src/oauth";
+import { clearManualCodeSlot, loginState, waitForManualLoginCode } from "../../src/oauth/login-flow-state";
 import {
   commandCodeReasoningEfforts,
   PROFILE_PAGE_MAX_BYTES,
@@ -212,12 +213,13 @@ describe("Command Code provider", () => {
       "meta/muse-spark-1.3-contributor",
       "meta/muse-spark-1.2",
       "meta/muse-spark-1.2-contributor",
+      "xai/grok-4.6",
+      "xai/grok-4.7",
     ];
     const verifiedTextOnlyModels = [
       "deepseek/deepseek-v4-flash",
       "zai-org/GLM-5.2",
       "zai-org/GLM-5.3",
-      "xai/grok-4.6",
     ];
 
     expect(apiKey?.modelInputModalities).toEqual(oauth?.modelInputModalities);
@@ -296,6 +298,99 @@ describe("Command Code provider", () => {
       controller.abort(new Error("cancelled"));
       await expect(login).rejects.toThrow("cancelled");
       expect(whoamiCalls).toBeGreaterThan(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("callback JSON pasted through the shared submit path: wrong state re-prompts, hashes survive", async () => {
+    const controller = new AbortController();
+    const originalFetch = globalThis.fetch;
+    const whoamiKeys: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const href = String(input);
+      if (href.includes("whoami")) {
+        whoamiKeys.push(new Headers(init?.headers).get("authorization") ?? "");
+        return new Response(JSON.stringify({ ok: true, user: { id: "u-1", userName: "alice#1" } }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${href}`);
+    }) as typeof globalThis.fetch;
+    loginState.set("command-code", { done: false });
+    const prompts: string[] = [];
+    let settled: Promise<void> = Promise.resolve();
+    const promptCount = async (count: number) => {
+      for (let i = 0; prompts.length < count && i < 400; i++) await Bun.sleep(5);
+      expect(prompts.length).toBeGreaterThanOrEqual(count);
+    };
+    const callback = (state: string) => JSON.stringify({
+      apiKey: "sk-key#segment",
+      state,
+      userId: "u-1",
+      userName: "alice#1",
+      keyName: "cli",
+    });
+    try {
+      const login = loginCommandCode({
+        onAuth: () => {},
+        onProgress: () => {},
+        onManualCodeInput: state => {
+          prompts.push(state);
+          return waitForManualLoginCode("command-code", controller.signal, state);
+        },
+        signal: controller.signal,
+      }, { importLocal: "off" });
+      // Observe the login from the start so an early assertion failure cannot leave its
+      // rejection unhandled once finally aborts it.
+      settled = login.then(() => undefined, () => undefined);
+      await promptCount(1);
+      const state = prompts[0]!;
+
+      // The shared gate lets Command Code JSON through; the provider parser owns the state check.
+      expect(submitManualLoginCode("command-code", callback(`${state}-other`))).toEqual({ ok: true });
+      await promptCount(2);
+      expect(whoamiKeys).toHaveLength(0);
+
+      // A "#" inside a JSON field must not be read as a code#state suffix.
+      expect(submitManualLoginCode("command-code", callback(state))).toEqual({ ok: true });
+      expect(await login).toMatchObject({ access: "sk-key#segment", accountId: "u-1", source: "oauth" });
+      expect(whoamiKeys).toEqual(["Bearer sk-key#segment"]);
+    } finally {
+      controller.abort(new Error("test complete"));
+      await settled;
+      globalThis.fetch = originalFetch;
+      loginState.delete("command-code");
+      clearManualCodeSlot("command-code");
+    }
+  });
+
+  test("the direct prompt rejects a raw key whose #state suffix does not match", async () => {
+    const controller = new AbortController();
+    const originalFetch = globalThis.fetch;
+    let whoamiCalls = 0;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const href = String(input);
+      if (href.includes("whoami")) {
+        whoamiCalls += 1;
+        return new Response(JSON.stringify({ ok: true, user: { id: "u-1", userName: "tester" } }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${href}`);
+    }) as typeof globalThis.fetch;
+    let prompts = 0;
+    try {
+      const login = loginCommandCode({
+        onAuth: () => {},
+        onProgress: () => {},
+        onManualCodeInput: async state => {
+          prompts += 1;
+          if (prompts === 1) return `sk-direct#${state}-other`;
+          controller.abort(new Error("cancelled after re-prompt"));
+          return undefined;
+        },
+        signal: controller.signal,
+      }, { importLocal: "off" });
+      await expect(login).rejects.toThrow("cancelled after re-prompt");
+      expect(prompts).toBe(2);
+      expect(whoamiCalls).toBe(0);
     } finally {
       globalThis.fetch = originalFetch;
     }

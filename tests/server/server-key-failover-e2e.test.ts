@@ -5,6 +5,9 @@ import { join } from "node:path";
 import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { readUsageEntries, resetUsageReadCacheForTests } from "../../src/usage/log";
 import { loadConfig, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
+import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
+import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { clearKeyCooldowns, getKeyCooldownUntil, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import {
@@ -44,9 +47,14 @@ beforeEach(() => {
   clearBridgeSearchReplayCacheForTests();
 });
 
-afterEach(() => {
-  upstream?.stop(true);
+afterEach(async () => {
+  await upstream?.stop(true);
   upstream = null;
+  await flushNativeMainStartupReleases();
+  await flushConfigDirHardeningForTests();
+  // Caller-facing ACL deadlines do not prove that their child released this home.
+  if (testDir) await flushWindowsSecretAclReapsBeforeRemoval(testDir);
+  if (isolatedCodexHome) await flushWindowsSecretAclReapsBeforeRemoval(isolatedCodexHome.path);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   isolatedCodexHome?.restore();

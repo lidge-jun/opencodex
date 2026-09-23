@@ -68,6 +68,8 @@ Translated Claude timeline reminders use the Chat adapter's
 [chronological instruction ordering](../providers/chat-compat.md#chronological-in-conversation-instructions)
 on every destination. This is separate from trailing-notice stabilization and from
 native Chat message passthrough.
+On native Chat, a spend ceiling checked before any physical send remains a local 429 refusal
+when a transient upstream response causes a later retry leg to reach that ceiling.
 
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
 

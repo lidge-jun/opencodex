@@ -181,9 +181,7 @@ describe("a configured ladder is bounded by the request budget", () => {
   });
 });
 
-  const goPacked = dense(readResponsesCoreModule("passthrough-dispatch.ts"));
-describe("the Go destination replays ambiguous resets on the initial send", () => {
-  test("replaySafe is destination-scoped to exactly one leg", () => {
-    expect(occurrences(goPacked, "replaySafe:isOpenCodeGoDestination(route.provider)")).toBe(1);
-  });
-});
+// The OpenCode Go replaySafe exception is gone for good: the behavioral contract is pinned
+// by an execution test in responses-send-budget-counts.test.ts ("an OpenCode Go destination
+// refuses an ambiguous pre-answer reset instead of replaying"), which fails if any name for
+// the option ever returns.

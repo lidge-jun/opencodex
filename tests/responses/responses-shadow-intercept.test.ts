@@ -4,7 +4,7 @@
  * default follows modern clients, while sourceModels keeps an escape hatch.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync} from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses, isShadowSourceModel } from "../../src/server/responses";
@@ -15,6 +15,9 @@ import type { OcxConfig } from "../../src/types";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { repoPath } from "../helpers/repo-root";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { prepareResponsesRequest } from "../../src/server/responses/request-prepare";
 
 const originalFetch = globalThis.fetch;
 let releaseSpendHome: (() => void) | undefined;
@@ -307,6 +310,61 @@ function chatOk(text: string): Response {
 }
 
 describe("a combo shadow-call target enters the failover loop (#4129)", () => {
+  test("a combo child of a shadow-intercepted call gets Cursor conversation isolation", async () => {
+    const config = comboInterceptConfig([{ provider: "xai", model: "grok-4.5" }]);
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const mkreq = () => new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "grok-4.5",
+        input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+        stream: false,
+      }),
+    });
+    const dispatchers = {
+      handleResponses: () => Promise.reject(new Error("unexpected recursion")),
+      handleComboResponses: () => Promise.reject(new Error("unexpected combo dispatch")),
+    };
+    const admission = () => ({ pendingHostAdmissionLease: null, authCtx: { kind: "main", accountId: null } }) as never;
+
+    const intercepted = await prepareResponsesRequest(
+      { req: mkreq(), config, logCtx, options: { comboAttempt: true, shadowCallIntercepted: true, translatorBudget: createTestTranslatorBudget() } },
+      admission(),
+      dispatchers,
+    );
+    expect(intercepted).not.toBeInstanceOf(Response);
+    if (intercepted instanceof Response) throw new Error("expected a prepared request, got HTTP " + intercepted.status);
+    expect(intercepted.parsed._cursorIsolateConversation).toBe(true);
+
+    // A plain combo child (no interception marker) must not be isolated.
+    const plain = await prepareResponsesRequest(
+      { req: mkreq(), config, logCtx, options: { comboAttempt: true, translatorBudget: createTestTranslatorBudget() } },
+      admission(),
+      dispatchers,
+    );
+    expect(plain).not.toBeInstanceOf(Response);
+    if (plain instanceof Response) throw new Error("expected a prepared request, got HTTP " + plain.status);
+    expect(plain.parsed._cursorIsolateConversation).not.toBe(true);
+  });
+
+  test("carries helper conversation isolation into concrete combo children", () => {
+    const prepare = readFileSync(repoPath("src/server/responses/request-prepare.ts"), "utf8");
+    const comboDispatch = prepare.slice(
+      prepare.indexOf("const comboId = !options.comboAttempt"),
+      prepare.indexOf("let unreadableEncryptedAgentTask"),
+    );
+    const parsedHandoff = prepare.slice(
+      prepare.indexOf("if (cursorClientThreadId) parsed._cursorClientThreadId"),
+      prepare.indexOf("} catch (err)", prepare.indexOf("if (cursorClientThreadId) parsed._cursorClientThreadId")),
+    );
+
+    expect(comboDispatch).toContain("shadowCallIntercepted,");
+    expect(parsedHandoff).toContain(
+      "if (options.shadowCallIntercepted === true) parsed._cursorIsolateConversation = true;",
+    );
+  });
+
   test("a helper call rewritten to a combo hops past a 429 to the second target", async () => {
     takeSpendHome();
     const urls: string[] = [];

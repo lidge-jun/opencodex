@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { repoRoot } from "./repo-root";
@@ -201,7 +202,112 @@ export async function warmModuleGraph(options: ColdSpawnWarmup): Promise<void> {
   return warmColdSpawn(options.graph, deadlineMs => runModuleGraphWarmup(options, deadlineMs));
 }
 
-function runModuleGraphWarmup(options: ColdSpawnWarmup, deadlineMs: number): void {
+export interface ModuleGraphWarmupResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+}
+
+/**
+ * Spawn the warm-up child asynchronously and bound it on a live event loop.
+ *
+ * A blocking `Bun.spawnSync` made its own `timeout` the only bound it could honour, and that
+ * turned out to be no bound at all: while the synchronous wait runs, the event loop is dead, so
+ * the calling hook's budget and the suite's per-test timeout freeze inside the same wait and
+ * nothing can report anything. Run 35511743422's macos 2/2 leg held that shape for eighteen
+ * silent minutes inside tests/clients/client-connect.test.ts before the job ceiling cut it and
+ * reported `cancelled` — a result the `ci` gate reads as failure rather than evidence. Whether
+ * the child or the spawn primitive wedged is not observable from the outside, so the bound here
+ * does not depend on either: SIGKILL at the deadline, a short reap grace, and the call settles
+ * with or without the child's exit or EOF. A child that outlives its kill — or a descendant
+ * holding its pipes — cannot turn a warm-up into an unbounded wait.
+ */
+export function spawnModuleGraphWarmupChild(
+  script: string,
+  cwd: string,
+  env: Record<string, string | undefined> | undefined,
+  deadlineMs: number,
+): Promise<ModuleGraphWarmupResult> {
+  const maxCaptureBytes = 1024 * 1024;
+  return new Promise((resolve, reject) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(process.execPath, ["--eval", script], {
+        cwd,
+        env: { ...process.env, ...env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch {
+      reject(new Error("[cold-spawn-warmup] the warm-up child could not be spawned"));
+      return;
+    }
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let bytes = 0;
+    let settled = false;
+    let timedOut = false;
+    let exitCode: number | null = null;
+    let signal: NodeJS.Signals | null = null;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let reap: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      clearTimeout(reap);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.unref();
+      resolve({
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+        exitCode,
+        signal,
+        timedOut,
+      });
+    };
+    const beginReapGrace = () => {
+      if (settled) return;
+      reap ??= setTimeout(finish, WARMUP_REAP_RESERVE_MS);
+    };
+    const stop = () => {
+      if (settled || timedOut) return;
+      timedOut = true;
+      clearTimeout(deadline);
+      beginReapGrace();
+      try { child.kill("SIGKILL"); } catch { /* The kill's own failure must not extend the wait. */ }
+    };
+    const capture = (chunk: Buffer, into: Buffer[]) => {
+      if (settled || timedOut) return;
+      bytes += chunk.length;
+      if (bytes > maxCaptureBytes) { stop(); return; }
+      into.push(chunk);
+    };
+    child.stdout?.on("data", (chunk: Buffer) => capture(chunk, stdoutChunks));
+    child.stderr?.on("data", (chunk: Buffer) => capture(chunk, stderrChunks));
+    child.stdout?.on("error", stop);
+    child.stderr?.on("error", stop);
+    // The child was never started or died at launch; there is nothing to reap.
+    child.on("error", finish);
+    child.once("exit", (code, exitSignal) => {
+      exitCode = code;
+      signal = exitSignal;
+      clearTimeout(deadline);
+      // A descendant retaining a pipe must not turn a clean exit into a wait for EOF.
+      beginReapGrace();
+    });
+    child.once("close", (code, exitSignal) => {
+      exitCode = code;
+      signal = exitSignal;
+      finish();
+    });
+    deadline = setTimeout(stop, deadlineMs);
+  });
+}
+
+async function runModuleGraphWarmup(options: ColdSpawnWarmup, deadlineMs: number): Promise<void> {
   const cwd = options.cwd ?? repoRoot();
   const source = options.source ?? readFileSync(requireEntry(options), "utf8");
   const resolveDir = options.entry === undefined ? cwd : dirname(options.entry);
@@ -214,21 +320,26 @@ function runModuleGraphWarmup(options: ColdSpawnWarmup, deadlineMs: number): voi
   }
 
   const startedAt = performance.now();
-  const result = Bun.spawnSync([process.execPath, "--eval", warmupScript(specifiers, deadlineMs)], {
+  const result = await spawnModuleGraphWarmupChild(
+    warmupScript(specifiers, deadlineMs),
     cwd,
-    env: { ...process.env, ...options.env },
-    stdout: "pipe",
-    stderr: "pipe",
-    timeout: deadlineMs,
-  });
+    options.env,
+    deadlineMs,
+  );
   const elapsedMs = (performance.now() - startedAt).toFixed(0);
-  const stdout = result.stdout.toString();
-  const report = parseWarmupReport(stdout);
+  const report = parseWarmupReport(result.stdout);
+  if (result.timedOut) {
+    throw new Error(
+      `[cold-spawn-warmup] graph=${options.graph} warm-up child did not exit within ${deadlineMs}ms `
+      + `and was killed (specifiers=${specifiers.length}). `
+      + `stderr: ${result.stderr.trim().slice(0, 600)}`,
+    );
+  }
   if (result.exitCode !== 0 || report === undefined || report.loaded === 0) {
     throw new Error(
       `[cold-spawn-warmup] graph=${options.graph} loaded nothing in ${elapsedMs}ms `
       + `(exitCode=${String(result.exitCode)}, specifiers=${specifiers.length}). `
-      + `stderr: ${result.stderr.toString().trim().slice(0, 600)}`,
+      + `stderr: ${result.stderr.trim().slice(0, 600)}`,
     );
   }
   console.log(

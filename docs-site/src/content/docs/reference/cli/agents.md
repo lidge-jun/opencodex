@@ -331,7 +331,7 @@ No key is ever serialized. Configs carry either a documented environment referen
 non-secret loopback placeholder. A loopback proxy (`127.0.0.1`, the default) requires no
 admission key at all. Set a referenced variable only when the client schema supports it and
 the proxy binds beyond loopback; see
-[Remote access](/reference/configuration/#remote-access) for how admission keys are issued. Keys for
+[Remote access](/reference/configuration/server/#remote-access) for how admission keys are issued. Keys for
 the upstream providers themselves are a separate thing entirely, configured per
 [Providers](/guides/providers/).
 The generated gjc integration uses a non-secret loopback placeholder and needs no environment variable. It remains loopback-only; it does not configure remote admission credentials.

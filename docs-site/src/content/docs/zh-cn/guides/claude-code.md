@@ -321,7 +321,7 @@ Claude 入站的路由重放会把主 ChatGPT 登录附加到内部请求，因�
 进行中描述不会消耗配额。成功的 `data:` 图像描述会按后端、模型、detail、图像字节和请求上下文
 缓存，避免每次重放都重复描述同一图像与上下文。内容可能变化的远程 `https:` 图像不会缓存。
 
-全部配置项见[配置参考](/zh-cn/reference/configuration/#sidecars)。Anthropic OAuth Web
+全部配置项见[配置参考](/zh-cn/reference/configuration/server/#侧车)。Anthropic OAuth Web
 Search 和图像描述沿用仓库已有的 Claude Code OAuth fingerprint 先例，但在用于长时间无人值守任务前，
 仍应使用你的账户和实际负载进行充分 soak test。
 

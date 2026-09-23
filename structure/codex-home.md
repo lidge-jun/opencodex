@@ -278,7 +278,8 @@ a deliberate user choice:
   `ocx status`.
 - Project-level Codex config that bypasses managed routing
   (`src/codex/project-config-warnings.ts`), surfaced by `ocx doctor` as a warning rather than an
-  override.
+  override. Project candidates and opened handles must be regular files of at most 1 MiB;
+  nonblocking descriptor reads reject changed size or timestamps. Global config reads are unchanged.
 
 Codex display-cache expiry, retained blocking main-policy evidence, and reset history follow the
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
@@ -352,3 +353,5 @@ Codex pool settings and their consumers follow the [reset-first ordering contrac
 Upstream API-key usage follows the [physical-attempt account attribution contract](gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Stored Direct substitution follows the [credential identity contract](providers/openai-tiers.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
+
+Native-main owner claims and credential-generation backoff remain authoritative during [priority failback priming](providers/openai-tiers.md#ongoing-priority-failback); the preference grants no access through a fenced main profile.

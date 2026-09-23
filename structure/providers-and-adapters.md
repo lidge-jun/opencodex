@@ -1,5 +1,11 @@
 # Providers And Adapters
 
+Kimi Coding's Chat, API-key, and optional Responses presets consume the same model seeds in
+`src/providers/registry/model-seeds.ts`, including the native `k3-256k` ID. The Responses preset
+shares the `kimi` OAuth account and Coding endpoint, keeps Chat as the featured default, and
+enables adjacent tool-result repair on its Responses wire. Its metadata alias is generated from
+the registry; sharing authentication does not implicitly share a usage-price namespace.
+
 OrcaRouter key exchange uses the shared raw-byte reader before returning a durable key. Its
 64 KiB response ceiling, single 30-second header/body deadline, and cancellation behavior follow
 the [bounded ingestion contract](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
@@ -15,7 +21,7 @@ only canonical Fable, Opus, or Sonnet labels after removing terminal controls; u
 | `src/providers/model-rename-fields.ts`, `src/providers/model-rename-migration.ts` | Classifies every provider config field for a declared model rename. Exact-model records, lists and nested request-pacing keys follow the replacement; an already saved replacement entry wins. Provider-wide settings and credential fields are not model identities. |
 | `src/providers/resolved-model-policy.ts`, `src/providers/resolved-model-policy-merge.ts` | Static provider/model policy resolution for the final upstream wire model, plus its pure clone/merge/URL/family helpers. The resolver detaches and freezes registry defaults, operator overrides, exact explicit input-modality declarations, provider-scoped hard wire pins (including Command Code's `claude-` prefix), aliases, and explicit false/empty values with field-level provenance. Provider derivation, routing, catalog hints, gather admission, and adapter selection consume its detached frozen result. Callers supply transport match, the exact capability row, and a credential-free effective auth decision; credential bytes, usability evidence, account/quota/health state, and observed limits remain outside the result. |
 
-| `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. |
+| `src/oauth/` | OAuth providers, token storage, refresh, and auth-token resolution. The login callback listener binds a per-provider FIXED loopback port, so consecutive logins reuse the same number; every response it sends ends its connection (`Connection: close`, including non-callback paths such as a stray `/favicon.ico` 404). Stopping the listener does not close an established socket, so without that a pooled client would deliver the next login's callback to the retired flow, which rejects the unknown state as a CSRF mismatch while the live flow waits. Command Code manual callback JSON remains opaque to the shared `code#state` parser and is state-validated by its provider parser. A raw Command Code paste with an explicit `#state` suffix must match the flow state on the direct prompt as well. Kiro add-account identity prefers same-session `whoami` over a leftover SQLite state profile, and never persists the Builder ID service profile ARN as `accountId`. |
 | `src/combos/request.ts` | Clones each selected combo target request and applies the existing target capability ladder: adaptive unknown targets and explicit empty ladders receive no unsupported reasoning/thinking controls, while known ladders retain per-target resolution. |
 | `src/adapters/openai-responses.ts` | Native OpenAI/ChatGPT Responses passthrough. |
 | `src/responses/muse-tool-name-alias.ts` | Host-gated Meta Muse 64-char tool-name alias/restore used by the Responses passthrough. |
@@ -170,7 +176,10 @@ the configured entry, reference, revision, resolved key, authentication mode, an
 disabled or removed provider fails the same check. Drift produces the bridge's failed terminal
 without another provider request, and an unchanged binding resends the built request with its
 executed search result appended, never re-entering the initial reselection/rebuild path. Initial
-dispatch keeps its normal reselection policy. `tests/web-search/web-search-passthrough-bridge.test.ts`
+dispatch keeps its normal reselection policy. When the route's registry policy carries a
+terminal-repair grace (`modelResponsesTerminalRepair`), the response body of every successful
+continuation is wrapped by the same repair that saw the raw first leg, so a complete leg the
+destination leaves open still ends that leg on schedule instead of stalling the turn. `tests/web-search/web-search-passthrough-bridge.test.ts`
 covers drift during search, while pacing, and before first-leg headers return, plus successful
 first-dispatch reselection and result preservation.
 

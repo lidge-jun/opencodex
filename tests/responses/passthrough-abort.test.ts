@@ -2,6 +2,11 @@ import { describe, expect, test } from "bun:test";
 import { consumeForInspection, linkAbortSignal, relaySseWithFailedTail, relaySseWithHeartbeat, relayWithAbort } from "../../src/server";
 import { pathToFileURL } from "node:url";
 import { repoRoot } from "../helpers/repo-root";
+import { relayResponsesSseWithTerminalRepair, type ResponsesTerminalRepairScheduler } from "../../src/server/responses-terminal-repair";
+import { createPassthroughWebSearchBridgeStream, type PassthroughWebSearchBridgePlan } from "../../src/web-search/passthrough-bridge";
+import { deliverPassthroughResponse } from "../../src/server/responses/passthrough-delivery";
+import { routedProviderConfig } from "../../src/router";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const root = pathToFileURL(repoRoot() + "/");
 
@@ -62,8 +67,15 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     // The captured static policy now supplies the repair decision; the real platform gate and
     // pure native relay invariants below are unchanged.
     expect(sseBranch).toContain("const terminalRepairPolicy = route.staticPolicy.model.responsesTerminalRepair;");
-    expect(sseBranch).toContain("const passthroughSseBody = terminalRepairPolicy");
+    expect(sseBranch).toContain("let passthroughSseBody = terminalRepairPolicy");
     expect(sseBranch).toContain(": upstreamResponse.body;");
+    // Repair has to wrap the raw first leg before the bridge hides its completed web-search call;
+    // otherwise a terminal-less open leg cannot trigger the repair timer and continuation stalls.
+    const terminalRepair = sseBranch.indexOf("relayResponsesSseWithTerminalRepair(");
+    const webSearchBridge = sseBranch.indexOf("createPassthroughWebSearchBridgeStream({");
+    expect(terminalRepair).toBeGreaterThanOrEqual(0);
+    expect(webSearchBridge).toBeGreaterThan(terminalRepair);
+    expect(sseBranch.slice(webSearchBridge)).toContain("firstLeg: passthroughSseBody,");
     // Native tee stays inside the bounded observer. The production owner passes
     // the raw stream and disconnect signal before any client-side rewrite.
     expect(sseBranch).toMatch(/const \[nativeBody, inspectBody\] = teeWithBoundedInspection\(passthroughSseBody, \{ clientGoneSignal \}\)/);
@@ -618,5 +630,327 @@ describe("passthrough relayWithAbort (RC2, passthrough path)", () => {
     turn.abort("replacement turn");
     expect(upstream.signal.aborted).toBe(true);
     expect(upstream.signal.reason).toBe("replacement turn");
+  });
+});
+
+/**
+ * The reported stall: a provider emits a complete intercepted `web_search` call but never sends
+ * a terminal and holds the leg open. With repair wrapped around the raw first leg, the grace
+ * timer still arms and the bridge can execute the search and continue upstream.
+ */
+describe("terminal repair ahead of the passthrough web-search bridge", () => {
+  class ManualScheduler implements ResponsesTerminalRepairScheduler {
+    private current = 0;
+    private nextId = 1;
+    private readonly jobs = new Map<number, { at: number; callback: () => void }>();
+
+    nowMs(): number { return this.current; }
+
+    schedule(callback: () => void, delayMs: number): unknown {
+      const id = this.nextId++;
+      this.jobs.set(id, { at: this.current + delayMs, callback });
+      return id;
+    }
+
+    cancel(handle: unknown): void {
+      this.jobs.delete(handle as number);
+    }
+
+    advance(ms: number): void {
+      this.current += ms;
+      for (;;) {
+        const due = [...this.jobs.entries()]
+          .filter(([, job]) => job.at <= this.current)
+          .sort((left, right) => left[1].at - right[1].at);
+        if (due.length === 0) return;
+        for (const [id, job] of due) {
+          if (!this.jobs.delete(id)) continue;
+          job.callback();
+        }
+      }
+    }
+
+    pending(): number { return this.jobs.size; }
+  }
+
+  const searchCall = {
+    type: "function_call",
+    id: "fc_1",
+    status: "completed",
+    call_id: "call_1",
+    name: "web_search",
+    arguments: "{\"query\":\"opencodex release\"}",
+  };
+
+  const preamble = {
+    type: "message",
+    id: "msg_1",
+    status: "completed",
+    role: "assistant",
+    content: [{ type: "output_text", text: "Let me look that up." }],
+  };
+
+  const answer = {
+    type: "message",
+    id: "msg_2",
+    role: "assistant",
+    content: [{ type: "output_text", text: "The current release is 2.50.0." }],
+  };
+
+  function frame(type: string, payload: Record<string, unknown>): string {
+    return "event: " + type + "\ndata: " + JSON.stringify({ type, ...payload });
+  }
+
+  function sseBody(...blocks: string[]): string {
+    return blocks.concat("data: [DONE]").join("\n\n") + "\n\n";
+  }
+
+  /** Every output item complete, no terminal event, and the leg is never closed. */
+  function terminallessSearchLeg(): ReadableStream<Uint8Array> {
+    const text = [
+      frame("response.created", { response: { id: "resp_1", status: "in_progress" } }),
+      frame("response.output_item.added", { output_index: 0, item: { ...preamble, content: [] } }),
+      frame("response.output_item.done", { output_index: 0, item: preamble }),
+      frame("response.output_item.added", { output_index: 1, item: { ...searchCall, arguments: "" } }),
+      frame("response.function_call_arguments.done", {
+        output_index: 1,
+        item_id: "fc_1",
+        arguments: searchCall.arguments,
+      }),
+      frame("response.output_item.done", { output_index: 1, item: searchCall }),
+    ].join("\n\n") + "\n\n";
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text));
+      },
+    });
+  }
+
+  function answerLeg(): ReadableStream<Uint8Array> {
+    return streamFromChunks([new TextEncoder().encode(sseBody(
+      frame("response.created", { response: { id: "resp_2", status: "in_progress" } }),
+      frame("response.output_item.added", { output_index: 0, item: { ...answer, content: [] } }),
+      frame("response.output_item.done", { output_index: 0, item: answer }),
+      frame("response.completed", {
+        response: { id: "resp_2", status: "completed", output: [answer] },
+      }),
+    ))]);
+  }
+
+  /** Complete answer output, no terminal event, and the continuation remains open. */
+  function terminallessAnswerLeg(): ReadableStream<Uint8Array> {
+    const text = [
+      frame("response.created", { response: { id: "resp_2", status: "in_progress" } }),
+      frame("response.output_item.added", { output_index: 0, item: { ...answer, content: [] } }),
+      frame("response.output_item.done", { output_index: 0, item: { ...answer, status: "completed" } }),
+    ].join("\n\n") + "\n\n";
+    return new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text));
+      },
+    });
+  }
+
+  test("a terminal-less first search leg reaches the bridge once repaired", async () => {
+    const scheduler = new ManualScheduler();
+    const upstream = new AbortController();
+    const plan: PassthroughWebSearchBridgePlan = {
+      backend: "ollama",
+      endpoint: "https://ollama.com/api/web_search",
+      maxSearches: 3,
+      timeoutMs: 60_000,
+    };
+    const sent: string[] = [];
+    const executed: string[][] = [];
+    const stream = createPassthroughWebSearchBridgeStream({
+      plan,
+      firstLeg: relayResponsesSseWithTerminalRepair(
+        terminallessSearchLeg(),
+        upstream,
+        { graceMs: 5_000 },
+        createTestTranslatorBudget(),
+        scheduler,
+      ),
+      requestBody: JSON.stringify({
+        model: "glm-4.7",
+        stream: true,
+        input: [{ role: "user", content: [{ type: "input_text", text: "what is the latest release?" }] }],
+        tools: [{ type: "web_search" }],
+      }),
+      send: async (body) => {
+        sent.push(body);
+        return new Response(answerLeg(), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      },
+      execute: async (queries) => {
+        executed.push(queries);
+        return { text: "opencodex 2.50.0 shipped", sources: [] };
+      },
+    });
+
+    const bodyPromise = new Response(stream).text();
+    // The bridge is pull-driven: let it drain the pushed leg frames so repair arms the timer.
+    for (let i = 0; i < 1_000 && scheduler.pending() === 0; i += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    expect(scheduler.pending()).toBe(1);
+    scheduler.advance(5_000);
+    const body = await bodyPromise;
+
+    expect(executed).toEqual([["opencodex release"]]);
+    expect(sent).toHaveLength(1);
+    const events = body
+      .split(/\r?\n/)
+      .filter(line => line.startsWith("data:"))
+      .map(line => line.slice(5).trim())
+      .filter(payload => payload.length > 0 && payload !== "[DONE]")
+      .map(payload => JSON.parse(payload) as Record<string, unknown>);
+    expect(events.some(event => event.type === "response.completed")).toBe(true);
+  });
+
+  /**
+   * The production continuation sender in deliverPassthroughResponse must apply the same
+   * terminal repair to every leg, not only the first one. This drives the real function:
+   * the first leg is a terminal-less intercepted web_search call, the ollama search fetch is
+   * stubbed, and the provider's own fetch returns a terminal-less continuation — which only
+   * reaches the client when the sender's repair wrap synthesizes response.completed.
+   */
+  test("deliverPassthroughResponse repairs a terminal-less continuation leg", async () => {
+    const scheduler = new ManualScheduler();
+    const upstream = new AbortController();
+    const originalFetch = globalThis.fetch;
+
+    const provider = routedProviderConfig("bridge-test", {
+      adapter: "openai-responses",
+      baseUrl: "https://bridge-test.example/v1",
+      authMode: "key",
+      apiKey: "test-bridge-key",
+      webSearchBridge: {
+        enabled: true,
+        backend: "ollama",
+        endpoint: "https://bridge-test.example/api/web_search",
+        maxSearches: 3,
+        timeoutMs: 60_000,
+      },
+      fetch: (async () => new Response(terminallessAnswerLeg(), {
+        headers: { "content-type": "text/event-stream" },
+      })) as unknown as typeof globalThis.fetch,
+    } as never);
+    const config = {
+      providers: { "bridge-test": provider },
+      maxUpstreamBodyBytes: 8 * 1024 * 1024,
+    };
+    const upstreamRequest = {
+      url: "https://bridge-test.example/v1/responses",
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "glm-4.7",
+        stream: true,
+        input: [{ role: "user", content: [{ type: "input_text", text: "what is the latest release?" }] }],
+        tools: [{ type: "web_search" }],
+      }),
+    };
+    const requestBindings = new WeakMap<object, unknown>();
+    requestBindings.set(upstreamRequest, { kind: "api-key", provider });
+
+    globalThis.fetch = (async () => Response.json({
+      results: [{ url: "https://example.com/release", title: "Release notes", content: "2.50.0 shipped" }],
+    })) as typeof globalThis.fetch;
+    try {
+      const response = await deliverPassthroughResponse(
+        {
+          logCtx: { model: "", provider: "" },
+          config,
+          options: { responsesTerminalRepairScheduler: scheduler },
+          req: new Request("http://localhost/v1/responses", { method: "POST" }),
+        },
+        { authCtx: { kind: "main", accountId: null } },
+        {
+          parsed: {
+            modelId: "glm-4.7",
+            stream: true,
+            options: {},
+            _webSearch: { type: "web_search" },
+          },
+          route: {
+            providerName: "bridge-test",
+            provider,
+            modelId: "glm-4.7",
+            staticPolicy: { model: { responsesTerminalRepair: { graceMs: 5_000 } } },
+          },
+          subagentQuotaFailureModel: undefined,
+          subagentFallbackAccountId: undefined,
+          clientRequestedStream: true,
+          translatorBudget: createTestTranslatorBudget(),
+        },
+        { requestBindings },
+        { openAiSidecar: undefined },
+        {
+          plaintextV2AgentMessageToolNames: new Set<string>(),
+          commitReasoningReplayServingRoute: () => {},
+          routedMuseToolNameAliases: new Map(),
+          routedNamespaceToolAliases: new Map(),
+          plaintextV2AgentMessageAliasedToolNames: new Set<string>(),
+          recordTerminalOutcomes: false,
+          responseCompletionCancelled: false,
+        },
+        {
+          upstreamResponse: new Response(terminallessSearchLeg(), {
+            headers: { "content-type": "text/event-stream" },
+          }),
+          codexSafetyBufferingOptions: undefined,
+          upstream,
+          request: upstreamRequest,
+          connectMs: 5_000,
+          imageGenCallAliases: new Map(),
+          selfNamedNamespaceScrubAuthorization: undefined,
+          authorizedBareNamespaceToolAliases: new Map(),
+          rememberPassthroughResponseChecked: () => {},
+          routedCustomToolNames: new Set<string>(),
+          routedCustomToolRepairNames: new Set<string>(),
+          declaredWireToolNames: new Set<string>(),
+          routedToolSearchNames: new Set<string>(),
+          outboundRequestBody: undefined,
+          functionRepairSchemas: new Map(),
+          undeclaredToolGuardActive: false,
+          declaredNamelessClientCallTypes: new Set<string>(),
+          providerExecutedCallTypes: new Set<string>(),
+          declaredBareWireToolNames: new Set<string>(),
+          rememberPassthroughResponse: false,
+          noteInspectedPayload: () => {},
+          normalizeFunctionCompletionJson: (text: string) => text,
+        },
+      );
+
+      expect(response.ok).toBe(true);
+      const bodyPromise = response.text();
+      // First leg: repair arms once every output item is complete and the grace timer
+      // synthesizes the terminal that lets the bridge dispatch its continuation.
+      for (let i = 0; i < 1_000 && scheduler.pending() === 0; i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      expect(scheduler.pending()).toBe(1);
+      scheduler.advance(5_000);
+      // Continuation leg: the production sender wraps the fetch result in the same repair,
+      // so its own terminal-less body re-arms the timer instead of stalling the stream.
+      for (let i = 0; i < 1_000 && scheduler.pending() === 0; i += 1) {
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      expect(scheduler.pending()).toBe(1);
+      scheduler.advance(5_000);
+      const body = await bodyPromise;
+
+      const events = body
+        .split(/\r?\n/)
+        .filter(line => line.startsWith("data:"))
+        .map(line => line.slice(5).trim())
+        .filter(payload => payload.length > 0 && payload !== "[DONE]")
+        .map(payload => JSON.parse(payload) as Record<string, unknown>);
+      expect(events.some(event => event.type === "response.completed")).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

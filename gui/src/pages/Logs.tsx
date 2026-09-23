@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
@@ -18,7 +18,7 @@ import { DEFAULT_LOG_FILTER_STATE, extractLogFilterOptions, filterLogs, hasActiv
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
-import { modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
+import { isModelRerouted, modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
 import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
@@ -179,6 +179,8 @@ export interface LogEntry extends LogFailureAttribution {
   // cannot say whether Fast was granted on a backend whose echo is not authoritative.
   tierOutcome?: ModelTitleTierOutcome;
   resolvedModel?: string;
+  servedModel?: string;
+  wireModel?: string;
   modelSupportsServiceTier?: boolean;
   status: number;
   durationMs: number;
@@ -274,6 +276,13 @@ function effortLabel(log: ReasoningLogFields): string {
 function reasoningWireLabel(log: ReasoningLogFields): string | undefined {
   if (!log.reasoningWireField || log.reasoningWireValue === undefined) return undefined;
   return `${log.reasoningWireField}=${log.reasoningWireValue}`;
+}
+
+function servedModelLabel(log: { model: string; resolvedModel?: string; servedModel?: string; wireModel?: string }): ReactNode {
+  if (isModelRerouted(log)) {
+    return <>{modelLabel(log.wireModel ?? log.model)}{" → "}{modelLabel(log.servedModel!)}</>;
+  }
+  return modelLabel(log.servedModel ?? log.resolvedModel ?? log.model);
 }
 
 function formatTokPerSecond(result: TokPerSecondResult | undefined, localeTag?: string): string {
@@ -954,7 +963,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   </td>
                  <td className="mono log-col-model" title={modelTitle(log, t)}>
                   <span className="logs-model-cell">
-                   <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
+                   <span>{servedModelLabel(log)}</span>
                       {log.shadowCallRewrittenFrom && (
                         <span
                           className="badge badge-muted"
@@ -1141,7 +1150,7 @@ function LogDetailDialog({
                 </span>
               </>
             )}
-            <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
+            <span className="muted">{t("logs.col.model")}</span><span className="mono">{servedModelLabel(detail)}</span>
             <span className="muted">{t("logs.col.provider")}</span><span>{formatProviderDisplayName(detail.provider, t)}</span>
             {(detail.requestedEffort || detail.effectiveEffort) && (
               <><span className="muted">{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>

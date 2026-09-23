@@ -122,7 +122,8 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
 
   test("native failure leaves policy-hop request headers free of synthesized identity", async () => {
     const cfg = config();
-    const trace = { version: 1, decisionId: "native-hop", createdAt: Date.now(), requestedModel: "openai/gpt-5.6-luna",
+    cfg.routingProfiles = { "native-hop": { candidates: [{ provider: "openai", model: "gpt-5.6-luna" }] } };
+    const trace = { version: 1, decisionId: "native-hop", createdAt: Date.now(), requestedModel: "policy/native-hop",
       routeKind: "policy", profile: { id: "native-hop", revision: "1" }, requirements: [],
       candidates: [
         { provider: "openai", model: "gpt-5.6-luna", eligible: true, exclusions: [], score: { total: 2 } },
@@ -138,7 +139,7 @@ describe("Claude final canonical native affinity after a Go preliminary pick", (
     }) as typeof fetch;
     const req = new Request("http://localhost/v1/responses", { method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "chatgpt-account-id": "fixture-native-main" },
-      body: JSON.stringify({ model: "openai/gpt-5.6-luna", input: "ping", stream: false }) });
+      body: JSON.stringify({ model: "policy/native-hop", input: "ping", stream: false }) });
     const runCore: NonNullable<Parameters<typeof handleResponsesWithPolicyFallback>[4]>["runCore"] = async (request, current, log, options) => {
       requests.push(request);
       const response = await handleResponses(request, current, log, options);

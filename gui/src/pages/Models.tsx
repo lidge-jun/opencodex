@@ -296,9 +296,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       pickerFlight.current?.controller.abort();
       pickerFlight.current?.clear();
       pickerFlight.current = null;
-      cancelAppServerRead();
     };
-  }, [apiBase, catalogActive, cancelAppServerRead]);
+  }, [apiBase, catalogActive]);
   useLayoutEffect(() => {
     // Pin inferred Custom before any late GET can switch mode and unmount its draft.
     if (catalogActive && pickerDraft === null && pickerMode === "custom") setPickerDraft("custom");

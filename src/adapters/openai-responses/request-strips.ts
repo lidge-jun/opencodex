@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
+import { debugProviderDiagnostic } from "../../lib/debug";
 import { isPlainObject } from "./internal";
 import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
@@ -169,13 +171,37 @@ export function stripCanonicalOnlyTopLevelFields(body: unknown): unknown {
  * exist, producing a 404. Strip all item IDs in this case — `call_id` pairing is unaffected.
  * Matches codex-rs behavior (core/src/client.rs:918-925).
  */
-export function stripItemIdsWhenUnstored(body: unknown): unknown {
-  if (!isPlainObject(body) || body.store !== false) return body;
+export function stripItemIdsWhenUnstored(body: unknown, requireCustomCallIds = false): unknown {
+  const repairCustomCallIds = requireCustomCallIds === true;
+  if (!isPlainObject(body) || (body.store !== false && !repairCustomCallIds)) return body;
   if (!Array.isArray(body.input)) return body;
 
   let changed = false;
   const input = body.input.map(item => {
-    if (!isPlainObject(item) || !("id" in item)) return item;
+    if (!isPlainObject(item)) return item;
+    if (repairCustomCallIds && item.type === "custom_tool_call") {
+      try {
+        if (typeof item.id === "string" && item.id.startsWith("ctc_")) return item;
+        if (
+          typeof item.call_id !== "string"
+          || typeof item.name !== "string"
+          || typeof item.input !== "string"
+        ) return item;
+        const digest = createHash("sha256")
+          .update(JSON.stringify([item.call_id, item.name, item.input]))
+          .digest("hex")
+          .slice(0, 40);
+        changed = true;
+        debugProviderDiagnostic("openai-responses", "xai-custom-tool-call-id-repaired", {
+          hadId: typeof item.id === "string",
+        });
+        return { ...item, id: `ctc_${digest}` };
+      } catch {
+        debugProviderDiagnostic("openai-responses", "xai-custom-tool-call-id-unrepaired", {});
+        return item;
+      }
+    }
+    if (body.store !== false || !("id" in item)) return item;
     changed = true;
     const next = { ...item };
     delete next.id;

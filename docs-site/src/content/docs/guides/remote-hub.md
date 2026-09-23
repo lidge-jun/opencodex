@@ -111,6 +111,18 @@ Bind the data listener to the hub's Tailscale address, enable the loopback compa
 own processes reach that same port without a credential, and publish management separately. The
 values below are examples:
 
+:::danger[Use a dedicated single-tenant host]
+The loopback companion is unauthenticated: every process and OS user on this machine can use the
+hub's provider credentials and account quota, and can exhaust the shared turn capacity that
+authenticated remote clients depend on. Do not enable it on a shared or multi-tenant host. If the
+host is shared, leave the `unauthenticatedLoopbackListener` setting disabled and do not run the hub's local
+integrations.
+
+Binding to `127.0.0.1` means the kernel refuses remote connections, but it does not stop a browser:
+a page you visit can make your browser connect to `127.0.0.1`. The listener therefore applies the
+same `Host` and `Origin` checks as an ordinary loopback bind.
+:::
+
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10
@@ -215,6 +227,9 @@ separate ports:
 ```bash
 ocx config set unauthenticatedLoopbackListener '{"enabled":true,"port":10104}'
 ```
+
+The ported form is the same unauthenticated surface: the dedicated-host warning above applies to
+this command too.
 
 With a `port` set, the local integrations follow the listener and write `http://127.0.0.1:10104`
 instead. The port must differ from the proxy port and is never OS-assigned: an ephemeral port would

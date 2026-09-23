@@ -78,3 +78,44 @@ export function decodeBasicString(literal: string): string | null {
   }
   return out;
 }
+
+/** Decode externally authored TOML basic strings on the read-only fallback path. */
+export function decodeTomlBasicString(literal: string): string | null {
+  if (literal.length < 2 || !literal.startsWith('"') || !literal.endsWith('"')) return null;
+  const inner = literal.slice(1, -1);
+  let out = "";
+  for (let i = 0; i < inner.length; i += 1) {
+    const ch = inner[i]!;
+    if (ch !== "\\") {
+      const code = inner.codePointAt(i)!;
+      if (ch === '"' || (code < 0x20 && code !== 0x09) || code === 0x7f
+        || (code >= 0xd800 && code <= 0xdfff)) return null;
+      out += String.fromCodePoint(code);
+      if (code > 0xffff) i += 1;
+      continue;
+    }
+    const escape = inner[++i];
+    switch (escape) {
+      case "b": out += "\b"; break;
+      case "t": out += "\t"; break;
+      case "n": out += "\n"; break;
+      case "f": out += "\f"; break;
+      case "r": out += "\r"; break;
+      case '"': out += '"'; break;
+      case "\\": out += "\\"; break;
+      case "u":
+      case "U": {
+        const digits = escape === "u" ? 4 : 8;
+        const hex = inner.slice(i + 1, i + 1 + digits);
+        if (hex.length !== digits || !/^[0-9a-fA-F]+$/.test(hex)) return null;
+        const code = Number.parseInt(hex, 16);
+        if (code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return null;
+        out += String.fromCodePoint(code);
+        i += digits;
+        break;
+      }
+      default: return null;
+    }
+  }
+  return out;
+}

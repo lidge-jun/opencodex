@@ -76,7 +76,7 @@ requests such as vision and web search are replayed normally, because repeating 
 duplicate a turn.
 
 A native Responses provider can opt into replacing that send with
-[`retryOnReset`](providers.md#provider-entries-ocxproviderconfig). The same grant covers the
+[`retryOnReset`](/reference/configuration/providers/#provider-entries-ocxproviderconfig). The same grant covers the
 case where the connection survives the header and the SSE body then dies carrying only control
 events, because the caller has observed nothing in either one. A replacement happens only when
 the request is self-contained (`store: false`, complete input, client-executed tools only, no
@@ -714,6 +714,6 @@ wildcard `hostname`, where the public listener already holds `127.0.0.1:<port>`.
 
 `codexNativeSteering` and `codexNativeInjection` enable separate, default-off native
 WebSocket control paths. See the canonical guide for
-[supported steering routes and settings](../../guides/codex-integration.md#steering-continuation-settings),
-[typed result and approval continuations](../../guides/codex-integration.md#rich-tool-results-and-explicit-approvals-after-response-completion),
-and [confirmation deadlines and retained context](../../guides/codex-integration.md#steering-confirmation-deadlines-and-retained-context).
+[supported steering routes and settings](/guides/codex-integration/#steering-continuation-settings),
+[typed result and approval continuations](/guides/codex-integration/#rich-tool-results-and-explicit-approvals-after-response-completion),
+and [confirmation deadlines and retained context](/guides/codex-integration/#steering-confirmation-deadlines-and-retained-context).

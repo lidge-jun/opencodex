@@ -22,6 +22,19 @@ const USAGE = `Usage:
   ocx access models [--json]
   ocx access test <model> [--protocol <chat|responses|messages>] [--json]`;
 
+const UTC_ISO_INSTANT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+
+/**
+ * The server emits `attributionSince` with `toISOString()`. `Date.parse` alone also accepts
+ * strings such as "0", so require the ISO-8601 UTC shape and an instant that round-trips to the
+ * same second, which also rejects impossible dates the parser would roll over.
+ */
+function isUtcIsoInstant(value: unknown): value is string {
+  if (typeof value !== "string" || !UTC_ISO_INSTANT_RE.test(value)) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 19) === value.slice(0, 19);
+}
+
 /**
  * Render the key table with the usage fields the API already returns (#2705).
  *
@@ -38,6 +51,10 @@ const USAGE = `Usage:
  */
 function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<string, unknown>>): string[] {
   const cells: string[][] = [["ID", "NAME", "PREFIX", "REQ 7D", "TOTAL", "LAST USED"]];
+  // A string that is not an ISO-8601 UTC instant is not attribution data: treat it like an
+  // absent field so malformed payloads still render "unavailable" instead of usage values.
+  const attributionSince = isUtcIsoInstant(payload.attributionSince) ? payload.attributionSince : undefined;
+  const usageAvailable = attributionSince !== undefined;
   for (const entry of keys) {
     const usage = (entry.usage ?? {}) as Record<string, unknown>;
     const ambiguous = usage.ambiguous === true;
@@ -47,16 +64,16 @@ function formatKeyRows(payload: Record<string, unknown>, keys: Array<Record<stri
       String(entry.name ?? ""),
       String(entry.prefix ?? ""),
       // One marker spanning both numeric columns: the union guarantees neither exists.
-      ambiguous ? "ambiguous" : num(usage.requests7d),
-      ambiguous ? "" : num(usage.totalRequests),
-      ambiguous ? "" : (typeof usage.lastUsedAt === "string" ? usage.lastUsedAt : "never"),
+      !usageAvailable ? "unavailable" : ambiguous ? "ambiguous" : num(usage.requests7d),
+      !usageAvailable || ambiguous ? "" : num(usage.totalRequests),
+      !usageAvailable || ambiguous ? "" : (typeof usage.lastUsedAt === "string" ? usage.lastUsedAt : "never"),
     ]);
   }
   const widths = cells[0]!.map((_, column) => Math.max(...cells.map(row => (row[column] ?? "").length)));
   const lines = cells.map(row => row.map((cell, i) => (cell ?? "").padEnd(widths[i]!)).join("  ").trimEnd());
   const footer: string[] = [];
-  if (typeof payload.attributionSince === "string") {
-    footer.push(`attribution since ${payload.attributionSince}`);
+  if (attributionSince !== undefined) {
+    footer.push(`attribution since ${attributionSince}`);
   }
   if (payload.historyTruncated === true) {
     footer.push("older history truncated");

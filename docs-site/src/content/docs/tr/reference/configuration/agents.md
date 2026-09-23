@@ -23,7 +23,7 @@ kontrol eder.
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Kullanılabilirlik probu önbellek aralığı. 1000 ms'nin altındaki değerler varsayılana geri döner. |
 | `effortCap?` | `string` | — | Uygun v2 ana turları ve işaretlenmiş çocuk turları için kesin tavan. `low` ile `ultra` arasını kabul eder. |
 | `subagentEffortCap?` | `string` | — | Yalnızca oluşturulan çocuk turları için ek tavan. Her iki sınır da geçerli olduğunda daha düşük olan kazanır. |
-| `agentTaskRecovery?` | `object` | — | Yönlendirilen sağlayıcılara gönderilen arka uçta şifrelenmiş v2 görevleri için deneysel isteğe bağlı kurtarma. `enabled: true` olmadıkça devre dışıdır; bkz. [Şifrelenmiş v2 görev kurtarma](#sifrelenmis-v2-gorev-kurtarma). |
+| `agentTaskRecovery?` | `object` | — | Yönlendirilen sağlayıcılara gönderilen arka uçta şifrelenmiş v2 görevleri için deneysel isteğe bağlı kurtarma. `enabled: true` olmadıkça devre dışıdır; bkz. [Şifrelenmiş v2 görev kurtarma](#şifrelenmiş-v2-görev-kurtarma). |
 
 Arayüzü kontrol paneli veya `ocx v2 status|on|off|mode <v1|default|v2>|threads
 <n>|mode-hint <metin|--clear>` ile yönetin. Mod değişiklikleri yeni oturumlara
