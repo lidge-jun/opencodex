@@ -978,6 +978,8 @@ change target order or attempt accounting; provider-400 decisions follow the [re
 An injected combo default supplies `summary: "auto"` only when no summary was specified; caller
 summary choices remain intact. Raw display and hidden-envelope replay follow
 [reasoning display parity](../providers/chat-compat.md#reasoning-display-parity-hidethinkingsummary).
+Final-route normalization preserves visible raw reasoning when the parsed request has a validated
+active effort and omits summary; explicit `summary: "none"` still hides it.
 
 The shared Responses path follows the [bounded multipart recovery contract](../subagents.md#multipart-encrypted-task-recovery); credential admission and retry policy remain unchanged.
 

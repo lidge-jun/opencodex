@@ -94,6 +94,10 @@ function attachPendingReasoningToCallOwner(
 
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
+export function hasValidatedActiveReasoningEffort(options: Pick<OcxRequestOptions, "reasoning">): boolean {
+  return options.reasoning !== undefined && options.reasoning !== "none";
+}
+
 
 export function parseRequest(
   body: unknown,
@@ -542,7 +546,7 @@ export function parseRequest(
     options.reasoning = requestedEffort;
   }
   const summaryMode = data.reasoning?.summary;
-  const reasoningActive = options.reasoning !== undefined && options.reasoning !== "none";
+  const reasoningActive = hasValidatedActiveReasoningEffort(options);
   if (summaryMode === "none" || (!summaryMode && !reasoningActive)) options.hideThinkingSummary = true;
   if (data.presence_penalty !== undefined) options.presencePenalty = data.presence_penalty;
   if (data.frequency_penalty !== undefined) options.frequencyPenalty = data.frequency_penalty;

@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { parseRequest } from "../../src/responses/parser";
 import { concreteComboRequestBody } from "../../src/combos/request";
-import type { OcxComboTarget } from "../../src/types";
+import { routeModel } from "../../src/router";
+import { applyFinalRouteRequestNormalization } from "../../src/server/responses/core-normalize";
+import type { OcxComboTarget, OcxConfig } from "../../src/types";
 
 describe("reasoning effort preserves visible thinking when summary is omitted", () => {
   test.each(["unknown", "off", ""])("invalid effort %j does not enable visibility", effort => {
@@ -71,6 +73,32 @@ describe("reasoning effort preserves visible thinking when summary is omitted", 
       input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
     });
     expect(parsed.options.hideThinkingSummary).toBe(true);
+  });
+
+  test.each(["openai-chat", "kiro"] as const)("%s final route honors caller reasoning visibility", async adapter => {
+    const config: OcxConfig = {
+      port: 0,
+      defaultProvider: "summary-route",
+      providers: { "summary-route": { adapter, baseUrl: "https://example.test/v1" } },
+    };
+    for (const [reasoning, hidden] of [
+      [{ effort: "high" }, false],
+      [{ effort: "high", summary: "none" }, true],
+      [undefined, true],
+    ] as const) {
+      const parsed = parseRequest({ model: "summary-route/test-model", input: [], reasoning });
+      const route = routeModel(config, parsed.modelId);
+      expect(route.provider.showThinkingSummary).toBeUndefined();
+      await applyFinalRouteRequestNormalization({
+        parsed,
+        route,
+        config,
+        req: new Request("http://localhost/v1/responses"),
+        logCtx: { model: parsed.modelId, provider: route.providerName },
+        inboundWire: "responses",
+      });
+      expect(parsed.options.hideThinkingSummary).toBe(hidden);
+    }
   });
 
   test("combo injected effort defaults summary to auto", () => {
