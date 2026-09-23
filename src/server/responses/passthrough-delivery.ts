@@ -134,6 +134,80 @@ import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-comp
 import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
 import { responsesJsonToSseStream } from "../responses-json-events";
 
+const PLAINTEXT_V2_SSE_PREFIX_LIMIT = 4096;
+
+function classifyPlaintextV2SsePrefix(prefix: string): "sse" | "unknown" | "more" {
+  const lastLineEnd = prefix.lastIndexOf("\n");
+  if (lastLineEnd < 0) return "more";
+  for (const rawLine of prefix.slice(0, lastLineEnd + 1).split("\n")) {
+    const line = rawLine.replace(/\r$/, "").trim();
+    if (!line || line.startsWith(":")) continue;
+    if (/^(id|retry):/.test(line)) continue;
+    if (line.startsWith("event:")) {
+      return /^event:\s*(?:response\.[\w.-]+|error)$/.test(line) ? "sse" : "unknown";
+    }
+    if (line.startsWith("data:")) {
+      try {
+        const value = JSON.parse(line.slice(5).trim()) as { type?: unknown };
+        return typeof value.type === "string" && /^(?:response\.[\w.-]+|error)$/.test(value.type)
+          ? "sse" : "unknown";
+      } catch {
+        return "unknown";
+      }
+    }
+    return "unknown";
+  }
+  return "more";
+}
+
+/** Confirm an unlabeled successful body is Responses SSE before alias restoration. */
+async function classifyPlaintextV2SseResponse(response: Response): Promise<Response> {
+  if (!response.body) return response;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const buffered: Uint8Array[] = [];
+  let prefix = "";
+  let inspectedBytes = 0;
+  while (inspectedBytes < PLAINTEXT_V2_SSE_PREFIX_LIMIT) {
+    const next = await reader.read();
+    if (next.done) break;
+    buffered.push(next.value);
+    const inspected = next.value.subarray(0, PLAINTEXT_V2_SSE_PREFIX_LIMIT - inspectedBytes);
+    inspectedBytes += inspected.byteLength;
+    prefix += decoder.decode(inspected, { stream: true });
+    const kind = classifyPlaintextV2SsePrefix(prefix);
+    if (kind === "sse") {
+      let bufferedIndex = 0;
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          if (bufferedIndex < buffered.length) {
+            controller.enqueue(buffered[bufferedIndex++]!);
+            return;
+          }
+          try {
+            const result = await reader.read();
+            if (result.done) controller.close();
+            else controller.enqueue(result.value);
+          } catch (error) {
+            controller.error(error);
+          }
+        },
+        cancel(reason) { return reader.cancel(reason); },
+      });
+      const headers = new Headers(response.headers);
+      headers.set("content-type", "text/event-stream");
+      return new Response(body, { status: response.status, statusText: response.statusText, headers });
+    }
+    if (kind === "unknown") break;
+  }
+  void reader.cancel().catch(() => {});
+  return new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverPassthroughResponse(
   requestContext: Pick<ResponsesRequestContext, "logCtx" | "config" | "options" | "req">,
@@ -187,7 +261,6 @@ export async function deliverPassthroughResponse(
 ): Promise<Response> {
   const { logCtx, config, options, req } = requestContext;
   const {
-    upstreamResponse,
     codexSafetyBufferingOptions,
     upstream,
     connectMs,
@@ -212,18 +285,26 @@ export async function deliverPassthroughResponse(
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
 
+  let upstreamResponse = nativeExchange.upstreamResponse;
+  const originalContentType = upstreamResponse.headers.get("content-type");
+  if (isUsageDebugEnabled() && originalContentType) logCtx.usageDebugContentType = originalContentType;
+  if (responseEffects.plaintextV2AgentMessageToolNames.size > 0
+    && upstreamResponse.ok && upstreamResponse.body && parsed.stream
+    && !originalContentType?.toLowerCase().includes("text/event-stream")
+    && !originalContentType?.toLowerCase().includes("application/json")
+    && !isCodexWsUpstreamResponse(upstreamResponse)
+    && !(options.nativeControl && isNativeControlResponse(upstreamResponse))) {
+    upstreamResponse = await classifyPlaintextV2SseResponse(upstreamResponse);
+  }
+
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel) {
       logCtx.servedModel = resolvedModel;
       if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
     }
-    if (isUsageDebugEnabled()) {
-      const upstreamContentType = upstreamResponse.headers.get("content-type");
-      if (upstreamContentType) logCtx.usageDebugContentType = upstreamContentType;
-    }
-    // The chatgpt backend may omit Content-Type on SSE responses. Fall back to
-    // treating a successful body as SSE when the caller requested streaming.
+    // ChatGPT may omit Content-Type on SSE responses. Plaintext V2 responses
+    // reach this fallback only after their first Responses event is confirmed.
     const passthroughCt = headers.get("content-type")?.toLowerCase();
     const isEventStream = passthroughCt?.includes("text/event-stream")
       || (responseEffects.plaintextV2AgentMessageToolNames.size === 0 && upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);

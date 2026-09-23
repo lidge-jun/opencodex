@@ -274,6 +274,53 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
     expect(clientBody).toContain('"encrypted_function_args":[]');
   });
 
+  test.each(["missing", "text/plain"] as const)(
+    "restores plaintext V2 calls from valid SSE with %s upstream content type",
+    async contentType => {
+      takeInheritedSpendHome();
+      const payload = completedResponsePayload(`resp-plaintext-v2-${contentType}`);
+      const wire = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: payload })}\n\ndata: [DONE]\n\n`;
+      globalThis.fetch = (async () => new Response(new TextEncoder().encode(wire), {
+        status: 200,
+        ...(contentType === "missing" ? {} : { headers: { "content-type": contentType } }),
+      })) as typeof fetch;
+
+      const response = await handleResponses(collaborationRequest(), config(true), { model: "", provider: "" });
+      const clientBody = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(clientBody).toContain('"namespace":"collaboration"');
+      expect(clientBody).toContain('"name":"spawn_agent"');
+      expect(clientBody).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+      expect(clientBody).not.toContain('"name":"start_delegated_task"');
+      const replay = expandPreviousResponseInput({ previous_response_id: payload.id, input: [] }) as {
+        input: Array<Record<string, unknown>>;
+      };
+      expect(replay.input.find(value => value.type === "function_call"))
+        .toMatchObject({ namespace: "collaboration", name: "spawn_agent" });
+    },
+  );
+
+  test("recognizes a headerless SSE event split across upstream chunks", async () => {
+    takeInheritedSpendHome();
+    const payload = completedResponsePayload("resp-plaintext-v2-split");
+    const wire = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: payload })}\n\ndata: [DONE]\n\n`;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(wire.slice(0, 12)));
+        controller.enqueue(new TextEncoder().encode(wire.slice(12)));
+        controller.close();
+      },
+    }), { status: 200 })) as typeof fetch;
+
+    const response = await handleResponses(collaborationRequest(), config(true), { model: "", provider: "" });
+    const clientBody = await response.text();
+    expect(response.status).toBe(200);
+    expect(clientBody).toContain('"name":"spawn_agent"');
+    expect(clientBody).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+  });
+
   test("rejects an unclassified successful response while restoration is required", async () => {
     takeInheritedSpendHome();
     globalThis.fetch = (async () => new Response(

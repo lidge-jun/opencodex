@@ -344,3 +344,6 @@ encrypted, but task text can be retained in Codex history, routed-provider reque
 response/debug state. Existing ciphertext is unchanged, and the option depends on undocumented
 ChatGPT and Codex behavior. See
 [Agent configuration: Plaintext v2 agent messages](/reference/configuration/agents/#plaintext-v2-agent-messages).
+If a streamed ChatGPT response omits or mislabels its content type, opencodex checks a bounded
+Responses event prefix before restoring the message-tool names. An unrecognized body still fails
+closed.
