@@ -111,6 +111,7 @@ import {
   pickUnboundStrategyAccount,
   preferModelEntitledAccount,
   sharedStateSelectionOptions,
+  sharesActiveSelection,
   strategySelectionOptionsForModelDetour,
   shouldFailover,
   peekAlternateCodexAccount,
@@ -851,12 +852,6 @@ export function resolveCodexAccountForThreadDetailed(
   // An entitlement roster constrains only this model request. It must not rewrite
   // the operator's shared active/pin choice or the task's ordinary-model affinity.
   const modelScopedSelection = selectionOptions?.modelEligibleAccountIds !== undefined;
-  // A main that is live only through this request's own bearer serves this request alone; writing
-  // it back as the shared active account would route later requests through a credential they do
-  // not carry (see CodexAccountUsabilityOptions.requestOwnedMainCredential).
-  const sharesActiveSelection = (accountId: string): boolean => !(
-    accountId === MAIN_CODEX_ACCOUNT_ID && selectionOptions?.requestOwnedMainCredential === true
-  );
   let preserveExistingModelScopedAffinity = false;
   const sharedSelectionOptions: CodexAccountUsabilityOptions | undefined = modelScopedSelection
     ? sharedStateSelectionOptions(selectionOptions) ?? {}
@@ -988,7 +983,7 @@ export function resolveCodexAccountForThreadDetailed(
       // rotation is new-session-only (affinity policy A).
       const cooler = reevaluateAffinityQuota(entry, config, now, quotaScope, selectionOptions);
       if (cooler) {
-        if (!isIndependentCodexQuotaScope(quotaScope)) {
+        if (!isIndependentCodexQuotaScope(quotaScope) && sharesActiveSelection(cooler, selectionOptions)) {
           promoteActiveCodexAccount(config, cooler);
         }
         bindThreadAffinity(threadId, cooler, now, quotaScope); // rebinds + resets clocks
@@ -1034,7 +1029,9 @@ export function resolveCodexAccountForThreadDetailed(
         && !shouldFailover(config, expiredDetour, now)
         && !isCodexAccountSoftAvoided(expiredDetour, now)
       ) {
-        if (!isIndependentCodexQuotaScope(quotaScope)) promoteActiveCodexAccount(config, expiredDetour);
+        if (!isIndependentCodexQuotaScope(quotaScope) && sharesActiveSelection(expiredDetour, selectionOptions)) {
+          promoteActiveCodexAccount(config, expiredDetour);
+        }
         bindThreadAffinity(threadId, expiredDetour, now, quotaScope);
         return {
           status: "selected",
@@ -1128,7 +1125,7 @@ export function resolveCodexAccountForThreadDetailed(
       // process-local cursor to whoever is actually serving and releases the pin; the
       // operator's persisted activeCodexAccountId is left untouched either way, which is
       // the thing the preference exists to protect.
-      if (sharesActiveSelection(strategyPick)) promoteActiveCodexAccount(config, strategyPick);
+      if (sharesActiveSelection(strategyPick, selectionOptions)) promoteActiveCodexAccount(config, strategyPick);
     }
     return { status: "selected", accountId: strategyPick, affinity: affinityAfterRelease(threadId, releaseReason) };
   }
@@ -1146,7 +1143,7 @@ export function resolveCodexAccountForThreadDetailed(
       return { status: "none", affinity: affinityOnNoAccount(threadId, releaseReason) };
     }
     if (!isIndependentCodexQuotaScope(quotaScope) && !modelScopedSelection) {
-      if (sharesActiveSelection(selected)) setActiveCodexAccount(config, selected);
+      if (sharesActiveSelection(selected, selectionOptions)) setActiveCodexAccount(config, selected);
     }
     active = selected;
   }
@@ -1167,7 +1164,7 @@ export function resolveCodexAccountForThreadDetailed(
         && preserveSharedSelectionForModelDetour
         && activeHealthyForSharedSelection;
       if (!isIndependentCodexQuotaScope(quotaScope) && !modelOnlyMove) {
-        if (sharesActiveSelection(fallback)) setActiveCodexAccount(config, fallback);
+        if (sharesActiveSelection(fallback, selectionOptions)) setActiveCodexAccount(config, fallback);
       }
       active = fallback;
     } else if (
@@ -1201,6 +1198,7 @@ export function resolveCodexAccountForThreadDetailed(
     if (
       !preserveSharedSelectionForModelDetour
       && !isIndependentCodexQuotaScope(quotaScope)
+      && sharesActiveSelection(preempted, selectionOptions)
     ) {
       // Preemption is an automatic pick competing with the operator, so it yields.
       if (!manualPreferenceBlocks(POOL_KEY_CODEX, preempted)) {

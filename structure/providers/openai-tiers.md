@@ -399,6 +399,9 @@ sent if selection named main — so `requestOwnedMainCredentialIsLive` answers t
 question yes, and main is compared against the stored accounts on the operator's own usage, priority
 and reset ordering. Selecting main then serves it from the caller's credential without claiming,
 reading, reconciling or priming the stored profile, and without owning affinity or health state.
+A main that wins only through that bearer is also never recorded as the shared active account: the
+request resolves to main, while the operator's stored selection answers the next request that
+arrives without the credential.
 Answering that question with the pin predicate instead scored main `main_credential_unavailable` on
 every unpinned request, so a pool with one stored sibling degraded to "stored account until it cannot
 serve, then main" whatever the usage numbers, the strategy or `codexAccountPriorities` said (#5019).
