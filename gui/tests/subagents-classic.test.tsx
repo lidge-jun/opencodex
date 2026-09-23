@@ -7,7 +7,7 @@ import { LanguageProvider } from "../src/i18n/provider";
 
 /**
  * Behavioural contract for the denser Subagents workspace: five-slot cap,
- * add/remove via the rail, and the exact save request.
+ * add/remove via the rail, and the exact autosave request.
  */
 
 const globals = ["document", "window", "navigator", "localStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -124,27 +124,25 @@ test("caps featured selections at five", async () => {
   await act(async () => { addToggle(available[5]!).dispatchEvent(new (globalThis as any).window.MouseEvent("click", { bubbles: true })); });
   expect(removeButtons().length).toBe(5);
 
-  // And save must never ship more than five.
-  const save = Array.from(container.querySelectorAll("button"))
-    .find((b) => b.textContent?.trim() === "Save") as HTMLButtonElement | undefined;
-  await act(async () => { save!.click(); });
-  const put = requests.find((r) => r.init?.method === "PUT");
-  expect(JSON.parse(String(put!.init!.body)).models.length).toBe(5);
+  // Every edit saved itself, and no autosave ever shipped more than five.
+  const puts = requests.filter((r) => r.init?.method === "PUT");
+  expect(puts.length).toBe(5);
+  expect(puts.every((r) => JSON.parse(String(r.init!.body)).models.length <= 5)).toBe(true);
+  expect(JSON.parse(String(puts.at(-1)!.init!.body)).models).toEqual(available.slice(0, 5));
 });
 
-test("saves the featured order with PUT and the models payload", async () => {
+test("adding a model saves the featured order without a Save button", async () => {
   await mount();
+  const featuredSection = container.querySelector(".subagents-workspace-section")!;
+  expect(Array.from(featuredSection.querySelectorAll("button")).some((b) => b.textContent?.trim() === "Save")).toBe(false);
 
   await act(async () => { addToggle("a-1").click(); });
   await act(async () => { addToggle("a-2").click(); });
 
-  const save = Array.from(container.querySelectorAll("button"))
-    .find((b) => b.textContent?.trim() === "Save") as HTMLButtonElement | undefined;
-  expect(save).toBeDefined();
-  await act(async () => { save!.click(); });
-
-  const put = requests.find((r) => r.init?.method === "PUT");
-  expect(put).toBeDefined();
-  expect(put!.url).toContain("/api/subagent-models");
-  expect(put!.init?.body).toBe(JSON.stringify({ models: ["a-1", "a-2"] }));
+  const puts = requests.filter((r) => r.init?.method === "PUT");
+  expect(puts.map((r) => r.url)).toEqual(["/api/subagent-models", "/api/subagent-models"]);
+  expect(puts.map((r) => r.init?.body)).toEqual([
+    JSON.stringify({ models: ["a-1"] }),
+    JSON.stringify({ models: ["a-1", "a-2"] }),
+  ]);
 });
