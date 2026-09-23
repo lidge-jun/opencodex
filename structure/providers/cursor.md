@@ -244,20 +244,36 @@ that cannot fit the remaining budget settles both sniffers, releases the held ev
 emitted directly.
 Each adapter feed is limited to 512 UTF-16 code units for envelope detection and 2,048 for
 routing-commentary detection. Matches beyond that frame prefix intentionally do not trigger a
-corrective retry; the complete text still reaches the client and the diagnostic midstream
-observer. These feed limits bound temporary copies and do not promise frame-independent parsing.
+corrective retry; the later text still passes the independent line-aware echo filter and
+diagnostic observer. These feed limits bound temporary copies and do not promise
+frame-independent prefix classification.
 
 Adjacent midstream markers retain separate findings, capped at eight. A new marker closes the
 previous corruption window before consuming its line, including a call-id on the marker's own
 line. Only marker identities, offsets and corruption booleans survive; held reasoning is released
 in order before terminal errors, preserving upstream error visibility.
 
-The prefix sniffer only watches the opening bytes of a turn. An external model that writes real
-prose first and then pastes a replayed `[Tool Result]` envelope defeats it, so that text reaches
-the client and is stored as assistant output. `CursorMidstreamEchoObserver` records those
-findings without throwing or withholding output, and at turn end eligible non-isolated turns
-remint the conversation id for the NEXT turn. The current send is never retried: the echo is
-already delivered and a resend would be an uncertain replay.
+The prefix sniffer only watches the opening bytes of a turn. For later text, the shared
+`ToolEnvelopeEchoFilter` in the shared lib filter holds only a possible
+line-leading marker suffix across deltas, emits prose on divergence, and suppresses the
+marker and remaining echo tail. A harmless partial suffix is flushed on normal completion;
+a distinctive truncated marker at end is dropped. `CursorMidstreamEchoObserver` still
+records findings, and eligible non-isolated turns remint the conversation id for the NEXT
+turn. The current send is never retried because leading prose may already have escaped.
+Markers inside a Markdown fenced code block are quoted examples. Fences follow CommonMark: an
+opener is a run of at least three backticks or tildes indented at most three spaces, and only a run
+of the same character, at least as long and followed by nothing but whitespace, closes it. A marker
+line inside a fence starts a bounded hold (64K characters): a matching closer releases the held text as
+code, and a turn that ends with the fence still open drops it as an echo, so an envelope pasted
+into a block that never closes cannot escape. A line-start marker in ordinary prose outside a fence
+is still treated as an echo; that is the deliberate tradeoff of a sentinel filter. The assistant-history
+replay scrub keeps a marker line only inside a fence that closes later in the stored text
+(`closedFenceLines`), and the remint follows the filter's verdict (a confirmed echo, or a fenced marker
+released by hold overflow): `CursorMidstreamEchoObserver` findings are diagnostics only. The filter and the next-turn remint
+are armed for every model that replays tool results as root text
+(`cursorNeedsExternalToolContinuation`, which includes the native-wire composer-2.5 builds);
+the opening-bytes prefix retry stays external-only, because its corrective continuation text is
+encoded for external wire models alone.
 
 That rotation has its own bounded allowance in `src/adapters/cursor/thread-continuity.ts`,
 separate from the incomplete-tool budget and from the overflow budget. It is bounded because a
@@ -267,6 +283,9 @@ structural — one shared counter would let the cheap failure spend the allowanc
 recovery depends on. Exhaustion records a `midstream-envelope-echo-remint-exhausted` diagnostic
 and keeps the conversation; a turn that completes without an echo clears only this counter. When
 an incomplete-tool remint already fired in the same turn, the echo arm does not rotate again.
+The allowance follows the identity-scoped original conversation through remints, even when
+the client omits or changes its thread owner. A bounded, one-hour conversation rewrite map
+redirects restored provider-state ids only within the same opaque credential scope.
 
 Assistant root replay drops echoed envelopes before they are sent back upstream
 (`stripAssistantEchoedToolEnvelope`), so the transcript stops feeding itself. The strip starts at
@@ -277,9 +296,9 @@ pasted body contains its own blank line therefore leaves a remainder in replay; 
 remint, not this filter, is the primary defence against a poisoned conversation.
 
 `resolveCursorConversationId` prefers the retained thread override over a stored
-`_cursorConversationId`. Only the remint path writes that store, so a stored id that disagrees
-with it is the pre-remint value; preferring it let a second Responses chain in one Codex thread
-keep resuming the conversation the previous turn had rotated away from. Isolated helper turns
+`_cursorConversationId`, and rewrites either when it names a reminted conversation. Only
+the remint path writes that store, so a stored id that disagrees with it is the pre-remint
+value. Isolated helper turns
 still bypass both and mint their own id.
 
 Translated audio/file admission follows the [final-adapter input contract](../adapters/registry.md#untranslated-input-media); native raw passthrough remains separate.

@@ -12,10 +12,17 @@
  * cursor.ts to retry before any invalid text reaches the client.
  */
 
+import { closedFenceLines } from "../../lib/tool-envelope-echo-filter";
+
 const ECHO_MARKERS = ["[Tool Result]", "[Tool Error]", "[tool_result]"] as const;
+const REPLAY_ECHO_PREFIXES = ["[Tool call:", "[Tool Call]", "[Tool Result", "[Tool Error", "[tool_result"] as const;
 
 function isEchoMarkerLine(line: string): boolean {
-  return (ECHO_MARKERS as readonly string[]).includes(line.replace(/^[ \t]+/, ""));
+  const probe = line.replace(/^[ \t]+/, "");
+  return probe.startsWith("[Tool call:")
+    || probe.startsWith("[Tool Call]")
+    || ["[Tool Result", "[Tool Error", "[tool_result"].some(prefix =>
+      probe === prefix || probe.startsWith(`${prefix}]`));
 }
 
 /**
@@ -42,15 +49,18 @@ function isEchoMarkerLine(line: string): boolean {
  * Only whole-line markers count, so prose such as "the string [Tool Result] appeared" survives.
  */
 export function stripAssistantEchoedToolEnvelope(text: string): string {
-  if (!text || !ECHO_MARKERS.some(marker => text.includes(marker))) return text;
+  if (!text || !REPLAY_ECHO_PREFIXES.some(marker => text.includes(marker))) return text;
   const newline = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
   const kept: string[] = [];
   let dropped = false;
   let index = 0;
+  // A marker inside a fenced code block that closes is an example the model showed, not an echo;
+  // the live filter releases it as code, so replay keeps it too. An unclosed block shields nothing.
+  const shielded = closedFenceLines(lines);
   while (index < lines.length) {
     const line = lines[index] ?? "";
-    if (!isEchoMarkerLine(line)) {
+    if (shielded[index] || !isEchoMarkerLine(line)) {
       kept.push(line);
       index += 1;
       continue;

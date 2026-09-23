@@ -18,6 +18,14 @@ answers a replayed tool call whose output never arrived. It is deliberately not 
 The contract for both, and the reason they do not collapse into one, is specified in
 [chat-compat](./chat-compat.md); it is not restated here.
 
+Native xAI Responses delivery strips a line-leading echoed tool-result or tool-call
+envelope across split SSE text deltas. It is armed only when the request can have primed the echo:
+a tool call or tool output in the input (a dangling call gets a synthetic output from the paired
+tool-result repair), or a `previous_response_id` continuation whose history lives upstream
+(`responsesRequestMayReplayToolOutput`); a first turn is delivered untouched. The same filter preserves leading prose and
+normalizes text-done events, completed snapshots, non-streaming JSON, and the stored
+continuation snapshot. It does not rotate an xAI upstream conversation.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
