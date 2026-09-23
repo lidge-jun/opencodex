@@ -87,6 +87,8 @@ describe("subagent roster defaults and one-time upgrades", () => {
     [["gpt-6-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"], ["gpt-6-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"]],
     // A list of only retired rows receives the defaults rather than becoming empty.
     [["gpt-5.5", "gpt-5.6-terra"], ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]],
+    // Ids that name Object.prototype members are ordinary strings, not lookup hits.
+    [["constructor", "toString", "gpt-5.5"], ["constructor", "toString"]],
     // An explicitly empty roster stays empty.
     [[], []],
   ])("a version-1 roster %j sheds retired 5.x rows as %j", (before, expected) => {
