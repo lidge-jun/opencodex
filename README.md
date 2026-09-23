@@ -306,14 +306,15 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 <details>
 <summary>Memory ownership details</summary>
 
-OpenCodex tracks 36 categories of process-retained state. Each has a documented bound:
+OpenCodex tracks process-retained state in the categories below. Each has a documented bound:
 
-- **12 retained stores** (request log, debug rings, image cache, model cache, vision
+- **14 retained stores** (request log, debug rings, image cache, model cache, vision
   descriptions, cursor blobs, responses continuation, etc.) are byte-accounted and
-  evicted by the app-owned memory budget (default 256 MiB).
+  evicted by the app-owned memory budget (default 256 MiB), except the native control replay
+  store, which is pinned and never evicted.
 - **4 observed buffers** (translator accumulators, image/OAuth/Grok tails) are
   monitored for in-flight byte pressure without eviction.
-- **24 state-store registrations** handle expiry sweeps (60 s interval) and
+- **28 state-store registrations** handle expiry sweeps (60 s interval) and
   config-generation reconciliation so stale provider/account keys are removed.
 - **Path and fingerprint memos** (workspace metadata, hardened identities, installation
   salts, mode-hint capabilities) use insertion-order LRU caps (8–128 entries).

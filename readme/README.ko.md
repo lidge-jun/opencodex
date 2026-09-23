@@ -297,14 +297,14 @@ CLI 설치에는 [Node](https://nodejs.org) 18 이상이 필요하고, 데스크
 <details>
 <summary>메모리 소유권 상세</summary>
 
-OpenCodex는 프로세스가 붙잡고 있는 상태 36종을 추적합니다. 각각에 문서화된 한도가 있습니다:
+OpenCodex는 프로세스가 붙잡고 있는 상태를 아래 항목에서 추적합니다. 각각에 문서화된 한도가 있습니다:
 
-- **유지 저장소 12개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
+- **유지 저장소 14개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
   responses continuation 등)는 바이트 단위로 집계되며, 앱이 소유한 메모리 예산(기본 256 MiB)이
-  eviction합니다.
+  eviction합니다. 단, native control replay 저장소는 고정되어 eviction되지 않습니다.
 - **관측 버퍼 4개**(translator accumulator, image/OAuth/Grok tail)는 진행 중 바이트 압력을 감시만
   하고 eviction하지 않습니다.
-- **state-store 등록 24개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
+- **state-store 등록 28개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
   낡은 프로바이더/계정 키를 지웁니다.
 - **경로·fingerprint 메모**(워크스페이스 메타데이터, hardened identity, 설치 salt, mode-hint
   capability)는 삽입 순서 LRU cap(8–128개)을 씁니다.

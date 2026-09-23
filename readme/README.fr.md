@@ -311,14 +311,15 @@ consultez la [documentation d'installation](https://opencodex.me/fr/getting-star
 <details>
 <summary>Détails de la gestion de la mémoire</summary>
 
-OpenCodex suit 36 catégories d'état conservé par le processus. Chacune possède une limite documentée :
+OpenCodex suit l'état conservé par le processus dans les catégories ci-dessous. Chacune possède une limite documentée :
 
-- **12 stockages conservés** (journal des requêtes, tampons circulaires de débogage, cache d'images, cache de
+- **14 stockages conservés** (journal des requêtes, tampons circulaires de débogage, cache d'images, cache de
   modèles, descriptions visuelles, blobs de curseurs, continuation des réponses, etc.) sont comptabilisés en octets et
-  évincés selon le budget mémoire géré par l'application (256 Mio par défaut).
+  évincés selon le budget mémoire géré par l'application (256 Mio par défaut), sauf le stockage de
+  rejeu des contrôles natifs, épinglé et jamais évincé.
 - **4 tampons observés** (accumulateurs de traduction, segments finaux d'images/OAuth/Grok) sont
   surveillés pour détecter la pression des octets en cours de traitement, sans éviction.
-- **24 enregistrements de stockages d'état** gèrent les balayages d'expiration (intervalle de 60 s) et la
+- **28 enregistrements de stockages d'état** gèrent les balayages d'expiration (intervalle de 60 s) et la
   réconciliation des générations de configuration afin de supprimer les clés obsolètes des fournisseurs et des comptes.
 - **Les mémos de chemins et d'empreintes** (métadonnées de l'espace de travail, identités renforcées, sels
   d'installation, capacités indiquées par le mode) utilisent des limites LRU selon l'ordre d'insertion (8 à 128 entrées).

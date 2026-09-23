@@ -312,14 +312,15 @@ betiklerini engellediyse [kurulum belgelerine](https://opencodex.me/tr/getting-s
 <details>
 <summary>Bellek sahipliği ayrıntıları</summary>
 
-OpenCodex, süreçte tutulan durumu 36 kategoride izler. Her birinin belgelenmiş bir sınırı vardır:
+OpenCodex, süreçte tutulan durumu aşağıdaki kategorilerde izler. Her birinin belgelenmiş bir sınırı vardır:
 
-- **12 tutulan depo** (istek günlüğü, hata ayıklama halkaları, görsel önbelleği, model önbelleği, görü
+- **14 tutulan depo** (istek günlüğü, hata ayıklama halkaları, görsel önbelleği, model önbelleği, görü
   açıklamaları, imleç blob'ları, responses devamlılığı vb.) bayt olarak hesaplanır ve uygulamanın sahip
-  olduğu bellek bütçesiyle (varsayılan 256 MiB) tahliye edilir.
+  olduğu bellek bütçesiyle (varsayılan 256 MiB) tahliye edilir; yalnızca native control replay deposu
+  sabitlenmiştir ve hiç tahliye edilmez.
 - **4 gözlenen arabellek** (çevirici biriktiricileri, görsel/OAuth/Grok kuyrukları) tahliye edilmeden,
   yalnızca uçuştaki bayt baskısı için izlenir.
-- **24 state-store kaydı**, süre dolumu taramalarını (60 sn aralık) ve yapılandırma kuşağı uzlaştırmasını
+- **28 state-store kaydı**, süre dolumu taramalarını (60 sn aralık) ve yapılandırma kuşağı uzlaştırmasını
   yürüterek eski sağlayıcı/hesap anahtarlarını kaldırır.
 - **Yol ve parmak izi notları** (çalışma alanı meta verileri, sağlamlaştırılmış kimlikler, kurulum
   tuzları, mod ipucu yetenekleri) ekleme sıralı LRU sınırları kullanır (8–128 girdi).
