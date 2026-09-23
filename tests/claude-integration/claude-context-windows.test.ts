@@ -15,9 +15,17 @@ describe("claude context-window map (devlog 260712 B2)", () => {
     const map = buildClaudeContextWindows([], routed);
     expect(map["cursor/gpt-5.6-luna"]).toBe(1_000_000);
     expect(map[desktop3pAlias("cursor", "gpt-5.6-luna")]).toBe(1_000_000);
+    expect(map["ocx-claude-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+    // A selector saved under the legacy spelling keeps its window until it is re-picked.
     expect(map["claude-ocx-cursor--gpt-5.6-luna"]).toBe(1_000_000);
     expect(map["mock/small-model"]).toBe(128_000);
     expect(map["mock/no-window"]).toBeUndefined();
+  });
+
+  test("a saved escaped legacy selector keeps its window next to the current one", () => {
+    const map = buildClaudeContextWindows([], [{ provider: "openrouter", id: "anthropic/x-model", contextWindow: 400_000 }]);
+    expect(map["ocx-claude2-openrouter--anthropic~sx-model"]).toBe(400_000);
+    expect(map["claude-ocx2-openrouter--anthropic~sx-model"]).toBe(400_000);
   });
 
   test("registers native slugs (bare + desktop alias + legacy alias)", () => {
@@ -27,6 +35,7 @@ describe("claude context-window map (devlog 260712 B2)", () => {
     // slug passed here does not register.
     expect(map["gpt-5.6-sol"]).toBe(272_000);
     expect(map[desktop3pAlias("native", "gpt-5.6-sol")]).toBe(272_000);
+    expect(map["ocx-claude-native--gpt-5.6-sol"]).toBe(272_000);
     expect(map["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
     expect(map["gpt-5.5"]).toBe(272_000);
     expect(map["gpt-5.3-codex-spark"]).toBeUndefined();

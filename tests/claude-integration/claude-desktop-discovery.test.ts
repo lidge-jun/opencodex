@@ -191,7 +191,7 @@ describe("Desktop snapshot through authenticated model discovery", () => {
     expect(resolveDesktop3pAlias("claude-opus-4-8-20260304")).toBe("test/model-155");
     const cli = await request("?flavor=anthropic&ids=cli");
     expect(cli.status).toBe(200);
-    expect((await cli.json() as { data: Array<{ id: string }> }).data.some(model => model.id.startsWith("claude-ocx-test--"))).toBe(true);
+    expect((await cli.json() as { data: Array<{ id: string }> }).data.some(model => model.id.startsWith("ocx-claude-test--"))).toBe(true);
     const openai = await request("");
     expect(openai.status).toBe(200);
     const openaiBody = await openai.json() as { object: string; data: unknown[]; version?: number };

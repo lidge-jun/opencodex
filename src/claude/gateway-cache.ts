@@ -7,7 +7,9 @@
  * refresh its picker list itself — it reads whatever cache exists. We therefore
  * pre-write the cache in the exact on-disk schema the CLI uses:
  *   { baseUrl, fetchedAt, models: [{ id, display_name?, description? }] }  (mode 0600)
- * mirroring its `/^(claude|anthropic)/i` usable-id filter. The picker validates
+ * mirroring the picker rule that the id must contain `claude` or `anthropic`.
+ * Current aliases are `ocx-claude-*`, so an anchored `^(claude|anthropic)` filter
+ * would drop every newly minted routed model. The picker validates
  * only `baseUrl === ANTHROPIC_BASE_URL`, so a foreign base URL is simply ignored.
  * `description` replaces the picker's generic "From gateway" line (Claude Code >= 2.1.257).
  */
@@ -51,7 +53,7 @@ export function claudeConfigDir(): string {
 export function writeGatewayModelCache(baseUrl: string, models: readonly GatewayModelRow[], configDir = claudeConfigDir()): string | null {
   try {
     // Mirror the CLI's usable-id filter so our file matches what it would cache.
-    const usable = models.filter(m => /^(claude|anthropic)/i.test(m.id));
+    const usable = models.filter(m => /(claude|anthropic)/i.test(m.id));
     const cacheDir = join(configDir, "cache");
     mkdirSync(cacheDir, { recursive: true });
     const path = join(cacheDir, "gateway-models.json");

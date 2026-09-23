@@ -553,16 +553,16 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
     const setCalls = launchctlCommands();
     expect(setCalls).toContain("launchctl setenv CLAUDE_CODE_MAX_CONTEXT_TOKENS 1000000");
-    expect(setCalls).toContain("launchctl setenv DISABLE_COMPACT 1");
+    expect(setCalls.some(c => c.includes("DISABLE_COMPACT"))).toBe(false);
     expect(setCalls).toContain("launchctl setenv CLAUDE_CODE_ALWAYS_ENABLE_EFFORT 1");
     const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
     expect(JSON.parse(trackingWrite!.data).injectedKeys).toEqual(expect.arrayContaining([
-      "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "DISABLE_COMPACT", "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
+      "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
     ]));
     // Shell env file: lever keys are CONDITIONAL exports so a shell-only user value wins.
     const shellWrite = writes.find(w => w.path.includes("claude-env.sh"));
     expect(shellWrite!.data).toContain(`[ -z "\${CLAUDE_CODE_MAX_CONTEXT_TOKENS+x}" ] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS='1000000'`);
-    expect(shellWrite!.data).toContain(`[ -z "\${DISABLE_COMPACT+x}" ] && export DISABLE_COMPACT='1'`);
+    expect(shellWrite!.data).not.toContain("DISABLE_COMPACT");
     expect(shellWrite!.data).toContain(`[ -z "\${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT+x}" ] && export CLAUDE_CODE_ALWAYS_ENABLE_EFFORT='1'`);
   });
 
@@ -572,11 +572,40 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
     const setCalls = launchctlCommands();
     expect(setCalls).not.toContain("launchctl setenv CLAUDE_CODE_MAX_CONTEXT_TOKENS 1000000");
-    expect(setCalls).toContain("launchctl setenv DISABLE_COMPACT 1");
+    expect(setCalls.some(c => c.includes("DISABLE_COMPACT"))).toBe(false);
     const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
     const keys = JSON.parse(trackingWrite!.data).injectedKeys as string[];
     expect(keys).not.toContain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
-    expect(keys).toContain("DISABLE_COMPACT");
+    expect(keys).not.toContain("DISABLE_COMPACT");
+  });
+
+  // An older release injected DISABLE_COMPACT=1 next to CLAUDE_CODE_MAX_CONTEXT_TOKENS and
+  // tracked it. A same-port restart keeps that record (this proxy already answers the stale
+  // probe), so without an explicit unset launchd would keep disabling compact after upgrade.
+  test("an upgrade unsets the DISABLE_COMPACT an older release injected and tracked", async () => {
+    const writes = capturedWrites();
+    trackingFile = JSON.stringify({
+      pid: 123,
+      port: 4096,
+      injectedAt: "2026-07-11T00:00:00.000Z",
+      injectedKeys: [
+        "ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "DISABLE_COMPACT",
+      ],
+    });
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.DISABLE_COMPACT = "1";
+    expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain("launchctl unsetenv DISABLE_COMPACT");
+    const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
+    expect(JSON.parse(trackingWrite!.data).injectedKeys).not.toContain("DISABLE_COMPACT");
+  });
+
+  test("a DISABLE_COMPACT the user set in launchd is left alone", async () => {
+    capturedWrites();
+    launchctlEnvValues.DISABLE_COMPACT = "1";
+    expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).not.toContain("launchctl unsetenv DISABLE_COMPACT");
   });
 
   test("levers disabled: no lever keys injected or exported", async () => {

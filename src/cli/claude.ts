@@ -10,7 +10,7 @@
 import { spawn } from "node:child_process";
 import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
-import { CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
+import { CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
 import { claudeToolSearchEnv, effectiveModelEnv, resolveAutoContext } from "../claude/context-windows";
 import { claudeConfigDir, refreshGatewayModelCacheFromProxy } from "../claude/gateway-cache";
 import { commandInvocation } from "../lib/win-exec";
@@ -373,12 +373,13 @@ export function buildClaudeEnv(
   // worse than the problem. So this stays opt-in per config rather than
   // unconditional, and setDefault keeps an operator's own export.
   setDefault("ENABLE_TOOL_SEARCH", claudeToolSearchEnv(config.claudeCode?.toolSearch));
-  // Context-window override: the official pair — MAX_CONTEXT_TOKENS alone is ignored
-  // for recognized claude-shaped ids unless DISABLE_COMPACT=1 rides along (devlog 135).
   const maxCtx = config.claudeCode?.maxContextTokens;
   if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {
     setDefault("CLAUDE_CODE_MAX_CONTEXT_TOKENS", String(Math.floor(maxCtx)));
-    setDefault("DISABLE_COMPACT", "1");
+    // Claude Code 2.1.278 honors this without DISABLE_COMPACT when the model id
+    // does not start with "claude-" (gF). Current ocx-claude aliases qualify.
+    // A persisted claude-ocx id is still claude-shaped, so that one session keeps
+    // the 200k accounting until the picker is moved to the new id.
   }
   // Auto-context (devlog 260712 020): min(believed window, env) inside the CLI means
   // one global env acts as a per-model floor — [1m]-marked models compact here while
@@ -592,7 +593,8 @@ const DESKTOP_3P_ALIAS = /^claude-opus-4(?:-8)?-[a-z][0-9a-z]{2}$/;
 export function isProxyOnlyModelId(value: string, providerNames: readonly string[] = []): boolean {
   const id = value.trim().replace(/\[1m\]$/, "");
   if (!id) return false;
-  if (id.startsWith(CLAUDE_ALIAS_PREFIX_V1) || id.startsWith(CLAUDE_ALIAS_PREFIX_V2) || DESKTOP_3P_ALIAS.test(id)) {
+  const aliasPrefixes = [CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2];
+  if (aliasPrefixes.some(prefix => id.startsWith(prefix)) || DESKTOP_3P_ALIAS.test(id)) {
     return true;
   }
   const slash = id.indexOf("/");

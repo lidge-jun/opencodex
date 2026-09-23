@@ -83,7 +83,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (optional) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` when `alwaysEnableEffort` is on (conditional) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` when set (conditional; off by default — see [MCP tool schemas fill the context](#troubleshooting)) |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | Legacy context override when `maxContextTokens` is set (conditional) |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Legacy context override when `maxContextTokens` is set (conditional) |
 Variables you export yourself always win. Extra arguments pass through: `ocx claude -p "hello"`.
 
 One exception is about *where* a variable comes from, not about precedence. The bundled Bun
@@ -383,12 +383,11 @@ arbitrary external copies; revoke separately on the hub if desired.
 Claude Code 2.1.129+ discovers gateway models via `GET /v1/models?limit=1000` and lists them in
 the native `/model` picker. A row without a `description` reads "From gateway"; opencodex sends one
 for every Claude Code CLI row (`Routed by OpenCodex to <provider>/<model>`; native rows use `Routed by OpenCodex to native <model>`, Fast rows append ` · Fast`, and 1M rows keep the base description), which Claude Code
-2.1.257+ shows in its place. Because the picker only accepts ids beginning with `claude` or
-`anthropic`, opencodex exposes routed models as stable, reversible aliases:
+2.1.257+ shows in its place. Claude Code 2.1.278 accepts a picker id that contains `claude` or `anthropic`. An unrecognized id that starts with `claude-` is accounted at 200k unless compact is disabled, so opencodex exposes routed models as stable, reversible aliases that contain `claude` but do not start with `claude-`:
 
 | Surface | Format | Example |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` (plain) or `claude-ocx2-…` (escaped) | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) or `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3-char base36 hash) | `claude-opus-4-8-ncb` |
 
 The proxy picks the family per request: `?ids=cli` or `?ids=desktop` wins; otherwise the
@@ -397,8 +396,7 @@ Both families decode forever — a model saved in `settings.json` under either f
 Each entry carries an honest display name such as `gemini-3-pro (gemini)`, plus full model
 capabilities (reasoning-effort ladder, thinking types) in the official ModelInfo shape so Claude
 Desktop's third-party gateway mode can offer its effort selector. Real Anthropic models keep their
-canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases
-and `claude-ocx-<provider>--<model>` ids from older configs still resolve.
+canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases and `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` ids from older configs still resolve. A saved legacy id still routes, but Claude Code keeps its 200k accounting for that id. Pick `ocx-claude-` for a saved `claude-ocx-` id, and `ocx-claude2-` for a saved escaped `claude-ocx2-` id, so the real context window and compact both apply.
 
 If Claude Desktop's footer picker does not change the model for an already-running 3P
 conversation, you can try `/model <id>`, but this workaround may also fail on affected Desktop
@@ -421,9 +419,9 @@ slots via
 `ANTHROPIC_MODEL` or type any routed id with `/model` (Claude Code passes strings through).
 
 **Alias grammar rules:** provider must not contain `/` or `--` or equal `native`.
-Plain model ids (no `/` or `~`) keep the v1 prefix `claude-ocx-…`. Model ids that contain `/` or
-`~` mint the v2 prefix `claude-ocx2-…` with escapes (`/` → `~s`, `~` → `~t`), e.g.
-`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`.
+Plain model ids (no `/` or `~`) keep the v1 prefix `ocx-claude-…`. Model ids that contain `/` or
+`~` mint the v2 prefix `ocx-claude2-…` with escapes (`/` → `~s`, `~` → `~t`), e.g.
+`openrouter/anthropic/claude-opus-4-8` → `ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`.
 v1 aliases decode literally (so a historical model id that contained the two-char sequences
 `~s` / `~t` is preserved); v2 aliases expand the escapes. Routes that the readable form cannot
 express fall back to the hashed alias. Model ids MAY contain `--` (resolution splits on the first

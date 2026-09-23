@@ -1675,7 +1675,7 @@ test("generated agent effort directive restores exact xhigh and max after Claude
         max_tokens: 32000,
         stream: true,
         system: [
-          { type: "text", text: "<!-- ocx-route: claude-ocx-mock--test-model -->" },
+          { type: "text", text: "<!-- ocx-route: ocx-claude-mock--test-model -->" },
           { type: "text", text: `<!-- ocx-effort: ${effort} -->` },
         ],
         thinking: { type: "enabled", budget_tokens: 31999 },
@@ -1735,7 +1735,7 @@ test("generated agent effort directive preserves routed Anthropic structured out
       max_tokens: 32000,
       stream: true,
       system: [
-        { type: "text", text: "<!-- ocx-route: claude-ocx-mock-anthropic--claude-sonnet-5 -->" },
+        { type: "text", text: "<!-- ocx-route: ocx-claude-mock-anthropic--claude-sonnet-5 -->" },
         { type: "text", text: "<!-- ocx-effort: max -->" },
       ],
       thinking: { type: "enabled", budget_tokens: 31999 },

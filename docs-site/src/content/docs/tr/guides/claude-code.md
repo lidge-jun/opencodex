@@ -65,7 +65,7 @@ bağlanmış olarak Claude Code'u başlatır:
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (isteğe bağlı) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` açık olduğunda `1` (koşullu) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` ayarlandığında (koşullu; varsayılan olarak kapalı) |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | `maxContextTokens` ayarlandığında eski bağlam geçersiz kılma (koşullu) |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` ayarlandığında eski bağlam geçersiz kılma (koşullu) |
 
 Kendi dışa aktardığınız değişkenler her zaman önceliklidir. Ekstra argümanlar
 doğrudan iletilir: `ocx claude -p "hello"`.
@@ -315,13 +315,12 @@ Claude Code 2.1.129+, `GET /v1/models?limit=1000` aracılığıyla ağ geçidi
 modellerini keşfeder ve bunları yerel `/model` seçicisinde listeler. `description`
 alanı olmayan bir satır "From gateway" olarak görünür; opencodex her Claude Code CLI
 satırı için bir tane gönderir (`Routed by OpenCodex to <provider>/<model>`; yerel satırlarda `Routed by OpenCodex to native <model>`, Fast satırları sona ` · Fast` ekler, 1M satırları temel açıklamayı korur) ve Claude Code
-2.1.257+ onun yerine bunu gösterir. Seçici yalnızca `claude` veya `anthropic` ile başlayan
-kimlikleri kabul ettiğinden, opencodex yönlendirilen modelleri kararlı, tersine
+2.1.257+ onun yerine bunu gösterir. Claude Code 2.1.278, `claude` veya `anthropic` içeren bir kimliği kabul eder. `claude-` ile başlayan tanınmayan bir kimlik, compact kapatılmadıkça 200k sayılır. opencodex yönlendirilen modelleri `claude` içeren ama `claude-` ile başlamayan kararlı, tersine
 çevrilebilir takma adlar olarak sunar:
 
 | Yüzey | Format | Örnek |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` (düz) veya `claude-ocx2-…` (kaçışlı) | `claude-ocx-openai--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>` (düz) veya `ocx-claude2-…` (kaçışlı) | `ocx-claude-openai--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3 karakterli base36 karması) | `claude-opus-4-8-ncb` |
 
 Proxy, istek başına aileyi seçer: `?ids=cli` veya `?ids=desktop` kazanır; aksi
@@ -334,7 +333,11 @@ ModelInfo biçiminde tam model yeteneklerini (akıl yürütme çabası merdiveni
 düşünme türleri) taşır. Gerçek Anthropic modelleri kurallı kimliklerini korur.
 Sentetik 2026 tarihi bir çıkış tarihi değil, dahili bir yuvadır. Eski karma
 takma adlar ve eski yapılandırmalardan gelen `claude-ocx-<provider>--<model>`
-kimlikleri hala çözümlenir.
+kimlikleri hala çözümlenir; kaçışlı `claude-ocx2-<provider>--<model>` kimlikleri de
+çözümlenir. Kayıtlı eski bir kimlik yine yönlendirilir, ancak Claude Code o kimlik için
+200k hesabını sürdürür. Gerçek bağlam penceresi ve compact birlikte uygulansın diye
+kayıtlı `claude-ocx-` yerine bir kez `ocx-claude-`, kaçışlı `claude-ocx2-` yerine
+`ocx-claude2-` seçin.
 
 Claude Desktop'ın altbilgi seçicisi zaten çalışan bir 3P görüşmesi için modeli
 değiştirmezse, `/model <id>` komutunu deneyebilirsiniz; ancak bu geçici çözüm de
@@ -363,10 +366,10 @@ Code dizeleri doğrudan iletir).
 
 **Takma ad dilbilgisi kuralları:** sağlayıcı `/` veya `--` içeremez veya
 `native` değerine eşit olamaz. Düz model kimlikleri (`/` veya `~` içermeyen) v1
-önekini `claude-ocx-…` korur. `/` veya `~` içeren model kimlikleri, kaçışlarla
-(`/` → `~s`, `~` → `~t`) v2 önekini `claude-ocx2-…` basar, örn.
+önekini `ocx-claude-…` korur. `/` veya `~` içeren model kimlikleri, kaçışlarla
+(`/` → `~s`, `~` → `~t`) v2 önekini `ocx-claude2-…` basar, örn.
 `openrouter/anthropic/claude-opus-4-8` →
-`claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`. v1 takma adları harfi
+`ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`. v1 takma adları harfi
 harfine çözülür (böylece `~s` / `~t` iki karakterli dizilerini içeren geçmiş bir
 model kimliği korunur); v2 takma adları kaçışları genişletir. Okunabilir formun
 ifade edemediği rotalar karma takma ada geri döner. Model kimlikleri `--`

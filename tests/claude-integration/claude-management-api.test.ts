@@ -82,7 +82,7 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
     expect(d.modelMap).toEqual({});
     expect(d.available).toContain("mock/test-model");
     // Aliases preview uses the readable CLI-surface family (devlog 050 / audit 051 #2).
-    expect(d.aliases.some((a: { id: string }) => a.id === "claude-ocx-mock--test-model")).toBe(true);
+    expect(d.aliases.some((a: { id: string }) => a.id === "ocx-claude-mock--test-model")).toBe(true);
     expect(typeof d.port).toBe("number");
   } finally {
     await server.stop(true);

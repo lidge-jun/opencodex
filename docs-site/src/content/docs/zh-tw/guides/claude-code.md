@@ -52,7 +52,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（可選） |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 啟用 `alwaysEnableEffort` 時設為 `1`（條件注入） |
 | `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入，預設關閉） |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | 設定 `maxContextTokens` 時使用的舊版上下文覆蓋項（條件注入） |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 設定 `maxContextTokens` 時使用的舊版上下文覆蓋項（條件注入） |
 你自行匯出的變數始終優先。額外引數會直接透傳：`ocx claude -p "hello"`。
 
 ### Claude 路由關閉時的原生回退
@@ -224,12 +224,11 @@ apply、輪換/復原或直接 disconnect 均可處理，無須新參數或事�
 Claude Code 2.1.129+ 透過 `GET /v1/models?limit=1000` 發現閘道器模型，並在原生 `/model`
 選擇器中列出。沒有 `description` 的列會顯示為“From gateway”；opencodex 會為 Claude Code CLI 的每一列送出
 `description`（`Routed by OpenCodex to <provider>/<model>`；原生列為 `Routed by OpenCodex to native <model>`，Fast 列末尾加上 ` · Fast`，1M 列沿用基礎描述），Claude Code 2.1.257+ 會改為顯示它。
-由於選擇器只接受以 `claude` 或 `anthropic` 開頭的 ID，
-opencodex 會將已路由模型公開為穩定且可逆的別名：
+Claude Code 2.1.278 接受包含 `claude` 或 `anthropic` 的 ID。以 `claude-` 開頭的未知 ID 在不關閉 compact 時按 200k 計算，因此 opencodex 會將已路由模型公開為包含 `claude`、但不以 `claude-` 開頭的穩定且可逆別名：
 
 | 介面 | 格式 | 示例 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>`（plain）或 `ocx-claude2-…`（escaped） | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>`（3 字元 base36 雜湊） | `claude-opus-4-8-ncb` |
 
 代理會按請求選擇別名族：`?ids=cli` 或 `?ids=desktop` 優先；否則，`claude-code/*`
@@ -238,15 +237,22 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜�
 每個條目帶有誠實的顯示名（如 `gemini-3-pro (gemini)`），並以官方 ModelInfo 形態附帶完整模型
 能力（推理強度階梯、thinking 型別），使 Claude Desktop 的第三方閘道器模式能夠提供其推理強度
 選擇器。真實 Anthropic 模型保留其規範 id。合成的 2026 日期是內部槽位，不是釋出日期。舊版雜湊
-別名與較舊設定中的 `claude-ocx-<provider>--<model>` id 仍可解析。
+別名與較舊設定中的 `claude-ocx-<provider>--<model>` id 仍可解析，跳脫的 `claude-ocx2-<provider>--<model>`
+也同樣可解析。已儲存的舊 id 仍會路由，但 Claude Code 對它仍按 200k 計算。把已儲存的 `claude-ocx-`
+重新選一次對應的 `ocx-claude-`，跳脫的 `claude-ocx2-` 重新選一次 `ocx-claude2-`，即可同時用上真實上下文
+視窗與 compact。
 擁有權威 1M 上下文視窗的模型會多出一個 `…[1m]` 選擇器列：選中後 Claude Code 會按完整 1M 上下文
 計算該模型（自動壓縮仍開啟）——代理在路由前會去掉該標記。
 選中後會儲存到 Claude Code 的 `settings.json` `model` 欄位；入站請求會將別名解析回路由
 模型。在較舊的 Claude Code 版本中，選擇器保持原生——可透過 `ANTHROPIC_MODEL` 設定槽位，或在
 `/model` 中輸入任意已路由 id（Claude Code 會原樣傳遞字串）。
 
-**別名語法規則：**provider 不得包含 `/` 或 `--`，也不得等於 `native`；model 不得包含
-`/`。易讀形式無法表達的路由會回退到雜湊別名。模型 ID **可以**包含 `--`（解析時只按第一個
+**別名語法規則：**provider 不得包含 `/` 或 `--`，也不得等於 `native`。
+不含 `/` 或 `~` 的一般 model ID 使用 v1 前綴 `ocx-claude-…`。包含 `/` 或 `~` 的 model ID
+使用 v2 前綴 `ocx-claude2-…` 並跳脫（`/` → `~s`，`~` → `~t`），例如
+`openrouter/anthropic/claude-opus-4-8` → `ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`。
+v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` / `~t` 會被保留）；v2 別名會展開跳脫。
+易讀形式無法表達的路由會回退到雜湊別名。模型 ID **可以**包含 `--`（解析時只按第一個
 `--` 拆分）；包含 `--` 的原生 slug 會回退到雜湊形式。
 
 **模型解析順序：**移除 `[1m]` 標記 → 解碼易讀別名 → 解碼 Desktop 雜湊別名 →

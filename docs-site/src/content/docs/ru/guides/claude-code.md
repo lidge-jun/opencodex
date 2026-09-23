@@ -27,7 +27,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (необязательно) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1`, когда включён `alwaysEnableEffort` (условно) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`, когда задан (условно; по умолчанию выключено) |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | Устаревшее переопределение контекста, когда задан `maxContextTokens` (условно) |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Устаревшее переопределение контекста, когда задан `maxContextTokens` (условно) |
 Переменные, которые вы экспортируете сами, всегда имеют приоритет. Дополнительные аргументы передаются как есть: `ocx claude -p "hello"`.
 
 ### Нативный запасной запуск, когда маршрутизация Claude выключена
@@ -164,19 +164,20 @@ Claude Desktop: работающий процесс может хранить п
 Claude Code 2.1.129+ обнаруживает модели шлюза через `GET /v1/models?limit=1000` и показывает их
 в нативном селекторе `/model`. Строка без `description` подписана «From gateway»; opencodex отправляет
 её для каждой строки Claude Code CLI (`Routed by OpenCodex to <provider>/<model>`; для нативных строк — `Routed by OpenCodex to native <model>`, строки Fast добавляют ` · Fast`, строки 1M сохраняют базовое описание), и Claude Code 2.1.257+
-показывает этот текст вместо подписи. Поскольку селектор принимает только id,
-начинающиеся с `claude` или `anthropic`, opencodex публикует маршрутизируемые модели как
-стабильные обратимые алиасы:
+показывает этот текст вместо подписи. Claude Code 2.1.278 принимает id, содержащий `claude` или `anthropic`. Неизвестный id, начинающийся с `claude-`, учитывается как 200k, если compact не отключён. Поэтому opencodex публикует маршрутизируемые модели как стабильные обратимые алиасы, которые содержат `claude`, но не начинаются с `claude-`:
 
 | Интерфейс | Формат | Пример |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` (plain) или `claude-ocx2-…` (escaped) | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) или `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3-символьный base36-хеш) | `claude-opus-4-8-ncb` |
 
 Прокси выбирает семейство для каждого запроса: приоритет у `?ids=cli` или `?ids=desktop`; иначе
 user-agent `claude-code/*` получает читаемую CLI-форму, а остальные клиенты — Desktop-хеш. Оба
 семейства декодируются бессрочно — модель, сохранённая в `settings.json` в любой из форм,
-продолжает работать.
+продолжает работать. Устаревшие id `claude-ocx-<provider>--<model>` и `claude-ocx2-<provider>--<model>`
+из старых конфигураций тоже разрешаются, но Claude Code продолжает считать такой сохранённый id как 200k.
+Один раз выберите `ocx-claude-` вместо сохранённого `claude-ocx-` и `ocx-claude2-` вместо экранированного
+`claude-ocx2-`, чтобы применялись и реальное окно контекста, и compact.
 
 Если нижний селектор Claude Desktop не переключает модель в уже запущенном 3P-диалоге,
 можно попробовать `/model <id>`, но в затронутых сборках Desktop этот обходной способ тоже может
@@ -191,10 +192,10 @@ user-agent `claude-code/*` получает читаемую CLI-форму, а 
 запросе. Проверьте, что отправляет клиент, в **Logs → requestedModel**.
 
 **Правила грамматики алиасов:** provider не может содержать `/` или `--` и не может быть равен
-`native`. Обычные id моделей (без `/` и `~`) остаются с префиксом v1 `claude-ocx-…`. Id с `/`
-или `~` выпускаются с префиксом v2 `claude-ocx2-…` и экранированием (`/` → `~s`, `~` → `~t`),
+`native`. Обычные id моделей (без `/` и `~`) остаются с префиксом v1 `ocx-claude-…`. Id с `/`
+или `~` выпускаются с префиксом v2 `ocx-claude2-…` и экранированием (`/` → `~s`, `~` → `~t`),
 например `openrouter/anthropic/claude-opus-4-8` →
-`claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`. Алиасы v1 декодируются литерально (исторические
+`ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`. Алиасы v1 декодируются литерально (исторические
 двухсимвольные последовательности `~s` / `~t` в id модели сохраняются); алиасы v2 раскрывают
 экранирование. Маршруты, которые невозможно выразить читаемой формой, откатываются на
 хешированный алиас. Id моделей МОГУТ содержать `--` (при разрешении разбиение выполняется только

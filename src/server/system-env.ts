@@ -308,7 +308,6 @@ export async function injectSystemEnv(
     const maxCtx = config.claudeCode?.maxContextTokens;
     if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {
       injectLever("CLAUDE_CODE_MAX_CONTEXT_TOKENS", String(Math.floor(maxCtx)));
-      injectLever("DISABLE_COMPACT", "1");
     }
     // Auto-context (devlog 260712 020): user-wins lever, inert when maxContextTokens set.
     if (auto.enabled) injectLever("CLAUDE_CODE_AUTO_COMPACT_WINDOW", String(auto.compactWindow));
@@ -321,8 +320,9 @@ export async function injectSystemEnv(
     const toolSearch = claudeToolSearchEnv(config.claudeCode?.toolSearch);
     if (toolSearch !== undefined) injectLever("ENABLE_TOOL_SEARCH", toolSearch);
     // A lever injected on an earlier run that this config no longer produces (a cleared
-    // smallFastModel, a removed tier slot) would otherwise stay in launchd until the proxy
-    // stops. Only tracked keys are touched, so a user-owned value is never removed.
+    // smallFastModel, a removed tier slot, or the DISABLE_COMPACT older releases paired with
+    // maxContextTokens) would otherwise stay in launchd until the proxy stops, and a
+    // same-port restart keeps the tracking record. Only tracked keys are touched, so a user-owned value is never removed.
     for (const name of [...injectedKeys]) {
       if ((SYSTEM_ENV_NAMES as readonly string[]).includes(name) || producedLevers.has(name)) continue;
       unsetLaunchctlEnv(name);

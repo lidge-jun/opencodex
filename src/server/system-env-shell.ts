@@ -120,7 +120,6 @@ export function writeShellEnvFile(
   const maxCtx = config.claudeCode?.maxContextTokens;
   if (typeof maxCtx === "number" && Number.isFinite(maxCtx) && maxCtx > 0) {
     lines.push(conditional("CLAUDE_CODE_MAX_CONTEXT_TOKENS", String(Math.floor(maxCtx))));
-    lines.push(conditional("DISABLE_COMPACT", "1"));
   }
   // Auto-context (devlog 260712 020): same contract as `ocx claude` / launchctl.
   const autoShell = auto ?? resolveAutoContext(config.claudeCode);

@@ -213,7 +213,7 @@ test("Fable 1M picker alias preserves native passthrough on both Messages endpoi
   const upstream = mockAnthropicUpstream(captured);
   saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
   const server = startServer(0);
-  const pickerModel = "claude-ocx-native--claude-fable-5-1";
+  const pickerModel = "ocx-claude-native--claude-fable-5-1";
   try {
     const messagesWithoutMarker = await fetch(new URL("/v1/messages", server.url), {
       method: "POST",
@@ -409,7 +409,7 @@ test("alias/mapped models and non-anthropic credentials do NOT pass through", as
     const alias = await fetch(new URL("/v1/messages", server.url), {
       method: "POST",
       headers: OAUTH_HEADERS,
-      body: JSON.stringify({ model: "claude-ocx-mock--test-model", max_tokens: 10, messages: [{ role: "user", content: "x" }] }),
+      body: JSON.stringify({ model: "ocx-claude-mock--test-model", max_tokens: 10, messages: [{ role: "user", content: "x" }] }),
     });
     expect(alias.status).not.toBe(200);
 
