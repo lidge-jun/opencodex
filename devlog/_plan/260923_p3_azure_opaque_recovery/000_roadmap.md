@@ -30,7 +30,7 @@ Two defects, both confirmed from source on `origin/dev` e9643875f0:
 - Drop the reasoning item `id` together with the blob only after the destination itself rejected
   foreign opaque state: the recovery rebuild (`prepareOpaqueBlobRecovery`) and the five-minute
   rejection memo that strips pre-flight on later turns. A new request flag
-  `_dropRejectedReasoningItemIds` carries that signal. A plain proven route switch keeps its
+  `_dropForeignReasoningItemIds` carries that signal. A plain proven route switch keeps its
   current behaviour (blob removed, item and id kept), which an existing passthrough test pins.
 - Keep the item and its summary, as openai-responses recovery already does; only the two opaque
   fields minted by the rejected identity go.
@@ -50,6 +50,8 @@ differently from its declared Responses contract. Neither affects this recovery 
 | wp-3 | [020_tests.md](020_tests.md) | Sibling regression file, layout registration |
 | wp-4 | [030_docs.md](030_docs.md) | structure and docs-site sync |
 | wp-5 | [040_delivery.md](040_delivery.md) | One PR to dev, exact-head CI |
+
+Review follow-up inside wp-5: [050_review_followup.md](050_review_followup.md).
 
 ## Verification policy
 

@@ -296,3 +296,9 @@ Anthropic 来源的失败会以 Anthropic 的错误封装呈现，因此该方�
 
 某些 agent hook 历史上会把明文控制文本放进 `encrypted_content` 槽。为兼容起见，代理会把那部分明文拆分为文本片段，同时保持任何结构有效的 Fernet 片段不变。如果一个 `agent_message` 在该修复过程中失去了所有加密部分，它就会变成普通的 user message。如果当前的 v2 task 仍然真的是加密的，但所选路由目标无法读取原生 ChatGPT 密文，opencodex 会以
 `unreadable_encrypted_agent_task` 失败，而不是把不可读字节发送给该提供方。有关 worker task 周边的客户端行为，请参见 [Sub-agent Surface](/guides/sub-agent-surface/)。
+
+### 在已有对话中切换 provider
+
+重放的推理项携带的 `encrypted_content` 只有生成它的 provider 和凭据才能读取。如果 opencodex 知道该对话上一次由另一个 provider 处理，它会在发送前移除这个 blob，并保留该项的摘要。如果那个 provider 还使用了不同的 endpoint 或凭据，该项的 `rs_…` id 也会被移除，因为它指向新目标无法查到的项。如果 opencodex 无从得知，例如代理重启之后，新目标会拒绝这个 blob：OpenAI 和 Azure OpenAI 返回 `400 invalid_encrypted_content`。此时 opencodex 会去掉上一个 provider 的推理状态（blob 和 `rs_…` id）后只重发一次请求；保留 id 会导致 `Item with id 'rs_…' not found`。
+
+这项恢复适用于所有使用 Responses 协议的 adapter，因此 `openai-responses` 和 `azure-openai` 的行为相同。恢复成功后，该对话在同一目标上的后续轮次会在接下来五分钟内于首次发送前移除这些状态。重发计入请求的常规发送预算。普通的 400 和 429 不会以这种方式重发，5xx 也不会，只有一个狭窄的例外：对于携带加密工具输出的请求，响应体恰好是该解密拒绝的 502 会得到同样的一次重发。第二次拒绝会原样返回给客户端。遇到这种情况，请在目标 provider 上开始新的对话。

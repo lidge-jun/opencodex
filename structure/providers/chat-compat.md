@@ -192,9 +192,12 @@ Recovery is admitted for every adapter whose registry contract resolves to the R
 the same passthrough outside recovery. Once the destination itself has rejected foreign opaque
 state, the stripped reasoning item also loses its `id`: the id was minted by the refused identity,
 and without `store: false` a stateful destination resolves it against its own store and answers
-`Item with id 'rs_…' not found` on the recovered send. `_dropRejectedReasoningItemIds` carries that
+`Item with id 'rs_…' not found` on the recovered send. `_dropForeignReasoningItemIds` carries that
 signal from `prepareOpaqueBlobRecovery` and from the rejection memo below into
-`sanitizeReasoningInputContent`. A proven route switch alone keeps the item id, as before.
+`sanitizeReasoningInputContent`. A proven route switch sets it only when the durable destination or
+credential changed (`reasoningReplayItemStoreChanged`): that is when the id names another store. A
+model or adapter change on the same destination and credential strips the blob but keeps the id,
+which that store can still resolve.
 `tests/responses/responses-azure-opaque-blob-recovery.test.ts` runs the switch on both adapters.
 
 After a self-identified opaque-blob rejection, the proxy also keeps a five-minute rejection memo.

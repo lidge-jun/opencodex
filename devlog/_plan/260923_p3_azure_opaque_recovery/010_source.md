@@ -9,18 +9,18 @@
   `contractParent` inheritance.
 - Replace `args.adapterName === "openai-responses"` in `shouldAttemptOpaqueBlobRecovery` and
   `adapterName !== "openai-responses"` in `opaqueBlobRejectionBodyForRecovery` with the helper.
-- In `prepareOpaqueBlobRecovery`, set `parsed._dropRejectedReasoningItemIds = true` beside
+- In `prepareOpaqueBlobRecovery`, set `parsed._dropForeignReasoningItemIds = true` beside
   `_stripReasoningEncryptedContent`.
 
 ## `src/types/request.ts`
 
-- Add `_dropRejectedReasoningItemIds?: boolean` after `_stripReasoningEncryptedContent`, documenting
+- Add `_dropForeignReasoningItemIds?: boolean` after `_stripReasoningEncryptedContent`, documenting
   the two setters and the `Item with id … not found` failure it prevents.
 
 ## `src/server/responses/core-replay.ts`
 
 - In `bindRouteReasoningReplayScope`, the `reasoningReplayOpaqueBlobRejectionMemoized` branch also
-  sets `_dropRejectedReasoningItemIds`. The serving-identity-change branch does not.
+  sets `_dropForeignReasoningItemIds`. The serving-identity-change branch does not.
 
 ## `src/adapters/openai-responses/reasoning.ts`
 
@@ -30,7 +30,7 @@
 
 ## `src/adapters/openai-responses/passthrough.ts`
 
-- Pass `dropStrippedItemId: parsed._dropRejectedReasoningItemIds === true` into the existing
+- Pass `dropStrippedItemId: parsed._dropForeignReasoningItemIds === true` into the existing
   `sanitizeReasoningInputContent` call. Azure inherits this through `inner.buildRequest`.
 
 ## Invariants kept
