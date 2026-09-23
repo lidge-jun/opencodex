@@ -91,7 +91,10 @@ impl HelperRequest {
         Ok(())
     }
 
+    // Staged for the Windows confinement backend, which still reports unavailable; nothing calls
+    // it yet, so the lint gate would otherwise fail every Windows build.
     #[cfg(target_os = "windows")]
+    #[allow(dead_code)]
     pub fn canonical_paths(&self) -> Result<CanonicalPaths, String> {
         let root = canonical_directory(&self.root, "workspace root")?;
         let cwd = canonical_directory(&self.cwd, "command cwd")?;
@@ -121,6 +124,7 @@ fn validate_path(value: &str, label: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 fn canonical_directory(value: &str, label: &str) -> Result<PathBuf, String> {
     let original = Path::new(value);
     let metadata =
@@ -134,6 +138,7 @@ fn canonical_directory(value: &str, label: &str) -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct CanonicalPaths {
     pub root: PathBuf,

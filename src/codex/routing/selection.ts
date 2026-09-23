@@ -476,13 +476,21 @@ export function getPoolAccountPlan(config: OcxConfig, accountId: string): string
     .find(account => isSelectableCodexPoolAccount(account) && account.id === accountId)?.plan;
 }
 
-/** Selection-only main routing must not lazily read the fenced native credential for its plan. */
+/**
+ * Selection-only main routing must not lazily read the fenced native credential for its plan, and
+ * neither may a request whose main candidacy comes from its own bearer (#5019): that request is
+ * forbidden to read the physical main credential, so main is ranked without a plan.
+ */
 export function getPoolAccountPlanForSelection(
   config: OcxConfig,
   accountId: string,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | undefined {
-  if (accountId === MAIN_CODEX_ACCOUNT_ID && selectionOptions?.nativeMainSelectionOnly === true) {
+  if (
+    accountId === MAIN_CODEX_ACCOUNT_ID
+    && (selectionOptions?.nativeMainSelectionOnly === true
+      || selectionOptions?.requestOwnedMainCredential === true)
+  ) {
     return undefined;
   }
   return getPoolAccountPlan(config, accountId);
