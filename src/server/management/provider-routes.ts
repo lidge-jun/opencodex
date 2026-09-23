@@ -54,6 +54,7 @@ import {
   providerOverwriteKeepsDestination,
   sampleProviderOverwrite,
 } from "./provider-overwrite-carry";
+import { shadowInterceptProviderDependency } from "./shadow-call-validation";
 import { deriveProviderPresets, providerConfigSeed } from "../../providers/derive";
 import { initializeProviderModelSelection } from "../../providers/initial-model-selection";
 import { effectiveGoogleMode, providerCodexAccountMode, providerMatchesRegistryTransport } from "../../providers/registry";
@@ -1496,6 +1497,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // mask onto the newest provider under the mutation lock right before saving, so two
     // concurrent PATCHes updating different fields/headers both survive instead of the
     // later save clobbering the earlier snapshot.
+    // Read before the save: once the provider is disabled the target no longer resolves (#5618).
+    const shadowDependency = rawBody.disabled === true && config.providers[name]!.disabled !== true
+      ? shadowInterceptProviderDependency(config, name)
+      : null;
     let replayError: string | undefined;
     withConfigMutationLockSync(() => {
       const replay = applyProviderPatchFields(name, config.providers[name]!, rawBody, keys, config);
@@ -1561,6 +1566,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       name,
       disabled: config.providers[name]!.disabled === true,
       hasApiKey: !!config.providers[name]!.apiKey,
+      ...(shadowDependency ? { dependentShadowIntercept: shadowDependency } : {}),
       ...(name === "xai"
         ? { xaiResponsesOptInState: xaiResponsesOptInState(config.providers[name]!) }
         : {}),
@@ -1774,6 +1780,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }, 409);
     }
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
+    // Deleting still succeeds; the response names the shadow-call target left without a provider.
+    const shadowDependency = shadowInterceptProviderDependency(config, name);
     if (fallbackDefault) config.defaultProvider = fallbackDefault;
     delete config.providers[name];
     const { dropProviderCustomModels } = await import("../../providers/provider-id-rewrite");
@@ -1789,6 +1797,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       success: true,
       ...(fallbackDefault ? { defaultProvider: fallbackDefault } : {}),
       ...(droppedCustomModels > 0 ? { droppedCustomModels } : {}),
+      ...(shadowDependency ? { dependentShadowIntercept: shadowDependency } : {}),
       catalogRefresh,
     });
   }
