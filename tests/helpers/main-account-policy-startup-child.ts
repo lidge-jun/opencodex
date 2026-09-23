@@ -32,8 +32,12 @@ globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: Request
   throw new Error("Unexpected network request in startup policy fixture");
 }, { preconnect() {} }) as typeof fetch;
 
-const { setIcaclsRunnerForTests } = await import("../../src/lib/windows-secret-acl");
+const { setIcaclsRunnerForTests, setAsyncIcaclsRunnerForTests } = await import("../../src/lib/windows-secret-acl");
+// Both runners, not only the sync one: startServer hardens its state files through the async path,
+// and on a loaded Windows runner a real icacls stall there (30 s budget) outran this child's whole
+// spawn budget. ACLs are not what this fixture measures.
 setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+setAsyncIcaclsRunnerForTests(async () => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
 const authCollision = await import("../../src/codex/auth-collision");
 const readTokens = authCollision.readCodexTokensResult;
 const tokenReads: Array<string | undefined> = [];
