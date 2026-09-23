@@ -49,6 +49,14 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
 
+Log Guard reclaim in `src/codex/log-guard/maintenance.ts` refuses a non-regular or redirected
+database path. It compares canonical path and full-width filesystem device and file identity
+from path observations before and immediately after SQLite opens the database, before maintenance
+statements. Reclaim is unavailable where the filesystem does not report a usable stable file
+identity: missing or zero inode values return `unsafe_path`. File size and timestamps are
+measurements, not identity evidence. These path observations do not attest SQLite's opened handle
+or continuous file identity between the observations.
+
 Observed catalog/cache rows and restore output follow the [retired-native policy](catalog.md#shared-catalog).
 Restore filters retired bare and trusted account-qualified native rows from its output with or
 without a backup. The original backup, historical user-selected settings and session records remain intact.
