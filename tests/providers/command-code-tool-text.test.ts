@@ -271,6 +271,7 @@ describe("Command Code MiMo tool-call text", () => {
     const sequence = (events: AdapterEvent[]) => events.flatMap(event => {
       if (event.type === "text_delta") return [`text:${event.text}`];
       if (event.type === "tool_call_start") return [`tool:${event.id}`];
+      if (event.type === "thinking_delta") return [`thinking:${event.thinking}`];
       if (event.type === "done") return [`done:${event.stopReason ?? ""}`];
       if (event.type === "error") return ["error"];
       return [];
@@ -283,7 +284,9 @@ describe("Command Code MiMo tool-call text", () => {
       { name: "native after held", wire: [...text("held", partial), native("c"), { type: "finish", rawFinishReason: "stop" }], expected: [`text:${partial}`, "tool:c", "done:stop"] },
       { name: "held text before unrelated native", wire: [{ type: "tool-input-start", id: "a", toolName: "exec" }, ...text("held", held), ...text("post", "after"), native("c"), native("a"), { type: "finish", rawFinishReason: "tool_calls" }], expected: ["text:after", "tool:c", "tool:a", "done:tool_calls"] },
       { name: "ordinary chunks straddle native", wire: [{ type: "tool-input-start", id: "a", toolName: "exec" }, ...text("held", held), { type: "text-start", id: "post" }, { type: "text-delta", id: "post", text: "before" }, native("c"), { type: "text-delta", id: "post", text: "after" }, { type: "text-end", id: "post" }, native("a"), { type: "finish", rawFinishReason: "tool_calls" }], expected: ["text:before", "tool:c", "text:after", "tool:a", "done:tool_calls"] },
-      { name: "held chunks straddle native on length", wire: [{ type: "text-start", id: "held" }, { type: "text-delta", id: "held", text: "<tool" }, native("c"), { type: "text-delta", id: "held", text: held.slice(5) }, { type: "text-end", id: "held" }, { type: "finish", rawFinishReason: "length" }], expected: ["text:<tool", "tool:c", `text:${held.slice(5)}`, "done:length"] },
+      { name: "held chunks straddle native on clean finish", wire: [{ type: "tool-input-start", id: "a", toolName: "exec" }, { type: "text-start", id: "held" }, { type: "text-delta", id: "held", text: "<tool" }, native("c"), { type: "text-delta", id: "held", text: held.slice(5) }, { type: "text-end", id: "held" }, { type: "finish", rawFinishReason: "stop" }], expected: ["text:<tool", "tool:c", `text:${held.slice(5)}`, "done:stop"] },
+      { name: "held chunks straddle native on length", wire: [{ type: "tool-input-start", id: "a", toolName: "exec" }, { type: "text-start", id: "held" }, { type: "text-delta", id: "held", text: "<tool" }, native("c"), { type: "text-delta", id: "held", text: held.slice(5) }, { type: "text-end", id: "held" }, { type: "finish", rawFinishReason: "length" }], expected: ["text:<tool", "tool:c", `text:${held.slice(5)}`, "done:length"] },
+      { name: "held chunks straddle reasoning", wire: [{ type: "text-start", id: "held" }, { type: "text-delta", id: "held", text: "<tool" }, { type: "reasoning-delta", text: "thought" }, { type: "text-delta", id: "held", text: held.slice(5) }, { type: "finish", rawFinishReason: "stop" }], expected: ["text:<tool", "thinking:thought", `text:${held.slice(5)}`, "done:stop"] },
       { name: "error finish", wire: [...text("held", held), { type: "finish", rawFinishReason: "error" }], expected: [`text:${held}`, "error"] },
       { name: "length finish", wire: [...text("held", held), { type: "finish", rawFinishReason: "length" }], expected: [`text:${held}`, "done:length"] },
       { name: "EOF", wire: [...text("held", held)], expected: [`text:${held}`, "done:"] },
@@ -316,6 +319,29 @@ describe("Command Code MiMo tool-call text", () => {
     expect(events[0]).toEqual({ type: "text_delta", text: markup });
     expect(filter.finish()).toEqual({ events: [], salvaged: false });
     expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("many one-byte chunks use bounded queue visits", () => {
+    const budget = createTestTranslatorBudget();
+    const filter = new CommandCodeToolTextFilter(budget, new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]]));
+    const markup = `<tool_call><function=exec>${JS}</function></tool_call>`;
+    filter.textDelta("held", markup);
+    filter.textEnd("held");
+    filter.textStart("later");
+    const count = 20_000;
+    for (let index = 0; index < count; index++) expect(filter.textDelta("later", "x")).toEqual([]);
+    const events = filter.releaseAll();
+    expect(events).toEqual([{ type: "text_delta", text: markup }, { type: "text_delta", text: "x".repeat(count) }]);
+    expect(filter.queueOperationsForTest()).toBeLessThan(count * 5);
+    expect(budget.snapshot().currentBytes).toBe(0);
+
+    const spacedBudget = createTestTranslatorBudget();
+    const spaced = new CommandCodeToolTextFilter(spacedBudget, new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]]));
+    for (let index = 0; index < count; index++) spaced.textDelta("t", " ");
+    spaced.textDelta("t", markup);
+    expect(spaced.finish().salvaged).toBe(true);
+    expect(spaced.queueOperationsForTest()).toBeLessThan(count * 5);
+    expect(spacedBudget.snapshot().currentBytes).toBe(0);
   });
 
   test("leaves markup as text when it names an undeclared tool or does not fit", async () => {
@@ -397,11 +423,13 @@ describe("Command Code MiMo tool-call text", () => {
     const first = "text('a');";
     const second = "text('b');";
     filter.toolInputStart("a", "exec");
+    filter.toolInputStart("b", "exec");
     filter.textStart("first");
     expect(filter.textDelta("first", `<tool_call><function=exec>${first}</function></tool_call>`)).toEqual([]);
-    filter.toolInputStart("b", "exec");
+    expect(filter.textEnd("first")).toEqual([]);
     filter.textStart("second");
     expect(filter.textDelta("second", `<tool_call><function=exec>${second}</function></tool_call>`)).toEqual([]);
+    expect(filter.textEnd("second")).toEqual([]);
     expect(filter.toolCall("b", "exec", second)).toEqual([]);
     expect(filter.textDelta("second", " trailing")).toEqual([]);
     expect(filter.toolCall("a", "exec", first)).toEqual([{ type: "text_delta", text: " trailing" }]);

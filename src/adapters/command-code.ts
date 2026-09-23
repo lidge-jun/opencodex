@@ -691,7 +691,7 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             else yield { type: "text_delta", text: event.text };
           } break;
           case "text-end": if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.textEnd(event.id), budget); break;
-          case "tool-input-start": if (restoreMiMoTools) toolText.toolInputStart(event.id, event.toolName); break;
+          case "tool-input-start": if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.toolInputStart(event.id, event.toolName), budget); break;
           case "reasoning-delta": if (typeof event.text === "string") {
             const thinking: AdapterEvent = { type: "thinking_delta", thinking: event.text };
             if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.enqueueEvent(thinking, event.text), budget);
@@ -768,6 +768,8 @@ export function createCommandCodeAdapter(provider: OcxProviderConfig): ProviderA
             }
             break;
           }
+          default:
+            if (restoreMiMoTools) yield* emitOrderedToolEvents(toolText.boundary(), budget);
         }
       }
       // A stream that ends without a finish event still needs a terminal done so the

@@ -200,10 +200,12 @@ export function salvagedArguments(markup: ToolCallMarkup, tool: CommandCodeDecla
 }
 
 interface TextBlock {
-  text: string;
+  markupParts: string[];
+  probe: string;
   bytes: number;
   state: "probing" | "held" | "queued" | "dropped" | "streaming";
   ended: boolean;
+  interrupted: boolean;
   /** Tool inputs open when the block started; the native call that duplicates it is one of them. */
   candidates: Set<string>;
 }
@@ -211,7 +213,7 @@ interface TextBlock {
 interface TextChunk {
   kind: "chunk";
   block: TextBlock;
-  text: string;
+  parts: string[];
   bytes: number;
 }
 
@@ -244,54 +246,95 @@ export class CommandCodeToolTextFilter {
   private held: TextBlock[] = [];
   /** Every output-bearing event shares this wire-order queue. */
   private pending: Pending[] = [];
+  private head = 0;
+  private queuedBytes = 0;
+  private queueOperations = 0;
 
   constructor(
     private readonly budget: TranslatorBudget,
     private readonly declared: CommandCodeDeclaredTools | undefined,
   ) {}
 
-  toolInputStart(id: unknown, name: unknown): void {
+  /** Counts queue item visits and appends for the bounded-work regression. */
+  queueOperationsForTest(): number { return this.queueOperations; }
+
+  toolInputStart(id: unknown, name: unknown): AdapterEvent[] {
+    const events = this.breakOpenBlocks();
     if (typeof id === "string" && typeof name === "string") this.openInputs.set(id, name);
+    return events;
+  }
+
+  boundary(): AdapterEvent[] { return this.breakOpenBlocks(); }
+
+  private breakOpenBlocks(exceptKey?: string): AdapterEvent[] {
+    let changed = false;
+    for (const [key, block] of this.blocks) {
+      if (key === exceptKey || block.ended || (block.state !== "held" && block.state !== "probing") || block.bytes === 0) continue;
+      block.interrupted = true;
+      block.state = "queued";
+      block.markupParts = [];
+      changed = true;
+    }
+    if (changed) this.held = this.held.filter(block => block.state === "held");
+    return changed ? this.drain() : [];
   }
 
   textStart(id: unknown): AdapterEvent[] {
     const key = typeof id === "string" ? id : DEFAULT_TEXT_ID;
     const events = this.blocks.has(key) ? this.textEnd(key) : [];
-    const block: TextBlock = { text: "", bytes: 0, state: "probing", ended: false, candidates: new Set(this.openInputs.keys()) };
+    events.push(...this.breakOpenBlocks(key));
+    const block: TextBlock = { markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: false, candidates: new Set(this.openInputs.keys()) };
     this.blocks.set(key, block);
     return events;
   }
 
   textDelta(id: unknown, text: string): AdapterEvent[] {
     const key = typeof id === "string" ? id : DEFAULT_TEXT_ID;
+    const boundaryEvents = this.breakOpenBlocks(key);
     let block = this.blocks.get(key);
     if (!block) {
-      block = { text: "", bytes: 0, state: "probing", ended: false, candidates: new Set(this.openInputs.keys()) };
+      block = { markupParts: [], probe: "", bytes: 0, state: "probing", ended: false, interrupted: false, candidates: new Set(this.openInputs.keys()) };
       this.blocks.set(key, block);
     }
-    if (block.state === "streaming" && this.pending.length === 0) {
-      return [{ type: "text_delta", text }];
+    if (block.state === "streaming" && this.head === this.pending.length) {
+      return [...boundaryEvents, { type: "text_delta", text }];
     }
     // Once a duplicate is dropped, later text is a new chunk at its own wire position.
     if (block.state === "dropped" || block.state === "streaming") {
-      block = { text: "", bytes: 0, state: "queued", ended: false, candidates: new Set() };
+      block = { markupParts: [], probe: "", bytes: 0, state: "queued", ended: false, interrupted: true, candidates: new Set() };
       this.blocks.set(key, block);
     }
     const preceding = this.makeRoom(encoder.encode(text).byteLength);
     this.retain(block, text);
-    this.pending.push({ kind: "chunk", block, text, bytes: encoder.encode(text).byteLength });
-    const lead = block.text.trimStart();
+    const bytes = encoder.encode(text).byteLength;
+    const tail = this.pending.at(-1);
+    if (tail?.kind === "chunk" && tail.block === block && this.head < this.pending.length) {
+      tail.parts.push(text);
+      tail.bytes += bytes;
+      this.queueOperations++;
+    } else {
+      this.pending.push({ kind: "chunk", block, parts: [text], bytes });
+      this.queueOperations++;
+    }
+    this.queuedBytes += bytes;
     if (block.state === "probing") {
-      if (lead.length > 0 && !lead.startsWith(TOOL_CALL_MARKER) && !TOOL_CALL_MARKER.startsWith(lead)) {
-        block.state = "queued";
-        block.text = "";
-      }
-      if (block.state === "probing" && lead.startsWith(TOOL_CALL_MARKER)) {
-        block.state = "held";
-        this.held.push(block);
+      for (const char of text) {
+        if (!block.probe && char.trim() === "") continue;
+        block.probe += char;
+        if (!TOOL_CALL_MARKER.startsWith(block.probe)) {
+          block.state = "queued";
+          block.markupParts = [];
+          break;
+        }
+        if (block.probe === TOOL_CALL_MARKER) {
+          block.state = "held";
+          block.probe = "";
+          this.held.push(block);
+          break;
+        }
       }
     }
-    return [...preceding, ...this.limitPending()];
+    return [...boundaryEvents, ...preceding, ...this.limitPending()];
   }
 
   textEnd(id: unknown): AdapterEvent[] {
@@ -303,7 +346,7 @@ export class CommandCodeToolTextFilter {
     // A block that never committed to the marker (whitespace, or a marker prefix) is ordinary text.
     if (block.state === "probing") {
       block.state = "queued";
-      block.text = "";
+      block.markupParts = [];
       return this.drain();
     }
     if (block.state === "queued") return this.drain();
@@ -318,22 +361,28 @@ export class CommandCodeToolTextFilter {
 
   /** Put the native call at its wire position, after matching any earlier held markup. */
   nativeCall(id: string, name: string, input: unknown): AdapterEvent[] {
+    const boundaryEvents = this.breakOpenBlocks();
     this.matchNative(id, name, input);
     const argumentsText = typeof input === "string" ? input : JSON.stringify(input);
     const preceding = this.makeRoom(encoder.encode(argumentsText).byteLength);
-    const bytes = this.pending.length > 0 ? encoder.encode(argumentsText).byteLength : 0;
+    const bytes = this.head < this.pending.length ? encoder.encode(argumentsText).byteLength : 0;
     if (bytes > 0) this.retainQueued(bytes);
     this.pending.push({ kind: "native", id, name, argumentsText, bytes });
-    return [...preceding, ...this.limitPending()];
+    this.queueOperations++;
+    this.queuedBytes += bytes;
+    return [...boundaryEvents, ...preceding, ...this.limitPending()];
   }
 
   /** Reasoning shares the same ordering barrier as text and native calls. */
   enqueueEvent(event: AdapterEvent, textValue: string): AdapterEvent[] {
+    const boundaryEvents = this.breakOpenBlocks();
     const preceding = this.makeRoom(encoder.encode(textValue).byteLength);
-    const bytes = this.pending.length > 0 ? encoder.encode(textValue).byteLength : 0;
+    const bytes = this.head < this.pending.length ? encoder.encode(textValue).byteLength : 0;
     if (bytes > 0) this.retainQueued(bytes);
     this.pending.push({ kind: "event", event, bytes });
-    return [...preceding, ...this.limitPending()];
+    this.queueOperations++;
+    this.queuedBytes += bytes;
+    return [...boundaryEvents, ...preceding, ...this.limitPending()];
   }
 
   private matchNative(id: string, name: string, input: unknown): void {
@@ -345,7 +394,7 @@ export class CommandCodeToolTextFilter {
         remaining.push(block);
         continue;
       }
-      const markup = parseToolCallMarkup(block.text);
+      const markup = parseToolCallMarkup(block.markupParts.join(""));
       if (markup && markup.name === name && markupMatchesInput(markup, input)) {
         this.drop(block);
         block.state = "dropped";
@@ -354,7 +403,7 @@ export class CommandCodeToolTextFilter {
       block.candidates.delete(id);
       if (block.candidates.size === 0) {
         block.state = "queued";
-        block.text = "";
+        block.markupParts = [];
       } else {
         remaining.push(block);
       }
@@ -377,17 +426,21 @@ export class CommandCodeToolTextFilter {
     let salvaged = false;
     let lastTextBlock: TextBlock | undefined;
     this.pending.push({ kind: "finish", restore });
-    const pending = this.pending;
+    const pending = this.pending.slice(this.head);
+    this.queueOperations += pending.length;
     this.held = [];
     this.pending = [];
+    this.head = 0;
+    this.queuedBytes = 0;
     this.blocks.clear();
     for (const item of pending) {
+      this.queueOperations++;
       if (item.kind === "finish") break;
       if (item.kind === "native") { events.push(...this.emitNative(item)); lastTextBlock = undefined; continue; }
       if (item.kind === "event") { this.releaseQueued(item.bytes); events.push(item.event); lastTextBlock = undefined; continue; }
       const block = item.block;
       if (block.state === "held") {
-        const markup = restore ? parseToolCallMarkup(block.text) : undefined;
+        const markup = restore && !block.interrupted ? parseToolCallMarkup(block.markupParts.join("")) : undefined;
         const tool = markup ? this.declared?.get(markup.name) : undefined;
         const args = markup && tool ? salvagedArguments(markup, tool) : undefined;
         if (markup && args !== undefined) {
@@ -401,11 +454,11 @@ export class CommandCodeToolTextFilter {
           lastTextBlock = undefined;
         } else {
           block.state = "queued";
-          block.text = "";
+          block.markupParts = [];
         }
       } else if (block.state === "probing") {
         block.state = "queued";
-        block.text = "";
+        block.markupParts = [];
       }
       if (block.state === "dropped") {
         lastTextBlock = undefined;
@@ -424,21 +477,24 @@ export class CommandCodeToolTextFilter {
     const bytes = encoder.encode(text).byteLength;
     const reservation = this.budget.reserveTransient(bytes, { kind: "live_transient" });
     reservation.commitRetained();
-    if (block.state === "probing" || block.state === "held") block.text += text;
+    if (block.state === "probing" || block.state === "held") block.markupParts.push(text);
     block.bytes += bytes;
   }
 
   private drop(block: TextBlock): void {
     this.budget.releaseRetained(block.bytes, { kind: "live_transient" });
+    this.queuedBytes = Math.max(0, this.queuedBytes - block.bytes);
     block.bytes = 0;
-    block.text = "";
+    block.markupParts = [];
   }
 
   private releaseChunk(chunk: TextChunk): { type: "text_delta"; text: string } | undefined {
     if (chunk.block.state === "dropped") return undefined;
     this.budget.releaseRetained(chunk.bytes, { kind: "live_transient" });
+    this.queuedBytes = Math.max(0, this.queuedBytes - chunk.bytes);
     chunk.block.bytes = Math.max(0, chunk.block.bytes - chunk.bytes);
-    return chunk.text ? { type: "text_delta", text: chunk.text } : undefined;
+    const text = chunk.parts.join("");
+    return text ? { type: "text_delta", text } : undefined;
   }
 
   private retainQueued(bytes: number): void {
@@ -446,7 +502,10 @@ export class CommandCodeToolTextFilter {
   }
 
   private releaseQueued(bytes: number): void {
-    if (bytes > 0) this.budget.releaseRetained(bytes, { kind: "live_transient" });
+    if (bytes > 0) {
+      this.budget.releaseRetained(bytes, { kind: "live_transient" });
+      this.queuedBytes = Math.max(0, this.queuedBytes - bytes);
+    }
   }
 
   private emitNative(call: NativeCall): AdapterEvent[] {
@@ -461,10 +520,11 @@ export class CommandCodeToolTextFilter {
   private drain(): AdapterEvent[] {
     const events: AdapterEvent[] = [];
     let lastTextBlock: TextBlock | undefined;
-    while (this.pending.length > 0) {
-      const item = this.pending[0]!;
+    while (this.head < this.pending.length) {
+      const item = this.pending[this.head]!;
+      this.queueOperations++;
       if (item.kind === "finish" || (item.kind === "chunk" && (item.block.state === "held" || item.block.state === "probing"))) break;
-      this.pending.shift();
+      this.head++;
       if (item.kind === "chunk") {
         const emitted = this.releaseChunk(item);
         if (emitted && lastTextBlock === item.block && events.at(-1)?.type === "text_delta") {
@@ -475,28 +535,33 @@ export class CommandCodeToolTextFilter {
       } else if (item.kind === "native") { events.push(...this.emitNative(item)); lastTextBlock = undefined; }
       else { this.releaseQueued(item.bytes); events.push(item.event); lastTextBlock = undefined; }
     }
+    if (this.head === this.pending.length) { this.pending = []; this.head = 0; }
+    else if (this.head >= 1024 && this.head * 2 >= this.pending.length) {
+      this.queueOperations += this.pending.length - this.head;
+      this.pending = this.pending.slice(this.head);
+      this.head = 0;
+    }
     return events;
   }
 
   private limitPending(): AdapterEvent[] {
-    if (this.pendingBytes() <= MAX_HELD_TOOL_TEXT_BYTES) return this.drain();
+    if (this.queuedBytes <= MAX_HELD_TOOL_TEXT_BYTES) return this.drain();
     return this.flushPendingAsText();
   }
 
-  private pendingBytes(): number {
-    return this.pending.reduce((sum, item) => sum + ("bytes" in item ? item.bytes : 0), 0);
-  }
-
   private makeRoom(additionalBytes: number): AdapterEvent[] {
-    return this.pendingBytes() + additionalBytes > MAX_HELD_TOOL_TEXT_BYTES ? this.flushPendingAsText() : [];
+    return this.queuedBytes + additionalBytes > MAX_HELD_TOOL_TEXT_BYTES ? this.flushPendingAsText() : [];
   }
 
   private flushPendingAsText(): AdapterEvent[] {
     // Drop restoration once the ordered queue fills, then release all text in arrival order.
     this.held = [];
-    for (const item of this.pending) if (item.kind === "chunk" && (item.block.state === "held" || item.block.state === "probing")) {
+    for (let index = this.head; index < this.pending.length; index++) {
+      const item = this.pending[index]!;
+      this.queueOperations++;
+      if (item.kind !== "chunk" || (item.block.state !== "held" && item.block.state !== "probing")) continue;
       item.block.state = "queued";
-      item.block.text = "";
+      item.block.markupParts = [];
     }
     return this.drain();
   }
