@@ -931,6 +931,7 @@
     "install-scripts.test.ts": "ci-workflows",
     "installed-gate-drivers.test.ts": "ci-workflows",
     "integrations-current-store.test.ts": "clients",
+    "integrations-hermes-affinity.test.ts": "clients",
     "integrations-invariants.test.ts": "gui",
     "integrations-journal.test.ts": "clients",
     "integrations-merge.test.ts": "clients",

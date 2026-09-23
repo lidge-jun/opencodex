@@ -25,6 +25,7 @@ import {
 } from "./merge";
 import { canonicalContribution, fingerprint, semanticContribution, type OwnershipRecord } from "./ownership";
 import {
+  isHermesAffinityUpgrade,
   protectedContributionFingerprint,
   refreshablePathsOf,
   semanticProtectedContributionFingerprint,
@@ -385,7 +386,8 @@ export function classifyIntegration(input: {
    * conflict no matter what the rest of the file looks like, so the sibling-
    * edit exemption below can never mask it.
    */
-  if (!recordedBlockIsOwned(input.parsed, input.record, input.contribution)) {
+  if (!recordedBlockIsOwned(input.parsed, input.record, input.contribution)
+    && !isHermesAffinityUpgrade(input.parsed, input.record, input.contribution)) {
     return { state: "conflict", reason: "foreign-edit" };
   }
   if (!INTEGRATION_CLIENTS[clientId].sourcePreservingYaml

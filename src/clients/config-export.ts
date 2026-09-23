@@ -863,6 +863,8 @@ export interface HermesProviderBlock {
   api: string;
   api_key: string;
   api_mode: "chat_completions";
+  /** Header name only; Hermes supplies a dynamic per-conversation value. */
+  session_affinity_header: "session-id";
   /** We supply the list, so skip their live `/models` probe. */
   discover_models: false;
   models: Record<string, HermesModelEntry>;
@@ -1051,6 +1053,7 @@ function buildHermesClientConfig(ctx: ExportContext): HermesGeneratedConfig {
         api: ctx.baseUrl,
         api_key: HERMES_API_KEY_ENV_REF,
         api_mode: "chat_completions",
+        session_affinity_header: "session-id",
         discover_models: false,
         models,
         ...(headers ? { extra_headers: headers } : {}),
