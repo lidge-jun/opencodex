@@ -159,8 +159,8 @@ Token estimation includes retained external root blobs, including checkpoint-car
 Missing or invalid UTF-8 blobs are skipped with bounded provider diagnostics; estimating does not
 alter blob-retention metrics.
 Root-echo eligibility is `cursorNeedsExternalToolContinuation`, which includes native
-`composer-2.5`, not only external wire models, so the restoration reaches every replay that carries
-an invocation line. Coverage lives in
+`composer-2.5` and `composer-2.5-fast`, not only external wire models, so the restoration reaches
+every replay that carries an invocation line. Coverage lives in
 `tests/providers/cursor/cursor-tool-result-invocation.test.ts`.
 
 ## Cursor executable tool schema ownership

@@ -104,7 +104,7 @@ describe("363-B: tool result reaches the model via rootPromptMessagesJson", () =
 
   test("native resume models do not few-shot [Tool Result] as assistant chat", () => {
     const bytes = encodeCursorRunRequest({
-      modelId: "composer-2.5-fast",
+      modelId: "composer-1",
       conversationId: "c1",
       system: ["You are helpful."],
       messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: mcp__fs__read_file\nis_error: false\noutput:\nFILE CONTENTS HERE" }],
