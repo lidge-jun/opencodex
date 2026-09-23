@@ -213,11 +213,11 @@ export function useAnthropicResetGrants({ apiBase, accountIds, enabled }: {
         body: JSON.stringify({ accountId, grantId: request.grantId, operationId: request.operationId }),
         signal: bounded.signal,
       });
-      const data = await response.json().catch(() => null) as unknown;
       if (!response.ok) {
-        const code = errorCode(data);
+        const code = errorCode(await response.json().catch(() => null));
         return UNKNOWN_CODES.has(code) ? { kind: "unknown", code } : { kind: "refused", code };
       }
+      const data = await response.json().catch(() => null) as unknown;
       if (!isRecord(data) || typeof data.code !== "string") return { kind: "unknown", code: "unknown_outcome" };
       void read(accountId, epoch.current);
       return {
