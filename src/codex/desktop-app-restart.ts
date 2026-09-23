@@ -40,6 +40,7 @@ import { rootShells, type DesktopAppAdapter, type DesktopExec, type DesktopProce
 import { darwinDesktopAppAdapter, darwinDefaultExec } from "./desktop-app/darwin";
 import { linuxDesktopAppAdapter, linuxDefaultExec } from "./desktop-app/linux";
 import { windowsDesktopAppAdapter, windowsDefaultExec } from "./desktop-app/windows";
+import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 
 export type { DesktopAppExecOptions } from "./desktop-app/types";
 
@@ -81,6 +82,7 @@ export interface DesktopAppRestartIo {
 
 export type DesktopAppRestartReason =
   | "unsupported_platform"
+  | "test_environment"
   | "package_discovery_failed"
   | "process_probe_failed"
   | "no_targets"
@@ -213,6 +215,12 @@ export function restartCodexDesktopApp(io: DesktopAppRestartIo = {}): DesktopApp
   const adapter = io.adapter ?? selected?.adapter;
   const exec = io.execFile ?? selected?.exec;
   if (!adapter || !exec) return skipped("unsupported_platform");
+  // In an armed test process a call without an injected exec would reach the real OS (an injected
+  // adapter still execs through the platform default): on a developer Mac, `performCodexRestart`
+  // tests quit the user's ChatGPT (Codex) app and relaunched it through `/usr/bin/open` with the
+  // runner's sandbox HOME, logged out. Armed means the test preload's flag, not NODE_ENV, for the
+  // reason test-home-guard gives: a real `NODE_ENV=test ocx ...` must still restart the app.
+  if (!io.execFile && isTestHomeGuardArmed()) return skipped("test_environment");
 
   // Step 0. Two restarts at once are destructive rather than merely wasteful: the
   // first quits and relaunches, the second sees the freshly started shell as a target

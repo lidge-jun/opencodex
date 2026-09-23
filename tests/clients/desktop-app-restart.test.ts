@@ -1,10 +1,11 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { restartCodexDesktopApp, type DesktopAppRestartIo } from "../../src/codex/desktop-app-restart";
 import { windowsDesktopAppAdapter } from "../../src/codex/desktop-app/windows";
+import { handleDesktopAppRestart } from "../../src/cli/restart-scope";
 import { setTrustedWindowsElevationExecutablesForTests } from "../../src/lib/windows-elevation";
 
 /**
@@ -140,6 +141,35 @@ function scriptedIo(options: {
 
 const DISCOVERY = [AUMID.replace("!App", ""), INSTALL, AUMID].join("\n");
 
+// The guard follows the test preload's OCX_TEST_HOME_GUARD, as the home guard does, rather than
+// NODE_ENV: Bun's test runner keeps an inherited NODE_ENV, and a real `NODE_ENV=test ocx ...`
+// must still restart the app.
+describe("the test-runner guard follows the test preload, not NODE_ENV", () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalGuard = process.env.OCX_TEST_HOME_GUARD;
+  afterEach(() => {
+    if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = originalNodeEnv;
+    if (originalGuard === undefined) delete process.env.OCX_TEST_HOME_GUARD;
+    else process.env.OCX_TEST_HOME_GUARD = originalGuard;
+  });
+
+  test("an armed test process is guarded even when NODE_ENV was inherited as something else", () => {
+    process.env.NODE_ENV = "development";
+    const result = restartCodexDesktopApp({ lock: isolatedLock(), platform: "win32" });
+    expect(result.reason).toBe("test_environment");
+  });
+
+  test("a process the test preload did not arm restarts as usual even with NODE_ENV=test", () => {
+    process.env.NODE_ENV = "test";
+    process.env.OCX_TEST_HOME_GUARD = "0";
+    // discover() answers without exec, so this never reaches the OS.
+    const adapter = { ...windowsDesktopAppAdapter, discover: () => null };
+    const result = restartCodexDesktopApp({ lock: isolatedLock(), platform: "win32", adapter });
+    expect(result.reason).toBe("package_discovery_failed");
+  });
+});
+
 describe("Codex desktop app restart (#2292)", () => {
   // macOS and Linux are no longer no-ops: they have real adapters. What survives from the
   // original assertion is that a platform with NO adapter still refuses without execing
@@ -156,6 +186,33 @@ describe("Codex desktop app restart (#2292)", () => {
       attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "unsupported_platform",
     });
     expect(calls).toEqual([]);
+  });
+
+  // A test that reaches the restart without injecting an adapter or exec used to drive the real
+  // OS adapter: on a developer Mac `performCodexRestart` tests quit the user's ChatGPT (Codex)
+  // app and relaunched it through `/usr/bin/open` with the runner's sandbox HOME, logged out.
+  // win32 keeps the pre-fix run harmless off Windows (no PowerShell to discover anything with).
+  test("under the test runner, the real OS adapter is never used without an injected one", () => {
+    const result = restartCodexDesktopApp({ lock: isolatedLock(), platform: "win32" });
+    expect(result).toEqual({
+      attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "test_environment",
+    });
+  });
+
+  // An injected adapter still execs through the platform default when no exec is injected, so
+  // only an injected exec proves the caller is simulating the OS.
+  test("an injected adapter without an injected exec still never reaches the OS", () => {
+    const result = restartCodexDesktopApp({ lock: isolatedLock(), platform: "win32", adapter: windowsDesktopAppAdapter });
+    expect(result.reason).toBe("test_environment");
+  });
+
+  // win32 keeps this call away from the OS on macOS and Linux even if the guard regressed.
+  test("the CLI says why nothing was restarted under the test runner", async () => {
+    const out: string[] = [];
+    const log = { log: (...a: unknown[]) => { out.push(a.join(" ")); }, error: (...a: unknown[]) => { out.push(a.join(" ")); } };
+    const result = await handleDesktopAppRestart(log, { platform: "win32", lock: isolatedLock() });
+    expect(result.reason).toBe("test_environment");
+    expect(out.join("\n")).toContain("OCX_TEST_HOME_GUARD");
   });
 
   test("fails closed when the package cannot be identified, killing nothing", () => {
