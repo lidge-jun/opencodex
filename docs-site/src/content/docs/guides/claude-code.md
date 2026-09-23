@@ -268,7 +268,9 @@ requiring the `ocx claude` wrapper. Already-open shells are unaffected and must 
 Changing a model slot or lever (`smallFastModel`, `tierModels`, `maxContextTokens`, auto-context,
 `alwaysEnableEffort`) re-applies the injection right away: a key opencodex injected earlier is
 updated, or unset once the setting no longer produces it. A value you set yourself with
-`launchctl setenv` is never overwritten or removed.
+`launchctl setenv` before opencodex injects that key is never overwritten or removed; a key
+opencodex injected stays opencodex-owned (refreshed, unset, and removed by `ocx stop`) even if
+you change its value by hand.
 
 `ocx stop` and proxy shutdown **unset the injected keys** (it does not restore previous values —
 only the keys opencodex injected are removed). The proxy also writes `~/.opencodex/claude-env.sh`;

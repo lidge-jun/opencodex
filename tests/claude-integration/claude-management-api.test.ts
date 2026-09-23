@@ -387,8 +387,11 @@ test("authMode-only PUT triggers system-env reconciliation (audit R2 #1)", async
 test.each([
   ["smallFastModel", ""],
   ["model", ""],
+  ["tierModels", { opus: "mock/test-model" }],
+  ["maxContextTokens", 1_000_000],
   ["alwaysEnableEffort", true],
   ["autoContext", false],
+  ["autoCompactWindow", 400_000],
 ] as const)("%s-only PUT triggers system-env reconciliation", async (field, value) => {
   const applySpy = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false, reason: "test" });
   const server = startServer(0);
