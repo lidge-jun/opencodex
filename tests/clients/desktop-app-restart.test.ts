@@ -158,6 +158,17 @@ describe("Codex desktop app restart (#2292)", () => {
     expect(calls).toEqual([]);
   });
 
+  // A test that reaches the restart without injecting an adapter or exec used to drive the real
+  // OS adapter: on a developer Mac `performCodexRestart` tests quit the user's ChatGPT (Codex)
+  // app and relaunched it through `/usr/bin/open` with the runner's sandbox HOME, logged out.
+  // win32 keeps the pre-fix run harmless off Windows (no PowerShell to discover anything with).
+  test("under the test runner, the real OS adapter is never used without an injected one", () => {
+    const result = restartCodexDesktopApp({ lock: isolatedLock(), platform: "win32" });
+    expect(result).toEqual({
+      attempted: false, stopped: [], surviving: [], relaunch: "skipped", reason: "test_environment",
+    });
+  });
+
   test("fails closed when the package cannot be identified, killing nothing", () => {
     const calls: Call[] = [];
     const result = withTrustedExes(() => restartCodexDesktopApp(scriptedIo({ discovery: "MISS", calls })));
