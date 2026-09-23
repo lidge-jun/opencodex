@@ -478,7 +478,9 @@ Anthropic doğrudan geçişine dokunulmaz.
    `tool_result` gövdesi bir taslakla değiştirilir.
 2. **Metin bloğu taşıyıcısı:** `Base directory for this skill: ` ile başlayan
    ≥10.000 karakterlik bir kullanıcı metin bloğu — dizin temel adı engellenen
-   bir ada eşit olduğunda eşleşir (büyük/küçük harfe duyarsız).
+   bir ada eşit olduğunda eşleşir (büyük/küçük harfe duyarsız). Dizin satırı
+   yalnızca 4.096 UTF-16 kod birimine kadar incelenir; daha uzun bir satır,
+   sonunda satır sonu olmasa bile değiştirilmeden gönderilir.
 
 `claudeCode.blockedSkills` ile yapılandırın (varsayılan `["claude-api"]`; `[]`
 atlamayı tamamen devre dışı bırakır). Taslak, araç çağrısı/sonuç eşleşmesini

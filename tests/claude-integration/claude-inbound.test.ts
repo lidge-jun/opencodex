@@ -681,6 +681,34 @@ describe("bundled-skill elision for routed models (devlog 260712 060)", () => {
     const texts = userTexts(requestWithSkillTextBlock("claude-api", 20_000, undefined, oversizedDir));
     expect(texts.some(t => t.startsWith(`Base directory for this skill: ${oversizedDir}`))).toBe(true);
   });
+
+  for (const [prefix, separator] of [["/", "/"], ["C:\\", "\\"]] as const) {
+    for (const pathLength of [4_096, 4_097]) {
+      test(`text-block carrier: ${prefix} marker path at ${pathLength} characters`, () => {
+        const suffix = `${separator}claude-api${separator}`;
+        const dir = prefix + "a".repeat(pathLength - prefix.length - suffix.length) + suffix;
+        const texts = userTexts(requestWithSkillTextBlock("claude-api", 20_000, undefined, dir));
+        const bundle = `Base directory for this skill: ${dir}\n\n` + "DOCS ".repeat(4_000);
+        expect(dir.length).toBe(pathLength);
+        if (pathLength === 4_096) {
+          expect(texts.some(text => text.includes("'claude-api'") && text.includes("elided"))).toBe(true);
+          expect(texts.every(text => text.length < 10_000)).toBe(true);
+        } else {
+          expect(texts).toContain(bundle);
+        }
+      });
+    }
+  }
+
+  test("text-block carrier: an oversized first line without a newline stays byte-for-byte intact", () => {
+    const text = "Base directory for this skill: /" + "a/".repeat(10_000) + "claude-api";
+    const body = anthropicToResponsesTranslation({
+      model: "gemini/gemini-3-pro",
+      max_tokens: 100,
+      messages: [{ role: "user", content: [{ type: "text", text }] }],
+    }).body;
+    expect(userTexts(body)).toContain(text);
+  });
 });
 
 describe("ocx-route directive (devlog 072)", () => {

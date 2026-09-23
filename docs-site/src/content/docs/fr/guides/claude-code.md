@@ -434,7 +434,8 @@ Le transfert Anthropic natif reste intact.
    remplacé par un contenu minimal lorsque l'entrée JSON en minuscules contient un nom bloqué.
 2. **Vecteur de bloc de texte :** un bloc de texte utilisateur d'au moins 10 000 caractères commençant par
    `Base directory for this skill: ` — est reconnu lorsque le nom de base du répertoire correspond à un nom bloqué
-   (insensible à la casse).
+   (insensible à la casse). La ligne du répertoire n'est inspectée que jusqu'à 4 096 unités de code UTF-16 ;
+   une ligne plus longue est envoyée telle quelle, y compris sans saut de ligne final.
 
 Configurez cette fonction avec `claudeCode.blockedSkills` (`["claude-api"]` par défaut ; `[]` désactive entièrement
 l'élision). Le contenu de remplacement préserve l'association entre l'appel d'outil et son résultat.

@@ -510,7 +510,8 @@ Anthropic passthrough is untouched.
    replaced by a stub when the lowercased JSON input contains a blocked name.
 2. **Text-block carrier:** a user text block ≥10,000 characters starting with
    `Base directory for this skill: ` — matched when the directory basename equals a blocked name
-   (case-insensitive).
+   (case-insensitive). The directory line is inspected only up to 4,096 UTF-16 code units;
+   a longer line is sent unchanged, including when it has no terminating newline.
 
 Configure with `claudeCode.blockedSkills` (default `["claude-api"]`; `[]` disables elision
 entirely). The stub keeps tool call/result pairing intact.
