@@ -84,12 +84,47 @@ export interface LivenessIo {
   createChallengeFn?: () => string;
 }
 
+/**
+ * Operator override for the per-probe fetch ceilings below (`OCX_PROBE_TIMEOUT_MS`),
+ * integer milliseconds in [1, MAX_PROBE_TIMEOUT_MS].
+ *
+ * Some hosts put a security layer (content filter, EDR network extension) in front of
+ * loopback TCP that adds a fixed per-connect cost, measured at about one second on an
+ * affected macOS machine. The shipped 750 ms probe then aborts before a healthy proxy can
+ * answer, and every CLI liveness consumer reports the proxy as down while a direct
+ * `curl /healthz` succeeds.
+ *
+ * The override only raises: each ceiling keeps its shipped floor (750 ms for the shared
+ * default, 1500 ms for the stop/start ownership budgets that guard against a duplicate
+ * proxy, #764, #5004), so a small value can never shorten them. Values above the 30 s
+ * ceiling are ignored rather than clamped: a stop multiplies its budget by the attempt
+ * count, and a typo must not turn a stop into a wait of minutes or days. Parsed once at
+ * module load; anything malformed falls back to the defaults and never breaks startup.
+ */
+export const MAX_PROBE_TIMEOUT_MS = 30_000;
+const SHARED_PROBE_FLOOR_MS = 750;
+const OWNERSHIP_PROBE_FLOOR_MS = 1500;
+
+export function parseProbeTimeoutOverrideMs(raw: string | undefined): number | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) return undefined;
+  const n = Number(trimmed);
+  return n > 0 && n <= MAX_PROBE_TIMEOUT_MS ? n : undefined;
+}
+
+/** The ceiling for a probe whose shipped value is `floorMs`, raised by a valid override only. */
+export function probeCeilingMs(floorMs: number, override: number | undefined): number {
+  return Math.max(floorMs, override ?? 0);
+}
+
+const probeTimeoutOverrideMs = parseProbeTimeoutOverrideMs(process.env.OCX_PROBE_TIMEOUT_MS);
+
 /** Default per-probe fetch ceiling shared by liveness and readiness probes. */
-export const DEFAULT_PROBE_TIMEOUT_MS = 750;
+export const DEFAULT_PROBE_TIMEOUT_MS = probeCeilingMs(SHARED_PROBE_FLOOR_MS, probeTimeoutOverrideMs);
 
 /** Default probe options for service stop / orphan cleanup — a just-bound proxy can miss a single 750ms probe. */
 export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
-  timeoutMs: 1500,
+  timeoutMs: probeCeilingMs(OWNERSHIP_PROBE_FLOOR_MS, probeTimeoutOverrideMs),
   attempts: 3,
 };
 
@@ -105,7 +140,7 @@ export const SERVICE_STOP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> =
  * the stop path already uses for the mirror-image decision.
  */
 export const START_OWNERSHIP_LIVENESS: Pick<LivenessIo, "timeoutMs" | "attempts"> = {
-  timeoutMs: 1500,
+  timeoutMs: probeCeilingMs(OWNERSHIP_PROBE_FLOOR_MS, probeTimeoutOverrideMs),
   attempts: 3,
 };
 

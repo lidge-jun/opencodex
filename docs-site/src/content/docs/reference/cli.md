@@ -68,6 +68,21 @@ List or status is the default where unambiguous. Use `--json` for structured sna
 and other purely visual browser state have no CLI equivalent; Cloudflare Tunnel setup is outside
 this command set.
 
+## Liveness probe ceiling override
+
+`ocx health`, `ocx status`, `ocx account *`, `ocx login codex`, and `ocx ready` find the running
+proxy through a short liveness probe: 750 ms per attempt by default, and 1500 ms with retries for
+stop and start decisions. On hosts where a security layer (a content filter or an EDR-style network
+extension) adds a fixed cost to every loopback connection, those ceilings can expire before a
+healthy proxy answers, so these commands report the proxy as down while
+`curl http://127.0.0.1:10100/healthz` succeeds.
+
+Set `OCX_PROBE_TIMEOUT_MS` to raise the ceilings on such hosts, for example
+`OCX_PROBE_TIMEOUT_MS=5000 ocx status`. The value is whole milliseconds from 1 to 30000. The
+override only raises: the 750 ms default and the 1500 ms stop/start budgets keep their floors, so
+`1000` lengthens only the default probe. Unset, empty, fractional, negative, zero, or larger values
+are ignored and the shipped ceilings apply.
+
 ## Exit codes and confirmation
 
 Successful commands exit 0. Invalid usage, unknown commands or resources, failed API operations,
