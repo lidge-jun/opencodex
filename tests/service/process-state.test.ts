@@ -26,6 +26,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
 let testDir = "";
+const previousHome = process.env.OPENCODEX_HOME;
 
 beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "ocx-process-state-"));
@@ -38,7 +39,8 @@ afterEach(() => {
   setProcessCommandLinePlatformForTests(null);
   setTrustedWindowsSystemDirectoryResolverForTests(null);
   setOcxStartProcessCacheForTests([]);
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   if (testDir && existsSync(testDir)) removeTreeWithRetry(testDir);
   testDir = "";
 });

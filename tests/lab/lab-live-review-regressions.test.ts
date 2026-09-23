@@ -23,6 +23,7 @@ import type {
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const HOMES: string[] = [];
+const previousHome = process.env.OPENCODEX_HOME;
 function tempHome(): string {
   const dir = join(tmpdir(), `ocx-lab-live-review-${process.pid}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -34,7 +35,8 @@ afterEach(() => {
   for (const dir of HOMES.splice(0)) {
     try { removeTreeWithRetry(dir); } catch { /* ignore */ }
   }
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
 });
 
 function behavior(overrides: Partial<LabBehaviorValues> = {}): LabBehaviorValues {

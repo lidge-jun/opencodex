@@ -41,6 +41,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const COMPAT_VERSION = "e".repeat(64);
 const HOMES: string[] = [];
+const previousHome = process.env.OPENCODEX_HOME;
 
 function tempHome(): string {
   const dir = join(tmpdir(), `ocx-lab-cl08-review-${process.pid}-${Math.random().toString(16).slice(2)}`);
@@ -152,7 +153,8 @@ afterEach(() => {
   resetLabAutomationSchedulerStateForTests();
   setLabAutomationDispatchDeps({});
   resetCompatibilityVersionCacheForTests();
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   for (const dir of HOMES.splice(0)) {
     try { removeTreeWithRetry(dir); } catch { /* ignore */ }
   }

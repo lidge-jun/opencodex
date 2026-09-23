@@ -34,6 +34,7 @@ import {
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 let home = "";
+const previousHome = process.env.OPENCODEX_HOME;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-service-secret-"));
@@ -41,7 +42,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   if (home) removeTreeWithRetry(home);
 });
 

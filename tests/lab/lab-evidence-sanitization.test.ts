@@ -28,6 +28,7 @@ import type { NormalizedObservation } from "../../src/lab/conformance/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const HOMES: string[] = [];
+const previousHome = process.env.OPENCODEX_HOME;
 function tempHome(): string {
   const dir = join(tmpdir(), `ocx-lab-sanitize-${process.pid}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -38,7 +39,8 @@ afterEach(() => {
   for (const dir of HOMES.splice(0)) {
     try { removeTreeWithRetry(dir); } catch { /* ignore */ }
   }
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
 });
 
 function behavior(adapter: string, upstreamProtocol: string): LabBehaviorValues {
