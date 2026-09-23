@@ -439,6 +439,8 @@ export const zh: Record<TKey, string> = {
   "dash.updateReason.source_checkout": "源码检出",
   "dash.updateReason.latest_unavailable": "无法连接 npm 注册表",
   "dash.updateReason.already_latest": "已是最新版本",
+  "dash.updateReason.externally_managed": "由 mise 外部管理；请运行显示的命令",
+  "dash.updateReason.external_ownership_invalid": "mise 所有权元数据无法读取或不一致",
   "dash.updateReason.unknown": "无法更新",
   "dash.updateRestart": "更新后重启",
   "dash.updateRestartHint": "推荐开启。代理重启前，当前 GUI 仍运行旧代码。",

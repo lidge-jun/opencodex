@@ -448,6 +448,8 @@ export const tr: Record<TKey, string> = {
   "dash.updateReason.source_checkout": "kaynak kod kopyası",
   "dash.updateReason.latest_unavailable": "npm sunucusuna ulaşılamıyor",
   "dash.updateReason.already_latest": "zaten en son sürümde",
+  "dash.updateReason.externally_managed": "mise tarafından harici olarak yönetiliyor; gösterilen komutu çalıştırın",
+  "dash.updateReason.external_ownership_invalid": "mise sahiplik meta verileri okunamıyor veya tutarsız",
   "dash.updateReason.unknown": "güncelleme kullanılamıyor",
   "dash.updateRestart": "Güncellemeden sonra yeniden başlat",
   "dash.updateRestartHint": "Önerilir. Proxy yeniden başlayana kadar mevcut GUI eski kodu çalıştırmaya devam eder.",

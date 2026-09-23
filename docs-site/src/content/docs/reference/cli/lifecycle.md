@@ -700,6 +700,8 @@ package registry or install an update.
 
 ### `ocx update [--tag latest|preview]`
 
+When OpenCodex is installed through mise, this command exits unsuccessfully before stopping the proxy or changing package files and shows `mise upgrade <tool>`, using the verified local mise alias. Update checks remain available and report the installation as externally managed. An unreadable or inconsistent mise ownership record fails closed without guessing a tool name, and `--tag preview` never changes mise's configured selection.
+
 Self-update opencodex from npm. Stable installs use `@latest`; preview installs stay on `@preview`
 unless you pass `--tag latest|preview`. It detects a source checkout and tells you to
 `git pull && bun install` instead, and is a no-op if you are already on the newest version for that

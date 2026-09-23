@@ -446,6 +446,8 @@ export const fr: Record<TKey, string> = {
   "dash.updateReason.source_checkout": "extraction du code source",
   "dash.updateReason.latest_unavailable": "registre npm inaccessible",
   "dash.updateReason.already_latest": "dernière version déjà installée",
+  "dash.updateReason.externally_managed": "géré par mise ; exécutez la commande affichée",
+  "dash.updateReason.external_ownership_invalid": "les métadonnées de propriété mise sont illisibles ou incohérentes",
   "dash.updateReason.unknown": "mise à jour indisponible",
   "dash.updateRestart": "Redémarrer après la mise à jour",
   "dash.updateRestartHint": "Recommandé. L’interface graphique actuelle continue d’exécuter l’ancien code jusqu’au redémarrage du proxy.",

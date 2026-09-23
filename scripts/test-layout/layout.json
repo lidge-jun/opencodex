@@ -1622,6 +1622,7 @@
     "update-notify.test.ts": "update",
     "update-npm-cache-preflight.test.ts": "update",
     "update-npm-invocation.test.ts": "update",
+    "update-mise.test.ts": "update",
     "update-pnpm.test.ts": "update",
     "update-stop-classification.test.ts": "update",
     "update-stop-first.test.ts": "update",

@@ -317,6 +317,8 @@ Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http:/
 
 ### `ocx update [--tag latest|preview]`
 
+Lorsque OpenCodex est installé avec mise, cette commande échoue avant d'arrêter le proxy ou de modifier les fichiers du paquet et affiche `mise upgrade <outil>` avec l'alias mise local vérifié. La vérification des mises à jour reste disponible et signale une gestion externe. Des métadonnées de propriété mise illisibles ou incohérentes bloquent aussi toute modification sans deviner le nom de l'outil, et `--tag preview` ne change jamais la sélection configurée dans mise.
+
 Met à jour opencodex depuis npm. Les installations stables utilisent `@latest` ; les préversions restent sur `@preview`, sauf si vous indiquez `--tag latest|preview`. La commande détecte un dépôt de sources et vous invite alors à exécuter `git pull && bun install`. Elle ne fait rien si la version la plus récente correspondant à cette balise est déjà installée.
 
 Avant tout arrêt, les installations npm effectuent sous Unix un contrôle borné de la propriété et de l’accès au cache. Les liens symboliques imbriqués sont examinés avec `lstat`, sans être suivis ; Windows ignore explicitement ce contrôle propre à Unix. En cas d’échec, l’opération s’interrompt tandis que l’icône et le proxy fonctionnent encore. Le proxy actif est ensuite arrêté avant le remplacement des fichiers. Un service installé est reconstruit et redémarré automatiquement ; pour une installation au premier plan, la commande indique `ocx start` comme étape suivante. Avant leur conservation, les enregistrements de mise à jour du tableau de bord masquent les chemins de profil et de cache ainsi que les valeurs UID/GID.

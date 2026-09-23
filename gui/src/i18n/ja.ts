@@ -444,6 +444,8 @@ export const ja: Record<TKey, string> = {
   "dash.updateReason.source_checkout": "ソースチェックアウト",
   "dash.updateReason.latest_unavailable": "npm レジストリに到達できません",
   "dash.updateReason.already_latest": "最新です",
+  "dash.updateReason.externally_managed": "mise によって外部管理されています。表示されたコマンドを実行してください",
+  "dash.updateReason.external_ownership_invalid": "mise の所有権メタデータを読み取れないか、整合していません",
   "dash.updateReason.unknown": "更新は利用できません",
   "dash.updateRestart": "更新後に再起動",
   "dash.updateRestartHint": "推奨。プロキシが再起動されるまで現在の GUI は古いコードを実行し続けます。",

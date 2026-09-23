@@ -28,6 +28,7 @@ interface StarStatus {
 interface UpdateBadge {
   updateAvailable?: boolean;
   latestVersion?: string | null;
+  installer?: "bun" | "mise" | "npm" | "pnpm" | "source";
   /** True when no cached registry answer exists, so "no update" is unproven. */
   unknown?: boolean;
 }

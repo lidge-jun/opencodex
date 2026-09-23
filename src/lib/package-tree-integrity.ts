@@ -57,7 +57,7 @@ export interface PackageTreeIntegrityOptions {
 }
 
 export type ObservePackageTree = () => PackageTreeObservation | null;
-export type PackageTreeRuntimeInstall = "bun" | "npm" | "pnpm" | "source";
+export type PackageTreeRuntimeInstall = "bun" | "mise" | "npm" | "pnpm" | "source";
 
 const packageManifestUrl = new URL("../../package.json", import.meta.url);
 

@@ -36,7 +36,7 @@ import { fileURLToPath } from "node:url";
 import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
-import { detectInstallFromPath } from "../src/update/install-detection.mjs";
+import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
 import {
   pnpmOwnerInvocation,
   resolvePnpmGlobalOwner,
@@ -71,7 +71,8 @@ try {
 }
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
-const installMethod = detectInstallFromPath(here, { exists: existsSync });
+const installOwnership = detectInstallOwnershipFromPath(here, { exists: existsSync });
+const installMethod = installOwnership.installer;
 const cliPath = join(here, "..", "src", "cli", "index.ts");
 const NODE_LAUNCH_CONTEXT_ENV = "OCX_NODE_LAUNCH_CONTEXT";
 const NODE_LAUNCH_PROOF_PREFIX = "--ocx-internal-launch-proof=";
@@ -921,6 +922,19 @@ if (updateHelpRequested) {
 const codexCliUpdateInspection = isCodexCliUpdateInspectionArgv(process.argv);
 if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
   console.error("opencodex: codex-cli-update inspection must use the published Node launcher.");
+  process.exit(1);
+}
+
+if (process.argv[2] === "update" && installMethod === "mise") {
+  if (installOwnership.owner) {
+    console.error(
+      `opencodex: this installation is externally managed by mise; update it with: mise upgrade ${installOwnership.owner.tool}`,
+    );
+  } else {
+    console.error(
+      "opencodex: this installation appears to be managed by mise, but its ownership metadata is unreadable or inconsistent; repair the mise installation metadata before updating.",
+    );
+  }
   process.exit(1);
 }
 

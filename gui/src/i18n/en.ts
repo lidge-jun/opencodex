@@ -456,6 +456,8 @@ export const en = {
   "dash.updateReason.source_checkout": "source checkout",
   "dash.updateReason.latest_unavailable": "npm registry unreachable",
   "dash.updateReason.already_latest": "already on latest",
+  "dash.updateReason.externally_managed": "managed externally by mise; run the shown command",
+  "dash.updateReason.external_ownership_invalid": "mise ownership metadata is unreadable or inconsistent",
   "dash.updateReason.unknown": "update unavailable",
   "dash.updateRestart": "Restart after update",
   "dash.updateRestartHint": "Recommended. The current GUI keeps running the old code until the proxy restarts.",

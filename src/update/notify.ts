@@ -139,7 +139,8 @@ export function interactiveGuardOk(): boolean {
  * the one-time star prompt has already run (first-run yield, O1).
  */
 export function shouldConsider(): { channel: Channel; current: string } | null {
-  if (detectInstall() === "source") return null;
+  const installer = detectInstall();
+  if (installer === "source" || installer === "mise") return null;
   const current = currentVersion();
   if (current === "?" || isSourceBuildVersion(current)) return null;
   if (!interactiveGuardOk()) return null;

@@ -118,7 +118,7 @@ describe("package tree integrity", () => {
     expect(installedGuard.status()).toEqual({ ok: false, reason: "package_tree_replaced" });
   });
 
-  test.each(["npm", "bun"] as const)("%s installs still refuse a replaced package tree", installer => {
+  test.each(["npm", "bun", "mise"] as const)("%s installs still refuse a replaced package tree", installer => {
     let observation: PackageTreeObservation = {
       device: 1n,
       inode: 10n,

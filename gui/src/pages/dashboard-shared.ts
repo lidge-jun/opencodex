@@ -125,7 +125,7 @@ export interface SidecarPatch {
 export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
 export type UsageSummary30d = import("../usage-summary-resource").UsageReadMetadata & { summary: { requests: number; totalTokens: number; coverageRatio: number } };
 export type UpdateChannel = "latest" | "preview";
-export type Installer = "npm" | "bun" | "source";
+export type Installer = "bun" | "mise" | "npm" | "pnpm" | "source";
 export type UpdateJobStatus = "running" | "restarting" | "succeeded" | "failed";
 export interface SyncResult {
   ok: boolean;
@@ -189,6 +189,8 @@ export function updateReasonLabel(reason: string | undefined, t: (key: TKey) => 
     case "source_checkout": return t("dash.updateReason.source_checkout");
     case "latest_unavailable": return t("dash.updateReason.latest_unavailable");
     case "already_latest": return t("dash.updateReason.already_latest");
+    case "externally_managed": return t("dash.updateReason.externally_managed");
+    case "external_ownership_invalid": return t("dash.updateReason.external_ownership_invalid");
     default: return t("dash.updateReason.unknown");
   }
 }
