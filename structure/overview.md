@@ -192,6 +192,14 @@ still cover the rule, which is a judgement only review makes.
   there is none, no icon is claimed, the window is shown on launch whatever the launch origin, and
   closing it quits through the same drain; see [`desktop-shell.md`](desktop-shell.md).
   Enforced by `tests/clients/desktop-tray-availability.test.ts`.
+- **INV-COMPANION-01** — Timeline model rows and available ids merge historical pool providers
+  under their base provider, while account grouping keeps separate labels. A legacy
+  account-qualified model filter selects the entire merged row; hiding a base provider removes
+  all its accounts, and hiding a raw provider removes that account's attributions.
+  Enforced by `tests/usage/usage-timeline.test.ts`.
+- **INV-COMPANION-02** — Loaded and updated companion model selections normalize older
+  account-qualified ids to canonical timeline ids and deduplicate them.
+  Enforced by `tests/server/companion-settings.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage

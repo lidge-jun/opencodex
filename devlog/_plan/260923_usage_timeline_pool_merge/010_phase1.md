@@ -35,6 +35,7 @@
 
 ## Verification
 
-- `bun test tests/usage/usage-timeline.test.ts` (new case fails on the old code).
-- `bun run typecheck`.
-- hosted CI at the PR head.
+- `bun install --frozen-lockfile`: passed (104 packages installed).
+- `bun test tests/usage/usage-timeline.test.ts tests/server/companion-settings.test.ts tests/providers/provider-registry-parity.test.ts tests/ci-workflows/structure-ssot.test.ts`: 129 pass, 0 fail after merging current `origin/dev`. This covers the timeline and persisted-settings behavior, the registry conflict resolution, and the owned structure contract.
+- `bun run typecheck`: passed.
+- `bun run test:changed` and the full local suite were not run under this repair lane's focused-validation limit. Exact-head hosted CI after the merge remains to be checked.

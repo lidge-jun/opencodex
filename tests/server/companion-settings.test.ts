@@ -48,6 +48,7 @@ async function call(method: string, body?: unknown, userAgent?: string): Promise
 }
 
 describe("companion settings", () => {
+  // INV-COMPANION-02
   test("a chart selection saved per pool account names the merged timeline row", async () => {
     await withHome(async home => {
       writeFileSync(join(home, "companion.json"), JSON.stringify({

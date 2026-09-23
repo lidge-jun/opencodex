@@ -126,6 +126,7 @@ describe("usage timeline", () => {
     expect(result.series[0]?.id).toBe("openai/one · main");
   });
 
+  // INV-COMPANION-01
   test("pool accounts of one model draw one series and still split under account grouping", () => {
     const pooled = (provider: string, totalTokens: number, extra: Partial<PersistedUsageEntry> = {}) =>
       entry({ requestId: provider, provider, model: "gpt-6-astra", totalTokens, ...extra });

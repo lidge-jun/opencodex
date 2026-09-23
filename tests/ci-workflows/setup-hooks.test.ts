@@ -48,9 +48,13 @@ function setup(root: string): string {
 
 function hooks(root: string): string {
   const path = git(root, "rev-parse", "--path-format=absolute", "--git-path", "hooks");
-  // A linked worktree resolves to its parent fixture's shared hooks directory.
+  // Git and the runtime can spell the same Windows directory differently
+  // (drive casing, separators, or a junction in the temp path). Compare the
+  // filesystem targets while keeping the guard against writes outside fixtures.
+  const resolvedPath = realpathSync.native(path);
   expect(roots.some(fixtureRoot => {
-    const rel = relative(fixtureRoot, path);
+    // A linked worktree resolves to its parent fixture's shared hooks directory.
+    const rel = relative(realpathSync.native(fixtureRoot), resolvedPath);
     return rel !== ".." && !rel.startsWith("../") && !rel.startsWith("..\\") && !isAbsolute(rel);
   })).toBe(true);
   return path;

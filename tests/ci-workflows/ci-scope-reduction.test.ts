@@ -211,6 +211,13 @@ function legsFor(jobName: string, ci: "true" | "false", native: "true" | "false"
 
 const hostHasJq = Boolean(Bun.which("jq"));
 const emittersNeedJq = MATRIX_JOBS.some(name => (emitterStep(matrixOutputName(name)).run ?? "").includes("jq"));
+// The changes emitters and the aggregate gate run under bash on ubuntu-latest,
+// and the harness launches them through /bin/bash. The Windows runner has no
+// /bin/bash, so executing them there tests the host, not the workflow; the
+// structural assertions above and below still run on every platform.
+const hostRunsWorkflowShell = process.platform !== "win32";
+const cannotRunEmitters = !hostRunsWorkflowShell || (emittersNeedJq && !hostHasJq);
+const cannotRunGate = !hostRunsWorkflowShell || !hostHasJq;
 
 const gateScript = (jobs.ci?.steps ?? []).find(step => (step.run ?? "").includes("scoped=requested"))?.run ?? "";
 
@@ -376,14 +383,14 @@ describe("the smoke matrices", () => {
     }
   });
 
-  test.skipIf(emittersNeedJq && !hostHasJq)("keep ubuntu and windows unconditionally and macos only under the native selection", () => {
+  test.skipIf(cannotRunEmitters)("keep ubuntu and windows unconditionally and macos only under the native selection", () => {
     for (const jobName of MATRIX_JOBS) {
       expect(legsFor(jobName, "true", "false").sort()).toEqual(["ubuntu-latest", "windows-latest"]);
       expect(legsFor(jobName, "true", "true").sort()).toEqual(["macos-latest", "ubuntu-latest", "windows-latest"]);
     }
   });
 
-  test.skipIf(emittersNeedJq && !hostHasJq)("keep the keyring legs shaped as name/runner pairs", () => {
+  test.skipIf(cannotRunEmitters)("keep the keyring legs shaped as name/runner pairs", () => {
     // The job reads matrix.name in its step conditions and matrix.runner in
     // runs-on, so an entry missing either key starts a leg that cannot run.
     const outputName = matrixOutputName("keyring-smoke");
@@ -403,12 +410,12 @@ describe("the aggregate gate", () => {
     expect(step?.env?.CHANGES_CI).toBe("${{ needs.changes.outputs.ci }}");
   });
 
-  test.skipIf(!hostHasJq)("gates every job by name, with the aggregate itself excepted", () => {
+  test.skipIf(cannotRunGate)("gates every job by name, with the aggregate itself excepted", () => {
     const { gatedJobs } = runGate(PR_WITHOUT_NATIVE, {});
     expect(gatedJobs.sort()).toEqual(Object.keys(jobs).filter(name => name !== "ci").sort());
   });
 
-  test.skipIf(!hostHasJq)("treats an unselected native job as not-requested and stays green over skips", () => {
+  test.skipIf(cannotRunGate)("treats an unselected native job as not-requested and stays green over skips", () => {
     // This is the shape the native gate must not get wrong: a src-only pull
     // request skips the three native jobs, and the gate must read that as
     // deliberate. The ci-scoped jobs stay requested, which is what keeps a
@@ -427,7 +434,7 @@ describe("the aggregate gate", () => {
     expect(bad).toBe("");
   });
 
-  test.skipIf(!hostHasJq)("still fails a requested native job that reports skipped", () => {
+  test.skipIf(cannotRunGate)("still fails a requested native job that reports skipped", () => {
     const selectedNative = { ...PR_WITHOUT_NATIVE, native: "true" } as const;
     const { expectations } = runGate(selectedNative, {});
     for (const name of NATIVE_GATED) expect(`${name}:${expectations[name]}`).toBe(`${name}:requested`);
@@ -439,7 +446,7 @@ describe("the aggregate gate", () => {
     for (const name of NATIVE_GATED) expect(bad).toContain(name);
   });
 
-  test.skipIf(!hostHasJq)("requests the native jobs on push and dispatch regardless of the filter outputs", () => {
+  test.skipIf(cannotRunGate)("requests the native jobs on push and dispatch regardless of the filter outputs", () => {
     for (const eventName of ["push", "workflow_dispatch"]) {
       const { expectations } = runGate({ ...PR_WITHOUT_NATIVE, eventName, ci: "false", native: "false" }, {});
       for (const name of NATIVE_GATED) {
@@ -448,7 +455,7 @@ describe("the aggregate gate", () => {
     }
   });
 
-  test.skipIf(!hostHasJq)("leaves the keyring and npm-global expectations alone", () => {
+  test.skipIf(cannotRunGate)("leaves the keyring and npm-global expectations alone", () => {
     // The smoke jobs keep running as jobs; only their matrix legs shrink. So
     // keyring-smoke still follows the shared ci scope and npm-global-smoke
     // still follows packaging, native or not.
