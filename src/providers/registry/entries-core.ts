@@ -278,6 +278,19 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // absent from xAI's documented API, so a model discovered later has no more support for it
     // than the seeded ones do.
     supportsVerbosity: false,
+    // docs.x.ai/docs/guides/reasoning: presencePenalty and frequencyPenalty "cannot be used with
+    // reasoning models. Requests that include them return an error." Live 2026-09-23: grok-4.7
+    // answers 400 invalid-argument "Model grok-4.7 does not support parameter presencePenalty."
+    // Non-reasoning ids keep caller penalties.
+    noPenaltyModels: [
+      "grok-4.7",
+      "grok-4.6",
+      "grok-4.5",
+      "grok-4.3",
+      "grok-4.20-multi-agent-0309",
+      "grok-4.20-0309-reasoning",
+      "grok-build-0.1",
+    ],
     defaultModel: "grok-4.5",
     // Grok 4.7/4.6/4.5 subscription Responses callers use the native wire with the existing
     // namespace/web-search/replay normalization. Chat remains an explicit modelAdapters
