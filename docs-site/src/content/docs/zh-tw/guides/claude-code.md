@@ -235,7 +235,10 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜�
 每個條目帶有誠實的顯示名（如 `gemini-3-pro (gemini)`），並以官方 ModelInfo 形態附帶完整模型
 能力（推理強度階梯、thinking 型別），使 Claude Desktop 的第三方閘道器模式能夠提供其推理強度
 選擇器。真實 Anthropic 模型保留其規範 id。合成的 2026 日期是內部槽位，不是釋出日期。舊版雜湊
-別名與較舊設定中的 `claude-ocx-<provider>--<model>` id 仍可解析。
+別名與較舊設定中的 `claude-ocx-<provider>--<model>` id 仍可解析，跳脫的 `claude-ocx2-<provider>--<model>`
+也同樣可解析。已儲存的舊 id 仍會路由，但 Claude Code 對它仍按 200k 計算。把已儲存的 `claude-ocx-`
+重新選一次對應的 `ocx-claude-`，跳脫的 `claude-ocx2-` 重新選一次 `ocx-claude2-`，即可同時用上真實上下文
+視窗與 compact。
 擁有權威 1M 上下文視窗的模型會多出一個 `…[1m]` 選擇器列：選中後 Claude Code 會按完整 1M 上下文
 計算該模型（自動壓縮仍開啟）——代理在路由前會去掉該標記。
 選中後會儲存到 Claude Code 的 `settings.json` `model` 欄位；入站請求會將別名解析回路由
@@ -246,6 +249,7 @@ user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜�
 不含 `/` 或 `~` 的一般 model ID 使用 v1 前綴 `ocx-claude-…`。包含 `/` 或 `~` 的 model ID
 使用 v2 前綴 `ocx-claude2-…` 並跳脫（`/` → `~s`，`~` → `~t`），例如
 `openrouter/anthropic/claude-opus-4-8` → `ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`。
+v1 別名按字面解碼（歷史上 model ID 中包含的兩字元序列 `~s` / `~t` 會被保留）；v2 別名會展開跳脫。
 易讀形式無法表達的路由會回退到雜湊別名。模型 ID **可以**包含 `--`（解析時只按第一個
 `--` 拆分）；包含 `--` 的原生 slug 會回退到雜湊形式。
 

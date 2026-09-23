@@ -184,7 +184,10 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 プロキシはリクエストごとに系列を選びます。`?ids=cli` または `?ids=desktop` が優先し、指定しないと
 `claude-code/*` user-agent には読みやすい CLI 形式を、他のクライアントには Desktop ハッシュを
 提供します。両系列は継続してデコードできるため、どちらの形式でも `settings.json` に保存したモデルは
-引き続き動作します。
+引き続き動作します。古い設定の `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` も
+引き続き解決されますが、保存済みの旧 ID はルーティングされても Claude Code 側では 200k として計算されます。
+保存済みの `claude-ocx-` は `ocx-claude-` に、エスケープ付きの `claude-ocx2-` は `ocx-claude2-` に一度選び直すと、
+実際のコンテキストウィンドウと compact が両方とも適用されます。
 
 Claude Desktop のフッターピッカーで実行中の 3P 会話のモデルが切り替わらない場合は、
 `/model <id>` を試せますが、影響を受ける Desktop ビルドではこの回避策も失敗することがあります。

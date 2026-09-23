@@ -139,7 +139,10 @@ apply、轮换/恢复或直接 disconnect 均可处理，无需新参数或事�
 每个条目带有诚实的显示名（如 `gemini-3-pro (gemini)`），并以官方 ModelInfo 形态附带模型能力
 信息（推理强度梯度、thinking 类型），使 Claude Desktop 的第三方网关模式能够启用推理强度选择
 UI。真实 Anthropic 模型保留其原始 id。合成的 2026 日期是内部槽位，不是发布日期。旧版哈希
-别名和 `claude-ocx-<provider>--<model>` 别名仍可解析。拥有 1M 上下文的模型会多出一行 `…[1m]`：
+别名和 `claude-ocx-<provider>--<model>` 别名仍可解析，转义的 `claude-ocx2-<provider>--<model>` 也同样可解析。
+已保存的旧 id 仍会路由，但 Claude Code 对它仍按 200k 计算。把已保存的 `claude-ocx-` 重新选一次对应的
+`ocx-claude-`，转义的 `claude-ocx2-` 重新选一次 `ocx-claude2-`，即可同时用上真实上下文窗口和 compact。
+拥有 1M 上下文的模型会多出一行 `…[1m]`：
 选中后 Claude Code 会按 1M 计算该模型的上下文（自动压缩保留，代理在路由前去掉该标记）。
 选中后会保存到 Claude Code 的 `settings.json` `model` 字段；入站请求会将别名解析回路由
 模型。旧版 Claude Code 中选择器保持原生 — 通过 `ANTHROPIC_MODEL` 设置槽位，或直接在 `/model`

@@ -331,7 +331,11 @@ ModelInfo biçiminde tam model yeteneklerini (akıl yürütme çabası merdiveni
 düşünme türleri) taşır. Gerçek Anthropic modelleri kurallı kimliklerini korur.
 Sentetik 2026 tarihi bir çıkış tarihi değil, dahili bir yuvadır. Eski karma
 takma adlar ve eski yapılandırmalardan gelen `claude-ocx-<provider>--<model>`
-kimlikleri hala çözümlenir.
+kimlikleri hala çözümlenir; kaçışlı `claude-ocx2-<provider>--<model>` kimlikleri de
+çözümlenir. Kayıtlı eski bir kimlik yine yönlendirilir, ancak Claude Code o kimlik için
+200k hesabını sürdürür. Gerçek bağlam penceresi ve compact birlikte uygulansın diye
+kayıtlı `claude-ocx-` yerine bir kez `ocx-claude-`, kaçışlı `claude-ocx2-` yerine
+`ocx-claude2-` seçin.
 
 Claude Desktop'ın altbilgi seçicisi zaten çalışan bir 3P görüşmesi için modeli
 değiştirmezse, `/model <id>` komutunu deneyebilirsiniz; ancak bu geçici çözüm de

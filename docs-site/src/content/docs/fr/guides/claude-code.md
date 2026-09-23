@@ -315,7 +315,10 @@ Chaque entrée porte un nom d'affichage explicite, comme `gemini-3-pro (gemini)`
 Desktop peut ainsi proposer son sélecteur d'effort. Les véritables modèles Anthropic conservent leurs
 identifiants canoniques. La date synthétique 2026 désigne un emplacement interne, et non une date de publication. Les
 anciens alias hachés et les identifiants `claude-ocx-<provider>--<model>` des configurations antérieures sont
-toujours résolus.
+toujours résolus, tout comme les identifiants échappés `claude-ocx2-<provider>--<model>`. Un identifiant hérité
+enregistré est toujours acheminé, mais Claude Code continue de le compter à 200k. Choisissez une fois `ocx-claude-`
+à la place d'un `claude-ocx-` enregistré, et `ocx-claude2-` à la place d'un `claude-ocx2-` échappé, pour que la vraie
+fenêtre de contexte et le compactage s'appliquent tous les deux.
 
 Si le sélecteur situé au bas de Claude Desktop ne modifie pas le modèle d'une conversation 3P déjà en cours,
 vous pouvez essayer `/model <id>`, mais ce contournement peut également échouer sur les versions de Desktop
