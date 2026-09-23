@@ -133,6 +133,9 @@ allow attachments instead of blocking them before the sidecar runs. When
 use the `gpt-5.6-luna` fallback. Startup still migrates an explicitly persisted legacy
 `gpt-5.4-mini` value to `gpt-5.6-luna`; that migration applies to a stored value, not to an absent
 model field.
+Saving a multimodal combo from the dashboard enrolls its non-image members automatically: the
+Combos page sends them as `visionSidecarTargets` on `PUT /api/combos`, which writes the exact
+text-only declaration on the member's provider, so no manual config edit and reload is needed.
 The first-party DeepSeek `deepseek-flash` model is native multimodal (`text` and `image`) and does
 not use this sidecar by default. Explicit `noVisionModels` or text-only declarations remain
 authoritative. First-party `deepseek-chat`, `deepseek-reasoner`, and `deepseek-v4-flash` remain

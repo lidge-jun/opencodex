@@ -412,9 +412,13 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
   });
 }
 
-export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}): {
+export function toPutBody(
+  item: ComboItem,
+  options: { renameFrom?: string; visionSidecarTargets?: Array<{ provider: string; model: string }> } = {},
+): {
   id: string;
   renameFrom?: string;
+  visionSidecarTargets?: Array<{ provider: string; model: string }>;
   combo: {
     targets: ComboTarget[];
     strategy: ComboStrategy;
@@ -431,6 +435,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
   return {
     id: item.id.trim(),
     ...(options.renameFrom ? { renameFrom: options.renameFrom } : {}),
+    ...(options.visionSidecarTargets?.length ? { visionSidecarTargets: options.visionSidecarTargets } : {}),
     combo: {
       targets: item.targets.map((target) => weighted
         ? { provider: target.provider.trim(), model: target.model.trim(), weight: target.weight ?? 1 }

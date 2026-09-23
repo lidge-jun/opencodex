@@ -52,6 +52,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
+import { mergeModelCapabilities, modelCapabilitiesConfigError } from "../../config/provider-validation";
 import type { OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -106,6 +107,43 @@ function sparseComboConfig<T extends {
     ...(reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
     ...(defaultEffortMode === "force" ? { defaultEffortMode: "force" as const } : {}),
   };
+}
+
+interface VisionSidecarTarget {
+  provider: string;
+  model: string;
+}
+
+/**
+ * Request-only PUT field: combo members to declare text-only so the Vision Sidecar
+ * covers them when the combo accepts images. Every entry must be an exact target of
+ * the submitted combo, and the whole field is validated before any config mutation.
+ * Nothing from here is persisted under config.combos.
+ */
+function parseVisionSidecarTargets(
+  raw: unknown,
+  comboTargetKeys: ReadonlySet<string>,
+): { targets?: VisionSidecarTarget[]; error?: string } {
+  if (raw === undefined) return {};
+  if (!Array.isArray(raw)) return { error: "visionSidecarTargets must be an array" };
+  const seen = new Set<string>();
+  const targets: VisionSidecarTarget[] = [];
+  for (const entry of raw) {
+    if (!isPlainRecord(entry)) return { error: "visionSidecarTargets entries must be objects" };
+    const provider = typeof entry.provider === "string" ? entry.provider.trim() : "";
+    const model = typeof entry.model === "string" ? entry.model.trim() : "";
+    if (!provider || !model) {
+      return { error: "visionSidecarTargets entries must have nonblank provider and model" };
+    }
+    const key = `${provider}/${model}`;
+    if (!comboTargetKeys.has(key)) {
+      return { error: `visionSidecarTargets entry "${key}" is not a target of this combo` };
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    targets.push({ provider, model });
+  }
+  return { targets };
 }
 
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
@@ -187,6 +225,26 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     });
     if (error) return jsonResponse({ error }, 400);
     const normalized = normalizeComboConfig(effectiveCombo as unknown as OcxComboConfig);
+    const sidecarParsed = parseVisionSidecarTargets(
+      body.visionSidecarTargets,
+      new Set(normalized.targets.map((target) => `${target.provider}/${target.model}`)),
+    );
+    if (sidecarParsed.error) return jsonResponse({ error: sidecarParsed.error }, 400);
+    const sidecarPatches = new Map<string, Record<string, { inputModalities: string[] }>>();
+    if (sidecarParsed.targets?.length) {
+      if (normalized.imageInput === "disabled") {
+        return jsonResponse({ error: "visionSidecarTargets requires imageInput auto" }, 400);
+      }
+      for (const { provider, model } of sidecarParsed.targets) {
+        const patch = sidecarPatches.get(provider) ?? {};
+        patch[model] = { inputModalities: ["text"] };
+        sidecarPatches.set(provider, patch);
+      }
+      for (const patch of sidecarPatches.values()) {
+        const error = modelCapabilitiesConfigError(patch);
+        if (error) return jsonResponse({ error }, 400);
+      }
+    }
     // Persist only non-default identity/capability fields so config stays sparse.
     // Capability defaults (`imageInput`, `reasoningEffortMode`) go through the same
     // helper the GET/PUT responses use, so the wire shape and the stored shape cannot drift.
@@ -282,6 +340,13 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       config.disabledModels = [...new Set(config.disabledModels.map(model => (
         oldDisabledSelectors.has(model) ? newDisabledModel : model
       )))];
+    }
+    for (const [providerName, patch] of sidecarPatches) {
+      const provider = config.providers?.[providerName];
+      if (!provider) continue;
+      const capabilities = mergeModelCapabilities(provider.modelCapabilities, patch);
+      if (capabilities === undefined) delete provider.modelCapabilities;
+      else provider.modelCapabilities = capabilities;
     }
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
