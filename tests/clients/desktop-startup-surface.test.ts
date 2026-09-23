@@ -100,7 +100,9 @@ describe("desktop startup surface", () => {
 
   test("one deadline covers the whole sequence and bounds every probe under it", () => {
     expect(startup).toContain("pub const DEADLINE: Duration");
-    expect(startup).toContain("let deadline = started + DEADLINE;");
+    // `mut` because a takeover prompt moves the ceiling by however long the user thought — the
+    // budget bounds the machinery, not the person deciding.
+    expect(startup).toContain("let mut deadline = started + DEADLINE;");
     // The budget for finding an existing runtime is the CLI's now, not a second one here: the
     // tuned probe budgets exist because a shell-side reimplementation answered "nobody is
     // listening" twice and started duplicate proxies.
@@ -190,14 +192,28 @@ describe("desktop startup surface", () => {
   test("a run that reports nothing is still a run that ends", () => {
     // Every early return in the sequence, and every step that outlives the ceiling, used to leave
     // the surface on its last state for as long as the process lived.
-    const begin = startup.slice(startup.indexOf("pub fn begin("), startup.indexOf("fn settle("));
+    const begin = startup.slice(
+      startup.indexOf("pub fn begin("),
+      startup.indexOf("fn settle(app:"),
+    );
     expect(begin).toContain("run(&app, started).await;");
     expect(begin.slice(begin.indexOf("run(&app, started).await;"))).toContain("settle(");
-    expect(begin).toContain("sleep_until(started + DEADLINE + SETTLE_GRACE)");
+    // The consent wait moves the ceiling. The expiry check, the consent state and the terminal
+    // publish share one critical section, so a prompt posted or an answer consumed can never
+    // meet a failure already in flight.
+    expect(begin).toContain("startup.set_deadline(started + DEADLINE)");
+    expect(begin).toContain("startup.expire_run(");
+    expect(begin).toContain("Expiry::Blocked");
+    expect(begin).toContain("Expiry::Waiting");
+    expect(begin).toContain("Expiry::Fired");
+    expect(begin).toContain("sleep_until(wake)");
     // Idempotent, and bound to the run it was started for: it may not overwrite a real result,
     // and a guard left over from an earlier run may not fail the retry that replaced it.
-    const settle = startup.slice(startup.indexOf("fn settle("), startup.indexOf("async fn run("));
-    expect(settle).toContain("startup.settled()");
+    const settle = startup.slice(
+      startup.indexOf("fn settle(&self"),
+      startup.indexOf("async fn run("),
+    );
+    expect(settle).toContain("live.is_settled()");
     expect(settle).toContain("generation.load(Ordering::Acquire) != generation");
     expect(settle).toContain("Progress::new(Phase::Failed, elapsed_ms)");
   });
@@ -228,9 +244,10 @@ describe("desktop startup surface", () => {
   test("every call into the shell can fail without leaving the page blank", () => {
     const page = readFileSync(PAGE, "utf8");
     expect(page).toContain("function reportPageFailure");
-    // Both entry points — the first load and the retry — have to catch, because either one
-    // failing silently leaves a window that says "Starting…" forever.
-    expect(page.match(/reportPageFailure\(/g) || []).toHaveLength(3);
+    // Every entry point — the first load, the retry and the takeover decision — has to catch,
+    // because any one failing silently leaves a window that says "Starting…" forever. The count
+    // includes the function definition itself.
+    expect(page.match(/reportPageFailure\(/g) || []).toHaveLength(4);
     const retry = page.slice(page.indexOf('retry.addEventListener'));
     expect(retry.slice(0, 400)).toContain("catch");
   });

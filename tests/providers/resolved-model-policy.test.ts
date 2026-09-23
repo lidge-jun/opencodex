@@ -66,6 +66,14 @@ function resolve(
 }
 
 describe("resolved static model policy parity", () => {
+  test("inline tag opt-in inherits only matching transport defaults and preserves explicit empty lists", () => {
+    const entry = registry({ inlineThinkTagModels: [MODEL] });
+    expect(resolve(provider(), entry).provider.inlineThinkTagModels).toEqual([MODEL]);
+    expect(resolve(provider({ inlineThinkTagModels: [] }), entry).provider.inlineThinkTagModels).toEqual([]);
+    expect(resolve(provider({ inlineThinkTagModels: ["other"] }), entry).provider.inlineThinkTagModels).toEqual(["other"]);
+    expect(resolve(provider(), entry, false).provider.inlineThinkTagModels).toBeUndefined();
+    expect(routedProviderConfig("fixture-provider", provider({ inlineThinkTagModels: [MODEL] })).inlineThinkTagModels).toEqual([MODEL]);
+  });
   test("representative registry maps stay byte-equivalent to the current route merge", () => {
     const entry = PROVIDER_REGISTRY.find(candidate => {
       if (candidate.allowBaseUrlOverride || /\{[^}]*\}/.test(candidate.baseUrl)) return false;

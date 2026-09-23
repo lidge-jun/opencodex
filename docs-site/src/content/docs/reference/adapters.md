@@ -206,9 +206,14 @@ classified that key as belonging to one conversation. Shared or unclassified cac
 keys do not establish session affinity; requests without a usable identity receive
 a fresh session ID. Recovery and cached-history replay preserve this classification.
 
-The API-key `commandcode` provider uses the `openai-chat` adapter and supports
-forwarding `prompt_cache_key`. This is separate from the OAuth adapter's session
-header and does not guarantee a provider cache hit.
+The API-key `commandcode` provider uses Chat Completions for most model ids and the
+Anthropic Messages adapter (`x-api-key`) for `claude-*` ids, which Command Code serves
+only on `/provider/v1/messages`; the pin applies only while the provider points at that
+endpoint. It supports forwarding `prompt_cache_key`; this is separate
+from the OAuth adapter's session header and does not guarantee a provider cache hit.
+The OAuth `command-code` preset streams `/alpha/generate` as NDJSON. MiMo tool-call
+markup echoed by the gateway as text is removed when it duplicates a real call, or
+restored as a real call when a complete declared-tool call has no native counterpart.
 
 ## `anthropic`
 

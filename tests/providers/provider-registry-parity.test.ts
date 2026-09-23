@@ -1849,7 +1849,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     const provider = make();
     enrichProviderFromRegistry("CommandCode", provider);
     expect(configuredReasoningEfforts(provider, known)).toEqual(["high", "max"]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
     expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual([]);
   });
   test("preserves explicit entries and clones arrays without losing other table rows", () => {
@@ -1862,7 +1862,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     enrichProviderFromRegistry("CommandCode", provider);
     expect(provider).toEqual(once);
     expect(configuredReasoningEfforts(provider, known)).toEqual(["low"]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
     expect(configuredReasoningEfforts(provider, "custom")).toEqual([]);
     expect(configuredReasoningEfforts(provider, "unknown-model")).toEqual(["medium"]);
     provider.modelReasoningEfforts![known]!.push("high");
@@ -1874,7 +1874,7 @@ describe("renamed fixed-key destination reasoning metadata", () => {
     const provider = make({ modelReasoningEfforts: { [known]: [] } });
     enrichProviderFromRegistry("CommandCode", provider);
     expect(configuredReasoningEfforts(provider, known)).toEqual([]);
-    expect(configuredReasoningEfforts(provider, newer)).toEqual(["high", "max"]);
+    expect(configuredReasoningEfforts(provider, newer)).toEqual(["low", "high", "max"]);
   });
   test("does not infer metadata for a different adapter, OAuth, or unrelated endpoint", () => {
     for (const override of [{ adapter: "openai-responses" }, { authMode: "oauth" as const }, { baseUrl: "https://example.test/v1" }]) {

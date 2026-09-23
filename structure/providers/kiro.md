@@ -37,6 +37,14 @@ raw body.
 
 > Decision record: [ADR-0061](../decisions/ADR-0061-kiro-responses-text-controls.md)
 
+## Bounded fallback HTTP errors
+
+When a first Kiro stream needs a completion fallback, the fallback response's non-success
+body is read through the shared display-safe bounded reader with the attempt's abort signal.
+The adapter emits an error with the upstream status and does not emit a successful completion.
+A body that exceeds the reader's limit is cancelled and cannot contribute unbounded text to
+the error message. Coverage: `tests/providers/kiro/kiro-fallback-error-body.test.ts`.
+
 ## Kiro reasoning round-trip (`signature`)
 
 Kiro never returns plaintext reasoning for its **GPT-5.6 family** (`gpt-5.6-sol`, `-terra`,

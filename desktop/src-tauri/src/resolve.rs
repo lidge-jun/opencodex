@@ -14,6 +14,7 @@
 //! reading that must never happen is "the resolve failed, so nobody must be listening".
 
 use crate::endpoint::ProxyEndpoint;
+use crate::ownership::Recorded;
 use serde::Deserialize;
 use std::path::PathBuf;
 use tauri::AppHandle;
@@ -52,6 +53,36 @@ pub struct Port {
     pub configured: u16,
 }
 
+/// Whether the CLI says a desktop takeover can be offered.
+///
+/// The token is the binding a later `ocx service claim` repeats back: it covers the exact
+/// subject and managing-CLI observations the consent was approved against, so a claim made
+/// after either moved is refused rather than recorded.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Takeover {
+    #[serde(rename_all = "camelCase")]
+    Supported {
+        protocol_version: u64,
+        minimum_cli_version: String,
+        token: String,
+    },
+    Blocked {
+        reason: String,
+        detail: String,
+    },
+}
+
+impl Default for Takeover {
+    /// An older bundled CLI carries no takeover answer at all; silence is not approval.
+    fn default() -> Self {
+        Self::Blocked {
+            reason: "unreported".to_owned(),
+            detail: "the bundled CLI did not report takeover compatibility".to_owned(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Resolved {
@@ -60,6 +91,12 @@ pub struct Resolved {
     pub config_home: String,
     pub port: Port,
     pub liveness: Liveness,
+    /// The recorded runtime owner, already in the CLI's three answers. Absent on older
+    /// documents, which read as unknown rather than as nobody owning the runtime.
+    #[serde(default)]
+    pub ownership: Recorded,
+    #[serde(default)]
+    pub takeover: Takeover,
 }
 
 impl Resolved {
@@ -228,8 +265,10 @@ pub async fn run(app: &AppHandle, deadline: Instant) -> Resolution {
 #[cfg(test)]
 mod tests {
     use super::{
-        live_verdict, loopback_reachable, may_start, read, LiveVerdict, Resolution, Status, SCHEMA,
+        live_verdict, loopback_reachable, may_start, read, LiveVerdict, Resolution, Status,
+        Takeover, SCHEMA,
     };
+    use crate::ownership::{Owner, Recorded};
 
     const LIVE: &str = r#"{"schema":"ocx-resolve/1","cliVersion":"2.61.0","configHome":"/h",
         "port":{"effective":10100,"configured":10100,"source":"runtime-record"},
@@ -316,6 +355,69 @@ mod tests {
             assert!(matches!(resolution, Resolution::Unknown(_)), "{code:?}");
             assert!(!may_start(&resolution));
         }
+    }
+
+    #[test]
+    fn ownership_and_takeover_answers_are_read_whole() {
+        let document = format!(
+            "{}{}}}",
+            LIVE.strip_suffix('}').unwrap(),
+            r#","ownership":{"kind":"owned","ownership":{"owner":"cli","installId":"npm-1","consentGeneration":2},"revision":9},"takeover":{"kind":"supported","protocolVersion":1,"minimumCliVersion":"2.61.0","token":"abc"}"#
+        );
+        let resolution = read(Some(0), document.as_bytes(), b"");
+        let resolved = match resolution.resolved() {
+            Some(resolved) => resolved.clone(),
+            None => panic!("{}", resolution.reason().unwrap()),
+        };
+        assert_eq!(
+            resolved.ownership,
+            Recorded::Owned {
+                ownership: crate::ownership::Claim {
+                    owner: Owner::Cli,
+                    install_id: "npm-1".to_owned(),
+                    consent_generation: 2,
+                },
+                revision: 9,
+            }
+        );
+        assert!(matches!(
+            resolved.takeover,
+            Takeover::Supported { ref token, .. } if token == "abc"
+        ));
+    }
+
+    #[test]
+    fn a_missing_ownership_or_takeover_answer_is_not_consent() {
+        // Older bundled CLIs carry neither field; silence must read unknown/blocked, never
+        // "nobody owns it" or "takeover supported".
+        let resolved = read(Some(0), LIVE.as_bytes(), b"")
+            .resolved()
+            .expect("a document")
+            .clone();
+        assert!(matches!(resolved.ownership, Recorded::Unknown { .. }));
+        assert!(matches!(resolved.takeover, Takeover::Blocked { .. }));
+        assert_eq!(resolved.takeover, Takeover::default());
+    }
+
+    #[test]
+    fn a_blocked_takeover_carries_its_reason() {
+        let document = format!(
+            "{}{}}}",
+            LIVE.strip_suffix('}').unwrap(),
+            r#","ownership":{"kind":"none","revision":0},"takeover":{"kind":"blocked","reason":"managing-cli-unsupported","detail":"path uses 2.59.0","minimumCliVersion":"2.61.0"}"#
+        );
+        let resolved = read(Some(0), document.as_bytes(), b"")
+            .resolved()
+            .expect("a document")
+            .clone();
+        assert_eq!(resolved.ownership, Recorded::None { revision: 0 });
+        assert_eq!(
+            resolved.takeover,
+            Takeover::Blocked {
+                reason: "managing-cli-unsupported".to_owned(),
+                detail: "path uses 2.59.0".to_owned(),
+            }
+        );
     }
 
     #[test]

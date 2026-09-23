@@ -38,7 +38,7 @@ Chat request serialization owns
 and the developer wire role; it requires no runtime lifecycle change, and its one
 configuration option is a per-provider role opt-out.
 
-Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Anthropic streaming usage snapshots
 
@@ -55,9 +55,9 @@ Catalog-derived reasoning-level diagnostics are escaped only at the human-output
 
 ## CLI resolve and stop contracts for embedding shells
 
-`ocx resolve` (`src/cli/resolve.ts`) is the machine surface a desktop shell asks instead of resolving the config home, the port, and liveness itself: the home comes from `src/config/paths.ts`, the effective port is the live listener's when the identity-checked `findLiveProxy` answers and the configured `config.port ?? 10100` otherwise, and the liveness verdict is that same module's output (pid, runtime-versus-config provenance, version, role). Config reads go through `readConfigDiagnostics`, not `loadConfig`: a missing file is defaults, but an invalid file exits 1 instead of being repaired to defaults, because a defaulted port is a guess the caller must refuse. Liveness is three-valued: when `findLiveProxy` returns null, resolve re-asks the endpoints with the updater's tri-state probe (`endpointsToProve` + `everyEndpointProvenDown` + `probeProxyLiveness`), and only a unanimous definitive "dead" becomes `absent-proven`; unknown exits 1 and never authorises a start. Discovery borrows `START_OWNERSHIP_LIVENESS`, the start path's ownership budget — the verdict feeds the shell's launch decision, so the cost of a false "nobody listening" is the duplicate proxy (#5004). The verb is in `skipsCodexShimAutoRestore`, so a read-only lookup never triggers a shim repair. Arguments are pre-parsed in `src/cli/root.ts` and exit 64 before any preflight side effect, the same ordering `ocx ready` obeys.
+`ocx resolve` (`src/cli/resolve.ts`) is the machine surface a desktop shell asks instead of resolving the config home, the port, and liveness itself: the home comes from `src/config/paths.ts`, the effective port is the live listener's when the identity-checked `findLiveProxy` answers and the configured `config.port ?? 10100` otherwise, and the liveness verdict is that same module's output (pid, runtime-versus-config provenance, version, role). Config reads go through `readConfigDiagnostics`, not `loadConfig`: a missing file is defaults, but an invalid file exits 1 instead of being repaired to defaults, because a defaulted port is a guess the caller must refuse. Liveness is three-valued: when `findLiveProxy` returns null, resolve re-asks the endpoints with the updater's tri-state probe (`endpointsToProve` + `everyEndpointProvenDown` + `probeProxyLiveness`), and only a unanimous definitive "dead" becomes `absent-proven`; unknown exits 1 and never authorises a start. Discovery borrows `START_OWNERSHIP_LIVENESS`, the start path's ownership budget — the verdict feeds the shell's launch decision, so the cost of a false "nobody listening" is the duplicate proxy (#5004). The verb is in `skipsCodexShimAutoRestore`, so a read-only lookup never triggers a shim repair. Arguments are pre-parsed in `src/cli/root.ts` and exit 64 before any preflight side effect, the same ordering `ocx ready` obeys. `ocx-resolve/1` also reports `ownership` (`none`, `owned`, or `unknown`) and `takeover` (`supported` with protocol version, minimum CLI version and compatibility token, or `blocked` with a reason). A known liveness verdict still exits 0 when ownership is unknown, but takeover is blocked. An unreadable second service-state read blocks takeover instead of becoming an absent registration. `src/service/managing-cli.ts` observes the registered and selected PATH CLIs, including Windows PATHEXT order and file validation, before compatibility is offered.
 
-`ocx stop --json` is a reporting layer over the unchanged stop path. `src/cli/index.ts` threads a `StopRunRecord` through the existing receipt, drain, respawn-verification and restore flow, and `src/cli/stop-report.ts` maps the recorded facts plus the signals that already pick the exit code into one versioned document (`schema: "ocx-stop/1"`). With `--json` the human lines print on stderr and stdout carries only that document; exit codes 0/1/79/80 cross the process boundary unchanged.
+`ocx stop --json` is a reporting layer over the unchanged stop path. `src/cli/index.ts` threads a `StopRunRecord` through the existing receipt, drain, respawn-verification and restore flow, and `src/cli/stop-report.ts` maps the recorded facts plus the signals that already pick the exit code into one versioned document (`schema: "ocx-stop/1"`). With `--json` the human lines print on stderr and stdout carries only that document; exit codes 0/1/79/80 cross the process boundary unchanged. The desktop's opt-in guarded stop adds exact approved PID, endpoint, home, CLI version and compatibility-token expectations; plain `ocx stop` retains its ordinary behavior. Under the ownership mutation lease, `src/cli/stop-approval.ts` re-resolves them and `src/service/guarded-manager-target.ts` binds any installed manager's process tree to the approved PID before a stop action. A pre-action mismatch returns `approval-changed` without stopping. Immediately before any manager stop or direct PID signal, the CLI rechecks the same manager identity or proven absence; a change also returns `approval-changed`. A non-OpenCodex process replacing the OS job in the remaining instant before the manager command is a residual same-user risk outside the ownership lease. The guarded path stops the bound manager, or the approved PID directly when managers are proven absent, then uses a five-second shared deadline to verify PID exit, port availability and definitive endpoint absence. Only after settlement does a read-only manager probe require launchd `not-loaded` in both domains or systemd `inactive` with `MainPID=0`; the state is checked again before a success summary. Timeout, active or unreadable manager state returns terminal `manager-still-active`, even if the endpoint briefly refuses. A present Windows manager without a provable child PID blocks guarded takeover. The token checks snapshot consistency, not whether a person approved the desktop prompt.
 
 ## Native main reauth JSON output
 
@@ -376,7 +376,7 @@ Codex display-cache expiry, retained blocking main-policy evidence, and reset hi
 [quota cache contract](providers/openai-tiers.md#quota-cache-and-short-window-history).
 
 Usage consumers preserve positive incomplete-history metadata as specified in
-[usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented
+[usage accounting](dashboard-and-usage.md#usage-accounting); readable totals are not represented
 as a complete ledger. The same contract owns `src/usage/log.ts` append-path permission rechecks and
 their bounded cache.
 
@@ -390,7 +390,7 @@ Chat helper admission in `src/server/responses/request-sidecar-auth.ts` follows 
 [deferred stored-main contract](providers/openai-tiers.md): only a needed Direct OpenAI helper
 claims stored main, after terminal vision, routed vision and search exclusions.
 
-Automatic Codex pool selection and account status share the [plan exclusion contract](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+Automatic Codex pool selection and account status share the [plan exclusion contract](providers/openai-accounts.md#automatic-pool-plan-exclusions).
 
 ### Empty forced search answers
 
@@ -413,7 +413,7 @@ the old binding; restoring the same configuration may reuse still-fresh evidence
 cooldowns and response-driven retry remain authoritative.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
 
 Canonical Spark Lite metadata follows the final serialized model and surviving nonempty Lite tool catalog; see [Responses transport](transports/responses.md).
 
@@ -432,12 +432,12 @@ The relay is transparent in both directions, and that includes the close: a down
 
 Paginated and migration-capable history follows the [authoritative writer contract](codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Claude replay carries [Go conversation affinity](data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch)
 privately to final dispatch; preliminary route selection does not inject Go-only headers.
 
-Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-tiers.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
+Private pool credential metadata follows the [quota-history publication identity contract](providers/openai-accounts.md#quota-history-publication-identity); credential-only and account DTO projections omit it.
 
 Cline CLI joins the existing export/client integration registries. Explicit CLI sync and POST /api/sync refresh its owned pair; unattended catalog refresh excludes it. See [Cline paired files](clients/integrations.md#cline-paired-files).
 Its paired-file writer uses the config atomic-write primitive that replaces the named entry without
@@ -445,15 +445,15 @@ following a final symlink, so an exchange during a mutation cannot redirect the 
 
 `claudeCode.stabilizePromptCache` is a default-off operator setting for
 [translated instruction stabilization](data-planes/inbound-compat.md#opt-in-claude-instruction-stabilization).
-Config JSON preserves the boolean; only literal true activates the role-changing transform.
+Config JSON preserves the boolean; only literal true activates the role-changing transform. Claude skill-bundle marker parsing follows the [bounded inbound contract](data-planes/inbound-compat.md#claude-skill-marker-path-bound).
 The lightweight top-level CLI help counts Cline CLI among the fifteen registered export clients; registry parity remains covered by the client help and integration tests.
 
 Devin CLI credential path composition in `src/oauth/devin/cli-import.ts` follows the selected platform: Windows uses Win32 APPDATA paths, other platforms use POSIX XDG-data paths. The explicit absolute override remains verbatim; credential parsing and login behavior are unchanged. The `src/providers/devin-provider-merge-migration.ts` startup migration treats the legacy provider row and its OAuth slot as one account-bound unit: an occupied destination or a refused config projection leaves both unchanged, and both backups complete before either file changes. The adapter takes a tenant host only from the stored account that owns the exact key being transmitted, in the literal slot or, during a detached rekey window, the alias slot, so separately configured or forwarded credentials and non-owning accounts cannot lend another account's destination.
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
-Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
-The account history response can include a [low-confidence effective capacity estimate](providers/openai-tiers.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
+The account history response can include a [low-confidence effective capacity estimate](providers/openai-accounts.md#observed-effective-token-capacity); usage normalization retains local-answer provenance so local responses cannot supply samples.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -523,7 +523,7 @@ Shared response-log retention and native SSE inspection pacing follow the [bound
 `src/codex/account-label.ts` owns the provider/selection digest and `src/providers/label.ts`
 stamps the configured key selected for the physical request. `src/server/request-log.ts`
 retains per-key attempt usage, and `src/usage/log.ts` validates and persists labels. The
-[account attribution contract](gui-and-management-api.md#upstream-key-account-attribution)
+[account attribution contract](dashboard-and-usage.md#upstream-key-account-attribution)
 defines identity, unknown records, and aggregation boundaries.
 
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](transports/streaming-health.md#steering-deadlines-and-replay-completeness).
@@ -533,7 +533,7 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Unicode pattern normalization uses [copy-on-write traversal](transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
 Codex compaction uses a request-local model override for the configured triggers; the
-[Responses compaction contract](transports/responses.md#compaction-routing-overrides) owns its trigger and replay boundaries.
+[Responses compaction contract](transports/responses-failover.md#compaction-routing-overrides) owns its trigger and replay boundaries.
 
 ## Background-service runtime ownership
 
@@ -570,7 +570,7 @@ Missing, old, malformed or unknown manager evidence blocks takeover and leaves r
 and autostart untouched. The supported verdict carries an opaque token over the approved
 subject and both manager identities; `recordServiceOwner` re-observes and compares it inside
 the lock, so a mutable shim or downgrade cannot inherit earlier consent. An upgrade is a
-separate user-authorized action; declining or failing it leaves the app a guest.
+separate user-authorized action; declining or failing it leaves the app a guest. `ocx service claim` in `src/service/claim.ts` accepts the expected subject and compatibility token and calls `recordServiceOwner` under the ownership mutation lease. The CLI rechecks both before writing; a mismatch writes nothing. The desktop owns the consent prompt and treats `approval-changed`, `manager-still-active`, unreadable stop output and stop-child timeout as terminal before its silence wait or claim. Only a parsed `stopped` result or a validated exit-79 `history-incomplete` result reaches that wait. A stopped but unclaimed runtime is reported as such, without a restoration claim.
 
 The verbs that activate the npm registration refuse on a foreign or unknown owner:
 `src/service/repair.ts` stops before it asserts, writes, stops or starts anything, and
@@ -597,4 +597,4 @@ registration succeeds.
 
 Bun updater lease and recovery behavior follows the [update transaction contract](ops/service-and-sidecars.md#bun-updater-ownership-transaction).
 
-Companion timeline and filtered totals follow the [companion usage contract](companion.md). [Ongoing priority failback](providers/openai-tiers.md#ongoing-priority-failback) reuses request-triggered quota priming and captured-account dispatch; it adds no periodic worker or mid-request account switch.
+Companion timeline and filtered totals follow the [companion usage contract](companion.md). [Ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) reuses request-triggered quota priming and captured-account dispatch; it adds no periodic worker or mid-request account switch.

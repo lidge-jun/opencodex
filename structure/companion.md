@@ -67,3 +67,11 @@ If display settings cannot be read, the native panel keeps independently fetched
 `src/usage/ledger-retention.ts` closes its source reader after copying and before publishing the retained file, allowing replacement on Windows. The final pathname revision check still refuses replacement after a concurrent append or file replacement.
 
 A partial settings PUT refuses unreadable or unsupported persisted content with `409 companion_settings_corrupt`. Only an explicit `reset:true` replaces that content with defaults.
+
+
+Timeline model rows and available ids merge historical pool providers under their base provider,
+while account grouping keeps separate labels. Legacy account-qualified model filters select the
+whole merged row; hiding a base provider removes all its accounts, and hiding a raw provider removes
+that account's attributions. Loaded and updated companion model selections normalize older
+account-qualified ids to canonical timeline ids and deduplicate them. Coverage: `tests/usage/usage-timeline.test.ts`
+and `tests/server/companion-settings.test.ts`.

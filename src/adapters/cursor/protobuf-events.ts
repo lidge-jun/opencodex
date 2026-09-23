@@ -189,8 +189,8 @@ export interface CursorProtobufEventState {
   pendingTextToolCall?: string;
   /** Constant-space scanner used after an incomplete textual marker exceeds its retained byte cap. */
   suppressedTextToolCall?: SuppressedTextToolCallScan;
-  /** Parsed textual fallback calls held until turn finalization establishes that no real frame won. */
-  bufferedTextToolCalls?: DrainedTextToolCall[];
+  /** Budgeted textual fallback calls held until turn finalization establishes that no real frame won. */
+  bufferedTextToolCalls?: Array<DrainedTextToolCall & { callId: string }>;
   /** True once this turn carries any real client-tool frame, including an incomplete one. */
   sawRealClientToolCall?: boolean;
   /** Monotonic id suffix for tool calls promoted from text markers. */
@@ -1077,7 +1077,10 @@ export function mapSyntheticMcpExecToToolEvents(
 ): CursorServerMessage[] {
   if (args.providerIdentifier !== OCX_RESPONSES_TOOL_PROVIDER) return [];
   if (options.state?.terminated) return [];
-  if (options.state) options.state.sawRealClientToolCall = true;
+  if (options.state) {
+    discardBufferedTextToolCalls(options.state);
+    options.state.sawRealClientToolCall = true;
+  }
   if (options.allowEmptyArgs !== true && !hasMcpArgBytes(args)) return [];
   const cursorWireName = mcpWireNameFromArgs(args);
   if (!cursorWireName) return [{ type: "error", message: "Cursor requested a Responses tool without a tool name" }];
@@ -1148,8 +1151,14 @@ function recordToolCall(state: CursorProtobufEventState, callId: string, cursorW
 }
 
 function recordRealToolCall(state: CursorProtobufEventState, callId: string, cursorWireName: string): CursorServerMessage[] {
+  discardBufferedTextToolCalls(state);
   state.sawRealClientToolCall = true;
   return recordToolCall(state, callId, cursorWireName);
+}
+
+function discardBufferedTextToolCalls(state: CursorProtobufEventState): void {
+  for (const call of state.bufferedTextToolCalls ?? []) state.translatorBudget?.closeCall(call.callId);
+  delete state.bufferedTextToolCalls;
 }
 
 /**
@@ -1313,10 +1322,21 @@ export function mapCursorProtobufServerMessage(
           || !advertised
           || (state.bufferedTextToolCalls?.length ?? 0) >= state.maxClientToolCalls
         ) continue;
-        (state.bufferedTextToolCalls ??= []).push({
-          name: advertised,
-          args: normalizeJsonText(call.args, advertised, state),
-        });
+        const args = normalizeJsonText(call.args, advertised, state);
+        state.textToolCallSeq = (state.textToolCallSeq ?? 0) + 1;
+        const callId = `textcall_${state.textToolCallSeq}`;
+        state.translatorBudget?.openCall(callId);
+        try {
+          const reservation = state.translatorBudget?.reserveTransient(
+            Buffer.byteLength(args),
+            { kind: "tool_args", callId },
+          );
+          reservation?.commitRetained();
+          (state.bufferedTextToolCalls ??= []).push({ name: advertised, args, callId });
+        } catch (error) {
+          state.translatorBudget?.closeCall(callId);
+          throw error;
+        }
       }
       return out;
     }
@@ -1346,7 +1366,10 @@ export function mapCursorProtobufServerMessage(
       const out: CursorServerMessage[] = [];
       if (state.completedToolCalls.has(update.value.callId)) return [];
       const name = mcpCursorWireName(update.value.toolCall);
-      if (name) state.sawRealClientToolCall = true;
+      if (name) {
+        discardBufferedTextToolCalls(state);
+        state.sawRealClientToolCall = true;
+      }
       const args = mcpArgsFromToolCall(update.value.toolCall);
       const openBeforeStart = state.openToolCalls.get(update.value.callId);
       // Empty-arg completion handling:
@@ -1454,6 +1477,7 @@ export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServe
   const bufferedTextToolCalls = state.bufferedTextToolCalls ?? [];
   delete state.bufferedTextToolCalls;
   if (state.openToolCalls.size > 0) {
+    for (const call of bufferedTextToolCalls) state.translatorBudget?.closeCall(call.callId);
     const openCallIds = [...state.openToolCalls.keys()];
     const openIds = openCallIds.join(", ");
     // Clear so a second turnEnded (should not happen, but defensive) doesn't re-emit.
@@ -1464,11 +1488,15 @@ export function finalizeTurnEvents(state: CursorProtobufEventState): CursorServe
   const out: CursorServerMessage[] = [];
   if (!state.sawRealClientToolCall) {
     for (const call of bufferedTextToolCalls) {
-      state.textToolCallSeq = (state.textToolCallSeq ?? 0) + 1;
-      const callId = `textcall_${state.textToolCallSeq}`;
-      out.push(...recordToolCall(state, callId, call.name));
-      if (state.openToolCalls.has(callId)) out.push(...commitToolCall(state, callId, call.args));
+      out.push(...recordToolCall(state, call.callId, call.name));
+      const open = state.openToolCalls.get(call.callId);
+      if (open) {
+        open.args = call.args;
+        out.push(...commitToolCall(state, call.callId, call.args));
+      } else state.translatorBudget?.closeCall(call.callId);
     }
+  } else {
+    for (const call of bufferedTextToolCalls) state.translatorBudget?.closeCall(call.callId);
   }
   // Surface the absolute context size (when Cursor reported a checkpoint) as both totalTokens and
   // the estimated input side of Codex's visible `input + output` counter. Codex status lines can

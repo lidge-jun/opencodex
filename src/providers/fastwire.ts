@@ -12,8 +12,9 @@ import type { InboundWire, ModelWireDefault, ProviderAuthKind } from "./registry
 const SERVICE_TIER_ADAPTERS = new Set(["openai-chat", "openai-responses"]);
 const FAST_WIRE_ADAPTERS: Readonly<Record<FastWire["kind"], ReadonlySet<string>>> = {
   "service-tier": SERVICE_TIER_ADAPTERS,
-  // A1 deliberately has no adapter implementation for Anthropic speed.
-  "anthropic-speed": new Set(),
+  // Anthropic fast mode: top-level `speed: "fast"` plus the declared beta, serialized and
+  // observed (`usage.speed`) by the Anthropic adapter itself.
+  "anthropic-speed": new Set(["anthropic"]),
   // Cursor expresses Fast as a variant dimension of the picked model, resolved in the
   // request builder, so the adapter set is exactly the cursor adapter.
   "cursor-variant": new Set(["cursor"]),
@@ -46,6 +47,7 @@ export interface FastPolicyAuthority {
   };
   readonly modelAdapters: Readonly<Record<string, string>>;
   readonly hardPins: Readonly<Record<string, string>>;
+  readonly hardPinPrefixes?: Readonly<Record<string, string>>;
   readonly registryWireDefaults: Readonly<Record<string, ModelWireDefault>>;
 }
 
@@ -153,6 +155,12 @@ function resolvePolicyAdapter(
     ? authority.hardPins[modelId]
     : undefined;
   if (typeof hardPin === "string") return { adapter: hardPin, hardPinned: true };
+  const foldedModelId = modelId.toLowerCase();
+  for (const [prefix, adapter] of Object.entries(authority.hardPinPrefixes ?? {})) {
+    if (foldedModelId.startsWith(prefix.toLowerCase())) {
+      return { adapter, hardPinned: true };
+    }
+  }
   if (authority.modelWireOverrideAllowed) {
     const registryDefault = MODEL_ADAPTER_OVERRIDE_ALLOWED.has(authority.providerAdapter)
       ? registryDefaultForModel(
@@ -368,7 +376,12 @@ export function createAdapterTierMetadata(
     outcome.fastOutcome = "not-requested";
   } else if (!effectiveFastRequested || context.eligibility !== "eligible" || wireValue === null) {
     outcome.fastOutcome = "downgraded";
-    outcome.fastDowngradeReason = downgradeReasonForUnavailable(context);
+    // An upstream that refused the fast wire earlier in this request is a decline, not a
+    // missing wire: the route is eligible and was asked, and the standard resend that follows
+    // must not read as if the proxy never tried.
+    outcome.fastDowngradeReason = context.upstreamDeclinedFast === true
+      ? "response-declined"
+      : downgradeReasonForUnavailable(context);
     outcome.confirmation = "downgraded";
   } else if (canonicalFromWire(context.fastWire, wireValue) === "priority") {
     outcome.canonical = "priority";

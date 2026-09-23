@@ -160,6 +160,12 @@ async function handleGrokCouponRoutesOnDemand(ctx: ManagementContext): Promise<R
   return handleGrokCouponRoutes(ctx);
 }
 
+async function handleAnthropicResetGrantRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/anthropic/reset-grants", true)) return null;
+  const { handleAnthropicResetGrantRoutes } = await import("./management/anthropic-reset-grant-routes");
+  return handleAnthropicResetGrantRoutes(ctx);
+}
+
 async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/remote-workspace")) return null;
   if (!remoteWorkspaceEnabled(ctx.config)) {
@@ -278,6 +284,7 @@ export async function handleManagementAPI(
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleGrokCouponRoutesOnDemand(ctx))
+    ??     (await handleAnthropicResetGrantRoutesOnDemand(ctx))
     ??     handleMetricsRoutes(ctx)
     ??     (await handleRoutingAnalyticsRoutes(ctx))
     ??     (await handleRoutingProfileRoutesOnDemand(ctx))

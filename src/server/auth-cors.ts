@@ -1062,6 +1062,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   transientRetryOn5xx: "editor",
   retryOnReset: "editor",
   reasoningSplitModels: "editor",
+  inlineThinkTagModels: "editor",
   reasoningDetailsModels: "editor",
   thinkingToggleModels: "editor",
   thinkingBudgetModels: "editor",

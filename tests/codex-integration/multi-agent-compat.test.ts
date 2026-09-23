@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace } from "../../src/server/responses";
+import { injectDeveloperMessage, multiAgentGuidanceText, sanitizeEncryptedContentInPlace, stripAgentMessageCiphertextInPlace } from "../../src/server/responses";
 import { MULTI_AGENT_MODE_HINT_RECOMMENDATION } from "../../src/codex/multi-agent-mode-policy";
 import { parseRequest } from "../../src/responses/parser";
 import type { OcxParsedRequest } from "../../src/types";
@@ -1368,10 +1368,11 @@ describe("injectDeveloperMessage", () => {
 });
 
 describe("sanitizeEncryptedContentInPlace", () => {
-  const fernetFixture = (): string => {
+  const fernetFixture = (index = 0): string => {
     const raw = Buffer.alloc(73, 0x5a);
     raw[0] = 0x80;
     raw.writeBigUInt64BE(1_720_000_000n, 1);
+    raw.writeUInt32BE(index, 25);
     const unpadded = raw.toString("base64url");
     return `${unpadded}${"=".repeat((4 - (unpadded.length % 4)) % 4)}`;
   };
@@ -1477,6 +1478,63 @@ describe("sanitizeEncryptedContentInPlace", () => {
     expect(sanitizeEncryptedContentInPlace(input)).toBe(0);
     const parts = (input[0] as { content: Array<Record<string, unknown>> }).content;
     expect(parts[0]).toEqual({ type: "encrypted_content", encrypted_content: fernet });
+  });
+
+  test("65 valid runs omit the mixed slot without emitting a token suffix", () => {
+    const tokens = Array.from({ length: 65 }, (_, index) => fernetFixture(index));
+    const withinLimit = [{ type: "message", role: "user", content: [
+      { type: "encrypted_content", encrypted_content: `preamble.${tokens.slice(0, 64).join(".")}` },
+    ] }];
+    expect(sanitizeEncryptedContentInPlace(withinLimit)).toBe(1);
+    const withinParts = (withinLimit[0] as { content: Array<Record<string, unknown>> }).content;
+    expect(withinParts.length).toBeLessThanOrEqual(129);
+    expect(withinParts.filter(part => part.type === "encrypted_content")).toHaveLength(64);
+    const input = [{ type: "message", role: "user", content: [
+      { type: "encrypted_content", encrypted_content: `preamble.${tokens.join(".")}` },
+    ] }];
+
+    expect(sanitizeEncryptedContentInPlace(input)).toBe(1);
+    const parts = (input[0] as { content: Array<Record<string, unknown>> }).content;
+    expect(parts).toEqual([{ type: "input_text", text: "[encrypted content omitted]" }]);
+    const serialized = JSON.stringify(input);
+    for (const token of tokens) expect(serialized).not.toContain(token);
+  });
+
+  test("65 valid runs in an agent message normalize without forwarding token text", () => {
+    const tokens = Array.from({ length: 65 }, (_, index) => fernetFixture(index));
+    const input = [{ type: "agent_message", id: "a1", author: "/root", recipient: "/root/worker", content: [
+      { type: "encrypted_content", encrypted_content: `preamble.${tokens.join(".")}` },
+    ] }];
+
+    expect(sanitizeEncryptedContentInPlace(input)).toBe(1);
+    expect(input[0]).toMatchObject({ type: "message", role: "user" });
+    expect(stripAgentMessageCiphertextInPlace(input)).toBe(0);
+    const serialized = JSON.stringify(input);
+    for (const token of tokens) expect(serialized).not.toContain(token);
+  });
+
+  test("65 valid runs in a raw agent slot are omitted before lowering", () => {
+    const tokens = Array.from({ length: 65 }, (_, index) => fernetFixture(index));
+    const input = [{ type: "agent_message", content: [
+      { type: "encrypted_content", encrypted_content: `preamble.${tokens.join(".")}` },
+    ] }];
+    expect(stripAgentMessageCiphertextInPlace(input)).toBe(1);
+    expect((input[0] as { content: unknown[] }).content).toEqual([
+      { type: "input_text", text: "[encrypted content omitted]" },
+    ]);
+    for (const token of tokens) expect(JSON.stringify(input)).not.toContain(token);
+  });
+
+  test("65 valid runs in agent text are omitted before lowering", () => {
+    const tokens = Array.from({ length: 65 }, (_, index) => fernetFixture(index));
+    const input = [{ type: "agent_message", content: [
+      { type: "input_text", text: `preamble.${tokens.join(".")}` },
+    ] }];
+    expect(stripAgentMessageCiphertextInPlace(input)).toBe(1);
+    expect((input[0] as { content: unknown[] }).content).toEqual([
+      { type: "input_text", text: "[encrypted content omitted]" },
+    ]);
+    for (const token of tokens) expect(JSON.stringify(input)).not.toContain(token);
   });
 });
 

@@ -22,6 +22,7 @@ import {
   providerHeadersConfigError,
   saveConfigPreservingClaudeCode,
 } from "../../config";
+import { captureDesktopAppliedMarker, commitDesktopAppliedMarker } from "../../claude/desktop-applied-marker";
 import {
   clearLoginState,
   getLoginStatus,
@@ -219,18 +220,27 @@ export async function syncEnabledClientIntegrations(
       if (claudeDesktopIntegrationEnabled(latest)) {
         const routed = filterCatalogVisibleModels(models, latest)
           .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow }));
+        const writtenProfile = latest.claudeCode?.desktopProfile;
+        const markerBaseline = captureDesktopAppliedMarker(writtenProfile);
         const r = (deps.writeDesktop3pConfig ?? writeDesktop3pConfig)(
           port,
           [...desktopVisibleNativeSlugs(latest)],
           routed,
           latest.apiKeys?.[0]?.key,
           "static",
-          latest.claudeCode?.desktopProfile,
+          writtenProfile,
           nativeContextLimits(latest),
         );
-        out.push(r.written
-          ? { client: "claude-desktop", ok: true, changed: true }
-          : { client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
+        if (!r.written || !r.fingerprint) {
+          out.push({ client: "claude-desktop", ok: false, reason: r.reason ?? "Claude Desktop write failed" });
+        } else {
+          const marked = commitDesktopAppliedMarker(markerBaseline, r.fingerprint);
+          out.push(marked.status === "unavailable"
+            ? { client: "claude-desktop", ok: false, reason: "Claude Desktop applied marker was not saved (" + marked.reason + ")" }
+            : marked.value === false
+            ? { client: "claude-desktop", ok: false, reason: "Claude Desktop desired profile changed during sync; applied marker skipped" }
+            : { client: "claude-desktop", ok: true, changed: true });
+        }
       }
     } catch (error) {
       out.push({ client: "claude-desktop", ok: false, reason: error instanceof Error ? error.message : String(error) });

@@ -74,7 +74,7 @@ opencodex state root does not undo those writes. Putting native Codex back is th
 | Path | Owner | Notes |
 | --- | --- | --- |
 | `~/.opencodex/config.json` | opencodex | Init creates via private temp plus no-replace hard link; dashboard and explicit updates use atomic replacement. |
-| `~/.opencodex/auth.json` | opencodex | OAuth tokens; not committed. Multiauth shape: `provider -> { activeAccountId, accounts[] }` (legacy single-credential values normalize on load; a one-time `auth.json.pre-multiauth` backup guards downgrades; logout, account deletion, and provider deletion remove that provider from it and delete it once empty, and a failed update is warned, not fatal). ChatGPT scratch OAuth stays separate from the Codex account store. For multi-slot providers, credentials without `accountId`/email replace the active slot on a normal login; an explicit add-account login preserves the prior slot and appends a distinct one. Single-slot providers such as ChatGPT remain replacement-only. |
+| `~/.opencodex/auth.json` | opencodex | OAuth tokens; not committed. Multiauth shape: `provider -> { activeAccountId, accounts[] }` (legacy single-credential values normalize on load; a one-time `auth.json.pre-multiauth` backup guards downgrades). ChatGPT scratch OAuth stays separate from the Codex account store. Logout, account deletion and provider deletion remove that provider from it and delete the file once empty; failed updates warn without becoming fatal. For multi-slot providers, credentials without `accountId`/email replace the active slot on a normal login; an explicit add-account login preserves the prior slot and appends a distinct one. Single-slot providers such as ChatGPT remain replacement-only. |
 | `~/.opencodex/codex-accounts.json` | opencodex | Hardened main-plus-added credential store used by `openai` in Pool mode. |
 | `~/.opencodex/catalog-backup.json` | opencodex | One-time pristine Codex catalog backup for restore; per-catalog copies are hashed variants (see [`catalog.md`](catalog.md)). |
 | `~/.opencodex/usage.jsonl` | opencodex | Append-only request usage log (0o600); request metadata + token counts only, never prompts or auth. |
@@ -96,6 +96,15 @@ validation. The shared reader's cancellation contract and the login-specific byt
 are defined in [bounded response ingestion](transports/inventory.md#bounded-response-ingestion-and-orcarouter-login).
 
 ## Non-negotiable invariants
+
+- **INV-COMPANION-01** — Timeline model rows and available ids merge historical pool providers
+  under their base provider, while account grouping keeps separate labels. A legacy
+  account-qualified model filter selects the entire merged row; hiding a base provider removes
+  all its accounts, and hiding a raw provider removes that account's attributions.
+  Enforced by `tests/usage/usage-timeline.test.ts`.
+- **INV-COMPANION-02** — Loaded and updated companion model selections normalize older
+  account-qualified ids to canonical timeline ids and deduplicate them.
+  Enforced by `tests/server/companion-settings.test.ts`.
 
 Each invariant carries a stable id. A bound invariant names one test, and that test names the id
 back, so deleting or renaming the test fails `bun run structure:check` instead of quietly unbinding the
@@ -192,14 +201,6 @@ still cover the rule, which is a judgement only review makes.
   there is none, no icon is claimed, the window is shown on launch whatever the launch origin, and
   closing it quits through the same drain; see [`desktop-shell.md`](desktop-shell.md).
   Enforced by `tests/clients/desktop-tray-availability.test.ts`.
-- **INV-COMPANION-01** — Timeline model rows and available ids merge historical pool providers
-  under their base provider, while account grouping keeps separate labels. A legacy
-  account-qualified model filter selects the entire merged row; hiding a base provider removes
-  all its accounts, and hiding a raw provider removes that account's attributions.
-  Enforced by `tests/usage/usage-timeline.test.ts`.
-- **INV-COMPANION-02** — Loaded and updated companion model selections normalize older
-  account-qualified ids to canonical timeline ids and deduplicate them.
-  Enforced by `tests/server/companion-settings.test.ts`.
 
 CI enumerates that domain layout through `scripts/ci/run-bun-test-batches.sh`. Its default general
 scope and 12-file/120-second process shape leave the dedicated Linux storage-policy and api-usage
@@ -225,33 +226,33 @@ would pass while the rule was violated.
 - **INV-HOME-01** — `CODEX_HOME` wins over `~/.codex` when present and valid.
 - **INV-SLUG-01** — Routed model slugs use `provider/model`.
 
-Codex plan exclusions constrain automatic pool selection without deleting credentials; [account-policy reasons](providers/openai-tiers.md#automatic-pool-plan-exclusions) remain distinct from health and pause.
+Codex plan exclusions constrain automatic pool selection without deleting credentials; [account-policy reasons](providers/openai-accounts.md#automatic-pool-plan-exclusions) remain distinct from health and pause.
 
-Connected CLI usage follows the [client-scoped hub usage contract](gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](remote-workspace.md).
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger.
 
 Listener startup diagnostics follow [the runtime lifecycle contract](runtime.md#lifecycle); malformed optional listener blocks follow [config loading](config.md#config-surface).
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](transports/responses.md).
 
 Raw reasoning content and provider-authored summaries remain distinct on the Responses wire. See [reasoning presentation](providers/chat-compat.md).
 
-Connected-browser pairing and dashboard failure meanings follow the [management UI contract](gui-and-management-api.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
+Connected-browser pairing and dashboard failure meanings follow the [management UI contract](dashboard-and-usage.md#dashboard-surfaces); machine enrollment alone does not authenticate a browser.
 
-Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](gui-and-management-api.md#dashboard-surfaces) defines terminal release and completion notification. A GET answered with 404 `unknown_flow` is the exception: the flow no longer exists, so polling stops and the generic failure state appears.
+Native-main reauthentication keeps its existing polling cadence when a non-2xx status races with retryable cancellation for the same owned flow; the [dashboard flow-ownership contract](dashboard-and-usage.md#dashboard-surfaces) defines terminal release and completion notification.
 
 Cline CLI is a managed file integration: its provider settings and catalog share one recoverable journal operation. The [paired-file contract](clients/integrations.md#cline-paired-files) defines its stop/restart requirement.
-Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -268,6 +269,5 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](gui-and-management-api.md#fast-selector-rows-setting).
 
 Codex compaction can select a request-local model through the
-[existing Responses handlers](transports/responses.md#compaction-routing-overrides) for the configured
-manual and automatic triggers, while subsequent turns keep their conversation settings.
-The optional [ongoing priority failback](providers/openai-tiers.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary.
+[existing Responses handlers](transports/responses-failover.md#compaction-routing-overrides) for the configured
+manual and automatic triggers, while subsequent turns keep their conversation settings. The optional [ongoing priority failback](providers/openai-accounts.md#ongoing-priority-failback) is distinct from default cache affinity and changes no credential-eligibility boundary.

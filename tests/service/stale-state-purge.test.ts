@@ -54,7 +54,7 @@ describe("snapshot-guarded stale-state purge", () => {
 
   test("handleStop snapshots stale state before probing and purges through the guards", () => {
     const cliSource = readFileSync(repoPath("src", "cli", "index.ts"), "utf8");
-    const stopFn = cliSource.slice(cliSource.indexOf("async function handleStop()"), cliSource.indexOf("async function handleUninstall()"));
+    const stopFn = cliSource.slice(cliSource.indexOf("async function handleStop("), cliSource.indexOf("async function handleUninstall()"));
 
     const snapshotAt = stopFn.indexOf("const stalePidValue = readPidFileValue()");
     const probeAt = stopFn.indexOf("await findLiveProxy()");

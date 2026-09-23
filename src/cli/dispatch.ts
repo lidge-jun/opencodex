@@ -30,6 +30,7 @@ import { handleRestartScopeAfterWrite, readRestartScope, type RestartScope } fro
 import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
 import { isJsonOption, takeFlag, terminalSafeError } from "./runtime-api";
 import { printStopSummary, type StopOutcome } from "./stop-report";
+import { parseStopApproval, type StopApproval } from "./stop-approval";
 import type { ResolveArgs } from "./resolve";
 import type { ClientConnectionState } from "../client/state";
 import { OCX_NATIVE_REPLAY_RECOVERY_NOTE } from "../responses/compaction";
@@ -46,7 +47,7 @@ export interface CliDispatchDeps {
   /** Spawn a detached proxy child (stdio ignore, unref'd, provenance env). */
   spawnDetached: (argv: readonly string[]) => void;
   handleStart: () => Promise<void>;
-  handleStop: () => Promise<StopOutcome>;
+  handleStop: (approval?: StopApproval) => Promise<StopOutcome>;
   handleEnsure: (options?: { existingIsSuccess?: boolean }) => Promise<boolean>;
   handleResolve: (args: ResolveArgs) => Promise<number>;
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
@@ -99,10 +100,15 @@ const commandRunners: Record<string, CommandRunner> = {
     return Number(process.exitCode ?? 0);
   },
   stop: async deps => {
+    const parsed = parseStopApproval(deps.args.slice(1));
+    if (!parsed.ok) {
+      console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
+      return 64;
+    }
     // Downtime warning lives HERE, not in handleStop: `restart`/tray-restart callers
     // re-start the proxy immediately, so warning there would contradict the next line.
     const warning = "⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').";
-    if (!takeFlag(deps.args.slice(1), "--json")) {
+    if (!parsed.json) {
       // handleStop returns the structured outcome now; an object is always truthy, so
       // the warning must key on .ok — otherwise a failed stop would still claim downtime.
       if ((await deps.handleStop()).ok) console.log(warning);
@@ -117,7 +123,7 @@ const commandRunners: Record<string, CommandRunner> = {
     console.log = console.error;
     let outcome: StopOutcome | undefined;
     try {
-      outcome = await deps.handleStop();
+      outcome = await deps.handleStop(parsed.approval ?? undefined);
       if (outcome.ok) console.log(warning);
     } finally {
       console.log = humanLog;
@@ -125,7 +131,9 @@ const commandRunners: Record<string, CommandRunner> = {
     // A throw above propagates after the finally restores the console, so reaching here
     // with an undefined outcome cannot happen; the guard keeps the assignment provable.
     if (outcome) printStopSummary(outcome.summary);
-    return Number(process.exitCode ?? 0);
+    // A guarded refusal never reaches the code that records process.exitCode, so the
+    // approval-bound form answers with its summary's code; plain stop keeps its contract.
+    return parsed.approval ? (outcome?.summary.exitCode ?? 1) : Number(process.exitCode ?? 0);
   },
   resolve: async deps => {
     // Same fail-closed shape as `ready`: parseCliHead pre-parsed the verb before any

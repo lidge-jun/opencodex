@@ -16,6 +16,7 @@ import { prepareEffortNormalization } from "../effort-policy";
 import { resolveOpenCodeGoTransport } from "../../providers/opencode-go-transport";
 import { getOrAllocateRequestSessionLane } from "../request-log-conversation";
 import { shouldPreparePlaintextV2AgentMessages } from "../../responses/plaintext-v2-agent-messages";
+import { hasValidatedActiveReasoningEffort } from "../../responses/parser";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { applyOpenAiVirtualModel } from "../../providers/openai-virtual-models";
 import {
@@ -164,7 +165,8 @@ export async function applyFinalRouteRequestNormalization(args: {
   if (inboundWire === "responses" && parsed._rawBody) {
     const summary = (parsed._rawBody as { reasoning?: { summary?: unknown } }).reasoning?.summary;
     parsed.options.hideThinkingSummary = summary === "none"
-      || (!summary && route.provider.showThinkingSummary !== true);
+      || (!summary && !hasValidatedActiveReasoningEffort(parsed.options)
+        && route.provider.showThinkingSummary !== true);
   }
   if (preserveAnthropicResponseModel) parsed._responseModelId = responseModelId;
   logCtx.model = virtualModel?.selectedModelId ?? route.modelId;

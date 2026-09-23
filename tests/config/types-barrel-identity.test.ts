@@ -42,6 +42,7 @@ describe("types barrel re-exports the leaves by identity, not by copy", () => {
     "OPENAI_PROVIDER_TIER_VERSION",
     "MODEL_ADAPTER_OVERRIDE_ALLOWED",
     "captureWireAdapterHardPins",
+    "captureWireAdapterHardPinPrefixes",
     "isWirePinnedModel",
     "pinnedWireAdapter",
   ] as const)("types/wire %s is the same binding", name => {

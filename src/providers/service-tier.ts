@@ -1,5 +1,5 @@
 import type { OcxProviderConfig } from "../types";
-import { captureWireAdapterHardPins } from "../types";
+import { captureWireAdapterHardPinPrefixes, captureWireAdapterHardPins } from "../types";
 import { isCanonicalOpenAiForwardProvider } from "./openai-tiers";
 import {
   getProviderRegistryEntry,
@@ -113,6 +113,7 @@ function buildFastPolicyAuthority(
     }),
     modelAdapters: Object.freeze({ ...(provider.modelAdapters ?? {}) }),
     hardPins: captureWireAdapterHardPins(providerName),
+    hardPinPrefixes: captureWireAdapterHardPinPrefixes(providerName, provider),
     registryWireDefaults: cloneRegistryWireDefaults(registry?.modelWireDefaults),
   });
   return authority;
@@ -158,6 +159,7 @@ function authorityForProvider(
       ...authority,
       modelAdapters: Object.freeze({}),
       hardPins: Object.freeze({}),
+      hardPinPrefixes: Object.freeze({}),
       registryWireDefaults: Object.freeze({}),
     });
   }

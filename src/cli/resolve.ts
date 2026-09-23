@@ -45,6 +45,20 @@ import {
   type LiveProxy,
 } from "../server/proxy-liveness";
 import { endpointsToProve, everyEndpointProvenDownAsync, type ProbeEndpoint } from "./uninstall-plan";
+import {
+  resolveServiceOwnership,
+  resolveServiceState,
+  type ServiceInstallState,
+  type ServiceOwnershipResolution,
+  type ServiceStateResolution,
+} from "../service/state";
+import {
+  assessServiceTakeoverCompatibility,
+  type ManagingCliObservation,
+  type ManagingCliRole,
+} from "../service/ownership-compatibility";
+import { observeManagingClis } from "../service/managing-cli";
+import { SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION } from "../service/install-state-contract.mjs";
 
 /** Wire version of the resolve document. Bump only on an incompatible shape change. */
 export const RESOLVE_SCHEMA = "ocx-resolve/1";
@@ -86,7 +100,25 @@ export interface ResolveJson {
     source: LiveProxy["source"];
   };
   liveness: ResolveLivenessJson;
+  /**
+   * The recorded runtime owner, in the CLI's own three answers. `unknown` is on the wire
+   * deliberately: it never changes the exit code — the liveness verdict is still
+   * trustworthy — and the embedding shell fails closed on it rather than asking consent
+   * against a record it could not read.
+   */
+  ownership: ServiceOwnershipResolution;
+  /**
+   * Whether a desktop takeover can be offered, and the token that binds that approval to
+   * the exact subject and managing-CLI observations a later `ocx service claim` must find
+   * unchanged. `ownership-unknown` is produced only here: it is a wire reason, not a new
+   * member of `ServiceTakeoverCompatibility`'s union.
+   */
+  takeover: ResolveTakeover;
 }
+
+export type ResolveTakeover =
+  | { kind: "supported"; protocolVersion: number; minimumCliVersion: string; token: string }
+  | { kind: "blocked"; reason: string; detail: string; minimumCliVersion: string };
 
 export interface ResolveArgs {
   json: boolean;
@@ -111,6 +143,14 @@ export interface ResolveIo {
   /** Tri-state endpoint probe; production default runs in-process for compiled standalone binaries. */
   probeEndpoint?: (endpoint: ProbeEndpoint) => EndpointLiveness | Promise<EndpointLiveness>;
   cliVersion?: () => string;
+  /** Recorded-ownership resolver; production default is resolveServiceOwnership. */
+  resolveOwnership?: () => ServiceOwnershipResolution;
+  /** Full install-state resolver; production default is resolveServiceState. */
+  resolveState?: () => ServiceStateResolution;
+  /** Managing-CLI observer; production default is observeManagingClis. */
+  observeManagers?: (
+    state: ServiceInstallState | null,
+  ) => Readonly<Record<ManagingCliRole, ManagingCliObservation>>;
   stdout?: { log: (s: string) => void };
   stderr?: { error: (s: string) => void };
 }
@@ -136,6 +176,8 @@ export function buildResolveJson(
   live: LiveProxy | null,
   configHome: string,
   cliVersion: string,
+  ownership: ServiceOwnershipResolution,
+  takeover: ResolveTakeover,
 ): ResolveJson {
   const configured = config.port ?? RESOLVE_DEFAULT_PORT;
   return {
@@ -148,6 +190,8 @@ export function buildResolveJson(
       source: live ? live.source : "config",
     },
     liveness: livenessJson(live),
+    ownership,
+    takeover,
   };
 }
 
@@ -164,6 +208,19 @@ function reportHuman(json: ResolveJson, stdout: { log: (s: string) => void }): v
   } else {
     stdout.log(`No live proxy (absence proven); effective port ${json.port.effective} (configured).`);
   }
+  const ownership = json.ownership;
+  if (ownership.kind === "owned") {
+    stdout.log(`Owner: ${ownership.ownership.owner} (install ${ownership.ownership.installId}, generation ${ownership.ownership.consentGeneration})`);
+  } else if (ownership.kind === "unknown") {
+    stdout.log(`Owner: unknown (${ownership.reason})`);
+  } else {
+    stdout.log("Owner: none recorded");
+  }
+  stdout.log(
+    json.takeover.kind === "supported"
+      ? "Takeover: supported"
+      : `Takeover: blocked (${json.takeover.reason}: ${json.takeover.detail})`,
+  );
 }
 
 /**
@@ -181,6 +238,9 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
   const readRuntime = io.readRuntime ?? readRuntimePort;
   const probeEndpoint = io.probeEndpoint ?? probeEndpointLiveness;
   const cliVersion = io.cliVersion ?? packageVersion;
+  const resolveOwnership = io.resolveOwnership ?? resolveServiceOwnership;
+  const resolveState = io.resolveState ?? resolveServiceState;
+  const observeManagers = io.observeManagers ?? observeManagingClis;
   const configHome = configDir();
   let diagnostics: ConfigDiagnostics;
   try {
@@ -223,7 +283,59 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
       return 1;
     }
   }
-  const json = buildResolveJson(diagnostics.config, live, configHome, cliVersion());
+  let ownership: ServiceOwnershipResolution;
+  try {
+    ownership = resolveOwnership();
+  } catch (error) {
+    ownership = { kind: "unknown", reason: error instanceof Error ? error.message : String(error) };
+  }
+  let takeover: ResolveTakeover;
+  if (!live) {
+    // A proven absence may authorize start, but there is no runtime to take over.
+    // Avoid synchronous managing-CLI version probes on this launch path.
+    takeover = {
+      kind: "blocked",
+      reason: "runtime-absent",
+      detail: "no live runtime is available for takeover",
+      minimumCliVersion: SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
+    };
+  } else if (ownership.kind === "unknown") {
+    // The claim cannot be read, so nothing can be approved against it. This reason is a
+    // wire answer, not a new member of the compatibility union.
+    takeover = {
+      kind: "blocked",
+      reason: "ownership-unknown",
+      detail: ownership.reason,
+      minimumCliVersion: SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
+    };
+  } else {
+    try {
+      const resolved = resolveState();
+      if (resolved.kind === "unknown") {
+        takeover = {
+          kind: "blocked",
+          reason: "ownership-unknown",
+          detail: resolved.reason,
+          minimumCliVersion: SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
+        };
+      } else {
+        const resolvedState = resolved.kind === "state" ? resolved.state : null;
+        takeover = assessServiceTakeoverCompatibility({
+          state: resolvedState,
+          subject: ownership,
+          managers: observeManagers(resolvedState),
+        });
+      }
+    } catch (error) {
+      takeover = {
+        kind: "blocked",
+        reason: "managing-cli-unknown",
+        detail: error instanceof Error ? error.message : String(error),
+        minimumCliVersion: SERVICE_OWNERSHIP_MINIMUM_CLI_VERSION,
+      };
+    }
+  }
+  const json = buildResolveJson(diagnostics.config, live, configHome, cliVersion(), ownership, takeover);
   if (args.json) stdout.log(JSON.stringify(json));
   else reportHuman(json, stdout);
   return 0;

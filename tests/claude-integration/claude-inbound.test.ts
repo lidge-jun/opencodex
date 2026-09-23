@@ -675,6 +675,12 @@ describe("bundled-skill elision for routed models (devlog 260712 060)", () => {
     const texts = userTexts(requestWithSkillTextBlock("claude-api", 500_000, undefined, "C:claude-api"));
     expect(texts.some(t => t.length > 400_000)).toBe(true);
   });
+
+  test("text-block carrier: oversized marker paths pass through without unbounded parsing", () => {
+    const oversizedDir = `/${"/".repeat(10_000)}claude-api`;
+    const texts = userTexts(requestWithSkillTextBlock("claude-api", 20_000, undefined, oversizedDir));
+    expect(texts.some(t => t.startsWith(`Base directory for this skill: ${oversizedDir}`))).toBe(true);
+  });
 });
 
 describe("ocx-route directive (devlog 072)", () => {

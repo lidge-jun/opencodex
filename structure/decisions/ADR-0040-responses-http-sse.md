@@ -1,6 +1,6 @@
 # ADR-0040 — decision recorded under "Responses HTTP/SSE"
 
-- Contract owner: [transports/responses.md](../transports/responses.md#responses-httpsse)
+- Contract owner: [transports/responses-wire-shapes.md](../transports/responses-wire-shapes.md#mixed-wire-provider-defaults)
 
 ## Decision record
 

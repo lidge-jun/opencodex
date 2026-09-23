@@ -345,6 +345,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const preserveReasoningContentModels = staticPolicy.preserveReasoningContentModels;
   const requiresReasoningPlaceholderModels = staticPolicy.requiresReasoningPlaceholderModels;
   const reasoningSplitModels = staticPolicy.reasoningSplitModels;
+  const inlineThinkTagModels = staticPolicy.inlineThinkTagModels;
   const reasoningDetailsModels = staticPolicy.reasoningDetailsModels;
   const thinkingToggleModels = staticPolicy.thinkingToggleModels;
   const thinkingBudgetModels = staticPolicy.thinkingBudgetModels;
@@ -487,6 +488,7 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
     ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),
     ...(reasoningSplitModels ? { reasoningSplitModels } : {}),
+    ...(inlineThinkTagModels ? { inlineThinkTagModels } : {}),
     ...(reasoningDetailsModels ? { reasoningDetailsModels } : {}),
     ...(thinkingToggleModels ? { thinkingToggleModels } : {}),
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),

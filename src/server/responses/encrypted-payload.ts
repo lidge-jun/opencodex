@@ -123,10 +123,17 @@ function looksLikeUnknownOpaqueSlot(payload: string): boolean {
  */
 const FERNET_TOKEN_CANDIDATE = /g[A-Za-z0-9_-]{97,}={0,2}/g;
 const FERNET_TOKEN_BOUNDARY_CHAR = /[A-Za-z0-9_=-]/;
+// A normal mixed agent task contains one encrypted body. Keep pathological slots
+// from amplifying into an attacker-controlled number of request parts.
+const MAX_EMBEDDED_FERNET_RUNS_PER_SLOT = 64;
 
 interface FernetTokenRun {
   index: number;
   token: string;
+}
+interface FernetRunScan {
+  runs: FernetTokenRun[];
+  overflow: boolean;
 }
 
 /**
@@ -158,11 +165,11 @@ function isStructurallyValidFernetToken(token: string): boolean {
 }
 
 export function structurallyValidFernetTokens(payload: string): string[] {
-  return fernetTokenRuns(payload).map(run => run.token);
+  return fernetTokenRuns(payload).runs.map(run => run.token);
 }
 
 /** Maximal, boundary-delimited and structurally valid Fernet runs embedded in a slot. */
-function fernetTokenRuns(payload: string): FernetTokenRun[] {
+function fernetTokenRuns(payload: string): FernetRunScan {
   const runs: FernetTokenRun[] = [];
   for (const match of payload.matchAll(FERNET_TOKEN_CANDIDATE)) {
     const index = match.index ?? 0;
@@ -172,9 +179,10 @@ function fernetTokenRuns(payload: string): FernetTokenRun[] {
     if (before && FERNET_TOKEN_BOUNDARY_CHAR.test(before)) continue;
     if (after && FERNET_TOKEN_BOUNDARY_CHAR.test(after)) continue;
     if (!isStructurallyValidFernetToken(token)) continue;
+    if (runs.length === MAX_EMBEDDED_FERNET_RUNS_PER_SLOT) return { runs, overflow: true };
     runs.push({ index, token });
   }
-  return runs;
+  return { runs, overflow: false };
 }
 
 function textWithoutFernetRuns(payload: string, runs: readonly FernetTokenRun[]): string {
@@ -291,7 +299,9 @@ export function hasUnreadableEncryptedAgentTask(input: unknown): boolean {
     }
 
     if (fragmentParts.has(part)) continue;
-    const runs = fernetTokenRuns(record.encrypted_content);
+    const scan = fernetTokenRuns(record.encrypted_content);
+    if (scan.overflow) return true;
+    const { runs } = scan;
     if (runs.length > 0) hasFernetTask = true;
     readableParts.push(textWithoutFernetRuns(record.encrypted_content, runs));
   }
@@ -308,9 +318,11 @@ export function hasUnreadableEncryptedAgentTask(input: unknown): boolean {
 
 
 export function encryptedSlotParts(payload: string): Array<Record<string, string>> {
+  const scan = fernetTokenRuns(payload);
+  if (scan.overflow) return [{ type: "input_text", text: OMITTED_ENCRYPTED_CONTENT_TEXT }];
   const parts: Array<Record<string, string>> = [];
   let last = 0;
-  for (const run of fernetTokenRuns(payload)) {
+  for (const run of scan.runs) {
     const before = payload.slice(last, run.index);
     if (before.trim().length > 0) parts.push({ type: "input_text", text: before });
     parts.push({ type: "encrypted_content", encrypted_content: run.token });
@@ -420,7 +432,9 @@ export function stripAgentMessageCiphertextInPlace(input: unknown): number {
 
 /** Free text: drop embedded token runs, and replace a slot that is nothing but a token. */
 function textWithoutCiphertext(text: string): string {
-  const runs = fernetTokenRuns(text);
+  const scan = fernetTokenRuns(text);
+  if (scan.overflow) return OMITTED_ENCRYPTED_CONTENT_TEXT;
+  const { runs } = scan;
   if (runs.length > 0) return textWithRunsOmitted(text, runs);
   return looksLikeFernetToken(text.trim()) ? OMITTED_ENCRYPTED_CONTENT_TEXT : text;
 }
@@ -473,11 +487,11 @@ function contentWithoutCiphertext(content: unknown[]): unknown[] {
       changed = true;
       // Keep whatever plaintext a recognizable slot carries around its token; a slot this
       // cannot parse is replaced whole rather than forwarded on the chance that it is benign.
-      const runs = fernetTokenRuns(record.encrypted_content);
+      const scan = fernetTokenRuns(record.encrypted_content);
       return {
         type: "input_text",
-        text: runs.length > 0
-          ? textWithRunsOmitted(record.encrypted_content, runs)
+        text: scan.overflow ? OMITTED_ENCRYPTED_CONTENT_TEXT : scan.runs.length > 0
+          ? textWithRunsOmitted(record.encrypted_content, scan.runs)
           : OMITTED_ENCRYPTED_CONTENT_TEXT,
       };
     }

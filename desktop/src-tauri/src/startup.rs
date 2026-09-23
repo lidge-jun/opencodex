@@ -17,11 +17,12 @@
 
 use crate::{
     auth::Auth,
+    claim,
     endpoint::ProxyEndpoint,
     first_run::{self, StartAtLogin},
     identity, ownership,
     proxy::{ProxyClient, RuntimeIdentity},
-    resolve,
+    resolve, runtime_stop,
     sidecar::{self, SidecarWatch},
     tray_availability::{self, TrayAvailability},
     AppState,
@@ -35,6 +36,7 @@ use std::{
     },
 };
 use tauri::{AppHandle, Emitter, Manager};
+use tokio::sync::oneshot;
 use tokio::time::{sleep, sleep_until, Duration, Instant};
 
 /// The event the bootstrap page listens on.
@@ -110,6 +112,7 @@ pub enum Phase {
     Resolving,
     Probing,
     Attaching,
+    TakingOver,
     Starting,
     Waiting,
     Ready,
@@ -121,11 +124,12 @@ pub enum Phase {
 ///
 /// [`Phase::NotStarted`] is absent on purpose. It is the state of not having run, so a checklist
 /// row for it would be a step that never completes.
-pub const PHASES: [Phase; 8] = [
+pub const PHASES: [Phase; 9] = [
     Phase::Registering,
     Phase::Resolving,
     Phase::Probing,
     Phase::Attaching,
+    Phase::TakingOver,
     Phase::Starting,
     Phase::Waiting,
     Phase::Ready,
@@ -141,6 +145,7 @@ impl Phase {
             Self::Resolving => "resolving",
             Self::Probing => "probing",
             Self::Attaching => "attaching",
+            Self::TakingOver => "taking-over",
             Self::Starting => "starting",
             Self::Waiting => "waiting",
             Self::Ready => "ready",
@@ -155,6 +160,7 @@ impl Phase {
             Self::Resolving => "Resolving the configuration home and port",
             Self::Probing => "Looking for a runtime that is already listening",
             Self::Attaching => "Attaching to the runtime that answered",
+            Self::TakingOver => "Taking over the runtime that was already listening",
             Self::Starting => "Starting the bundled runtime",
             Self::Waiting => "Waiting for the runtime to report healthy",
             Self::Ready => "Ready",
@@ -213,6 +219,21 @@ pub struct Progress {
     pub dashboard: Option<String>,
     pub diagnostic: Option<String>,
     pub can_retry: bool,
+    /// Present only while the shell is waiting on the user's takeover decision.
+    pub consent: Option<ConsentPrompt>,
+}
+
+/// What the consent panel renders. `blocked` carries the CLI's refusal reason when a
+/// takeover cannot be offered; the panel is shown only for the offerable case today, but
+/// the field is part of the wire so a later UI does not need a schema change.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsentPrompt {
+    pub endpoint: String,
+    pub port: u16,
+    pub home: String,
+    pub owner: String,
+    pub blocked: Option<String>,
 }
 
 impl Progress {
@@ -227,6 +248,7 @@ impl Progress {
             dashboard: None,
             diagnostic: None,
             can_retry: phase == Phase::Failed,
+            consent: None,
         }
     }
 }
@@ -263,19 +285,85 @@ struct Target {
 #[derive(Clone, Debug)]
 pub struct Registration {
     pub login: StartAtLogin,
-    /// This installation's own id, and what the recorded runtime owner says about it.
-    pub identity: String,
+    /// This installation's own id, minted once in the app's config directory.
+    pub install_id: Option<String>,
 }
 
 struct Live {
     latest: Progress,
     reported: Vec<&'static str>,
+    /// The takeover decision state. Answered stays set until the run clears it: the deadline
+    /// extension lands between the decision and the clear, and the guard must keep waiting
+    /// through both.
+    consent: ConsentState,
+    /// The current run's ceiling.
+    ///
+    /// The consent wait moves it by however long the person took, so the deadline guard
+    /// re-reads it instead of racing a stale copy. It lives under this lock so the expiry
+    /// decision and the terminal publish are one critical section against consent transitions.
+    deadline: Instant,
+}
+
+impl Live {
+    fn is_settled(&self) -> bool {
+        self.latest.phase == Phase::Ready.id() || self.latest.phase == Phase::Failed.id()
+    }
+
+    /// Record the latest state. A run that already said how it ended refuses further
+    /// reports: the terminal state is the page's promise that the screen stopped changing,
+    /// and a probe resuming after the expiry landed must not move it back — nor reopen the
+    /// consent gate that reads this state. Returns whether the report was taken.
+    fn publish(&mut self, progress: &mut Progress, failed_in: Option<Phase>) -> bool {
+        if self.is_settled() {
+            return false;
+        }
+        if !self.reported.contains(&progress.phase)
+            && progress.phase != Phase::Ready.id()
+            && progress.phase != Phase::Failed.id()
+        {
+            self.reported.push(progress.phase);
+        }
+        progress.completed = self
+            .reported
+            .iter()
+            .copied()
+            .filter(|id| *id != progress.phase)
+            .collect();
+        progress.failed_phase = failed_in.map(Phase::id);
+        self.latest = progress.clone();
+        true
+    }
+}
+
+/// The takeover prompt's decision state.
+enum ConsentState {
+    /// No prompt is up and none was just answered.
+    Idle,
+    /// A prompt is up; the sender resolves with the user's decision.
+    Pending(oneshot::Sender<bool>),
+    /// The user answered and the run has not yet consumed the extension.
+    Answered,
+}
+
+/// What the deadline guard's expiry step found.
+enum Expiry {
+    /// The run is terminal or superseded; the guard is done.
+    Dead,
+    /// A consent prompt is pending or its answer is being consumed; re-check shortly.
+    Blocked,
+    /// Not expired yet; the current ceiling plus its grace.
+    Waiting(Instant),
+    /// Expired and the failure was published in the same critical section; emit it.
+    Fired(Box<Progress>),
 }
 
 /// The sequence's managed state: the latest thing it said, what it has already finished, and
 /// whether it is running, so a retry cannot start a second run alongside the first.
 pub struct Startup {
     live: Mutex<Live>,
+    /// Serialize state publication with its synchronous event dispatch. Always acquired
+    /// before `live`, and never held across an await.
+    reporting: Mutex<()>,
     running: AtomicBool,
     /// Which run the state belongs to.
     ///
@@ -292,7 +380,10 @@ impl Startup {
             live: Mutex::new(Live {
                 latest: Progress::new(Phase::NotStarted, 0),
                 reported: Vec::new(),
+                consent: ConsentState::Idle,
+                deadline: Instant::now(),
             }),
+            reporting: Mutex::new(()),
             running: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             registered: Mutex::new(None),
@@ -322,8 +413,51 @@ impl Startup {
         self.live().latest.clone()
     }
 
-    fn restart(&self) {
+    /// The user's answer to a pending takeover prompt. Nothing pending is a no-op: a retry
+    /// or a late click must never be read as a decision for a prompt that is not up.
+    pub fn decide_takeover(&self, approved: bool) {
         let mut live = self.live();
+        match std::mem::replace(&mut live.consent, ConsentState::Idle) {
+            ConsentState::Pending(sender) => {
+                live.consent = ConsentState::Answered;
+                let _ = sender.send(approved);
+            }
+            // A late click or a duplicate decision answers nothing: restore what was there.
+            prior => live.consent = prior,
+        }
+    }
+
+    /// Register the pending prompt, unless the run already ended. A guard expiry can win the
+    /// race against the prompt being posted; posting one anyway would leave a receiver that
+    /// waits forever on a decision nobody can see.
+    fn await_consent(&self) -> Option<oneshot::Receiver<bool>> {
+        let mut live = self.live();
+        if live.is_settled() {
+            return None;
+        }
+        let (sender, receiver) = oneshot::channel();
+        live.consent = ConsentState::Pending(sender);
+        Some(receiver)
+    }
+
+    /// Consume the decision and publish the extended ceiling in the same critical section, so
+    /// the guard's next expiry check sees either a pending/answered prompt or the new deadline,
+    /// never the gap between them.
+    fn resolve_consent(&self, deadline: Instant) {
+        let mut live = self.live();
+        live.deadline = deadline;
+        live.consent = ConsentState::Idle;
+    }
+
+    fn set_deadline(&self, deadline: Instant) {
+        self.live().deadline = deadline;
+    }
+
+    fn restart(&self) {
+        // A retry during a pending consent prompt drops the sender, so the waiting run reads
+        // the decision as declined rather than pairing an old prompt with a new sequence.
+        let mut live = self.live();
+        live.consent = ConsentState::Idle;
         live.reported.clear();
         live.latest = Progress::new(Phase::NotStarted, 0);
     }
@@ -332,27 +466,88 @@ impl Startup {
     ///
     /// A terminal state is the page's only promise that the screen has stopped changing, so it is
     /// also what tells a late guard there is nothing left to report.
+    #[cfg(test)]
     fn settled(&self) -> bool {
-        let phase = self.live().latest.phase;
-        phase == Phase::Ready.id() || phase == Phase::Failed.id()
+        self.live().is_settled()
     }
 
-    fn publish(&self, progress: &mut Progress, failed_in: Option<Phase>) {
+    fn publish(&self, progress: &mut Progress, failed_in: Option<Phase>) -> bool {
         let mut live = self.live();
-        if !live.reported.contains(&progress.phase)
-            && progress.phase != Phase::Ready.id()
-            && progress.phase != Phase::Failed.id()
-        {
-            live.reported.push(progress.phase);
+        live.publish(progress, failed_in)
+    }
+
+    fn with_reporting<T>(&self, report: impl FnOnce() -> T) -> T {
+        let _reporting = self
+            .reporting
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        report()
+    }
+
+    /// Publish a terminal state for a run that did not report one itself.
+    ///
+    /// Idempotent and bound to the run it was started for: a run that already said Ready or
+    /// Failed is left alone, and a caller whose run has been superseded by a retry says
+    /// nothing. The check and the publish are one critical section, so no other reporter can
+    /// slip a state between them.
+    fn settle(&self, started: Instant, generation: u64, reason: String) -> Option<Progress> {
+        let mut live = self.live();
+        self.settle_locked(&mut live, started, generation, reason)
+    }
+
+    fn settle_locked(
+        &self,
+        live: &mut Live,
+        started: Instant,
+        generation: u64,
+        reason: String,
+    ) -> Option<Progress> {
+        if self.generation.load(Ordering::Acquire) != generation || live.is_settled() {
+            return None;
         }
-        progress.completed = live
-            .reported
-            .iter()
-            .copied()
-            .filter(|id| *id != progress.phase)
-            .collect();
-        progress.failed_phase = failed_in.map(Phase::id);
-        live.latest = progress.clone();
+        let stalled_in = live.latest.phase;
+        let elapsed_ms = elapsed(started);
+        let mut progress = Progress::new(Phase::Failed, elapsed_ms);
+        progress.diagnostic = Some(
+            [
+                format!(
+                    "OpenCodex desktop {} on {}",
+                    env!("CARGO_PKG_VERSION"),
+                    std::env::consts::OS
+                ),
+                format!("state: {stalled_in}"),
+                format!("reason: {reason}"),
+                format!("elapsed: {elapsed_ms}ms"),
+            ]
+            .join("\n"),
+        );
+        progress.detail = Some(reason);
+        live.publish(&mut progress, Phase::from_id(stalled_in));
+        Some(progress)
+    }
+
+    /// The deadline guard's atomic expiry step. The deadline read, the consent state, the
+    /// terminal check and the failure publish all share one critical section, so a prompt
+    /// posted or an answer consumed on the other side of the lock can never meet a failure
+    /// already in flight.
+    fn expire_run(&self, started: Instant, generation: u64, reason: String) -> Expiry {
+        let mut live = self.live();
+        if self.generation.load(Ordering::Acquire) != generation || live.is_settled() {
+            return Expiry::Dead;
+        }
+        if !matches!(live.consent, ConsentState::Idle) {
+            // A prompt is up or an answer is being consumed. The budget does not run
+            // against the person, so there is nothing to expire.
+            return Expiry::Blocked;
+        }
+        let wake = live.deadline + SETTLE_GRACE;
+        if wake > Instant::now() {
+            return Expiry::Waiting(wake);
+        }
+        match self.settle_locked(&mut live, started, generation, reason) {
+            Some(progress) => Expiry::Fired(Box::new(progress)),
+            None => Expiry::Dead,
+        }
     }
 }
 
@@ -377,6 +572,7 @@ pub fn begin(app: &AppHandle) {
     startup.restart();
     let generation = startup.generation.fetch_add(1, Ordering::AcqRel) + 1;
     let started = Instant::now();
+    startup.set_deadline(started + DEADLINE);
     let app = app.clone();
 
     // The ceiling is a promise to the page, and something has to keep it when the run does not.
@@ -386,16 +582,41 @@ pub fn begin(app: &AppHandle) {
     // cannot tell from a hung application, which is the whole thing this surface exists to avoid.
     let guard = app.clone();
     tauri::async_runtime::spawn(async move {
-        sleep_until(started + DEADLINE + SETTLE_GRACE).await;
-        settle(
-            &guard,
-            started,
-            generation,
-            format!(
-                "the startup sequence did not finish within {} seconds",
-                DEADLINE.as_secs()
-            ),
-        );
+        // The consent wait extends the shared deadline, and while a prompt is up the budget
+        // does not run at all. The expiry check, the consent state and the terminal publish
+        // share one critical section, so a prompt posted or an answer consumed can never meet
+        // a failure already in flight.
+        loop {
+            let Some(startup) = guard.try_state::<Startup>() else {
+                return;
+            };
+            let expiry = startup.with_reporting(|| {
+                let expiry = startup.expire_run(
+                    started,
+                    generation,
+                    format!(
+                        "the startup sequence did not finish within {} seconds",
+                        DEADLINE.as_secs()
+                    ),
+                );
+                if let Expiry::Fired(progress) = &expiry {
+                    let _ = guard.emit(PHASE_EVENT, progress);
+                }
+                expiry
+            });
+            match expiry {
+                Expiry::Dead => return,
+                Expiry::Blocked => {
+                    sleep(POLL).await;
+                    continue;
+                }
+                Expiry::Waiting(wake) => {
+                    sleep_until(wake).await;
+                    continue;
+                }
+                Expiry::Fired(_) => return,
+            }
+        }
     });
 
     tauri::async_runtime::spawn(async move {
@@ -420,31 +641,15 @@ fn settle(app: &AppHandle, started: Instant, generation: u64, reason: String) {
     let Some(startup) = app.try_state::<Startup>() else {
         return;
     };
-    if startup.generation.load(Ordering::Acquire) != generation || startup.settled() {
-        return;
-    }
-    let stalled_in = startup.latest().phase;
-    let elapsed_ms = elapsed(started);
-    let mut progress = Progress::new(Phase::Failed, elapsed_ms);
-    progress.diagnostic = Some(
-        [
-            format!(
-                "OpenCodex desktop {} on {}",
-                env!("CARGO_PKG_VERSION"),
-                std::env::consts::OS
-            ),
-            format!("state: {stalled_in}"),
-            format!("reason: {reason}"),
-            format!("elapsed: {elapsed_ms}ms"),
-        ]
-        .join("\n"),
-    );
-    progress.detail = Some(reason);
-    emit(app, progress, Phase::from_id(stalled_in));
+    startup.with_reporting(|| {
+        if let Some(progress) = startup.settle(started, generation, reason) {
+            let _ = app.emit(PHASE_EVENT, progress);
+        }
+    });
 }
 
 async fn run(app: &AppHandle, started: Instant) {
-    let deadline = started + DEADLINE;
+    let mut deadline = started + DEADLINE;
     // Publishing comes before any lookup that can fail. A sequence that returns before it has
     // said anything leaves the page unable to tell "not started" from "still going".
     report(app, started, Phase::Registering, None);
@@ -456,11 +661,7 @@ async fn run(app: &AppHandle, started: Instant) {
         app,
         started,
         Phase::Registering,
-        Some(format!(
-            "{}; {}",
-            registration.login.describe(),
-            registration.identity
-        )),
+        Some(registration.login.describe().to_owned()),
     );
 
     report(app, started, Phase::Resolving, None);
@@ -514,10 +715,11 @@ async fn run(app: &AppHandle, started: Instant) {
         started,
         Phase::Resolving,
         Some(format!(
-            "{} with a configuration home of {}, resolved by the bundled CLI {}",
+            "{} with a configuration home of {}, resolved by the bundled CLI {}; {}",
             target.endpoint.url(""),
             target.home.display(),
-            answer.cli_version
+            answer.cli_version,
+            ownership::describe(&answer.ownership, registration.install_id.as_deref())
         )),
     );
 
@@ -532,29 +734,99 @@ async fn run(app: &AppHandle, started: Instant) {
             }
         }),
     );
+    let mut took_over = false;
     match resolve::live_verdict(&resolution) {
         resolve::LiveVerdict::Attach => {
-            report(
-                app,
-                started,
-                Phase::Attaching,
-                Some("a runtime was already listening, so this app is a guest on it".to_owned()),
-            );
-            if bind(app, &proxy, deadline).await.is_none() {
-                fail(
-                    app,
-                    started,
-                    Some(&target),
-                    &registration,
-                    &watch,
-                    Phase::Attaching,
-                    "the runtime answered but did not identify itself, so this app did not attach"
-                        .to_owned(),
-                );
-                return;
+            // Without our own id nothing can ever match us, which is the answer Refuse gives.
+            let consent = match registration.install_id.as_deref() {
+                Some(install_id) => ownership::consent(&answer.ownership, install_id),
+                None => ownership::Consent::Refuse,
+            };
+            match attach_plan(consent, &answer.takeover) {
+                AttachPlan::Guest(detail) => {
+                    attach_as_guest(
+                        app,
+                        started,
+                        &target,
+                        &registration,
+                        &watch,
+                        &proxy,
+                        endpoint,
+                        deadline,
+                        detail,
+                    )
+                    .await;
+                    return;
+                }
+                AttachPlan::Ask => {
+                    // The prompt has to be visible even when this launch started hidden.
+                    if let Some(window) = app.get_webview_window("main") {
+                        crate::window::show(&window);
+                    }
+                    let Some(startup) = app.try_state::<Startup>() else {
+                        return;
+                    };
+                    let Some(receiver) = startup.await_consent() else {
+                        // The run already ended (an expiry won the race to the terminal
+                        // state). Posting the prompt now would wait on a decision nobody
+                        // can see, so the run stops here instead.
+                        return;
+                    };
+                    let mut progress = Progress::new(Phase::Attaching, elapsed(started));
+                    progress.detail = Some(
+                        "a runtime was already listening; waiting for a decision on taking it over"
+                            .to_owned(),
+                    );
+                    progress.consent = Some(ConsentPrompt {
+                        endpoint: target.endpoint.url(""),
+                        port: target.endpoint.port,
+                        home: target.home.display().to_string(),
+                        owner: ownership::owner_label(&answer.ownership),
+                        blocked: None,
+                    });
+                    emit(app, progress, None);
+                    // The user may take any time; the budget exists to bound the machinery, not
+                    // the person, so the deadline moves by whatever the decision took.
+                    let asked = Instant::now();
+                    let approved = receiver.await.unwrap_or(false);
+                    deadline += asked.elapsed();
+                    // The extension and the clear are one critical section: the guard sees
+                    // either a prompt still pending or the moved ceiling, never the gap.
+                    startup.resolve_consent(deadline);
+                    if !approved {
+                        attach_as_guest(
+                            app,
+                            started,
+                            &target,
+                            &registration,
+                            &watch,
+                            &proxy,
+                            endpoint,
+                            deadline,
+                            "a runtime was already listening and taking it over was declined, so this app is a guest on it"
+                                .to_owned(),
+                        )
+                        .await;
+                        return;
+                    }
+                    if take_over(
+                        app,
+                        started,
+                        &mut deadline,
+                        &target,
+                        &registration,
+                        &watch,
+                        &proxy,
+                        answer,
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return;
+                    }
+                    took_over = true;
+                }
             }
-            finish(app, started, endpoint);
-            return;
         }
         // Something holds the port and this app cannot manage it. That is not an absence, so it
         // does not authorise starting a second runtime beside it either.
@@ -572,8 +844,9 @@ async fn run(app: &AppHandle, started: Instant) {
         }
         resolve::LiveVerdict::NotLive => {}
     }
-    if !resolve::may_start(&resolution) {
-        // Only a proven absence authorises a start. Nothing else may fall through to one.
+    if !took_over && !resolve::may_start(&resolution) {
+        // Only a proven absence authorises a start. Nothing else may fall through to one. A
+        // takeover just proved its own absence by stopping what was there.
         fail(
             app,
             started,
@@ -672,6 +945,279 @@ async fn run(app: &AppHandle, started: Instant) {
     );
 }
 
+/// What an attach turns into once the recorded owner and the CLI's compatibility answer are
+/// laid next to each other. The approved resolve answer carries the claim token.
+enum AttachPlan {
+    /// Stay a guest on what answered; the string is the detail the phase reports.
+    Guest(String),
+    /// Offer the takeover and wait on the user.
+    Ask,
+}
+
+fn attach_plan(consent: ownership::Consent, takeover: &resolve::Takeover) -> AttachPlan {
+    match consent {
+        ownership::Consent::Held => AttachPlan::Guest(
+            "a runtime was already listening and this installation already owns it".to_owned(),
+        ),
+        ownership::Consent::Refuse => AttachPlan::Guest(
+            "a runtime was already listening; its recorded owner could not be read, so this app is a guest on it and asked nothing".to_owned(),
+        ),
+        ownership::Consent::AskFirstTime | ownership::Consent::AskAgain => match takeover {
+            resolve::Takeover::Blocked { reason, detail } => AttachPlan::Guest(format!(
+                "a runtime was already listening, but taking it over is not available ({reason}: {detail}), so this app is a guest on it"
+            )),
+            resolve::Takeover::Supported { .. } => AttachPlan::Ask,
+        },
+    }
+}
+
+/// Report, bind and finish as a guest on the runtime that answered.
+#[allow(clippy::too_many_arguments)]
+async fn attach_as_guest(
+    app: &AppHandle,
+    started: Instant,
+    target: &Target,
+    registration: &Registration,
+    watch: &SidecarWatch,
+    proxy: &ProxyClient,
+    endpoint: ProxyEndpoint,
+    deadline: Instant,
+    detail: String,
+) {
+    report(app, started, Phase::Attaching, Some(detail));
+    if bind(app, proxy, deadline).await.is_none() {
+        fail(
+            app,
+            started,
+            Some(target),
+            registration,
+            watch,
+            Phase::Attaching,
+            "the runtime answered but did not identify itself, so this app did not attach"
+                .to_owned(),
+        );
+        return;
+    }
+    finish(app, started, endpoint);
+}
+
+fn approval_still_current(approved: &resolve::Resolved, fresh: &resolve::Resolution) -> bool {
+    let Some(now) = fresh.resolved() else {
+        return false;
+    };
+    matches!(resolve::live_verdict(fresh), resolve::LiveVerdict::Attach)
+        && matches!(&now.takeover, resolve::Takeover::Supported { .. })
+        && approved.ownership == now.ownership
+        && approved.takeover == now.takeover
+        && approved.config_home == now.config_home
+        && approved.cli_version == now.cli_version
+        && approved.port == now.port
+        && approved.liveness == now.liveness
+}
+
+async fn stop_after_approval<F, Fut>(
+    approved: &resolve::Resolved,
+    fresh: &resolve::Resolution,
+    stop: F,
+) -> Option<runtime_stop::StopResult>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = runtime_stop::StopResult>,
+{
+    if !approval_still_current(approved, fresh) {
+        return None;
+    }
+    Some(stop().await)
+}
+
+async fn claim_after_silence<F, Fut>(
+    stopped: &runtime_stop::StopResult,
+    silent: bool,
+    claim: F,
+) -> Option<claim::ClaimResult>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = claim::ClaimResult>,
+{
+    if !silent || !stopped.may_check_silence() {
+        return None;
+    }
+    Some(claim().await)
+}
+
+/// Stop the runtime that answered, wait for its silence, and record this installation as
+/// the owner. An `Err` has already been reported; `Ok` means the Starting branch may run.
+#[allow(clippy::too_many_arguments)]
+async fn take_over(
+    app: &AppHandle,
+    started: Instant,
+    deadline: &mut Instant,
+    target: &Target,
+    registration: &Registration,
+    watch: &SidecarWatch,
+    proxy: &ProxyClient,
+    approved: &resolve::Resolved,
+) -> Result<(), ()> {
+    let fresh = resolve::run(app, *deadline).await;
+    let stopped = stop_after_approval(approved, &fresh, || async {
+        report(
+            app,
+            started,
+            Phase::TakingOver,
+            Some("stopping the runtime that was already listening".to_owned()),
+        );
+        runtime_stop::run_approved(app, *deadline, approved).await
+    })
+    .await;
+    let Some(stopped) = stopped else {
+        fail(
+            app,
+            started,
+            Some(target),
+            registration,
+            watch,
+            Phase::TakingOver,
+            "the runtime or its managing CLI changed after approval; retry to review it".to_owned(),
+        );
+        return Err(());
+    };
+    if stopped.is_approval_changed() || !stopped.may_check_silence() {
+        fail(
+            app,
+            started,
+            Some(target),
+            registration,
+            watch,
+            Phase::TakingOver,
+            format!(
+                "the guarded stop could not confirm the approved runtime: {}",
+                stopped.describe()
+            ),
+        );
+        return Err(());
+    }
+    // A refused connection, not exit 0 and not the probe's deadline, is the receipt: `ocx stop`
+    // reports exit 79 when the proxy stopped but history cleanup failed after it exited, and a
+    // `None` from alive_within is only the clock running out — neither is silence. Only a
+    // validated stop result reaches this loop, and claim still requires active refusal.
+    let mut silent = false;
+    let mut still_answering = false;
+    while Instant::now() < *deadline {
+        match proxy.alive_within(*deadline).await {
+            Some(Err(_)) => {
+                silent = true;
+                break;
+            }
+            Some(Ok(_)) => {
+                still_answering = true;
+                sleep(POLL).await;
+            }
+            None => {
+                still_answering = false;
+                break;
+            }
+        }
+    }
+    if !silent {
+        fail(
+            app,
+            started,
+            Some(target),
+            registration,
+            watch,
+            Phase::TakingOver,
+            format!(
+                "the runtime that was already listening {} ({})",
+                if still_answering {
+                    "is still answering after the stop"
+                } else {
+                    "did not go silent before the deadline"
+                },
+                stopped.describe()
+            ),
+        );
+        return Err(());
+    }
+    if !stopped.is_stopped() {
+        report(
+            app,
+            started,
+            Phase::TakingOver,
+            Some(format!(
+                "the runtime that was already listening stopped answering (stop reported: {})",
+                stopped.describe()
+            )),
+        );
+    }
+
+    report(
+        app,
+        started,
+        Phase::TakingOver,
+        Some("recording this installation as the runtime owner".to_owned()),
+    );
+    let install_id = registration.install_id.clone().unwrap_or_default();
+    // An unknown record reaches here only off the UI path, and the claim has to refuse rather
+    // than fabricate the subject it is claiming against.
+    let resolve::Takeover::Supported { token, .. } = &approved.takeover else {
+        return Err(());
+    };
+    let Some(argv) = claim::args(&install_id, &approved.ownership, token) else {
+        fail(
+            app,
+            started,
+            Some(target),
+            registration,
+            watch,
+            Phase::TakingOver,
+            "the recorded owner could not be read, so no claim was made".to_owned(),
+        );
+        return Err(());
+    };
+    match claim_after_silence(&stopped, silent, || claim::run(app, argv, *deadline)).await {
+        Some(claim::ClaimResult::Recorded(ownership)) => {
+            report(
+                app,
+                started,
+                Phase::TakingOver,
+                Some(format!(
+                    "this installation now owns the runtime (consent generation {})",
+                    ownership.consent_generation
+                )),
+            );
+            Ok(())
+        }
+        Some(claim::ClaimResult::Failed(message)) => {
+            // The runtime is stopped either way. Refusing here leaves the next launch an
+            // ordinary absence to start into, which is the acceptable end state.
+            fail(
+                app,
+                started,
+                Some(target),
+                registration,
+                watch,
+                Phase::TakingOver,
+                format!(
+                    "the runtime was stopped, but this installation could not be recorded as its owner: {message}"
+                ),
+            );
+            Err(())
+        }
+        None => {
+            fail(
+                app,
+                started,
+                Some(target),
+                registration,
+                watch,
+                Phase::TakingOver,
+                "the approved runtime changed, so no ownership claim was attempted".to_owned(),
+            );
+            Err(())
+        }
+    }
+}
+
 /// Establish the app's own surface: the tray verdict, the tray, and the login item.
 ///
 /// It happens once per process. A retry re-runs the runtime half of the sequence, and running this
@@ -723,10 +1269,11 @@ async fn register(app: &AppHandle, deadline: Instant) -> Registration {
     // This installation's own id, and what the recorded runtime owner says about it. The claim
     // lives in the shared service install state and the CLI is what reads it; the comparison
     // against our own id is the rule that record publishes.
-    let install_id = identity::install_id(app);
+    // This installation's own id; what the recorded runtime owner says about it is part of the
+    // resolve answer, so the identity line is written where the answer exists.
     let registration = Registration {
         login,
-        identity: ownership::describe(ownership::resolve(app).as_ref(), install_id.as_deref()),
+        install_id: identity::install_id(app),
     };
     if let Some(startup) = app.try_state::<Startup>() {
         startup.remember_registration(registration.clone());
@@ -826,7 +1373,11 @@ fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
     let dashboard = endpoint.url("/#/usage");
     let mut progress = Progress::new(Phase::Ready, elapsed(started));
     progress.dashboard = Some(dashboard.clone());
-    emit(app, progress, None);
+    if !emit(app, progress, None) {
+        // The run already ended — the expiry won while this one was still binding. The
+        // terminal state stays and the window must not navigate away from it.
+        return;
+    }
     if let Some(window) = app.get_webview_window("main") {
         // justified: replacing the bootstrap page with the dashboard is how this window has always
         // navigated, and the string is a URL this process resolved, not anything a page supplied.
@@ -890,7 +1441,10 @@ pub fn diagnostic(
         None => lines.push("endpoint: not resolved".to_owned()),
     }
     lines.push(format!("start at login: {}", registration.login.describe()));
-    lines.push(format!("runtime ownership: {}", registration.identity));
+    lines.push(format!(
+        "installation id: {}",
+        registration.install_id.as_deref().unwrap_or("not minted")
+    ));
     lines.push(match watch.exit() {
         Some(exit) => format!("runtime process: {}", exit.describe()),
         None => "runtime process: still running or never started".to_owned(),
@@ -911,11 +1465,21 @@ fn report(app: &AppHandle, started: Instant, phase: Phase, detail: Option<String
     emit(app, progress, None);
 }
 
-fn emit(app: &AppHandle, mut progress: Progress, failed_in: Option<Phase>) {
+/// Publish and emit one state. A report refused because the run already ended is not
+/// emitted either, so a stale event cannot move the page past the terminal state the
+/// snapshot keeps. Returns whether the report was published.
+fn emit(app: &AppHandle, mut progress: Progress, failed_in: Option<Phase>) -> bool {
     if let Some(startup) = app.try_state::<Startup>() {
-        startup.publish(&mut progress, failed_in);
+        return startup.with_reporting(|| {
+            if !startup.publish(&mut progress, failed_in) {
+                return false;
+            }
+            let _ = app.emit(PHASE_EVENT, progress);
+            true
+        });
     }
     let _ = app.emit(PHASE_EVENT, progress);
+    true
 }
 
 fn elapsed(started: Instant) -> u64 {
@@ -925,11 +1489,213 @@ fn elapsed(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        shows_window, unavailable, LaunchOrigin, Phase, Progress, Startup, AUTOSTART_FLAG,
-        DEADLINE, PHASES, POLL,
+        approval_still_current, attach_plan, claim_after_silence, shows_window,
+        stop_after_approval, unavailable, AttachPlan, ConsentState, Expiry, LaunchOrigin, Phase,
+        Progress, Startup, AUTOSTART_FLAG, DEADLINE, PHASES, POLL,
     };
+    use crate::claim::ClaimResult;
+    use crate::ownership::{Claim, Consent, Owner, Recorded};
+    use crate::resolve::{Liveness, Port, Resolution, Resolved, Status, Takeover};
+    use crate::runtime_stop::{self, StopResult};
     use crate::tray_availability::TrayAvailability;
-    use tokio::time::Duration;
+    use std::cell::Cell;
+    use std::sync::atomic::Ordering;
+    use tokio::time::{Duration, Instant};
+
+    fn supported() -> Takeover {
+        Takeover::Supported {
+            protocol_version: 1,
+            minimum_cli_version: "2.61.0".to_owned(),
+            token: "tok".to_owned(),
+        }
+    }
+
+    fn blocked() -> Takeover {
+        Takeover::Blocked {
+            reason: "managing-cli-unsupported".to_owned(),
+            detail: "path uses 2.59.0".to_owned(),
+        }
+    }
+
+    fn approved_answer() -> Resolved {
+        Resolved {
+            schema: "ocx-resolve/1".to_owned(),
+            cli_version: "2.61.0".to_owned(),
+            config_home: "/sandbox/a".to_owned(),
+            port: Port {
+                effective: 10100,
+                configured: 10100,
+            },
+            liveness: Liveness {
+                status: Status::Live,
+                pid: Some(42),
+                port: Some(10100),
+                hostname: None,
+                version: Some("2.61.0".to_owned()),
+                role: None,
+            },
+            ownership: Recorded::Owned {
+                ownership: Claim {
+                    owner: Owner::Cli,
+                    install_id: "cli-a".to_owned(),
+                    consent_generation: 2,
+                },
+                revision: 7,
+            },
+            takeover: supported(),
+        }
+    }
+
+    #[test]
+    fn a_changed_answer_never_invokes_stop() {
+        tauri::async_runtime::block_on(async {
+            let approved = approved_answer();
+            let mut changed = approved.clone();
+            changed.ownership = Recorded::None { revision: 8 };
+            let called = Cell::new(false);
+            let refused = stop_after_approval(
+                &approved,
+                &Resolution::Answered(Box::new(changed)),
+                || async {
+                    called.set(true);
+                    StopResult::Failed("called".to_owned())
+                },
+            )
+            .await;
+            assert!(refused.is_none());
+            assert!(!called.get());
+            let accepted = stop_after_approval(
+                &approved,
+                &Resolution::Answered(Box::new(approved.clone())),
+                || async {
+                    called.set(true);
+                    StopResult::Failed("called".to_owned())
+                },
+            )
+            .await;
+            assert!(accepted.is_some());
+            assert!(called.get());
+            let mut moved = approved.clone();
+            moved.liveness.pid = Some(43);
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.port.effective = 10101;
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.config_home = "/sandbox/b".to_owned();
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.cli_version = "2.62.0".to_owned();
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.liveness.hostname = Some("localhost".to_owned());
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            if let Takeover::Supported { token, .. } = &mut moved.takeover {
+                *token = "changed".to_owned();
+            }
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.takeover = blocked();
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Unknown("unreadable".to_owned())
+            ));
+        });
+    }
+
+    #[test]
+    fn terminal_stop_results_never_invoke_claim_after_silence() {
+        tauri::async_runtime::block_on(async {
+            let approved = approved_answer();
+            let answer = Resolution::Answered(Box::new(approved.clone()));
+            let called = Cell::new(false);
+            for result in [
+                StopResult::ApprovalChanged("moved".to_owned()),
+                StopResult::ManagerStillActive("active".to_owned()),
+                runtime_stop::read(Some(1), b"{", b""),
+                StopResult::Failed("the bundled CLI timed out".to_owned()),
+            ] {
+                let stopped = stop_after_approval(&approved, &answer, || async { result })
+                    .await
+                    .expect("matching answer");
+                assert!(!stopped.may_check_silence());
+                let claimed = claim_after_silence(&stopped, true, || async {
+                    called.set(true);
+                    ClaimResult::Failed("called".to_owned())
+                })
+                .await;
+                assert!(claimed.is_none());
+                assert!(!called.get());
+            }
+            let history = StopResult::HistoryIncomplete("history-incomplete".to_owned());
+            let claimed = claim_after_silence(&history, true, || async {
+                called.set(true);
+                ClaimResult::Failed("called".to_owned())
+            })
+            .await;
+            assert!(matches!(claimed, Some(ClaimResult::Failed(_))));
+            assert!(called.get());
+        });
+    }
+
+    #[test]
+    fn a_retry_drops_a_prompt_the_run_is_still_waiting_on() {
+        // The waiting run reads the dropped sender as declined, so a stale prompt can never
+        // pair a decision meant for it with the retried sequence.
+        let startup = Startup::new();
+        let mut receiver = startup.await_consent().expect("no terminal state yet");
+        startup.restart();
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+    }
+
+    #[test]
+    fn an_ask_only_arises_when_the_takeover_can_be_taken() {
+        // Held and Refuse never ask, whatever the CLI reported about compatibility.
+        assert!(matches!(
+            attach_plan(Consent::Held, &supported()),
+            AttachPlan::Guest(_)
+        ));
+        assert!(matches!(
+            attach_plan(Consent::Refuse, &supported()),
+            AttachPlan::Guest(_)
+        ));
+        assert!(matches!(
+            attach_plan(Consent::AskFirstTime, &supported()),
+            AttachPlan::Ask
+        ));
+        match attach_plan(Consent::AskAgain, &blocked()) {
+            AttachPlan::Guest(detail) => {
+                assert!(detail.contains("managing-cli-unsupported: path uses 2.59.0"))
+            }
+            AttachPlan::Ask => panic!("a blocked takeover is not an offer"),
+        }
+    }
 
     #[test]
     fn not_having_started_is_not_a_step_of_the_run() {
@@ -1046,5 +1812,151 @@ mod tests {
             .iter()
             .all(|budget| *budget <= Duration::from_secs(45)));
         assert!(POLL < DEADLINE);
+    }
+
+    #[test]
+    fn an_expired_run_publishes_failed_in_the_same_step() {
+        // The expiry decision and the terminal publish share one critical section: an expired
+        // deadline with no prompt up fails the run, and the failure is already there when the
+        // call returns.
+        let startup = Startup::new();
+        startup.generation.store(1, Ordering::SeqCst);
+        startup.set_deadline(tokio::time::Instant::now() - Duration::from_secs(60));
+        match startup.expire_run(
+            tokio::time::Instant::now() - Duration::from_secs(60),
+            1,
+            "expired".to_owned(),
+        ) {
+            Expiry::Fired(progress) => {
+                assert_eq!(progress.phase, Phase::Failed.id());
+                assert!(progress.can_retry);
+            }
+            _ => panic!("an expired deadline with no consent must fire"),
+        }
+        assert!(startup.settled());
+        // A second expiry for the same run says nothing.
+        assert!(matches!(
+            startup.expire_run(tokio::time::Instant::now(), 1, "again".to_owned()),
+            Expiry::Dead
+        ));
+    }
+
+    #[test]
+    fn a_pending_prompt_blocks_expiry_and_the_prompt_still_resolves() {
+        // The losing side of the race the guard used to win: the prompt is up while the
+        // deadline sits in the past. Expiry must yield, and the user's answer must still
+        // reach the waiting run.
+        let startup = Startup::new();
+        startup.generation.store(1, Ordering::SeqCst);
+        startup.set_deadline(tokio::time::Instant::now() - Duration::from_secs(60));
+        let mut receiver = startup.await_consent().expect("no terminal state yet");
+        assert!(matches!(
+            startup.expire_run(tokio::time::Instant::now(), 1, "expired".to_owned()),
+            Expiry::Blocked
+        ));
+        startup.decide_takeover(true);
+        assert_eq!(receiver.try_recv(), Ok(true));
+        // The answer was consumed but the extension has not landed yet: still not expirable.
+        assert!(matches!(
+            startup.expire_run(tokio::time::Instant::now(), 1, "expired".to_owned()),
+            Expiry::Blocked
+        ));
+        // Once the run publishes the moved ceiling the guard waits on it instead of firing.
+        startup.resolve_consent(tokio::time::Instant::now() + Duration::from_secs(60));
+        assert!(matches!(
+            startup.expire_run(tokio::time::Instant::now(), 1, "expired".to_owned()),
+            Expiry::Waiting(_)
+        ));
+    }
+
+    #[test]
+    fn a_terminal_run_posts_no_prompt() {
+        // The other half of the race: the failure already landed, so the ask path must not
+        // register a prompt that would wait on a decision nobody can see.
+        let startup = Startup::new();
+        startup.generation.store(1, Ordering::SeqCst);
+        let mut terminal = Progress::new(Phase::Failed, 1);
+        startup.publish(&mut terminal, None);
+        assert!(startup.await_consent().is_none());
+        // And the consent state stays idle, so a later run is not shadowed by a stale prompt.
+        assert!(matches!(startup.live().consent, ConsentState::Idle));
+    }
+
+    #[test]
+    fn a_terminal_state_is_not_moved_by_a_late_report() {
+        // The expiry lands while the run is still inside a probe; the probe then resumes and
+        // reports. Neither the snapshot nor the consent gate may move: the terminal state is
+        // the page's promise that it stopped changing, and a report that could undo it would
+        // also reopen the prompt the terminal state just ruled out.
+        let startup = Startup::new();
+        startup.generation.store(1, Ordering::SeqCst);
+        startup.set_deadline(tokio::time::Instant::now() - Duration::from_secs(60));
+        match startup.expire_run(
+            tokio::time::Instant::now() - Duration::from_secs(60),
+            1,
+            "expired".to_owned(),
+        ) {
+            Expiry::Fired(progress) => assert_eq!(progress.phase, Phase::Failed.id()),
+            _ => panic!("an expired deadline with no consent must fire"),
+        }
+        let mut late = Progress::new(Phase::Probing, 2);
+        assert!(!startup.publish(&mut late, None));
+        assert_eq!(startup.latest().phase, Phase::Failed.id());
+        assert!(startup.await_consent().is_none());
+        // A second terminal report is refused as well: the first ending stands.
+        let mut ready = Progress::new(Phase::Ready, 3);
+        assert!(!startup.publish(&mut ready, None));
+        assert_eq!(startup.latest().phase, Phase::Failed.id());
+    }
+
+    #[test]
+    fn expiry_waits_for_an_accepted_report_to_be_dispatched() {
+        let startup = Startup::new();
+        startup.generation.store(1, Ordering::SeqCst);
+        startup.set_deadline(Instant::now() - Duration::from_secs(60));
+        let events = std::sync::Mutex::new(Vec::new());
+        let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            startup.with_reporting(|| {
+                let mut progress = Progress::new(Phase::Probing, 1);
+                assert!(startup.publish(&mut progress, None));
+                let startup = &startup;
+                let events = &events;
+                scope.spawn(move || {
+                    // The report was accepted but has not dispatched yet. Expiry cannot
+                    // overtake it, even though the state mutex itself is no longer held.
+                    assert!(matches!(
+                        startup.reporting.try_lock(),
+                        Err(std::sync::TryLockError::WouldBlock)
+                    ));
+                    checked_tx.send(()).unwrap();
+                    startup.with_reporting(|| {
+                        match startup.expire_run(Instant::now(), 1, "expired".to_owned()) {
+                            Expiry::Fired(progress) => events.lock().unwrap().push(progress.phase),
+                            _ => panic!("the unblocked expiry must publish failure"),
+                        }
+                    });
+                });
+                checked_rx.recv().unwrap();
+                events.lock().unwrap().push(progress.phase);
+            });
+        });
+        assert_eq!(
+            *events.lock().unwrap(),
+            vec![Phase::Probing.id(), Phase::Failed.id()]
+        );
+    }
+
+    #[test]
+    fn a_superseded_guard_reports_nothing() {
+        // A retry bumped the generation: the old guard's expiry is dead even with the
+        // deadline in the past.
+        let startup = Startup::new();
+        startup.generation.store(2, Ordering::SeqCst);
+        startup.set_deadline(tokio::time::Instant::now() - Duration::from_secs(60));
+        assert!(matches!(
+            startup.expire_run(tokio::time::Instant::now(), 1, "expired".to_owned()),
+            Expiry::Dead
+        ));
     }
 }

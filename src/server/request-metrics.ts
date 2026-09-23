@@ -38,6 +38,7 @@ export const REQUEST_METRICS_RECOVERY_CLASSES = Object.freeze([
   "payload",
   "empty_completion",
   "effort_downgrade",
+  "fast_downgrade",
   "other",
 ] as const);
 
@@ -143,6 +144,10 @@ const CAUSE_METRICS_CLASS = {
 } as const satisfies Record<RequestFailureCause, RequestMetricsRecoveryClass>;
 
 function recoveryClass(kind: AttemptRecoveryKind): RequestMetricsRecoveryClass {
+  // Both recoveries answer a rejected parameter, but an operator acts on them differently:
+  // an effort downgrade is a model/effort mismatch, a fast downgrade is a missing Anthropic
+  // fast-mode entitlement. Keep `effort_downgrade` meaning exactly what it always meant.
+  if (kind === "anthropic-fast-downgrade") return "fast_downgrade";
   return CAUSE_METRICS_CLASS[causeForRecoveryKind(kind)];
 }
 
