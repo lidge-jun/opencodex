@@ -28,6 +28,8 @@ type QuotaDiskFile = {
 };
 
 type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
+/** Fresh WHAM topology proof is consumed by the merge, never retained in a cache or DTO. */
+type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true };
 let mainPolicyQuota: MainPolicyQuota | null = null;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -198,6 +200,11 @@ function isExplicitMonthlyWindow(window: WhamUsageWindow | null | undefined): bo
     && seconds >= MONTHLY_WINDOW_MIN_SECONDS;
 }
 
+function isExplicitLongWindow(window: WhamUsageWindow | null | undefined): boolean {
+  const seconds = window?.limit_window_seconds;
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds >= WEEKLY_WINDOW_MIN_SECONDS;
+}
+
 function isExplicitMonthlyWindowMinutes(windowMinutes: unknown): boolean {
   const minutes = windowMinutes_(windowMinutes);
   return minutes !== undefined && minutes >= MONTHLY_WINDOW_MIN_MINUTES;
@@ -271,7 +278,7 @@ export function setAccountQuotaFromParsed(
   quota: Omit<StoredAccountQuota, "updatedAt"> | null,
   writerGeneration = captureConfigGeneration(),
   mainWriter?: MainQuotaWriter,
-  policyQuota: Omit<StoredAccountQuota, "updatedAt"> | null = quota,
+  policyQuota: MainPolicyQuotaObservation | null = quota,
   historyEvidence?: QuotaObservationEvidence,
 ): void {
   quota = withoutRetiredCodexQuota(quota);
@@ -314,7 +321,7 @@ export function setAccountQuotaFromParsed(
 
 /** One partial-window merge contract for legacy quota and identity-bound policy evidence. */
 function mergeAccountQuota(
-  quota: Omit<StoredAccountQuota, "updatedAt">,
+  quota: MainPolicyQuotaObservation,
   existing: StoredAccountQuota | undefined,
   updatedAt: number,
   policyEvidence = false,
@@ -376,7 +383,7 @@ function mergeAccountQuota(
     }
     if (quota.shortResetAt !== undefined) next.shortResetAt = quota.shortResetAt;
     if (quota.shortWindowSeconds !== undefined) next.shortWindowSeconds = quota.shortWindowSeconds;
-  } else {
+  } else if (!policyEvidence || quota.shortWindowAbsent !== true) {
     // Unknown usage is not a lower reading. Retain the entire known tuple: pairing
     // its percentage with new metadata would silently extend or shorten its reset.
     // An elapsed reset is the exception. It describes a window that has already rolled over,
@@ -792,10 +799,20 @@ function filterMainPolicyMonthlyQuota(
 }
 
 /** Ordinary main policy rejects an entire message containing any invalid numeric window. */
-export function parseMainPolicyUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {
+export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
-  return filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
+  const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
+  const [primary, secondary, tertiary] = windows;
+  // A complete, valid long-window WHAM response can retire an old 5h policy tuple.
+  // The primary must declare its duration; absent secondary windows may be null or omitted.
+  // Headers never supply this proof, and reset time alone still cannot release a block.
+  if (quota && normalizeUsagePercent(primary?.used_percent) !== undefined && isExplicitLongWindow(primary)
+    && (secondary == null || isExplicitLongWindow(secondary))
+    && (tertiary == null || isExplicitLongWindow(tertiary))) {
+    return { ...quota, shortWindowAbsent: true };
+  }
+  return quota;
 }
 
 export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuota, "updatedAt"> | null {

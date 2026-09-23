@@ -151,6 +151,10 @@ not erase an already measured blocking tuple. A predicted reset time alone does 
 While blocked, the existing once-per-minute background cycle checks fresh owned usage; failed or
 invalid readings retain the block. Other pause, reauthentication, and upstream limits remain independent.
 
+If a fresh usage response explicitly confirms that the account now has only weekly/monthly windows,
+protection discards the obsolete 5h reading and evaluates the current window at the same 99% threshold.
+Missing window metadata or partial response headers alone cannot clear a previous block.
+
 The persisted option is `"codexMainAccountHardLock": true` in OpenCodex's `config.json`; it is off
 by default. This protects new requests using the identified main account, not the last 1% itself:
 already-running requests, unmatched caller-owned keyring credentials, and traffic outside the

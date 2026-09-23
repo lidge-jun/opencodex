@@ -123,6 +123,18 @@ afterEach(async () => {
 });
 
 describe("main hard-lock background recovery", () => {
+  test("owned metadata recovery replaces an obsolete short block with the current weekly window", async () => {
+    const calls = fetchWith(async () => Response.json({ plan_type: "pro", rate_limit: {
+      primary_window: { used_percent: 35, limit_window_seconds: 604_800 }, secondary_window: null,
+    } }));
+    await runMainAccountHardLockRecovery(config());
+    expect(calls).toEqual([whamUrl]);
+    expect(getMainAccountHardLockStatus(config())).toEqual({ enabled: true, state: "ready" });
+    expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(35);
+    expect(getNativeMainProfileRequestCount()).toBe(0);
+  });
+
   test("existing sweep hook forces fresh WHAM past cache/reset without adding a timer", async () => {
     let percent = 99;
     const calls = fetchWith(async () => usage(percent));

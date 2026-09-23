@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
 import {
-  clearAccountQuota, getAccountQuota, getMainPolicyQuota, parseMainPolicyUsageQuota,
+  applyAccountQuotaFromUpstreamHeaders, clearAccountQuota, getAccountQuota, getMainPolicyQuota, parseMainPolicyUsageQuota,
   parseUsageQuota, setAccountQuotaFromParsed, updateAccountQuota, type WhamUsageResponse,
 } from "../../src/codex/quota";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -141,6 +141,111 @@ describe("raw policy evidence validation", () => {
     setAccountQuotaFromParsed(MAIN, { weeklyPercent: 99 }, undefined, other);
     setAccountQuotaFromParsed(MAIN, { weeklyPercent: 0 }, undefined, undefined, null);
     expect(getMainPolicyQuota()).toBeNull();
+  });
+});
+
+describe("main policy window replacement", () => {
+  const cfg = { codexMainAccountHardLock: true };
+  const weeklySeconds = 7 * 24 * 60 * 60;
+  const monthlySeconds = 30 * 24 * 60 * 60;
+
+  function publish(data: WhamUsageResponse) {
+    setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined, writerFor(), parseMainPolicyUsageQuota(data));
+  }
+
+  function retainedShort() {
+    const old = Date.now() - 16 * 24 * 60 * 60_000;
+    writeColdPolicy({ shortPercent: 100, shortWindowSeconds: 18_000,
+      shortObservedAt: old, shortResetAt: old / 1000 + 300, weeklyPercent: 35 });
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  }
+
+  for (const [field, seconds] of [["weeklyPercent", weeklySeconds], ["monthlyPercent", monthlySeconds]] as const) {
+    test.each([0, 35, 98.99, 99, 100])(`fresh ${field}=%s replaces a retired persisted short window`, percent => {
+      retainedShort();
+      publish({ rate_limit: {
+        primary_window: { used_percent: percent, limit_window_seconds: seconds }, secondary_window: null,
+      } });
+      const policy = getMainPolicyQuota();
+      expect(policy?.[field]).toBe(percent);
+      for (const key of ["shortPercent", "shortResetAt", "shortObservedAt", "shortWindowSeconds"] as const) {
+        expect(policy?.[key]).toBeUndefined();
+      }
+      // Replacement proof is per-observation, never a persisted permission to drop future evidence.
+      expect(policy).not.toHaveProperty("shortWindowAbsent");
+      expect(getMainAccountHardLockStatus(cfg).state).toBe(percent < 99 ? "ready" : "blocked");
+      publish({ rate_limit: { primary_window: { used_percent: 99, limit_window_seconds: 18_000 } } });
+      expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+    });
+  }
+
+  test.each([
+    { primary_window: { used_percent: 35 } },
+    { primary_window: { limit_window_seconds: weeklySeconds }, secondary_window: null },
+    { primary_window: { used_percent: -1, limit_window_seconds: weeklySeconds }, secondary_window: null },
+    { primary_window: { used_percent: 101, limit_window_seconds: weeklySeconds }, secondary_window: null },
+    { primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: {} },
+    { primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds },
+      secondary_window: { used_percent: 99, limit_window_seconds: 18_000 } },
+    { primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: null,
+      tertiary_window: { used_percent: 99, limit_window_seconds: 18_000 } },
+  ])("partial, invalid or short-bearing metadata retains the old block: %j", rate_limit => {
+    retainedShort();
+    publish({ rate_limit });
+    expect(getMainPolicyQuota()?.shortPercent).toBe(100);
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  });
+
+  test("a declared long secondary cannot hide the current weekly limit", () => {
+    retainedShort();
+    publish({ rate_limit: {
+      primary_window: { used_percent: 35, limit_window_seconds: monthlySeconds },
+      secondary_window: { used_percent: 99, limit_window_seconds: weeklySeconds },
+    } });
+    expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  });
+
+  test("a valid long primary also proves replacement when absent secondary is omitted", () => {
+    retainedShort();
+    publish({ rate_limit: { primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds } } });
+    expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
+  });
+
+  test("long-window response headers alone do not retire a known short block", () => {
+    retainedShort();
+    applyAccountQuotaFromUpstreamHeaders(MAIN, new Headers({
+      "x-codex-primary-used-percent": "35", "x-codex-primary-window-minutes": "10080",
+    }), undefined, writerFor());
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  });
+
+  test("window replacement persists without carrying its proof into later partial updates", async () => {
+    retainedShort();
+    publish({ rate_limit: {
+      primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: null,
+    } });
+    await Bun.sleep(350);
+    const path = join(home, "codex-quota-cache.json");
+    const persisted = readFileSync(path, "utf8");
+    clearAccountQuota();
+    writeFileSync(path, persisted);
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("ready");
+    expect(getMainPolicyQuota()).not.toHaveProperty("shortWindowAbsent");
+    publish({ rate_limit: { primary_window: { used_percent: 99, limit_window_seconds: 18_000 } } });
+    publish({ rate_limit: { primary_window: { used_percent: 0 } } });
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
+  });
+
+  test("a superseded identity cannot retire the current account's short block", () => {
+    const staleWriter = writerFor("fixture-main-b");
+    retainedShort();
+    const data = { rate_limit: {
+      primary_window: { used_percent: 35, limit_window_seconds: weeklySeconds }, secondary_window: null,
+    } };
+    setAccountQuotaFromParsed(MAIN, parseUsageQuota(data), undefined, staleWriter, parseMainPolicyUsageQuota(data));
+    expect(getMainAccountHardLockStatus(cfg).state).toBe("blocked");
   });
 });
 
