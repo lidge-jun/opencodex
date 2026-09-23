@@ -385,9 +385,13 @@ OpenCode Zen obtenue sur [opencode.ai/auth](https://opencode.ai/auth). Si OpenCo
 tiers pour le niveau sans clé, opencodex pourra le suivre ; d'ici là, le préréglage sert à documenter la
 restriction. Conditions en amont : [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
-La plupart utilisent l'adaptateur `openai-chat` avec une clé Bearer ; quelques fournisseurs qui n'exposent
-qu'un point de terminaison compatible Anthropic, comme **Xiaomi MiMo**, emploient l'adaptateur `anthropic`
-(`x-api-key`). Volcengine Coding Plan et Agent Plan utilisent leur point de terminaison Responses natif par `openai-responses`. Lors des continuations d'outils validées sur Ark Coding Plan, renvoyer l'élément `reasoning` retourné par le tour précédent provoque `400 InvalidParameter` ; le préréglage Coding Plan retire donc ces éléments avant de transmettre l'entrée de continuation. Cela perd l'état de raisonnement de ce tour et se désactive avec `dropResponsesReasoningItems: false`. Une configuration Coding Plan déjà enregistrée en `openai-chat` n'est pas réécrite et reste sur Chat : pour basculer, passez `adapter` à `openai-responses` et `responsesPath` à `/responses`, ou supprimez puis rajoutez le préréglage.
+La plupart utilisent l'adaptateur `openai-chat` avec une clé Bearer ; les préréglages compatibles
+Anthropic, comme **Xiaomi MiMo** (`xiaomi`), utilisent l'adaptateur `anthropic` (`x-api-key`). Xiaomi propose
+aussi un préréglage OpenAI Chat, `xiaomi-mimo`, et un préréglage avec forfait de jetons, `mimo`. Tous trois
+utilisent MiMo V2.6 par défaut (`mimo-v2.6-pro`, ou `mimo-v2.6-flash` pour `xiaomi-mimo`). Xiaomi retirera
+`mimo-v2.5` et `mimo-v2.5-pro` le 2026-10-21 sans redirection : changez toute valeur V2.5 par défaut
+enregistrée avant cette date ; opencodex ne la modifiera pas à votre place.
+Volcengine Coding Plan et Agent Plan utilisent leur point de terminaison Responses natif par `openai-responses`. Lors des continuations d'outils validées sur Ark Coding Plan, renvoyer l'élément `reasoning` retourné par le tour précédent provoque `400 InvalidParameter` ; le préréglage Coding Plan retire donc ces éléments avant de transmettre l'entrée de continuation. Cela perd l'état de raisonnement de ce tour et se désactive avec `dropResponsesReasoningItems: false`. Une configuration Coding Plan déjà enregistrée en `openai-chat` n'est pas réécrite et reste sur Chat : pour basculer, passez `adapter` à `openai-responses` et `responsesPath` à `/responses`, ou supprimez puis rajoutez le préréglage.
 Le préréglage DeepSeek intégré route également `deepseek-v4-flash` par son point de terminaison Responses natif
 et conserve le streaming SSE en amont. Si ce modèle termine tous les éléments de sortie mais omet l'événement
 Responses final, opencodex applique une réparation après un délai de grâce de cinq secondes, limitée à ce
@@ -445,14 +449,20 @@ prise en charge des outils d'agent. Créez un jeton de service dans la [console 
 et copiez la clé d'inférence de Vultr depuis la vue d'ensemble de l'abonnement dans la
 [console Vultr](https://my.vultr.com).
 
-**Découverte Command Code.** Le préréglage lit la liste `/provider/v1/models` de Command Code depuis l'hôte
-fixe de l'API Provider, préserve les identifiants natifs du fournisseur et limite la découverte à 256 KiB et
-256 lignes brutes. `ocx login command-code` prend en charge OAuth par connexion dans le navigateur, avec
-importation facultative des identifiants locaux depuis `~/.commandcode/auth.json` pour les utilisateurs de la
-CLI Command Code. Le catalogue, propre au compte, provient du point de terminaison de découverte authentifié
-après la connexion. Les requêtes de chat du préréglage Provider-API `commandcode` utilisent la clé Bearer active
-configurée ; le préréglage OAuth `command-code` utilise le jeton Bearer du compte enregistré pour la découverte
-authentifiée et les requêtes de chat. Créez des clés Provider-API dans
+**Découverte Command Code.** Le préréglage lit la liste `/provider/v1/models` de Command Code depuis
+l'hôte fixe de l'API Provider, conserve les identifiants natifs et limite la découverte à 256 KiB et
+256 lignes brutes. `ocx login command-code` permet une connexion OAuth dans le navigateur, avec importation
+facultative des identifiants de la CLI depuis `~/.commandcode/auth.json` pour ses utilisateurs actuels. Le
+catalogue des modèles est propre au compte et provient du point de terminaison de découverte authentifié après
+la connexion. Le préréglage Provider-API (`commandcode`) envoie la clé active configurée : la plupart des
+identifiants de modèle utilisent Chat Completions avec un en-tête Bearer, tandis que les identifiants `claude-*`
+utilisent Anthropic Messages avec `x-api-key`, car Command Code ne les sert que sur `/provider/v1/messages`.
+Un fournisseur qui reprend le nom `commandcode` pour un autre point de terminaison conserve son propre
+protocole. Le préréglage OAuth (`command-code`) utilise le jeton Bearer du compte enregistré pour la découverte
+authentifiée et diffuse la génération depuis `/alpha/generate` au format NDJSON. Le balisage d'appel d'outil
+MiMo renvoyé comme texte par la passerelle est supprimé lorsqu'il fait double emploi avec un appel réel. Sur
+les modèles MiMo, un appel complet à un outil déclaré, sans équivalent natif, n'est rétabli qu'après une fin
+sans erreur ; si le tour est interrompu ou filtré, le balisage reste du texte. Créez des clés Provider-API dans
 [Command Code Studio](https://commandcode.ai/studio/).
 
 **Quota Command Code.** Le tableau de bord et `ocx account refresh` sondent les fenêtres

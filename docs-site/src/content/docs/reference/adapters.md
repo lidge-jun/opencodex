@@ -212,10 +212,11 @@ only on `/provider/v1/messages`; the pin applies only while the provider points 
 endpoint. It supports forwarding `prompt_cache_key`; this is separate
 from the OAuth adapter's session header and does not guarantee a provider cache hit.
 The OAuth `command-code` preset streams `/alpha/generate` as NDJSON. MiMo tool-call
-markup echoed by the gateway as text is removed when it duplicates a real call, or
-restored as a real call when a complete declared-tool call has no native counterpart.
-A freeform call echoed without its `</function>` close counts as complete once
-`</tool_call>` arrives.
+markup echoed by the gateway as text is removed when it duplicates a real call. After a
+clean stop or tool-call finish, a complete declared-tool call with no native counterpart
+is restored as a real call; an interrupted or failed turn leaves the markup as text. A
+freeform call echoed without its `</function>` close counts as complete once
+`</tool_call>` arrives. This applies to every MiMo model Command Code serves.
 
 ## `anthropic`
 

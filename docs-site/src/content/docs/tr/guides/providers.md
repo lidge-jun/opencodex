@@ -427,9 +427,14 @@ Aynı modellere giden desteklenen yol, [opencode.ai/auth](https://opencode.ai/au
 bir üçüncü taraf yolu yayımlarsa opencodex bunu izleyebilir; o zamana kadar önayar
 kısıtlamayı belgeler. Yukarı akış koşulları: [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
-Çoğu bir taşıyıcı anahtarla `openai-chat` adaptörünü kullanır; yalnızca
-Anthropic uyumlu bir uç nokta sunan birkaç tanesi (örneğin **Xiaomi MiMo**)
-`anthropic` adaptörünü (`x-api-key`) kullanır. Volcengine Agent Plan,
+Çoğu, taşıyıcı anahtarla `openai-chat` adaptörünü kullanır; **Xiaomi MiMo** (`xiaomi`)
+gibi Anthropic uyumlu önayarlar `anthropic` adaptörünü (`x-api-key`) kullanır.
+Xiaomi'nin ayrıca bir OpenAI Chat önayarı (`xiaomi-mimo`) ve bir token planı önayarı
+(`mimo`) vardır. Üçü de varsayılan olarak MiMo V2.6 kullanır (`mimo-v2.6-pro`;
+`xiaomi-mimo` için `mimo-v2.6-flash`). Xiaomi, `mimo-v2.5` ve `mimo-v2.5-pro`
+modellerini 2026-10-21 tarihinde yönlendirme olmadan kullanımdan kaldıracak;
+bu tarihten önce kaydedilmiş bir V2.5 varsayılanını değiştirin. opencodex bunu
+sizin yerinize yeniden yazmaz. Volcengine Agent Plan,
 `openai-responses` aracılığıyla yerel Responses uç noktasını kullanır. Yerleşik
 DeepSeek önayarı da `deepseek-v4-flash`'ı yerel Responses uç noktası üzerinden
 yönlendirir ve yukarı akış SSE akışını etkin tutar. Bu model tüm çıktı öğelerini
@@ -481,15 +486,25 @@ kadar gizli kalır. [Nscale Console](https://console.nscale.com) içinde bir
 Nscale servis belirteci oluşturun; [Vultr Console](https://my.vultr.com)
 içindeki abonelik genel bakışından Vultr'un çıkarım anahtarını kopyalayın.
 
-**Command Code keşfi.** Önayar, sabit Sağlayıcı API ana bilgisayarından Command
-Code'un `/provider/v1/models` listesini okur, sağlayıcı yerel kimliklerini korur
-ve keşfi 256 KiB ve 256 ham satırla sınırlar. `ocx login command-code`, tarayıcı
-oturum açma yoluyla OAuth'u destekler (mevcut Command Code CLI kullanıcıları
-için `~/.commandcode/auth.json`'dan isteğe bağlı yerel CLI kimlik bilgisi içe
-aktarma ile); model kataloğu hesap kapsamlıdır ve oturum açtıktan sonra kimlik
-doğrulamalı keşif uç noktasından gelir. Sohbet istekleri yapılandırılmış Bearer
-anahtarını kullanır. [Command Code Studio](https://commandcode.ai/studio/)
-üzerinden anahtarlar oluşturun.
+**Command Code keşfi.** Önayar, sabit Provider API sunucusundan Command Code'un
+`/provider/v1/models` listesini okur, sağlayıcının özgün model kimliklerini korur
+ve keşfi 256 KiB ile 256 ham satırla sınırlar. `ocx login command-code`, tarayıcıda
+oturum açarak OAuth kullanımını destekler; mevcut Command Code CLI kullanıcıları
+isterse yerel kimlik bilgilerini `~/.commandcode/auth.json` dosyasından içe aktarabilir.
+Model kataloğu hesaba özeldir ve oturum açıldıktan sonra kimlik doğrulamalı keşif
+uç noktasından alınır. Provider API önayarı (`commandcode`) etkin yapılandırılmış
+anahtarı gönderir: çoğu model kimliği Bearer başlığıyla Chat Completions kullanırken
+`claude-*` kimlikleri `x-api-key` ile Anthropic Messages kullanır; çünkü Command Code
+bu modelleri yalnızca `/provider/v1/messages` üzerinden sunar. `commandcode` adını
+başka bir uç nokta için yeniden kullanan sağlayıcı kendi iletişim biçimini korur.
+OAuth önayarı (`command-code`), kimlik doğrulamalı keşif için kayıtlı hesap Bearer
+belirtecini kullanır ve `/alpha/generate` üzerinden NDJSON biçiminde akışlı çıktı
+üretir. Ağ geçidinin metin olarak yinelediği MiMo araç çağrısı işaretlemesi, gerçek
+bir çağrıyı yineliyorsa kaldırılır. MiMo modellerinde, yerel bir karşılığı olmayan
+tamamlanmış bir bildirilmiş araç çağrısı yalnızca akış sorunsuz bittiğinde geri yüklenir;
+kesintiye uğrayan veya filtrelenen turlarda işaretleme metin olarak kalır.
+Provider API anahtarlarını [Command Code Studio](https://commandcode.ai/studio/)
+üzerinden oluşturun.
 
 **Command Code kotası.** Pano ve `ocx account refresh`, kanonik `https://api.commandcode.ai` ana bilgisayarında `/alpha/billing/credits` pencerelerini (5 saat ve haftalık) sorgular. OAuth önayarı (`command-code`) kayıtlı hesap bearer'ını kullanır; Provider-API anahtar önayarı (`commandcode`) etkin yapılandırılmış anahtarı kullanır. Kullanıcının değiştirdiği benzer bir temel URL asla sorgulanmaz. Command Code dönem harcamasını da bildirirse kalan monthly / purchased / free credits USD penceresi olarak gösterilir.
 
