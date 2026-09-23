@@ -410,6 +410,10 @@ describe("COMPACT_PROMPT", () => {
     expect(COMPACT_PROMPT).toContain("CONTEXT CHECKPOINT COMPACTION");
     expect(COMPACT_PROMPT).toContain("What remains to be done");
   });
+
+  test("tells the summarizer to mine inlined reasoning traces for rationale", () => {
+    expect(COMPACT_PROMPT).toContain("<assistant_reasoning>");
+  });
 });
 
 describe("forward-path ocx1 compaction scrub", () => {

@@ -75,7 +75,7 @@ function findToolById(messages: OcxMessage[], callId: string): { name: string; n
 function attachPendingReasoningToCallOwner(
   messages: OcxMessage[],
   callId: string,
-  pendingReasoning: Array<{ part: OcxThinkingContent; envelopeSigned: boolean }>,
+  pendingReasoning: Array<{ part: OcxThinkingContent | OcxTextContent; envelopeSigned: boolean }>,
 ): void {
   if (pendingReasoning.length === 0 || !callId) return;
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -114,7 +114,7 @@ export function parseRequest(
   const systemPrompt: string[] = [];
   // Responses reasoning siblings belong to the following assistant, including across call items.
   // Keep them off the message list until that assistant arrives; turn boundaries clear the array.
-  const pendingReasoning: Array<{ part: OcxThinkingContent; envelopeSigned: boolean }> = [];
+  const pendingReasoning: Array<{ part: OcxThinkingContent | OcxTextContent; envelopeSigned: boolean }> = [];
   // Assistant placeholder that first folds any pending reasoning into the same turn (official
   // grok-build preserves reasoning across call items; Anthropic replay requires thinking to
   // precede tool_use inside one assistant message).
@@ -127,7 +127,9 @@ export function parseRequest(
     return holder;
   };
   const preservePendingReplay = () => {
-    const replay = pendingReasoning.filter(entry => entry.envelopeSigned || entry.part.redacted?.length);
+    const replay = pendingReasoning.filter(
+      entry => entry.envelopeSigned || (entry.part.type === "thinking" && entry.part.redacted?.length),
+    );
     if (replay.length > 0) {
       ensureAssistantPlaceholder(messages, data.model, now).content.push(...replay.map(entry => entry.part));
     }
@@ -137,7 +139,10 @@ export function parseRequest(
   const loadedToolSpecs: unknown[] = [];
   // Remote compaction v2: the input tail carries `{type:"compaction_trigger"}` and Codex expects a
   // synthetic `{type:"compaction"}` output item (src/responses/compaction.ts). Flagged for the server.
-  let compactionRequest = false;
+  // Scanned upfront, not when the tail item is reached: reasoning items EARLIER in the input must
+  // know this turn only exists to summarize them (see the reasoning branch below).
+  let compactionRequest = Array.isArray(data.input)
+    && data.input.some(item => isObj(item) && (item as { type?: unknown }).type === "compaction_trigger");
   let contextCompactionBoundary = false;
   let continuationConversationMessageIndex: number | undefined;
 
@@ -297,6 +302,20 @@ export function parseRequest(
           continue;
         }
 
+        // Compaction turns discard the history once it is summarized, so replay fidelity is
+        // moot — and routed adapters silently drop unsigned thinking parts, which would hide
+        // every routed model's reasoning from the summarizer. Render it as visible text so the
+        // summary keeps the *why* behind decisions, not just the *what*.
+        if (compactionRequest && thinkingText.length > 0) {
+          const text = `<assistant_reasoning>\n${thinkingText}\n</assistant_reasoning>`;
+          const previous = pendingReasoning[pendingReasoning.length - 1];
+          if (previous && !previous.envelopeSigned && previous.part.type === "text") {
+            previous.part = { type: "text", text: `${previous.part.text}\n${text}` };
+          } else {
+            pendingReasoning.push({ part: { type: "text", text }, envelopeSigned: false });
+          }
+          continue;
+        }
         // Native/non-ocxr1 encrypted-only reasoning is opaque here. Do not create a detached
         // assistant turn or invent replayable plaintext/signatures from the encrypted payload.
         if (thinkingText.length > 0 || envelope?.sig || envelope?.red?.length) {
@@ -310,7 +329,8 @@ export function parseRequest(
           const envelopeSigned = typeof envelope?.sig === "string";
           const previous = pendingReasoning[pendingReasoning.length - 1];
 
-          if (!envelopeSigned && !part.redacted && previous && !previous.envelopeSigned && !previous.part.redacted) {
+          if (!envelopeSigned && !part.redacted && previous && !previous.envelopeSigned
+            && previous.part.type === "thinking" && !previous.part.redacted) {
             previous.part = {
               ...part,
               thinking: `${previous.part.thinking}\n${part.thinking}`,

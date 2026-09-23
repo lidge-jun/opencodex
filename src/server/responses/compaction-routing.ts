@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../../types";
 import { isDeclaredReasoningEffort } from "../../reasoning-effort";
-import { COMPACTION_TRIGGERS } from "../../config/schema/compaction-triggers";
+import { COMPACTION_TRIGGERS, validCompactionSourceModels } from "../../config/schema/compaction-triggers";
 import { routeConcreteModel, type RouteResult } from "../../router";
 import { resolveComboId } from "../../combos/identifiers";
 import { resolvePolicyProfileId } from "../../routing/profile";
@@ -57,6 +57,13 @@ export function applyCompactionRoutingOverride(
     && (typeof override.reasoningEffort !== "string" || !isDeclaredReasoningEffort(override.reasoningEffort))) return null;
   const triggers = configuredTriggers(override.triggers);
   if (!triggers) return null;
+  if (override.sourceModels !== undefined) {
+    if (!validCompactionSourceModels(override.sourceModels)) return null;
+    const source = raw.model;
+    if (!override.sourceModels.some(selector => selector.endsWith("/*")
+      ? source.startsWith(selector.slice(0, -1)) && source.length > selector.length - 1
+      : source === selector)) return null;
+  }
   if (options.endpoint !== "compact"
     && !(Array.isArray(raw.input) && raw.input.some(item => record(item)?.type === "compaction_trigger"))) return null;
 

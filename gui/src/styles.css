@@ -2956,3 +2956,7 @@ button.prov-account-row.active { cursor: default; }
 }
 .claude-effort-badge.on { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
 .claude-effort-badge.off { background: color-mix(in srgb, var(--muted) 12%, transparent); color: var(--muted); }
+.source-scope-groups { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-top: 12px; max-height: 220px; overflow: auto; }
+.source-scope-group { border: 0; padding: 0; margin: 0; min-width: 12rem; }
+.source-scope-group legend { padding: 0; }
+.source-scope-group label { display: flex; align-items: center; gap: 7px; color: var(--text); font-size: 12px; padding: 2px 0; }

@@ -11,7 +11,7 @@ let previous: Record<string, PropertyDescriptor | undefined>;
 let win: Window;
 let root: Root | undefined;
 let container: HTMLDivElement;
-let setting: { model: string; reasoningEffort?: string; triggers?: string[] } | null;
+let setting: { model: string; reasoningEffort?: string; triggers?: string[]; sourceModels?: string[] } | null;
 let failLoad: boolean;
 let failSave: boolean;
 let combosUnavailable: boolean;
@@ -58,13 +58,13 @@ afterEach(async () => {
 });
 
 async function flush() { await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); }
-async function render(base = "") {
+async function render(base = "", providers: Array<{ name: string; baseUrl: string }> = []) {
   if (!root) {
     container = win.document.createElement("div") as unknown as HTMLDivElement;
     win.document.body.appendChild(container);
     root = (await import("react-dom/client")).createRoot(container);
   }
-  await act(async () => { root!.render(<StrictMode><LanguageProvider><CompactionRoutingPanel apiBase={base} models={models} /></LanguageProvider></StrictMode>); });
+  await act(async () => { root!.render(<StrictMode><LanguageProvider><CompactionRoutingPanel apiBase={base} models={models} providers={providers} /></LanguageProvider></StrictMode>); });
   await flush();
 }
 async function choose(id: string, label: string) {
@@ -116,6 +116,100 @@ test("the trigger selection round-trips and discloses automatic compaction", asy
   expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap" } });
   await choose("model", "Use conversation model");
   expect(container.querySelector<HTMLButtonElement>('#compaction-routing-triggers')!.disabled).toBe(true);
+});
+
+test("saving an effort change preserves the configured source-model boundary", async () => {
+  setting = { model: "gateway/cheap", sourceModels: ["kimi/*", "google-antigravity/*"] };
+  await render();
+  await choose("effort", "Low");
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: {
+    model: "gateway/cheap", reasoningEffort: "low", sourceModels: ["kimi/*", "google-antigravity/*"],
+  } });
+  expect(container.textContent).toContain("kimi/*");
+});
+
+function sourceCheckbox(label: string) {
+  const row = [...container.querySelectorAll("label")].find(item => item.textContent === label);
+  return row?.querySelector("input");
+}
+
+test("the source scope checklist writes sourceModels and round-trips", async () => {
+  await render();
+  expect(container.querySelector<HTMLButtonElement>("#compaction-routing-sources")!.disabled).toBe(true);
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector("#compaction-routing-sources")?.textContent).toContain("All conversation models");
+  expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+  await choose("sources", "Selected sources only");
+  // An empty selection would be rejected by the config schema, so saving stays disabled.
+  expect(saveButton().disabled).toBe(true);
+  expect(container.textContent).toContain("Select at least one source");
+  await act(async () => { sourceCheckbox("gateway/*")!.click(); });
+  await act(async () => { sourceCheckbox("combo/compact")!.click(); });
+  expect(saveButton().disabled).toBe(false);
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap", sourceModels: ["gateway/*", "combo/compact"] } });
+  await render("/reloaded");
+  expect(container.querySelector("#compaction-routing-sources")?.textContent).toContain("Selected sources only");
+  expect(sourceCheckbox("gateway/*")!.checked).toBe(true);
+  expect(sourceCheckbox("combo/compact")!.checked).toBe(true);
+  expect(sourceCheckbox("gateway/cheap")!.checked).toBe(false);
+  await act(async () => { sourceCheckbox("combo/compact")!.click(); });
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap", sourceModels: ["gateway/*"] } });
+  await choose("sources", "All conversation models");
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap" } });
+});
+
+test("saved selectors outside the catalog stay visible and can be dropped deliberately", async () => {
+  setting = { model: "gateway/cheap", sourceModels: ["kimi/*", "gateway/cheap"] };
+  await render();
+  expect(container.querySelector("#compaction-routing-sources")?.textContent).toContain("Selected sources only");
+  expect(sourceCheckbox("kimi/*")!.checked).toBe(true);
+  expect(sourceCheckbox("gateway/cheap")!.checked).toBe(true);
+  expect(saveButton().disabled).toBe(true);
+  await act(async () => { sourceCheckbox("kimi/*")!.click(); });
+  expect(saveButton().disabled).toBe(false);
+  await save();
+  expect(writes.at(-1)).toEqual({ compactionRouting: { model: "gateway/cheap", sourceModels: ["gateway/cheap"] } });
+});
+
+test("the disclosure names the selected sources instead of claiming every request", async () => {
+  await render();
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("every covered compaction request");
+  await choose("sources", "Selected sources only");
+  // Nothing is covered while the selection is empty, so no destination claim is shown.
+  expect(container.querySelector('[role="note"]')).toBeNull();
+  await act(async () => { sourceCheckbox("gateway/*")!.click(); });
+  const note = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(note).toContain("compaction requests from gateway/*");
+  expect(note).toContain("to gateway for summarization");
+  expect(note).not.toContain("every covered compaction request");
+  await choose("model", "combo/compact");
+  const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(comboNote).toContain("compaction requests from gateway/*");
+  expect(comboNote).toContain("combo combo/compact");
+});
+
+test("the disclosure names the provider endpoint host when the provider is known", async () => {
+  await render("", [{ name: "gateway", baseUrl: "https://gw.example.com/v1" }, { name: "openai-apikey", baseUrl: "https://api.openai.com/v1" }]);
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("to gateway (gw.example.com) for summarization");
+  // A scoped override keeps the endpoint next to the sources it covers.
+  await choose("sources", "Selected sources only");
+  await act(async () => { sourceCheckbox("gateway/*")!.click(); });
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("from gateway/* send the full conversation contents to gateway (gw.example.com)");
+  // Combo targets carry their own endpoints, so "any of them" is checkable against the list.
+  await choose("model", "combo/compact");
+  const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
+  expect(comboNote).toContain("gateway (gw.example.com)");
+  expect(comboNote).toContain("openai-apikey (api.openai.com)");
+  // A base URL that fails to parse is shown raw rather than dropped.
+  await render("/reloaded", [{ name: "gateway", baseUrl: "not a url" }]);
+  await choose("model", "gateway/cheap");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("gateway (not a url)");
 });
 
 test("failed save retains the draft and allows retry", async () => {

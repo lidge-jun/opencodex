@@ -554,6 +554,15 @@ requests use. The setting is disabled when omitted.
 ```
 
 `model` accepts native model IDs, provider-qualified model IDs, and configured combos.
+Optional `sourceModels` limits the override to exact incoming model IDs or `provider/*` patterns,
+for example `["kimi/*", "google-antigravity/*"]`. Matching is case-sensitive. Omit it for the
+existing all-model behavior; empty, duplicate, or malformed lists are invalid. Dashboard saves
+preserve this allowlist and display it read-only; configure it through `config.json` or `PUT /api/settings`.
+This checks the incoming compaction model, not an inferred conversation model. If Codex sends a
+bare native compaction model for a routed thread, it does not match those provider patterns and
+keeps its existing route. This conservative behavior protects GPT but can leave some automatic
+compactions on the native path. Ordinary non-compaction turns are never changed.
+
 `reasoningEffort` is optional; omit it to preserve the incoming effort. Supported declarations
 are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`.
 Existing provider effort rules still apply. The native `/responses/compact` endpoint keeps

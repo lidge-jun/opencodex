@@ -95,6 +95,64 @@ afterEach(() => {
 });
 
 describe("manual compaction request selection", () => {
+  test("source matching is exact or provider-bounded on both endpoints and WebSocket", () => {
+    const settings = config();
+    settings.compactionRouting!.sourceModels = ["kimi/*", "google-antigravity/*", "Company/moonshot.public.kimi-k3"];
+    settings.compactionRouting!.triggers = ["manual", "auto"];
+    for (const endpoint of ["responses", "compact"] as const) {
+      for (const transport of [undefined, "websocket"] as const) {
+        for (const trigger of ["manual", "auto"]) {
+          for (const [model, allowed] of [
+            ["kimi/k3", true], ["google-antigravity/gemini-3.8-flash", true],
+            ["Company/moonshot.public.kimi-k3", true], ["Company/moonshot.public.kimi-k3-other", false],
+            ["kimi-fake/k3", false], ["kimi/", false], ["main/gpt-6-astra", false],
+            ["openai/gpt-6-astra", false], ["gpt-6-astra", false], ["deepseek/deepseek-flash", false],
+          ] as const) {
+            const input = { ...body(endpoint === "responses"), model,
+              client_metadata: { "x-codex-turn-metadata": metadata(trigger) } };
+            const before = structuredClone(input);
+            const result = applyCompactionRoutingOverride(input, new Headers(), settings, { endpoint, transport });
+            expect(Boolean(result)).toBe(allowed);
+            expect(input.model).toBe(allowed ? "gateway/cheap" : model);
+            if (!allowed) expect(input).toEqual(before);
+          }
+        }
+      }
+    }
+    const ordinary = { ...body(false), model: "kimi/k3" };
+    expect(applyCompactionRoutingOverride(ordinary, new Headers({ "x-codex-turn-metadata": metadata() }), settings)).toBeNull();
+    expect(ordinary.model).toBe("kimi/k3");
+  });
+
+  test("source-scoped compaction keeps GPT native and only rewrites Kimi and agy", async () => {
+    const settings = config();
+    Object.assign(settings.compactionRouting!, {
+      sourceModels: ["kimi/*", "google-antigravity/*"], triggers: ["manual", "auto"],
+    });
+    settings.providers.openai = {
+      adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    };
+    const calls: Array<{ url: string; model: string }> = [];
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      const input = JSON.parse(String(init?.body));
+      calls.push({ url: String(url), model: input.model });
+      return upstreamCompletion(input);
+    }) as typeof fetch;
+    for (const trigger of ["manual", "auto"]) {
+      for (const model of ["gpt-6-astra", "kimi/k3", "google-antigravity/gemini-3.8-flash"]) {
+        const req = request({ ...body(), model, stream: true }, trigger);
+        req.headers.set("authorization", `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}`);
+        const response = await handleResponses(req, settings, { model: "", provider: "" });
+        expect(response.status).toBe(200);
+        await response.text();
+        const native = model === "gpt-6-astra";
+        expect(calls.at(-1)?.model).toBe(native ? "gpt-6-astra" : "cheap");
+        expect(calls.at(-1)?.url).toContain(native ? "chatgpt.com" : "gateway.example");
+      }
+    }
+  });
+
   test.each(["header", "body", "both"])("uses explicit manual metadata from %s", location => {
     const input = body();
     const history = structuredClone(input.input);
@@ -171,6 +229,21 @@ describe("manual compaction request selection", () => {
 
 
 describe("manual compaction config", () => {
+  test("source allowlists survive configuration validation and reject ambiguous patterns", () => {
+    const settings = config();
+    const sourceModels = ["kimi/*", "google-antigravity/*", "Company/moonshot.public.kimi-k3"];
+    Object.assign(settings.compactionRouting!, { sourceModels });
+    expect(validateConfigCandidate(settings).ok).toBe(true);
+    expect(configSchema.parse(settings).compactionRouting).toEqual(settings.compactionRouting);
+    for (const invalid of [[], null, "kimi/*", ["*"], ["kimi*"], ["kimi/*/x"], [" kimi/*"], ["kimi/*", "kimi/*"], [12]]) {
+      const candidate = { ...settings, compactionRouting: { ...settings.compactionRouting, sourceModels: invalid } };
+      expect(validateConfigCandidate(candidate).ok).toBe(false);
+      expect(configSchema.parse(candidate).compactionRouting).toBeUndefined();
+      const input = body();
+      expect(applyCompactionRoutingOverride(input, new Headers({ "x-codex-turn-metadata": metadata() }), candidate as OcxConfig)).toBeNull();
+    }
+  });
+
   test("validates optional settings without resetting providers on malformed hand edits", () => {
     expect(validateConfigCandidate(config()).ok).toBe(true);
     for (const value of [null, {}, [], "cheap", { model: " " }, { model: 42 },
