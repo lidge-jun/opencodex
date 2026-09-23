@@ -27,6 +27,12 @@ genel model kimliği birkaç hedef arasından seçim yapması gerektiğinde
 
 Kimlik bilgisi taşıyan model, görsel, video ve arama istekleri, aynı origin içindeki yönlendirmeler dâhil HTTP yönlendirmelerini otomatik izlemez. Yönlendiren bir adres yerine son API URL’sini yapılandırın. Sunucu, kimlik bilgilerini veya istek gövdesini yönlendirme hedefine yeniden göndermez. Mevcut hata işleme ve yanıt aktarma davranışı korunur; native Responses ve compact yolları, özgün 3xx ve `Location` değerini istemciye döndürebilir. İstemcinin yönlendirme davranışı bu sunucu aktarım politikasından ayrıdır.
 
+## xAI policy refusals
+
+Bazı xAI Chat Completions retleri, HTTP 200 ve `finish_reason: content_filter` yerine `I can't help with that request.` gibi tam bir ret cümlesiyle HTTP 403 olarak gelir. Codex 403'ü taşıma hatası sayar; kullanıcı turu kaydedilmez ve aynı istek yeniden gönderilir.
+
+Kombo olmayan bir Responses isteğinde OpenCodex, izin listesindeki bu 403'ü `status: "incomplete"` ve `incomplete_details.reason: "content_filter"` içeren bir HTTP 200 Responses yanıtına dönüştürür. Dönüştürme openai-chat bağdaştırıcı yolunda ve openai-responses geçişinde (grok-4.6 / grok-4.5 OAuth) çalışır. Akış da aynı incomplete sınırını kullanır. Boş veya yalnızca boşluk içeren 403 gövdeleri hata olarak kalır. Abonelik, kredi, yetki ve `not allowed to use this model` 403'leri hata olarak kalır. Kombo yük devretmesi özgün HTTP 403'ü görmeye devam eder.
+
 ## Uç nokta genel bakışı
 
 | İstemci yüzeyi | Uç nokta | Başarılı akışsız sonuç | Başarılı akış veya soket sonucu |

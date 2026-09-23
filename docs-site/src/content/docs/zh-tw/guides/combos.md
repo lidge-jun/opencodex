@@ -175,6 +175,7 @@ Combo 失敗分為**跳轉**失敗與**終端**失敗。
 
 :::note
 Failover 是刻意受限的。它有助於目標特定的可用性、認證、配額與過載失敗；不會隱藏呼叫者錯誤或策略拒絕。
+在非 combo 的 Responses 請求上，允許清單中的 xAI 政策 403 會在 Codex 將其當作傳輸失敗重試之前，改寫為 HTTP 200 `incomplete/content_filter`；參見 [xAI policy refusals](/zh-tw/reference/proxy-formats/#xai-policy-refusals)。Combo 跳轉仍把原始 HTTP 403 當作一次跳轉。
 :::
 
 ## 預設推理 effort

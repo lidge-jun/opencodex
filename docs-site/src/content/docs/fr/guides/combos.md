@@ -216,6 +216,7 @@ le temps de recharge expire. S’il ne reste aucune cible éligible, le proxy re
 :::note
 Le basculement est intentionnellement limité. Il facilite la disponibilité, l'authentification et l'authentification spécifiques à la cible.
 échecs de quota et de surcharge ; il ne cache pas les erreurs des appelants ni les refus de politique.
+Sur une requête Responses hors combo, un 403 de politique xAI de la liste autorisée est réécrit en HTTP 200 `incomplete/content_filter` avant que Codex ne le relance comme un échec de transport ; voir [xAI policy refusals](/fr/reference/proxy-formats/#xai-policy-refusals). Les sauts de combo classent toujours le HTTP 403 d'origine comme un saut.
 :::
 
 ## Effort de raisonnement par défaut

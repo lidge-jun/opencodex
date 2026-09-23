@@ -35,6 +35,7 @@ import { consumeComboFailure } from "./core-combo-failure";
 import { readDisplaySafeErrorText } from "./core-errors";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
+import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 import {
   resolvePassthroughWebSearchBridgeAuth,
   planPassthroughWebSearchBridge,
@@ -326,6 +327,16 @@ export async function deliverPassthroughResponse(
           ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
           : jsonContextOverflowResponse();
       }
+      const policyRefusal = rewriteUpstreamPolicyRefusal({
+        status: upstreamResponse.status,
+        errorText,
+        stream: clientRequestedStream,
+        modelId: parsed._responseModelId ?? parsed.modelId,
+        destinationIsXai: isXaiResponsesDestination(route.provider),
+        translatorBudget,
+        turnAdmissionLease: options.turnAdmissionLease,
+      });
+      if (policyRefusal) return policyRefusal;
       return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,

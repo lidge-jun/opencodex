@@ -17,6 +17,7 @@ import {
 } from "../request-log";
 import { clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { redactSecretString } from "../../lib/redact";
+import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 import { waitForProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import {
@@ -41,7 +42,7 @@ import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
 import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
-import { resolveProviderTransport } from "../../providers/xai-transport";
+import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
@@ -1065,6 +1066,21 @@ export async function prepareAdapterExchange(
         return clientRequestedStream
           ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
           : jsonContextOverflowResponse();
+      }
+      const policyRefusal = rewriteUpstreamPolicyRefusal({
+        status: upstreamResponse.status,
+        errorText,
+        stream: clientRequestedStream,
+        modelId: parsed._responseModelId ?? parsed.modelId,
+        // The same host check covers the openai-chat wire: both xAI hosts serve Chat too.
+        destinationIsXai: isXaiResponsesDestination(route.provider),
+        translatorBudget,
+        turnAdmissionLease: options.turnAdmissionLease,
+      });
+      if (policyRefusal) {
+        // Codex-facing incomplete/content_filter. openai-responses passthrough
+        // uses the same helper after its 413 block.
+        return policyRefusal;
       }
       if (!isFixedCodexAccount(admissionState.authCtx)) {
         recordSubagentQuotaFailureForThreadSpawn(

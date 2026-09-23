@@ -24,6 +24,12 @@ doit choisir parmi plusieurs cibles.
 
 Les requêtes de modèle, d’image, de vidéo et de recherche contenant des identifiants ne suivent pas automatiquement les redirections HTTP, même vers la même origine. Configurez l’URL finale de l’API plutôt qu’un alias qui redirige. Le serveur ne renvoie ni les identifiants ni le corps de la requête à la destination d’une redirection. Chaque chemin conserve sa gestion des erreurs ou son relais existant ; les routes Responses natives et compact peuvent renvoyer le 3xx et le `Location` d’origine au client. Le comportement de redirection du client est distinct de cette politique de transport du serveur.
 
+## xAI policy refusals
+
+Certains refus xAI de Chat Completions arrivent en HTTP 403 avec une phrase de refus exacte, par exemple `I can't help with that request.`, au lieu d'un HTTP 200 avec `finish_reason: content_filter`. Codex traite un 403 comme un échec de transport : le tour utilisateur n'est pas enregistré et la même requête est renvoyée.
+
+Sur une requête Responses hors combo, OpenCodex réécrit ce 403 de la liste autorisée en réponse Responses HTTP 200 avec `status: "incomplete"` et `incomplete_details.reason: "content_filter"`. La réécriture s'applique au chemin de l'adaptateur openai-chat et au passthrough openai-responses (OAuth grok-4.6 / grok-4.5). Le streaming utilise la même limite incomplete. Un corps 403 vide ou fait d'espaces reste une erreur. Les 403 d'abonnement, de crédits, de droits d'accès et `not allowed to use this model` restent des erreurs. Le basculement de combo voit toujours le HTTP 403 d'origine.
+
 ## Présentation du point de terminaison
 
 | Espace client | Point de terminaison | Résultat non-stream réussi | Résultat de flux ou de socket réussi |

@@ -23,6 +23,12 @@ Responses 표현이 이 연결의 중심입니다. 네이티브 호환 경로는
 
 자격 증명을 포함하는 모델·이미지·동영상·검색 요청은 동일 출처를 포함한 HTTP 리다이렉트를 자동으로 따라가지 않습니다. 리다이렉트하는 별칭 대신 최종 업스트림 API URL을 설정하세요. 서버는 리다이렉트 대상으로 자격 증명이나 요청 본문을 다시 보내지 않습니다. 각 응답 처리 경로의 기존 오류·전달 동작은 유지되며, native Responses와 compact 경로는 원래 3xx와 `Location`을 클라이언트에 반환할 수 있습니다. 클라이언트의 리다이렉트 동작은 이 서버 전송 정책과 별개입니다.
 
+## xAI policy refusals
+
+일부 xAI Chat Completions 거부는 HTTP 200과 `finish_reason: content_filter` 대신, HTTP 403과 `I can't help with that request.` 같은 거절 문장만 돌려줍니다. Codex는 403을 전송 실패로 보므로 사용자 턴이 기록되지 않고 같은 요청을 다시 보냅니다.
+
+콤보가 아닌 Responses 요청에서 OpenCodex는 allowlist에 오른 그 403을 HTTP 200 Responses, `status: "incomplete"`, `incomplete_details.reason: "content_filter"`로 바꿉니다. openai-chat 어댑터 경로와 openai-responses passthrough(grok-4.6 / grok-4.5 OAuth) 모두에서 동작합니다. 스트리밍도 같은 incomplete 경계입니다. 빈 본문 403은 오류로 남습니다. 구독, 크레딧, 권한, `not allowed to use this model` 403은 오류로 남습니다. 콤보 페일오버는 원래 HTTP 403을 그대로 봅니다.
+
 ## 엔드포인트 개요
 
 | 클라이언트 표면 | 엔드포인트 | 성공한 비스트리밍 결과 | 성공한 스트리밍 또는 소켓 결과 |

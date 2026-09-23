@@ -248,6 +248,10 @@ used by native account routing.
 :::note
 Failover is intentionally bounded. It helps with target-specific availability, authentication,
 quota, and overload failures; it does not hide caller errors or policy refusals.
+On a non-combo Responses request, an allowlisted xAI policy 403 is rewritten to HTTP 200
+`incomplete/content_filter` before Codex retries it as a transport failure; see
+[xAI policy refusals](/reference/proxy-formats/#xai-policy-refusals). Combo hops still
+classify the original HTTP 403 as a hop.
 :::
 
 For streaming requests, the upstream HTTP status is not the final decision. OpenCodex buffers a

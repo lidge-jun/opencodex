@@ -39,6 +39,21 @@ attempt with tools removed and existing results retained. This can incur another
 request. A second empty answer fails; malformed calls and provider refusal or truncation
 outcomes are preserved without this retry.
 
+## xAI policy refusals
+
+Some xAI Chat Completions refusals arrive as HTTP 403 with an exact model-refusal
+sentence such as `I can't help with that request.` instead of HTTP 200 plus
+`finish_reason: content_filter`. Codex treats a 403 as a transport failure, so the
+user turn is never recorded and the same request is retried.
+
+On a non-combo Responses request, OpenCodex rewrites that allowlisted 403 to an
+HTTP 200 Responses payload with `status: "incomplete"` and
+`incomplete_details.reason: "content_filter"`. The rewrite runs on the openai-chat
+adapter path and on openai-responses passthrough (grok-4.6 / grok-4.5 OAuth).
+Streaming uses the same incomplete boundary. Empty or whitespace 403 bodies stay
+errors. Subscription, credit, entitlement, and `not allowed to use this
+model` 403s stay errors. Combo failover still sees the original HTTP 403.
+
 ## Cursor context overflow
 
 Cursor's first bare context overflow is surfaced to the client. Later eligible requests

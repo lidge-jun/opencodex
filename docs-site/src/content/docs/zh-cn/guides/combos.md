@@ -161,6 +161,7 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 
 :::note
 故障切换是有边界的。它有助于处理特定目标的可用性、认证、配额和过载失败；它不会掩盖调用方错误或策略拒绝。
+在非 combo 的 Responses 请求上，allowlist 中的 xAI 策略 403 会在 Codex 将其当作传输失败重试之前被改写为 HTTP 200 `incomplete/content_filter`；见 [xAI policy refusals](/reference/proxy-formats/#xai-policy-refusals)。combo 跳转仍把原始 HTTP 403 分类为跳转。
 :::
 
 对于流式请求，上游 HTTP 状态并不是最终决定。OpenCodex 只会缓冲所选子目标在开始输出前的一段有上限的 Responses SSE。若在任何文本、推理、工具调用或其他输出事件开始之前收到可重试的 `response.failed` 终止事件，该次尝试会被记为失败，combo 可以继续尝试下一个合格目标。一旦输出开始或预输出缓冲区达到上限，当前目标就会被提交；之后的流错误不会在其他提供商上重放，从而避免重复文本和重复执行工具。

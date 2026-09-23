@@ -46,6 +46,7 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-dispatch.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
+  "policy-refusal.ts",
 ] as const;
 
 export type ResponsesCoreModule = typeof RESPONSES_CORE_MODULES[number];

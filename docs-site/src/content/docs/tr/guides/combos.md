@@ -247,6 +247,7 @@ soğuma süresi dolana kadar onu atlar. Uygun hiçbir hedef kalmazsa proxy
 Yük devretme kasıtlı olarak sınırlandırılmıştır. Hedefe özgü kullanılabilirlik,
 kimlik doğrulama, kota ve aşırı yük hatalarına yardımcı olur; arayan hatalarını
 veya politika retlerini gizlemez.
+Kombo olmayan bir Responses isteğinde, izin listesindeki bir xAI politika 403'ü Codex onu taşıma hatası olarak yeniden denemeden önce HTTP 200 `incomplete/content_filter` yanıtına dönüştürülür; bkz. [xAI policy refusals](/tr/reference/proxy-formats/#xai-policy-refusals). Kombo atlamaları özgün HTTP 403'ü yine bir atlama olarak sınıflandırır.
 :::
 
 ## Varsayılan akıl yürütme çabası

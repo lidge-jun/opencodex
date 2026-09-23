@@ -18,6 +18,12 @@ provider events → internal adapter events → client dialect
 
 認証情報を含むモデル・画像・動画・検索リクエストは、同一オリジンを含む HTTP リダイレクトを自動追跡しません。リダイレクトする別名ではなく、最終的な上流 API URL を設定してください。サーバーはリダイレクト先に認証情報やリクエスト本文を再送しません。各応答処理の既存のエラー処理・中継動作は維持され、native Responses と compact は元の 3xx と `Location` をクライアントへ返す場合があります。クライアントのリダイレクト動作は、このサーバー転送ポリシーとは別です。
 
+## xAI policy refusals
+
+一部の xAI Chat Completions 拒否は、HTTP 200 と `finish_reason: content_filter` ではなく、HTTP 403 と `I can't help with that request.` のような拒否文だけを返します。Codex は 403 を転送失敗として扱うため、ユーザーのターンが記録されず、同じリクエストが再送されます。
+
+コンボではない Responses リクエストでは、OpenCodex はその allowlist 対象の 403 を HTTP 200 の Responses、`status: "incomplete"`、`incomplete_details.reason: "content_filter"` に書き換えます。openai-chat アダプタ経路と openai-responses パススルー（grok-4.6 / grok-4.5 OAuth）の両方です。ストリーミングも同じ incomplete 境界です。空本文の 403 はエラーのままです。サブスクリプション、クレジット、権限、`not allowed to use this model` の 403 はエラーのままです。コンボのフェイルオーバーは元の HTTP 403 を見ます。
+
 ## エンドポイントの概要
 
 |クライアントサーフェス |エンドポイント |非ストリームの結果が成功 |成功したストリームまたはソケットの結果 |

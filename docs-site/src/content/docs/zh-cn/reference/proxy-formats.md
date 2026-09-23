@@ -23,6 +23,12 @@ Responses 表示是这座桥的中心。原生兼容的路由可以跳过部分�
 
 携带凭据的模型、图像、视频和搜索请求不会自动跟随 HTTP 重定向，包括同源重定向。请配置最终上游 API URL，而不是会重定向的别名。服务器不会向重定向目标重新发送凭据或请求正文。各响应处理路径保留原有的错误处理或转发行为；原生 Responses 和 compact 路径仍可向客户端返回原始 3xx 和 `Location`。客户端的重定向行为与此服务器传输策略是不同的边界。
 
+## xAI policy refusals
+
+部分 xAI Chat Completions 拒绝会以 HTTP 403 加上 `I can't help with that request.` 这类拒绝句返回，而不是 HTTP 200 加 `finish_reason: content_filter`。Codex 把 403 当作传输失败，因此用户回合不会被记录，同一请求会被重试。
+
+在非 combo 的 Responses 请求上，OpenCodex 会把该 allowlist 中的 403 改写为 HTTP 200 Responses，`status: "incomplete"`，`incomplete_details.reason: "content_filter"`。openai-chat 适配器路径和 openai-responses passthrough（grok-4.6 / grok-4.5 OAuth）都会改写。流式响应使用同一 incomplete 边界。空正文 403 仍是错误。订阅、额度、权限以及 `not allowed to use this model` 的 403 仍是错误。combo 故障切换仍会看到原始 HTTP 403。
+
 ## 端点总览
 
 | 客户端表面 | 端点 | 成功的非流式结果 | 成功的流式或套接字结果 |

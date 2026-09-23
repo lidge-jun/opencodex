@@ -141,6 +141,7 @@ ocx combo set balanced \
 
 :::note
 페일오버는 의도적으로 범위를 제한합니다. 대상별 가용성, 인증, 쿼터, 과부하 실패에는 도움이 되지만, 호출자 오류나 정책 거부를 숨기지는 않습니다.
+콤보가 아닌 Responses 요청에서는 allowlist에 오른 xAI 정책 403이 Codex가 전송 실패로 재시도하기 전에 HTTP 200 `incomplete/content_filter`로 바뀝니다. [xAI policy refusals](/reference/proxy-formats/#xai-policy-refusals)를 보세요. 콤보 홉은 원래 HTTP 403을 홉으로 분류합니다.
 :::
 
 스트리밍 요청에서는 상위 HTTP 상태만으로 최종 결정을 내리지 않습니다. OpenCodex는 선택한 하위 대상의 Responses SSE를 출력 시작 전의 제한된 구간까지만 버퍼링합니다. 텍스트, 추론, 도구 호출 또는 그 밖의 출력 이벤트가 시작되기 전에 재시도 가능한 `response.failed` 종결 이벤트가 오면 해당 시도를 실패로 기록하고 다음 적합한 대상을 시도할 수 있습니다. 출력이 시작되거나 버퍼 상한에 도달하면 현재 대상에 커밋하며, 이후의 스트림 실패를 다른 공급자에서 다시 실행하지 않습니다. 따라서 텍스트와 도구 실행이 중복되지 않습니다.

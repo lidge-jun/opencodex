@@ -49,6 +49,17 @@ the Responses wire. Claude Code auto-mode always sends `stop_sequences`; forward
 classifier mark Grok temporarily unavailable. Regression coverage:
 `tests/providers/xai/xai-no-stop.test.ts`.
 
+### Policy-refusal 403
+
+xAI sometimes refuses a turn with HTTP 403 and a bare refusal sentence (`I can't help with that
+request.`) instead of HTTP 200 with `finish_reason: content_filter`. Codex would treat the 403 as a
+transport failure and retry the unrecorded turn. `isUpstreamPolicyRefusalMessage` matches only the
+exact normalized phrases after unwrapping JSON and `Provider error 403:` bodies; plan, credit and
+model-access wording stays an error, and those xAI cues are checked by the refusal matcher alone so
+the global subscription classifier is unchanged. The rewrite itself is owned by
+[policy-refusal.ts](../transports/responses.md#core-module-ownership). Regression coverage:
+`tests/server/errors-adapter-failure.test.ts` ("xAI policy-refusal 403").
+
 `src/adapters/xai-web-search.ts` omits `auto`/`none` tool selection after normalization if no tools
 remain in either the top-level catalog or `additional_tools`. Cached-only search removal follows
 the same rule. When an omitted `none` selector stated the turn's only client-call prohibition,
