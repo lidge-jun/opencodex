@@ -272,8 +272,9 @@ widening Codex's five-row advertisement window. Fresh defaults are the GPT-6 tri
 Luna. Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
 non-Astra choices, then move retained bare `gpt-5.5` last. The old fifth choice is dropped;
 an unmarked empty list becomes Astra only, and an unset list receives the fresh defaults.
-A second one-time step replaces a roster that exactly equals the earlier generated default
-(Astra, 5.6 Sol, 5.6 Terra, 5.6 Luna, 5.5, in order) with the trio and keeps every other list.
+A second one-time step rewrites bare `gpt-5.6-sol`/`gpt-5.6-luna` to their GPT-6 rows in place
+and drops every other bare `gpt-5.5`/`gpt-5.6` id; ids with a `/` are untouched, and a list left
+empty by the cleanup receives the defaults.
 `subagentModelsVersion: 2` records completion, so later user edits (including an empty list or
 removing Astra) persist. The migration rebases on the latest disk config under the existing
 mutation lock; failed persistence degrades to an in-memory roster for that run without a stale

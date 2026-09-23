@@ -54,8 +54,8 @@ describe("subagent roster defaults and one-time upgrades", () => {
     [["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"], defaults],
     [["one", "two", "three", "four", "five"], ["gpt-6-astra", "one", "two", "three", "four"]],
     [["one", "two", "three", "four", "gpt-5.5"], ["gpt-6-astra", "one", "two", "three", "four"]],
-    [["one", "gpt-6-astra", "gpt-6-astra", "gpt-5.5", "two"], ["gpt-6-astra", "one", "two", "gpt-5.5"]],
-    [["pool/gpt-6-astra", "gpt-5.5"], ["gpt-6-astra", "pool/gpt-6-astra", "gpt-5.5"]],
+    [["one", "gpt-6-astra", "gpt-6-astra", "gpt-5.5", "two"], ["gpt-6-astra", "one", "two"]],
+    [["pool/gpt-6-astra", "gpt-5.5"], ["gpt-6-astra", "pool/gpt-6-astra"]],
     [[], ["gpt-6-astra"]],
   ])("upgrades legacy roster %j once", (before, expected) => {
     const config = getDefaultConfig();
@@ -79,15 +79,22 @@ describe("subagent roster defaults and one-time upgrades", () => {
   });
 
   test.each([
-    [["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]],
-    [["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]],
-    [["gpt-6-astra", "custom/model"]],
-    [[]],
-  ])("an edited version-1 roster %j is kept", before => {
+    // Sol and Luna move to their GPT-6 rows in place; Terra and 5.5 leave.
+    [["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"], ["gpt-6-sol", "gpt-6-astra", "gpt-6-luna"]],
+    // A successor already on the list is not added twice; every 5.5/5.6 variant leaves.
+    [["gpt-6-astra", "gpt-5.6-sol", "gpt-6-sol", "gpt-5.5-pro"], ["gpt-6-astra", "gpt-6-sol"]],
+    // Routed and account-qualified ids keep their exact spelling, 5.x suffix or not.
+    [["gpt-6-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"], ["gpt-6-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"]],
+    // A list of only retired rows receives the defaults rather than becoming empty.
+    [["gpt-5.5", "gpt-5.6-terra"], ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]],
+    // An explicitly empty roster stays empty.
+    [[], []],
+  ])("a version-1 roster %j sheds retired 5.x rows as %j", (before, expected) => {
     const config = { ...getDefaultConfig(), subagentModels: [...before], subagentModelsVersion: 1 };
     expect(migrateSubagentModels(config)).toBe(true);
-    expect(config.subagentModels).toEqual(before);
+    expect(config.subagentModels).toEqual(expected);
     expect(config.subagentModelsVersion).toBe(2);
+    expect(migrateSubagentModels(config)).toBe(false);
   });
 
   test("unset legacy roster uses the new defaults", () => {
@@ -150,7 +157,7 @@ describe("subagent roster defaults and one-time upgrades", () => {
     const stale = loadConfig();
     saveConfig({ ...legacy, subagentModels: ["new", "gpt-5.5"], port: 23456, modelPickerOrder: undefined });
     const migrated = migrateStartupSubagentModels(stale);
-    expect(migrated.subagentModels).toEqual(["gpt-6-astra", "new", "gpt-5.5"]);
+    expect(migrated.subagentModels).toEqual(["gpt-6-astra", "new"]);
     expect(loadConfig().subagentModels).toEqual(migrated.subagentModels);
     expect(loadConfig().subagentModelsVersion).toBe(2);
     expect(loadConfig().port).toBe(23456);
