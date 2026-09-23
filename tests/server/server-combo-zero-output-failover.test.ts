@@ -322,6 +322,35 @@ describe("combo zero-output bare Responses error failover", () => {
     });
   }
 
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} error after a replay-unsafe heartbeat stays on that child`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        if (parsed.modelId === "m1") {
+          emit({ type: "heartbeat", replayUnsafe: true });
+          emit({ type: "error", message: "transport lost after a local tool ran" });
+          return;
+        }
+        emit({ type: "text_delta", text: "must not run" });
+        emit({ type: "done" });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream }),
+      }), config, { model: "", provider: "" });
+      const body = await response.text();
+      expect(hits).toEqual(["m1"]);
+      expect(body).not.toContain("must not run");
+    });
+  }
+
   test("undeclared adapter tool call after text never replays on backup", async () => {
     const hits: string[] = [];
     const a = serve(() => {

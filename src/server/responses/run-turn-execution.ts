@@ -20,7 +20,7 @@ import { providerFetch } from "./fetch-helpers";
 import { normalizeLogConversationId } from "../request-log-conversation";
 import { normalizeDeclaredToolName, type AdapterEvent, type OcxProviderContinuationState } from "../../types";
 import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
-import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { SendBudgetExhaustedError, markResponseNonReplayable } from "../../lib/upstream-retry";
 import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   hasEligibleGenericOAuthFailoverTarget,
@@ -395,7 +395,11 @@ export async function executeResponsesRunTurn(
           runTurnAbort.abort();
           queue.close();
           const message = preflight.error?.message ?? "Adapter ended before producing a response";
-          return formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
+          // combo must not send this turn to another target: the failure stays with this child.
+          if (preflight.replayUnsafe) markResponseNonReplayable(failure);
+          return failure;
         }
         eventSource = preflight.stream;
       }
@@ -498,7 +502,9 @@ export async function executeResponsesRunTurn(
         const message = classifiedError?.message ?? (firstMeaningful?.type === "error"
           ? firstMeaningful.message
           : "Adapter ended before producing a response");
-        return formatErrorResponse(502, "upstream_error", redactSecretString(message));
+        const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
+        if (replayUnsafe) markResponseNonReplayable(failure);
+        return failure;
       }
     }
     let providerState: OcxProviderContinuationState | undefined;

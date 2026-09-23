@@ -162,6 +162,9 @@ recorded a side effect, `src/server/responses/run-turn-execution.ts` projects th
 undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After
 any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and
 Anthropic Messages inbound requests do not use this classification.
+The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a
+replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead
+of sending the turn to the next target.
 
 HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
 structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
@@ -298,6 +301,10 @@ replacement rows (pre-header, SSE and WebSocket): a status the client would rese
 refusal, and anything else keeps its status and the non-replayable marker. The direct path skips
 the streamed opaque-blob rebuild and settles the preflight's projected failure by the same rule.
 Policy fallback does not hop on a marked answer.
+A scope derived from a budget this factory did not build (the shape-tested bridge in
+`src/lib/request-execution-budget.ts`) remembers a grant it claimed through the bridge, keyed by
+the bridged parent, so every sibling scope reports it spent even when that parent predates the
+`ambiguousResendSpent` flag.
 
 **An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
 The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the

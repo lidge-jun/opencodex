@@ -269,6 +269,36 @@ describe("one resend budget across composed recovery legs", () => {
     expect(owner.claimAmbiguousResend?.(GRANT)).toBe(false);
   });
 
+  test("a bridged parent without a spent flag still reports a grant claimed through the bridge", () => {
+    // A hand-built parent that predates `ambiguousResendSpent` can still grant through
+    // `claimAmbiguousResend`. Reading only the parent's missing flag would report "not spent"
+    // after a scope spent the grant, and a combo would then hop on a zero-output 200 from the
+    // replacement: a third send of a turn that may already have run.
+    const owner = createRequestExecutionBudget(CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    const legacy: RequestExecutionBudget = {
+      get used(): number { return owner.used; },
+      set used(next: number) { owner.used = next; },
+      logicalRequestId: owner.logicalRequestId,
+      policyVersion: owner.policyVersion,
+      policy: owner.policy,
+      get reserveSpent(): boolean { return owner.reserveSpent; },
+      get alternateTargetSends(): number { return owner.alternateTargetSends; },
+      get targetTransitions(): number { return owner.targetTransitions; },
+      get lastTargetKey(): string | undefined { return owner.lastTargetKey; },
+      remainingBaseSends: (cap: number): number => owner.remainingBaseSends(cap),
+      claimAmbiguousResend: (limit: number): boolean => owner.claimAmbiguousResend?.(limit) === true,
+      reserveDispatch: intent => owner.reserveDispatch(intent),
+    };
+
+    const first = deriveRequestExecutionBudget(legacy, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    const second = deriveRequestExecutionBudget(legacy, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    expect(first.ambiguousResendSpent).toBe(false);
+    expect(first.claimAmbiguousResend?.(GRANT)).toBe(true);
+    expect(first.ambiguousResendSpent).toBe(true);
+    expect(second.ambiguousResendSpent).toBe(true);
+    expect(deriveRequestExecutionBudget(legacy, CODEX_TEXT_GUARDED_BUDGET_POLICY).ambiguousResendSpent).toBe(true);
+  });
+
   test("a parent that grants nothing cannot be bridged into a grant", () => {
     const stub: RequestExecutionBudget = {
       used: 0,

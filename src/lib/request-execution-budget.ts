@@ -439,10 +439,24 @@ export function deriveRequestExecutionBudget(
  * share pending external bookings and a durable-spend observer, which are private by
  * construction; a bridged scope keeps the parent's spend accurate and books nothing of its own.
  */
+/**
+ * Grant claims made THROUGH a bridge, keyed by the bridged parent so every scope derived from it
+ * sees them. A parent that predates `ambiguousResendSpent` can still grant through
+ * `claimAmbiguousResend`; reading only its missing flag would report "not spent" after a derived
+ * scope spent the grant, and a combo would then hop on a zero-output 200 from the replacement.
+ */
+const bridgedGrantClaims = new WeakMap<RequestExecutionBudget, { claimed: boolean }>();
+
 function ledgerFor(parent: RequestExecutionBudget): SharedSendLedger {
   const existing = sharedSendLedgers.get(parent);
   if (existing) return existing;
   let pendingExternalSends = 0;
+  let bridged = bridgedGrantClaims.get(parent);
+  if (!bridged) {
+    bridged = { claimed: false };
+    bridgedGrantClaims.set(parent, bridged);
+  }
+  const claims = bridged;
   return {
     get spent(): number { return parent.used; },
     set spent(next: number) { parent.used = next; },
@@ -455,8 +469,12 @@ function ledgerFor(parent: RequestExecutionBudget): SharedSendLedger {
     // but the grant can -- `claimAmbiguousResend` is public on the parent. A parent that does
     // not implement it grants nothing, which is the fail-closed answer for a send whose
     // upstream state is unknown.
-    claimAmbiguousResend: (limit: number): boolean => parent.claimAmbiguousResend?.(limit) === true,
-    get ambiguousResendSpent(): boolean { return parent.ambiguousResendSpent === true; },
+    claimAmbiguousResend: (limit: number): boolean => {
+      const granted = parent.claimAmbiguousResend?.(limit) === true;
+      if (granted) claims.claimed = true;
+      return granted;
+    },
+    get ambiguousResendSpent(): boolean { return claims.claimed || parent.ambiguousResendSpent === true; },
   };
 }
 
