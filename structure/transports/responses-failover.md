@@ -284,16 +284,16 @@ on, say, a context overflow. The cost is that a real 401, 402 or 429 on a replac
 recorded against its credential on that request. One case is not covered yet: a 2xx replacement
 whose stream then fails with zero output. The combo preflight projects that terminal into a fresh
 5xx that carries no marker, so a failover combo can still send the turn to its next target after
-the grant was spent. That applies to all three replacement rows and is left for a follow-up.
+the grant was spent. That applies to all three replacement rows; #5646 closes it.
 
 **An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
 The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the
 Codex WebSocket transport still settles `upstream_closed_before_response` (socket closed
 after the create frame) and `upstream_no_response` (origin never produced an event) as 502
-and 504. Those describe something the upstream did after our send, they are the contract the
-public server reference already documents, and this release does not move them. Since #4191 a
-provider that opted into `retryOnReset` may replace that 502 once, over HTTP, when the socket
-closed or errored; the 504 is never replaced.
+and 504. Those describe something the upstream did after our send, and they are the contract
+the public server reference already documents. The 504 and a drop after the response started
+are never replaced. Only the 502 of a socket that closed or errored before any Responses event
+may be replaced, once, over HTTP, when the provider opted into `retryOnReset` (#4191).
 
 This reclassification is the recorded behaviour change: before it, the pre-header refusal
 borrowed `upstream_closed_before_response` and its 502, which multiplied the duplicate send
