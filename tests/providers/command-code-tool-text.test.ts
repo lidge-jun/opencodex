@@ -344,6 +344,19 @@ describe("Command Code MiMo tool-call text", () => {
     expect(spacedBudget.snapshot().currentBytes).toBe(0);
   });
 
+  test("many empty text starts do not scan open blocks", () => {
+    const budget = createTestTranslatorBudget();
+    const filter = new CommandCodeToolTextFilter(budget, undefined);
+    const count = 20_000;
+    for (let index = 0; index < count; index++) expect(filter.textStart(`empty-${index}`)).toEqual([]);
+    expect(filter.openBlockCountForTest()).toBe(count);
+    expect(filter.boundary()).toEqual([]);
+    expect(filter.queueOperationsForTest()).toBeLessThan(count * 2);
+    expect(filter.finish()).toEqual({ events: [], salvaged: false });
+    expect(filter.openBlockCountForTest()).toBe(0);
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
   test("leaves markup as text when it names an undeclared tool or does not fit", async () => {
     for (const markup of [
       "<tool_call><function=delete_everything><parameter=path>/</parameter></function></tool_call>",
