@@ -10,6 +10,7 @@ import {
 } from "../../src/cli/stop-report";
 import { STOP_HISTORY_DEFERRED_EXIT_CODE, STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../../src/update/stop-contract.mjs";
 import {
+  approvalChanged,
   guardFinalStopSummary,
   managerStillActive,
   parseStopApproval,
@@ -349,6 +350,7 @@ describe("approval-bound stop", () => {
     const result = await runApprovedStop(STOP_APPROVAL, async () => STOP_RESOLVE,
       TRACKED_STOP_TARGET, BOUND_STOP_MANAGER, async snapshot => {
         const step = await runGuardedManagerStep(snapshot, {
+          revalidateManager: BOUND_STOP_MANAGER,
           stopManager: () => {
             order.push("stop-manager");
             pidAlive = false;
@@ -378,6 +380,7 @@ describe("approval-bound stop", () => {
     for (const [settled, state] of [[false, "inactive"], [true, "active"], [true, "unknown"]] as const) {
       let reads = 0;
       const step = await runGuardedManagerStep(snapshot, {
+        revalidateManager: BOUND_STOP_MANAGER,
         stopManager: () => "stopped",
         signalApproved: async () => false,
         settle: async () => settled,
@@ -395,6 +398,31 @@ describe("approval-bound stop", () => {
     });
     expect(final.summary.outcome).toBe("manager-still-active");
     expect(published).toBe(0);
+  });
+
+  test("a replaced manager refuses before receipt, manager stop, or proxy signal", async () => {
+    let managerPid = 7;
+    let managerStops = 0;
+    let proxySignals = 0;
+    let settles = 0;
+    const result = await runApprovedStop(STOP_APPROVAL, async () => STOP_RESOLVE,
+      TRACKED_STOP_TARGET, () => ({ ...BOUND_STOP_MANAGER(), managerPid }), async snapshot => {
+        managerPid = 8;
+        const step = await runGuardedManagerStep(snapshot, {
+          revalidateManager: () => ({ ...BOUND_STOP_MANAGER(), managerPid }),
+          stopManager: () => { managerStops++; return "stopped"; },
+          signalApproved: async () => { proxySignals++; return false; },
+          settle: async () => { settles++; return true; },
+          managerState: async () => "inactive",
+        });
+        expect(step.effect).toBe("approval-changed");
+        return step.effect === "approval-changed" ? approvalChanged()
+          : { ok: true, summary: summarize(record(), { exitCode: 0 }) };
+      });
+    expect(result.summary.outcome).toBe("approval-changed");
+    expect(managerStops).toBe(0);
+    expect(proxySignals).toBe(0);
+    expect(settles).toBe(0);
   });
 
   test("settlement shares one deadline and needs a definitive dead probe", async () => {

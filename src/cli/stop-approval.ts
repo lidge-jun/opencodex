@@ -20,6 +20,15 @@ export interface GuardedStopSnapshot {
   manager: Exclude<GuardedManagerTarget, { kind: "unknown" }>;
 }
 
+function sameGuardedManager(
+  expected: GuardedStopSnapshot["manager"],
+  current: GuardedManagerTarget,
+): boolean {
+  if (expected.kind === "absent") return current.kind === "absent";
+  return current.kind === "bound" && current.pid === expected.pid
+    && current.managerPid === expected.managerPid && current.backend === expected.backend;
+}
+
 export type StopApprovalParse = { ok: true; json: boolean; approval: StopApproval | null } | { ok: false };
 
 export function parseStopApproval(argv: string[]): StopApprovalParse {
@@ -133,13 +142,21 @@ export async function settleApprovedTarget(
 export async function runGuardedManagerStep(
   snapshot: GuardedStopSnapshot,
   io: {
+    revalidateManager: () => GuardedManagerTarget;
     stopManager: () => StopServiceOutcome;
     signalApproved: () => Promise<boolean>;
     settle: () => Promise<boolean>;
     managerState: () => Promise<"inactive" | "active" | "unknown">;
   },
-): Promise<{ service: StopServiceOutcome; effect: "stopped" | "manager-still-active" | "failed";
+): Promise<{ service: StopServiceOutcome; effect: "stopped" | "approval-changed" | "manager-still-active" | "failed";
   proxy: "stopped" | "unknown"; handledByProxy: boolean }> {
+  try {
+    if (!sameGuardedManager(snapshot.manager, io.revalidateManager())) {
+      return { service: "absent", effect: "approval-changed", proxy: "unknown", handledByProxy: false };
+    }
+  } catch {
+    return { service: "absent", effect: "approval-changed", proxy: "unknown", handledByProxy: false };
+  }
   const service = snapshot.manager.kind === "absent" ? "absent" : io.stopManager();
   let handledByProxy = false;
   if (snapshot.manager.kind === "absent") {

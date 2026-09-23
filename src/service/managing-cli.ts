@@ -62,8 +62,8 @@ function probeVersion(
   try {
     const windowsShim =
       deps.platform === "win32" && /\.(cmd|bat)$/i.test(executable);
-    if (windowsShim && /[&|<>^%!"()]/.test(executable)) {
-      return { status: "unknown", reason: "the selected Windows command shim path cannot be probed safely" };
+    if (windowsShim && [executable, ...args].some(part => /[&|<>^%!"()]/.test(part))) {
+      return { status: "unknown", reason: "the selected Windows command shim invocation cannot be probed safely" };
     }
     result = deps.spawn(
       windowsShim ? (deps.env?.ComSpec ?? "cmd.exe") : executable,

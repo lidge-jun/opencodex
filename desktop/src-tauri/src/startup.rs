@@ -1546,115 +1546,119 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn a_changed_answer_never_invokes_stop() {
-        let approved = approved_answer();
-        let mut changed = approved.clone();
-        changed.ownership = Recorded::None { revision: 8 };
-        let called = Cell::new(false);
-        let refused = stop_after_approval(
-            &approved,
-            &Resolution::Answered(Box::new(changed)),
-            || async {
-                called.set(true);
-                StopResult::Failed("called".to_owned())
-            },
-        )
-        .await;
-        assert!(refused.is_none());
-        assert!(!called.get());
-        let accepted = stop_after_approval(
-            &approved,
-            &Resolution::Answered(Box::new(approved.clone())),
-            || async {
-                called.set(true);
-                StopResult::Failed("called".to_owned())
-            },
-        )
-        .await;
-        assert!(accepted.is_some());
-        assert!(called.get());
-        let mut moved = approved.clone();
-        moved.liveness.pid = Some(43);
-        assert!(!approval_still_current(
-            &approved,
-            &Resolution::Answered(Box::new(moved))
-        ));
-        let mut moved = approved.clone();
-        moved.port.effective = 10101;
-        assert!(!approval_still_current(
-            &approved,
-            &Resolution::Answered(Box::new(moved))
-        ));
-        let mut moved = approved.clone();
-        moved.config_home = "/sandbox/b".to_owned();
-        assert!(!approval_still_current(
-            &approved,
-            &Resolution::Answered(Box::new(moved))
-        ));
-        let mut moved = approved.clone();
-        moved.cli_version = "2.62.0".to_owned();
-        assert!(!approval_still_current(
-            &approved,
-            &Resolution::Answered(Box::new(moved))
-        ));
-        let mut moved = approved.clone();
-        moved.liveness.hostname = Some("localhost".to_owned());
-        assert!(!approval_still_current(
-            &approved,
-            &Resolution::Answered(Box::new(moved))
-        ));
-        let mut moved = approved.clone();
-        if let Takeover::Supported { token, .. } = &mut moved.takeover {
-            *token = "changed".to_owned();
-        }
-        assert!(!approval_still_current(
-            &approved,
-            &Resolution::Answered(Box::new(moved))
-        ));
-        let mut moved = approved.clone();
-        moved.takeover = blocked();
-        assert!(!approval_still_current(
-            &approved,
-            &Resolution::Answered(Box::new(moved))
-        ));
-        assert!(!approval_still_current(
-            &approved,
-            &Resolution::Unknown("unreadable".to_owned())
-        ));
+    #[test]
+    fn a_changed_answer_never_invokes_stop() {
+        tauri::async_runtime::block_on(async {
+            let approved = approved_answer();
+            let mut changed = approved.clone();
+            changed.ownership = Recorded::None { revision: 8 };
+            let called = Cell::new(false);
+            let refused = stop_after_approval(
+                &approved,
+                &Resolution::Answered(Box::new(changed)),
+                || async {
+                    called.set(true);
+                    StopResult::Failed("called".to_owned())
+                },
+            )
+            .await;
+            assert!(refused.is_none());
+            assert!(!called.get());
+            let accepted = stop_after_approval(
+                &approved,
+                &Resolution::Answered(Box::new(approved.clone())),
+                || async {
+                    called.set(true);
+                    StopResult::Failed("called".to_owned())
+                },
+            )
+            .await;
+            assert!(accepted.is_some());
+            assert!(called.get());
+            let mut moved = approved.clone();
+            moved.liveness.pid = Some(43);
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.port.effective = 10101;
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.config_home = "/sandbox/b".to_owned();
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.cli_version = "2.62.0".to_owned();
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.liveness.hostname = Some("localhost".to_owned());
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            if let Takeover::Supported { token, .. } = &mut moved.takeover {
+                *token = "changed".to_owned();
+            }
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            let mut moved = approved.clone();
+            moved.takeover = blocked();
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Answered(Box::new(moved))
+            ));
+            assert!(!approval_still_current(
+                &approved,
+                &Resolution::Unknown("unreadable".to_owned())
+            ));
+        });
     }
 
-    #[tokio::test]
-    async fn terminal_stop_results_never_invoke_claim_after_silence() {
-        let approved = approved_answer();
-        let answer = Resolution::Answered(Box::new(approved.clone()));
-        let called = Cell::new(false);
-        for result in [
-            StopResult::ApprovalChanged("moved".to_owned()),
-            StopResult::ManagerStillActive("active".to_owned()),
-            runtime_stop::read(Some(1), b"{", b""),
-            StopResult::Failed("the bundled CLI timed out".to_owned()),
-        ] {
-            let stopped = stop_after_approval(&approved, &answer, || async { result })
-                .await
-                .expect("matching answer");
-            assert!(!stopped.may_check_silence());
-            let claimed = claim_after_silence(&stopped, true, || async {
+    #[test]
+    fn terminal_stop_results_never_invoke_claim_after_silence() {
+        tauri::async_runtime::block_on(async {
+            let approved = approved_answer();
+            let answer = Resolution::Answered(Box::new(approved.clone()));
+            let called = Cell::new(false);
+            for result in [
+                StopResult::ApprovalChanged("moved".to_owned()),
+                StopResult::ManagerStillActive("active".to_owned()),
+                runtime_stop::read(Some(1), b"{", b""),
+                StopResult::Failed("the bundled CLI timed out".to_owned()),
+            ] {
+                let stopped = stop_after_approval(&approved, &answer, || async { result })
+                    .await
+                    .expect("matching answer");
+                assert!(!stopped.may_check_silence());
+                let claimed = claim_after_silence(&stopped, true, || async {
+                    called.set(true);
+                    ClaimResult::Failed("called".to_owned())
+                })
+                .await;
+                assert!(claimed.is_none());
+                assert!(!called.get());
+            }
+            let history = StopResult::HistoryIncomplete("history-incomplete".to_owned());
+            let claimed = claim_after_silence(&history, true, || async {
                 called.set(true);
                 ClaimResult::Failed("called".to_owned())
             })
             .await;
-            assert!(claimed.is_none());
-            assert!(!called.get());
-        }
-        let history = StopResult::HistoryIncomplete("history-incomplete".to_owned());
-        let claimed = claim_after_silence(&history, true, || async {
-            called.set(true);
-            ClaimResult::Failed("called".to_owned())
-        })
-        .await;
-        assert!(matches!(claimed, Some(ClaimResult::Failed(_))));
-        assert!(called.get());
+            assert!(matches!(claimed, Some(ClaimResult::Failed(_))));
+            assert!(called.get());
+        });
     }
 
     #[test]

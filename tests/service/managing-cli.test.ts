@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { observeManagingClis } from "../../src/service/managing-cli";
+import type { ServiceInstallState } from "../../src/service/state";
 import { createTempHome } from "../helpers/temp-home";
 
 describe("Windows managing CLI selection", () => {
@@ -77,6 +78,37 @@ describe("Windows managing CLI selection", () => {
         expect(result.path.status).toBe("unknown");
         expect(spawns).toBe(0);
       }
+    } finally { home.remove(); }
+  });
+
+  test("an unsafe recorded CLI argument never reaches a command shim", () => {
+    if (process.platform !== "win32") return;
+    const home = createTempHome("ocx-managing-cli-");
+    try {
+      const tools = home.path("tools");
+      const packageDir = home.path("package&name");
+      mkdirSync(tools);
+      mkdirSync(packageDir);
+      const shim = join(tools, "manager.cmd");
+      const cliPath = join(packageDir, "cli.ts");
+      writeFileSync(shim, "@echo off\n");
+      writeFileSync(cliPath, "");
+      const state: ServiceInstallState = {
+        version: 2, backend: "scheduler", codexHome: home.codexHome,
+        opencodexHome: home.configDir, revision: 1,
+        bunPath: shim, cliPath,
+      };
+      let spawns = 0;
+      const spawn = (() => {
+        spawns++;
+        return { status: 0, stdout: "2.61.0", stderr: "" };
+      }) as unknown as typeof spawnSync;
+      const result = observeManagingClis(state, {
+        platform: "win32", env: { PATH: "" },
+        execPath: home.path("self.exe"), spawn,
+      });
+      expect(result["service-registration"].status).toBe("unknown");
+      expect(spawns).toBe(0);
     } finally { home.remove(); }
   });
 });

@@ -98,6 +98,7 @@ import { isApiAuthRequired } from "../server/auth-cors";
 import { runReady, type ReadyArgs } from "./ready";
 import { runResolve, type ResolveArgs, type ResolveJson } from "./resolve";
 import {
+  approvalChanged,
   guardFinalStopSummary,
   managerStillActive,
   runApprovedStop,
@@ -1174,14 +1175,15 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   const approvedEndpoint = snapshot
     ? { hostname: probeHostname(snapshot.approval.hostname || undefined), port: snapshot.approval.port }
     : null;
-  if (snapshot?.manager.kind === "bound" && approvedEndpoint) {
-    claimTeardown(approvedEndpoint, "exact");
-  }
   let guardedStep: Awaited<ReturnType<typeof runGuardedManagerStep>> | null = null;
   try {
     const serviceStop = snapshot
       ? (guardedStep = await runGuardedManagerStep(snapshot, {
-          stopManager: stopServiceIfInstalledDetailed,
+          revalidateManager: () => inspectGuardedManagerTarget(snapshot.approval.pid, snapshot.approval.port),
+          stopManager: () => {
+            if (approvedEndpoint) claimTeardown(approvedEndpoint, "exact");
+            return stopServiceIfInstalledDetailed();
+          },
           signalApproved: () => stopWithDeferral(snapshot.approval.pid, approvedEndpoint),
           settle: () => settleApprovedTarget(snapshot.approval),
           managerState: () => observeGuardedManagerStopped(snapshot.manager),
@@ -1220,6 +1222,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   }
 
   if (snapshot) {
+    if (guardedStep?.effect === "approval-changed") {
+      return approvalChanged();
+    }
     if (guardedStep?.effect === "manager-still-active") {
       return managerStillActive(record.service, record);
     }
