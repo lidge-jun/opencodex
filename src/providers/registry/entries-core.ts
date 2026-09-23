@@ -272,7 +272,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // auto-mode always sends stop_sequences; forwarding that as `stop` makes
     // the classifier treat Grok as temporarily unavailable while chat turns
     // still work. Keep caller stop sequences on non-reasoning ids.
+    // Live 2026-09-23: grok-4.7 answers the same 400.
     noStopModels: [
+      "grok-4.7",
       "grok-4.6",
       "grok-4.5",
       "grok-4.3",

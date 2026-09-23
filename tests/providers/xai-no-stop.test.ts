@@ -5,6 +5,7 @@ import { routedProviderConfig } from "../../src/router";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 
 const XAI_NO_STOP_MODELS = [
+  "grok-4.7",
   "grok-4.6",
   "grok-4.5",
   "grok-4.3",
@@ -38,6 +39,13 @@ describe("xAI noStopModels", () => {
     expect(xai?.noStopModels).toEqual([...XAI_NO_STOP_MODELS]);
     expect(xai?.noStopModels).not.toContain("grok-4.20-0309-non-reasoning");
     expect(xai?.noStopModels).not.toContain("grok-composer-2.5-fast");
+  });
+
+  // Live 2026-09-23: `ocx-claude-xai--grok-4.7` + stop_sequences -> 400 "Model grok-4.7 does not
+  // support parameter stop." — the same auto-mode classifier break, one release later.
+  test("seed covers grok-4.7", () => {
+    const xai = PROVIDER_REGISTRY.find(provider => provider.id === "xai");
+    expect(xai?.noStopModels).toContain("grok-4.7");
   });
 
   test("openai-chat omits stop for grok-4.6 and forwards it for other ids", () => {
