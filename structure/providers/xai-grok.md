@@ -1,5 +1,8 @@
 # xAI Grok Provider
 
+Managed alias allocation retries nested-table reservation when rewriting references
+cannot parse the first candidate. Other rewrite failures still refuse the update.
+
 The Grok client picker forwards the `meta-muse` catalog's `max` effort through its existing managed-block export; this follows the [Muse provider contract](../providers-and-adapters.md).
 
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.

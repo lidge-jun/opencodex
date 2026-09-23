@@ -1324,9 +1324,10 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // private console endpoint — the approach closed in #687 and left in draft in #2244.
     // baseUrl is the canonical region identity: the adapter fails closed if it is overridden, so a
     // global key is never sent to the CN environment (that is the separate `codebuddy-cn` entry).
-    // v1 runs tools-disabled so Codex keeps tool ownership; this provider is text/reasoning only
-    // until the control-protocol tool bridge lands (see docs). Free/trial/promotional/subscription
-    // credits draw from the same official API-key pool. Requires the CLI: `npm i -g @tencent-ai/codebuddy-code`.
+    // The CLI always runs tools-disabled; a capture-only MCP bridge advertises the request's
+    // Codex tool catalog, so approval, sandboxing, and execution stay with the client.
+    // Free/trial/promotional/subscription credits draw from the same official API-key pool.
+    // Requires the CLI: `npm i -g @tencent-ai/codebuddy-code`.
     // GOVERNANCE: whether routing this vendor automation surface behind a proxy for a third-party
     // agent satisfies CodeBuddy's AUP is an open question flagged for maintainer security review.
     id: "codebuddy",
@@ -1346,7 +1347,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     reasoningEfforts: CODEBUDDY_REASONING_EFFORTS,
     modelReasoningEfforts: CODEBUDDY_GLOBAL_MODEL_REASONING_EFFORTS,
     modelDefaultReasoningEfforts: CODEBUDDY_GLOBAL_MODEL_DEFAULT_REASONING_EFFORTS,
-    note: "Official CodeBuddy Code CLI (Tencent Cloud), global/public environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy-cn. v1 disables CLI tools (--tools \"\") so Codex retains tool ownership: text/reasoning only for now. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
+    note: "Official CodeBuddy Code CLI (Tencent Cloud), global/public environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy-cn. The CLI always runs tools-disabled (--tools \"\"); a capture-only MCP bridge surfaces the request's Codex tool catalog as capturable calls, with approval and execution kept by the client. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
   },
   {
     // Official CodeBuddy Code CLI provider, CHINA / `internal` environment. Identical adapter and
@@ -1371,7 +1372,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: CODEBUDDY_CN_MODEL_REASONING_EFFORTS,
     modelDefaultReasoningEfforts: CODEBUDDY_CN_MODEL_DEFAULT_REASONING_EFFORTS,
     noVisionModels: CODEBUDDY_CN_NO_VISION_MODELS,
-    note: "Official CodeBuddy Code CLI (Tencent Cloud), China/internal environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy (Global); credentials are never exchanged across regions. v1 disables CLI tools (--tools \"\"): text/reasoning only for now. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
+    note: "Official CodeBuddy Code CLI (Tencent Cloud), China/internal environment. Uses the documented CODEBUDDY_API_KEY + headless CLI surface; never reads desktop sessions or private console endpoints. Region-isolated from codebuddy (Global); credentials are never exchanged across regions. The CLI always runs tools-disabled (--tools \"\"); a capture-only MCP bridge surfaces the request's Codex tool catalog as capturable calls, with approval and execution kept by the client. Requires `npm i -g @tencent-ai/codebuddy-code`. AUP/routing authorization flagged for maintainer security review.",
   },
   {
     id: "stepfun",

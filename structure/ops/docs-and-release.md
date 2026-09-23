@@ -1,5 +1,9 @@
 # Docs And Release
 
+Automatic package-tree restart holds a releasable data-plane drain until its scheduled
+service-home check succeeds. A veto releases that fence; a committed shutdown uses the
+permanent drain latch.
+
 macOS shards and control use the shared fresh-process batch runner described below.
 `scripts/ci/sample-macos-stall.sh` remains a standalone diagnostic helper with isolated
 observer regression coverage; it is not wired into those bounded batch steps. It samples
@@ -322,6 +326,18 @@ Invariants:
 - Public docs (root READMEs + `docs-site` installation pages, all locales) state Node 18+ as the only
   prerequisite. Do not reintroduce "install Bun first" / "bun must be on PATH" guidance for npm users.
 
+### Package-tree integrity fence
+
+Installed npm, bun, and pnpm packages bind each server process to the package manifest identity
+observed at startup. Replacing that manifest under a live process fences `/healthz`, `/readyz`, and
+`/v1/*` with `package_tree_changed`. The first observed replacement starts an unref'd five-second
+stability timer; if the same new manifest identity remains readable and distinct, the timer enters the existing
+drain-and-restart handoff without waiting for another request. A temporarily unreadable manifest
+is polled until readable and then receives a fresh full stability interval, while a return to the
+startup identity cancels the pending restart. Failed restart admission retries after the same
+bounded delay. Stopping the server before the accepted restart begins vetoes it, and a service child
+restarts only while it still owns the service home. Source checkouts and standalone binaries remain outside this fence.
+
 ## Release workflow
 
 Package release is npm-focused. `package.json` exposes `opencodex` and `ocx`, `prepublishOnly` runs
@@ -510,13 +526,7 @@ Native steering generation overrides, explicit public-API eligibility and the co
 The public server configuration reference documents the optional
 [compaction routing override](../transports/responses.md#compaction-routing-overrides). Its regression file is registered in both test-layout inventories.
 
-Startup and explicit catalog synchronization in `src/codex/sync.ts` refresh the optional
-`src/providers/reasoning-metadata.ts` effort snapshot for supported destinations before catalog
-gathering. Each sync waits at most two seconds for a fresh or shared fetch, then continues with
-the existing snapshot; the fetch retains its own abort deadline. Routed effort reads in
-`src/reasoning-effort.ts` use a snapshot immediately and request a best-effort background refresh
-only when an existing snapshot answers with an expired ladder. Missing or corrupt snapshots do
-not fetch on the request path; catalog sync owns their bootstrap.
+Catalog synchronization follows the [reasoning metadata refresh contract](../catalog.md#reasoning-metadata-refresh).
 
 Bun updater ownership and recovery follow the [service transaction contract](service-and-sidecars.md#bun-updater-ownership-transaction).
 

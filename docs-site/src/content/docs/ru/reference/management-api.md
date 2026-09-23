@@ -357,7 +357,7 @@ picker изменилась. `catalogRefreshPending: true` в успешном �
 | `POST /api/codex-auth/reset-credits/consume` | Израсходовать доступный reset credit. Необязательный `operationId` (UUIDv4) делает списание идемпотентным: тот же id воспроизводит один сохранённый результат вместо расходования второго кредита. | 400 missing account id или некорректный `operationId`; 409 `identity_mismatch`, если id принадлежит другому аккаунту; upstream status passthrough; 503 `server_busy`, `capacity` или `unavailable`; 500 consume failure |
 | `POST /api/codex-auth/login` | Запустить login или reauthentication для Codex | 400 invalid request; conflict/busy login states |
 | `POST /api/codex-auth/login/code` | Отправить manual code для login-flow Codex | 400 invalid flow/code |
-| `POST /api/codex-auth/login/cancel` | Отменить login-flow Codex | — |
+| `POST /api/codex-auth/login/cancel` | Отменить только ожидающий вход Codex с `{ "flowId": "..." }` | 400 ID потока отсутствует, неизвестен или не ожидает завершения |
 | `GET /api/codex-auth/login-status` | Опрашивать flow или login-state аккаунта. Завершение нового аккаунта включает `catalogRefreshPending: true` только при необходимости восстановления. | Неизвестные flow'ы сообщаются как `expired`; отсутствие активного flow — как `idle` |
 
 Если config row нового аккаунта сохранён, но credential setup не завершён, OAuth `login-status`

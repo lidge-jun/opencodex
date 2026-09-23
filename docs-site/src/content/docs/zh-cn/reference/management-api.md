@@ -311,7 +311,7 @@ OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上�
 | `POST /api/codex-auth/reset-credits/consume` | 消耗一个符合条件的 reset credit。可选的 `operationId`（UUIDv4）让兑换具备幂等性：相同 id 会重放同一条持久化结果，而不会再消耗一个 credit。 | 400 缺少账户 id 或无效的 `operationId`；若该 id 属于其他账户则 409 `identity_mismatch`；上游状态透传；503 `server_busy`、`capacity` 或 `unavailable`；500 消耗失败 |
 | `POST /api/codex-auth/login` | 启动 Codex 登录或重新认证 | 400 请求无效；登录状态冲突/忙碌 |
 | `POST /api/codex-auth/login/code` | 为 Codex 登录流程提交手动代码 | 400 流程/代码无效 |
-| `POST /api/codex-auth/login/cancel` | 取消一个 Codex 登录流程 | — |
+| `POST /api/codex-auth/login/cancel` | 仅取消 `{ "flowId": "..." }` 指定的待处理 Codex 登录 | 400 流程 ID 缺失、未知或不在待处理状态 |
 | `GET /api/codex-auth/login-status` | 轮询某个流程或账户登录状态。新账号流程完成时，仅在需要恢复时包含 `catalogRefreshPending: true`。 | 未知流程报告为 `expired`；没有活跃流程时报告为 `idle` |
 
 如果新账号的 config row 已保存但 credential setup 未能完成，OAuth `login-status` 会报告

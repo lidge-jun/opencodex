@@ -379,7 +379,7 @@ devreder. Rotaları şunlardır:
 | `POST /api/codex-auth/reset-credits/consume` | Uygun bir sıfırlama kredisini tüketin. İsteğe bağlı `operationId` (UUIDv4) kullanımı işlemi idempotent yapar: aynı kimlik ikinci bir kredi harcamak yerine tek bir kalıcı sonucu yeniden oynatır. | 400 eksik hesap kimliği veya geçersiz `operationId`; kimlik başka bir hesaba aitse 409 `identity_mismatch`; yukarı akış durum doğrudan geçişi; 503 `server_busy`, `capacity` veya `unavailable`; 500 tüketme hatası |
 | `POST /api/codex-auth/login` | Codex girişini veya yeniden kimlik doğrulamasını başlatın | 400 geçersiz istek; çakışma/meşgul giriş durumları |
 | `POST /api/codex-auth/login/code` | Bir Codex giriş akışı için manuel bir kod gönderin | 400 geçersiz akış/kod |
-| `POST /api/codex-auth/login/cancel` | Bir Codex giriş akışını iptal edin | — |
+| `POST /api/codex-auth/login/cancel` | Yalnızca `{ "flowId": "..." }` ile belirtilen bekleyen Codex girişini iptal edin | 400 akış kimliği eksik, bilinmiyor veya beklemede değil |
 | `GET /api/codex-auth/login-status` | Bir akışı veya hesap giriş durumunu yoklayın. Tamamlanan yeni hesap akışı yalnızca kurtarma gerektiğinde `catalogRefreshPending: true` içerir. | Bilinmeyen akışlar `expired` bildirir; aktif olmayan akış `idle` bildirir |
 
 Yeni bir hesap yapılandırma satırı kaydedilirse ancak kimlik bilgisi kurulumu

@@ -99,9 +99,9 @@ backing, the npm prefix layout, and the Node/npm toolchain beside the resolved n
 Configured values containing a path separator must be drive-absolute; otherwise derivation
 refuses with `candidate_unavailable` instead of substituting a different PATH candidate. Bare
 command names and the unset default continue to resolve only through the captured PATH.
-Discovery only proposes paths and never reads ambient state. Four explicit absolute paths
-remain accepted as an all-or-none override. Only the
-standard npm command shim or direct Codex package entry is accepted. The native reader in
+Discovery probes candidates through the same local-volume, reparse-refusing held-handle reader as final observation, so captured PATH entries cannot trigger network filesystem I/O.
+It never reads ambient state. Four explicit absolute paths remain accepted as an all-or-none override.
+Only the standard npm command shim or direct Codex package entry is accepted. The native reader in
 `src/codex/windows-installation-files.ts` holds ancestor/file handles for bounded reads and
 rejects reparse points, conflicting writers and unsupported paths/platforms. Its path-free
 report binds file identities and bytes to this observation, not a durable update permission.
@@ -188,6 +188,8 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore.
+The package-tree integrity fence for live package replacement follows the
+[update transaction contract](ops/docs-and-release.md#package-tree-integrity-fence).
 
 A busy preferred port is never resolved by starting somewhere else. Both questions a start asks
 about an existing proxy — the pre-bind owner check and the port-is-busy check in `src/cli/index.ts`
@@ -382,9 +384,7 @@ Connected `ocx usage` reads `/v1/usage` through `src/client/hub-client.ts`, usin
 
 The client usage read requires HTTPS or loopback HTTP before adding the enrolled credential, and sets request `cache: "no-store"`; the hub response also forbids caching.
 
-The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](remote-workspace.md).
-
-Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
+The shared atomic replacement publisher identifies explicit Remote Workspace file writes as `remote-workspace`. Remote Workspace's separate, explicitly enabled server surface uses structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration and documents its isolated owner and support limits.
 
 Chat helper admission in `src/server/responses/request-sidecar-auth.ts` follows the
 [deferred stored-main contract](providers/openai-tiers.md): only a needed Direct OpenAI helper

@@ -435,6 +435,15 @@
       ]
     },
     {
+      "path": "ops/test-sandbox-cleanup.md",
+      "tier": 6,
+      "title": "Test Sandbox Cleanup",
+      "scope": "Test-runner home and case-scoped lifecycle teardown ordering.",
+      "documents": [
+        "tests/"
+      ]
+    },
+    {
       "path": "design-methodology.md",
       "tier": 6,
       "title": "Design Methodology For New Surfaces",

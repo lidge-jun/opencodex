@@ -318,7 +318,7 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `POST /api/codex-auth/reset-credits/consume` |対象となるリセット クレジットを消費する。任意の `operationId`（UUIDv4）を指定すると消費が冪等になります。同じ id は 2 つ目のクレジットを消費せず、保存済みの結果を 1 回再生します。 | 400 アカウント ID がありません、または `operationId` が不正です。id が別のアカウントに属する場合は 409 `identity_mismatch`。アップストリームステータスパススルー。 503 `server_busy`、`capacity`、`unavailable`; 500 消費失敗 |
 | `POST /api/codex-auth/login` | Codex のログインまたは再認証を開始する | 400 無効なリクエスト。競合/ビジー ログイン状態 |
 | `POST /api/codex-auth/login/code` | Codex ログイン フローの手動コードを送信する | 400 無効なフロー/コード |
-| `POST /api/codex-auth/login/cancel` | Codex ログイン フローをキャンセルする | — |
+| `POST /api/codex-auth/login/cancel` | `{ "flowId": "..." }` で指定した保留中の Codex ログインのみキャンセルする | 400 フロー ID が未指定、不明、または保留中ではない |
 | `GET /api/codex-auth/login-status` |フローまたはアカウントのログイン状態をポーリングする。新規アカウント完了時は回復が必要な場合だけ `catalogRefreshPending: true` を含みます。 |不明なフローは `expired` を報告します。アクティブなフローは `idle` を報告しません |
 
 新規 account の config row は保存されたものの credential setup を完了できない場合、OAuth の
