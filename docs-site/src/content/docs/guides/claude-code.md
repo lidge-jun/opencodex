@@ -265,6 +265,10 @@ When `claudeCode.systemEnv` is set to `true` (default: **off**), `ocx start` use
 to inject `ANTHROPIC_BASE_URL` and the related Claude Code environment variables system-wide.
 New terminal windows and tabs therefore route plain `claude` commands through the proxy without
 requiring the `ocx claude` wrapper. Already-open shells are unaffected and must be reopened.
+Changing a model slot or lever (`smallFastModel`, `tierModels`, `maxContextTokens`, auto-context,
+`alwaysEnableEffort`) re-applies the injection right away: a key opencodex injected earlier is
+updated, or unset once the setting no longer produces it. A value you set yourself with
+`launchctl setenv` is never overwritten or removed.
 
 `ocx stop` and proxy shutdown **unset the injected keys** (it does not restore previous values —
 only the keys opencodex injected are removed). The proxy also writes `~/.opencodex/claude-env.sh`;

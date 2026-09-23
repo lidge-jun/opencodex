@@ -282,9 +282,12 @@ export async function injectSystemEnv(
     }
     // Lever keys (devlog 136 B6): user-wins — skip any key the user already set in the
     // launchd domain, and track ONLY the keys we actually injected so revert cannot
-    // delete a pre-existing user value (audit 139 #3).
+    // delete a pre-existing user value (audit 139 #3). A key we already track is ours
+    // (revertSystemEnv unsets it regardless of value), so it is refreshed, not skipped.
+    const producedLevers = new Set<string>();
     const injectLever = (name: string, value: string) => {
-      if (launchctlGetenv(name) !== undefined) return;
+      producedLevers.add(name);
+      if (launchctlGetenv(name) !== undefined && !injectedKeys.includes(name)) return;
       inject(name, value);
     };
     // Model slots (default + tier defaults + legacy small-fast) with [1m] auto-marking
@@ -293,7 +296,9 @@ export async function injectSystemEnv(
     // Auto-context: a user-owned launchd value drives the marking predicate so the
     // marker and threshold never separate (audit 021 #2); injectLever's user-wins
     // check below keeps that value untouched.
-    const userAutoCompact = launchctlGetenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
+    const userAutoCompact = injectedKeys.includes("CLAUDE_CODE_AUTO_COMPACT_WINDOW")
+      ? undefined
+      : launchctlGetenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
     const auto = resolveAutoContext(config.claudeCode, userAutoCompact);
     const { modelEnv, windows } = await computeEffectiveModelEnv(config, auto);
     for (const [name, value] of Object.entries(modelEnv)) {
@@ -315,6 +320,15 @@ export async function injectSystemEnv(
     // instead of only terminal sessions. injectLever keeps a user-owned launchd value.
     const toolSearch = claudeToolSearchEnv(config.claudeCode?.toolSearch);
     if (toolSearch !== undefined) injectLever("ENABLE_TOOL_SEARCH", toolSearch);
+    // A lever injected on an earlier run that this config no longer produces (a cleared
+    // smallFastModel, a removed tier slot) would otherwise stay in launchd until the proxy
+    // stops. Only tracked keys are touched, so a user-owned value is never removed.
+    for (const name of [...injectedKeys]) {
+      if ((SYSTEM_ENV_NAMES as readonly string[]).includes(name) || producedLevers.has(name)) continue;
+      unsetLaunchctlEnv(name);
+      injectedKeys.splice(injectedKeys.indexOf(name), 1);
+      writeTracking(port, injectedKeys, tracked);
+    }
 
     // Shell-hook env file: works for new shells in already-running Terminal.app.
     writeShellEnvFile(port, config, modelEnv, auto, deps);
