@@ -311,14 +311,15 @@ export function shouldAttemptOpaqueBlobRecovery(args: {
  * Peek the upstream error body for the reasoning-effort downgrade. Only 400/403 are considered
  * and the body must be complete and display-safe, the same contract the other rejection peeks
  * use. The match is deliberately narrow: the upstream has to name reasoning effort, so an
- * unrelated 400 never triggers a replay.
+ * unrelated 400 never triggers a replay. A non-replayable answer, such as one to a spent operator
+ * replacement, is never read: the first send may already have run the turn.
  */
 export async function reasoningEffortRejectionText(
   response: Response,
   alreadyAttempted: boolean,
   signal: AbortSignal,
 ): Promise<string | undefined> {
-  if (alreadyAttempted) return undefined;
+  if (alreadyAttempted || isNonReplayableResponse(response)) return undefined;
   if (response.status !== 400 && response.status !== 403) return undefined;
   try {
     const body = await readBoundedResponseBody(response.clone(), { signal });

@@ -440,6 +440,25 @@ function invitesResendAfterReplacement(status: number): boolean {
     || status === 307 || status === 308 || status === 413 || status >= 500;
 }
 
+/**
+ * The answer a request keeps once its one operator replacement has gone out.
+ *
+ * A status that invites another send settles as the refusal. Any other answer keeps its real
+ * status: no client retries it, and the caller needs the evidence (a 400 names the request
+ * defect). The marker still stops this process from using it as a recovery trigger, such as the
+ * opaque-blob rebuild of a 400 or a combo hop on a context overflow, because each of those checks
+ * it before sending again.
+ */
+export function settleOperatorReplacement(response: Response): Response {
+  if (response.ok) return response;
+  if (invitesResendAfterReplacement(response.status)) {
+    cancelResponseBodyBestEffort(response);
+    return replayRefusalResponse();
+  }
+  markResponseNonReplayable(response);
+  return response;
+}
+
 export async function fetchWithAttemptDeadline(
   url: string,
   init: RequestInit,
@@ -624,18 +643,7 @@ export async function fetchWithResetRetry(
     opts.onSendsConsumed?.(1);
     try {
       const response = await doFetch(attempt === 0 ? firstRecovery : "connection-reset");
-      if (spentOperatorReplacement && !response.ok) {
-        if (invitesResendAfterReplacement(response.status)) {
-          cancelResponseBodyBestEffort(response);
-          return replayRefusalResponse();
-        }
-        // Any other answer keeps its real status: no client retries it, and the caller needs the
-        // evidence (a 400 names the request defect). The marker still stops this process from
-        // using it as a recovery trigger, such as the opaque-blob rebuild of a 400 or a combo hop
-        // on a context overflow, because each of those checks it before sending again.
-        markResponseNonReplayable(response);
-      }
-      return response;
+      return spentOperatorReplacement ? settleOperatorReplacement(response) : response;
     } catch (err) {
       if (opts.abortSignal?.aborted) throw err;
       if (!isConnectionResetError(err)) {

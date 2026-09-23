@@ -214,10 +214,10 @@ export function classifyCodexWsFailure(stage: CodexWsFailureStage): CodexWsFailu
  * whose failures cannot be compared with anything else, which is the reported symptom -- every
  * such failure reached the user as one of two bare sentences.
  *
- * It does not relax the transport's own rule. The no-replay-after-send contract in
- * `codex-ws-exchange.ts` holds regardless of what this returns, and the stage below is
- * deliberately not consulted as a fallback-eligibility signal; it reports where the exchange got
- * to, and `resendPermission` happens to agree that everything past `before-send` is refused.
+ * It does not relax the transport's own rule. The stage below reports where the exchange got to,
+ * and `resendPermission` agrees that everything past `before-send` is refused. When a socket dies
+ * under the send, this stage is what the resend gate is asked with (#4191), so the operator's
+ * `retryOnReset` grant is the only way past that refusal, as it is for an HTTP reset.
  */
 export const CODEX_WS_FAILURE_PROJECTION = {
   /** The create frame never left, so the origin provably never saw this turn. */
@@ -234,6 +234,29 @@ export function projectCodexWsFailure(
   stage: CodexWsFailureStage,
 ): { stage: RequestFailureStage; cause: RequestFailureCause } {
   return CODEX_WS_FAILURE_PROJECTION[classifyCodexWsFailure(stage)];
+}
+
+const socketDeathStages = new WeakMap<Response, RequestFailureStage>();
+
+/**
+ * Record that a pre-response settle came from the socket closing or failing under the send (#4191),
+ * rather than from silence, a refused frame or a local limit.
+ *
+ * A fact about how the exchange ended, not a grant. The settle is the same non-replayable 502
+ * either way; whether the turn may go out once more is the resend gate's question, and only the
+ * operator's `retryOnReset` grant can answer it yes.
+ */
+export function markCodexWsSocketDeath(response: Response, stage: CodexWsFailureStage): void {
+  socketDeathStages.set(response, projectCodexWsFailure(stage).stage);
+}
+
+/**
+ * Where the send stood when its socket died: `pre-header` when nothing came back and
+ * `protocol-prelude` when frames arrived but none was a Responses event. Undefined for every other
+ * response.
+ */
+export function codexWsSocketDeathStage(response: Response): RequestFailureStage | undefined {
+  return socketDeathStages.get(response);
 }
 
 /**

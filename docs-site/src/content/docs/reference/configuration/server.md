@@ -54,9 +54,10 @@ HTTP 504 with an `upstream_no_response` error. A slow but alive origin therefore
 client's own deadline or for `connectTimeoutMs` (default 200s), whichever comes first; a
 connect timeout that fires after the create frame was sent settles as the same 504. A socket
 that closes or errors before the first Responses event settles as an HTTP 502 with
-`upstream_closed_before_response`. These statuses are never retried inside the proxy — the
-frame may already be executing upstream, so the client applies its own retry policy exactly as
-it would when connected to the backend directly. Once the response has started, a later drop
+`upstream_closed_before_response`. The proxy does not retry either status on its own: the frame
+may already be executing upstream, so the client applies its own retry policy exactly as it would
+when connected to the backend directly. The one exception is that 502 on a provider that opted
+into `retryOnReset`, described below. Once the response has started, a later drop
 surfaces inside the stream as before. `stallTimeoutSec` is unrelated to this window.
 
 An ordinary HTTP send has a third case. When the connection dies before any response header
@@ -78,7 +79,10 @@ duplicate a turn.
 A native Responses provider can opt into replacing that send with
 [`retryOnReset`](/reference/configuration/providers/#provider-entries-ocxproviderconfig). The same grant covers the
 case where the connection survives the header and the SSE body then dies carrying only control
-events, because the caller has observed nothing in either one. A replacement happens only when
+events, because the caller has observed nothing in either one. It also covers the canonical
+ChatGPT WebSocket above: a socket that closes or errors before the first Responses event is
+replaced by one HTTP send, never by a second socket. A silent socket keeps its 504, and a native
+steering or injection turn is never replaced. A replacement happens only when
 the request is self-contained (`store: false`, complete input, client-executed tools only, no
 server-side continuation state), and one logical request gets the configured number of
 replacements in total — across every recovery leg and every combo child, not one each. The

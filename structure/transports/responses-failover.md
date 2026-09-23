@@ -41,11 +41,12 @@ abort/sleep helpers from this module.
 
 ## Ambiguous-resend gate
 
-A model POST that fails with the caller having observed nothing is one question asked at two
-points: before any response head, and after a head whose SSE body carried only control events.
-`src/lib/request-resend-gate.ts` is the single answer. It derives stage, cause, permission and
-send class from `src/lib/request-failure-model.ts` and adds exactly one thing the table names
-but does not implement — the narrowly scoped operator override for `refused-ambiguous`.
+A model POST that fails with the caller having observed nothing is one question asked at three
+points. Two are HTTP: before any response head, and after a head whose SSE body carried only
+control events. The third is a Codex WebSocket that closes or errors under its create frame before
+any Responses event (#4191). `src/lib/request-resend-gate.ts` is the single answer. It derives
+stage, cause, permission and send class from `src/lib/request-failure-model.ts` and adds exactly
+one thing the table names but does not implement — the narrowly scoped operator override for `refused-ambiguous`.
 
 The override is bounded on three axes at once. The provider opts in with
 `providers.<name>.retryOnReset`; the request must be one
@@ -71,6 +72,17 @@ A committed or futile failure refuses without touching the grant, so a turn that
 output cannot drain the replacement a later ambiguous reset would have been entitled to. The
 cause is derived from the `AttemptRecoveryKind` the send will be recorded as, which is what
 keeps the reason in the log and the reason the gate weighed from being two different values.
+
+The WebSocket row is asked once, at the end of the passthrough recovery loop, after every leg has
+let the settled 502 through. The exchange marks only a socket that closed or errored
+(`markCodexWsSocketDeath`) and records the stage it reached: `pre-header` when nothing came back,
+`protocol-prelude` when frames arrived but none was a Responses event. Silence keeps its 504, and a native steering or
+injection exchange is never marked, because its channel may already have sent continuation frames
+on that socket. The send budget is asked before the gate, so a replacement the request cannot fund
+leaves the grant unspent. The replacement is one HTTP send, never a second socket, and its answer
+is sorted exactly like the pre-header row's (see
+[ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary)) before
+it goes round the recovery loop again.
 
 ## Console upload rejection recovery
 
@@ -250,7 +262,8 @@ this same refusal. Nothing on that path hands the client a status that invites t
 to be sent again. See [ambiguous-resend gate](#ambiguous-resend-gate).
 
 That includes what the replacement send itself answers. Once the grant is spent, the first send
-may already have run the turn, so `fetchWithResetRetry` sorts the replacement's answer:
+may already have run the turn, so `settleOperatorReplacement` sorts the replacement's answer, for
+the pre-header row in `fetchWithResetRetry` and the WebSocket row alike:
 
 | Replacement answer | Result |
 | --- | --- |
@@ -268,14 +281,19 @@ caller, and the marker stops every recovery loop that checks it, such as the opa
 of a 400 or the Codex pool's gated-model retry. A combo rebuilds a failed attempt as a new
 response, so `consumeComboFailure` records `nonReplayable` and the combo stops rather than hopping
 on, say, a context overflow. The cost is that a real 401, 402 or 429 on a replacement send is not
-recorded against its credential on that request.
+recorded against its credential on that request. One case is not covered yet: a 2xx replacement
+whose stream then fails with zero output. The combo preflight projects that terminal into a fresh
+5xx that carries no marker, so a failover combo can still send the turn to its next target after
+the grant was spent. That applies to all three replacement rows and is left for a follow-up.
 
 **An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
 The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the
 Codex WebSocket transport still settles `upstream_closed_before_response` (socket closed
 after the create frame) and `upstream_no_response` (origin never produced an event) as 502
 and 504. Those describe something the upstream did after our send, they are the contract the
-public server reference already documents, and this release does not move them.
+public server reference already documents, and this release does not move them. Since #4191 a
+provider that opted into `retryOnReset` may replace that 502 once, over HTTP, when the socket
+closed or errored; the 504 is never replaced.
 
 This reclassification is the recorded behaviour change: before it, the pre-header refusal
 borrowed `upstream_closed_before_response` and its 502, which multiplied the duplicate send
