@@ -1,24 +1,23 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 
 /**
  * `privacy:scan` is the gate that makes a public `devlog/` safe rather than
- * merely visible, and it was inert for exactly the diffs that fill that
- * directory. The scan runs as a step of `gates`, `gates` is gated on the `ci`
- * path filter, and that filter does not list `devlog/**` -- so a devlog-only
- * pull request skipped `gates` and the aggregate `ci` check still concluded
- * success (#5468).
+ * merely visible. The scan runs as a step of `gates`, and `gates` is gated on
+ * the `ci` path filter, so a pull request whose paths miss that filter skipped
+ * `gates` and ran no scan while the aggregate `ci` check still concluded
+ * success. #5469 closed that gap only for the paths its `privacy` filter
+ * enumerated (`devlog/**` and `ci.yml`); a docs-only or no-filter pull request
+ * still scanned nothing.
  *
- * The fix mirrors `docs` and `structure`: its own filter and its own job,
- * rather than widening `ci` and starting the cross-platform matrix for a scan
- * that takes seconds. The cases below execute the checked-in conditions and
- * shell rather than matching their text, so an edit that keeps the words and
- * changes the behaviour still fails here.
+ * The dedicated `privacy-gate` job is now the exact complement of `gates` on
+ * pull requests: it runs wherever the `ci` filter declines, so the scan's
+ * coverage no longer depends on an enumerated path list and no filter selects
+ * it. The cases below execute the checked-in conditions and shell rather than
+ * matching their text, so an edit that keeps the words and changes the
+ * behaviour still fails here.
  */
 type Step = {
   name?: string;
@@ -35,10 +34,8 @@ const workflow = Bun.YAML.parse(readFileSync(repoPath(".github", "workflows", "c
   jobs: Record<string, Job>;
 };
 const jobs = workflow.jobs;
-const changes = jobs.changes;
-const filterStep = (changes?.steps ?? []).find(step => step.uses?.startsWith("dorny/paths-filter@"));
+const filterStep = (jobs.changes?.steps ?? []).find(step => step.uses?.startsWith("dorny/paths-filter@"));
 const filters = Bun.YAML.parse(String(filterStep?.with?.filters ?? "")) as Record<string, string[]>;
-const scopeStep = (changes?.steps ?? []).find(step => step.id === "scope");
 const aggregate = jobs.ci;
 const aggregateStep = (aggregate?.steps ?? []).find(step => step.name === "Assert every job this event requested succeeded");
 const aggregateNeeds = aggregate?.needs;
@@ -55,24 +52,17 @@ const scanners = Object.entries(jobs)
   .sort();
 
 /** Evaluate a job's checked-in if: condition; these use only ==, !=, && and ||. */
-function selected(job: string, event: string, ci: string, privacy: string): boolean {
+function selected(job: string, event: string, ci: string): boolean {
   const condition = jobs[job]?.if;
   if (!condition) throw new Error(`${job} has no if: condition`);
   const evaluate = new Function("github", "needs", `return (${condition});`);
   return Boolean(evaluate(
     { event_name: event, event: { inputs: { lane: "" } } },
-    { changes: { outputs: { ci, privacy } } },
+    { changes: { outputs: { ci } } },
   ));
 }
 
-describe("the privacy filter", () => {
-  test("selects devlog changes without widening the ci filter", () => {
-    expect(filters.privacy).toContain("devlog/**");
-    // Widening ci would also close #5468 and would also start nine Windows
-    // shards and two macOS shards for a scan that takes seconds.
-    expect((filters.ci ?? []).some(path => path.startsWith("devlog"))).toBe(false);
-  });
-
+describe("the privacy scan selection", () => {
   test("the push trigger keeps mirroring the ci filter exactly", () => {
     // Pull-request scope, like docs-site-build and structure-gate: dev, main and
     // preview require a pull request, so no devlog change reaches an integration
@@ -80,56 +70,30 @@ describe("the privacy filter", () => {
     expect([...(workflow.on?.push?.paths ?? [])].sort()).toEqual([...(filters.ci ?? [])].sort());
   });
 
-  test.skipIf(cannotRunShell)("a missing or malformed privacy output fails the changes job", () => {
-    // Consumed raw, an empty output reads as "no devlog change": the gate skips and
-    // the aggregate expects the skip, so the scan silently stops running.
-    expect(changes?.outputs?.privacy).toBe("${{ steps.scope.outputs.privacy }}");
-    expect(scopeStep?.env?.PRIVACY_SCOPE).toBe("${{ steps.filter.outputs.privacy }}");
-    const runScope = (privacyScope: string) => {
-      const directory = mkdtempSync(join(tmpdir(), "ocx-privacy-scope-"));
-      try {
-        const output = join(directory, "github-output");
-        writeFileSync(output, "");
-        const result = spawnSync("bash", ["-c", scopeStep!.run!], {
-          encoding: "utf8",
-          env: { PATH: process.env.PATH ?? "/usr/bin:/bin", CI_SCOPE: "false", PRIVACY_SCOPE: privacyScope, GITHUB_OUTPUT: output },
-          timeout: 5_000,
-        });
-        return { status: result.status, stdout: result.stdout, written: readFileSync(output, "utf8") };
-      } finally {
-        removeTreeWithRetry(directory);
-      }
-    };
-    const valid = runScope("true");
-    expect(`status:${valid.status}`, valid.stdout).toBe("status:0");
-    expect(valid.written).toContain("privacy=true\n");
-    for (const malformed of ["", "maybe"]) {
-      const run = runScope(malformed);
-      const label = JSON.stringify(malformed);
-      expect(`${label} status:${run.status}`).toBe(`${label} status:1`);
-      expect(run.stdout).toContain("changes.outputs.privacy");
-      expect(run.written).not.toContain("privacy=");
+  test("no job or step still reads a privacy filter output", () => {
+    // The privacy filter selected nothing once privacy-gate became the exact
+    // complement of gates, so it was removed with its plumbing. A job or step
+    // that still reads it would evaluate a permanently-empty output.
+    expect(filters.privacy).toBeUndefined();
+    const serialized = JSON.stringify(jobs);
+    for (const reference of ["outputs.privacy", "PRIVACY_SCOPE", "CHANGES_PRIVACY"]) {
+      expect(serialized).not.toContain(reference);
     }
   });
-});
 
-describe("the privacy scan", () => {
-  test("runs at most once for every event and scope, and exactly once for a devlog change", () => {
-    // gates keeps its own scan step, so the new job must stand down wherever gates
-    // runs: a ci.yml edit sets both filters, and a push or a dispatch always runs
-    // gates. Where gates is skipped, a devlog change must still select the
-    // dedicated job.
+  test("runs exactly one scanner for every event and ci scope", () => {
+    // gates keeps its own scan step, so the dedicated job must stand down
+    // wherever gates runs: a push or a dispatch always runs gates, and a pull
+    // request runs gates exactly when the ci filter selects the suite. Where
+    // gates is skipped the complement selects privacy-gate instead, so every
+    // pull request scans once and no event scans twice.
     expect(scanners).toEqual(["gates", "privacy-gate"]);
     for (const event of ["pull_request", "push", "workflow_dispatch"]) {
       for (const ci of ["true", "false"]) {
-        for (const privacy of ["true", "false"]) {
-          const label = `${event} ci=${ci} privacy=${privacy}`;
-          const running = scanners.filter(job => selected(job, event, ci, privacy));
-          const expected = event !== "pull_request" || ci === "true"
-            ? ["gates"]
-            : privacy === "true" ? ["privacy-gate"] : [];
-          expect(`${label}: ${running.join(",")}`).toBe(`${label}: ${expected.join(",")}`);
-        }
+        const label = `${event} ci=${ci}`;
+        const running = scanners.filter(job => selected(job, event, ci));
+        const expected = event !== "pull_request" || ci === "true" ? ["gates"] : ["privacy-gate"];
+        expect(`${label}: ${running.join(",")}`).toBe(`${label}: ${expected.join(",")}`);
       }
     }
   });
@@ -147,7 +111,6 @@ describe.skipIf(cannotRunAggregate)("the aggregate ci gate, executed", () => {
       CHANGES_PACKAGING: "false",
       CHANGES_DOCS: "false",
       CHANGES_STRUCTURE: "false",
-      CHANGES_PRIVACY: "false",
       CHANGES_SETUP_ACTION: "false",
       CHANGES_REMOTE_HELPER: "false",
       ...scope,
@@ -159,16 +122,32 @@ describe.skipIf(cannotRunAggregate)("the aggregate ci gate, executed", () => {
   const resultsWith = (succeeded: string[]): Record<string, string> =>
     Object.fromEntries(producers.map(job => [job, succeeded.includes(job) ? "success" : "skipped"]));
 
-  test("is green on a devlog-only pull request only when the privacy gate ran", () => {
+  test("is green on a pull request that matches no filter only when the privacy gate ran", () => {
     expect(producers).toContain("privacy-gate");
-    const devlogOnly = { CHANGES_PRIVACY: "true" };
     // The two unconditional producers plus the privacy gate, and nothing else.
-    const ran = runAggregate(devlogOnly, resultsWith(["changes", "select-windows-runner", "privacy-gate"]));
+    const ran = runAggregate({}, resultsWith(["changes", "select-windows-runner", "privacy-gate"]));
     expect(`status:${ran.status}`, ran.stdout + ran.stderr).toBe("status:0");
 
     for (const result of ["skipped", "failure", "cancelled"]) {
-      const run = runAggregate(devlogOnly, {
+      const run = runAggregate({}, {
         ...resultsWith(["changes", "select-windows-runner"]),
+        "privacy-gate": result,
+      });
+      expect(`${result} status:${run.status}`).toBe(`${result} status:1`);
+      expect(run.stdout).toContain(`privacy-gate was requested by pull_request but reported '${result}'`);
+    }
+  });
+
+  test("requires the privacy gate alongside a narrow job on a docs-only pull request", () => {
+    // docs-site-build is pull-request scope like privacy-gate: the complement
+    // must still request the scan, and a gate that did not succeed fails by name.
+    const docsOnly = { CHANGES_DOCS: "true" };
+    const ran = runAggregate(docsOnly, resultsWith(["changes", "select-windows-runner", "docs-site-build", "privacy-gate"]));
+    expect(`status:${ran.status}`, ran.stdout + ran.stderr).toBe("status:0");
+
+    for (const result of ["skipped", "failure", "cancelled"]) {
+      const run = runAggregate(docsOnly, {
+        ...resultsWith(["changes", "select-windows-runner", "docs-site-build"]),
         "privacy-gate": result,
       });
       expect(`${result} status:${run.status}`).toBe(`${result} status:1`);
@@ -179,7 +158,7 @@ describe.skipIf(cannotRunAggregate)("the aggregate ci gate, executed", () => {
   test("rejects a second scan on a pull request that gates already scans", () => {
     // Where ci is true, gates scans; a privacy gate that also ran means its
     // condition and this table have drifted apart.
-    const both = { CHANGES_CI: "true", CHANGES_PRIVACY: "true" };
+    const both = { CHANGES_CI: "true" };
     const doubled = runAggregate(both, { ...resultsWith([]), "privacy-gate": "success" });
     expect(doubled.status).toBe(1);
     expect(doubled.stdout).toContain("privacy-gate was not requested by pull_request but reported 'success'");

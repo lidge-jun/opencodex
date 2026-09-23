@@ -257,7 +257,7 @@ describe("CI review lanes", () => {
         ...process.env, RESULTS: JSON.stringify(value),
         EVENT_NAME: "workflow_dispatch", LANE: "release-gates",
         CHANGES_CI: "true", CHANGES_NATIVE: "true", CHANGES_PACKAGING: packaging,
-        CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false", CHANGES_PRIVACY: "false",
+        CHANGES_DOCS: "false", CHANGES_STRUCTURE: "false",
         CHANGES_SETUP_ACTION: "false", CHANGES_REMOTE_HELPER: "false",
       },
       timeout: 5_000,

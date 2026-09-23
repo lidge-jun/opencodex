@@ -29,6 +29,11 @@ the live confinement tests compile only on macOS and Windows. Both filters also 
 both stay pull-request scope like `docs` and `structure`, their outputs are validated before any
 job reads them, and the aggregate gate expects each job exactly when its filter output is `true`.
 
+`privacy:scan` runs inside `gates`, and `gates` is scoped to the `ci` filter. The `privacy
+gate` job is its exact complement on pull requests — it runs wherever the `ci` filter declines —
+so every pull request scans exactly once and the coverage does not depend on an enumerated path
+list. The aggregate derives the same expectation from its `scoped` result.
+
 No recovery retry can turn a failed workflow green. Linux, Windows, macOS shards and macOS control use
 `scripts/ci/run-bun-test-batches.sh`, but
 each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;

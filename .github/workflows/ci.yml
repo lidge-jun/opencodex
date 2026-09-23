@@ -196,9 +196,6 @@ jobs:
       # skipping the check it selects.
       setup_action: ${{ steps.narrow.outputs.setup_action }}
       remote_helper: ${{ steps.narrow.outputs.remote_helper }}
-      # Re-emitted by the scope step like `ci`: a missing value must fail this
-      # job, not read as "no devlog change" and skip the only scan that covers it.
-      privacy: ${{ steps.scope.outputs.privacy }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -319,23 +316,6 @@ jobs:
             # real only on macOS and Windows, so its job lints and tests the crate on all three.
             remote_helper:
               - 'native/remote-workspace-helper/**'
-            # `privacy:scan` is a step of `gates`, and `gates` is gated on `ci`
-            # above -- which does not list `devlog/**`. So the one diff class the
-            # scan exists for, adding public devlog prose, was the one class that
-            # never ran it: a devlog-only pull request skipped `gates` entirely and
-            # the aggregate still concluded success (#5468). AGENTS.md records that
-            # security triage once had to be excised from this directory before it
-            # could be published, so an inert gate here is the expensive direction
-            # to be wrong in.
-            #
-            # Widening `ci` would also close this and would also start the
-            # cross-platform matrix for a scan that takes seconds, which is the
-            # tradeoff `docs` and `structure` above already declined. Same shape
-            # here: its own filter, its own job. `.github/workflows/ci.yml` is
-            # listed for the same reason `docs` and `structure` list it.
-            privacy:
-              - 'devlog/**'
-              - '.github/workflows/ci.yml'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -362,7 +342,6 @@ jobs:
         shell: bash
         env:
           CI_SCOPE: ${{ steps.filter.outputs.ci }}
-          PRIVACY_SCOPE: ${{ steps.filter.outputs.privacy }}
         run: |
           set -euo pipefail
           case "$CI_SCOPE" in
@@ -371,15 +350,6 @@ jobs:
               ;;
             *)
               printf '::error::changes.outputs.ci was %q, expected true or false\n' "$CI_SCOPE"
-              exit 1
-              ;;
-          esac
-          case "$PRIVACY_SCOPE" in
-            true|false)
-              printf 'privacy=%s\n' "$PRIVACY_SCOPE" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              printf '::error::changes.outputs.privacy was %q, expected true or false\n' "$PRIVACY_SCOPE"
               exit 1
               ;;
           esac
@@ -1195,13 +1165,13 @@ jobs:
 
   # `gates` already runs `privacy:scan` on every event it runs for, so this job
   # covers exactly the pull requests `gates` skips -- its condition is the
-  # complement of `gates`' own, restricted to a devlog change. A `ci.yml` edit
-  # sets both filters and must not scan twice; a push or dispatch always runs
-  # `gates`. The aggregate below derives the same expectation from `scoped`.
+  # complement of `gates`' own, with no path list: every pull request runs the
+  # scan once, in one job or the other. A push or dispatch always runs `gates`.
+  # The aggregate below derives the same expectation from `scoped`.
   privacy-gate:
     name: privacy gate
     needs: changes
-    if: github.event_name == 'pull_request' && needs.changes.outputs.ci != 'true' && needs.changes.outputs.privacy == 'true'
+    if: github.event_name == 'pull_request' && needs.changes.outputs.ci != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -1444,7 +1414,6 @@ jobs:
           CHANGES_SETUP_ACTION: ${{ needs.changes.outputs.setup_action }}
           CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
-          CHANGES_PRIVACY: ${{ needs.changes.outputs.privacy }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1494,11 +1463,12 @@ jobs:
           if [ "$CHANGES_REMOTE_HELPER" = "true" ]; then
             remote_helper=requested
           fi
-          # privacy-gate runs exactly where `gates` (scoped) does not, for a devlog
-          # change. Deriving it from `scoped` keeps the two scans complementary here
-          # as they are in the jobs' own conditions.
+          # privacy-gate runs exactly where `gates` (scoped) does not, on every
+          # pull request the ci filter declines. Deriving it from `scoped` keeps
+          # the two scans complementary here as they are in the jobs' own
+          # conditions.
           privacy=not-requested
-          if [ "$scoped" = not-requested ] && [ "$CHANGES_PRIVACY" = "true" ]; then
+          if [ "$scoped" = not-requested ]; then
             privacy=requested
           fi
           dispatch=not-requested
