@@ -17,6 +17,7 @@ import { jsonUtf8Bytes } from "../lib/json-byte-size";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { enforceAnthropicImageLimits, sniffImageDimensions } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
+import { createToolCallIdAllocator } from "../adapters/tool-call-id";
 import { AnthropicRequestError, DesktopModelMappingUnavailableError, anthropicToResponsesTranslation, extractOcxEffortDirective, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
 import { resolveAlias, claudeCodeNativeAlias } from "../claude/alias";
@@ -406,6 +407,41 @@ export function tapAnthropicSseForLog(
   });
 }
 
+/**
+ * `tool_use.id` / `tool_result.tool_use_id` must match Anthropic's wire contract
+ * (`^[a-zA-Z0-9_-]+$`, <=64 chars). Third-party models mint other shapes — Devin's
+ * swe-2 emits `Bash:0#<hex>` — and a session history carrying them 400s the moment it
+ * is switched to a native Anthropic model ("messages.N.content.M.tool_use.id: String
+ * should match pattern"). The adapter path normalizes these via
+ * adapters/tool-call-id.ts (#1780); this passthrough bypasses that adapter, so the same
+ * allocator runs here. Stateless per request: conforming ids pass through byte-identical
+ * (prompt-cache keys untouched), rewritten ids keep call/result pairing stable.
+ */
+function sanitizePassthroughToolCallIds(messages: unknown[]): void {
+  const blocks: Rec[] = [];
+  for (const message of messages) {
+    if (!isRec(message) || !Array.isArray(message.content)) continue;
+    for (const block of message.content) if (isRec(block)) blocks.push(block);
+  }
+  const fieldOf = (block: Rec): "id" | "tool_use_id" | undefined => {
+    if (typeof block.type !== "string") return undefined;
+    if (block.type.endsWith("tool_use")) return "id";
+    if (block.type.endsWith("tool_result")) return "tool_use_id";
+    return undefined;
+  };
+  const callIds = createToolCallIdAllocator();
+  for (const block of blocks) {
+    const field = fieldOf(block);
+    if (field && typeof block[field] === "string") callIds.reserve(block[field] as string);
+  }
+  for (const block of blocks) {
+    const field = fieldOf(block);
+    if (!field || typeof block[field] !== "string") continue;
+    const wire = callIds.allocate(block[field] as string);
+    if (typeof wire === "string") block[field] = wire;
+  }
+}
+
 async function anthropicNativePassthrough(
   req: Request,
   config: OcxConfig,
@@ -435,6 +471,7 @@ async function anthropicNativePassthrough(
   if (Array.isArray(body.messages)) {
     await normalizeAnthropicImages(body.messages, { abortSignal: req.signal });
     enforceAnthropicImageLimits(body.messages);
+    sanitizePassthroughToolCallIds(body.messages);
   }
   const headers = new Headers();
   req.headers.forEach((value, name) => {

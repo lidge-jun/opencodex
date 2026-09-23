@@ -640,3 +640,74 @@ test.each([false, true])("catalog-published native dates retain identity while u
     buildDesktop3pRegistry([], []);
   }
 }, { timeout: SERVER_BUDGET_MS });
+
+// --- tool_use.id wire-contract sanitize on the native branch ---
+// The Anthropic adapter normalizes tool call ids (#1780), but this branch bypasses that
+// adapter, so third-party ids like Devin's `Bash:0#<hex>` would reach api.anthropic.com
+// verbatim and 400 on `^[a-zA-Z0-9_-]+$`. The passthrough sanitizes before serialize.
+
+test("non-conforming tool_use ids are rewritten on the wire, pairing preserved, conforming ids untouched", async () => {
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
+  const server = startServer(0);
+  try {
+    const pollutedA = "Bash:0#abcdef1234567890";
+    const pollutedB = "Read:7#fedcba0987654321";
+    const conforming = "toolu_01KeepMeVerbatim";
+    const body = {
+      model: "claude-fable-5",
+      max_tokens: 1000,
+      messages: [
+        { role: "user", content: "run them" },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: pollutedA, name: "Bash", input: { cmd: "a" } },
+            { type: "server_tool_use", id: pollutedB, name: "web_search", input: { q: "b" } },
+            { type: "tool_use", id: conforming, name: "Read", input: {} },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: pollutedA, content: "ok-a" },
+            { type: "web_search_tool_result", tool_use_id: pollutedB, content: [] },
+            { type: "tool_result", tool_use_id: conforming, content: "ok-c" },
+          ],
+        },
+        { role: "user", content: "go on" },
+      ],
+    };
+    const res = await postNative(String(server.url), "/v1/messages", body);
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const msgs = captured[0].body.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    const callBlocks = msgs[1].content;
+    const resultBlocks = msgs[2].content;
+    const wireA = callBlocks[0].id as string;
+    const wireB = callBlocks[1].id as string;
+    for (const wire of [wireA, wireB]) {
+      expect(wire).toMatch(/^[a-zA-Z0-9_-]+$/);
+      expect(wire.length).toBeLessThanOrEqual(64);
+    }
+    expect(wireA).not.toBe(pollutedA);
+    expect(wireB).not.toBe(pollutedB);
+    expect(wireA).not.toBe(wireB);
+    expect(resultBlocks[0].tool_use_id).toBe(wireA);
+    expect(resultBlocks[1].tool_use_id).toBe(wireB);
+    expect(callBlocks[2].id).toBe(conforming);
+    expect(resultBlocks[2].tool_use_id).toBe(conforming);
+
+    // count_tokens shares the branch; the allocator is deterministic per raw id.
+    const res2 = await postNative(String(server.url), "/v1/messages/count_tokens", body);
+    expect(res2.status).toBe(200);
+    const msgs2 = captured[1].body.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(msgs2[1].content[0].id).toBe(wireA);
+    expect(msgs2[2].content[0].tool_use_id).toBe(wireA);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
