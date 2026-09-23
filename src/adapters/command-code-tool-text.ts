@@ -283,6 +283,9 @@ export class CommandCodeToolTextFilter {
       block.state = "queued";
       this.pending.push(block);
     }
+    // A duplicate can be dropped behind an earlier held block. Its later text still belongs
+    // at this position in the ordered queue and must be released once that barrier clears.
+    if (block.state === "dropped") block.state = "queued";
     this.retain(block, text);
     if (block.state === "queued") return this.limitPending();
     const lead = block.text.trimStart();
@@ -415,8 +418,7 @@ export class CommandCodeToolTextFilter {
       const block = this.pending[0]!;
       if (block.state === "held" || block.state === "probing") break;
       this.pending.shift();
-      if (block.state === "queued") events.push(...this.stream(block));
-      else block.state = "streaming";
+      events.push(...this.stream(block));
     }
     return events;
   }

@@ -347,6 +347,26 @@ describe("Command Code MiMo tool-call text", () => {
     }
   });
 
+  test("a duplicate resolved behind an earlier held block keeps its trailing text and budget", () => {
+    const budget = createTestTranslatorBudget();
+    const filter = new CommandCodeToolTextFilter(budget, new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]]));
+    const first = "text('a');";
+    const second = "text('b');";
+    filter.toolInputStart("a", "exec");
+    filter.textStart("first");
+    expect(filter.textDelta("first", `<tool_call><function=exec>${first}</function></tool_call>`)).toEqual([]);
+    filter.toolInputStart("b", "exec");
+    filter.textStart("second");
+    expect(filter.textDelta("second", `<tool_call><function=exec>${second}</function></tool_call>`)).toEqual([]);
+    expect(filter.toolCall("b", "exec", second)).toEqual([]);
+    expect(filter.textDelta("second", " trailing")).toEqual([]);
+    expect(filter.toolCall("a", "exec", first)).toEqual([{ type: "text_delta", text: " trailing" }]);
+    expect(filter.textEnd("first")).toEqual([]);
+    expect(filter.textEnd("second")).toEqual([]);
+    expect(filter.finish()).toEqual({ events: [], salvaged: false });
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
   test("restored arguments honour numeric safety, enum and bounds", () => {
     const tool = { freeform: false, schema: { type: "object", required: ["mode"], properties: {
       mode: { type: "string", enum: ["read", "write"] },
