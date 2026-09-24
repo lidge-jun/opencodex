@@ -61,6 +61,12 @@ the Responses wire. Claude Code auto-mode always sends `stop_sequences`; forward
 classifier mark Grok temporarily unavailable. Regression coverage:
 `tests/providers/xai/xai-no-stop.test.ts`.
 
+`grok-4.7-build-fast` joins these lists, `preserveReasoningContentModels` and the grok-4.7
+context/effort/vision rows, because xAI documents Grok 4.7 Fast as the same model on faster
+infrastructure (Cursor and Grok Build only, not the public xAI API); it stays out of the lineup
+seed, `modelWireDefaults` and `modelSupportsServiceTier` until a live probe. Regression coverage:
+`tests/providers/xai/grok-47-build-fast-metadata.test.ts`.
+
 ### Policy-refusal 403
 
 xAI sometimes refuses a turn with HTTP 403 and a bare refusal sentence (`I can't help with that

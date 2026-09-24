@@ -635,6 +635,7 @@ describe("xAI reasoning_content cache preservation", () => {
     const entry = getProviderRegistryEntry("xai");
     expect(entry?.preserveReasoningContentModels).toEqual([
       "grok-4.7",
+      "grok-4.7-build-fast",
       "grok-4.6",
       "grok-4.5",
       "grok-4.3",
@@ -826,6 +827,7 @@ describe("xAI reasoning_content cache preservation", () => {
 describe("xAI reasoning models reject penalty parameters", () => {
   const REASONING = [
     "grok-4.7",
+    "grok-4.7-build-fast",
     "grok-4.6",
     "grok-4.5",
     "grok-4.3",
