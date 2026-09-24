@@ -70,8 +70,8 @@ HTTP 경계는 `server/index/serve-options.ts`가 맡고, Responses 데이터 �
 
 요청 전 입력량 추정은 라우팅된 어댑터의 전송 방식에 맞춥니다. `openai-chat` 모델이
 `preserveReasoningContentModels`에 없으면 전송하지 않는 이전 assistant thinking은 계산에서
-제외합니다. reasoning을 보존하는 모델은 계속 계산하므로, 실제로 전송하지 않는 기록 때문에
-로컬 컨텍스트 한도에서 잘못 거부되지 않습니다.
+제외하므로, 실제로 전송하지 않는 기록 때문에 로컬 컨텍스트 한도에서 잘못 거부되지 않습니다.
+reasoning을 보존하는 모델과 다른 어댑터에서는 이전 thinking도 계속 계산합니다.
 
 ## 파서
 

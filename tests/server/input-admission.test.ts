@@ -30,6 +30,7 @@ function userText(text: string): OcxMessage {
   return { role: "user", content: text, timestamp: 0 };
 }
 
+/** Create a replay whose thinking alone exceeds the test model's context window. */
 function replayedThinking(): OcxParsedRequest {
   return {
     ...request([
@@ -211,15 +212,18 @@ describe("checkInputAdmission", () => {
     modelContextWindows: { "m": 10_000 },
   };
 
+  /** Compare direct admission with the actual serialized reasoning payload. */
   test("ignores reasoning that openai-chat drops but counts preserved and native reasoning", () => {
     const parsed = replayedThinking();
     const dropped = checkInputAdmission(parsed, provider, "custom", "m");
     expect(dropped.admitted).toBe(true);
     expect(dropped.estimatedTokens).toBeLessThan(100);
     expect(JSON.stringify(messagesToChatFormat(parsed, provider))).not.toContain("reasoning_content");
+    expect(JSON.stringify(messagesToChatFormat(parsed, provider))).not.toContain(asciiTokens(30_000));
 
     const preserved = { ...provider, preserveReasoningContentModels: ["m"] };
     expect(JSON.stringify(messagesToChatFormat(parsed, preserved))).toContain("reasoning_content");
+    expect(JSON.stringify(messagesToChatFormat(parsed, preserved))).toContain(asciiTokens(30_000));
     expect(checkInputAdmission(parsed, preserved, "custom", "m").admitted).toBe(false);
     expect(checkInputAdmission(parsed, { ...provider, adapter: "openai-responses" }, "custom", "m").admitted).toBe(false);
   });
@@ -295,13 +299,15 @@ describe("combo target input admission", () => {
     modelMaxOutputTokens: { m: 32_000 },
   };
 
+  /** Verify each combo target counts only reasoning retained by its wire compiler. */
   test("uses the target's reasoning replay policy before reserving output space", () => {
     const parsed = { ...replayedThinking(), options: { maxOutputTokens: 1_000 } };
     const target = { ...capped, modelContextWindows: { m: 10_000 }, modelMaxOutputTokens: { m: 1_000 } };
     expect(checkComboTargetInputAdmission(parsed, target, "custom", "m").admitted).toBe(true);
-    expect(checkComboTargetInputAdmission(parsed, {
-      ...target, preserveReasoningContentModels: ["m"],
-    }, "custom", "m").admitted).toBe(false);
+    expect(JSON.stringify(messagesToChatFormat(parsed, target))).not.toContain(asciiTokens(30_000));
+    const preserved = { ...target, preserveReasoningContentModels: ["m"] };
+    expect(checkComboTargetInputAdmission(parsed, preserved, "custom", "m").admitted).toBe(false);
+    expect(JSON.stringify(messagesToChatFormat(parsed, preserved))).toContain(asciiTokens(30_000));
   });
 
   const withMaxOutput = (inputTokens: number, maxOutputTokens = 64_000): OcxParsedRequest => ({
