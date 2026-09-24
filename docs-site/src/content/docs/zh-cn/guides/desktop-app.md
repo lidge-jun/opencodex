@@ -44,6 +44,8 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 使用托盘中的 **Open dashboard** 或 **Open in browser**，可在内嵌仪表盘与常用浏览器之间切换。托盘也提供更新检查。
 
+在 macOS 上，关闭仪表盘后，应用会继续在菜单栏中运行。从 Dock 或 Finder 再次打开 OpenCodex 即可恢复仪表盘，无需重启代理。
+
 ## 在托盘中查看用量
 
 在 macOS 和 Windows 上，点击托盘图标即可打开紧凑的用量窗口。托盘中的 **Show usage** 也能打开它，包括在不转发点击事件的 Linux 桌面上。在 Linux 上，仪表盘会在启动时打开，即使桌面环境没有显示托盘图标也是如此。

@@ -59,6 +59,8 @@ it from the tray or launch the app again.
 Use the tray's **Open dashboard** or **Open in browser** action to move between the
 embedded dashboard and your normal browser. The tray also provides update checks.
 
+On macOS, closing the dashboard keeps the app running in the menu bar. Open OpenCodex again from Dock or Finder to restore the dashboard without restarting the proxy.
+
 ## Usage in the tray
 
 On macOS and Windows, click the tray icon to open a compact usage window. The tray's

@@ -44,6 +44,8 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 트레이의 **Open dashboard** 또는 **Open in browser**를 사용하면 내장 대시보드와 일반 브라우저를 오갈 수 있습니다. 트레이에서는 업데이트도 확인할 수 있습니다.
 
+macOS에서는 대시보드를 닫아도 앱이 메뉴 막대에서 계속 실행됩니다. Dock 또는 Finder에서 OpenCodex를 다시 열면 프록시를 재시작하지 않고 대시보드가 다시 표시됩니다.
+
 ## 트레이에서 사용량 보기
 
 macOS와 Windows에서는 트레이 아이콘을 클릭하면 작은 사용량 창이 열립니다. 트레이의 **Show usage**로도 열 수 있으며, 트레이 클릭 이벤트를 전달하지 않는 Linux 데스크톱에서도 사용할 수 있습니다. Linux에서는 트레이 아이콘이 표시되지 않는 환경을 포함해 시작할 때 대시보드가 열립니다.

@@ -99,6 +99,12 @@ is the quit. macOS needs one thing beyond the event loop: Tauri's default menu c
 Quit wired to Cocoa's `terminate:` and the pinned tao raises no cancellable event for it, so
 `desktop/src-tauri/src/menu.rs` rebuilds that menu with an ordinary item on the same accelerator.
 
+On macOS, the event loop in `desktop/src-tauri/src/lib.rs` handles `RunEvent::Reopen` through the
+existing dashboard entry point. Opening the running app from Dock or Finder restores its main
+window, closes the usage popup if it is open, and loads the dashboard if a hidden launch deferred
+it. This is separate from the single-instance callback, which handles a second process notifying
+the existing one.
+
 Every ending drains first, and so does the tray's Stop, which is not an ending: all of them take the
 same phase, so Stop pressed twice, Stop then Quit, and Stop during an update are one execution over
 one child rather than several racing. Ownership is re-established at the start of each drain rather

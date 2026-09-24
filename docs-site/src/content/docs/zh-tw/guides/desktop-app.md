@@ -44,6 +44,8 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 透過系統匣的 **Open dashboard** 或 **Open in browser**，可以在內嵌儀表板與一般瀏覽器間切換。系統匣也提供更新檢查。
 
+在 macOS 上，關閉儀表板後，應用程式會繼續在選單列中執行。從 Dock 或 Finder 再次開啟 OpenCodex 即可恢復儀表板，無須重新啟動代理。
+
 ## 系統匣中的用量資訊
 
 在 macOS 與 Windows 上，點擊系統匣圖示可開啟精簡用量視窗。系統匣的 **Show usage** 也能開啟它，包括不會轉送點擊事件的 Linux 桌面環境。Linux 會在啟動時開啟儀表板，即使桌面環境不顯示系統匣圖示也一樣。

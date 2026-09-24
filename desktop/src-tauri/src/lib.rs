@@ -260,6 +260,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building OpenCodex desktop shell")
         .run(|app, event| {
+            // Dock/Finder reopening an existing macOS app does not launch a second instance.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_dashboard(app.clone());
+            }
             // Window close and the platform quit gesture arrive here as an exit request, and until
             // this handler existed they went straight through to a SIGKILL of the runtime. D2 makes
             // them hide; only the tray's Quit, and an update's coordinated restart, get past.
