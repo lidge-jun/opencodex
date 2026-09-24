@@ -93,7 +93,10 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://chatgpt.com",
     authKind: "local",
     featured: false,
-    dashboardPreset: true,
+    // Off until `src/adapters/registry.ts` constructs this adapter with a browser transport
+    // in `deps`: without one every turn 503s with CHATGPT_WEB_TRANSPORT_UNAVAILABLE, so a
+    // published tile promises something the adapter cannot do.
+    dashboardPreset: false,
     note: "Web ChatGPT models served through the chatgpt-bridge module (browser transport). Turns fail with CHATGPT_WEB_TRANSPORT_UNAVAILABLE until the module browser transport is enabled; no keys are stored and web login lives in the managed browser profile.",
     models: ["chatgpt-web/luna", "chatgpt-web/instant", "chatgpt-web/medium", "chatgpt-web/high"],
     liveModels: false,

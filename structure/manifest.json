@@ -227,6 +227,7 @@
       "documents": [
         "src/adapters/",
         "src/chat/",
+        "src/chatgpt-bridge/",
         "src/combos/",
         "src/oauth/",
         "src/providers/",
