@@ -4436,6 +4436,25 @@ describe("OpenAI Responses forward-mode unsupported param stripping", () => {
     expect(body.store).toBe(false);
   });
 
+  test("noncanonical forward mode keeps the caller's max_output_tokens cap", () => {
+    const adapter = createResponsesPassthroughAdapter({
+      adapter: "openai-responses",
+      baseUrl: "https://gateway.internal.example/v1",
+      authMode: "forward" as const,
+    });
+    const request = adapter.buildRequest({
+      modelId: "gpt-5.6-sol",
+      context: { messages: [] },
+      stream: true,
+      options: {},
+      _rawBody: { ...rawBody },
+    }, meta);
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+
+    expect(body.max_output_tokens).toBe(32000);
+    expect(body).not.toHaveProperty("metadata");
+  });
+
   test("key-auth mode preserves max_output_tokens and metadata", () => {
     const adapter = createResponsesPassthroughAdapter({
       adapter: "openai-responses",
