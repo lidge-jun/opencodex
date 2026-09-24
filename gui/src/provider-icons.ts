@@ -3,6 +3,7 @@ import type { TFn, TKey } from "./i18n/shared";
 const PROVIDER_ICON_ALIASES: Record<string, string> = {
   anthropic: "claude-color.svg",
   "anthropic-apikey": "claude-color.svg",
+  "claude-cli": "claude-color.svg",
   "azure-openai": "openai.svg",
   chatgpt: "openai.svg",
  "cloudflare-ai-gateway": "cloudflare-ai-gateway-color.svg",

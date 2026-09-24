@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
-import { ACCOUNT_LOG_LABEL_RE, KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
+import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
+import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
+export { sealRequestAttemptIdentity };
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
@@ -1748,33 +1750,6 @@ export function beginRequestAttempt(
   };
 }
 
-export function sealRequestAttemptIdentity(
-  attempt: PersistedUsageAttempt | undefined,
-  provider: string,
-  adapter: string,
-  accountLogLabel?: string,
-): void {
-  if (!attempt) return;
-  if (attempt.provider !== provider || attempt.adapter !== adapter) delete attempt.credentialSource;
-  // The adapter keeps re-stamping: a mid-turn wire rotation is still this same physical send.
-  attempt.adapter = adapter;
-  if (attempt.sendCount === 0) {
-    attempt.provider = provider;
-    if (isCodexUsageAccountLogLabel(accountLogLabel)) attempt.accountLogLabel = accountLogLabel;
-    else delete attempt.accountLogLabel;
-    return;
-  }
-  // Once this row has sent, its ACCOUNT is settled -- those tokens were spent on it. Re-stamping
-  // the account-qualified provider string here laundered a rotation before the split in
-  // `noteProviderAttemptSend` could see it. Anthropic depends on that string: its pool turns
-  // carry no account label at all, because `stampOAuthAccountLabel` skips that base provider.
-  // A label that merely arrives late (resolved after the send, same account) still lands, since
-  // that case leaves the attempt unlabelled rather than labelled differently.
-  if (attempt.accountLogLabel === undefined && isCodexUsageAccountLogLabel(accountLogLabel)) {
-    attempt.accountLogLabel = accountLogLabel;
-  }
-}
-
 /** Preserve metered JSON failures before key recovery consumes/cancels their body. */
 export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal): Promise<void> {
   const attempt = logCtx.activeAttempt;
@@ -1818,24 +1793,7 @@ export function noteProviderAttemptSend(
   stampApiKeyAccountLabel(logCtx, providerName, provider);
   const next = logCtx.accountLogLabel;
   if (attempt && usesApiKeyAccount(provider)) keyUsageOwners.add(attempt);
-  // Any ACCOUNT change ends the attempt, not just an API-key one. Codex pool and generic OAuth
-  // labels are `p`/`o` + 6 hex, which the key-only pattern never matched, so a rotation folded the
-  // second account's sends, usage and label into the first attempt row: the request then reported
-  // one attempt on the wrong account, and per-account usage attribution was silently wrong.
-  // `isCodexUsageAccountLogLabel` (src/usage/log.ts) already persists those labels onto the
-  // attempt through the broad pattern; this is the same pattern, read back at the split.
-  const accountLabelChanged = previous !== next
-    && (ACCOUNT_LOG_LABEL_RE.test(previous ?? "") || ACCOUNT_LOG_LABEL_RE.test(next ?? ""));
-  // The other axis a rotation can move. Anthropic's pool carries no label at all --
-  // `stampOAuthAccountLabel` skips that base provider -- and keeps its account inside the
-  // account-qualified log provider string ("anthropic (pabc123)"), so the label test above can
-  // never see an Anthropic rotation. Safe to compare because a sent attempt's provider is frozen
-  // by `sealRequestAttemptIdentity`: the only way these diverge after a send is the account
-  // moving underneath the row.
-  const accountProviderChanged = attempt !== undefined
-    && attempt.provider !== logCtx.provider
-    && logCtx.provider.length > 0;
-  if (attempt && attempt.sendCount > 0 && (accountLabelChanged || accountProviderChanged)) {
+  if (attempt && attempt.sendCount > 0 && attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)) {
     // An input estimate is not evidence that a failed send used that many tokens.
     delete attempt.inputTokenEstimate;
     finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
