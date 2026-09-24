@@ -192,6 +192,9 @@ top-level `instructions`, and `truncation` is removed because that destination r
 Responses shapes. Other Responses destinations preserve them.
 The same canonical boundary removes nested client-only `prompt_cache_breakpoint` markers and drops
 `item_reference` entries only on `store: false` continuations; tool call/result pairing is unchanged.
+`metadata` is removed on every forward route, because no forward allowlist accepts it. `max_output_tokens`
+is removed only on that canonical route, which rejects the field outright; every other forward destination
+receives the caller's output cap unchanged, so a limit set by the caller still bounds what the turn spends.
 
 Image file IDs are provider-scoped references, not portable image bytes. Responses passthrough
 retains them; translating adapters receive an `[image: file_id]` text marker for file-only image
