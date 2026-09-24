@@ -45,6 +45,7 @@ import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
 // LOCAL PATCH (runturn-websearch)
 import { planWebSearch } from "../../web-search";
 import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
+import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 
 // LOCAL PATCH (runturn-websearch): top-level fields route binding or the
 // adapter itself may write during a turn. Iteration-local `turnParsed` objects
@@ -437,6 +438,8 @@ export async function executeResponsesRunTurn(
       event: AdapterEvent,
     ): Extract<AdapterEvent, { type: "error" }> | undefined => {
       if (!enforceDeclaredToolNames || event.type !== "tool_call_start") return undefined;
+      // This tool is declared to the adapter by the private search loop.
+      if (wsPlan && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
       const effectiveName = normalizeDeclaredToolName(event.name, declaredToolNames);
       if (declaredToolNames.has(effectiveName)) return undefined;
       return {
@@ -581,6 +584,7 @@ export async function executeResponsesRunTurn(
       // loop; iterations dispatch through the same attempt body on fresh queues.
       if (wsPlan) {
         const searched: AdapterEvent[] = [];
+        let retainedReplayUnsafe = false;
         for await (const event of runTurnWebSearchLoop(
           (async function* () { yield* events; })(),
           {
@@ -596,7 +600,10 @@ export async function executeResponsesRunTurn(
             dispatch: dispatchSearchIteration,
           },
         )) {
-          if (event.type === "heartbeat") continue;
+          if (event.type === "heartbeat") {
+            if (!event.replayUnsafe || retainedReplayUnsafe) continue;
+            retainedReplayUnsafe = true;
+          }
           if (event.type === "error" && event.code === "translation_buffer_limit") runTurnAbort.abort();
           const bytes = jsonUtf8Bytes(event) + 1;
           translatorBudget.chargeRetained(bytes, { kind: "retained_collectors" });

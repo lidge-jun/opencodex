@@ -51,7 +51,7 @@ afterEach(() => {
   else process.env.OPENCODEX_HOME = originalHome;
   removeTreeWithRetry(home);
 });
-async function run(stream: boolean, retry = false, media?: "image" | "video", search = true) {
+async function run(stream: boolean, retry = false, media?: "image" | "video", search = true, comboAttempt = false) {
   const config = {
     port: 0, defaultProvider: "cursor", emptyCompletionRetry: retry,
     webSearchSidecar: { backend: "exa", exaApiKey: "fixture-search-key" },
@@ -65,10 +65,17 @@ async function run(stream: boolean, retry = false, media?: "image" | "video", se
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "cursor/model", input: "answer", stream,
       tools: [...(search ? [{ type: "web_search" }] : []), ...(media === "image" ? [{ type: "image_generation" }] : [])] }),
-  }), config, { model: "", provider: "" });
+  }), config, { model: "", provider: "" }, { comboAttempt });
   return response.text();
 }
 for (const streaming of [true, false]) {
+  test(`combo preflight permits the injected search tool (stream=${streaming})`, async () => {
+    events = [[{ type: "tool_call_start", id: "search", name: "web_search" },
+      { type: "tool_call_delta", arguments: '{"query":"fixture"}' }, { type: "tool_call_end" },
+      { type: "error", message: "fixture terminal failure" }]];
+    expect(await run(streaming, false, undefined, true, true)).toContain("fixture terminal failure");
+    expect(attempts).toHaveLength(1);
+  });
   for (const media of ["image", "video"] as const) {
     test(`search takes priority over ${media} bridge (stream=${streaming})`, async () => {
       events = [[{ type: "text_delta", text: "search-enabled answer" }, { type: "done" }]];
