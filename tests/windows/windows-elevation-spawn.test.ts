@@ -368,7 +368,18 @@ describe("runWindowsElevated spawn contract", () => {
     // then rereading would leave the swap window this check exists to close.
     expect(elevatedScript).toContain(staged.path);
     expect(elevatedScript).toContain(staged.sha256);
-    expect(commandScript.indexOf("Lock-OcxStage")).toBeLessThan(commandScript.indexOf("Start-Process"));
+    // Pin the CALLS, not the declaration: moving every Lock-OcxStage call after
+    // Start-Process would still satisfy a name-substring check while nothing is
+    // held during UAC.
+    const startProcessAt = commandScript.indexOf("Start-Process");
+    for (const lockCall of [
+      "ForEach-Object { Lock-OcxStage $_ $true }",
+      `Lock-OcxStage '${staged.path}' $false`,
+    ]) {
+      const at = commandScript.indexOf(lockCall);
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(at).toBeLessThan(startProcessAt);
+    }
     expect(commandScript).toContain("GetFileInformationByHandleEx");
     expect(commandScript).toContain("0x00200000");
     expect(commandScript).toContain("0x400");
@@ -412,6 +423,17 @@ describe("runWindowsElevated spawn contract", () => {
     const replaceMatch = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(commandScript);
     expect(replaceMatch).not.toBeNull();
     const replaceScript = Buffer.from(replaceMatch![1]!, "base64").toString("utf16le");
+    // The predecessor payload is pinned before elevation too, alongside the ancestors
+    // and the replacement payload.
+    for (const lockCall of [
+      "ForEach-Object { Lock-OcxStage $_ $true }",
+      `Lock-OcxStage '${staged.path}' $false`,
+      `Lock-OcxStage '${stagedPredecessor.path}' $false`,
+    ]) {
+      const at = commandScript.indexOf(lockCall);
+      expect(at).toBeGreaterThanOrEqual(0);
+      expect(at).toBeLessThan(commandScript.indexOf("Start-Process"));
+    }
     expect(replaceScript).toContain("& $registerTask -TaskName $taskName -Xml $xml -Force");
     expect(replaceScript).toContain(stagedPredecessor.path);
     expect(replaceScript).toContain(stagedPredecessor.sha256);
