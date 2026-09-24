@@ -378,3 +378,20 @@ structure/manifest.json은 이미 source directory ownership을 충족하므로 
 - K7 검증: port 0 stub listener 기준 missing-key 401, wrong-key 401, correct service-token key 경로를 세 endpoint에 추가했다.
 - K9: `relayLinkDataRequest` 자체도 Upgrade를 upstream fetch 없이 404로 거부하도록 고정해 HTTP-only 경계를 유지했다.
 - K17: stale한 locale 수 표기를 `gui/src/i18n/shared.ts:6-17`의 실제 10개 locale로 고쳤다.
+
+## wp3 P 재검증 (아키텍트 Laplace, gpt-6-sol high, 2026-09-25)
+
+| ID | 제안 | 처분 |
+|---|---|---|
+| W3-1 | 타입·스키마 위치 유지(src/types/config.ts:400-435, leaf-validators.ts:853-893). diagnostics.ts:261-269, load-degrade.ts:658-665, state.ts:81-112는 스키마를 그대로 소비하므로 코드 변경 없이 검증 지점으로 기록 | 수용 |
+| W3-2 | 필드 체인에 pending 복구(connect.ts:343-356), 사용량(cli/observe.ts:193), Desktop 모델 조회(cli/claude-desktop.ts:241-259), hub-state(client/hub-state.ts:210), status·캐시 소비자 추가. 카탈로그·상태·사용량·모델 헬퍼는 이미 `x-opencodex-api-key`를 보냄(hub-client.ts:435-447,528-537,597-615) → readiness만 새 옵션 필요. 키 제로화 유지(connect.ts:179-180은 Uint8Array만 처리) | 수용. stdin으로 받은 키도 Uint8Array로 보관하고 같은 정리 경로를 탄다 |
+| W3-3 | wp2 보안 계약 인용 갱신(link-listener.ts:54-72, serve-options.ts:312-353, auth-cors.ts:571-581) | 수용 |
+| W3-4 | K9 근거 수정: WebSocket 여부는 plan.ts:243,302,361의 `websocketsEnabled(config)` | 수용: link 대상이면 전역 설정과 무관하게 websocket을 끈다. 테스트: 전역 websocket 켠 설정에서도 link 주입 결과는 꺼짐 |
+| W3-5 | runtime.ts:88-100의 임시 포트 대체 때문에 바인드 포트가 config.port와 다를 수 있음 | 수용: 라우팅 대상은 `http://localhost:<config.port>`. `config.port`가 0 또는 유효하지 않으면 `connect --link`는 거부(링크는 고정 포트가 필요). 테스트는 라우팅 포트를 주입하는 seam으로 검증하고, 어떤 경로도 `localhost:0`을 만들지 않음을 테스트 |
+| W3-6 | status 링크 메타데이터 위치 갱신(cli/connect.ts:69-93,170-213). K16 허브 상태는 wp4 | 수용 |
+| W3-7 | 새 테스트 4개 배치 등록 필요, 대상 파일에 크기 상한 없음 | 수용 |
+
+- 반영 확인(Laplace): MISALIGNED 3건을 다음과 같이 확정.
+  - W3-2: 필드 체인에 `fetchHubUsage` 헬퍼(src/client/hub-client.ts:484-498) 추가. status·캐시 소비자는 구현 시 `rg -n "client\\?\\.(serverUrl|managementUrl|managementTransport)|OcxClientConnectionConfig"` 결과 전부를 체크리스트로 PR 설명에 나열.
+  - W3-3: `/v1/responses`는 별도 resolver(src/server/auth-cors.ts:598-611, resolveResponsesApiAuth)를 쓴다. wp3 통합 테스트는 relay를 거친 `POST /v1/responses`가 링크 키로 허용되고 키 없이는 401임을 확인한다.
+  - W3-5: link 모드의 machine listener는 `config.port`에만 바인드한다. runtime.ts:88-93의 임시 포트 대체는 link 모드에서 끄고, 포트가 사용 중이면 "link mode needs port N; free it or change port" 오류로 시작에 실패한다. 테스트: 포트 점유 시 link 모드 시작 실패, hub 모드에서는 기존 대체 유지.
