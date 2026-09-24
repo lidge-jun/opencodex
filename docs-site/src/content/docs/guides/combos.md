@@ -228,8 +228,9 @@ the combo returns the last real upstream failure without sending to that target.
 When `cooldownMs` is unset, a hopped target uses an upstream fallback: 5 seconds for request-rate
 429s with upstream code `1302` or `1305`, and 60 seconds otherwise. When it is set, `cooldownMs`
 applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including those
-request-rate 429s. Numeric `Retry-After` seconds and HTTP-date values are accepted, and every
-cooldown is capped at 10 minutes. The precedence is, from strongest to weakest, explicit
+request-rate 429s. Numeric `Retry-After` seconds and HTTP-date values are accepted. Explicit
+server delays are capped at 24 hours; reset-derived, configured, and fallback cooldowns are capped
+at 10 minutes. The precedence is, from strongest to weakest, explicit
 `Retry-After` → Codex reset headers (`x-codex-primary-reset-at`, `x-codex-secondary-reset-at`, or
 `x-codex-tertiary-reset-at`) → the combo's `cooldownMs` (when set) → the 5-second request-rate
 fallback for upstream rate-limit codes `1302`/`1305` → the 60-second default. A valid immediate
@@ -449,8 +450,8 @@ it has already been attempted for this request, or an encrypted v2 task excludes
 provider state and recent upstream errors. For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies
-when it is unset (5 seconds for request-rate codes `1302`/`1305`, otherwise 60 seconds); every cooldown is
-capped at 10 minutes.
+when it is unset (5 seconds for request-rate codes `1302`/`1305`, otherwise 60 seconds). Explicit
+`Retry-After` delays are capped at 24 hours; the other cooldowns are capped at 10 minutes.
 
 ### Why was my alias rejected?
 

@@ -498,6 +498,28 @@ describe("combo target cooldowns", () => {
     expect(parseRetryAfterMs(new Date(now + 90_000).toUTCString(), now)).toBe(90_000);
     expect(parseRetryAfterMs(new Date(now + 90_000).toUTCString().toLowerCase(), now)).toBe(90_000);
     expect(parseRetryAfterMs(new Date(now + 900_000).toUTCString(), now)).toBe(600_000);
+    const serverDelay = { preserveServerDelay: true };
+    expect(parseRetryAfterMs("14400", now, serverDelay)).toBe(14_400_000);
+    expect(parseRetryAfterMs("86400", now, serverDelay)).toBe(86_400_000);
+    expect(parseRetryAfterMs("999999", now, serverDelay)).toBe(86_400_000);
+    expect(parseRetryAfterMs(new Date(now + 4 * 60 * 60_000).toUTCString(), now, serverDelay)).toBe(14_400_000);
+    expect(parseRetryAfterMs(new Date(now + 2 * 86_400_000).toUTCString(), now, serverDelay)).toBe(86_400_000);
+  });
+
+  test("caps only explicit server cooldowns at one day", () => {
+    const now = Date.parse("2026-07-18T00:00:00.000Z");
+    coolComboTarget("numeric-retry", target, { now, retryAfter: "999999" });
+    coolComboTarget("date-retry", target, { now, retryAfter: new Date(now + 2 * 86_400_000).toUTCString() });
+    coolComboTarget("multi-hour-retry", target, { now, retryAfter: "14400" });
+    coolComboTarget("local-fallback", target, { now, cooldownMs: 999_999_999 });
+    for (const comboId of ["numeric-retry", "date-retry"]) {
+      expect(isComboTargetInCooldown(comboId, target, now + 86_400_000 - 1)).toBe(true);
+      expect(isComboTargetInCooldown(comboId, target, now + 86_400_000)).toBe(false);
+    }
+    expect(isComboTargetInCooldown("multi-hour-retry", target, now + 14_400_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("multi-hour-retry", target, now + 14_400_000)).toBe(false);
+    expect(isComboTargetInCooldown("local-fallback", target, now + 600_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("local-fallback", target, now + 600_000)).toBe(false);
   });
 
   test("rejects missing malformed zero and expired Retry-After values", () => {
