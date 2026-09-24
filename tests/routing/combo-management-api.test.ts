@@ -574,6 +574,137 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT carries lastResort and cooldownWaitPolicy through a dashboard-shaped save (#5691)", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+
+      const created = await comboApi(config, "PUT", "/api/combos", {
+        id: "deferred",
+        combo: {
+          strategy: "failover",
+          cooldownWaitPolicy: "before-last-resort",
+          waitForCooldownMs: 10000,
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2", lastResort: true },
+          ],
+        },
+      });
+      expect(created?.status).toBe(200);
+      expect(await responseJson(created)).toMatchObject({
+        combo: { cooldownWaitPolicy: "before-last-resort" },
+      });
+      expect(config.combos?.deferred).toMatchObject({
+        cooldownWaitPolicy: "before-last-resort",
+        targets: [
+          { provider: "a", model: "m1" },
+          { provider: "b", model: "m2", lastResort: true },
+        ],
+      });
+
+      // The dashboard exposes neither the combo-level policy nor the per-target flag, so its
+      // whole-combo save re-sends the target list without them. Carrying both forward is what
+      // keeps a GUI edit from silently turning a deferred target back into a normal one.
+      const dashboard = await comboApi(config, "PUT", "/api/combos", {
+        id: "deferred",
+        combo: {
+          strategy: "failover",
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+          ],
+        },
+      });
+      expect(dashboard?.status).toBe(200);
+      expect(config.combos?.deferred).toMatchObject({
+        cooldownWaitPolicy: "before-last-resort",
+        targets: [
+          { provider: "a", model: "m1" },
+          { provider: "b", model: "m2", lastResort: true },
+        ],
+      });
+      // The normalizer gives every target an explicit `lastResort: false`; storage stays sparse
+      // and only the opt-in value is written, so the first target carries no key at all.
+      expect(config.combos?.deferred?.targets?.[0]).not.toHaveProperty("lastResort");
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persisted.combos?.deferred).toMatchObject({ cooldownWaitPolicy: "before-last-resort" });
+      expect(persisted.combos?.deferred?.targets?.[0]).not.toHaveProperty("lastResort");
+      expect(persisted.combos?.deferred?.targets?.[1]).toMatchObject({ lastResort: true });
+
+      // The carry-over re-reads the previous combo under its source id, so a rename keeps it.
+      const renamed = await comboApi(config, "PUT", "/api/combos", {
+        id: "deferred-next",
+        renameFrom: "deferred",
+        combo: {
+          strategy: "failover",
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2" },
+          ],
+        },
+      });
+      expect(renamed?.status).toBe(200);
+      expect(config.combos?.deferred).toBeUndefined();
+      expect(config.combos?.["deferred-next"]).toMatchObject({
+        cooldownWaitPolicy: "before-last-resort",
+        targets: [
+          { provider: "a", model: "m1" },
+          { provider: "b", model: "m2", lastResort: true },
+        ],
+      });
+
+      // The flag belongs to the target identity (provider+model), so a swapped-in target does
+      // not inherit it from whatever used to occupy that position.
+      const swapped = await comboApi(config, "PUT", "/api/combos", {
+        id: "deferred-next",
+        combo: {
+          strategy: "failover",
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "c", model: "m3" },
+          ],
+        },
+      });
+      expect(swapped?.status).toBe(200);
+      expect(config.combos?.["deferred-next"]).toMatchObject({
+        cooldownWaitPolicy: "before-last-resort",
+        targets: [
+          { provider: "a", model: "m1" },
+          { provider: "c", model: "m3" },
+        ],
+      });
+      expect(config.combos?.["deferred-next"]?.targets?.[1]).not.toHaveProperty("lastResort");
+
+      // Explicit values still replace: `lastResort: false` drops the flag and a null policy
+      // clears the combo-level opt-in rather than pinning the string.
+      const cleared = await comboApi(config, "PUT", "/api/combos", {
+        id: "deferred-next",
+        combo: {
+          strategy: "failover",
+          cooldownWaitPolicy: null,
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2", lastResort: false },
+          ],
+        },
+      });
+      expect(cleared?.status).toBe(200);
+      expect((await responseJson(cleared)).combo).not.toHaveProperty("cooldownWaitPolicy");
+      expect(config.combos?.["deferred-next"]).not.toHaveProperty("cooldownWaitPolicy");
+      expect(config.combos?.["deferred-next"]?.targets).toHaveLength(2);
+      for (const target of config.combos?.["deferred-next"]?.targets ?? []) {
+        expect(target).not.toHaveProperty("lastResort");
+      }
+      const clearedDisk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(clearedDisk.combos?.["deferred-next"]).not.toHaveProperty("cooldownWaitPolicy");
+      expect(clearedDisk.combos?.["deferred-next"]?.targets).toHaveLength(2);
+      for (const target of clearedDisk.combos?.["deferred-next"]?.targets ?? []) {
+        expect(target).not.toHaveProperty("lastResort");
+      }
+    });
+  });
+
   test("PUT rejects an unknown reasoningEffortMode", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });
