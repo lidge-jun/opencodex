@@ -77,8 +77,9 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
 
 function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undefined {
   const measured = windows.filter(window => window.percent !== undefined);
+  const byId = new Map(measured.map(window => [window.id, window]));
   for (const id of HEADLINE_ORDER) {
-    const hit = measured.find(window => window.id === id);
+    const hit = byId.get(id);
     if (hit) return hit;
   }
   return measured[0];
