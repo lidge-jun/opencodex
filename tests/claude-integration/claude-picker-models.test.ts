@@ -50,7 +50,8 @@ test("snapshot persists mode 0600, loads synchronously, and retains last good on
     await first.refresh();
     const saved = first.current();
     expect(saved?.models).toHaveLength(2);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
+    // POSIX permission bits only; Windows reports 0o666 for any writable file.
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(saved);
     const restarted = createPickerModelSnapshot(load, path);
     expect(restarted.current()).toEqual(saved);

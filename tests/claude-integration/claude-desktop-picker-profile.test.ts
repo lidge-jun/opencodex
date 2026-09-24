@@ -72,7 +72,9 @@ describe("Claude Desktop picker profile", () => {
     expect(first).toMatchObject({ ok: true, changed: true });
     if (!first.ok) throw new Error(first.reason);
     expect(readFileSync(first.path, "utf8")).toBe('{"egressProxyUrl":"http://127.0.0.1:41234"}\n');
-    expect(statSync(first.path).mode & 0o777).toBe(0o600);
+    // POSIX permission bits only: Windows reports 0o666 for any writable file (ACLs carry the
+    // real protection), the same exemption claude-picker-ca.test.ts makes for its key file.
+    if (process.platform !== "win32") expect(statSync(first.path).mode & 0o777).toBe(0o600);
     const metadata = readJson(join(library, "_meta.json"));
     expect(metadata.foreignMeta).toBe(true);
     expect(Object.keys(metadata).filter(key => key.toLowerCase().includes("opencodex"))).toEqual([]);
@@ -80,7 +82,7 @@ describe("Claude Desktop picker profile", () => {
     expect(metadata.appliedId).toBe(picker.id);
     const statePath = join(configDir, "claude-picker", "profile-state.json");
     expect(readJson(statePath)).toEqual({ entryId: picker.id, previousAppliedId: previous });
-    expect(statSync(statePath).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(statePath).mode & 0o777).toBe(0o600);
     expect(inspectDesktopPickerProfile({ env: env(), configDir })).toMatchObject({ kind: "applied", proxyUrl: "http://127.0.0.1:41234" });
 
     expect(applyDesktopPickerProfile({ proxyPort: 41234, env: env(), configDir })).toMatchObject({ ok: true, changed: false, path: first.path });
