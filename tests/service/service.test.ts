@@ -2740,9 +2740,9 @@ describe("service diagnostics", () => {
   // deletes the old one on upgrade. The baked Bun and CLI both live in that directory, so the
   // unit's `exec <old-bun> <old-cli>` stops resolving and Restart=on-failure restart-loops.
   // When the install went through a stable launcher, the launcher is what systemd runs, so it
-  // (launchd installs never record a launcherPath; one found there is always reported stale.)
   // is the only path whose absence means anything — and the replaced version directory must
-  // NOT be reported as stale.
+  // NOT be reported as stale. (Launchd installs never record a launcherPath; one found there
+  // is always reported stale.)
   test("a launcher install judges staleness by the launcher, not the replaced version dir", () => {
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const stateDir = join(TEST_DIR, "launcher-paths-home");
@@ -2766,11 +2766,8 @@ describe("service diagnostics", () => {
       // launchd never bakes a launcher anymore, so a recorded launcherPath on darwin can
       // only have come from an install that ran a mutable PATH shim with the service token
       // and proxy environment — stale whether or not the file it names still exists.
-      if (process.platform === "darwin") {
-        expect(bakedServicePathsDiagnostic()).toContain("STALE mutable launchd launcher");
-      } else {
-        expect(bakedServicePathsDiagnostic()).toBeNull();
-      }
+      expect(bakedServicePathsDiagnostic("darwin")).toContain("STALE mutable launchd launcher");
+      expect(bakedServicePathsDiagnostic("linux")).toBeNull();
 
       // A launcher that is itself gone is genuinely stale, and names the launcher.
       const missingLauncher = join(stateDir, "shims", "ocx");
@@ -2783,13 +2780,10 @@ describe("service diagnostics", () => {
         launcherPath: missingLauncher,
         backend: "scheduler",
       }), "utf8");
-      const diagnostic = bakedServicePathsDiagnostic();
-      if (process.platform === "darwin") {
-        expect(diagnostic).toContain("STALE mutable launchd launcher");
-      } else {
-        expect(diagnostic).toContain("STALE baked paths");
-        expect(diagnostic).toContain(missingLauncher);
-      }
+      expect(bakedServicePathsDiagnostic("darwin")).toContain("STALE mutable launchd launcher");
+      const diagnostic = bakedServicePathsDiagnostic("linux");
+      expect(diagnostic).toContain("STALE baked paths");
+      expect(diagnostic).toContain(missingLauncher);
     } finally {
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;

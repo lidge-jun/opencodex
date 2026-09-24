@@ -21,7 +21,7 @@ import { LABEL, TASK, serviceLogPath } from "./state";
  * moved, nvm switch, reinstall) — the service manager would restart-loop on a dead path
  * while `schtasks`/`launchctl` still report "installed".
  */
-export function bakedServicePathsDiagnostic(): string | null {
+export function bakedServicePathsDiagnostic(platform: NodeJS.Platform = process.platform): string | null {
   const state = readServiceInstallState();
   // A launcher install runs the launcher, not the baked pair, so the pair's existence says
   // nothing about whether the service can start. Judging the recorded launcher is both
@@ -31,7 +31,7 @@ export function bakedServicePathsDiagnostic(): string | null {
     // launchd no longer bakes a launcher at all: a recorded one can only have come from an
     // install that handed the service token and proxy environment to a mutable PATH shim,
     // so it is stale whether or not the file it names still exists.
-    if (process.platform === "darwin") {
+    if (platform === "darwin") {
       return "STALE mutable launchd launcher — run 'ocx service repair' to re-bake trusted package paths";
     }
     if (existsSync(state.launcherPath)) return null;
