@@ -258,9 +258,9 @@ stable port to derive from, so the pair stays off unless `claudeCode.intercept.p
 Auxiliary listener bind failures carry the listener key and effective address through `AuxiliaryListenerBindError` in `src/server/ports.ts`. `src/cli/index.ts` reports them without retrying the public port. Startup still rolls back every earlier socket synchronously.
 
 A failed public, loopback, or management bind rolls back earlier sockets; a failed hub-link bind warns
-and records `failed{bind}` while existing sockets remain available. Normal stop joins sockets before
-release. The existing launchd/systemd installer remains the service owner and loads the data token
-from `service-api-token`; hub mode adds no service-manager fork or token-bearing unit/plist field.
+and exposes `failed{bind}` through optional-listener status while existing sockets remain available.
+Listener-port persistence failures expose `failed{persist}` and close the new socket. Normal stop joins
+sockets before release. The existing launchd/systemd installer remains the service owner and loads the data token from `service-api-token`; hub mode adds no service-manager fork or token-bearing unit/plist field.
 
 > Decision record: [ADR-0002](decisions/ADR-0002-lifecycle.md)
 

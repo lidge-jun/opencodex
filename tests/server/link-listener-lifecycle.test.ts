@@ -69,8 +69,12 @@ describe("hub-link listener lifecycle", () => {
     lifecycle.start(context());
     await lifecycle.ensureStarted();
     expect(warnings.join("\n")).toMatch(/bind failed/);
+    expect(lifecycle.status()).toEqual({ state: "failed", port: null, reason: "bind" });
     expect(await (await fetch(publicServer.url)).text()).toBe("public-ok");
     expect(lifecycle.linkAdmissionKeyIds()).toEqual(new Set([LINK_ID]));
+    // Removing the last link after a failed bind leaves nothing to report as failed.
+    await lifecycle.close();
+    expect(lifecycle.status()).toEqual({ state: "off", port: null, reason: null });
   });
 
   test("closes the real link socket when listenerPort persistence fails", async () => {
@@ -94,6 +98,7 @@ describe("hub-link listener lifecycle", () => {
     await stopped;
     expect(bound).toBeDefined();
     expect(lifecycle.ownsListener(bound!)).toBe(false);
+    expect(lifecycle.status()).toEqual({ state: "failed", port: null, reason: "persist" });
     expect(await (await fetch(publicServer.url)).text()).toBe("public-ok");
   });
 
@@ -116,6 +121,7 @@ describe("hub-link listener lifecycle", () => {
     expect(second).toBe(first);
     await Promise.all([first, second]);
     expect(bindCount).toBe(1);
+    expect(lifecycle.status().state).toBe("listening");
   });
 
   test("does not rebind until a close has completed", async () => {
@@ -145,6 +151,112 @@ describe("hub-link listener lifecycle", () => {
     await ensure;
     expect(bindCount).toBe(2);
     await lifecycle.close();
+    expect(lifecycle.status()).toEqual({ state: "off", port: null, reason: null });
+  });
+
+  test("stop fences ensureStarted queued behind a pending close", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "ocx-link-stop-race-"));
+    const current = { value: store() };
+    let bindCount = 0;
+    let releaseStop!: () => void;
+    const stopEntered = new Promise<void>(resolve => { releaseStop = resolve; });
+    const lifecycle = makeLifecycle(current, {
+      writeStore: (_path, next) => { current.value = next; },
+      serve: options => {
+        bindCount += 1;
+        const actual = Bun.serve(options);
+        servers.push(actual);
+        return wrappedServer(actual, async () => { await stopEntered; await actual.stop(true); });
+      },
+    });
+    lifecycle.start(context());
+    const port = servers[0]!.port;
+    const close = lifecycle.close();
+    const ensure = lifecycle.ensureStarted();
+    const stop = lifecycle.stop();
+    releaseStop();
+    await Promise.all([close, ensure, stop]);
+    expect(bindCount).toBe(1);
+    expect(lifecycle.status()).toEqual({ state: "off", port: null, reason: null });
+    await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow();
+  });
+
+  test("persists the port onto the latest store snapshot", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "ocx-link-store-race-"));
+    const initial = store();
+    const latest: LinkStore = {
+      ...initial,
+      links: [...initial.links, {
+        ...initial.links[0]!,
+        id: "lnk_fedcba9876543210",
+        alias: "concurrent-link",
+        apiKeyId: "concurrent-key",
+      }],
+    };
+    let reads = 0;
+    let persisted: LinkStore | undefined;
+    const warnings: string[] = [];
+    const lifecycle = createLinkListenerLifecycle({
+      storePath: join(tempHome, "links.json"),
+      readStore: () => {
+        reads += 1;
+        return reads === 1 ? initial : latest;
+      },
+      writeStore: (_path, next) => { persisted = next; },
+      warn: message => warnings.push(message),
+      serve: options => {
+        const actual = Bun.serve(options);
+        servers.push(actual);
+        return actual;
+      },
+    });
+    lifecycle.start(context());
+    await lifecycle.ensureStarted();
+    expect(reads).toBe(2);
+    expect(persisted?.links).toEqual(latest.links);
+    expect(persisted?.listenerPort).toBe(servers[0]!.port);
+    expect(lifecycle.status()).toEqual({ state: "listening", port: servers[0]!.port, reason: null });
+    expect(warnings).toEqual([]);
+    await lifecycle.stop();
+  });
+
+  test("gives up a socket whose port lost to another writer, then binds the stored port", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "ocx-link-port-conflict-"));
+    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("") });
+    const storedPort = probe.port!;
+    await probe.stop(true);
+    const initial = store();
+    const latest: LinkStore = { ...initial, listenerPort: storedPort };
+    let bound = false;
+    let boundPort = 0;
+    let writes = 0;
+    const warnings: string[] = [];
+    const lifecycle = createLinkListenerLifecycle({
+      storePath: join(tempHome, "links.json"),
+      // The conflicting writer lands between the bind and the persist step.
+      readStore: () => (bound ? latest : initial),
+      writeStore: () => { writes += 1; },
+      warn: message => warnings.push(message),
+      serve: options => {
+        const actual = Bun.serve(options);
+        servers.push(actual);
+        if (!bound) boundPort = actual.port!;
+        bound = true;
+        return actual;
+      },
+    });
+    lifecycle.start(context());
+    // start() bound a free port, then found the stored port changed underneath it.
+    expect(writes).toBe(0);
+    expect(lifecycle.status()).toEqual({ state: "failed", port: null, reason: "persist" });
+    expect(warnings.join("\n")).toContain(`stored port ${storedPort} differs from bound port ${boundPort}`);
+    await Bun.sleep(10);
+    await expect(fetch(`http://127.0.0.1:${boundPort}/`)).rejects.toThrow();
+    // The next ensureStarted() binds the port the tunnels actually target.
+    await lifecycle.ensureStarted();
+    expect(lifecycle.status()).toEqual({ state: "listening", port: storedPort, reason: null });
+    expect(writes).toBe(0);
+    await lifecycle.stop();
   });
 
   test("connection is refused after closing the last-link listener", async () => {

@@ -1,7 +1,6 @@
 import type { Server } from "bun";
 import {
   emptyLinkStore,
-  hasLinks,
   readLinkStore,
   type LinkStore,
   writeLinkStore,
@@ -23,11 +22,18 @@ export interface LinkListenerDeps {
   warn?: (message: string) => void;
 }
 
+export type LinkListenerStatus = {
+  state: "off" | "listening" | "failed";
+  port: number | null;
+  reason: string | null;
+};
+
 export interface LinkListenerLifecycle<T> {
   ownsListener(server: Server<T>): boolean;
   start(ctx: LinkListenerStartContext<T>): void;
   ensureStarted(): Promise<void>;
   linkAdmissionKeyIds(): ReadonlySet<string>;
+  status(): LinkListenerStatus;
   close(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -80,8 +86,14 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   let ensureFlight: Promise<void> | undefined;
   let closeFlight: Promise<void> | undefined;
   let stopped = false;
+  let lifecycleStatus: LinkListenerStatus = { state: "off", port: null, reason: null };
 
-  const reportFailure = (operation: string, error: unknown): void => {
+  const setStatus = (state: LinkListenerStatus["state"], port: number | null, reason: string | null): void => {
+    lifecycleStatus = { state, port, reason };
+  };
+
+  const reportFailure = (operation: string, error: unknown, reason: string): void => {
+    setStatus("failed", null, reason);
     warn(`⚠ hub-link listener ${operation} failed: ${error instanceof Error ? error.message : String(error)}`);
   };
 
@@ -90,17 +102,18 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   };
 
   const bindIfNeeded = (): void => {
-    if (listener || !startContext) return;
+    if (stopped || listener || !startContext) return;
     let store: LinkStore;
     try {
-      const active = deps.readStore ? readStore(storePath).links.length > 0 : hasLinks(storePath);
-      if (!active) return;
       store = readStore(storePath);
     } catch (error) {
-      reportFailure("store read", error);
+      reportFailure("store read", error, "bind");
       return;
     }
-    if (store.links.length === 0) return;
+    if (store.links.length === 0) {
+      setStatus("off", null, null);
+      return;
+    }
     const requestedPort = store.listenerPort ?? 0;
     let bound: Server<unknown>;
     try {
@@ -111,25 +124,39 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
         fetch: (req: Request, server: Server<unknown>) => startContext!.dispatch(req, server as Server<T>),
       } as Parameters<typeof Bun.serve>[0]);
     } catch (error) {
-      reportFailure("bind", error);
+      reportFailure("bind", error, "bind");
+      return;
+    }
+    if (stopped) {
+      closeWithoutAwait(bound);
       return;
     }
     if (store.listenerPort === null) {
       const port = bound.port;
       if (!port || port === 0) {
         closeWithoutAwait(bound);
-        reportFailure("bind", new Error("Bun did not report a concrete listener port"));
+        reportFailure("bind", new Error("Bun did not report a concrete listener port"), "bind");
         return;
       }
       try {
-        writeStore(storePath, { ...store, listenerPort: port });
+        const current = readStore(storePath);
+        if (current.listenerPort !== null && current.listenerPort !== port) {
+          // Another writer fixed a different port while this bind ran. Tunnels target the stored
+          // port, so serving on this one would strand them: give it up and let the next
+          // ensureStarted() bind the stored port.
+          closeWithoutAwait(bound);
+          reportFailure("listenerPort persistence", new Error(`stored port ${current.listenerPort} differs from bound port ${port}`), "persist");
+          return;
+        }
+        writeStore(storePath, { ...current, listenerPort: port });
       } catch (error) {
         closeWithoutAwait(bound);
-        reportFailure("listenerPort persistence", error);
+        reportFailure("listenerPort persistence", error, "persist");
         return;
       }
     }
     listener = bound as Server<T>;
+    setStatus("listening", bound.port ?? (requestedPort > 0 ? requestedPort : null), null);
   };
 
   const ensureStarted = (): Promise<void> => {
@@ -137,6 +164,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     if (ensureFlight) return ensureFlight;
     const flight = (async () => {
       if (closeFlight) await closeFlight;
+      if (stopped) return;
       bindIfNeeded();
     })();
     ensureFlight = flight.finally(() => {
@@ -153,6 +181,9 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
       const current = listener;
       listener = null;
       if (current) await current.stop(true);
+      // Closing is the caller saying "no links now": an earlier bind or persist failure no
+      // longer describes anything, so the status reads off either way.
+      setStatus("off", null, null);
     })();
     closeFlight = flight.finally(() => {
       closeFlight = undefined;
@@ -170,11 +201,15 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     linkAdmissionKeyIds() {
       return new Set(readStoreForAdmission().links.map(link => link.apiKeyId));
     },
+    status() {
+      return { ...lifecycleStatus };
+    },
     close,
     async stop() {
       stopped = true;
       await close();
       startContext = undefined;
+      setStatus("off", null, null);
     },
   };
 }
