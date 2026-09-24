@@ -146,3 +146,64 @@ test("GET /api/settings reports external Codex ownership without an apply attemp
     removeTreeWithRetry(root);
   }
 }, 15_000);
+
+test("GET /api/settings survives an unreadable config.toml during ownership detection", () => {
+  // existsSync passes but readFileSync throws: config.toml as a directory is a
+  // deterministic stand-in for a permission error or a delete racing the read.
+  const root = mkdtempSync(join(tmpdir(), "ocx-settings-unreadable-cfg-"));
+  const codexHome = join(root, "codex");
+  mkdirSync(join(codexHome, "config.toml"), { recursive: true });
+
+  const script = `
+    const { handleManagementAPI } = await import("./src/server/management-api");
+    const { startupHealthFixture } = await import("./tests/helpers/startup-health");
+    const config = JSON.parse(process.env.OCX_TEST_ROUTE_CONFIG);
+    const request = new Request("http://127.0.0.1:10100/api/settings", {
+      headers: { host: "127.0.0.1:10100" },
+    });
+    const response = await handleManagementAPI(request, new URL(request.url), config, {
+      getCachedStartupHealth: async () => startupHealthFixture(),
+    });
+    console.log(JSON.stringify({ status: response.status, body: await response.json() }));
+  `;
+  const child = spawnSync(process.execPath, ["--eval", script], {
+    cwd: repoRoot(),
+    env: {
+      ...process.env,
+      CODEX_HOME: codexHome,
+      OPENCODEX_HOME: join(root, "opencodex"),
+      OCX_TEST_ROUTE_CONFIG: JSON.stringify({
+        port: 10100,
+        defaultProvider: "openai",
+        codexDesktopAuthless: true,
+        codexClientCompaction: true,
+        providers: {
+          openai: {
+            adapter: "openai-chat",
+            baseUrl: "https://api.example.test/v1",
+            apiKey: "sk-secret-value",
+            defaultModel: "gpt-test",
+          },
+        },
+      }),
+    },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  try {
+    if (child.status !== 0) {
+      throw new Error(`isolated settings GET failed: ${child.stderr || child.stdout}`);
+    }
+    const line = child.stdout.trim().split("\n").filter(Boolean).at(-1);
+    expect(line).toBeDefined();
+    const response = JSON.parse(line!) as { status: number; body: Record<string, unknown> };
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      codexDesktopSwitches: {
+        apply: { applied: false, reason: "not_requested", retryable: true },
+      },
+    });
+  } finally {
+    removeTreeWithRetry(root);
+  }
+}, 15_000);
