@@ -13,6 +13,8 @@ const resolver = await import("../../src/server/adapter-resolve");
 const resolveAdapter = resolver.resolveAdapter;
 let attempts: OcxParsedRequest[] = [];
 let events: AdapterEvent[][] = [];
+let onAttempt: ((index: number, parsed: OcxParsedRequest) => void | Promise<void>) | undefined;
+let onPacingSlotWait: (() => void | Promise<void>) | undefined;
 function fixture(provider: OcxProviderConfig): ProviderAdapter {
   return {
     name: "cursor",
@@ -22,12 +24,21 @@ function fixture(provider: OcxProviderConfig): ProviderAdapter {
       const index = attempts.length;
       attempts.push(structuredClone(parsed));
       for (const event of events[index] ?? []) emit(event);
+      await onAttempt?.(index, parsed);
     },
   };
 }
 mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
   resolveAdapter: (provider: OcxProviderConfig, cache?: "none" | "short" | "long") =>
     provider.adapter === "cursor" ? fixture(provider) : resolveAdapter(provider, cache),
+}));
+const pacing = await import("../../src/providers/request-pacing");
+const originalWaitForSlot = pacing.waitForProviderRequestSlot;
+mock.module("../../src/providers/request-pacing", () => ({ ...pacing,
+  waitForProviderRequestSlot: async (...args: Parameters<typeof originalWaitForSlot>) => {
+    await onPacingSlotWait?.();
+    return originalWaitForSlot(...args);
+  },
 }));
 const { handleResponses } = await import("../../src/server/responses");
 const originalHome = process.env.OPENCODEX_HOME;
@@ -39,10 +50,12 @@ beforeEach(async () => {
   release = acquireOwnedSpendHome();
   clearGenericFailoverHealth();
   attempts = [];
+  onAttempt = undefined;
+  onPacingSlotWait = undefined;
   for (let i = 0; i < 2; i++) await saveCredential("cursor", {
     access: `fixture-access-${i}`, refresh: `fixture-refresh-${i}`,
     expires: Date.now() + 3_600_000, accountId: `fixture-${i}`,
-  }, { addAccount: true });
+  });
 });
 afterEach(() => {
   release?.();
@@ -116,4 +129,51 @@ test.each(["image", "video"] as const)("media-only %s bridge still injects its t
   expect(await run(true, false, media, false)).toContain("media answer");
   expect(attempts[0].context.tools?.some(t => t.name === `${media}_gen`)).toBe(true);
   expect(attempts[0].context.tools?.some(t => t.webSearch)).toBe(false);
+});
+
+// Streaming only: a first-event 429 replays the turn while the superseded
+// attempt is still in-flight (the buffered path awaits it before collecting
+// events, so the race cannot exist there). When that attempt finally returns,
+// its copy-back must not restore the failed account's route state over the
+// rotation's rebind.
+test("superseded 429 attempt cannot restore stale route state", async () => {
+  let releaseAttempt0!: () => void;
+  const attempt0Gate = new Promise<void>(resolve => { releaseAttempt0 = resolve; });
+  let gateReleasedByHook = false;
+  onAttempt = async (index, parsed) => {
+    if (index !== 0) return;
+    // Bounded wait: a broken pacing hook must fail the test, not hang the file.
+    await Promise.race([attempt0Gate, new Promise(r => setTimeout(r, 15_000))]);
+    parsed._providerContinuationOwner = {
+      version: 1, providerName: "cursor", providerDestinationIdentity: "stale",
+      adapterName: "cursor", modelId: "model", credentialIdentity: "stale-superseded",
+    };
+  };
+  // The replay's pacing-slot wait is the last hookable point before its
+  // copy-in reads parsed. Releasing the superseded attempt here is not enough
+  // on its own — its copy-back is still a few microtasks out — so the hook
+  // yields a macrotask: attempt 0's runTurn return and copy-back settle before
+  // the replay resumes and copies route state in.
+  onPacingSlotWait = async () => {
+    if (attempts.length < 1) return;
+    gateReleasedByHook = true;
+    releaseAttempt0();
+    await new Promise(r => setTimeout(r, 0));
+  };
+  events = [
+    [{ type: "error", status: 429, message: "Cursor rate limit exceeded: resource_exhausted" }],
+    [{ type: "text_delta", text: "rotated answer" }, { type: "done" }],
+  ];
+  try {
+    expect(await run(true)).toContain("rotated answer");
+  } finally {
+    onAttempt = undefined;
+    onPacingSlotWait = undefined;
+    releaseAttempt0();
+  }
+  expect(attempts).toHaveLength(2);
+  expect(gateReleasedByHook).toBe(true);
+  const owner = (parsed: OcxParsedRequest) => parsed._providerContinuationOwner?.credentialIdentity;
+  expect(owner(attempts[1])).not.toBe(owner(attempts[0]));
+  expect(owner(attempts[1])).not.toBe("stale-superseded");
 });

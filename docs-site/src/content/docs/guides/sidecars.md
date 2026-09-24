@@ -61,7 +61,9 @@ toggle on the web-search sidecar card (`PUT /api/sidecar-settings` with
 `webSearch.streamRoutedModelOutput`).
 
 This option also applies to adapters that manage their own turns, including Devin and Cursor.
-When search and image/video sidecars are both eligible, search takes priority. Cancelling a request
+When search and image/video sidecars are both eligible, search takes priority. A first-event
+OAuth 429 rotates the account on the initial request and on each post-search answer request,
+replaying the request with the search tool and the gathered results. Cancelling a request
 stops subsequent searches, and retained search-loop output shares the request's translation-buffer
 limit; exceeding that limit fails the response instead of starting another model iteration.
 
