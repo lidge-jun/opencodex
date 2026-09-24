@@ -167,7 +167,7 @@ function catalogMatchesFingerprint(body: string, fingerprint: string | undefined
   return createHash("sha256").update(body).digest("base64url") === fingerprint;
 }
 
-export function routingTarget(serverUrl: string, localPort?: number): CodexRoutingTarget {
+export function routingTarget(serverUrl: string, localPort?: number): CodexRoutingTarget & { link?: true } {
   const baseUrl = localPort === undefined
     ? `${serverUrl}/v1`
     : (() => {
@@ -180,6 +180,7 @@ export function routingTarget(serverUrl: string, localPort?: number): CodexRouti
     baseUrl,
     requiresAdmissionToken: true,
     tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+    ...(localPort === undefined ? {} : { link: true as const }),
   };
 }
 
@@ -559,8 +560,10 @@ export async function connectClient(
     if (options.selectedClients.length < 1 || new Set(options.selectedClients).size !== options.selectedClients.length) {
       throw new Error("at least one unique connected client is required");
     }
-    const config = loadConfig();
-    if (linkMode && (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535)) {
+    // Only link mode needs the local port before the hub is contacted; hub mode keeps reading config
+    // after the catalog download, so its stderr order (catalog refusal first) is unchanged.
+    const earlyConfig = linkMode ? loadConfig() : undefined;
+    if (earlyConfig && (!Number.isInteger(earlyConfig.port) || earlyConfig.port < 1 || earlyConfig.port > 65535)) {
       throw new Error("link mode requires a valid local config port");
     }
     withClientLifecycleSync(() => withConfigMutationLockSync(() => {
@@ -649,6 +652,7 @@ export async function connectClient(
       return sha256(catalog.body);
     }), deps.lifecycleLockDeps);
 
+    const config = earlyConfig ?? loadConfig();
     const target = routingTarget(serverUrl, linkMode ? config.port : undefined);
     const injectConfig = { ...config, syncResumeHistory: false };
     const preflight = await injectCodexConfig(config.port, injectConfig, {

@@ -421,17 +421,26 @@ export async function readSecretBytes(
       finally { wipeChunks(); }
     };
     const onData = (chunk: unknown) => {
-      const bytes = typeof chunk === "string"
-        ? new TextEncoder().encode(chunk)
-        : chunk instanceof Uint8Array
-          ? new Uint8Array(chunk)
-          : new TextEncoder().encode(String(chunk));
-      total += bytes.byteLength;
-      if (total > maxBytes) {
-        finish(() => reject(new CliUsageError(`${label} exceeds ${maxBytes} bytes`)));
-        return;
+      const source = chunk instanceof Uint8Array ? chunk : undefined;
+      let bytes: Uint8Array | undefined;
+      let retained = false;
+      try {
+        bytes = typeof chunk === "string"
+          ? new TextEncoder().encode(chunk)
+          : source
+            ? new Uint8Array(source)
+            : new TextEncoder().encode(String(chunk));
+        total += bytes.byteLength;
+        if (total > maxBytes) {
+          finish(() => reject(new CliUsageError(`${label} exceeds ${maxBytes} bytes`)));
+          return;
+        }
+        chunks.push(bytes);
+        retained = true;
+      } finally {
+        source?.fill(0);
+        if (!retained) bytes?.fill(0);
       }
-      chunks.push(bytes);
     };
     const onEnd = () => finish(() => {
       if (total === 0) {

@@ -106,16 +106,13 @@ function websocketsForRoutingTarget(
   config: OcxConfig | undefined,
   routingTarget: CodexRoutingTarget,
 ): boolean {
-  let parsed: URL;
-  try { parsed = new URL(routingTarget.baseUrl); }
-  catch { return websocketsEnabled(config ?? {}); }
   // A link client reaches the hub through an HTTP-only tunnel. Its local Codex target is
   // deliberately distinct from the tunnel origin, so force the injected websocket setting off
-  // even when the operator enabled the global websocket option.
-  const linkTarget = routingTarget.requiresAdmissionToken
-    && parsed.protocol === "http:"
-    && parsed.hostname === "localhost";
-  return linkTarget ? false : websocketsEnabled(config ?? {});
+  // even when the operator enabled the global websocket option. Hub mode can also use a local
+  // HTTP target with admission, so the explicit discriminator is required here.
+  return (routingTarget as CodexRoutingTarget & { link?: boolean }).link === true
+    ? false
+    : websocketsEnabled(config ?? {});
 }
 
 export function deriveCodexInjectionPlan(

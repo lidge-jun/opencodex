@@ -16,4 +16,17 @@ describe("link Codex injection", () => {
     expect(`${plan.content}\n${plan.profileContent}`).toContain("base_url = \"http://localhost:10100/v1\"");
     expect(`${plan.content}\n${plan.profileContent}`).not.toContain("supports_websockets = true");
   });
+
+  test("keeps websocket support for a localhost hub routing target", () => {
+    const plan = deriveCodexInjectionPlan("# existing config\n", {
+      config: { port: 10100, websockets: true } as OcxConfig,
+      routingTarget: routingTarget("http://localhost:34567"),
+      catalogPathOption: null,
+      journalReadOnly: true,
+    });
+    expect(plan.kind).toBe("ok");
+    if (plan.kind !== "ok") return;
+    expect(`${plan.content}\n${plan.profileContent}`).toContain("base_url = \"http://localhost:34567/v1\"");
+    expect(`${plan.content}\n${plan.profileContent}`).toContain("supports_websockets = true");
+  });
 });
