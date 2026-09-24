@@ -400,7 +400,9 @@ describe("ollama-native — tool calls", () => {
 
   test("charges retained tool names to the aggregate translator budget", async () => {
     const adapter = createOllamaNativeAdapter(provider());
-    const budget = createTestTranslatorBudget({ maxTurnBytes: 2500 });
+    // 2000 sits below the three name+ledger charges alone (3 x (700 + 128) = 2484), so the
+    // overflow can no longer hide behind the buffered JSON line the way 2500 let it.
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 2000 });
     const frames = Array.from({ length: 3 }, (_, index) => frame({
       role: "assistant",
       tool_calls: [{ function: { index, name: `${index}${"n".repeat(699)}`, arguments: {} } }],
