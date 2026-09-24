@@ -770,8 +770,9 @@ export async function executeComboResponses(
     });
     // Cooldown state is shared by every request using this target, so a concurrent failure
     // can put it in cooldown while THIS failure recorded none. Scope "none" means the
-    // refusal described this request's shape rather than the target's health — only a
-    // cooldown this failure produced itself may arm the single-target retry below.
+    // refusal described this request's shape rather than the target's health. The retry
+    // below arms whenever this failure is cooldown-scoped and the target is currently
+    // cooling down, regardless of which request recorded that cooldown.
     const failedTargetCooled = failureCooldownScope !== "none"
       && isComboTargetInCooldown(comboId, pick.target, failureNow);
     // Same target selector as the exclusionary pick below, minus `exclude`: the only
