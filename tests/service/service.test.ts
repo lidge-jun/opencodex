@@ -1473,14 +1473,28 @@ describe("launchd service plist", () => {
 
 
   test("launchd stays bound to the package runtime instead of a mutable PATH launcher", async () => {
+    // A supplied launcher must not reach the credential-bearing ProgramArguments
+    // command. Assert on the extracted command rather than the whole plist: the
+    // same Bun path also legitimately appears under OCX_BUN_RUNTIME_PATH, so a
+    // plist-wide substring check cannot tell command from environment.
+    const launcher = "/home/u/.local/share/mise/shims/ocx";
     const plist = buildPlist(resolvedProxyEnv({}), {
+      launcher,
       runtime: { path: "/opt/opencodex/versioned/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
     });
+
+    const command = /<key>ProgramArguments<\/key>\s*<array>\s*<string>\/bin\/sh<\/string>\s*<string>-lc<\/string>\s*<string>([^<]*)<\/string>/.exec(plist)?.[1];
+    expect(command).toBeDefined();
+    expectTextToContainPath(command!, "/opt/opencodex/versioned/bun");
+    expectTextToContainPath(command!, join("cli", "index.ts"));
+    expect(command!).not.toContain(launcher);
+    expect(command!).not.toContain("mise/shims");
 
     expectTextToContainPath(plist, "/opt/opencodex/versioned/bun");
     expectTextToContainPath(plist, join("cli", "index.ts"));
     expect(plist).toContain("OCX_BUN_RUNTIME_PATH");
     expect(plist).toContain("OCX_BUN_RUNTIME_SOURCE");
+    expect(plist).not.toContain(launcher);
 
     const service = await readText("src/service/launchd.ts");
     const installLaunchd = service.slice(
