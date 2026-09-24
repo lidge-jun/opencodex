@@ -417,7 +417,7 @@ export function transactionalNpmUpdate({
   const discardStage = () => {
     const removal = removeOwnedStage(stageRoot, deps);
     if (!removal.removed) {
-      log("Left this update's staging directory in place (" + removal.code + "; a file inside is still in use); delete it by hand once no OpenCodex process is running from it: " + basename(stageRoot));
+      log("Left this update's staging directory in place (" + removal.code + "; a file inside is still in use); later updates will not remove it either — delete it by hand once no OpenCodex process is running from it: " + basename(stageRoot));
     }
   };
   const spec = pkgName + "@" + (targetVersion || tag);
