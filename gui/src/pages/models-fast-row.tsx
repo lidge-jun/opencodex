@@ -17,6 +17,10 @@ export function ProviderFastRow({ summary, apiBase, onSaved }: {
   // The confirmed save wins until the reloaded summary moves off the value it was saved from, so
   // the control never falls back to a stale summary while (or if) the catalog reload is pending.
   const [saved, setSaved] = useState<{ value: boolean; from: boolean } | null>(null);
+  const reported = summary?.fastOptIn?.enabled;
+  // Once the summary moves off the value the save started from, the server has spoken; drop the
+  // override so a later change by another client is shown as-is (render-time reset, no effect).
+  if (saved && reported !== saved.from) setSaved(null);
   if (!summary?.fastOptIn) return null;
   const serverEnabled = summary.fastOptIn.enabled;
   const enabled = saved && saved.from === serverEnabled ? saved.value : serverEnabled;
