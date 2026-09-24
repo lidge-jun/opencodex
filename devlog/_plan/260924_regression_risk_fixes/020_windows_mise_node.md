@@ -13,3 +13,7 @@ Docs: structure owner of src/update (install detection section).
 
 The exemption is narrowed: only metadata that is exactly the mise core Node runtime (short = "node", full = "core:node") AND a package path that is that tool's <version>/node_modules/<package> (the Windows npm global layout, installPath directly under toolRoot) is classified as not mise-owned. Every other backend for short node/nodejs, unreadable metadata and every OpenCodex mismatch stay fail-closed.
 
+
+## Residual
+
+detectMiseOwner treats a backslash UNC path (\\server\share) as Windows but a slash-form //server/share path as POSIX, as before this change; on such a path a case difference in the node tool directory misses the exemption and keeps the old metadata_inconsistent refusal.

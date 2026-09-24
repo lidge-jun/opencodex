@@ -113,3 +113,38 @@ describe("openai-chat streaming", () => {
   });
 });
 
+
+describe("bound bypass paths", () => {
+  test("one delta that opens a block and passes the size bound is not retained", () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 16 * 1024 * 1024 });
+    const buffer = new SerializedToolCallContentBuffer(budget);
+    const big = "<tool_call><function=write>" + "x".repeat(5 * 1024 * 1024);
+    expect(texts(buffer.ingestStreaming(big))).toBe(big);
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0 });
+    buffer.dispose();
+  });
+
+  test("an oversized delta after an open block is delivered after the held text", () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 32 * 1024 * 1024 });
+    const buffer = new SerializedToolCallContentBuffer(budget);
+    expect(buffer.ingestStreaming("<tool_call><function=write>")).toEqual([]);
+    const big = "<tool_call>" + "y".repeat(5 * 1024 * 1024);
+    expect(texts(buffer.ingestStreaming(big))).toBe("<tool_call><function=write>" + big);
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0 });
+    buffer.dispose();
+  });
+
+  test("queued non-text events count toward the size bound", () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes: 16 * 1024 * 1024 });
+    const buffer = new SerializedToolCallContentBuffer(budget);
+    expect(buffer.ingestStreaming("<tool_call><function=write>")).toEqual([]);
+    const reasoning = { type: "reasoning_raw_delta", text: "r".repeat(1024 * 1024) } as AdapterEvent;
+    for (let i = 0; i < 3; i++) expect(buffer.hold(reasoning)).toEqual([{ type: "heartbeat" }]);
+    const released = buffer.hold(reasoning);
+    expect(released.at(-1)).toEqual(reasoning);
+    expect(released.filter(event => event.type === "reasoning_raw_delta")).toHaveLength(4);
+    expect(texts(released)).toBe("<tool_call><function=write>");
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0 });
+    buffer.dispose();
+  });
+});

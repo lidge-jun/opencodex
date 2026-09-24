@@ -51,6 +51,8 @@ describe("wsl.conf automount root", () => {
     // Native join: defaultCodexHome builds the local home with the host path module.
     const linuxCodexHome = join("/home/example", ".codex");
     const windowsCodexHome = [usersRoot, "windows-user", ".codex"].join("/");
+    // Fresh and in use: Codex has logged in (auth.json) but not written config.toml yet.
+    const localState = new Set([linuxCodexHome, join(linuxCodexHome, "auth.json")]);
 
     expect(defaultCodexHome({
       env: { WSL_DISTRO_NAME: "Ubuntu" },
@@ -61,7 +63,10 @@ describe("wsl.conf automount root", () => {
         || path === linuxCodexHome
         || path === `${windowsCodexHome}/config.toml`,
       readdirSync: () => ["windows-user"],
-      statSync: (() => ({ isDirectory: () => true })) as never,
+      statSync: ((path: string) => {
+        if (path.startsWith(linuxCodexHome) && !localState.has(path)) throw Object.assign(new Error("absent"), { code: "ENOENT" });
+        return { isDirectory: () => true };
+      }) as never,
       realpathSync: (path: string) => path,
     })).toBe(linuxCodexHome);
   });

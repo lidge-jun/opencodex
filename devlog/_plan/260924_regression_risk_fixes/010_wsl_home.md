@@ -14,3 +14,7 @@ Tests (new tests/codex-integration/codex-home-wsl-local-state.test.ts, registere
 
 Docs: structure/codex-home.md and the Codex integration guide sentence that says directory presence decides.
 
+
+## Build note
+
+A local ~/.codex that exists but is empty, with a discoverable Windows home, resolves to the Windows home (the pre-#5441 behaviour). That is the accepted direction: moving an existing user off the Windows home loses their auth and sessions, while a fresh user who has not run Codex locally yet loses nothing and CODEX_HOME overrides. The existing fresh-home test now models a fresh install honestly (auth.json present, config.toml absent) instead of a mock that reported every path present.

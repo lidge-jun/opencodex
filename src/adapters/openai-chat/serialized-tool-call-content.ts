@@ -179,11 +179,19 @@ export class SerializedToolCallContentBuffer {
    * context. The size bound is checked before the delta is retained.
    */
   ingestStreaming(delta: string): AdapterEvent[] {
-    if (this.hasOpenTag && this.bytes + Buffer.byteLength(delta) > MAX_HELD_BYTES) {
-      return [...this.drain([]), ...textEvents(this.ingest(delta))];
+    const deltaBytes = Buffer.byteLength(delta);
+    if (this.hasOpenTag && this.bytes + deltaBytes > MAX_HELD_BYTES) {
+      const released = this.drain([]);
+      // A delta that alone passes the bound is delivered as text rather than retained.
+      if (deltaBytes > MAX_HELD_BYTES) {
+        this.context = contextAfter(delta, this.context);
+        return [...released, ...textEvents(delta)];
+      }
+      return [...released, ...textEvents(this.ingest(delta))];
     }
     const text = this.ingest(delta);
-    if (this.hasOpenTag && proseAfterClosedBlock(this.text) > MAX_TRAILING_CHARS) {
+    // Checked after ingest too: one delta can open a block and already carry more than a bound.
+    if (this.hasOpenTag && (this.bytes > MAX_HELD_BYTES || proseAfterClosedBlock(this.text) > MAX_TRAILING_CHARS)) {
       return [...textEvents(text), ...this.drain([])];
     }
     return textEvents(text);
@@ -202,6 +210,8 @@ export class SerializedToolCallContentBuffer {
   hold(event: AdapterEvent): AdapterEvent[] {
     if (!this.hasOpenTag) return [...this.drain([]), event];
     const eventBytes = Buffer.byteLength(JSON.stringify(event));
+    // Queued events count toward the same runaway bound as held text.
+    if (this.bytes + eventBytes > MAX_HELD_BYTES) return [...this.drain([]), event];
     this.budget.reserveTransient(eventBytes, { kind: "live_transient" }).commitRetained();
     this.bytes += eventBytes;
     this.queued.push({ offset: this.text.length, event });

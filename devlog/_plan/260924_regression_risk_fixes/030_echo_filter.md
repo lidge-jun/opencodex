@@ -24,3 +24,7 @@ finish() replaces the startsWith(truncated marker) rule with: exact truncated pr
 ## Audit round 2 rebuttal
 
 The Cursor first-bytes sniffer stays out of scope: it predates the round (685321e297) and its false positive costs a remint retry, not a truncated answer. Narrowing a pre-existing echo guard is a separate decision; recorded as a residual.
+
+## Build note
+
+The "[Tool call:" line keeps its prefix rule instead of the planned completed-line rule. An existing Cursor replay test showed why: a call echo wraps when its arguments do ("[Tool call: Glob" then "args"), so a completed-line rule leaks it. Prose that opens with "[Tool call:" is rare, while "[Tool Result] ..." prose is common, so only the result/error markers move to the whole-line rule. The diff review flagged the prefix rule; this is the recorded reason for keeping it.
