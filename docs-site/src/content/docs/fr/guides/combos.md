@@ -207,7 +207,7 @@ Les échecs d’un combo se répartissent entre ceux qui entraînent un **bascul
 
 Une cible sautée entre en temps de recharge pendant 60 secondes par défaut. Si la réponse en amont inclut un
 valeur `Retry-After` valide, opencodex l’utilise à la place. Les secondes numériques et les valeurs de date HTTP sont
-accepté, et chaque temps de recharge est limité à 10 minutes.
+accepté, et un délai explicite `Retry-After` est plafonné à 24 heures ; les autres temps de recharge restent plafonnés à 10 minutes.
 
 La requête actuelle ne réessaye jamais la même cible tentée. Les demandes ultérieures l'ignorent jusqu'à ce qu'il soit
 le temps de recharge expire. S’il ne reste aucune cible éligible, le proxy renvoie HTTP 503 avec
@@ -355,7 +355,7 @@ exécution d'une instance opencodex qui reçoit des requêtes de modèle.
 Chaque cible est actuellement inéligible : par exemple, son fournisseur est désactivé, il est en phase de refroidissement,
 elle a déjà été tentée pour cette requête, ou une tâche v2 chiffrée l'exclut. Vérifier la cible
 état du fournisseur et erreurs récentes en amont. Pour les temps de recharge, attendez la valeur par défaut de 60 secondes ou la
-délai indiqué par `Retry-After` en amont (jamais plus de 10 minutes), puis réessayez.
+délai indiqué par `Retry-After` en amont (au maximum 24 heures pour un `Retry-After` explicite, contre 10 minutes pour les autres), puis réessayez.
 
 ### Pourquoi mon alias a-t-il été rejeté ?
 
