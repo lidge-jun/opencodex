@@ -20,6 +20,7 @@ const SYSTEM_ENV_NAMES = [
   "ANTHROPIC_BASE_URL",
   "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
   "ANTHROPIC_AUTH_TOKEN",
+  "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
 ] as const;
 
 const MANAGED_SYSTEM_ENV_NAMES = new Set<string>([
@@ -256,6 +257,14 @@ export async function injectSystemEnv(
   };
 
   try {
+    // Versions before 2.11 tracked this key, which prevents Claude's gateway model
+    // discovery. Remove it while we still have the old ownership metadata, before
+    // replacing that metadata with the keys managed by this version.
+    if (injectedKeys.includes("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL")) {
+      unsetLaunchctlEnv("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL");
+      injectedKeys.splice(injectedKeys.indexOf("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"), 1);
+      writeTracking(port, injectedKeys, tracked);
+    }
     inject("ANTHROPIC_BASE_URL", destination.origin);
     inject("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
     if (markerMode === "proxy") {
