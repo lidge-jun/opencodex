@@ -237,6 +237,33 @@ test("buffered Chat responses keep doubled input when two structured calls quali
   ]);
 });
 
+test("buffered Chat responses keep a doubled input when another call already agrees with the blocks", async () => {
+  // The single-input call explains the repeated pair on its own, so the doubled call beside it is a
+  // competing reading rather than the unique one, and neither argument is rewritten. Exactly one
+  // call still agrees with the blocks, so the range matcher suppresses the pair: the markup is
+  // settled, the doubled input is not.
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const content = block + block;
+  const doubledArguments = `{"input":"${script}${script}"}`;
+  const singleArguments = `{"input":"${script}"}`;
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: { content, tool_calls: [
+        { id: "call_doubled", function: { name: "exec", arguments: doubledArguments } },
+        { id: "call_single", function: { name: "exec", arguments: singleArguments } },
+      ] },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: doubledArguments },
+    { type: "tool_call_delta", arguments: singleArguments },
+  ]);
+});
+
 test("streamed Chat responses keep doubled input when two structured calls qualify", async () => {
   const script = "text('ok');";
   const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
@@ -259,6 +286,32 @@ test("streamed Chat responses keep doubled input when two structured calls quali
   expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
     { type: "tool_call_delta", arguments: argumentsText },
     { type: "tool_call_delta", arguments: argumentsText },
+  ]);
+});
+
+test("streamed Chat responses keep doubled input when another call already agrees with the blocks", async () => {
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const content = block + block;
+  const doubledArguments = `{"input":"${script}${script}"}`;
+  const singleArguments = `{"input":"${script}"}`;
+  const adapter = withTestTranslatorBudget(createOpenAIChatAdapter(provider));
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {}, context: { messages: [{ role: "user", content: "ping", timestamp: 0 }] } });
+  const frames = [
+    { choices: [{ delta: { content: content.slice(0, 40) } }] },
+    { choices: [{ delta: { content: content.slice(40) } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_doubled", function: { name: "exec", arguments: doubledArguments } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 1, id: "call_single", function: { name: "exec", arguments: singleArguments } }] } }] },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+  ];
+  const body = frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n";
+  const events: AdapterEvent[] = [];
+  for await (const event of adapter.parseStream(new Response(body))) if (event.type !== "heartbeat") events.push(event);
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: doubledArguments },
+    { type: "tool_call_delta", arguments: singleArguments },
   ]);
 });
 

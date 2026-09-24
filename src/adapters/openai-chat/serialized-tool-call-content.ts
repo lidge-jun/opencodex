@@ -339,6 +339,19 @@ function freeformBody(value: string): string {
   return value.replace(/^\r?\n/, "").trimEnd();
 }
 
+/**
+ * Whether a structured call's freeform input already equals the body of `repeated`. Such a call
+ * explains the repeated pair on its own, which is what competes with a doubled call in the same
+ * batch: both readings account for the two blocks, and the response never says which one it meant.
+ */
+function agreesWithRepeatedBlock(
+  structured: StructuredToolCallReference,
+  repeated: SerializedToolCall,
+): boolean {
+  const input = structured.names.has(repeated.name) ? inputFromArguments(structured.argumentsText) : undefined;
+  return input !== undefined && freeformBody(input) === freeformBody(repeated.body);
+}
+
 /** The `[start, end)` ranges of blocks whose function identity and freeform input match a dispatched call. */
 function duplicatedSerializedToolCallRanges(
   text: string,
@@ -348,12 +361,8 @@ function duplicatedSerializedToolCallRanges(
   if (structuredCalls.length === 0) return [];
   const repeated = repeatedCallIn(text, context);
   if (repeated) {
-    const body = freeformBody(repeated.body);
     // Without a single agreeing call the pair is ambiguous, so no shape of it is suppressed.
-    const matching = structuredCalls.filter(structured => {
-      const input = structured.names.has(repeated.name) ? inputFromArguments(structured.argumentsText) : undefined;
-      return input !== undefined && freeformBody(input) === body;
-    });
+    const matching = structuredCalls.filter(structured => agreesWithRepeatedBlock(structured, repeated));
     return matching.length === 1 ? [{ start: repeated.start, end: repeated.end }] : [];
   }
   return callsIn(text, context).filter(call => {
@@ -455,9 +464,10 @@ export interface StructuredToolCallInput {
  * Repairs the arguments of every structured call in one response against the visible text that
  * response carried, and returns them in input order. The per-call prefix repair stands alone,
  * because the markup it proves is matched against that call's own repaired input. The
- * doubled-input reduction is applied only when exactly ONE call qualifies: it rewrites executable
- * arguments, and two qualifying calls leave the repeated block ambiguous, so the uniqueness proof
- * has to cover the whole batch rather than one call at a time.
+ * doubled-input reduction is applied only when exactly ONE call in the batch qualifies: it either
+ * carries the doubled shape or already agrees with the repeated block body. It rewrites executable
+ * arguments, and a second qualifying call leaves the block ambiguous, so the uniqueness proof has
+ * to cover the whole batch rather than one call at a time.
  */
 export function reconcileStructuredToolCalls(
   calls: readonly StructuredToolCallInput[],
@@ -473,9 +483,12 @@ export function reconcileStructuredToolCalls(
 /**
  * Applies the doubled-input reduction across the batch. The doubled shape is valid JSON, so the
  * prefix repair returns it untouched, and the reduction only ever rewrites a call the repair left
- * alone. A repeated block with no uniquely qualifying call keeps every argument as sent, which is
- * also what leaves the markup visible: the range matcher then finds either no agreeing call or
- * several, and suppresses neither.
+ * alone. A call whose input already equals the repeated body is a competing explanation, not a
+ * bystander: both readings account for the pair and the response never picks one, so a batch with
+ * two qualifying calls keeps every argument exactly as sent. The reduction then rewrites nothing,
+ * and the markup is left to the range matcher, which suppresses the pair only when exactly one
+ * call already agrees. A lone qualifying call is always the doubled one, because a call that
+ * already agrees leaves nothing to reduce.
  */
 function reduceUnambiguousDoubledInput(
   references: readonly StructuredToolCallReference[],
@@ -483,11 +496,15 @@ function reduceUnambiguousDoubledInput(
 ): StructuredToolCallReference[] {
   const repeated = repeatedCallIn(serializedText);
   if (!repeated) return [...references];
-  const reductions = references.map(reference =>
-    doubledInputReduction(reference.argumentsText, reference.names, repeated));
-  if (reductions.filter(reduction => reduction !== undefined).length !== 1) return [...references];
+  const candidates = references.map(reference => ({
+    reduction: doubledInputReduction(reference.argumentsText, reference.names, repeated),
+    explains: agreesWithRepeatedBlock(reference, repeated),
+  }));
+  if (candidates.filter(candidate => candidate.explains || candidate.reduction !== undefined).length !== 1) {
+    return [...references];
+  }
   return references.map((reference, index) => {
-    const reduction = reductions[index];
+    const reduction = candidates[index]!.reduction;
     return reduction === undefined ? reference : { names: reference.names, argumentsText: reduction };
   });
 }
