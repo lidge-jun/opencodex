@@ -163,6 +163,7 @@ export const ru: Record<TKey, string> = {
   "onboarding.star.browserHint": "Открывает репозиторий на github.com в браузере.",
   "onboarding.star.openPage": "Открыть страницу GitHub",
   "onboarding.star.later": "Позже",
+  "onboarding.star.failed": "Не удалось поставить звезду через GitHub CLI (gh). Вы можете поставить её на странице GitHub.",
   "onboarding.star.starring": "Ставим звезду…",
   "onboarding.star.thanks": "Спасибо за звезду!",
   "onboarding.star.thanksBody": "Это действительно помогает. Ссылка GitHub на боковой панели всегда ведёт к репозиторию.",

@@ -5,7 +5,7 @@
  * Starring spends the user's GitHub identity, so nothing happens without a click. When the
  * user's own `gh` is signed in, the primary action stars through the existing
  * `POST /api/github/star` route; otherwise (or when that write fails) it opens the repository
- * page in the system browser. An installation that has already starred never sees the prompt.
+ * page in the system browser (a failed write says so in the dialog first). An installation that has already starred never sees the prompt.
  */
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { setClientResourceData } from "../client-resource";
@@ -20,7 +20,7 @@ interface StarStatus {
   url?: string;
 }
 
-type Step = "prompt" | "starring" | "thanks";
+type Step = "prompt" | "starring" | "thanks" | "failed";
 
 export const STAR_ONBOARDING_KEY = "ocx-desktop-star-onboarding";
 const REPO_URL = "https://github.com/lidge-jun/opencodex";
@@ -80,7 +80,7 @@ export function DesktopStarOnboarding({ apiBase, enabled }: { apiBase: string; e
     setDone(true);
   }, []);
 
-  if (done || !status) return null;
+  if (done || !enabled || !status) return null;
   return <StarOnboardingDialog apiBase={apiBase} status={status} onClose={close} />;
 }
 
@@ -128,12 +128,13 @@ function StarOnboardingDialog({
         return;
       }
     } catch {
-      // Falls through to the repository page, where the user can star it themselves.
+      // Reported below; the repository page stays one click away.
     }
-    openRepo();
+    setStep("failed");
   };
 
   const thanks = step === "thanks";
+  const failed = step === "failed";
 
   return (
     <dialog
@@ -153,7 +154,7 @@ function StarOnboardingDialog({
           {t(thanks ? "onboarding.star.thanks" : "onboarding.star.title")}
         </h3>
         <p id={bodyId} className="star-onboarding-body">
-          {t(thanks ? "onboarding.star.thanksBody" : "onboarding.star.body")}
+          {t(thanks ? "onboarding.star.thanksBody" : failed ? "onboarding.star.failed" : "onboarding.star.body")}
         </p>
         {thanks ? (
           <div className="star-onboarding-actions">
@@ -164,7 +165,7 @@ function StarOnboardingDialog({
         ) : (
           <>
             <div className="star-onboarding-actions">
-              {viaGh ? (
+              {viaGh && !failed ? (
                 <button type="button" className="btn btn-primary" disabled={step === "starring"}
                   onClick={() => { void starWithGh(); }} autoFocus>
                   <IconStar aria-hidden="true" />
@@ -173,7 +174,7 @@ function StarOnboardingDialog({
               ) : (
                 <button type="button" className="btn btn-primary" onClick={openRepo} autoFocus>
                   <IconGithub aria-hidden="true" />
-                  {t("onboarding.star.cta")}
+                  {t(failed ? "onboarding.star.openPage" : "onboarding.star.cta")}
                 </button>
               )}
               <button type="button" className="btn btn-ghost" disabled={step === "starring"} onClick={onClose}>
@@ -181,8 +182,8 @@ function StarOnboardingDialog({
               </button>
             </div>
             <p className="star-onboarding-hint">
-              {t(viaGh ? "onboarding.star.ghHint" : "onboarding.star.browserHint")}
-              {viaGh && (
+              {t(viaGh && !failed ? "onboarding.star.ghHint" : "onboarding.star.browserHint")}
+              {viaGh && !failed && (
                 <>
                   {" "}
                   <button type="button" className="star-onboarding-link" disabled={step === "starring"} onClick={openRepo}>

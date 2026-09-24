@@ -96,6 +96,7 @@ export const en = {
   "onboarding.star.browserHint": "Opens the repository on github.com in your browser.",
   "onboarding.star.openPage": "Open the GitHub page instead",
   "onboarding.star.later": "Maybe later",
+  "onboarding.star.failed": "Couldn't star it with the GitHub CLI (gh). You can star it on the GitHub page instead.",
   "onboarding.star.starring": "Starring…",
   "onboarding.star.thanks": "Thanks for the star!",
   "onboarding.star.thanksBody": "It really helps. The GitHub link in the sidebar takes you back to the repository any time.",

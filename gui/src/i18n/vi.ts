@@ -94,6 +94,7 @@ export const vi: Record<TKey, string> = {
   "onboarding.star.browserHint": "Mở kho mã trên github.com trong trình duyệt.",
   "onboarding.star.openPage": "Mở trang GitHub thay vào đó",
   "onboarding.star.later": "Để sau",
+  "onboarding.star.failed": "Không thể gắn sao bằng GitHub CLI (gh). Bạn có thể gắn sao trên trang GitHub.",
   "onboarding.star.starring": "Đang gắn sao…",
   "onboarding.star.thanks": "Cảm ơn bạn đã gắn sao!",
   "onboarding.star.thanksBody": "Điều này thật sự rất có ích. Liên kết GitHub ở thanh bên luôn đưa bạn về kho mã.",

@@ -2284,6 +2284,7 @@ export const zhTW: Record<TKey, string> = {
   "onboarding.star.browserHint": "在瀏覽器中開啟 github.com 上的儲存庫。",
   "onboarding.star.openPage": "改為開啟 GitHub 頁面",
   "onboarding.star.later": "稍後再說",
+  "onboarding.star.failed": "無法透過 GitHub CLI（gh）加上星號。你可以改在 GitHub 頁面上加星。",
   "onboarding.star.starring": "正在加星…",
   "onboarding.star.thanks": "感謝您的星星！",
   "onboarding.star.thanksBody": "這真的很有幫助。隨時可以透過側邊欄的 GitHub 連結回到儲存庫。",

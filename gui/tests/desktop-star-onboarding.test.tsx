@@ -19,6 +19,7 @@ let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
 let starState: string;
+let postOk: boolean;
 let calls: string[];
 
 function setup(userAgent: string) {
@@ -39,13 +40,14 @@ beforeEach(() => {
   originalFetch = globalThis.fetch;
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   starState = "not-starred";
+  postOk = true;
   calls = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const method = init?.method ?? "GET";
       calls.push(`${method} ${new URL(String(input), "http://127.0.0.1").pathname}`);
-      if (method === "POST") return Response.json({ ok: true, state: "starred" });
+      if (method === "POST") return postOk ? Response.json({ ok: true, state: "starred" }) : Response.json({ ok: false, state: "not-starred" });
       return Response.json({ state: starState, url: "https://github.com/lidge-jun/opencodex" });
     },
   });
@@ -64,13 +66,13 @@ afterEach(async () => {
   await win.happyDOM?.close?.();
 });
 
-async function mount() {
+async function mount(enabled = true) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root = createRoot(host);
     root.render(
       <LanguageProvider>
-        <DesktopStarOnboarding apiBase="" enabled />
+        <DesktopStarOnboarding apiBase="" enabled={enabled} />
       </LanguageProvider>,
     );
   });
@@ -129,4 +131,22 @@ test("a plain browser tab is never asked", async () => {
   await mount();
   expect(host.querySelector(".star-onboarding")).toBeNull();
   expect(calls).toEqual([]);
+});
+
+test("a failed gh star says so and keeps the repository page one click away", async () => {
+  setup(DESKTOP_UA);
+  postOk = false;
+  await mount();
+  await act(async () => { click(host.querySelector(".star-onboarding .btn-primary")!); await new Promise((r) => setTimeout(r, 20)); });
+  expect(calls).toEqual(["GET /api/github/star", "POST /api/github/star"]);
+  expect(host.querySelector(".star-onboarding")).toBeTruthy();
+  expect(host.querySelector(".star-onboarding-mark--done")).toBeNull();
+  expect(win.localStorage.getItem(STAR_ONBOARDING_KEY)).toBeNull();
+});
+
+test("a disabled prompt is not shown and not marked seen", async () => {
+  setup(DESKTOP_UA);
+  await mount(false);
+  expect(host.querySelector(".star-onboarding")).toBeNull();
+  expect(win.localStorage.getItem(STAR_ONBOARDING_KEY)).toBeNull();
 });

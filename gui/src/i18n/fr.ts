@@ -93,6 +93,7 @@ export const fr: Record<TKey, string> = {
   "onboarding.star.browserHint": "Ouvre le dépôt sur github.com dans votre navigateur.",
   "onboarding.star.openPage": "Ouvrir plutôt la page GitHub",
   "onboarding.star.later": "Plus tard",
+  "onboarding.star.failed": "Impossible d'ajouter l'étoile avec la CLI GitHub (gh). Vous pouvez l'ajouter depuis la page GitHub.",
   "onboarding.star.starring": "Ajout de l’étoile…",
   "onboarding.star.thanks": "Merci pour l’étoile !",
   "onboarding.star.thanksBody": "Ça aide vraiment. Le lien GitHub de la barre latérale vous ramène au dépôt à tout moment.",

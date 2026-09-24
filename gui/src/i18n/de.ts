@@ -163,6 +163,7 @@ export const de: Record<TKey, string> = {
   "onboarding.star.browserHint": "Öffnet das Repository auf github.com in Ihrem Browser.",
   "onboarding.star.openPage": "Stattdessen GitHub-Seite öffnen",
   "onboarding.star.later": "Später",
+  "onboarding.star.failed": "Mit der GitHub CLI (gh) konnte kein Stern vergeben werden. Du kannst ihn stattdessen auf der GitHub-Seite vergeben.",
   "onboarding.star.starring": "Wird markiert…",
   "onboarding.star.thanks": "Danke für den Stern!",
   "onboarding.star.thanksBody": "Das hilft wirklich. Über den GitHub-Link in der Seitenleiste gelangen Sie jederzeit zum Repository.",

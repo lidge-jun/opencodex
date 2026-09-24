@@ -163,6 +163,7 @@ export const ko: Record<TKey, string> = {
   "onboarding.star.browserHint": "브라우저에서 github.com 저장소 페이지를 엽니다.",
   "onboarding.star.openPage": "GitHub 페이지로 열기",
   "onboarding.star.later": "나중에",
+  "onboarding.star.failed": "GitHub CLI(gh)로 스타를 누르지 못했어요. GitHub 페이지에서 직접 눌러 주세요.",
   "onboarding.star.starring": "스타 누르는 중…",
   "onboarding.star.thanks": "스타 감사합니다!",
   "onboarding.star.thanksBody": "정말 큰 힘이 됩니다. 사이드바의 GitHub 링크로 언제든 저장소에 갈 수 있습니다.",

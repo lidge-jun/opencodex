@@ -163,6 +163,7 @@ export const ja: Record<TKey, string> = {
   "onboarding.star.browserHint": "ブラウザで github.com のリポジトリを開きます。",
   "onboarding.star.openPage": "代わりに GitHub ページを開く",
   "onboarding.star.later": "あとで",
+  "onboarding.star.failed": "GitHub CLI（gh）でスターを付けられませんでした。GitHub のページから付けてください。",
   "onboarding.star.starring": "スターを付けています…",
   "onboarding.star.thanks": "スターありがとうございます！",
   "onboarding.star.thanksBody": "とても励みになります。サイドバーの GitHub リンクからいつでもリポジトリを開けます。",

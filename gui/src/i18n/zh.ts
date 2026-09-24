@@ -163,6 +163,7 @@ export const zh: Record<TKey, string> = {
   "onboarding.star.browserHint": "在浏览器中打开 github.com 上的仓库。",
   "onboarding.star.openPage": "改为打开 GitHub 页面",
   "onboarding.star.later": "以后再说",
+  "onboarding.star.failed": "无法通过 GitHub CLI（gh）点亮星标。你可以在 GitHub 页面上点亮。",
   "onboarding.star.starring": "正在加星…",
   "onboarding.star.thanks": "感谢您的星标！",
   "onboarding.star.thanksBody": "这真的很有帮助。随时可以通过侧边栏的 GitHub 链接回到仓库。",

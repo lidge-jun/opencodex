@@ -95,6 +95,7 @@ export const tr: Record<TKey, string> = {
   "onboarding.star.browserHint": "Depoyu tarayıcınızda github.com üzerinde açar.",
   "onboarding.star.openPage": "Bunun yerine GitHub sayfasını aç",
   "onboarding.star.later": "Daha sonra",
+  "onboarding.star.failed": "GitHub CLI (gh) ile yıldız verilemedi. Bunun yerine GitHub sayfasından yıldız verebilirsiniz.",
   "onboarding.star.starring": "Yıldız veriliyor…",
   "onboarding.star.thanks": "Yıldız için teşekkürler!",
   "onboarding.star.thanksBody": "Gerçekten çok yardımcı oluyor. Kenar çubuğundaki GitHub bağlantısı sizi her zaman depoya götürür.",
