@@ -142,21 +142,36 @@ export default function ApiKeysWorkspace({
   const [deleteFailed, setDeleteFailed] = useState(false);
   const [rotationPending, setRotationPending] = useState(false);
   const [rotationFailed, setRotationFailed] = useState(false);
+  // Fallback "copied" badge for when the host shows the one-time secret without
+  // wiring onCopyRotationSecret — records the copied rotation's id so a fresh
+  // secret does not inherit the badge.
+  const [rotationCopyFallbackId, setRotationCopyFallbackId] = useState<string | null>(null);
 
   const selected = selectedId ? (keys.find(k => k.id === selectedId) ?? null) : null;
-  const selectedHasRotationSecret = Boolean(selected && rotationSecret?.id === selected.id);
   const selectedRotationId = selected
     ? (rotationSecret?.id === selected.id ? rotationSecret.rotationId : selected.pendingRotation?.id)
     : undefined;
-  // Each handler is independently optional, so "enabled" holds only when the
-  // key's current state has an action the caller wired: start for an idle key,
-  // commit/abort for a pending one. A revealed one-time secret counts on its
-  // own — hiding the section then would strand the only copy. Rendering the
-  // rest offers operations that can only fail locally.
-  const rotationEnabled = selectedHasRotationSecret || (selectedRotationId
-    ? Boolean(onRotationCommit || onRotationAbort)
-    : Boolean(onRotationStart));
+  // A pending rotation keeps the section up no matter which handlers are wired:
+  // the pending/expiry notice is status, not an action, and hiding it would
+  // leave the user unable to tell a rotation is in flight — or strand a
+  // revealed one-time secret. Only an idle key still needs a callable start.
+  // Buttons inside keep their own per-handler gating.
+  const rotationEnabled = selectedRotationId !== undefined || Boolean(onRotationStart);
   const mutationPending = deleting || renamePending || rotationPending;
+
+  // When the host did not wire a copy handler, the one-time secret still needs
+  // a way off the screen — a disabled button would strand it. Falls back to a
+  // direct clipboard write; a missing clipboard API makes the click a no-op.
+  const copyRotationSecretFallback = () => {
+    const secret = rotationSecret;
+    if (!secret) return;
+    const write = navigator.clipboard?.writeText?.(secret.key);
+    if (!write) return;
+    void write.then(() => {
+      setRotationCopyFallbackId(secret.rotationId);
+      window.setTimeout(() => setRotationCopyFallbackId(null), 2000);
+    }).catch(() => {});
+  };
 
   const runRotation = async (operation: "start" | "commit" | "abort") => {
     if (!selected || rotationPending) return;
@@ -387,11 +402,9 @@ export default function ApiKeysWorkspace({
                           <p>{t("api.rotation.secretOnce")}</p>
                           <code>{rotationSecret.key}</code>
                           <span>
-                            {onCopyRotationSecret && (
-                              <button type="button" className="btn btn-sm" onClick={onCopyRotationSecret}>
-                                {rotationCopied ? t("api.copied") : t("api.copy")}
-                              </button>
-                            )}
+                            <button type="button" className="btn btn-sm" onClick={onCopyRotationSecret ?? copyRotationSecretFallback}>
+                              {(rotationCopied || rotationCopyFallbackId === rotationSecret.rotationId) ? t("api.copied") : t("api.copy")}
+                            </button>
                             {onDismissRotationSecret && (
                               <button type="button" className="btn btn-ghost btn-sm" onClick={onDismissRotationSecret}>{t("common.close")}</button>
                             )}

@@ -332,6 +332,9 @@ test("a start-only integration keeps the issued secret on screen", async () => {
   });
   expect(container.textContent).toContain("Key rotation");
   expect(container.textContent).toContain("ocx_data_shown_once");
+  // The secret is only useful if it can leave the screen: Copy stays even when
+  // the host never wired a copy handler (clipboard fallback).
+  expect(container.querySelector(".api-key-reveal")!.textContent).toContain("Copy");
   expect(container.textContent).not.toContain("Commit rotation");
   expect(container.textContent).not.toContain("Abort rotation");
 });
@@ -351,8 +354,9 @@ test("the secret's own controls are wired separately from the lifecycle actions"
   };
   const rotationSecret = { id: "k1", key: "ocx_data_shown_once", rotationId: "rotation-1" };
 
-  // A finish handler keeps the section up, but Copy and Close still check
-  // their own callbacks — an unwired reveal box is read-only.
+  // A finish handler keeps the section up. Copy is always rendered — a shown
+  // secret is useless if it cannot leave the screen; an unwired host gets the
+  // clipboard fallback. Close still checks its own callback.
   const container = await mount({
     keys: [pendingKey],
     rotationSecret,
@@ -361,7 +365,8 @@ test("the secret's own controls are wired separately from the lifecycle actions"
   await openKey(container);
   const reveal = container.querySelector<HTMLElement>(".api-key-reveal")!;
   expect(reveal.textContent).toContain("ocx_data_shown_once");
-  expect([...reveal.querySelectorAll("button")]).toHaveLength(0);
+  const revealLabels = [...reveal.querySelectorAll("button")].map(b => b.textContent?.trim());
+  expect(revealLabels).toEqual(["Copy"]);
 
   await act(async () => { active?.unmount(); active = null; });
 
@@ -404,13 +409,16 @@ test("a pending key renders only the rotation actions that have handlers", async
   await act(async () => { active?.unmount(); active = null; });
 
   // Start without commit/abort: no action applies to a pending key, so the
-  // section hides rather than offering a Start that cannot help it.
+  // buttons hide. The pending status and expiry stay — they are notice, not
+  // actions, and hiding them would leave the rotation invisible to the user.
   const startOnly = await mount({
     keys: [pendingKey],
     onRotationStart: async () => true,
   });
   await openKey(startOnly);
-  expect(startOnly.textContent).not.toContain("Key rotation");
+  expect(startOnly.textContent).toContain("Key rotation");
+  expect(startOnly.textContent).toContain("Rotation is pending");
+  expect(startOnly.textContent).toContain("Overlap expires:");
   expect(startOnly.textContent).not.toContain("Commit rotation");
   expect(startOnly.textContent).not.toContain("Abort rotation");
 });
