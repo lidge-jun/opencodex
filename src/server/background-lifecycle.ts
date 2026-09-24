@@ -1,4 +1,8 @@
 import type { StorageCleanupPolicy } from "../types";
+import { join } from "node:path";
+import { getConfigDir } from "../config/paths";
+import { getActiveTurnCount } from "./lifecycle";
+import { responseStateMetrics } from "../responses/state";
 import { startStateStoreSweeper } from "../lib/state-store-sweeper";
 import {
   abortStorageCleanupPolicyJobAsync,
@@ -31,9 +35,12 @@ import {
 
 type PolicyApply = (policy: StorageCleanupPolicy) => void;
 
+type RecorderHandle = { stop(): void };
+
 type ProcessLoops = {
-  memoryWatchdog: MemoryWatchdog;
-  stateStoreSweeper: ReturnType<typeof startStateStoreSweeper>;
+  diagnostics: RecorderHandle | null;
+  memoryWatchdog: MemoryWatchdog | null;
+  stateStoreSweeper: ReturnType<typeof startStateStoreSweeper> | null;
 };
 
 type LeaseOwner = {
@@ -58,11 +65,30 @@ function setLivePolicyOwner(applyPolicy: PolicyApply | null): void {
 }
 
 function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
-  let memoryWatchdog: MemoryWatchdog | null = null;
-  let stateStoreSweeper: ReturnType<typeof startStateStoreSweeper> | null = null;
+  const loops: ProcessLoops = { diagnostics: null, memoryWatchdog: null, stateStoreSweeper: null };
   try {
-    memoryWatchdog = startMemoryWatchdog();
-    stateStoreSweeper = startStateStoreSweeper();
+    loops.memoryWatchdog = startMemoryWatchdog();
+    if (process.env.OPENCODEX_RUNTIME_DIAGNOSTICS === "1") {
+      // Opt-in, and loaded only when it is opted in. The one thing that opts in today is
+      // scripts/windows-visible-proxy.ps1 (the desktop launcher, where an event-loop stall is
+      // a frozen window), so no other install pays for the recorder or its child process.
+      void import("../lib/runtime-diagnostics").then(module => module.startRuntimeDiagnostics(
+        join(getConfigDir(), "runtime-diagnostics.jsonl"),
+        () => {
+          const turns = getActiveTurnCount();
+          const state = turns > 0 ? responseStateMetrics() : null;
+          return { activeTurns: turns, responseBytes: state?.totalBytes ?? null,
+            spillWrites: state?.spillWrites ?? null, spillFailures: state?.spillWriteFailures ?? null,
+            spillTimeoutRefusals: state?.spillAclTimeoutMemoRefusals ?? null };
+        },
+      )).then(recorder => {
+        // The identity check is the teardown race: if these loops were replaced or rolled
+        // back while the module loaded, the recorder has no owner and stops itself.
+        if (processLoops === loops) loops.diagnostics = recorder;
+        else recorder.stop();
+      }).catch(() => console.warn("[runtime-diagnostics] recorder could not start"));
+    }
+    loops.stateStoreSweeper = startStateStoreSweeper();
     setLivePolicyOwner(applyPolicy);
     startStorageCleanupScheduler();
     // Opt-in: the tick itself is a no-op unless config.quotaResetNotify is enabled with a
@@ -95,10 +121,11 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
       .catch(() => {
         // The next poll tick retries.
       });
-    return { memoryWatchdog, stateStoreSweeper };
+    return loops;
   } catch (error) {
-    memoryWatchdog?.stop();
-    stateStoreSweeper?.stop();
+    loops.diagnostics?.stop();
+    loops.memoryWatchdog?.stop();
+    loops.stateStoreSweeper?.stop();
     stopStorageCleanupScheduler();
     stopQuotaResetPoller();
     stopCatalogAutoRefresh();
@@ -110,8 +137,9 @@ function startProcessLoops(applyPolicy: PolicyApply): ProcessLoops {
 function stopProcessLoops(): void {
   const loops = processLoops;
   processLoops = null;
-  loops?.memoryWatchdog.stop();
-  loops?.stateStoreSweeper.stop();
+  loops?.diagnostics?.stop();
+  loops?.memoryWatchdog?.stop();
+  loops?.stateStoreSweeper?.stop();
   stopStorageCleanupScheduler();
   stopQuotaResetPoller();
   stopCatalogAutoRefresh();

@@ -377,17 +377,51 @@ function Read-ListenTarget {
 }
 
 function Read-JsonUrl([string]$Url) {
-  $request = [System.Net.HttpWebRequest]::Create($Url)
-  $request.Method = "GET"
-  $request.Timeout = 700
-  $request.ReadWriteTimeout = 700
-  $response = $request.GetResponse()
-  try {
-    $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
-    try { return ($reader.ReadToEnd() | ConvertFrom-Json) } finally { $reader.Dispose() }
-  } finally {
-    $response.Dispose()
+  # GetResponse() stalled the WinForms UI thread for up to its 700 ms timeout on every
+  # 3 s tick. The request now runs on its own task: a tick waits 100 ms for the loopback
+  # round-trip and otherwise repeats what the last completed read proved. The 3 s ceiling
+  # replaces the timeout the task-based call ignores, so a wedged proxy still goes stale.
+  $task = $script:jsonTask
+  if ($null -eq $task) {
+    try {
+      $request = [System.Net.HttpWebRequest]::Create($Url)
+      $request.Method = "GET"
+      $request.Timeout = 700
+      $request.ReadWriteTimeout = 700
+      $task = $request.GetResponseAsync()
+    } catch {
+      $script:jsonPayload = $null
+      return $null
+    }
+    $script:jsonRequest = $request
+    $script:jsonTask = $task
+    $script:jsonTaskStarted = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   }
+  # A faulted task makes Wait() throw, and a task left installed would throw on every later
+  # tick and latch the tray Offline: observe the fault here and re-issue on the next tick.
+  $pending = $true
+  try { $pending = -not $task.Wait(100) } catch { $pending = $false }
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  if ($pending -and ($now - $script:jsonTaskStarted) -lt 3000) {
+    return $script:jsonPayload
+  }
+  $script:jsonTask = $null
+  $script:jsonPayload = $null
+  if ($pending) {
+    # Abandoned at the ceiling and no later tick reads its response, so Abort() is what
+    # releases the socket: without it the tray spends one connection every 3 s.
+    try { $script:jsonRequest.Abort() } catch { }
+  } else {
+    try {
+      $response = $task.Result
+      try {
+        $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+        try { $script:jsonPayload = ($reader.ReadToEnd() | ConvertFrom-Json) } finally { $reader.Dispose() }
+      } finally { $response.Dispose() }
+    } catch { }
+  }
+  $script:jsonRequest = $null
+  return $script:jsonPayload
 }
 
 $notify = New-Object System.Windows.Forms.NotifyIcon
@@ -439,6 +473,10 @@ $script:pendingStarted = 0L
 $script:pendingDeadline = 0L
 $script:pendingOldProxyPid = $null
 $script:pendingProcess = $null
+$script:jsonTask = $null
+$script:jsonRequest = $null
+$script:jsonTaskStarted = 0L
+$script:jsonPayload = $null
 
 function Set-PendingAction([string]$Action, [int]$TimeoutSeconds) {
   if ($null -ne $script:pendingAction) {
@@ -479,6 +517,43 @@ function Complete-PendingAction([bool]$Success) {
     Write-ActionLog "$action failed to reach the expected state"
     $notify.ShowBalloonTip(5000, "opencodex action failed", "$action did not reach the expected state. Open the logs folder or run ocx doctor.", [System.Windows.Forms.ToolTipIcon]::Error)
   }
+}
+
+function Test-RecoveryGuardianIntentEnabled([string]$OpenCodexHome) {
+  # A missing marker means this home predates the guardian, or the guardian was
+  # removed with it: the legacy tray actions stand on their own. Any marker that
+  # exists is load-bearing, so an unreadable one must fail closed and let the
+  # helper supply its own bounded error rather than dispatching a silent action.
+  $markerPath = Join-Path $OpenCodexHome 'recovery-guardian.json'
+  if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { return $false }
+  try {
+    $markerInfo = Get-Item -LiteralPath $markerPath -Force -ErrorAction Stop
+    if ((([int]$markerInfo.Attributes -band [int][System.IO.FileAttributes]::ReparsePoint) -ne 0) -or $markerInfo.Length -gt 16KB) { return $true }
+    $marker = [System.IO.File]::ReadAllText($markerInfo.FullName, [System.Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+    # Only a complete explicit disabled marker preserves legacy tray actions
+    # without requiring the new installed helper. Every other marker state is
+    # fail-closed and lets the helper supply its bounded error.
+    return -not ($marker.version -eq 1 -and $marker.enabled -is [bool] -and -not $marker.enabled)
+  } catch { return $true }
+}
+
+function Set-RecoveryIntent(
+  [Parameter(Mandatory)][string]$OpenCodexHome,
+  [Parameter(Mandatory)][ValidateSet('running', 'stopped', 'maintenance')][string]$Mode,
+  [long]$Until = 0
+) {
+  # The installed tray must write before dispatching its child: an older running
+  # proxy cannot be trusted to persist a manual Stop on the tray's behalf.
+  $helper = Join-Path $PSScriptRoot 'opencodex-recovery-intent.ps1'
+  if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) {
+    if (-not (Test-RecoveryGuardianIntentEnabled $OpenCodexHome)) { return }
+    throw 'Recovery intent helper is missing; lifecycle action was not dispatched.'
+  }
+  # Array splatting is positional in Windows PowerShell. Keep the helper's
+  # named lifecycle arguments in a hashtable so a home path never binds -Mode.
+  $intentArgs = @{ OpenCodexHome = $OpenCodexHome; Mode = $Mode }
+  if ($Mode -eq 'maintenance') { $intentArgs.Until = $Until }
+  & $helper @intentArgs
 }
 
 function Update-TrayState {
@@ -604,8 +679,12 @@ function Update-TrayState {
 }
 
 $openItem.add_Click({ Start-OcxCommand @("gui") })
-$updateItem.add_Click({ Start-OcxCommand @("gui") })
+$updateItem.add_Click({ Start-OcxCommand @("gui") })# The intent write comes FIRST: a refused write throws, and a latched pending action
+# would lock these three menu items for its whole budget and then report a failure the
+# tray never actually dispatched.
+
 $startItem.add_Click({
+  Set-RecoveryIntent -OpenCodexHome $OpenCodexHome -Mode "running"
   if (-not (Set-PendingAction "Start Proxy" 75)) { return }
   $statusItem.Text = "Proxy: Starting..."
   # service start can spend 20s and the CLI then observes health for another 40s.
@@ -617,6 +696,7 @@ $startItem.add_Click({
   }
 })
 $stopItem.add_Click({
+  Set-RecoveryIntent -OpenCodexHome $OpenCodexHome -Mode "stopped"
   if (-not (Set-PendingAction "Stop Proxy" 15)) { return }
   $statusItem.Text = "Proxy: Stopping..."
   $stopProcess = Start-OcxCommand @("stop") -TrackExit
@@ -627,6 +707,8 @@ $stopItem.add_Click({
   }
 })
 $restartItem.add_Click({
+  # No intent write here: `ocx __tray-restart` signs the maintenance fence and clears it in
+  # the same function, and a second signature per restart resets the guardian's window.
   if (-not (Set-PendingAction "Restart Proxy" 160)) { return }
   $statusItem.Text = "Proxy: Restarting..."
   # /api/system/restart may drain active work for 60s and then spend up to 70s

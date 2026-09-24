@@ -10,6 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { helperPath, repoPath, repoRoot } from "../helpers/repo-root";
 import { join } from "node:path";
 import {
@@ -22,6 +23,7 @@ import {
   readWindowsTrayRunValueWithAsyncRunner,
   readWindowsTrayRunValueWithRunner,
   replaceWindowsTrayOwnedFile,
+  trayHomeRequiresRecoveryIntentHelper,
   windowsPowerShellPath,
   windowsTrayProcessArgs,
   windowsTrayRunValue,
@@ -394,6 +396,126 @@ describe("Windows tray packaging and command safety", () => {
     expect(source).not.toContain("Invoke-Expression");
     expect(source).not.toContain("taskkill");
     expect(source).not.toContain("Stop-Process");
+  });
+
+  test("writes the recovery intent before latching a pending menu action", () => {
+    // A refused intent write throws out of the click handler: PowerShell keeps the tray
+    // alive (probed on 5.1) but never runs the rest of the body, so a latch set first
+    // would lock these three items for its whole budget and then balloon a failure for
+    // an action the tray never dispatched.
+    const source = readFileSync(repoPath("src", "tray", "windows-tray.ps1"), "utf8");
+    const start = source.indexOf('$startItem.add_Click');
+    const stop = source.indexOf('$stopItem.add_Click');
+    const restart = source.indexOf('$restartItem.add_Click');
+    const logs = source.indexOf('$logsItem.add_Click');
+    expect(start).toBeGreaterThan(-1);
+    expect(stop).toBeGreaterThan(start);
+    expect(logs).toBeGreaterThan(restart);
+    for (const [body, mode, action] of [
+      [source.slice(start, stop), "running", "Start Proxy"],
+      [source.slice(stop, restart), "stopped", "Stop Proxy"],
+    ] as const) {
+      expect(body).toContain(`Set-RecoveryIntent -OpenCodexHome $OpenCodexHome -Mode "${mode}"`);
+      expect(body.indexOf("Set-RecoveryIntent")).toBeLessThan(body.indexOf(`Set-PendingAction "${action}"`));
+    }
+    // The restart fence belongs to `ocx __tray-restart`, which signs it and clears it in
+    // the same function; a second signature here would reset primaryReady per restart.
+    expect(source.slice(restart, logs)).not.toContain("Set-RecoveryIntent");
+  });
+
+  test("reads health status without a synchronous socket wait on the UI thread", () => {
+    const source = readFileSync(repoPath("src", "tray", "windows-tray.ps1"), "utf8");
+    // GetResponse() measured 700-730 ms per 3 s tick on a home whose proxy is down or
+    // wedged (probe on PS 5.1): the request must go out on a task, and the tick must
+    // wait only briefly for it.
+    expect(source).not.toContain("$response = $request.GetResponse()");
+    expect(source).toContain("$task = $request.GetResponseAsync()");
+    expect(source).toContain("-not $task.Wait(100)");
+    // The task-based call ignores Timeout, so the re-issue ceiling is what stops a
+    // wedged proxy being reported as online from the cache forever.
+    expect(source).toContain("-lt 3000");
+    // The ceiling path is the only handle on a request nobody will observe again.
+    expect(source).toContain("$script:jsonRequest.Abort()");
+  });
+
+  test("recovers after a faulted status read instead of going blind for good", async () => {
+    if (process.platform !== "win32") return;
+    const source = readFileSync(repoPath("src", "tray", "windows-tray.ps1"), "utf8");
+    const lines = source.split(/\r?\n/);
+    // Execute the real function, extracted verbatim: a faulted task whose clearing sits
+    // below the throwing `Wait()` makes every later tick rethrow, so the tray reads
+    // Offline permanently and never notices the proxy coming back.
+    const start = lines.findIndex(line => line.startsWith("function Read-JsonUrl"));
+    expect(start).toBeGreaterThan(-1);
+    const end = lines.findIndex((line, index) => index > start && line === "}");
+    expect(end).toBeGreaterThan(start);
+    const listener = createServer();
+    await new Promise<void>(resolve => listener.listen(0, "127.0.0.1", resolve));
+    const port = (listener.address() as { port: number }).port;
+    await new Promise<void>(resolve => listener.close(() => resolve()));
+    const root = mkdtempSync(join(tmpdir(), "ocx-tray-blindness-"));
+    try {
+      const refusing = "http://127.0.0.1:9/healthz";
+      const live = `http://127.0.0.1:${port}/healthz`;
+      const script = join(root, "ticks.ps1");
+      writeFileSync(script, [
+        "$ErrorActionPreference = 'Stop'",
+        lines.slice(start, end + 1).join("\r\n"),
+        "$script:jsonTask = $null; $script:jsonRequest = $null; $script:jsonTaskStarted = 0L; $script:jsonPayload = $null",
+        "function Tick($u) { $t = ''; $v = $null; try { $v = Read-JsonUrl $u } catch { $t = $_.Exception.GetType().Name }; return [pscustomobject]@{ thrown = $t; value = $v } }",
+        "$throws = 0",
+        `for ($n = 1; $n -le 6; $n++) { if ((Tick '${refusing}').thrown) { $throws++ }; Start-Sleep -Milliseconds 250 }`,
+        "$listener = New-Object System.Net.HttpListener",
+        `$listener.Prefixes.Add('http://127.0.0.1:${port}/'); $listener.Start()`,
+        "$ctx = $listener.GetContextAsync(); $seen = 0",
+        `for ($n = 1; $n -le 10; $n++) { $r = Tick '${live}'; if ($r.thrown) { $throws++ }; if ($null -ne $r.value) { $seen++ }`,
+        "  if ($ctx.Wait(400)) { $c = $ctx.Result; $b = [Text.Encoding]::UTF8.GetBytes('{\"status\":\"ok\",\"service\":\"opencodex\",\"port\":"
+        + port + "}')",
+        "    $c.Response.OutputStream.Write($b, 0, $b.Length); $c.Response.Close(); $ctx = $listener.GetContextAsync() }",
+        "  Start-Sleep -Milliseconds 250 }",
+        "$listener.Stop()",
+        "[Console]::Out.WriteLine(('THROWS={0} SEEN={1}' -f $throws, $seen))",
+      ].join("\r\n"));
+      const run = Bun.spawnSync(
+        [windowsPowerShellPath(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script],
+        { stdout: "pipe", stderr: "pipe", timeout: 60_000 },
+      );
+      const out = Buffer.from(run.stdout).toString();
+      expect(run.exitCode, Buffer.from(run.stderr).toString()).toBe(0);
+      expect(out).toMatch(/THROWS=0 SEEN=[1-9]/);
+    } finally {
+      removeTreeWithRetry(root);
+    }
+  }, 90_000);
+
+  test("derives the intent-helper ownership rule from the home, not the source tree", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-tray-helper-"));
+    try {
+      // No marker: a legacy home, and the installed tray dispatches without a helper.
+      expect(trayHomeRequiresRecoveryIntentHelper(home)).toBe(false);
+      writeFileSync(join(home, "recovery-guardian.json"), JSON.stringify({ version: 1, enabled: false }));
+      expect(trayHomeRequiresRecoveryIntentHelper(home)).toBe(false);
+      writeFileSync(join(home, "recovery-guardian.json"), JSON.stringify({ version: 1, enabled: true }));
+      expect(trayHomeRequiresRecoveryIntentHelper(home)).toBe(true);
+      // A marker the tray script cannot read is fail-closed there too, so an install
+      // that cannot see scripts/ must not certify a helper it never installed.
+      writeFileSync(join(home, "recovery-guardian.json"), "{ nope");
+      expect(trayHomeRequiresRecoveryIntentHelper(home)).toBe(true);
+      // A published install ships no scripts/ directory and therefore no helper: the same
+      // marker must not demand one, or the home is stale forever and reinstall cannot
+      // clear what status just insisted on.
+      expect(trayHomeRequiresRecoveryIntentHelper(home, false)).toBe(false);
+      writeFileSync(join(home, "recovery-guardian.json"), JSON.stringify({ version: 1, enabled: true }));
+      expect(trayHomeRequiresRecoveryIntentHelper(home, false)).toBe(false);
+    } finally {
+      removeTreeWithRetry(home);
+    }
+    const tray = readFileSync(repoPath("src", "tray", "windows.ts"), "utf8");
+    expect(tray).toContain("trayHomeRequiresRecoveryIntentHelper() ? [installedTrayRecoveryIntentPath()]");
+    expect(tray).not.toContain("existsSync(sourceTrayRecoveryIntentPath()) ? [installedTrayRecoveryIntentPath()]");
+    // One rule for both sides: the copy is gated on the same shipped test status applies.
+    expect(tray).toContain("if (trayRecoveryIntentHelperShipped()) {");
+    expect(tray).toContain("helperShipped = trayRecoveryIntentHelperShipped()");
   });
 
   test("tray reads restart safety through the CLI instead of the admin-gated /api endpoint", () => {

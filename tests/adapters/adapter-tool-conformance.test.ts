@@ -420,11 +420,20 @@ describe("registry-derived routed tool conformance", () => {
   });
 
   const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder", "claude-cli"]);
-  // The Devin adapter is runTurn-only: it streams Connect-RPC from runTurn, so
+  // Devin and chatgpt-web are runTurn-only: Devin streams Connect-RPC from
+  // runTurn, and chatgpt-web delegates every turn to an injected transport, so
+
   // buildRequest returns a placeholder and tools never travel the wire path.
-  // Both Devin provider rows share it and differ only in where the credential
-  // came from.
-  const RUN_TURN_ONLY_WIRES = new Set(["devin"]);
+  // Both Devin provider rows share an adapter and differ only in where the
+  // credential came from.
+  const RUN_TURN_ONLY_WIRES = new Set(["devin", "chatgpt-web"]);
+  // The skips above must stay derived from the driver table, never merely declared.
+  test("runTurn-only skips are exactly the reported wires with no conformance driver", () => {
+    const drivers = new Set(Object.keys(TOOL_WIRE_DRIVERS));
+    for (const wire of RUN_TURN_ONLY_WIRES) expect(drivers.has(wire), wire).toBe(false);
+    const reported = new Set(adapterDefinitions().map(([adapterId]) => effectiveAdapterContract(adapterId).wire));
+    for (const wire of reported) if (!drivers.has(wire)) expect(RUN_TURN_ONLY_WIRES.has(wire), wire).toBe(true);
+  });
 
   test("every registered adapter keeps the nested apply_patch helper in its final request", async () => {
     for (const [adapterId] of adapterDefinitions()) {

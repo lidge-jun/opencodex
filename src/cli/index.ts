@@ -151,6 +151,7 @@ import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
+import { writeRecoveryIntentIfGuardianEnabled, backupRecoveryIntent, restoreRecoveryIntent, type RecoveryIntentBackup } from "../lib/recovery-intent";
 
 /**
  * A failed shell-hook reconcile is not cosmetic: a stale hook keeps sourcing
@@ -488,6 +489,11 @@ async function handleStart(options: { block?: boolean } = {}) {
   // live daemon holding resources while it overwrites its own binary.
   await maybeShowUpdatePrompt();
 
+  // Every path that intends to bring this home's proxy up has to say so: the guardian
+  // reads a stale `stopped` as "the user stopped this on purpose" and stops recovering
+  // crashes for the whole life of the new process.
+  await writeRecoveryIntentIfGuardianEnabled("running");
+
   type StartServerModule = typeof import("../server");
   type BoundStart = {
     server: ReturnType<StartServerModule["startServer"]>;
@@ -766,6 +772,9 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
     return false;
   }
   const live = owner.live;
+  // The proxy is up, or this command is about to bring it up: same durable `running`
+  // intent `ocx start` records, before either branch can return.
+  await writeRecoveryIntentIfGuardianEnabled("running");
   if (live) {
     if (options.existingIsSuccess === false) {
       console.error("Proxy appeared while restart was confirming absence; no start was attempted.");
@@ -837,7 +846,15 @@ async function handleEnsure(options: { existingIsSuccess?: boolean } = {}): Prom
   return true;
 }
 
-/** Fixed tray action: start the proxy without depending on codexAutoStart. */
+/**
+ * Fixed tray action: start the proxy without depending on codexAutoStart.
+ *
+ * Intent authority, decided deliberately: this command writes no intent, so it stays
+ * tray-only — the tray pre-signs `running` before it spawns this, which is what covers the
+ * already-live path that starts no child. A child this does spawn re-affirms `running`
+ * itself (`handleStart`, `handleEnsure`, the visible launcher), and the writer drops a
+ * re-affirmation of an intent that already reads `running`, so one start signs once.
+ */
 async function handleTrayProxyStart(existingIsSuccess = true): Promise<boolean> {
   const ok = await runTrayProxyStart({
     findLive: findLiveProxy,
@@ -935,7 +952,15 @@ async function handleProxyRestart(
 }
 
 async function handleTrayProxyRestart(): Promise<void> {
-  await handleProxyRestart(() => handleTrayProxyStart(false));
+  await writeRecoveryIntentIfGuardianEnabled("maintenance", { until: Date.now() + 180_000 });
+  try {
+    await handleProxyRestart(() => handleTrayProxyStart(false));
+  } finally {
+    // Unconditional, and a fence that only has to cover the restart window is correct
+    // either way: the guardian reader never compares `until` to now, so a fence left
+    // behind by a failed restart would keep this home from ever recovering on its own.
+    await writeRecoveryIntentIfGuardianEnabled("running");
+  }
 }
 
 async function handleRestartStartWhenStopped(): Promise<boolean | "skipped"> {
@@ -1015,31 +1040,66 @@ async function restoreSharedClientStateAfterStop(): Promise<{ historyOnly: boole
 }
 
 async function handleStop(approval?: StopApproval) {
+  // The lease first: an intent written before the mutation lease could be refused would
+  // leave the file claiming `stopped` while the proxy keeps serving.
   const lease = acquireOwnershipMutationLease(serviceStatePaths());
   try {
-    if (!approval) return await handleStopUnlocked();
-    return await runApprovedStop(
-      approval,
-      async () => {
-        const lines: string[] = [];
-        const code = await runResolve({ json: true }, {
-          stdout: { log: line => { lines.push(line); } },
-          stderr: { error: () => {} },
-        });
-        if (code !== 0 || lines.length !== 1) return null;
-        try { return JSON.parse(lines[0]!) as ResolveJson; }
-        catch { return null; }
-      },
-      () => {
-        const pid = readPid();
-        const runtime = pid === null ? null : readRuntimePort(pid);
-        return pid && runtime?.port ? {
-          pid, port: runtime.port, hostname: runtime.hostname ?? "",
-        } : null;
-      },
-      () => inspectGuardedManagerTarget(approval.pid, approval.port),
-      snapshot => handleStopUnlocked(snapshot),
-    );
+    let stopIntent: RecoveryIntentBackup | null = null;
+    // A guardian-driven recovery child is carrying out a bounded automatic repair,
+    // not an operator's durable manual-stop instruction.
+    if (process.env.OPENCODEX_GUARDIAN_RECOVERY !== "1") {
+      try {
+        stopIntent = backupRecoveryIntent();
+        await writeRecoveryIntentIfGuardianEnabled("stopped");
+      } catch (error) {
+        // Fail closed with an operator-facing line rather than a stack out of the CLI
+        // top level, which would leave the proxy running and the reason unreadable.
+        const message = error instanceof Error ? error.message : String(error);
+        console.error(`❌ Stop refused: ${message}`);
+        console.error("   Nothing was stopped. Repair or remove the recovery guardian marker in this home, then rerun 'ocx stop'.");
+        process.exitCode = 1;
+        return {
+          ok: false,
+          summary: summarizeStopRun(
+            { service: "absent", proxy: "unknown", sharedTeardown: "skipped", inheritedTeardownBlocks: false, receiptClearFailed: false },
+            { failed: true, historyOnly: false, historyDeferred: false, exitCode: 1 },
+          ),
+        };
+      }
+    }
+    // The approval gate runs inside the fence on purpose: a refusal there leaves the proxy
+    // serving just like an ownership refusal does, and the durable `stopped` written above
+    // must be rolled back by the same path rather than by a second copy of it.
+    const outcome = approval === undefined
+      ? await handleStopUnlocked()
+      : await runApprovedStop(
+          approval,
+          async () => {
+            const lines: string[] = [];
+            const code = await runResolve({ json: true }, {
+              stdout: { log: line => { lines.push(line); } },
+              stderr: { error: () => {} },
+            });
+            if (code !== 0 || lines.length !== 1) return null;
+            try { return JSON.parse(lines[0]!) as ResolveJson; }
+            catch { return null; }
+          },
+          () => {
+            const pid = readPid();
+            const runtime = pid === null ? null : readRuntimePort(pid);
+            return pid && runtime?.port ? {
+              pid, port: runtime.port, hostname: runtime.hostname ?? "",
+            } : null;
+          },
+          () => inspectGuardedManagerTarget(approval.pid, approval.port),
+          snapshot => handleStopUnlocked(snapshot),
+        );
+    // A refused stop leaves this proxy serving, and the durable `stopped` this run wrote
+    // would have the guardian gateway fence a home that never stopped.
+    if (stopIntent && !outcome.summary.runtimeDown && !await restoreRecoveryIntent(stopIntent)) {
+      console.error("❌ The stop was refused and recovery-intent.json could not be restored; check it against the running proxy.");
+    }
+    return outcome;
   }
   finally { lease.release(); }
 }

@@ -87,6 +87,7 @@ import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-typ
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
 import { handleSessionRoutes } from "./management/session-routes";
+import { writeRecoveryIntentIfGuardianEnabled, backupRecoveryIntent, restoreRecoveryIntent, type RecoveryIntentBackup } from "../lib/recovery-intent";
 import { packageVersion } from "../lib/package-version";
 
 // installed npm version instead of a stale hardcode.
@@ -341,13 +342,34 @@ export async function handleManagementAPI(
     const { deferralMatchesReceipt } = await import("../config/pending-teardown");
     const { deferralHonored, performStopTeardown } = await import("./stop-teardown");
     const holdsReceipt = deferralHonored(url, deferralMatchesReceipt);
+    let stopIntent: RecoveryIntentBackup | null = null;
+    if (!holdsReceipt) {
+      try {
+        stopIntent = backupRecoveryIntent();
+        await writeRecoveryIntentIfGuardianEnabled("stopped");
+      } catch {
+        return jsonResponse({
+          success: false,
+          code: "recovery_intent_unavailable",
+          message: "The enabled recovery guardian marker could not be validated, so the stop was not dispatched.",
+        }, 503, req, config);
+      }
+    }
+    // Every refusal below answers "Nothing was changed", and the durable `stopped` written
+    // above would leave the guardian gateway fencing a home whose proxy is still serving.
+    const refuseStop = async (body: unknown, status: number): Promise<Response> => {
+      if (!await restoreRecoveryIntent(stopIntent)) {
+        console.warn("[opencodex] stop refused and recovery-intent.json could not be restored");
+      }
+      return jsonResponse(body, status, req, config);
+    };
     const respawnRisk = holdsReceipt ? "none" : installedServiceRespawnRisk();
     if (respawnRisk === "respawnable") {
-      return jsonResponse({
+      return await refuseStop({
         success: false,
         code: "respawnable_service",
         message: "This proxy is managed by a Task Scheduler wrapper that can respawn it, so the stop must be run by `ocx stop`, which verifies the respawn window. Nothing was changed.",
-      }, 409, req, config);
+      }, 409);
     }
     if (respawnRisk === "self-unload") {
       // This proxy IS the launchd/systemd job, so stopping the manager below would
@@ -357,21 +379,21 @@ export async function handleManagementAPI(
       // proxy (#4023). Refuse before touching anything, like the Windows branch above.
       // `ocx stop` is safe because it runs outside this process and owns the teardown
       // through its receipt, which is why the receipt-backed caller never reaches here.
-      return jsonResponse({
+      return await refuseStop({
         success: false,
         code: "self_unload_service",
         message: "This proxy is running as the installed service, so stopping the manager from inside it would end this process before native Codex is restored. Run `ocx stop`, which stops the service from outside and completes the restore. Nothing was changed.",
-      }, 409, req, config);
+      }, 409);
     }
     if (respawnRisk === "unknown") {
       // Do NOT send them to `ocx stop`: it maps the same unanswerable probe to a stop
       // failure, so that advice would be a loop. The scheduler query itself is what needs
       // fixing (#3008).
-      return jsonResponse({
+      return await refuseStop({
         success: false,
         code: "service_state_unknown",
         message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Nothing was changed. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
-      }, 409, req, config);
+      }, 409);
     }
     let serviceStop: import("../service").ServiceStopOutcome;
     try {
@@ -381,7 +403,7 @@ export async function handleManagementAPI(
         // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn
         // this proxy immediately, and its shared config is not ours to tear down. Refuse the
         // stop instead of half-performing it. 409, not 500 — the request is well-formed.
-        return jsonResponse({ success: false, message: err.message }, 409, req, config);
+        return await refuseStop({ success: false, message: err.message }, 409);
       }
       throw err;
     }
@@ -389,18 +411,18 @@ export async function handleManagementAPI(
     // so this route used to tear down shared config and exit while a manager that refused
     // to stop was still there to respawn the proxy (#3008).
     if (serviceStop === "failed") {
-      return jsonResponse({
+      return await refuseStop({
         success: false,
         message: "The installed service manager did not stop; it may respawn the proxy. Shared client config was left alone. Run `ocx stop` from the home that owns the service.",
-      }, 409, req, config);
+      }, 409);
     }
     if (serviceStop === "state-unknown") {
       // Same case, same remedy as the pre-check: the query is what needs fixing.
-      return jsonResponse({
+      return await refuseStop({
         success: false,
         code: "service_state_unknown",
         message: "The Windows Task Scheduler state could not be read, so this proxy cannot tell whether a wrapper would respawn it. Shared client config was left alone. Run `ocx service status` to see the query error, repair Task Scheduler access, then retry.",
-      }, 409, req, config);
+      }, 409);
     }
     // The pre-check above already refused the respawnable case without a receipt, so
     // reaching here with one means the parent owns the verification.

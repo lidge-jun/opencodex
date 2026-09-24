@@ -38,6 +38,7 @@ export function getDefaultConfig(): OcxConfig {
   return {
     port: 10100,
     emptyCompletionRetry: false,
+    chatgptBridge: { enabled: false },
     dropCodexSafetyBuffering: false,
     fastRows: true,
     managementUsageMaxReadBytes: 64 * 1024 * 1024,

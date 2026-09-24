@@ -441,6 +441,26 @@ function emptyCompletionRetryError(value: unknown): string | null {
   return "schema_invalid: emptyCompletionRetry: must be a boolean or omitted";
 }
 
+function chatgptBridgeError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "chatgptBridge")) return null;
+  const module_ = raw.chatgptBridge;
+  if (module_ === undefined) return null;
+  if (typeof module_ !== "object" || module_ === null || Array.isArray(module_)) {
+    return "schema_invalid: chatgptBridge: must be an object or omitted";
+  }
+  const record = module_ as Record<string, unknown>;
+  if (Object.hasOwn(record, "enabled") && record.enabled !== undefined && typeof record.enabled !== "boolean") {
+    return "schema_invalid: chatgptBridge.enabled: must be a boolean or omitted";
+  }
+  for (const key of ["statePath", "devspaceMcpUrl"] as const) {
+    if (Object.hasOwn(record, key) && record[key] !== undefined && typeof record[key] !== "string") {
+      return `schema_invalid: chatgptBridge.${key}: must be a string or omitted`;
+    }
+  }
+  return null;
+}
+
 function dropCodexSafetyBufferingError(value: unknown): string | null {
   const raw = rawConfigRecord(value);
   if (!raw || !Object.hasOwn(raw, "dropCodexSafetyBuffering")) return null;
@@ -616,6 +636,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? codexQuotaAutoRefreshError(value)
     ?? codexAccountPickerEnabledError(value)
     ?? emptyCompletionRetryError(value)
+    ?? chatgptBridgeError(value)
     ?? dropCodexSafetyBufferingError(value)
     ?? oauthOpenBrowserError(value)
     ?? runtimeRoleError(value)

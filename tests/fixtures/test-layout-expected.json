@@ -1,4 +1,5 @@
 {
+
   "abort-idle-deadline.test.ts": "lib",
   "tool-envelope-echo-whole-line.test.ts": "adapters",
   "abort-race.test.ts": "adapters",
@@ -1627,5 +1628,9 @@
   "mimo-token-plan-capacity.test.ts": "providers",
   "command-code-tool-text-prose-split.test.ts": "providers",
   "cli-effort-slug.test.ts": "cli",
-  "grok-47-build-fast-metadata.test.ts": "providers/xai"
+  "grok-47-build-fast-metadata.test.ts": "providers/xai",
+  "chatgpt-bridge-core.test.ts": "chatgpt-bridge",
+  "chatgpt-bridge-codex-host.test.ts": "chatgpt-bridge",
+  "chatgpt-bridge-dsh-host.test.ts": "chatgpt-bridge",
+  "chatgpt-bridge-provider-adapter.test.ts": "chatgpt-bridge"
 }
