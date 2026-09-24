@@ -705,6 +705,87 @@ describe("combo management API", () => {
     });
   });
 
+  // Review finding on #5736: the per-target carry-over inspected every entry before
+  // comboConfigError validated the list, so a malformed entry threw a TypeError out of the
+  // handler instead of producing the structured 400 the rest of the API returns.
+  test("PUT validates a non-record target instead of throwing in the lastResort carry-over", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const created = await comboApi(config, "PUT", "/api/combos", {
+        id: "guarded",
+        combo: {
+          strategy: "failover",
+          cooldownWaitPolicy: "before-last-resort",
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2", lastResort: true },
+          ],
+        },
+      });
+      expect(created?.status).toBe(200);
+
+      const malformed = await comboApi(config, "PUT", "/api/combos", {
+        id: "guarded",
+        combo: { strategy: "failover", targets: [null] },
+      });
+      expect(malformed?.status).toBe(400);
+      expect(await responseJson(malformed)).toMatchObject({
+        error: expect.stringContaining("targets[0]"),
+      });
+      // Rejected means rejected: the stored combo keeps the target list it already had.
+      expect(config.combos?.guarded).toMatchObject({
+        cooldownWaitPolicy: "before-last-resort",
+        targets: [
+          { provider: "a", model: "m1" },
+          { provider: "b", model: "m2", lastResort: true },
+        ],
+      });
+    });
+  });
+
+  // Same carry-over, second half of the finding: identity is trimmed on both sides, because the
+  // normalizer trims. A client that pads provider/model re-sends the same target and must keep
+  // the flag rather than silently reintroducing a normal target.
+  test("PUT matches the lastResort carry-over against trimmed target identity", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const created = await comboApi(config, "PUT", "/api/combos", {
+        id: "padded",
+        combo: {
+          strategy: "failover",
+          cooldownWaitPolicy: "before-last-resort",
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: "b", model: "m2", lastResort: true },
+          ],
+        },
+      });
+      expect(created?.status).toBe(200);
+
+      const padded = await comboApi(config, "PUT", "/api/combos", {
+        id: "padded",
+        combo: {
+          strategy: "failover",
+          targets: [
+            { provider: "a", model: "m1" },
+            { provider: " b ", model: " m2 " },
+          ],
+        },
+      });
+      expect(padded?.status).toBe(200);
+      expect(config.combos?.padded).toMatchObject({
+        targets: [
+          { provider: "a", model: "m1" },
+          { provider: "b", model: "m2", lastResort: true },
+        ],
+      });
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persisted.combos?.padded?.targets?.[1]).toMatchObject({ lastResort: true });
+    });
+  });
+
   test("PUT rejects an unknown reasoningEffortMode", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });

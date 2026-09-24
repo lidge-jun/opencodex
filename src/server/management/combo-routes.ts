@@ -197,10 +197,20 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       // flag would strip it. Carry it over per target, matched on provider+model.
       ...(Array.isArray(requestedCombo.targets) && Array.isArray(previous?.targets)
         ? {
-            targets: (requestedCombo.targets as Array<Record<string, unknown>>).map(target => {
+            targets: requestedCombo.targets.map(target => {
+              // A non-record entry stays as the client sent it so comboConfigError reports it.
+              // Reading `lastResort` off it here would throw in place of that structured 400.
+              if (!isPlainRecord(target)) return target;
               if (Object.hasOwn(target, "lastResort")) return target;
+              const rawProvider = target.provider;
+              const rawModel = target.model;
+              if (typeof rawProvider !== "string" || typeof rawModel !== "string") return target;
+              // Identity is trimmed on both sides: the normalizer trims too, so a re-sent
+              // " b " must still match the stored "b" instead of losing the flag.
+              const provider = rawProvider.trim();
+              const model = rawModel.trim();
               const before = previous.targets.find(
-                candidate => candidate.provider === target.provider && candidate.model === target.model,
+                candidate => candidate.provider === provider && candidate.model === model,
               );
               return before?.lastResort ? { ...target, lastResort: true } : target;
             }),
