@@ -375,8 +375,6 @@ function hasLocalReadCapability(
   } catch {
     return false;
   }
-  // Do not let a future query-bearing variant silently inherit this narrow grant.
-  if (url.search !== "") return false;
   const expectedPid = parseExpectedLocalManagementPid(
     req.headers.get(LOCAL_MANAGEMENT_EXPECTED_PID_HEADER),
   );
@@ -391,7 +389,9 @@ function hasLocalReadCapability(
     local.attestationSecret,
     req.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER),
     req.method,
-    url.pathname,
+    // The query is signed into the capability, so a grant for one range cannot be replayed
+    // against another — the grant stays exactly as narrow as the request it was minted for.
+    url.pathname + url.search,
     local.pid,
     local.port,
     expiresAt,

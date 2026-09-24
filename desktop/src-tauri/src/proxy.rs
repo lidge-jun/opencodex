@@ -15,7 +15,7 @@ use tokio::time::{timeout_at, Instant};
 
 /// Which instance answered, taken from the unauthenticated health body.
 ///
-/// The management token is the admin credential for this machine's proxy. Sending it to whatever
+/// The admin credential for this machine's proxy must never reach whatever holds the port,
 /// happens to hold the port is the thing to avoid, so identity is established first — from a
 /// response that needs no credential to read — and the credential follows only if the answer is the
 /// instance the shell decided to trust.
@@ -91,7 +91,7 @@ impl ProxyClient {
             client: Client::builder()
                 .timeout(Duration::from_secs(4))
                 .user_agent(Auth::user_agent())
-                // The admin token attached to these requests is for the loopback endpoint and
+                // The capability attached to these requests is for the loopback endpoint and
                 // nowhere else. Two defaults would carry it off that endpoint, so both are turned
                 // off here rather than re-checked anywhere in the request path.
                 //
@@ -207,39 +207,27 @@ impl ProxyClient {
     async fn request(&self, method: Method, path: &str) -> Result<Value, ProxyError> {
         let response = self.send(&method, path, None).await?;
         if response.status() == StatusCode::UNAUTHORIZED {
-            let token = self.authorised_token().await?;
-            let response = self.send(&method, path, Some(token)).await?;
+            let headers = self.authorised_capability(&method, path)?;
+            let response = self.send(&method, path, Some(headers)).await?;
             return decode(response).await;
         }
         decode(response).await
     }
 
-    /// The management token, but only for the instance this client is bound to.
+    /// A single-use capability for this request, minted only for the instance this client is
+    /// bound to.
     ///
     /// The binding is re-confirmed here rather than trusted from when it was made: between then and
-    /// now the child can have exited and something else can hold the port. A request is therefore
-    /// bound to a pid, a port and the generation the shell authorised, and a mismatch is refused
-    /// instead of being sent the credential. The peer also has to prove the recorded attestation
-    /// secret: a pid and port can be replayed by a hostile listener, the proof cannot.
-    async fn authorised_token(&self) -> Result<String, ProxyError> {
+    /// now the child can have exited and something else can hold the port. The capability names the
+    /// recorded pid and port and is keyed by the attestation secret only the recorded runtime can
+    /// read, so a listener that took the port after the bound child exited cannot satisfy it — and
+    /// the credential never leaves the client: the request carries the proof, not the token. The
+    /// proof is bound to this exact method, path, query and a short expiry, so a captured one is
+    /// useless for any other request and expires before it can be replayed.
+    fn authorised_capability(&self, method: &Method, path: &str) -> Result<CapabilityHeaders, ProxyError> {
         let Some(binding) = self.binding() else {
             return Err(ProxyError::Unauthorized);
         };
-        let identity = self.identify_with_attestation().await?;
-        if identity != binding.identity {
-            return Err(ProxyError::Foreign);
-        }
-        if self.binding() != Some(binding) {
-            return Err(ProxyError::Foreign);
-        }
-        self.auth.token().ok_or(ProxyError::Unauthorized)
-    }
-
-    /// Ask the endpoint who it is and make it prove the recorded attestation secret in the same
-    /// round-trip: the challenge goes out as a header and the proof comes back in one. A listener
-    /// that cannot read the secret — a foreign service, or a hostile process that took the port
-    /// after the bound child exited — cannot produce it, so the credential stays put.
-    async fn identify_with_attestation(&self) -> Result<RuntimeIdentity, ProxyError> {
         let recorded = self
             .auth
             .runtime_identity()
@@ -247,66 +235,84 @@ impl ProxyClient {
         if recorded.port != self.endpoint.port {
             return Err(ProxyError::Unauthorized);
         }
-        let mut challenge_bytes = [0_u8; 32];
-        challenge_bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-        challenge_bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-        let challenge = URL_SAFE_NO_PAD.encode(challenge_bytes);
-        let response = self
-            .client
-            .get(self.endpoint.url("/healthz"))
-            .header("x-opencodex-attestation-challenge", &challenge)
-            .send()
-            .await
-            .map_err(map_request_error)?;
-        let proof = response
-            .headers()
-            .get("x-opencodex-attestation-proof")
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_owned);
-        let body = decode(response).await?;
-        let identity = identity_from(&body, self.endpoint.port).ok_or(ProxyError::Foreign)?;
-        if identity.pid != recorded.pid
-            || !valid_attestation_proof(&recorded, &challenge, proof.as_deref())
-            || self.auth.runtime_identity().as_ref() != Some(&recorded)
-        {
-            return Err(ProxyError::Unauthorized);
+        if recorded.pid != binding.identity.pid || recorded.port != binding.identity.port {
+            return Err(ProxyError::Foreign);
         }
-        Ok(identity)
+        if self.binding() != Some(binding) {
+            return Err(ProxyError::Foreign);
+        }
+        CapabilityHeaders::mint(&recorded, method, path).ok_or(ProxyError::Unauthorized)
     }
 
     async fn send(
         &self,
         method: &Method,
         path: &str,
-        token: Option<String>,
+        capability: Option<CapabilityHeaders>,
     ) -> Result<reqwest::Response, ProxyError> {
         let mut request = self.client.request(method.clone(), self.endpoint.url(path));
-        if let Some(value) = token {
-            request = request.header("X-OpenCodex-API-Key", value);
+        if let Some(headers) = capability {
+            request = request
+                .header("x-opencodex-local-expected-pid", headers.expected_pid)
+                .header("x-opencodex-local-nonce", headers.nonce)
+                .header("x-opencodex-local-expires-at", headers.expires_at)
+                .header("x-opencodex-local-capability", headers.capability);
         }
         request.send().await.map_err(map_request_error)
     }
 }
 
-fn valid_attestation_proof(
+/// The single-use local-read grant the server verifies against the recorded runtime: the same
+/// contract `local-management-capability.ts` defines, re-implemented here so the desktop never
+/// has to put the admin token on the wire. `None` means the inputs cannot form a valid grant.
+struct CapabilityHeaders {
+    expected_pid: String,
+    nonce: String,
+    expires_at: String,
+    capability: String,
+}
+
+impl CapabilityHeaders {
+    fn mint(recorded: &RecordedRuntime, method: &Method, path: &str) -> Option<Self> {
+        if method != Method::GET {
+            return None;
+        }
+        let mut nonce_bytes = [0_u8; 32];
+        nonce_bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        nonce_bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        let nonce = URL_SAFE_NO_PAD.encode(nonce_bytes);
+        let expires_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_millis() as u64
+            + 10_000;
+        Some(Self {
+            expected_pid: recorded.pid.to_string(),
+            capability: capability_mac(recorded, path, &nonce, expires_at)?,
+            nonce,
+            expires_at: expires_at.to_string(),
+        })
+    }
+}
+
+/// The signed half of a capability, split out so the wire format can be tested against a fixed
+/// vector from the TypeScript implementation. `None` means the inputs cannot form a valid grant.
+fn capability_mac(
     recorded: &RecordedRuntime,
-    challenge: &str,
-    proof: Option<&str>,
-) -> bool {
+    path: &str,
+    nonce: &str,
+    expires_at: u64,
+) -> Option<String> {
     // The server keys the MAC with the Base64URL text's UTF-8 bytes, not the decoded secret.
-    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(recorded.attestation_secret.as_bytes()) else {
-        return false;
-    };
+    let mut mac = Hmac::<Sha256>::new_from_slice(recorded.attestation_secret.as_bytes()).ok()?;
     mac.update(
         format!(
-            "opencodex-local-management-v1\n{challenge}\n{}\n{}",
+            "opencodex-local-management-read-v1\n{nonce}\nGET\n{path}\n{}\n{}\n{expires_at}",
             recorded.pid, recorded.port
         )
         .as_bytes(),
     );
-    proof
-        .and_then(|value| URL_SAFE_NO_PAD.decode(value).ok())
-        .is_some_and(|value| mac.verify_slice(&value).is_ok())
+    Some(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
 }
 
 fn map_request_error(error: reqwest::Error) -> ProxyError {
@@ -329,8 +335,9 @@ async fn decode(response: reqwest::Response) -> Result<Value, ProxyError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{identity_from, valid_attestation_proof, RuntimeIdentity};
+    use super::{capability_mac, identity_from, CapabilityHeaders, RuntimeIdentity};
     use crate::auth::RecordedRuntime;
+    use reqwest::Method;
     use serde_json::json;
 
     fn recorded_runtime() -> RecordedRuntime {
@@ -342,23 +349,37 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_a_proof_bound_to_the_runtime_identity() {
-        let challenge = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-        let proof = "Yr9EKHjeAFfsFMsF8Xsd7J6LxBYnObweKZlLyTMk0Lo";
-        assert!(valid_attestation_proof(
-            &recorded_runtime(),
-            challenge,
-            Some(proof)
-        ));
+    fn a_capability_matches_the_server_contract() {
+        // The fixed nonce and expiry make the signature reproducible against the TypeScript
+        // implementation: this vector is createLocalManagementReadCapability over the same
+        // inputs, so a drift on either side fails here before it fails on the wire.
+        let headers = CapabilityHeaders::mint(&recorded_runtime(), &Method::GET, "/api/usage?range=7d")
+            .expect("a mintable grant");
+        assert_eq!(headers.expected_pid, "4242");
+        assert_eq!(headers.nonce.len(), 43);
+        assert_eq!(headers.capability.len(), 43);
+        assert!(headers.expires_at.parse::<u64>().unwrap() > 0);
+        assert!(CapabilityHeaders::mint(&recorded_runtime(), &Method::POST, "/api/usage").is_none());
 
-        let mut replacement = recorded_runtime();
-        replacement.pid += 1;
-        assert!(!valid_attestation_proof(
-            &replacement,
-            challenge,
-            Some(proof)
-        ));
-        assert!(!valid_attestation_proof(&recorded_runtime(), challenge, None));
+        // The fixed nonce and expiry pin the exact wire signature to the TypeScript vector.
+        let capability = capability_mac(
+            &recorded_runtime(),
+            "/api/usage?range=7d",
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            1_700_000_010_000,
+        )
+        .expect("a signable grant");
+        assert_eq!(capability, "oGyWOCGZsICYctxQv-mPK0gCiDocvOVHQG5plyjYCUg");
+        assert_eq!(
+            capability_mac(
+                &recorded_runtime(),
+                "/api/system/memory",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                1_700_000_010_000,
+            )
+            .as_deref(),
+            Some("_a3HS292KKaMcXsDx0owmWr3zRFTYjH6vhUdpunRW28")
+        );
     }
 
     #[test]

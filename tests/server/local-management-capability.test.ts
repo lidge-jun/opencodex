@@ -117,6 +117,64 @@ describe("local management read capability", () => {
     )).toBe(false);
   });
 
+  test("the query is bound into the grant", () => {
+    const usage = `${LOCAL_MANAGEMENT_READ_PATHS.usage}?range=7d`;
+    const capability = createLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      usage,
+      pid,
+      port,
+      expiresAt,
+    );
+    expect(capability).toHaveLength(43);
+    expect(verifyLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      usage,
+      pid,
+      port,
+      expiresAt,
+      capability,
+      now,
+    )).toBe(true);
+    // A grant for one range does not satisfy another, and a capability minted over the bare
+    // pathname does not satisfy a query-bearing request.
+    expect(verifyLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      `${LOCAL_MANAGEMENT_READ_PATHS.usage}?range=today`,
+      pid,
+      port,
+      expiresAt,
+      capability,
+      now,
+    )).toBe(false);
+    const bare = createLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      LOCAL_MANAGEMENT_READ_PATHS.usage,
+      pid,
+      port,
+      expiresAt,
+    );
+    expect(verifyLocalManagementReadCapability(
+      secret,
+      nonce,
+      "GET",
+      usage,
+      pid,
+      port,
+      expiresAt,
+      bare,
+      now,
+    )).toBe(false);
+  });
+
   test("cannot cross the restart or other local-read capability domains", () => {
     const memoryCapability = createLocalManagementReadCapability(
       secret,

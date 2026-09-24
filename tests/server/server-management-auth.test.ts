@@ -396,6 +396,22 @@ describe("management and data-plane credential separation", () => {
       );
       expect(query.status).toBe(503);
 
+      // The query is signed into the capability: a grant minted for the bare pathname cannot
+      // be replayed against a query-bearing URL (above), and a grant that names the exact
+      // query is admitted only for that query.
+      const usagePath = `${LOCAL_MANAGEMENT_READ_PATHS.usage}?range=7d`;
+      const usage = await fetch(new URL(usagePath, server.url), {
+        headers: headersFor(usagePath, server.port, "E2".repeat(22).slice(0, 43)),
+      });
+      expect(usage.status).toBe(200);
+      const otherRange = await fetch(
+        new URL(`${LOCAL_MANAGEMENT_READ_PATHS.usage}?range=today`, server.url),
+        {
+          headers: headersFor(usagePath, server.port, "E3".repeat(22).slice(0, 43)),
+        },
+      );
+      expect(otherRange.status).toBe(503);
+
       const mutation = await fetch(new URL(LOCAL_MANAGEMENT_READ_PATHS.codexAccounts, server.url), {
         method: "POST",
         headers: {
