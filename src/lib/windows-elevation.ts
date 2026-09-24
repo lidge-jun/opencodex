@@ -738,17 +738,20 @@ export function runWindowsElevatedScheduledTaskRegistration(
   const powerShellPath = windowsPowerShell();
   const powerShellDirectory = powerShellPath.replace(/[\\/][^\\/]+$/, "");
   const scheduledTasksModule = `${powerShellDirectory}\\Modules\\ScheduledTasks\\ScheduledTasks.psd1`;
-  const stageDirectory = xml.path.replace(/[\\/][^\\/]+$/, "");
-  // A prefix match is not containment: a `..` segment passes startsWith while the
-  // resolved path lands outside the pinned directory, so traversal segments are
-  // rejected on either separator before the prefix is compared.
-  const sharesStagingDirectory = (path: string) =>
+  const parentDirectory = (path: string) => path.replace(/[\\/][^\\/]+$/, "");
+  const stageDirectory = parentDirectory(xml.path);
+  // The pin only covers the staging directory itself: a payload nested deeper
+  // would sit inside a folder nobody locked, so each file must name the staging
+  // directory as its immediate parent rather than merely carrying its prefix.
+  // Traversal segments are rejected on either separator before the parent is
+  // compared, and a bare filename has no parent directory at all.
+  const stagedDirectlyInside = (path: string) =>
     !path.split(/[\\/]+/).includes("..")
-    && (path.startsWith(`${stageDirectory}\\`) || path.startsWith(`${stageDirectory}/`));
+    && parentDirectory(path) === stageDirectory
+    && parentDirectory(path) !== path;
   if (
-    stageDirectory === xml.path
-    || !sharesStagingDirectory(xml.path)
-    || (expectedExisting && !sharesStagingDirectory(expectedExisting.path))
+    !stagedDirectlyInside(xml.path)
+    || (expectedExisting && !stagedDirectlyInside(expectedExisting.path))
   ) {
     throw new Error("Elevated Task Scheduler payloads must share one staging directory.");
   }

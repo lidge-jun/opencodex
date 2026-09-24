@@ -465,10 +465,13 @@ describe("runWindowsElevated spawn contract", () => {
     const staged = { path: `${stageDir}\\register.xml`, byteLength: 42, sha256: "a".repeat(64) };
     const digest = "c".repeat(64);
     // `..` slips past a startsWith prefix check but resolves outside the pinned
-    // directory — on either payload, and with either separator.
+    // directory — on either payload, and with either separator. A nested child
+    // directory passes the same prefix check while sitting outside the locked
+    // folder, so the parent directory has to match, not just the prefix.
     for (const escaped of [
       `${stageDir}\\..\\elsewhere\\expected.xml`,
       `${stageDir}/../elsewhere/expected.xml`,
+      `${stageDir}\\sub\\expected.xml`,
     ]) {
       expect(() => runWindowsElevatedScheduledTaskRegistration(
         "opencodex-proxy",
