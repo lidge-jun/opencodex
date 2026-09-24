@@ -161,6 +161,10 @@ the previous selection only while the managed profile is still selected. A later
 selection is not changed. A newly created profile with user additions is retained in readable
 standard mode instead of deleting those additions.
 
+During initial enrollment, `src/client/state.ts` records a pending key fingerprint before the token
+is published. Service uninstall retains that key until connect commits or rolls back; the marker
+does not claim any Desktop restoration ownership.
+
 A proven legacy current-hub/recognized-key profile without an original baseline can be adopted
 by apply, rotation/recovery or direct disconnect without a new flag or prerequisite reapply.
 Its explicit standard-fallback outcome is distinct from original restoration: only owned gateway

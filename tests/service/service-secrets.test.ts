@@ -35,6 +35,7 @@ import {
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { loadConfig, saveConfig } from "../../src/config";
 import { readClientConnectionState } from "../../src/client/state";
+import { clearClientConnectPending, markClientConnectPending } from "../../src/client/state";
 import { removeServiceTokenAfterUninstall } from "../../src/service/cli";
 
 let home = "";
@@ -52,6 +53,7 @@ afterEach(() => {
 });
 
 describe("service uninstall credential ownership", () => {
+  /** Run cleanup under the same synthetic lifecycle lock as a client connection. */
   function cleanup(): "removed" | "absent" | "retained" | "unverified" {
     return removeServiceTokenAfterUninstall({ lockPath: join(home, "lifecycle.sqlite") });
   }
@@ -82,6 +84,16 @@ describe("service uninstall credential ownership", () => {
     expect(cleanup()).toBe("removed");
     expect(existsSync(token.path)).toBe(false);
     expect(cleanup()).toBe("absent");
+  });
+
+  test("retains a key owned by a pending connection", () => {
+    const token = writeServiceApiTokenFile("ocx_pending_client_key");
+    markClientConnectPending(token.fingerprint);
+    expect(readClientConnectionState().kind).toBe("disconnected");
+    expect(cleanup()).toBe("retained");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_pending_client_key\n");
+    clearClientConnectPending(token.fingerprint);
+    expect(cleanup()).toBe("removed");
   });
 
   test("keeps the token when client metadata is incomplete", () => {

@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
+import { lstatSync, readFileSync, unlinkSync } from "node:fs";
+import { join } from "node:path";
 import {
+  getConfigDir,
   getConfigPath,
   deleteConfigTopLevelKey,
   getDefaultConfig,
@@ -8,6 +10,7 @@ import {
   saveConfig,
   withConfigMutationLockSync,
 } from "../config";
+import { atomicWriteFileNoFollowUnclaimed } from "../config/atomic-write";
 import type { OcxClientConnectionConfig } from "../types";
 import { inspectRemoteDesktopStore, readDesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "./lifecycle-lock";
@@ -22,6 +25,33 @@ export type ClientConnectionState =
   | { kind: "connected"; value: OcxClientConnectionConfig }
   | { kind: "invalid"; reason: string }
   | { kind: "mismatched"; reason: string };
+
+const pendingConnectPath = (): string => join(getConfigDir(), "client-connect-pending");
+
+/** A pending marker protects a just-issued client key before config commits the connection. */
+export function pendingClientConnectMayOwnToken(): boolean {
+  try { lstatSync(pendingConnectPath()); return true; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/** Publish only the token fingerprint, before the key file, under the client lifecycle lock. */
+export function markClientConnectPending(fingerprint: string): void {
+  if (!/^[a-f0-9]{64}$/.test(fingerprint)) throw new Error("invalid pending client fingerprint");
+  atomicWriteFileNoFollowUnclaimed(pendingConnectPath(), `${fingerprint}\n`);
+}
+
+/** Clear only the marker for this connect attempt while the client lifecycle lock is held. */
+export function clearClientConnectPending(fingerprint: string): void {
+  const path = pendingConnectPath();
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.nlink !== 1 || stat.size !== 65 || readFileSync(path, "utf8") !== `${fingerprint}\n`) {
+    throw new Error("pending client connection owner changed");
+  }
+  unlinkSync(path);
+}
 
 export type ClientRotationRecoveryGate =
   | { kind: "clean" }
