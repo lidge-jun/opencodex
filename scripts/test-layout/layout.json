@@ -1059,6 +1059,7 @@
     "management-provider-reasoning-lists.test.ts": "server",
     "management-provider-reset-replay.test.ts": "server",
     "management-provider-synthetic-max.test.ts": "server",
+    "management-provider-upstream-websocket.test.ts": "server",
     "management-provider-validation.test.ts": "server",
     "management-provider-verbosity.test.ts": "server",
     "management-route-registry.test.ts": "server",
