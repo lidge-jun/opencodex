@@ -33,7 +33,8 @@ export interface StructuredToolCallReference {
 }
 
 const BLOCK_HEADER = /<tool_call>\s*<function=([^>\r\n]+)>/y;
-const NEXT_BLOCK_HEADER = /<tool_call>\s*<function=[^>\r\n]+>/g;
+/** A separate bare block starts a line (see `splitAtPossibleSerializedToolCall`); a header mid-line is body text. */
+const NEXT_BLOCK_HEADER = /\n<tool_call>\s*<function=[^>\r\n]+>/g;
 const FUNCTION_CLOSE = "</function>";
 const PARAMETER_CLOSE = "</parameter>";
 
@@ -50,8 +51,8 @@ function endsWithAt(text: string, from: number, to: number, suffix: string): boo
  * The block starting at `offset`, read by delimiter scan so an unterminated block costs linear time.
  * MiMo's echo may close a freeform body with a stray `</parameter>` and may omit `</function>`
  * (#5724), the grammar the Command Code reader accepts too. The first `</tool_call>` preceded by
- * `</function>` closes the block, so a body can still carry a literal `</tool_call>` or
- * `<tool_call>`; with none before the next real block header, the first `</tool_call>` does.
+ * `</function>` closes the block, so a body can still carry a literal `</tool_call>` or header;
+ * with none before the next line-start block header, the first `</tool_call>` does.
  */
 function blockAt(text: string, offset: number): SerializedToolCall | undefined {
   BLOCK_HEADER.lastIndex = offset;
@@ -59,7 +60,8 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
   if (!header) return undefined;
   const bodyStart = offset + header[0].length;
   NEXT_BLOCK_HEADER.lastIndex = bodyStart;
-  const limit = NEXT_BLOCK_HEADER.exec(text)?.index ?? text.length;
+  const next = NEXT_BLOCK_HEADER.exec(text);
+  const limit = next ? next.index + 1 : text.length;
   let unclosed: SerializedToolCall | undefined;
   for (let close = text.indexOf(CLOSE_TAG, bodyStart); close >= 0 && close < limit;
     close = text.indexOf(CLOSE_TAG, close + CLOSE_TAG.length)) {

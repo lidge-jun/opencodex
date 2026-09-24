@@ -329,8 +329,8 @@ freeform body match a structured call's parsed `input` in the same response.
 A block may close a freeform body with a stray `</parameter>` and may omit `</function>`, and one
 newline after the function header is template layout, so MiMo's echoes of those shapes match too
 (#5724). Blocks are read by delimiter scan in linear time: the first `</tool_call>` preceded by
-`</function>` closes the block, and only when none appears before the next real block header does
-the first `</tool_call>` close it, so a body can still carry a literal `<tool_call>` or `</tool_call>`.
+`</function>` closes the block, and only when none appears before the next block header at the start
+of a line does the first `</tool_call>` close it, so a body can still carry literal tool-call tags.
 If the gateway also prefixes the structured call's JSON
 arguments with the same freeform body, the adapter keeps the JSON suffix only when the block body,
 prefix, and wrapper's `input` value all agree. Mismatched markup and arguments remain byte-exact.

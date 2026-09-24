@@ -106,8 +106,8 @@ describe("MiMo echo variants (#5724)", () => {
     }
   });
 
-  test("a closed block whose body carries a literal </tool_call> is still matched whole", async () => {
-    for (const input of ["text('</tool_call>');", "text('<tool_call>');"]) {
+  test("a closed block whose body carries literal tool-call tags is still matched whole", async () => {
+    for (const input of ["text('</tool_call>');", "text('<tool_call>');", 'text("<tool_call><function=exec>");']) {
       const block = `<tool_call><function=exec>${input}</parameter></function></tool_call>`;
       for (const events of [await streamed(block, input), await buffered(block, input)]) {
         expect(visible(events)).toBe("");
