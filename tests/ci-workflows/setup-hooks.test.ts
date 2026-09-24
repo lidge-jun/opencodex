@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { repoPath } from "../helpers/repo-root";
@@ -125,6 +125,29 @@ describe("local hook setup", () => {
       expect(existsSync(join(hooks(root), "post-merge"))).toBe(false);
     });
   }
+
+  // POSIX-only: chmod 0000 makes readFileSync throw EACCES for the owner, so the
+  // pre-push attempt fails while post-merge stays removable. Windows' read-only
+  // attribute blocks writes, not reads, so it cannot model this failure.
+  (process.platform === "win32" ? test.skip : test)(
+    "a failed pre-push removal still retires post-merge and exits nonzero", () => {
+      const root = fixture();
+      const hookDir = hooks(root);
+      const unreadable = join(hookDir, "pre-push");
+      writeFileSync(unreadable, legacyHook);
+      chmodSync(unreadable, 0o000);
+      writeFileSync(join(hookDir, "post-merge"), legacyPostMergeHook);
+      const run = spawnSync(process.execPath, [join(root, "scripts/setup-hooks.ts")], {
+        cwd: root, env: gitEnv(root), encoding: "utf8", timeout: 10_000,
+      });
+      expect(run.status).toBe(1);
+      expect(run.stderr + run.stdout).toContain("pre-push");
+      expect(existsSync(join(hookDir, "post-merge"))).toBe(false);
+      expect(existsSync(unreadable)).toBe(true);
+      // Restore readability so fixture cleanup can remove the file.
+      chmodSync(unreadable, 0o600);
+    },
+  );
 
   test("preserves custom hooks even when they contain the old shim", () => {
     const root = fixture();

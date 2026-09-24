@@ -34,6 +34,10 @@ try {
 // name or a partial marker: a user may have added other work to their hook.
 const retiredPrePushSha256 = "2aa6b5f84ab989954d2ccc1a8680d63ad934034778e0ee99c277f8873fd40508";
 const prePushPath = join(hooksDir, "pre-push");
+// Every managed hook is attempted even when an earlier one fails: a surviving
+// shim keeps executing pulled code, so failures are collected and reported
+// with a nonzero exit after all removals ran.
+const failures: string[] = [];
 try {
   const prePushStat = lstatSync(prePushPath, { throwIfNoEntry: false });
   if (prePushStat?.isFile()) {
@@ -48,7 +52,9 @@ try {
 } catch (error) {
   // A failed read or unlink must not skip the post-merge retirement below: the
   // shim keeps executing pulled code on every merge while it remains.
-  console.warn("setup-hooks: could not process the pre-push hook: " + (error instanceof Error ? error.message : String(error)));
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn("setup-hooks: could not process the pre-push hook: " + message);
+  failures.push(`pre-push: ${message}`);
 }
 
 // Same exact-match retirement for the repository-managed post-merge shim: an
@@ -68,7 +74,15 @@ try {
     }
   }
 } catch (error) {
-  console.warn("setup-hooks: could not process the post-merge hook: " + (error instanceof Error ? error.message : String(error)));
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn("setup-hooks: could not process the post-merge hook: " + message);
+  failures.push(`post-merge: ${message}`);
+}
+
+if (failures.length > 0) {
+  console.error("setup-hooks: managed hook retirement incomplete; the surviving shim keeps executing pulled code on every merge. "
+    + "Remove it manually, then re-run: " + failures.join("; "));
+  process.exitCode = 1;
 }
 
 console.log("Run validation explicitly before review; see AGENTS.md for test scope.");
