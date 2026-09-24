@@ -10,3 +10,4 @@
 - Choice: Hold only a possible complete markup block and suppress or repair it only when the function name and duplicated body agree with a structured call in the same response.
 - Why: Agreement between both representations is deterministic and avoids changing ordinary commentary, mismatched markup, or unrelated providers' valid text.
 - Consequences: Matching calls no longer appear twice; same-name/different-body examples remain visible; the small held region is translator-budgeted and emits heartbeats while held; terminal failures retain held text without dispatching tools; malformed concatenated arguments are repaired only for the exact duplicated wrapper shape.
+- Follow-up (260924): the streaming hold is bounded (8 KiB of prose after a closed block, 4 MiB total); past a bound held text is released unsuppressed. See structure/providers/chat-compat.md.

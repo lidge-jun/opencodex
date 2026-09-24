@@ -1174,6 +1174,7 @@
     "openai-chat-reasoning-wire-policy.test.ts": "adapters/openai",
     "openai-chat-sanitization-review-regressions.test.ts": "adapters/openai",
     "openai-chat-serialized-tool-call-content.test.ts": "adapters/openai",
+    "openai-chat-serialized-tool-call-hold-bound.test.ts": "adapters/openai",
     "openai-chat-serialized-tool-call-think.test.ts": "adapters/openai",
     "openai-chat-system-order.test.ts": "adapters/openai",
     "responses-chat-tool-call-content.test.ts": "responses",

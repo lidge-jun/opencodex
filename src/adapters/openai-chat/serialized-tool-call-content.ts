@@ -2,7 +2,17 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import type { AdapterEvent } from "../../types";
 
 const OPEN_TAG = "<tool_call>";
+const CLOSE_TAG = "</tool_call>";
 const FUNCTION_TAG = "<function=";
+/**
+ * Streaming bounds (ingestStreaming only; buffered reconciliation already knows its structured calls).
+ * MAX_HELD_BYTES is a runaway guard on held text plus queued events, far below the translator budget,
+ * so a large duplicated write inside the block is still reconciled. MAX_TRAILING_CHARS bounds the
+ * latency case: a duplicated block is the tail of the content (#5548), so a closed block followed by
+ * this much prose, with no block open after it, is treated as prose and released.
+ */
+const MAX_HELD_BYTES = 4 * 1024 * 1024;
+const MAX_TRAILING_CHARS = 8 * 1024;
 
 interface TextContext {
   fence: string | null;
@@ -160,6 +170,23 @@ export class SerializedToolCallContentBuffer {
     this.replace(split.defer, split.hasOpenTag);
     this.context = split.context;
     return split.emit;
+  }
+
+  /**
+   * Streaming ingest with bounded retention. Past either bound the stream prefers delivering text
+   * over suppressing a possible duplicate: everything held is released in order, nothing is
+   * suppressed (the behaviour before #5548 for that block), and scanning resumes from the carried
+   * context. The size bound is checked before the delta is retained.
+   */
+  ingestStreaming(delta: string): AdapterEvent[] {
+    if (this.hasOpenTag && this.bytes + Buffer.byteLength(delta) > MAX_HELD_BYTES) {
+      return [...this.drain([]), ...textEvents(this.ingest(delta))];
+    }
+    const text = this.ingest(delta);
+    if (this.hasOpenTag && proseAfterClosedBlock(this.text) > MAX_TRAILING_CHARS) {
+      return [...textEvents(text), ...this.drain([])];
+    }
+    return textEvents(text);
   }
 
   /** Exposes held text as evidence for narrowly repairing duplicated argument prefixes. */
@@ -351,4 +378,17 @@ export function reconcileSerializedToolCallEvents(
     buffer.dispose();
   }
   events.splice(start, end - start, ...reconciled);
+}
+
+function textEvents(text: string): AdapterEvent[] {
+  return text.length > 0 ? [{ type: "text_delta", text }] : [];
+}
+
+/** Non-whitespace characters after the last closed block, or 0 while a later block is still open. */
+function proseAfterClosedBlock(text: string): number {
+  const closer = text.lastIndexOf(CLOSE_TAG);
+  if (closer < 0) return 0;
+  const tail = text.slice(closer + CLOSE_TAG.length);
+  if (tail.includes(OPEN_TAG)) return 0;
+  return tail.replace(/\s+/g, "").length;
 }

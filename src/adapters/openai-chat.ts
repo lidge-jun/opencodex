@@ -376,8 +376,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           // Any other event keeps its place behind held text instead of overtaking it.
           if (event.type !== "text_delta") { yield* toolCallContent.hold(event); continue; }
           sawUserFacingOutput = true;
-          const text = toolCallContent.ingest(event.text);
-          yield text.length > 0 ? { type: "text_delta", text } : { type: "heartbeat" };
+          const released = toolCallContent.ingestStreaming(event.text);
+          yield* released.length > 0 ? released : [{ type: "heartbeat" } as AdapterEvent];
         }
       };
 
