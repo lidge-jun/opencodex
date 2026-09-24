@@ -70,6 +70,15 @@ foreach ($fn in $definitions) {
 $missing = @($wanted | Where-Object { $loaded -notcontains $_ })
 if ($missing.Count -gt 0) { throw "tray script is missing functions: $($missing -join ', ')" }
 
+# Badge scenarios assert that the UPDATE-BADGE maintenance never blocks the UI tick. The
+# tick also starts with the pre-existing /healthz request (Read-JsonUrl, 700 ms timeout),
+# which on an offline Windows runner can spend most of a second on a refused loopback
+# connect. That cost predates the badge and is not what these scenarios measure, so they
+# answer offline instantly; the Offline/Online scenarios keep the real request.
+if ($Scenario.StartsWith("Badge")) {
+  function Read-JsonUrl([string]$Url) { throw "offline (badge scenario stub)" }
+}
+
 # Production-shaped inputs (normally the script params and top-level state).
 $BunPath = $ChildEnginePath
 $CliPath = $HangChildPath
