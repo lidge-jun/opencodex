@@ -2,6 +2,9 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 
 const OPENCODEX_MISE_BACKEND = "npm:@bitkyc08/opencodex";
 const OPENCODEX_MISE_BACKEND_DIR = "npm-bitkyc08-opencodex";
+/** mise's core Node runtime. npm -g under it is an npm install that mise did not make. */
+const MISE_NODE_RUNTIME = { tool: "node", backend: "core:node" };
+const OPENCODEX_PACKAGE_SEGMENT = "/node_modules/@bitkyc08/opencodex";
 
 /**
  * @typedef {{
@@ -161,6 +164,20 @@ function detectMiseOwner(packagePath, deps) {
     return { recognized: true, owner: null, error: "metadata_unreadable" };
   }
   const toolDir = toolRoot.slice(toolRoot.lastIndexOf("/") + 1);
+  // On Windows, npm -g under a mise-managed Node writes the package straight into
+  // <mise>/installs/node/<version>/node_modules, so the adjacent record is Node's own
+  // (short = "node", full = "core:node"), not a statement about OpenCodex. Only that exact
+  // runtime record with the package directly in the runtime's global node_modules is an
+  // npm install; any other backend or layout stays fail-closed below.
+  if (
+    metadata
+    && metadata.tool === MISE_NODE_RUNTIME.tool
+    && metadata.backend === MISE_NODE_RUNTIME.backend
+    && samePath(toolDir, MISE_NODE_RUNTIME.tool, windowsPath)
+    && isRuntimeGlobalPackage(normalized, installPath, windowsPath)
+  ) {
+    return { recognized: false };
+  }
   const expectedToolDir = metadata?.tool === OPENCODEX_MISE_BACKEND
     ? OPENCODEX_MISE_BACKEND_DIR
     : metadata?.tool;
@@ -182,6 +199,16 @@ function detectMiseOwner(packagePath, deps) {
       toolRoot,
     },
   };
+}
+
+/**
+ * True when the package sits directly in the runtime's global node_modules:
+ * <toolRoot>/<version>/node_modules/@bitkyc08/opencodex[/...].
+ */
+function isRuntimeGlobalPackage(packagePath, installPath, windowsPath) {
+  const rest = packagePath.slice(installPath.length);
+  const probe = windowsPath ? rest.toLowerCase() : rest;
+  return probe === OPENCODEX_PACKAGE_SEGMENT || probe.startsWith(`${OPENCODEX_PACKAGE_SEGMENT}/`);
 }
 
 function probeMetadata(path) {
