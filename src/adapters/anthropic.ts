@@ -613,6 +613,11 @@ function supportsExplicitThinkingDisable(modelId: string): boolean {
   return meetsFamilyMinimum(modelId, EXPLICIT_THINKING_DISABLE_FAMILY_MINIMUMS);
 }
 
+function rejectsForcedToolChoice(modelId: string): boolean {
+  const parsed = claudeFamilyVersion(modelId);
+  return parsed?.family === "opus" && parsed.major === 5 && parsed.minor === 5;
+}
+
 /** `output_config.effort` accepts low|medium|high|xhigh|max — "minimal" is rejected with a 400. */
 function adaptiveEffort(effort: string): string {
   return effort === "minimal" ? "low" : effort;
@@ -1096,6 +1101,20 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // The caller asked for one tool call at a time but sent no explicit choice.
         // Anthropic carries that intent INSIDE tool_choice, so the implicit default
         // has to be stated before the flag has somewhere to live.
+        body.tool_choice = { type: "auto" };
+      }
+      const selectedToolChoice = body.tool_choice as { type?: string; name?: string } | undefined;
+      if (rejectsForcedToolChoice(parsed.modelId) && (selectedToolChoice?.type === "any" || selectedToolChoice?.type === "tool")) {
+        // Claude Opus 5.5 rejects forced tool use regardless of whether adaptive thinking is
+        // explicit. Anthropic's migration guidance recommends auto plus a prompt instruction;
+        // this keeps the request usable but cannot preserve the caller's forced-tool guarantee.
+        if (selectedToolChoice.type === "tool" && Array.isArray(body.tools)) {
+          // A named choice still narrows the candidate set even though the upstream cannot
+          // enforce the forced call. Do not let the compatibility downgrade widen it to every
+          // declared tool.
+          body.tools = body.tools.filter(tool => tool && typeof tool === "object" && "name" in tool
+            && (tool as { name?: unknown }).name === selectedToolChoice.name);
+        }
         body.tool_choice = { type: "auto" };
       }
       // disable_parallel_tool_use is nested in tool_choice and caps the model at one

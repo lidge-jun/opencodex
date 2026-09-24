@@ -518,6 +518,13 @@ true `parallelToolCalls` is byte-identical to previous behavior.
 The flag constrains the model's output, not execution ordering. Sequential tool use
 is enforced by the caller's own loop returning each `tool_result` before issuing the
 next request; this mapping does not provide that.
+
+Claude Opus 5.5 is an upstream exception to the forced-choice mapping: Anthropic rejects
+`tool_choice: {type:"any"}` and `{type:"tool",name:...}` for that model, with or without
+adaptive thinking. The Anthropic adapter sends `{type:"auto"}` for those choices so the
+request succeeds, but the caller's forced-tool guarantee cannot be preserved; the prompt
+must provide any required tool-use instruction. Other Claude model families retain the
+normal forced-choice mapping unless their own upstream contract says otherwise.
 ## Unmapped modalities are recorded, not dropped
 
 The translated Chat route has no video mapping — this adapter does not implement one.
