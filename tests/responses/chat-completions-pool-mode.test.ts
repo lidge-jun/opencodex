@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -72,22 +73,35 @@ describe("chat-completions pool vs direct credential injection", () => {
       return originalFetch(input, init);
     }) as typeof fetch;
 
-    saveConfig({
-      port: 0,
-      defaultProvider: "openai",
-      codexDesktopAuthless: true,
-      providers: {
-        openai: {
-          adapter: "openai-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          authMode: "forward",
-          codexAccountMode: "pool",
-        },
-      },
-    } as OcxConfig);
-
-    const server = startServer(0, { inspectNativeCodexOwnership });
+    let server: ReturnType<typeof startServer> | undefined;
     try {
+      saveConfig({
+        port: 0,
+        defaultProvider: "openai",
+        activeCodexAccountId: "pool-account",
+        codexAccounts: [{
+          id: "pool-account",
+          email: "pool-account@example.test",
+          chatgptAccountId: "pool-account-uuid",
+          isMain: false,
+        }],
+        providers: {
+          openai: {
+            adapter: "openai-responses",
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            authMode: "forward",
+            codexAccountMode: "pool",
+          },
+        },
+      } as OcxConfig);
+      saveCodexAccountCredential("pool-account", {
+        accessToken: "pool-account-token",
+        refreshToken: "pool-account-refresh",
+        expiresAt: Date.now() + 3_600_000,
+        chatgptAccountId: "pool-account-uuid",
+      });
+
+      server = startServer(0, { inspectNativeCodexOwnership });
       const response = await fetch(new URL("/v1/chat/completions", server.url), {
         method: "POST",
         headers: {
@@ -104,9 +118,13 @@ describe("chat-completions pool vs direct credential injection", () => {
       expect(response.status).toBe(200);
       const json = await response.json();
       expect(json.choices[0].message.content).toBe("pool-ok");
-      expect(seen.length).toBeGreaterThan(0);
+      expect(seen).toEqual([{
+        authorization: "Bearer pool-account-token",
+        chatgptAccountId: "pool-account-uuid",
+      }]);
+      expect(seen[0]?.authorization).not.toBe("Bearer native-main-token-pool");
     } finally {
-      await server.stop(true);
+      if (server) await server.stop(true);
       upstream.stop(true);
       globalThis.fetch = originalFetch;
     }

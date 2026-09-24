@@ -329,7 +329,7 @@ async function handleChatCompletionsWithBudget(
     // is fenced, omit it and let auth-context reject only a final physical-main
     // selection while healthy pool/provider routes continue.
     const isCanonicalPool = settledRoute && isCanonicalOpenAiForwardProvider(settledRoute.provider)
-      && settledRoute.codexAccountMode !== "direct";
+      && settledRoute.codexAccountMode === "pool";
     if (!isCanonicalPool && tryClaimNativeMainProfileForTurn(logIds?.turnAdmissionLease)) {
       try {
         const { getMainAccountToken } = await import("../codex/main-account");
