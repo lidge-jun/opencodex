@@ -705,6 +705,13 @@ provider instead of showing the effective state OpenCodex would produce. Flippin
 switch still stores the preference, but `config.toml` is not rewritten; the stored value
 takes effect if you switch Codex back to a provider OpenCodex manages and rerun `ocx start`.
 
+If `config.toml` exists but cannot be read (permissions, or a delete racing the read), the same
+report withholds the effective values and the sign-in answer as undetermined instead of showing
+the state OpenCodex would compute locally. The apply record keeps that explanation — including on
+a save whose injection gate is already closed by a disabled integration or a stopped proxy — and
+marks it retryable, so `ocx sync` or a later settings read reports the settled answer once the
+file reads again.
+
 Keep one tool as the owner of Codex provider configuration. To use OpenCodex behind an existing
 provider manager, point that provider at `http://127.0.0.1:10100/v1` with Responses passthrough
 (`wire_api = "responses"` in Codex TOML), not Chat Completions translation. When proxy API auth is

@@ -73,7 +73,13 @@ function settingsUpdateLines(
       || (typeof state.effective !== "boolean" && state.effective !== null)) return false;
     lines.push(`${label}: stored ${state.stored ? "on" : "off"}.`);
     if (state.effective === null) {
-      lines.push(`${label}: effective state is controlled by the external model provider.`);
+      // `null` is reported for both withheld cases; the apply reason is the only place
+      // that still distinguishes them, so the line has to read it rather than claim
+      // external control over an ownership the server could not determine.
+      const withheld = recordValue(switches.apply)?.reason === "ownership_undetermined"
+        ? "effective state could not be determined"
+        : "effective state is controlled by the external model provider";
+      lines.push(`${label}: ${withheld}.`);
       return true;
     }
     // The effective value is always stated, even when it matches. Printing it only on a

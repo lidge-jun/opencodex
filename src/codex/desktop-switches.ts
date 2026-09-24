@@ -21,6 +21,7 @@ export type CodexDesktopSwitchApplyReason =
   | "proxy_not_running"
   | "integration_disabled"
   | "external_provider"
+  | "ownership_undetermined"
   | "write_lock_busy"
   | "injection_refused";
 
@@ -72,9 +73,14 @@ export function describeCodexDesktopSwitches(
 ): CodexDesktopSwitchReport {
   const authlessStored = config.codexDesktopAuthless === true;
   const externallyOwned = !apply.applied && apply.reason === "external_provider";
-  const authlessEffective = externallyOwned ? null : isEffectiveCodexDesktopAuthless(config);
+  const ownershipUndetermined = !apply.applied && apply.reason === "ownership_undetermined";
+  // An unreadable config.toml leaves ownership undetermined, so the local effective values are
+  // withheld exactly like the externally owned case: reporting them would present OpenCodex's
+  // stored-versus-computed state as live while the file may belong to another provider.
+  const effectiveWithheld = externallyOwned || ownershipUndetermined;
+  const authlessEffective = effectiveWithheld ? null : isEffectiveCodexDesktopAuthless(config);
   const compactionStored = config.codexClientCompaction === true;
-  const compactionEffective = externallyOwned ? null : isEffectiveCodexClientCompaction(config);
+  const compactionEffective = effectiveWithheld ? null : isEffectiveCodexClientCompaction(config);
 
   return {
     codexDesktopAuthless: describeSwitch(authlessStored, authlessEffective, config),
@@ -84,6 +90,11 @@ export function describeCodexDesktopSwitches(
       ? {
           presentsCodexAccount: null,
           summary: "An external model provider owns Codex sign-in behavior; its account requirement was not changed.",
+        }
+      : ownershipUndetermined
+      ? {
+          presentsCodexAccount: null,
+          summary: "Whether the Codex app requires its own account sign-in is undetermined; config.toml ownership could not be read.",
         }
       : authlessEffective
       ? {
@@ -112,10 +123,12 @@ export async function observedCodexDesktopSwitchApply(): Promise<CodexDesktopSwi
     provider = currentExternalCodexModelProvider();
   } catch (error) {
     // A present-but-unreadable config.toml (permissions, deletion racing existsSync)
-    // must not take down the whole settings report — ownership is simply undetermined.
+    // must not take down the whole settings report. The undetermined reason keeps the
+    // reporting contract honest: effective values and the sign-in answer stay null instead
+    // of presenting local state a foreign provider may still control.
     return {
       applied: false,
-      reason: "not_requested",
+      reason: "ownership_undetermined",
       retryable: true,
       detail: `config.toml ownership could not be determined: ${error instanceof Error ? error.message : String(error)}`,
     };
@@ -131,10 +144,15 @@ export async function observedCodexDesktopSwitchApply(): Promise<CodexDesktopSwi
 
 // The apply gates skip the injector entirely, so they run the same ownership read the
 // observed path does — a disabled integration or an absent runtime must not make a
-// switch PUT report local state the external provider still controls.
-async function externalOwnershipApply(): Promise<CodexDesktopSwitchApply | null> {
+// switch PUT report local state the external provider still controls. An undetermined
+// read is kept for the same reason: replacing it with the gate's reason would drop the
+// "ownership could not be determined" explanation the locked save still owes.
+async function observedOwnershipApply(): Promise<CodexDesktopSwitchApply | null> {
   const ownership = await observedCodexDesktopSwitchApply();
-  return !ownership.applied && ownership.reason === "external_provider" ? ownership : null;
+  return !ownership.applied
+    && (ownership.reason === "external_provider" || ownership.reason === "ownership_undetermined")
+    ? ownership
+    : null;
 }
 
 /**
@@ -149,14 +167,14 @@ export async function applyCodexConfigInjection(
   config: OcxConfig,
 ): Promise<CodexDesktopSwitchApply> {
   if (!shouldSyncCodexOnStart(config)) {
-    return (await externalOwnershipApply())
+    return (await observedOwnershipApply())
       ?? { applied: false, reason: "integration_disabled", retryable: false };
   }
 
   const { readRuntimePort } = await import("../config/process-state");
   const runtime = readRuntimePort(process.pid);
   if (!runtime) {
-    return (await externalOwnershipApply())
+    return (await observedOwnershipApply())
       ?? { applied: false, reason: "proxy_not_running", retryable: true };
   }
 

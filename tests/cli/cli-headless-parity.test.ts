@@ -178,6 +178,39 @@ describe("ocx system settings desktop switches", () => {
       logSpy.mockRestore();
     }
   });
+
+  test("reports undetermined ownership without claiming external control", async () => {
+    const { deps } = fakeRuntime(() => ({
+      ok: true,
+      codexDesktopSwitches: {
+        codexDesktopAuthless: { stored: true, effective: null },
+        codexClientCompaction: { stored: false, effective: null },
+        apply: {
+          applied: false,
+          reason: "ownership_undetermined",
+          retryable: true,
+          detail: "config.toml ownership could not be determined: EACCES",
+        },
+        authSource: {
+          presentsCodexAccount: null,
+          summary: "Whether the Codex app requires its own account sign-in is undetermined; config.toml ownership could not be read.",
+        },
+      },
+    }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["settings", "--desktop-authless", "on"], deps)).toBe(0);
+      const output = logSpy.mock.calls.flat().join("\n");
+      expect(output).toContain("effective state could not be determined");
+      expect(output).toContain("was not rewritten because config.toml ownership could not be determined");
+      expect(output).toContain("Auth source: Whether the Codex app requires its own account sign-in is undetermined");
+      expect(output).not.toContain("controlled by the external model provider");
+      // Ownership may settle on a later read, so the retry advice stays.
+      expect(output).toContain("ocx sync");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
 });
 
 describe("ocx agent sidecar --list (#2188)", () => {

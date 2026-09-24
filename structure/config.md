@@ -361,6 +361,9 @@ reason and retryability when it was not. `src/codex/desktop-switches.ts` owns th
 When an external `model_provider` owns `config.toml`, injection preserves the file and reports the
 effective switch and authentication source as externally controlled. A report that attempted no
 rewrite checks the same `currentExternalCodexModelProvider` predicate via `observedCodexDesktopSwitchApply`.
+A present-but-unreadable `config.toml` reports `ownership_undetermined`: the effective values and
+the sign-in answer stay `null` rather than presenting local state a foreign provider may still
+control, and the apply gates keep that record instead of collapsing it to their own reason.
 
 Effective values come from `isEffectiveCodexDesktopAuthless` and
 `isEffectiveCodexClientCompaction` in `src/codex/loopback-target.ts` rather than a second copy

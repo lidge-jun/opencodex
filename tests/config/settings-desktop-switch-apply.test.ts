@@ -203,7 +203,58 @@ test("GET /api/settings survives an unreadable config.toml during ownership dete
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
       codexDesktopSwitches: {
-        apply: { applied: false, reason: "not_requested", retryable: true },
+        codexDesktopAuthless: { stored: true, effective: null },
+        codexClientCompaction: { stored: true, effective: null },
+        apply: { applied: false, reason: "ownership_undetermined", retryable: true },
+        authSource: { presentsCodexAccount: null },
+      },
+    });
+  } finally {
+    removeTreeWithRetry(root);
+  }
+}, 15_000);
+
+test("PUT /api/settings keeps the undetermined-ownership explanation on a locked save", () => {
+  // clientIntegrations.codex = false trips the apply gate before the injector runs, and an
+  // unreadable config.toml leaves ownership undetermined. The locked save must still report
+  // that explanation instead of collapsing to integration_disabled — the GET path and the
+  // switch PUT then agree on what could not be read.
+  const root = mkdtempSync(join(tmpdir(), "ocx-settings-undetermined-put-"));
+  const codexHome = join(root, "codex");
+  mkdirSync(join(codexHome, "config.toml"), { recursive: true });
+
+  try {
+    const response = runIsolatedSettingsRequest({
+      root,
+      codexHome,
+      routeConfig: {
+        ...ISOLATED_PROVIDER_CONFIG,
+        clientIntegrations: { codex: false },
+      },
+      scriptBody: `
+        const request = new Request("http://127.0.0.1:10100/api/settings", {
+          method: "PUT",
+          headers: { host: "127.0.0.1:10100", "content-type": "application/json" },
+          body: JSON.stringify({ codexDesktopAuthless: true }),
+        });
+        const response = await handleManagementAPI(request, new URL(request.url), config, {
+          saveConfigPreservingClaudeCode: () => {},
+          getCachedStartupHealth: async () => startupHealthFixture(),
+          createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+        });
+      `,
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      codexDesktopSwitches: {
+        codexDesktopAuthless: { stored: true, effective: null },
+        apply: {
+          applied: false,
+          reason: "ownership_undetermined",
+          retryable: true,
+          detail: expect.stringContaining("ownership could not be determined"),
+        },
+        authSource: { presentsCodexAccount: null },
       },
     });
   } finally {
