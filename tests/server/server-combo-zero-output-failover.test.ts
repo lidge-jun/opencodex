@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +20,9 @@ import {
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
 
-const actualResolver = await import("../../src/server/adapter-resolve");
+// `mock.module` outlives this file: Bun keeps the override below for every file that runs after
+// this one in the same process. This is a spread snapshot of the real module, taken before it.
+const actualResolver = { ...(await import("../../src/server/adapter-resolve")) };
 const actualResolveAdapter = actualResolver.resolveAdapter;
 let customRunTurn: NonNullable<ProviderAdapter["runTurn"]> | undefined;
 
@@ -43,6 +45,10 @@ mock.module("../../src/server/adapter-resolve", () => ({
     } satisfies ProviderAdapter;
   },
 }));
+
+afterAll(() => {  // Put the real module back for every later file in the same process.
+  mock.module("../../src/server/adapter-resolve", () => actualResolver);
+});
 
 const { handleResponses } = await import("../../src/server/responses");
 

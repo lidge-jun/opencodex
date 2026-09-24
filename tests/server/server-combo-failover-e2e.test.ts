@@ -4,7 +4,7 @@ import { comboProviderFactory } from "../helpers/combo-provider";
 import { registerComboContextOverflowCases } from "../helpers/combo-context-overflow-cases";
 import { registerComboContextHeadroomCases } from "../helpers/combo-context-headroom-cases";
 import { sessionLaneIdFromRequest } from "../../src/server/request-log-conversation";
-import { afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { logsFromApiBody } from "../helpers/logs-api";
 import { managementFetch as fetch, ManagementRequest as Request } from "../helpers/management-auth";
 import { mkdtempSync } from "node:fs";
@@ -58,9 +58,11 @@ import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 // default 5s per-test budget (same flake class as 810fa115 / claude-management-api).
 setDefaultTimeout(30_000);
 
-const actualResolver = await import("../../src/server/adapter-resolve");
+// `mock.module` outlives this file: Bun keeps both overrides below for every file that runs after
+// this one in the same process. These are spread snapshots of the real modules, taken before them.
+const actualResolver = { ...(await import("../../src/server/adapter-resolve")) };
 const actualResolveAdapter = actualResolver.resolveAdapter;
-const actualRetry = await import("../../src/lib/upstream-retry");
+const actualRetry = { ...(await import("../../src/lib/upstream-retry")) };
 const actualFetchWithTransientRetry = actualRetry.fetchWithTransientRetry;
 const { createCursorAdapter } = await import("../../src/adapters/cursor");
 import type { CursorTransportFactory } from "../../src/adapters/cursor/transport";
@@ -129,6 +131,11 @@ mock.module("../../src/lib/upstream-retry", () => ({
     return actualFetchWithTransientRetry(...args);
   },
 }));
+
+afterAll(() => {  // Put the real modules back for every later file in the same process.
+  mock.module("../../src/server/adapter-resolve", () => actualResolver);
+  mock.module("../../src/lib/upstream-retry", () => actualRetry);
+});
 
 const { handleResponses } = await import("../../src/server/responses");
 const { handleResponsesCompact } = await import("../../src/server/responses/compact");

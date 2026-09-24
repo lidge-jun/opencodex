@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,12 +10,18 @@ import {
 } from "../../src/companion/settings";
 import type { OcxConfig } from "../../src/types";
 
+// `mock.module` outlives this file: Bun keeps the override below for every file that runs after
+// this one in the same process. This is a spread snapshot of the real module, taken before it.
+const realOpenUrl = { ...(await import("../../src/lib/open-url")) };
 const opened: string[] = [];
 mock.module("../../src/lib/open-url", () => ({
   openUrl: (url: string) => {
     opened.push(url);
   },
 }));
+afterAll(() => {  // Put the real module back for every later file in the same process.
+  mock.module("../../src/lib/open-url", () => realOpenUrl);
+});
 const { resetCompanionPresenceForTests } = await import("../../src/server/management/companion-routes");
 const { handleManagementAPI } = await import("../../src/server/management-api");
 
