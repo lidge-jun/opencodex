@@ -1218,11 +1218,23 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     adapter: "openai-chat",
     authKind: "key",
     dashboardUrl: "https://xiaomimimo.com",
-    // Token-plan roster per Xiaomi's token-plan model list (V2.6 Pro and Flash). No jawcodeBundle,
-    // so no plan-specific facts are claimed; usage estimates still come from the model-level vendor
-    // price fallback (the pay-as-you-go equivalent), exactly as they did for V2.5.
+    // Token-plan roster per Xiaomi's token-plan model list (V2.6 Pro and Flash). Model-level facts
+    // come from Xiaomi's model pages (mimo.mi.com/models/en-US/<id>, fetched 2026-09-24): 1M context,
+    // 128K max output; V2.6 Pro/Flash and V2.5 take text/image/video/audio, V2.5 Pro text only. The
+    // catalog vocabulary has no video or audio, so only text/image are claimed. The token plan speaks
+    // the same API format as pay-as-you-go, so these are model facts rather than plan facts. No
+    // jawcodeBundle: pricing and entitlement stay unclaimed, and usage estimates still come from the
+    // model-level vendor price fallback, exactly as they did for V2.5.
     defaultModel: "mimo-v2.6-pro",
     models: ["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.5-pro", "mimo-v2.5"],
+    modelContextWindows: { "mimo-v2.6-pro": 1_048_576, "mimo-v2.6-flash": 1_048_576, "mimo-v2.5-pro": 1_048_576, "mimo-v2.5": 1_048_576 },
+    modelMaxOutputTokens: { "mimo-v2.6-pro": 131_072, "mimo-v2.6-flash": 131_072, "mimo-v2.5-pro": 131_072, "mimo-v2.5": 131_072 },
+    modelInputModalities: {
+      "mimo-v2.6-pro": ["text", "image"],
+      "mimo-v2.6-flash": ["text", "image"],
+      "mimo-v2.5": ["text", "image"],
+      "mimo-v2.5-pro": ["text"],
+    },
     // The gateway validates the ladder strictly and rejects anything above `high`.
     reasoningEfforts: ["low", "medium", "high"],
     reasoningEffortMap: { xhigh: "high", max: "high", ultra: "high" },
