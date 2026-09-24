@@ -27,6 +27,7 @@ import {
   comboFailureCooldownScope,
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
+import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
 import {
   expandPreviousResponseInput,
   previousResponseReplayFailure,
@@ -450,7 +451,11 @@ export async function executeComboResponses(
       countedExternally: true,
     });
     if (hopDecision && hopDecision.allowed) hopDecision.permit.use();
-    else if (hopDecision && !firstComboTarget) {
+    else if (hopDecision && firstComboTarget) {
+      // A refused initial reservation authorizes no child send and has no upstream failure to return.
+      return formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, "request send budget exhausted before combo dispatch");
+    }
+    else if (hopDecision) {
       // Out of budget is not this target's failure. The established exhaustion contract is to
       // return the last real upstream answer with its status, headers and any quota body
       // intact rather than to mint a synthetic error, and a later target only exists because

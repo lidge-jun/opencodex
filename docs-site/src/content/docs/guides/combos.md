@@ -221,6 +221,10 @@ Combo failures are divided into **hop** failures and **terminal** failures.
 | First tool call of a Responses turn run by an in-process adapter (`runTurn`) that the current request did not declare, before any output or replay-unsafe side effect | Cool the target and hop with the same tool catalog. After visible output or a replay-unsafe side effect the refusal is final. Chat Completions and Anthropic Messages requests are unchanged. |
 | Any other unclassified error | Stop and return the error. |
 
+If the shared request send budget refuses the first target, the combo returns a local 429
+`request_send_budget_exhausted` without contacting a provider. If it refuses a later target,
+the combo returns the last real upstream failure without sending to that target.
+
 When `cooldownMs` is unset, a hopped target uses an upstream fallback: 5 seconds for request-rate
 429s with upstream code `1302` or `1305`, and 60 seconds otherwise. When it is set, `cooldownMs`
 applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including those
