@@ -18,6 +18,7 @@ import {
 import { knownModelIdsForProvider, routeModel } from "../../src/router";
 import { buildCatalogEntries, resetCatalogRuntimeStateForTests } from "../../src/codex/catalog";
 import { clearModelCache, setCached } from "../../src/codex/model-cache";
+import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
 import { getModelMetadata } from "../../src/generated/model-metadata";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { registryModelIdKeys } from "../../src/providers/registry/model-ids";
@@ -393,8 +394,11 @@ describe("catalog emission (Codex-facing)", () => {
     expect(routed?.slug).toBe("zenmux/moonshotai-kimi-k3-free");
     expect((routed?.slug as string).split("/")).toHaveLength(2);
     expect(routed?.display_name).toBe("zenmux/moonshotai-kimi-k3-free");
-    // Identity text uses the NATIVE model name, not the encoded alias.
-    expect(String(routed?.base_instructions)).toContain("moonshotai/kimi-k3-free");
+    // #5217: the identity text is model-neutral on disk. Codex replays a stored instruction block
+    // into a sub-agent spawned on a DIFFERENT model, so a baked-in id would misname that worker;
+    // the destination model is named at request time instead, for the native id and the alias alike.
+    expect(String(routed?.base_instructions)).toContain(NEUTRAL_IDENTITY_LINE);
+    expect(String(routed?.base_instructions)).not.toContain("powered by the");
   });
 
   test("jawcode metadata resolves on the native id (template + null-template)", () => {

@@ -235,7 +235,13 @@ explicitly enabled and the final routed task contains an otherwise unreadable Fe
 opencodex uses a raw Responses passthrough request to the fixed
 `https://chatgpt.com/backend-api/codex/responses` endpoint with forward-mode authentication.
 ChatGPT returns the plaintext assignment through a forced function call; opencodex then converts
-only that task item to a standard user message before routed-provider dispatch.
+only that task item to a standard user message before routed-provider dispatch. Direct routed
+recovery, cached history replay, and the unreadable-task detector recognise all four codex-rs
+agent-message types: `NEW_TASK`, `MESSAGE`, `FOLLOWUP_TASK`, and `FINAL_ANSWER`. Combo recovery
+remains limited to spawned-child turns. A `FINAL_ANSWER` envelope may omit its `Task name` line.
+Recovery then has no header address to compare with the item's recipient, so that single cross-check
+does not run; the sender comparison and the cache scope, which still binds the structured recipient,
+are unchanged.
 
 This is not local decryption and does not fix the Codex wire protocol. It depends on undocumented
 ChatGPT backend behavior and may stop working after a backend change. The recovered assignment is

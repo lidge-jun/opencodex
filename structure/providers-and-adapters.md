@@ -34,6 +34,24 @@ the [bounded ingestion contract](transports/inventory.md#bounded-response-ingest
 Anthropic model-scoped quota labels in `src/providers/quota/vendor-probes-oauth.ts` publish
 only canonical Fable, Opus, or Sonnet labels after removing terminal controls; unknown upstream display names are omitted.
 
+The routed identity sentence a catalog row carries is model-neutral on disk: `base_instructions`,
+and a native capability alias's `model_messages.instructions_template`, hold `NEUTRAL_IDENTITY_LINE`
+rather than a model id, because Codex stores a session's instruction block once and replays it
+verbatim into a sub-agent spawned on a DIFFERENT model, where a baked id makes the worker answer
+identity questions with the parent's id (#5217). The destination model is therefore named at request
+time, in two steps, because the parser reads the body before routing has run and can only name the
+id the CLIENT sent. `src/responses/parser.ts` names it in the top-level `instructions` string and in
+developer and system-role items; `applyFinalRouteRequestNormalization`
+(`src/server/responses/core-normalize.ts`) then settles that sentence on `route.modelId` through
+`renameRoutedIdentityInContext`, where the wire id is final and every dispatch path — passthrough,
+`runTurn`, and the adapter request build — still has to read the context. Adapters that build their
+own system text call `identifyRoutedModel` on top of that with their own wire id, so the ones that
+never call it are not the ones that leak a client selector upstream (#5221).
+The Responses passthrough rewrites the sentence on a routed destination and strips it on a native or
+forward one, where Codex's own identity wording already supplies it;
+`tests/adapters/identity-neutralize.test.ts` and `tests/adapters/identity-subagent.test.ts` pin the
+rewrite rules and the routed-id settlement.
+
 | Path | Responsibility |
 | --- | --- |
 | `src/providers/registry.ts` | Compatibility facade; canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata live in `src/providers/registry/entries-core.ts` and `entries-extended.ts`, with model seeds in `model-seeds.ts`. |

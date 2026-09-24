@@ -23,6 +23,8 @@ macOS 選單列項目是 OpenCodex 桌面應用程式的一部分。它顯示本
 
 面板提供 **Refresh**、**Dashboard** 與 **Settings** 控制項。**Dashboard** 會在桌面視窗開啟用量檢視；**Settings** 會在其中開啟 companion 設定。系統匣選單也提供 **Open Dashboard**、**Open in Browser**、**Start at Login**、**Stop proxy**、**Check for Updates…**，有更新時提供 **Install update**，並有 **Quit**。**Stop proxy** 一律列出，但只有應用程式自行啟動代理時才可使用；你另外啟動的代理會繼續執行。系統匣可用時，關閉視窗或使用 Command-Q 只會隱藏應用程式；要退出請使用系統匣的 **Quit**。
 
+桌面儀表板的更新按鈕會開啟應用程式自己的更新頁面；它會檢查並安裝與系統匣選單相同的已簽署更新。
+
 系統匣標題每 60 秒更新一次。原生面板開啟期間，資料每 60 秒更新；**Refresh** 可要求立即更新。
 
 ## Widget

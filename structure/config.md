@@ -248,6 +248,13 @@ either file. History Worker job targets use that same canonical-first lookup rat
 `history-provider.ts` remains the strict mutation owner and maps shared validation failures to its
 restore/no-op integrity states. `native-residue.ts` remains a read-only observer and maps the same
 result to clean, residue, or indeterminate before inspecting referenced rollout files.
+One observation reads at most 64 MiB of rollout content across the history database and backup
+manifest together. The budget resets on each observation. A file that would exceed the remaining
+budget produces `indeterminate` before its content is read; exhausting the budget never proves
+that the history is clean. Classification stops at the first indeterminate surface, while a
+residue result still allows later surfaces to report uncertainty. This bounds repeated CLI
+startup checks on large conversation histories without rewriting history or weakening the
+coordinator's existing refusal and compatibility paths.
 
 > Decision record: [ADR-0018](decisions/ADR-0018-config-injection.md)
 

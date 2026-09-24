@@ -1286,12 +1286,14 @@ whitespace-only strings remain unchanged, as do incomplete and mixed encrypted/u
 Encrypted and unknown content is not normalized; native encrypted tasks still require the
 separate opt-in [task recovery](/reference/configuration/agents/#encrypted-v2-task-recovery).
 
-With task recovery enabled, replayed `NEW_TASK` and `MESSAGE` items reuse a cached assignment only
-after validating the caller and matching the parent-thread scope. Replay restoration
-does not make a new recovery request or extend cache expiry. Expired or unseen
-ciphertext is not replaced. Fresh encrypted `NEW_TASK` and `MESSAGE` items use the same
-opt-in recovery path, including native-parent `send_message` delivery. Message type,
-sender, recipient, parent scope and caller credentials remain part of validation or cache identity.
+With task recovery enabled, replayed `NEW_TASK`, `MESSAGE`, `FOLLOWUP_TASK`, and `FINAL_ANSWER`
+items reuse a cached assignment only after validating the caller and matching the parent-thread
+scope. Replay restoration does not make a new recovery request or extend cache expiry. Expired or
+unseen ciphertext is not replaced. Fresh encrypted `NEW_TASK`, `MESSAGE`, `FOLLOWUP_TASK`, and
+`FINAL_ANSWER` items use the same opt-in recovery path, including native-parent `send_message`
+delivery. Message type, sender, recipient, parent scope and caller credentials remain part of
+validation or cache identity. A `FINAL_ANSWER` without a `Task name` line has no header address to
+cross-check, but its recipient still scopes the cache.
 
 When a request contains several agent messages, cached replay restoration checks each
 message independently. The cache separates message type, sender, recipient and ciphertext

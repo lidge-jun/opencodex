@@ -1,5 +1,12 @@
 /** Quota wire/storage shapes. This leaf must not import credential or config owners. */
-export const MAIN_ACCOUNT_HARD_LOCK_PERCENT = 99;
+/**
+ * Observed usage at which new identity-matched main-account requests are refused (#5694).
+ *
+ * The policy is on by default, so this constant is what every installation without an explicit
+ * `codexMainAccountHardLock: false` admits against. 98 leaves one point of headroom under the
+ * exhausted reading Codex Desktop already treats as its own disabled send button.
+ */
+export const MAIN_ACCOUNT_HARD_LOCK_PERCENT = 98;
 
 /**
  * How recently a 100% burst reading must have been observed to exclude an account when it

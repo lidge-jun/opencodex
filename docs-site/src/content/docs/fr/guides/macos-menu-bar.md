@@ -23,6 +23,8 @@ Utilisez **Show Usage** dans le menu de la zone de notification pour ouvrir le p
 
 Le panneau comporte les contrôles **Refresh**, **Dashboard** et **Settings**. **Dashboard** ouvre la vue d’utilisation dans la fenêtre de bureau ; **Settings** y ouvre les réglages du composant associé. Le menu propose également **Open Dashboard**, **Open in Browser**, **Start at Login**, **Stop proxy**, **Check for Updates…**, l’élément **Install update** lorsqu’une mise à jour est disponible et **Quit**. **Stop proxy** reste affiché, mais n’est activé que si l’application a elle-même démarré le proxy ; un proxy démarré séparément continue de fonctionner. Fermer la fenêtre ou utiliser Command-Q masque l’application lorsque son icône est disponible ; utilisez **Quit** dans le menu pour la quitter.
 
+Le bouton de mise à jour du tableau de bord ouvre la page de mise à jour de l’application ; elle vérifie et installe la même mise à jour signée que le menu de la zone de notification.
+
 Le titre est actualisé toutes les 60 secondes. Tant que le panneau natif est ouvert, ses données sont également actualisées toutes les 60 secondes ; **Refresh** demande une mise à jour immédiate.
 
 ## Widget

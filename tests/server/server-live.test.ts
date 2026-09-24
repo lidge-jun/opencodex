@@ -2,7 +2,7 @@
  * /v1/live relay: Codex App / ChatGPT voice POSTs call-create against the injected base_url,
  * so the proxy must relay it to an OpenAI upstream instead of the /v1/* JSON-404 guard.
  */
-import { afterEach, beforeEach, describe, expect, onTestFinished, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -41,6 +41,10 @@ const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalFetch = globalThis.fetch;
 const TEST_DIR = join(import.meta.dir, ".tmp-server-live-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+// A case that starts a server against TEST_DIR hands its teardown here: the afterEach below must
+// stop those servers before it removes TEST_DIR (Bun runs afterEach before a case's
+// `onTestFinished` hooks, and Windows refuses to remove a directory holding open files).
+let caseTeardown: (() => Promise<void>) | undefined;
 const DIRECT_CHATGPT_TOKEN = fakeChatGptJwt({ chatgpt_account_id: "acct-123" });
 
 beforeEach(() => {
@@ -56,19 +60,33 @@ beforeEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  clearCodexUpstreamHealth();
-  clearThreadAccountMap();
-  clearAccountNeedsReauth("pool-a");
-  clearAccountQuota();
-  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+afterEach(async () => {
+  // First, so a case's servers are stopped before the removal below takes TEST_DIR apart under them.
+  const teardown = caseTeardown;
+  caseTeardown = undefined;
+  let teardownFailure: unknown;
+  try {
+    await teardown?.();
+  } catch (err) {
+    teardownFailure = err;
+  }
+  try {
+    globalThis.fetch = originalFetch;
+    if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
+    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    isolatedCodexHome?.restore();
+    isolatedCodexHome = null;
+    clearCodexUpstreamHealth();
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("pool-a");
+    clearAccountQuota();
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  } finally {
+    // Reported after the rest ran: a failed shutdown must not also cost this file its cleanup.
+    if (teardownFailure) throw teardownFailure;
+  }
 });
 
 interface CapturedRequest {
@@ -616,7 +634,9 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
   // No inner deadline: the 50MiB transfer is the thing the assertions are about, so a wall clock
   // over it would fail the contract for being the runner rather than the relay. The harness budget
   // below is the only bound left, and a case it kills emits no failure message of its own, so
-  // cleanup lives on `onTestFinished` -- which runs however this case ends -- and reports the stall.
+  // cleanup is handed to the file's afterEach through `caseTeardown`, which runs however this case
+  // ends -- including when the budget ends it -- and reports the stall. That hook owns it because
+  // the servers below hold files inside TEST_DIR, and the afterEach removes TEST_DIR.
   let restoreWebSocket: (() => void) | undefined;
   let live: ReturnType<typeof startServer> | undefined;
   let client: WebSocket | undefined;
@@ -640,7 +660,7 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
       await upstream.stop(true);
     }
   };
-  onTestFinished(cleanup);
+  caseTeardown = cleanup;
 
   saveConfig(forwardConfig());
   // Redirect ChatGPT sideband targets to the local mock; the config stays canonical. A sibling

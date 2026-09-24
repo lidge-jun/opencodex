@@ -61,6 +61,7 @@ import {
   registerDefaultAppOwnedObservedBuffers,
 } from "../lib/app-owned-memory-stores";
 import { acquireServerBackgroundLifecycle } from "./background-lifecycle";
+import { startPackageRefresh, stopPackageRefresh } from "../update/refresh-scheduler";
 import { activateLab, labActivationRequired } from "../lib/lab-activation";
 import { runOpenAiTierStartupMigration } from "../providers/openai-tier-startup";
 import { runAlibabaRegionStartupMigration } from "../providers/alibaba-region-startup";
@@ -746,6 +747,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   const nativeStop = server.stop.bind(server);
   const loopbackListenerRef = loopbackServer;
   const managementIngressRef = managementIngressServer;
+  let packageRefreshStopped = false;
   Object.defineProperty(server, "stop", {
     configurable: true,
     value: async (closeActiveConnections?: boolean): Promise<void> => {
@@ -754,6 +756,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       // Disarm the package-tree restart timer before listener teardown: a queued
       // replacement callback must not call acceptSystemRestart() after stop() has
       // begun, or it would schedule a drain-and-restart on a stopped server.
+      if (!packageRefreshStopped) {
+        packageRefreshStopped = true;
+        stopPackageRefresh();
+      }
       packageTreeIntegrity.dispose();
       // The orchestration lives in `runListenerShutdown` so its two competing properties —
       // cleanup completes, failure propagates — are testable without a live socket.
@@ -874,6 +880,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     });
   }
 
+  startPackageRefresh();
   return server;
 }
 

@@ -136,17 +136,24 @@ Remove the stored OAuth credential for a provider.
 
 ## Accounts and key pools
 
-### Main-account 99% protection
+### Main-account 98% protection
 
-In **Codex settings → Multi-auth → Advanced settings**, **Block main account at 99%**
-is an independent opt-in beside Ultra Fast. Enabling it first shows the consequences; cancelling
-does not change the setting. The main-account card shows monitoring, unknown usage, or a current
-policy block even when Advanced settings is closed.
+In **Codex settings → Multi-auth → Advanced settings**, **Block main account at 98%**
+is on by default beside Ultra Fast. Switching it off applies immediately; turning it back on first
+shows the consequences, and cancelling does not change the setting. The main-account card shows
+monitoring, unknown usage, or a current policy block even when Advanced settings is closed.
+
+The default follows from what a drained main account does to Codex Desktop: once the ChatGPT
+account window reports **0%** remaining, Desktop disables its send button and the account stops
+accepting turns until the window resets. Holding ocx's own traffic below that point keeps the
+account usable ([#5694](https://github.com/lidge-jun/opencodex/issues/5694)). The cost is Luna
+Reserve: while the block is in force, Reserve on that main account cannot activate. To let the main
+account run to exhaustion and hand over to Reserve, turn the switch off.
 
 The policy uses the **5h window when present**, otherwise the weekly window. Monthly-only
 accounts use their monthly window. It does not take the highest percentage across windows.
 A fresh **0%** observation automatically releases the block while the switch stays on; the next
-99% observation blocks again. Unknown usage does not fabricate a zero, and a missing reading does
+98% observation blocks again. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
 While blocked, the existing once-per-minute background cycle checks fresh owned usage; failed or
 invalid readings retain the block. Other pause, reauthentication, and upstream limits remain independent.
@@ -155,16 +162,20 @@ Protection treats one fresh valid WHAM usage response as a replacement for the o
 its primary window explicitly lasts **at least 24 hours** and secondary/tertiary windows are explicitly `null`
 or also explicitly last at least 24 hours and report their usage. This follows the parser's short/long boundary, so a
 one-day window qualifies as well as weekly/monthly windows. The current window still uses the same
-99% threshold. This relies on the single reported snapshot; repeated observations are not required.
+98% threshold. This relies on the single reported snapshot; repeated observations are not required.
 Omitted secondary/tertiary fields, an unknown primary duration, or partial response headers cannot clear a previous block.
 
-The persisted option is `"codexMainAccountHardLock": true` in OpenCodex's `config.json`; it is off
-by default. This protects new requests using the identified main account, not the last 1% itself:
-already-running requests, unmatched caller-owned keyring credentials, and traffic outside the
-proxy can still spend quota. Added accounts and other providers remain available.
+The persisted option is `"codexMainAccountHardLock"` in OpenCodex's `config.json`. An absent key or
+`true` means on; only an explicit `false` turns it off, and that is what switching the setting off
+stores. The default changed here: the policy used to be opt-in and the old switch removed the key
+when it was turned off, so an install that had switched it off now reads as on. If you want the old
+behavior, switch it off once to record the opt-out. Protection covers new requests using the
+identified main account, not the last 2% itself: already-running requests, unmatched caller-owned
+keyring credentials, and traffic outside the proxy can still spend quota. Added accounts and other
+providers remain available.
 
-With protection enabled, an owned startup restores the main credential's in-memory identity
-binding after native-profile recovery and cleanup, so a persisted 99% block survives a restart.
+With protection on, an owned startup restores the main credential's in-memory identity
+binding after native-profile recovery and cleanup, so a persisted 98% block survives a restart.
 Caller-owned Direct, exact-main, main-fallback, and main-pin requests can briefly receive 503
 while that binding is pending; healthy stored Pool accounts stay eligible throughout. No
 credential is read from a foreign or unconfirmed service home for this initialization.
@@ -198,7 +209,7 @@ Each compatibility request checks a credential-bound server authorization, cache
 requires ordinary usage to be disallowed, the Luna Reserve banner, and exactly one allowed Reserve
 bucket. Missing, denied, stale or mismatched evidence refuses the request; it does not switch accounts
 or silently use ordinary Luna. Passive usage can revoke authorization but cannot create it.
-Global cooldown, pause, reauthentication and the 99% hard lock still apply. Disable the hard lock if
+Global cooldown, pause, reauthentication and the 98% hard lock still apply. Turn the hard lock off if
 you want to use Reserve on an exhausted main account; doing so does not grant server entitlement.
 This compatibility path supports conversation requests and compaction, not Reserve as a vision or
 web-search helper or a standalone search-relay model. Choose another model for those helpers.

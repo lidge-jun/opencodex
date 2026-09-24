@@ -1,4 +1,6 @@
 import type { OcxConfig } from "../../types";
+import type { Channel } from "../../update/index";
+import type { UpdateCheckResult } from "../../update/job";
 import type { NativeProfileApiDeps } from "../../codex/native-profile-api";
 import type { CodexLogGuardProtectionDeps } from "../../codex/log-guard/protection";
 import type { CodexLogGuardMaintenanceDeps } from "../../codex/log-guard/maintenance";
@@ -34,6 +36,7 @@ export type RemoteWorkspaceSessionsApi = Pick<RemoteWorkspaceSessionService,
 export interface ManagementApiDeps {
   /** Read-only process-local aggregate metrics; absent keeps the scrape route unavailable. */
   requestMetrics?: RequestMetricsSnapshotter;
+  checkPackageUpdate?: (channel: Channel) => Promise<UpdateCheckResult>;
   remoteWorkspaceHub?: RemoteWorkspaceHubApi;
   remoteWorkspaceSessions?: RemoteWorkspaceSessionsApi;
   /** The listener retains and awaits teardown only after this optional subsystem activates. */

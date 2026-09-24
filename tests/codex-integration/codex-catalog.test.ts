@@ -66,6 +66,7 @@ import { convergeCodexCatalog } from "../../src/codex/convergence";
 import { resetCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
 import { resolveCodexCatalogSerializationDatabasePath, resolveEffectiveUserIdentity } from "../../src/codex/user-identity";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
+import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
 
 const originalFetch = globalThis.fetch;
 
@@ -414,7 +415,7 @@ describe("combo catalog capability intersection", () => {
       expect(row.slug).toBe(alias);
       expect(row.display_name).toBe(alias);
       expect(row.owned_by).toBe("combo");
-      expect(row.base_instructions).toContain("mixed");
+      expect(row.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
       expect(row).not.toHaveProperty("model_messages");
       expect(row.tool_mode).toBe("code_mode_only");
       expect(row.web_search_tool_type).toBe("text_and_image");
@@ -3426,7 +3427,7 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.supports_search_tool).toBe(true);
     expect(routed?.supports_reasoning_summaries).toBe(false);
     expect(routed?.base_instructions).not.toBe(nativeTemplate().base_instructions);
-    expect(routed?.base_instructions).toContain("claude-sonnet-4-6");
+    expect(routed?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
     expect(routed?.default_reasoning_level).toBe("medium");
   });
 
@@ -3764,10 +3765,9 @@ describe("Codex catalog routed normalization", () => {
       multi_agent_version: "v2",
     });
     expect(source).not.toHaveProperty("availability_nux");
-    expect(source?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
+    expect(source?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
     expect(source?.base_instructions).not.toContain("based on GPT-5");
-    expect((source?.model_messages as { instructions_template?: string })?.instructions_template)
-      .toContain("powered by the gpt-daybreak-blue-latest");
+    expect((source?.model_messages as { instructions_template?: string })?.instructions_template).toContain(NEUTRAL_IDENTITY_LINE);
 
     // NATIVE_OPENAI_MODELS already contains the slug; passing it again would double it.
     const projected = buildCatalogEntries(
@@ -3947,7 +3947,7 @@ describe("Codex catalog routed normalization", () => {
       multi_agent_version: "v2",
       opencodex_catalog_kind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
     });
-    expect(daybreak?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
+    expect(daybreak?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
     expect(daybreak?.model_messages).toBeDefined();
     expect(entries.some(entry => entry.slug === NATIVE_DAYBREAK_BLUE_MODEL)).toBe(false);
     expect(entries.some(entry => entry.slug === `main/${NATIVE_DAYBREAK_BLUE_MODEL}`)).toBe(false);
@@ -3995,7 +3995,7 @@ describe("Codex catalog routed normalization", () => {
       display_name: "GPT-6-Astra", multi_agent_reasoning_effort: "xhigh",
       service_tiers: [{ id: "priority", name: "Fast", description: "2x speed, increased usage" }],
     });
-    expect(astra?.base_instructions).toContain("powered by the gpt-6-astra");
+    expect(astra?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
     expect(astra?.base_instructions).not.toContain("daybreak");
   });
 

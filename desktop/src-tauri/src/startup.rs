@@ -1411,7 +1411,12 @@ fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
         app.try_state::<AppState>()
             .is_some_and(|state| state.owns_runtime()),
     );
-    let dashboard = endpoint.url("/#/usage");
+    let path = format!(
+        "/?desktop_session={}#/usage",
+        app.state::<crate::updater::DesktopUpdateState>()
+            .session_id()
+    );
+    let dashboard = endpoint.url(&path);
     let mut progress = Progress::new(Phase::Ready, elapsed(started));
     progress.dashboard = Some(dashboard.clone());
     if !emit(app, progress, None) {
@@ -1419,6 +1424,7 @@ fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
         // terminal state stays and the window must not navigate away from it.
         return;
     }
+    app.state::<crate::updater::DesktopUpdateState>().wake();
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(true);
         let startup = app.try_state::<Startup>();
@@ -1458,6 +1464,28 @@ pub fn open_dashboard(app: &AppHandle) {
         }
     }
     crate::window::show(&window);
+}
+
+pub fn return_to_dashboard(app: &AppHandle) -> Result<(), String> {
+    let startup = app.try_state::<Startup>().ok_or("dashboard is not ready")?;
+    let dashboard = startup.ready_dashboard();
+    let window = app
+        .get_webview_window("main")
+        .ok_or("dashboard window is unavailable")?;
+    return_ready_dashboard(dashboard.as_deref(), |url| navigate_dashboard(&window, url))?;
+    crate::window::show(&window);
+    Ok(())
+}
+
+fn return_ready_dashboard(
+    dashboard: Option<&str>,
+    navigate: impl FnOnce(&str) -> bool,
+) -> Result<(), String> {
+    let dashboard = dashboard.ok_or("dashboard is not ready")?;
+    if !navigate(dashboard) {
+        return Err("dashboard could not be opened".into());
+    }
+    Ok(())
 }
 
 fn loads_dashboard_on_ready(origin: LaunchOrigin, window_visible: bool, requested: bool) -> bool {
@@ -1593,8 +1621,9 @@ fn elapsed(started: Instant) -> u64 {
 mod tests {
     use super::{
         approval_still_current, attach_plan, claim_after_silence, loads_dashboard_on_ready,
-        navigate_once, shows_window, stop_after_approval, unavailable, AttachPlan, ConsentState,
-        Expiry, LaunchOrigin, Phase, Progress, Startup, AUTOSTART_FLAG, DEADLINE, PHASES, POLL,
+        navigate_once, return_ready_dashboard, shows_window, stop_after_approval, unavailable,
+        AttachPlan, ConsentState, Expiry, LaunchOrigin, Phase, Progress, Startup, AUTOSTART_FLAG,
+        DEADLINE, PHASES, POLL,
     };
     use crate::claim::ClaimResult;
     use crate::ownership::{Claim, Consent, Owner, Recorded};
@@ -1970,6 +1999,27 @@ mod tests {
         assert!(startup.dashboard_requested());
         startup.restart();
         assert!(!startup.dashboard_requested());
+    }
+
+    #[test]
+    fn update_page_return_requires_a_ready_dashboard_and_retries_refused_navigation() {
+        assert_eq!(
+            return_ready_dashboard(None, |_| true).unwrap_err(),
+            "dashboard is not ready"
+        );
+        assert_eq!(
+            return_ready_dashboard(Some("http://127.0.0.1:10100/#/usage"), |_| false).unwrap_err(),
+            "dashboard could not be opened"
+        );
+        let mut visited = None;
+        assert!(
+            return_ready_dashboard(Some("http://127.0.0.1:10100/#/usage"), |url| {
+                visited = Some(url.to_owned());
+                true
+            })
+            .is_ok()
+        );
+        assert_eq!(visited.as_deref(), Some("http://127.0.0.1:10100/#/usage"));
     }
 
     #[test]

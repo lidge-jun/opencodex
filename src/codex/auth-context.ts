@@ -28,6 +28,7 @@ import {
 } from "./main-account";
 import { isMainAccountPolicyBindingPending, isNativeMainTrafficBlocked, nativeMainStartupGateSnapshot } from "./native-profile-startup";
 import type { NativeMainStartupBlockReason } from "./native-profile-startup";
+import { waitForMainAccountPolicyBinding } from "./main-account-policy-wait";
 import {
   codexQuotaScopeForModel,
   computeCodexUsageScore,
@@ -67,7 +68,12 @@ import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
 import { extractAccountId, extractEmail } from "../oauth/chatgpt";
-import { getMainAccountHardLockStatus, isMainAccountHardLocked } from "./main-account-hard-lock";
+import {
+  MAIN_ACCOUNT_HARD_LOCK_PERCENT,
+  getMainAccountHardLockStatus,
+  isMainAccountHardLockEnabled,
+  isMainAccountHardLocked,
+} from "./main-account-hard-lock";
 import {
   captureMainAccountIdentityGeneration,
   captureMainQuotaWriter,
@@ -508,7 +514,7 @@ export class CodexMainAccountHardLockError extends CodexAccountCooldownError {
     super(MAIN_CODEX_ACCOUNT_ID, resetAt ?? 0);
     this.name = "CodexMainAccountHardLockError";
     this.resetAt = resetAt;
-    this.message = "Codex main account is blocked by the 99% main-account quota policy."
+    this.message = `Codex main account is blocked by the ${MAIN_ACCOUNT_HARD_LOCK_PERCENT}% main-account quota policy.`
       + " Choose another account, wait for quota to reset, or disable codexMainAccountHardLock in Settings.";
   }
 }
@@ -898,6 +904,8 @@ export interface ResolveCodexAuthContextOptions {
   getValidMainAccountToken?: typeof getValidMainAccountToken;
   nativeMainRefreshDependencies?: NativeMainRefreshDependencies;
   signal?: AbortSignal;
+  /** Test seam: overrides the bounded startup policy-binding wait before the hard-lock fence. */
+  mainAccountPolicyBindingWaitMs?: number;
   primeCodexPoolQuotas?: (config: OcxConfig, reason: string) => Promise<void>;
   /** Test seam for account-gated native model discovery. */
   resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
@@ -918,6 +926,32 @@ export interface CodexAccountSelectionAdmission {
   readonly mainProfileDraining: boolean;
   claimMainProfile(): boolean;
   release(): void;
+}
+
+/**
+ * Wait, bounded, for an owned startup's main-policy binding, then fail closed while it is still
+ * in flight.
+ *
+ * #5694 turned `codexMainAccountHardLock` on by default, so this fence stopped being an opt-in
+ * rarity and started intercepting ordinary requests: for the seconds a Windows startup spends
+ * recovering, sweeping stages, and binding the pinned home, every caller-owned direct request
+ * was answered with a 503 "native-main profile maintenance is active; retry". Waiting is the
+ * right answer for a window that closes on its own -- the request resumes and the hard lock
+ * below still decides on identity and quota, exactly as it does after startup. A gate still
+ * pending at the deadline (retained recovery, a manual-recovery requirement) is a real refusal,
+ * and that is the one case that keeps the draining error.
+ *
+ * Both reads are memory-only: neither this fence nor the wait probes a foreign home.
+ */
+async function awaitMainAccountPolicyBindingSettled(
+  options: ResolveCodexAuthContextOptions,
+): Promise<void> {
+  if (!isMainAccountPolicyBindingPending()) return;
+  const settled = await waitForMainAccountPolicyBinding({
+    signal: options.signal,
+    timeoutMs: options.mainAccountPolicyBindingWaitMs,
+  });
+  if (!settled) throw new CodexMainProfileDrainingError();
 }
 
 export async function resolveCodexAuthContext(
@@ -956,9 +990,11 @@ export async function resolveCodexAuthContext(
   );
   const requestOwnedMainPinCandidate = mainPinState().candidate;
   // During an owned startup, equality cannot be established until recovery and the
-  // memory-only policy binding finish. This read-only fence never probes a foreign home.
-  if (policy.codexMainAccountHardLock === true && requestOwnedMainPinCandidate && isMainAccountPolicyBindingPending()) {
-    throw new CodexMainProfileDrainingError();
+  // memory-only policy binding finish. This read-only fence never probes a foreign home, and it
+  // waits out a window that closes on its own instead of refusing a request that arrived inside
+  // it. Only a binding still pending at the deadline fails closed.
+  if (isMainAccountHardLockEnabled(policy) && requestOwnedMainPinCandidate) {
+    await awaitMainAccountPolicyBindingSettled(options);
   }
   const preserveRequestOwnedMainPin = () => mainPinState().preserve;
   if (fixedAccountId !== undefined && options.excludeAccountId !== undefined) {
@@ -970,9 +1006,7 @@ export async function resolveCodexAuthContext(
     // Trusted substitution still has to claim and validate stored main below.
     if (!substituteStoredMain && !hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     if (!substituteStoredMain) {
-      if (policy.codexMainAccountHardLock === true && isMainAccountPolicyBindingPending()) {
-        throw new CodexMainProfileDrainingError();
-      }
+      if (isMainAccountHardLockEnabled(policy)) await awaitMainAccountPolicyBindingSettled(options);
       if (callerMatchesObservedMain(headers)) assertMainAccountPolicy(policy);
       assertCallerOwnedMainPoolNotCooled();
       if (reserve) {
@@ -1014,7 +1048,7 @@ export async function resolveCodexAuthContext(
       ) {
         throw new CodexMainProfileDrainingError();
       }
-      if (policy.codexMainAccountHardLock === true) reconcileMainCodexAccountRuntimeState();
+      if (isMainAccountHardLockEnabled(policy)) reconcileMainCodexAccountRuntimeState();
       assertMainAccountPolicy(policy);
       if (options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)) {
         const entitled = entitledCodexAccountIdsForModel(
@@ -1542,7 +1576,11 @@ export function materializeCodexUpstreamAuth(
     if (accountId) selected.set("chatgpt-account-id", accountId);
   }
   if (ctx.kind === "main" && options.substituteMainCredential === true) {
-    if (options.config?.codexMainAccountHardLock === true) reconcileMainCodexAccountRuntimeState();
+    // No config object is "no policy input", not the persisted opt-out: only a config that
+    // actually says `false` disables the default-on lock (#5694).
+    if (options.config !== undefined && isMainAccountHardLockEnabled(options.config)) {
+      reconcileMainCodexAccountRuntimeState();
+    }
     const writer = captureObservedMainWriter();
     const stored = getMainAccountToken();
     // Fail BEFORE any upstream I/O. Falling through here would send the admission secret.
@@ -1620,7 +1658,9 @@ export async function materializeCodexUpstreamAuthAsync(
     const value = headers.get(name);
     if (value) selected.set(name, value);
   }
-  if (options.config?.codexMainAccountHardLock === true) reconcileMainCodexAccountRuntimeState();
+  if (options.config !== undefined && isMainAccountHardLockEnabled(options.config)) {
+    reconcileMainCodexAccountRuntimeState();
+  }
   const writer = captureObservedMainWriter();
   const stored = await getValidMainAccountToken({
     signal: options.signal,

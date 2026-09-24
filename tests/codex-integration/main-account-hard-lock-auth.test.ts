@@ -205,13 +205,13 @@ describe("main quota policy at native admission", () => {
     });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
-  test.each([...(["owned-99", "owned-98", "foreign", "unknown", "recovery", "second-listener",
+  test.each([...(["owned-97", "owned-98", "owned-99", "foreign", "unknown", "recovery", "second-listener",
     "invalid-access-token", "invalid-account-id", "invalid-id-token", "mismatched-identity", "renewed-listener",
     "stage-retry", "manual-recovery", "stale-sweep", "retained-unknown-binding",
     "conflicting-token-identities", "conflicting-claims", "owned-opaque-99"] as const)
     .map(scenario => [scenario, "global-zero"] as const),
     ["owned-99", "account-zero"] as const,
-    ["owned-98", "account-zero"] as const,
+    ["owned-97", "account-zero"] as const,
     ["recovery", "account-zero"] as const])(
     "fresh startup restores durable main policy only after owned recovery (%s, %s)", (scenario, thresholdMode) => {
       const restoredId = scenario === "recovery" ? "hard-lock-recovered-main" : accountId;
@@ -221,7 +221,10 @@ describe("main quota policy at native admission", () => {
         "https://api.openai.com/auth": { chatgpt_account_id: scenario === "conflicting-token-identities"
           ? "hard-lock-conflicting-access-account"
           : scenario === "conflicting-claims" ? "hard-lock-conflicting-claim-account" : restoredId } })).toString("base64url")}.signature`;
-      const quota = { weeklyPercent: scenario === "owned-98" ? 98 : 99, updatedAt: Date.now() - 7 * 60 * 60_000 };
+      // 97 is the admitted side of the 98% default lock; 98 and 99 pin the boundary itself.
+      const belowHardLock = scenario === "owned-97";
+      const quota = { weeklyPercent: scenario === "owned-97" ? 97 : scenario === "owned-98" ? 98 : 99,
+        updatedAt: Date.now() - 7 * 60 * 60_000 };
       const identityKey = createHash("sha256").update("opencodex-main-quota-v1\0").update(restoredId).digest("hex");
       if (scenario.startsWith("invalid-") || scenario === "mismatched-identity") {
         writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: {
@@ -285,9 +288,9 @@ describe("main quota policy at native admission", () => {
         expect(result.primaryUpstreamCalls).toBe(1);
       } else {
         expect(result.after).toMatchObject({ matched: true, policy: quota });
-        expect(result.response.status).toBe(scenario === "owned-98" ? 200 : 429);
-        expect(result.primaryUpstreamCalls).toBe(scenario === "owned-98" ? 1 : 0);
-        if (scenario !== "owned-98") expect(result.response.hardLockError).toBe(true);
+        expect(result.response.status).toBe(belowHardLock ? 200 : 429);
+        expect(result.primaryUpstreamCalls).toBe(belowHardLock ? 1 : 0);
+        if (!belowHardLock) expect(result.response.hardLockError).toBe(true);
       }
       if (scenario === "recovery") {
         expect(result.heldRecovery.observation).toMatchObject({ matched: false, policy: null, tokenReads: 0 });
@@ -356,7 +359,7 @@ describe("main quota policy at native admission", () => {
     const cfg = accountZeroConfig();
     addAlternative(cfg);
     setAccountQuotaFromParsed("hard-lock-pool", { weeklyPercent: 1, shortPercent: 1 });
-    setAccountQuotaFromParsed(MAIN, { weeklyPercent: 98.99, shortPercent: 98.99 }, undefined,
+    setAccountQuotaFromParsed(MAIN, { weeklyPercent: 97.99, shortPercent: 97.99 }, undefined,
       captureMainQuotaWriter(accountId));
     // Above global 95: ignoring the explicit zero would proactively leave main here.
     await expect(resolveCodexAuthContext(new Headers(), cfg, "pool"))
@@ -394,7 +397,7 @@ describe("main quota policy at native admission", () => {
 
   test("per-account zero cannot bypass hard-lock when selected main headers materialize", async () => {
     const cfg = accountZeroConfig();
-    quota(98.99);
+    quota(97.99);
     const context = await resolveCodexAuthContext(new Headers(), cfg, "pool", { accountId: MAIN });
     expect(context.kind).toBe("main-pool");
     quota(99);
@@ -450,7 +453,7 @@ describe("main quota policy at native admission", () => {
     })).rejects.toBeInstanceOf(CodexMainAccountHardLockError);
   });
 
-  for (const percent of [98.99, 99]) {
+  for (const percent of [97.99, 99]) {
     test(`Pool cooldown caller fallback keeps the main ${percent}% policy boundary`, async () => {
       const cfg = config();
       addAlternative(cfg);
@@ -468,7 +471,7 @@ describe("main quota policy at native admission", () => {
       const context = resolveCodexAuthContext(caller(), cfg, "pool", {
         requestScopedMainCredential: true, modelId: "gpt-5.6-terra",
       });
-      if (percent < 99) {
+      if (percent < 98) {
         await expect(context).resolves.toMatchObject({ kind: "main", accountId: null });
       } else {
         await expect(context).rejects.toBeInstanceOf(CodexMainAccountHardLockError);
@@ -492,7 +495,7 @@ describe("main quota policy at native admission", () => {
 
   test("selection writer survives to headers; live quota and toggle are checked at materialization", async () => {
     const cfg = config();
-    quota(98.99);
+    quota(97.99);
     const ctx = await resolveCodexAuthContext(new Headers(), cfg, "pool", { accountId: MAIN });
     expect(ctx.kind).toBe("main-pool");
     if (ctx.kind !== "main-pool") throw new Error("expected stored main context");
@@ -503,12 +506,12 @@ describe("main quota policy at native admission", () => {
     expect(headersForCodexAuthContext(new Headers(), ctx, cfg).get("authorization")).toBe(`Bearer ${bearer()}`);
     cfg.codexMainAccountHardLock = true;
     expect(() => headersForCodexAuthContext(new Headers(), ctx, cfg)).toThrow(CodexMainAccountHardLockError);
-    quota(98.99);
+    quota(97.99);
     expect(() => headersForCodexAuthContext(new Headers(), ctx, cfg)).not.toThrow();
   });
 
   test("quota changing while selected main refresh awaits rejects without quarantining it", async () => {
-    quota(98.99);
+    quota(97.99);
     await expect(resolveCodexAuthContext(new Headers(), config(), "pool", {
       accountId: MAIN,
       getValidMainAccountToken: async () => {
@@ -523,7 +526,7 @@ describe("main quota policy at native admission", () => {
 
   test("actual Direct substitution rechecks after awaited native refresh", async () => {
     writeMain(bearer(true));
-    quota(98.99);
+    quota(97.99);
     const cfg = config();
     cfg.codexMainAccountHardLock = false;
     await expect(materializeCodexUpstreamAuthAsync(caller("proxy-admission"), { kind: "main", accountId: null }, {
@@ -643,7 +646,7 @@ describe("main quota policy at native admission", () => {
   });
 
   test("stale writer is retained for rejection rather than converted into an untrusted write", async () => {
-    quota(98.99);
+    quota(97.99);
     const ctx = await resolveCodexAuthContext(new Headers(), config(), "pool", { accountId: MAIN });
     if (ctx.kind !== "main-pool") throw new Error("expected stored main context");
     const writer = ctx.mainQuotaWriter;

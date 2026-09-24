@@ -76,7 +76,7 @@ base 排在第二而非第一，因為其釘選讓大多數人用來*發起*委�
 1. **讓 ChatGPT 維持 v1。** 在 v2 模式下，`keepNativeChatGptOnV1` 開關讓 Sol 與 Terra 保持 v1 介面，仍可啟動 Grok 或 Claude；路由父代理則使用 v2。這最接近同時擁有兩者。
 2. **在同一供應商內委派。** 路由父代理在 v2 上啟動路由子代理時會使用明文，能正常運作。
 3. **信任使用金鑰直接驗證的 Responses relay。** 若明確將供應商標記為 `allowEncryptedV2AgentTasks: true`，它就會收到不透明的內容，而非 400。只在確定目的地能處理時才這麼做。
-4. **啟用 `agentTaskRecovery`。** 這是預設關閉的實驗功能。它透過 ChatGPT 後端救回多數新啟動的子任務，但會消耗配額、增加延遲，並依賴未記載的行為；訊息型別的後續互動與 multipart envelope 仍會遺失。
+4. **啟用 `agentTaskRecovery`。** 這是預設關閉的實驗功能。它透過 ChatGPT 後端救回無法讀取的加密 `NEW_TASK`、`MESSAGE`、`FOLLOWUP_TASK` 與 `FINAL_ANSWER` 項目，但會消耗配額、增加延遲，並依賴未記載的行為；combo 復原仍僅限於已啟動子代理的回合，而拆分權杖片段仍不受支援。
 
 各方式的完整機制請見[子代理介面](/zh-tw/guides/sub-agent-surface/)，設定項目請見[代理設定](/zh-tw/reference/configuration/agents/)。
 

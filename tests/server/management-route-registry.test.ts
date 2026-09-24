@@ -240,6 +240,15 @@ describe("route exemptions stay honest", () => {
     expect(star?.exempt?.reason).toBe("session-only");
   });
 
+  test("desktop snapshot is declared as a bounded internal shell mutation", () => {
+    const row = MANAGEMENT_ROUTES.find(r =>
+      r.method === "POST" && r.path === "/api/update/desktop-snapshot");
+    expect(row).toMatchObject({
+      module: "server/management/sidebar-routes", mutates: true,
+      exempt: { reason: "desktop-internal" },
+    });
+  });
+
   test("every mutating lab route is either verbed or bounded by a deferred-verb owner", () => {
     // The original plan exempted "20 /api/lab/* reads" under local-transport. The family
     // holds 7 mutating routes, and reading local SQLite cannot start an automation run,
