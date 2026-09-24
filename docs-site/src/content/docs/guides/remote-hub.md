@@ -61,8 +61,9 @@ The hub automatically issues a per-client key. The client writes it to the exist
 filtered to that client's stable `apiKeyId`. After disconnect, usage comes from the local store.
 OpenCodex does not mirror usage between the two stores.
 `ocx service uninstall` removes the local service but preserves an existing key when the client is
-connected, its connection metadata is invalid or mismatched, or a connection is still completing.
-If token cleanup cannot be verified,
+connected, its connection metadata is invalid or mismatched, or a pending connection marker matches
+the current key. A valid marker for an older key does not retain an unrelated service key.
+If a marker is unsafe, malformed, or unreadable, token cleanup cannot be verified;
 the command warns instead of claiming the key was kept. Use `ocx disconnect` to remove a connected
 client's local key and state.
 

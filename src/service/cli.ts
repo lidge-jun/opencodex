@@ -6,7 +6,7 @@ import { stripGrokConfig } from "../grok/inject";
 import { withConfigMutationLockSync } from "../config/mutation-lock";
 import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
 import { pendingClientConnectMayOwnToken, readClientConnectionState } from "../client/state";
-import { serviceApiTokenFilePath } from "../lib/service-secrets";
+import { readServiceApiTokenState, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { statusWinswRaw, type WinswStatus } from "../lib/winsw";
 import { withWindowsServiceMutationLock } from "../lib/windows-service-mutation-lock";
 import { maybeShowStarPrompt } from "../cli/star-prompt";
@@ -197,7 +197,10 @@ export function removeServiceTokenAfterUninstall(
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
         throw error;
       }
-      if (readClientConnectionState().kind !== "disconnected" || pendingClientConnectMayOwnToken()) return "retained";
+      if (readClientConnectionState().kind !== "disconnected") return "retained";
+      const token = readServiceApiTokenState();
+      if (token.kind !== "present") return token.kind === "absent" ? "absent" : "unverified";
+      if (pendingClientConnectMayOwnToken(token.fingerprint)) return "retained";
       unlinkSync(path);
       return "removed";
     }), lockDeps);

@@ -162,7 +162,7 @@ selection is not changed. A newly created profile with user additions is retaine
 standard mode instead of deleting those additions.
 
 During initial enrollment, `src/client/state.ts` records a pending key fingerprint before the token
-is published. Service uninstall retains that key until connect commits or rolls back; the marker
+is published. Service uninstall retains only the matching key; an unsafe or unreadable marker leaves cleanup unverified. Connect clears its marker on commit or rollback; the marker
 does not claim any Desktop restoration ownership.
 
 A proven legacy current-hub/recognized-key profile without an original baseline can be adopted

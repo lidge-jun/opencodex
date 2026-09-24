@@ -28,13 +28,21 @@ export type ClientConnectionState =
 
 const pendingConnectPath = (): string => join(getConfigDir(), "client-connect-pending");
 
-/** A pending marker protects a just-issued client key before config commits the connection. */
-export function pendingClientConnectMayOwnToken(): boolean {
-  try { lstatSync(pendingConnectPath()); return true; }
+/** Validate pending ownership; an optional fingerprint restricts it to that exact key. */
+export function pendingClientConnectMayOwnToken(fingerprint?: string): boolean {
+  const path = pendingConnectPath();
+  let stat;
+  try { stat = lstatSync(path); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
+  if (!stat.isFile() || stat.nlink !== 1 || stat.size !== 65) {
+    throw new Error("pending client connection owner is unsafe");
+  }
+  const marker = readFileSync(path, "utf8");
+  if (!/^[a-f0-9]{64}\n$/.test(marker)) throw new Error("pending client connection owner is malformed");
+  return fingerprint === undefined || marker === `${fingerprint}\n`;
 }
 
 /** Publish only the token fingerprint, before the key file, under the client lifecycle lock. */

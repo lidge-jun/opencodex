@@ -96,6 +96,41 @@ describe("service uninstall credential ownership", () => {
     expect(cleanup()).toBe("removed");
   });
 
+  test("a stale pending marker does not retain a replacement service key", () => {
+    const staleFingerprint = serviceApiTokenFingerprint("ocx_old_client_key");
+    markClientConnectPending(staleFingerprint);
+    const token = writeServiceApiTokenFile("ocx_replacement_service_key");
+    expect(cleanup()).toBe("removed");
+    expect(existsSync(token.path)).toBe(false);
+    expect(readFileSync(join(home, "client-connect-pending"), "utf8")).toBe(`${staleFingerprint}\n`);
+  });
+
+  for (const marker of ["", "z".repeat(64) + "\n", "a".repeat(66)]) {
+    test(`malformed pending marker of length ${marker.length} leaves cleanup unverified`, () => {
+      const token = writeServiceApiTokenFile("ocx_uncertain_pending_key");
+      writeFileSync(join(home, "client-connect-pending"), marker);
+      expect(cleanup()).toBe("unverified");
+      expect(readFileSync(token.path, "utf8")).toBe("ocx_uncertain_pending_key\n");
+    });
+  }
+
+  test("unsafe or unreadable pending markers preserve the key without claiming ownership", () => {
+    const token = writeServiceApiTokenFile("ocx_unreadable_pending_key");
+    const markerPath = join(home, "client-connect-pending");
+    mkdirSync(markerPath);
+    expect(cleanup()).toBe("unverified");
+    nodeFs.rmdirSync(markerPath);
+    markClientConnectPending(token.fingerprint);
+    const original = nodeFs.readFileSync;
+    const read = spyOn(nodeFs, "readFileSync").mockImplementation(((path: any, ...args: any[]) => {
+      if (path === markerPath) throw Object.assign(new Error("fixture marker read failure"), { code: "EACCES" });
+      return original(path, ...args);
+    }) as typeof nodeFs.readFileSync);
+    try { expect(cleanup()).toBe("unverified"); }
+    finally { read.mockRestore(); }
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_unreadable_pending_key\n");
+  });
+
   test("keeps the token when client metadata is incomplete", () => {
     const token = writeServiceApiTokenFile("ocx_uncertain_key");
     writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client" }));
