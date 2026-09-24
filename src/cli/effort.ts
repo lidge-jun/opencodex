@@ -7,6 +7,8 @@ import {
   mapReasoningEffort,
   reasoningEffortMapFor,
 } from "../reasoning-effort";
+import { decodeRoutedModelId } from "../providers/slug-codec";
+import { knownModelIdsForProvider } from "../router";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { modelInList, type OcxConfig } from "../types";
 import {
@@ -290,19 +292,26 @@ function inspectModelEffort(modelTarget: string, wantsJson: boolean): void {
     );
   }
 
-  const isReasoningDisabled = modelInList(provider.noReasoningModels, modelId);
-  const efforts = configuredReasoningEfforts(provider, modelId);
-  const wireMap = reasoningEffortMapFor(provider, modelId);
+  // A Codex-facing slug encodes the inner "/" of a namespaced native id
+  // (`command-code/deepseek-deepseek-v4.1-flash` for `deepseek/deepseek-v4.1-flash`), so the
+  // literal id only resolves against the ladder through the decode the router already uses.
+  const known = knownModelIdsForProvider(providerName, provider, config);
+  const resolvedModelId = known.includes(modelId) ? modelId : decodeRoutedModelId(modelId, known);
+
+  const isReasoningDisabled = modelInList(provider.noReasoningModels, resolvedModelId);
+  const efforts = configuredReasoningEfforts(provider, resolvedModelId);
+  const wireMap = reasoningEffortMapFor(provider, resolvedModelId);
 
   // Derive sample ladder directly from canonical CODEX_REASONING_LEVELS (#3528 review)
   const mappedExamples: Record<string, string | undefined> = {};
   for (const { effort } of CODEX_REASONING_LEVELS) {
-    mappedExamples[effort] = mapReasoningEffort(provider, modelId, effort);
+    mappedExamples[effort] = mapReasoningEffort(provider, resolvedModelId, effort);
   }
 
   const result = {
     provider: providerName,
-    model: modelId,
+    model: resolvedModelId,
+    ...(resolvedModelId !== modelId ? { requestedModel: modelId } : {}),
     reasoningDisabled: isReasoningDisabled,
     supportedEfforts: efforts ?? null,
     wireMap: wireMap ?? null,
@@ -310,7 +319,8 @@ function inspectModelEffort(modelTarget: string, wantsJson: boolean): void {
   };
 
   const lines = [
-    `Reasoning effort configuration for ${providerName}/${modelId}:`,
+    `Reasoning effort configuration for ${providerName}/${resolvedModelId}:`,
+    ...(resolvedModelId !== modelId ? [`  Resolved from: ${modelId}`] : []),
     `  Reasoning disabled: ${isReasoningDisabled ? "yes (noReasoningModels)" : "no"}`,
     `  Supported ladder:   ${efforts ? efforts.join(", ") : "(default / unconstrained)"}`,
     `  Wire mapping overrides: ${wireMap ? JSON.stringify(wireMap) : "(standard provider mapping)"}`,
