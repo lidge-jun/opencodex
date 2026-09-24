@@ -359,11 +359,19 @@ export function advanceComboAfterFailure(
       });
     }
   }
+  // #5691: under `cooldownWaitPolicy: "before-last-resort"` this final synchronous pick
+  // must not dispatch an emergency target while a normal one is merely cooling. Returning
+  // null hands the decision to `pickComboTargetWithWait`, which waits a normal target out
+  // inside the combo's wait budget or dispatches the last resort when none is reachable.
+  // Without the policy the eligible set is unchanged and the pick is exactly as before.
+  const defersLastResort = combo?.cooldownWaitPolicy === "before-last-resort"
+    && combo.targets.some(target => !target.lastResort);
   return pickComboTarget(config, pick.comboId, {
     exclude: pick.attempted,
     now: options.now,
     eligible: target => !isComboTargetInCooldown(pick.comboId, target, options.now)
-      && (options.eligible?.(target) ?? true),
+      && (options.eligible?.(target) ?? true)
+      && (!defersLastResort || !target.lastResort),
   });
 }
 

@@ -13,9 +13,11 @@
 // premature routing it exists to prevent.
 import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
+  advanceComboAfterFailure,
   clearComboSelectionState,
   clearComboTargetCooldowns,
   coolComboTarget,
+  pickComboTarget,
   pickComboTargetWithWait,
 } from "../../src/combos";
 import type { OcxConfig } from "../../src/types/config";
@@ -243,5 +245,92 @@ describe("the policy never causes an outage", () => {
       waitForCooldownMs: 0, now: NOW, sleep: noSleep,
     });
     expect(pick?.target.provider).toBe("c");
+  });
+});
+
+describe("the synchronous post-failure hop honors the policy", () => {
+  // `advanceComboAfterFailure` is the hop that runs immediately after an upstream failure.
+  // Its pick is synchronous and cannot wait, so under the policy it must decline rather than
+  // dispatch the emergency target: a null result is what makes the caller fall through to
+  // `pickComboTargetWithWait`, the only selector that can wait out a normal target.
+  test("a last-resort target is not dispatched while a normal target is briefly cooling", async () => {
+    const cfg = config();
+    const targets = cfg.combos!.free!.targets;
+    const failed = pickComboTarget(cfg, "free", { now: NOW })!;
+    expect(failed.target.provider).toBe("a");
+    coolComboTarget("free", targets[1]!, { now: NOW, cooldownMs: 3_000 });
+
+    expect(advanceComboAfterFailure(cfg, failed, { now: NOW })).toBeNull();
+
+    const sleeps: number[] = [];
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const pick = await pickComboTargetWithWait(cfg, "free", {
+        exclude: failed.attempted,
+        waitForCooldownMs: 10_000, now: NOW,
+        sleep: async (ms: number) => { sleeps.push(ms); },
+      });
+      expect(sleeps).toEqual([3_000]);
+      expect(pick?.target.provider).toBe("b");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("a normal target cooling past the wait budget releases the last resort without waiting", async () => {
+    const cfg = config();
+    const targets = cfg.combos!.free!.targets;
+    const failed = pickComboTarget(cfg, "free", { now: NOW })!;
+    coolComboTarget("free", targets[1]!, { now: NOW, cooldownMs: 60_000 });
+
+    expect(advanceComboAfterFailure(cfg, failed, { now: NOW })).toBeNull();
+
+    const sleeps: number[] = [];
+    const pick = await pickComboTargetWithWait(cfg, "free", {
+      exclude: failed.attempted,
+      waitForCooldownMs: 10_000, now: NOW,
+      sleep: async (ms: number) => { sleeps.push(ms); },
+    });
+    expect(sleeps).toEqual([]);
+    expect(pick?.target.provider).toBe("c");
+  });
+
+  test("without the policy the synchronous hop still takes the last resort", () => {
+    // The deferral is scoped to the policy: an unconfigured combo keeps the behaviour it
+    // had before, emergency target included.
+    const cfg = config({ cooldownWaitPolicy: undefined });
+    const targets = cfg.combos!.free!.targets;
+    const failed = pickComboTarget(cfg, "free", { now: NOW })!;
+    expect(failed.target.provider).toBe("a");
+    coolComboTarget("free", targets[0]!, { now: NOW, cooldownMs: 3_000 });
+    coolComboTarget("free", targets[1]!, { now: NOW, cooldownMs: 3_000 });
+
+    const next = advanceComboAfterFailure(cfg, failed, { now: NOW });
+    expect(next?.target.provider).toBe("c");
+  });
+});
+
+describe("round-robin keeps the last resort emergency-only", () => {
+  test("repeated selections never reach a last-resort target while a normal one is healthy", async () => {
+    // The policy is not a failover-only feature: with a zero wait budget, a healthy normal
+    // target must still win every ordinary selection, so the emergency target is reached
+    // only when the normal one stops being eligible.
+    const cfg = config({
+      strategy: "round-robin",
+      waitForCooldownMs: 0,
+      targets: [
+        { provider: "a", model: "m1" },
+        { provider: "c", model: "m3", lastResort: true },
+      ],
+    });
+
+    const providers: string[] = [];
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const pick = await pickComboTargetWithWait(cfg, "free", {
+        waitForCooldownMs: 0, now: NOW, sleep: noSleep,
+      });
+      providers.push(pick!.target.provider);
+    }
+    expect(providers).toEqual(["a", "a", "a", "a", "a"]);
   });
 });
