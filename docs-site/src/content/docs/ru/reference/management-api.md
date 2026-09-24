@@ -193,8 +193,8 @@ GUI-сессия в стиле loopback не выпускается.
 | `GET, POST /api/windows-tray` | Прочитать состояние Windows tray или установить/запустить/остановить/удалить её | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Прочитать кэшированные предупреждения project config | — |
 | `POST /api/sync` | Синхронизировать текущий каталог моделей в Codex | 500 failed sync |
-| `GET /api/update/check` | Проверить канал обновлений `latest` или `preview` | 400 invalid tag |
-| `POST /api/update/run` | Запустить update job, при желании с последующим restart | 400 invalid body; job-specific conflict/error status |
+| `GET /api/update/check` | Асинхронно проверить канал пакета `latest` или `preview` и при успехе обновить кеш | 400 invalid tag |
+| `POST /api/update/run` | Асинхронно проверить новую версию пакета, затем запустить задание обновления с возможным перезапуском | 400 invalid body; job-specific conflict/error status |
 | `GET /api/update/status` | Опрашивать update job по id | 404 unknown job |
 | `GET, PUT /api/sidecar-settings` | Прочитать или обновить model/backend-settings web-search и vision sidecar'ов | 400 invalid shape, backend or limit |
 | `GET, PUT /api/shadow-call-settings` | Прочитать или обновить настройки shadow-call interception | 400 invalid shape or value |
@@ -318,7 +318,9 @@ Endpoint'ы storage cleanup могут перемещать или навсег�
 | --- | --- | --- |
 | `GET /api/github/star` | Прочитать статус star для репозитория через пользовательскую `gh`-сессию | Фиксированные result-code'ы, зависящие от статуса |
 | `POST /api/github/star` | Поставить star репозиторию только из аутентифицированного человеческого действия | 403 `agent_consent_required` для agent-driven callers без dashboard-session evidence |
-| `GET /api/update/badge` | Прочитать дешёвое состояние update-badge в sidebar | — |
+| `GET /api/update/badge` | Прочитать кеш значка без обращения к реестру; отсутствующий кеш, другой канал или возраст от 40 часов дают `unknown: true`. | — |
+
+После запуска прокси проверяет подходящую установку пакета, если кеш отсутствует или старше 20 часов, а затем проверяет его свежесть каждый час. `OCX_DISABLE_UPDATE_CHECK=1` отключает только автоматические проверки. Явные запросы проверки и запуска продолжают работать.
 
 :::caution
 Management-аутентификация доказывает доступ к прокси, но не доказывает согласие тратить

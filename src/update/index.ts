@@ -84,8 +84,7 @@ function packageRoot(): string {
   return resolve(HERE, "..", "..");
 }
 
-function runningPnpmShimPath(): string | undefined {
-  const invoked = process.argv[1];
+function runningPnpmShimPath(invoked = process.argv[1]): string | undefined {
   if (!invoked) return undefined;
   const name = invoked.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase();
   if (!new Set(["ocx", "opencodex", "ocx.cmd", "opencodex.cmd", "ocx.ps1", "opencodex.ps1"]).has(name ?? "")) {
@@ -112,12 +111,12 @@ function runPnpmCandidate(
 }
 
 /** Resolve the exact pnpm executable/group/bin that own this package. */
-export function resolveCurrentPnpmGlobalOwner(): PnpmGlobalOwnerResult {
+export function resolveCurrentPnpmGlobalOwner(invoked = process.argv[1]): PnpmGlobalOwnerResult {
   return resolvePnpmGlobalOwner({
     packageName: PKG,
     packagePath: packageRoot(),
     commandPaths: resolvePnpmCommands(),
-    runningShimPath: runningPnpmShimPath(),
+    runningShimPath: runningPnpmShimPath(invoked),
     runPnpm: runPnpmCandidate,
   });
 }
@@ -192,6 +191,8 @@ type SpawnTarget = {
   env?: Record<string, string | undefined>;
 };
 
+export type RegistrySpawnTarget = SpawnTarget;
+
 function npmSpawnTarget(args: readonly string[]): SpawnTarget | null {
   const invocation = npmInvocation(args);
   if (!invocation) return null;
@@ -214,7 +215,7 @@ function pnpmSpawnTarget(args: readonly string[], owner?: PnpmGlobalOwner): Spaw
   return { bin: invocation.file, args: invocation.args, options: invocation.options };
 }
 
-function registrySpawnTarget(
+export function registrySpawnTarget(
   installer: Installer,
   args: readonly string[],
   owner?: PnpmGlobalOwner,

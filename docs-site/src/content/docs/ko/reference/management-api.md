@@ -178,8 +178,8 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 | `GET, POST /api/windows-tray` | Windows tray 상태를 읽거나 설치, 시작, 중지, 제거합니다 | 400 지원되지 않는 플랫폼/작업; 500 작업 실패 |
 | `GET /api/diagnostics/project-config` | 캐시된 프로젝트 구성 경고를 읽습니다 | — |
 | `POST /api/sync` | 현재 model catalog를 Codex에 동기화합니다 | 500 동기화 실패 |
-| `GET /api/update/check` | `latest` 또는 `preview` 업데이트 채널을 확인합니다 | 400 잘못된 태그 |
-| `POST /api/update/run` | 선택적으로 restart를 뒤따르게 할 수 있는 업데이트 작업을 시작합니다 | 400 잘못된 본문; 작업별 충돌/오류 상태 |
+| `GET /api/update/check` | `latest` 또는 `preview` 패키지 채널을 비동기로 확인하고 성공하면 캐시를 갱신합니다 | 400 잘못된 태그 |
+| `POST /api/update/run` | 새 패키지 버전을 비동기로 확인한 뒤 업데이트 작업을 시작하고 선택적으로 재시작합니다 | 400 잘못된 본문; 작업별 충돌/오류 상태 |
 | `GET /api/update/status` | id로 업데이트 작업을 조회합니다 | 404 알 수 없는 작업 |
 | `GET, PUT /api/sidecar-settings` | web-search 및 vision sidecar 모델/backend 설정을 읽거나 업데이트합니다 | 400 잘못된 형태, backend, 또는 한도 |
 | `GET, PUT /api/shadow-call-settings` | shadow-call interception 설정을 읽거나 업데이트합니다 | 400 잘못된 형태 또는 값 |
@@ -295,7 +295,9 @@ OpenAI도 같은 규칙을 따르며, 스위치를 켠다고 별도의 922k 모�
 | --- | --- | --- |
 | `GET /api/github/star` | 사용자의 `gh` 세션을 통해 저장소 star 상태를 읽습니다 | 상태별 고정 결과 코드 |
 | `POST /api/github/star` | 인증된 사람의 작업에서만 저장소를 star합니다 | 대시보드 세션 증거가 없는 agent-driven 호출에는 403 `agent_consent_required` |
-| `GET /api/update/badge` | 저렴한 sidebar update-badge 상태를 읽습니다 | — |
+| `GET /api/update/badge` | 레지스트리 조회 없이 캐시된 배지 상태를 읽습니다. 캐시가 없거나 채널이 다르거나 40시간 이상 지났으면 `unknown: true`를 반환합니다. | — |
+
+대상 패키지 설치에서는 시작 후 캐시가 없거나 20시간 이상 오래됐으면 확인하고, 이후 매시간 신선도를 검사합니다. `OCX_DISABLE_UPDATE_CHECK=1`은 자동 확인만 끕니다. 명시적인 확인 및 실행 요청은 계속 동작합니다.
 
 :::caution
 관리자 인증은 프록시에 대한 접근만 증명할 뿐, 사용자의 신원을 써도 된다는 동의까지 증명하지는 않습니다. 에이전트는 `agent_consent_required`를 우회해서는 안 됩니다. 저장소를 star할지 여부는 사용자가 직접 선택해야 합니다.

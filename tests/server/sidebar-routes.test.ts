@@ -1,4 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { writeVersionCache } from "../../src/update/notify";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { invalidateStarStatusCache, setStarDepsForTests, type StarDeps } from "../../src/github/star-state";
 import type { OcxConfig } from "../../src/types";
@@ -97,6 +102,24 @@ const NO_AGENT_ENV = {
 // headroom against an external binary's worst case.
 
 describe("GET /api/update/badge", () => {
+  test("repeated reads do not advance the package cache timestamp", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-badge-route-"));
+    const previous = process.env.OPENCODEX_HOME;
+    try {
+      process.env.OPENCODEX_HOME = dir;
+      writeVersionCache({ latest_version: "2.7.44", last_checked_at: "2026-09-24T00:00:00.000Z", tag: "latest" });
+      const before = readFileSync(join(dir, "version.json"), "utf8");
+      expect((await call("GET", "/api/update/badge")).status).toBe(200);
+      expect((await call("GET", "/api/update/badge")).status).toBe(200);
+      expect(readFileSync(join(dir, "version.json"), "utf8")).toBe(before);
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+      removeTreeWithRetry(dir);
+    }
+  });
+
+
   test("is routed and returns the badge shape", async () => {
     const { status, body } = await call("GET", "/api/update/badge");
     expect(status).toBe(200);
