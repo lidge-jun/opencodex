@@ -118,6 +118,20 @@ describe("registry model rename migration (#1610)", () => {
     expect(config.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max-preview");
   });
 
+  test.each([
+    ` HTTPS://TOKEN-PLAN.AP-SOUTHEAST-1.MAAS.ALIYUNCS.COM/compatible-mode/v1`,
+    `${INTL_BASE_URL}//`,
+  ])("migrates a row whose saved endpoint is URL-equivalent to the registry's: %s", baseUrl => {
+    // baseUrl is trimmed at parse time and URL schemes/hosts are case-insensitive,
+    // so these rows still point at the registry destination.
+    const config = staleConfig();
+    config.providers["alibaba-token-plan-intl"]!.baseUrl = baseUrl;
+    const { config: migrated, changed } = projectModelRenames(config, [RENAME]);
+    expect(changed).toBe(true);
+    expect(migrated.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max");
+    expect(migrated.providers["alibaba-token-plan-intl"]!.models).not.toContain("qwen3.8-max-preview");
+  });
+
   test("refuses to write an id the registry does not seed", () => {
     const bogus: ModelRename = { ...RENAME, to: "qwen-does-not-exist" };
     const { changed, warnings } = projectModelRenames(staleConfig(), [bogus]);
