@@ -264,11 +264,24 @@ function childEnd(
     // Blank lines and same-level comments remain outside our replacement.
     // Deeper comments belong to the leaf and would be destroyed, so refuse.
     if (isBlank(body)) {
-      if (quote === null && !scalarStarted) return index;
+      if (quote !== null) continue;
+      if (!scalarStarted) return index;
+      // A plain scalar's blank line folds only when deeper content follows;
+      // otherwise it is the separator before a sibling and stays outside.
+      let ahead = index + 1;
+      while (ahead < parentEnd && isBlank(lines[ahead]!.body)) ahead += 1;
+      if (ahead >= parentEnd) return index;
+      const nextSpaces = leadingSpaces(lines[ahead]!.body);
+      if (nextSpaces === null) return null;
+      if (nextSpaces <= indent) return index;
       continue;
     }
     if (quote === null && isComment(body)) return spaces <= indent ? index : null;
     if (spaces <= indent) return index;
+    // A block sequence indicator opens a new node: scalar state never carries
+    // across item boundaries. Inside an open quote a leading `- ` is content.
+    const trimmed = body.trimStart();
+    if (quote === null && (trimmed === "-" || trimmed.startsWith("- "))) scalarStarted = false;
     const scan = scanScalarLine(body, quote, scalarStarted);
     if (scan.comment) return null;
     quote = scan.quote;

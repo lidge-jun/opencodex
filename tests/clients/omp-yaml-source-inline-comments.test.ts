@@ -106,6 +106,35 @@ const PLAIN_CONTINUATION_VALUE = {
   api: "openai-completions",
 };
 
+// A `- ` indicator opens a new sequence item: scalar state from the previous
+// item must not carry over and hide the quoted item's ` #` as a comment.
+const SOURCE_WITH_QUOTED_ITEM_AFTER_PLAIN = [
+  "providers:",
+  "  opencodex:",
+  "    models:",
+  "      - plain",
+  "      - \"model # variant\"",
+  "",
+].join("\n");
+
+const QUOTED_ITEM_VALUE = {
+  models: ["plain", "model # variant"],
+};
+
+// The blank between a leaf and the next sibling is a separator, not scalar
+// content — refreshing or removing the leaf must leave it in place.
+const SOURCE_WITH_BLANK_SEPARATOR = [
+  "providers:",
+  "  opencodex:",
+  "    api: openai-completions",
+  "",
+  "  other:",
+  "    api: openai-responses",
+  "",
+].join("\n");
+
+const BLANK_SEPARATOR_VALUE = { api: "openai-completions" };
+
 describe("OMP managed YAML inline comments", () => {
   test("refresh refuses to replace a managed block containing a nested inline comment", () => {
     const nextValue = {
@@ -226,5 +255,40 @@ describe("OMP managed YAML inline comments", () => {
       { kind: "remove", removeEmptyProviders: true },
       {},
     )).toBeNull();
+  });
+
+  test("refresh accepts a quoted list item after a plain list item", () => {
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_QUOTED_ITEM_AFTER_PLAIN,
+      { kind: "upsert", value: QUOTED_ITEM_VALUE },
+      { providers: { opencodex: QUOTED_ITEM_VALUE } },
+    )).not.toBeNull();
+  });
+
+  test("disable accepts a quoted list item after a plain list item", () => {
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_QUOTED_ITEM_AFTER_PLAIN,
+      { kind: "remove", removeEmptyProviders: true },
+      {},
+    )).toBe("");
+  });
+
+  test("refresh keeps the blank separator before a sibling", () => {
+    const nextValue = { ...BLANK_SEPARATOR_VALUE, api: "openai-responses" };
+    const result = patchOmpYamlSource(
+      SOURCE_WITH_BLANK_SEPARATOR,
+      { kind: "upsert", value: nextValue },
+      { providers: { opencodex: nextValue, other: { api: "openai-responses" } } },
+    );
+    expect(result).toContain("openai-responses\n\n  other:");
+  });
+
+  test("disable keeps the blank separator before a sibling", () => {
+    const result = patchOmpYamlSource(
+      SOURCE_WITH_BLANK_SEPARATOR,
+      { kind: "remove", removeEmptyProviders: false },
+      { providers: { other: { api: "openai-responses" } } },
+    );
+    expect(result).toContain("providers:\n\n  other:");
   });
 });
