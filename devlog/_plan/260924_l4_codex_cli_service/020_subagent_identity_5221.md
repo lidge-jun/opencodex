@@ -1,0 +1,7 @@
+# 020 — rebuild #5221 (fixes #5217) — sbc1-code <207095575+sbc1-code@users.noreply.github.com>
+
+Change: src/adapters/identity.ts gains ROUTED_IDENTITY_RE, NEUTRAL_IDENTITY_RE, hasRoutedIdentity, repairRoutedIdentity, repairIdentityInResponsesBody, stripRoutedIdentity; identifyRoutedModel also rewrites neutral + routed lines. Catalog (src/codex/catalog/derive-entry.ts, metadata.ts) writes neutralizeIdentity instead of identifyRoutedModel. src/responses/parser.ts repairs developer items to data.model. src/adapters/openai-responses/passthrough.ts repairs raw body (routed rewrite, forward strip).
+Rebuild on current dev (221 commits drift): re-read current versions of those files; keep dev behaviour elsewhere.
+Tests: new tests/adapters/identity-subagent.test.ts (from PR). Catalog expectation edits: codex-catalog.test.ts is at cap, so changed expectations must not grow it; new catalog cases go to a sibling file (e.g. tests/codex-integration/codex-catalog-identity-neutral.test.ts) registered in both manifests.
+Check files at cap: parser.ts, passthrough.ts, identity.ts in file-size-baseline.
+Audit fold: neutralizeIdentity and NEUTRAL_IDENTITY_LINE already exist in identity.ts; the six routed-identity helpers do not. parser/passthrough/identity are uncapped (<2000 lines). codex-catalog.test.ts cap 7985 vs 7974 actual: expectation edits may not add net lines beyond headroom; new cases still go to a sibling file.
