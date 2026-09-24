@@ -43,6 +43,15 @@ const ROUTING_ENVELOPE = [
 // The same envelope a delegated agent uses to REPLY, as opposed to being spawned.
 // #3021 saw one of these reach the parent conversation as raw `gAAAA...` text.
 const MESSAGE_ROUTING_ENVELOPE = ROUTING_ENVELOPE.replace("NEW_TASK", "MESSAGE");
+// FOLLOWUP_TASK shares the four-line header; a FINAL_ANSWER completion may omit the
+// Task name line entirely, in which case the envelope names no recipient.
+const FOLLOWUP_ROUTING_ENVELOPE = ROUTING_ENVELOPE.replace("NEW_TASK", "FOLLOWUP_TASK");
+const FINAL_ANSWER_ENVELOPE = [
+  "Message Type: FINAL_ANSWER",
+  "Sender: /root",
+  "Payload:",
+  "",
+].join("\n");
 
 afterEach(() => {
   // Release the lease before later teardown can replace the preload sandbox home.
@@ -169,9 +178,8 @@ describe("V2 routed agent-message ciphertext guard", () => {
    * as surviving text. The envelope pattern matched only NEW_TASK, so a MESSAGE whose
    * entire body was one Fernet token measured as READABLE and was forwarded verbatim.
    *
-   * This is the detection half only. Recovery stays NEW_TASK-only on purpose:
-   * decrypting a MESSAGE on the parent's behalf would build a plaintext oracle out of
-   * a payload the parent's session may not be entitled to read.
+   * This is the detection half only. The opt-in recovery recognises the same envelope
+   * types; its admission gate, not the detector, is the trust boundary for decryption.
    */
   test("blocks a MESSAGE reply envelope followed only by a Fernet payload", () => {
     expect(hasUnreadableEncryptedAgentTask(agentMessage([
@@ -196,6 +204,40 @@ describe("V2 routed agent-message ciphertext guard", () => {
     // blocked one -- only the ones with nothing left after the header comes off.
     expect(hasUnreadableEncryptedAgentTask(agentMessage([
       { type: "input_text", text: `${MESSAGE_ROUTING_ENVELOPE}the worker finished the migration` },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]))).toBe(false);
+  });
+
+  test("blocks a FOLLOWUP_TASK envelope followed only by a Fernet payload", () => {
+    expect(hasUnreadableEncryptedAgentTask(agentMessage([
+      { type: "input_text", text: FOLLOWUP_ROUTING_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]))).toBe(true);
+  });
+
+  test.each([
+    FOLLOWUP_ROUTING_ENVELOPE,
+    FINAL_ANSWER_ENVELOPE,
+  ])("blocks an encrypted envelope with a blank line after its type", envelope => {
+    const input = agentMessage([
+      { type: "input_text", text: envelope.replace("\n", "\n\n") },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]);
+    expect(hasUnreadableEncryptedAgentTask(input)).toBe(true);
+  });
+
+  test("blocks a FINAL_ANSWER envelope without a Task name followed only by a Fernet payload", () => {
+    expect(hasUnreadableEncryptedAgentTask(agentMessage([
+      { type: "input_text", text: FINAL_ANSWER_ENVELOPE },
+      { type: "encrypted_content", encrypted_content: FERNET_TASK },
+    ]))).toBe(true);
+  });
+
+  test("a FINAL_ANSWER reply that carries real text stays readable", () => {
+    // The control. The widened strip must not turn a FINAL_ANSWER carrying real text
+    // into a blocked one.
+    expect(hasUnreadableEncryptedAgentTask(agentMessage([
+      { type: "input_text", text: `${FINAL_ANSWER_ENVELOPE}the worker finished the migration` },
       { type: "encrypted_content", encrypted_content: FERNET_TASK },
     ]))).toBe(false);
   });

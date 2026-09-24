@@ -185,10 +185,16 @@ Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent
 
 `src/server/responses/agent-task-recovery.ts` admits at most 32 consecutive, individually complete
 Fernet-shaped parts with a combined 2 MiB ciphertext limit. Every encrypted slot must belong to
-that run. The existing credential admission precedes cache access; the cache key includes an
-unambiguous ordered sequence. One fixed-endpoint request forwards separate parts, and assignment
+that run. The existing credential admission precedes cache access; the cache key is a JSON-encoded
+fixed-order tuple of every addressing field (scope, parent thread, message type, task name,
+recipient, sender, ciphertexts) rather than a delimiter-joined string, so no field content can shift
+a boundary. One fixed-endpoint request forwards separate parts, and assignment
 replacement compares the complete original item snapshot before splicing the run. Recovery output
 is model-transcribed plaintext, not cryptographic fidelity proof, and no internal outage retry is added.
+Recovery recognises all four codex-rs message types (NEW_TASK, MESSAGE, FOLLOWUP_TASK,
+FINAL_ANSWER); a FINAL_ANSWER envelope may omit the Task name line, in which case the
+structured recipient is not cross-checked because the envelope names no recipient, and
+admission remains the trust boundary.
 
 `src/server/responses/encrypted-payload.ts` uses bounded concatenation only to recognize otherwise
 unreadable split-token shapes. The sanitizer preserves just those fragment objects and continues
@@ -248,7 +254,8 @@ target its own `structuredClone` and its own concrete route, so a sibling's repa
 them and a target resolving to a routed Responses wire would otherwise send what the parent's own
 dispatch no longer does.
 
-Nothing here decrypts, and the tail NEW_TASK envelope keeps `unreadable_encrypted_agent_task` and
+Nothing here decrypts, and the tail agent_message envelope (any of the four codex-rs
+message types) keeps `unreadable_encrypted_agent_task` and
 its opt-in recovery unchanged: an unreadable current task still fails closed rather than reaching a
 child with a marker where its assignment should be. An `agent_message` carrying unknown parts but
 no ciphertext still reaches the wire unchanged and still draws the destination's own 422, which is
