@@ -37,6 +37,26 @@ remplissage automatique. Le tableau de bord lui-même ne conserve le jeton qu'en
 dans `localStorage` ni dans `sessionStorage` ; son enregistrement dépend entièrement du navigateur ou du
 gestionnaire de mots de passe.
 
+## Barre de résumé des quotas
+
+Une ligne de résumé en haut de chaque page indique l'utilisation actuelle des quotas de chaque
+fournisseur, par exemple `OpenAI 31% | Claude 54% | xAI 12% | Google 8%`. Elle lit les mêmes
+rapports de quotas que l'espace fournisseur (`GET /api/provider-quotas`, toutes les 60 secondes
+tant que l'onglet est visible) et ne force jamais d'actualisation en amont.
+
+- Chaque étiquette affiche la fenêtre la plus longue signalée : d'abord hebdomadaire, puis mensuelle,
+  puis 5 heures, puis une fenêtre nommée par le fournisseur ou des crédits prépayés.
+- Une étiquette passe en ambre à 70 % d'utilisation et en rouge à 90 %.
+- Survolez une étiquette ou cliquez dessus pour voir toutes les fenêtres signalées avec leur heure de
+  réinitialisation et l'heure de la lecture. Appuyez sur Échap ou cliquez ailleurs pour fermer une
+  étiquette épinglée.
+- Les fournisseurs qui ne signalent aucune fenêtre de quota sont omis. La barre est masquée quand
+  aucun fournisseur n'en signale.
+- Le bord droit indique quand le tableau de bord a lu les rapports pour la dernière fois. Il passe en
+  ambre lorsque la dernière lecture a échoué et que la lecture précédente est encore affichée.
+
+La barre n'est pas affichée sur la page Sécurité au démarrage.
+
 ## Fonctions disponibles
 
 | Zone | Fonction |

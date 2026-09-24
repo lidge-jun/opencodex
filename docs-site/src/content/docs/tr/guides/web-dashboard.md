@@ -39,6 +39,26 @@ yalnızca bellekte tutar ve `localStorage` veya `sessionStorage`'a yazmaz;
 kaydedilip kaydedilmeyeceği tamamen tarayıcının veya şifre yöneticisinin
 kararıdır.
 
+## Kota özeti çubuğu
+
+Her sayfanın üst kısmındaki tek satırlık özet, her sağlayıcının geçerli kota kullanımını
+gösterir; örneğin `OpenAI 31% | Claude 54% | xAI 12% | Google 8%`. Sağlayıcı çalışma
+alanıyla aynı kota raporlarını okur (`GET /api/provider-quotas`, sekme görünürken 60
+saniyede bir) ve hiçbir zaman yukarı akışta yenilemeye zorlamaz.
+
+- Her etiket, bildirilen en uzun pencereyi gösterir: önce haftalık, sonra aylık, sonra 5
+  saatlik, sonra sağlayıcı adlı bir pencere veya ön ödemeli krediler.
+- Etiket %70 kullanımda amber rengine, %90 kullanımda kırmızıya döner.
+- Bildirilen tüm pencereleri sıfırlama saati ve okuma zamanıyla görmek için etiketin
+  üzerine gelin veya tıklayın. Sabitlenmiş bir etiketi kapatmak için Escape'e basın veya
+  başka bir yere tıklayın.
+- Kota penceresi bildirmeyen sağlayıcılar gösterilmez. Hiçbir sağlayıcı bildirmiyorsa
+  çubuk gizlenir.
+- Sağ kenar, kontrol panelinin raporları en son ne zaman okuduğunu gösterir. Son okuma
+  başarısız olduğunda ve önceki değer hâlâ gösterildiğinde amber renge döner.
+
+Çubuk, Başlangıç güvenliği sayfasında gösterilmez.
+
 ## Neler yapabilirsiniz
 
 | Alan | Ne yapar |

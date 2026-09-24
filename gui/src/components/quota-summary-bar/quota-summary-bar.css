@@ -1,7 +1,7 @@
 .quota-summary-bar {
   position: sticky;
   top: 0;
-  z-index: 20;
+  z-index: var(--z-sticky);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -100,7 +100,7 @@
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  z-index: 30;
+  z-index: var(--z-popover);
   min-width: 260px;
   padding: 10px 12px;
   border: 1px solid var(--border);

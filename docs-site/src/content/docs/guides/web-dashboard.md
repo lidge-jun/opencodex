@@ -92,6 +92,8 @@ never forces an upstream refresh.
 - The right edge shows when the dashboard last read the reports. It turns amber when the latest
   read failed and the previous reading is still shown.
 
+The bar is not shown on the Startup page.
+
 ## What you can do
 
 | Area | What it does |

@@ -3201,7 +3201,7 @@ export const ko: Record<TKey, string> = {
   "remote.event.status": "상태",
   "remote.event.tool": "원격 도구",
   "remote.event.error": "오류",
-  "quotaSummary.aria": "Provider 사용량 요약",
+  "quotaSummary.aria": "프로바이더 사용량 요약",
   "quotaSummary.updated": "{time} 갱신",
   "quotaSummary.dataAt": "{time} 기준 데이터",
   "quotaSummary.observedAt": "{time} 관측",
