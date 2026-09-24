@@ -28,6 +28,12 @@ export function bakedServicePathsDiagnostic(): string | null {
   // necessary (a deleted launcher IS stale) and sufficient (a replaced version directory
   // is not, which is exactly what #2898 made routine).
   if (state?.launcherPath) {
+    // launchd no longer bakes a launcher at all: a recorded one can only have come from an
+    // install that handed the service token and proxy environment to a mutable PATH shim,
+    // so it is stale whether or not the file it names still exists.
+    if (process.platform === "darwin") {
+      return "STALE mutable launchd launcher — run 'ocx service repair' to re-bake trusted package paths";
+    }
     if (existsSync(state.launcherPath)) return null;
     return `STALE baked paths (missing: ${state.launcherPath}) — run 'ocx service repair' to re-bake`;
   }

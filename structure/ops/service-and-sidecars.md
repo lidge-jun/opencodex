@@ -53,21 +53,25 @@ read-only and time-bounded, so it is safe while the proxy runs under that same m
 
 ## Stable service launcher (launchd and systemd)
 
-Launchd and systemd installation resolve the first absolute `ocx` PATH candidate that is both a regular file
+Systemd installation resolves the first absolute `ocx` PATH candidate that is both a regular file
 and executable, keeps that path lexical so a version-manager shim remains an indirection, and
 records the same single resolution in the service definition and service state. Definition
-construction (`buildPlist`, `buildUnit`) never performs PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
-fallback, keeping diagnostics and tests independent of the host PATH.
+construction (`buildUnit`) never performs PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
+fallback, keeping diagnostics and tests independent of the host PATH. Launchd always uses the
+package-local Bun and CLI pair selected by the trusted install or repair invocation; it never hands
+credential-bearing service state to a mutable PATH launcher, and a `launcherPath` recorded by an
+older install is reported stale so `ocx service repair` re-bakes the trusted package paths.
 
 Launcher mode omits the package-local Bun provenance pair because an upgrade may delete that
 versioned tree. The only runtime path carried through the launcher is a pre-Bun, proof-bound
 `OPENCODEX_BUN_PATH` whose durable runtime source is `override`; bundled and process fallbacks are
 rediscovered by the current launcher. The API-auth token remains file-backed and is loaded only by
 the service shell at start. On macOS, `start` and detailed `status` compare the live launchd job
-against `expectedLaunchdCommand`, which follows the recorded `launcherPath` rather than re-walking
-PATH, so a launcher-backed job is never misreported as an older plist (#3464).
+against `expectedLaunchdCommand`, which still follows a `launcherPath` recorded by a pre-pinning
+install rather than re-walking PATH, so such a job is never misreported as an older plist (#3464).
 
 > Decision record: [ADR-0030](../decisions/ADR-0030-stable-service-launcher-launchd-and-systemd.md)
+> Decision record: [ADR-0100](../decisions/ADR-0100-stable-service-launcher-launchd-and-systemd.md)
 
 ## Sidecars
 

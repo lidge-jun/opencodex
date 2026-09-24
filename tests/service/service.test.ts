@@ -1472,65 +1472,24 @@ describe("launchd service plist", () => {
   });
 
 
-  // #3464. The macOS counterpart of the systemd launcher test above: a mise/asdf upgrade replaces
-  // the versioned package directory, and a plist that named the old Bun + CLI pair keeps launchd
-  // on the stale build until someone restarts it. Naming the shim lets the next start follow it.
-  test("a stable launcher install names the launcher in the plist and bakes no versioned path (#3464)", () => {
-    const launcher = "/home/u/.local/share/mise/shims/ocx";
+  test("launchd stays bound to the package runtime instead of a mutable PATH launcher", async () => {
     const plist = buildPlist(resolvedProxyEnv({}), {
-      launcher,
       runtime: { path: "/opt/opencodex/versioned/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
     });
 
-    expect(plist).toContain(launcher);
-    expect(plist).toContain("start --port");
-    for (const forbidden of [
-      "OCX_BUN_RUNTIME_PATH",
-      "OCX_BUN_RUNTIME_SOURCE",
-      "OPENCODEX_BUN_PATH",
-      "/opt/opencodex/versioned/bun",
-      "cli/index.ts",
-    ]) expect(plist).not.toContain(forbidden);
-    // The token still comes from the file at start, never from the plist.
-    expectTextToContainPath(plist, serviceApiTokenFilePath());
-    expect(plist).toContain("OPENCODEX_API_AUTH_TOKEN");
-    // launchdListenPort reads the same "start --port N" tail from either command shape.
-    expect(launchdListenPort({ readPlist: () => plist })).toBe(resolveServiceListenPort());
+    expectTextToContainPath(plist, "/opt/opencodex/versioned/bun");
+    expectTextToContainPath(plist, join("cli", "index.ts"));
+    expect(plist).toContain("OCX_BUN_RUNTIME_PATH");
+    expect(plist).toContain("OCX_BUN_RUNTIME_SOURCE");
 
-    // Without a launcher the plist keeps the previous shape, so source checkouts are unaffected.
-    const direct = buildPlist(resolvedProxyEnv({}), { launcher: null });
-    expectTextToContainPath(direct, join("cli", "index.ts"));
-    expect(direct).toContain("OCX_BUN_RUNTIME_PATH");
-    expect(direct).toContain("OCX_BUN_RUNTIME_SOURCE");
-  });
-
-  test("launcher mode preserves only a proof-bound Bun override, never an ambient one (#3464)", () => {
-    const launcher = "/home/u/.local/share/mise/shims/ocx";
-    const trusted = buildPlist(resolvedProxyEnv({}), {
-      launcher,
-      runtime: { path: "/custom/bun", source: "override", overrideEnv: "OPENCODEX_BUN_PATH" },
-    });
-    expect(trusted).toContain("<key>OPENCODEX_BUN_PATH</key><string>/custom/bun</string>");
-    expect(trusted).not.toContain("OCX_BUN_RUNTIME_PATH");
-
-    const bundled = buildPlist(resolvedProxyEnv({}), {
-      launcher,
-      runtime: { path: "/custom/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
-    });
-    expect(bundled).not.toContain("OPENCODEX_BUN_PATH");
-    expect(bundled).not.toContain("/custom/bun");
-  });
-
-  test("launcher paths with shell and XML metacharacters stay quoted in the plist (#3464)", () => {
-    const launcher = "/home/u/My Tools & Shims/it's/ocx";
-    const plist = buildPlist(resolvedProxyEnv({}), {
-      launcher,
-      runtime: { path: "/opt/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
-    });
-    // XML-escaped ampersand inside the ProgramArguments string; the shell quoting survives.
-    expect(plist).toContain("&amp;");
-    expect(plist).not.toContain("Shims/it's/ocx start");
-    expect(launchdListenPort({ readPlist: () => plist })).toBe(resolveServiceListenPort());
+    const service = await readText("src/service/launchd.ts");
+    const installLaunchd = service.slice(
+      service.indexOf("export function installLaunchd("),
+      service.indexOf("export function restartLaunchdJob"),
+    );
+    expect(installLaunchd).not.toContain("stableLauncherEntry");
+    expect(installLaunchd).toContain("buildPlist(resolvedProxyEnv())");
+    expect(installLaunchd).toContain('writeServiceInstallState("scheduler")');
   });
 
   // The scenario itself, executed rather than asserted: retarget the shim the way an upgrade
@@ -2767,6 +2726,7 @@ describe("service diagnostics", () => {
   // deletes the old one on upgrade. The baked Bun and CLI both live in that directory, so the
   // unit's `exec <old-bun> <old-cli>` stops resolving and Restart=on-failure restart-loops.
   // When the install went through a stable launcher, the launcher is what systemd runs, so it
+  // (launchd installs never record a launcherPath; one found there is always reported stale.)
   // is the only path whose absence means anything — and the replaced version directory must
   // NOT be reported as stale.
   test("a launcher install judges staleness by the launcher, not the replaced version dir", () => {
@@ -2779,7 +2739,7 @@ describe("service diagnostics", () => {
       const launcher = join(import.meta.dir, "service.test.ts");
       const removedVersionDir = join(stateDir, "installs", "2.35.0");
 
-      // The upgrade case: version directory gone, launcher intact. Healthy.
+      // The upgrade case: version directory gone, launcher intact. Healthy on systemd.
       writeFileSync(statePath, JSON.stringify({
         version: 2,
         codexHome: stateDir,
@@ -2789,7 +2749,14 @@ describe("service diagnostics", () => {
         launcherPath: launcher,
         backend: "scheduler",
       }), "utf8");
-      expect(bakedServicePathsDiagnostic()).toBeNull();
+      // launchd never bakes a launcher anymore, so a recorded launcherPath on darwin can
+      // only have come from an install that ran a mutable PATH shim with the service token
+      // and proxy environment — stale whether or not the file it names still exists.
+      if (process.platform === "darwin") {
+        expect(bakedServicePathsDiagnostic()).toContain("STALE mutable launchd launcher");
+      } else {
+        expect(bakedServicePathsDiagnostic()).toBeNull();
+      }
 
       // A launcher that is itself gone is genuinely stale, and names the launcher.
       const missingLauncher = join(stateDir, "shims", "ocx");
@@ -2803,8 +2770,12 @@ describe("service diagnostics", () => {
         backend: "scheduler",
       }), "utf8");
       const diagnostic = bakedServicePathsDiagnostic();
-      expect(diagnostic).toContain("STALE baked paths");
-      expect(diagnostic).toContain(missingLauncher);
+      if (process.platform === "darwin") {
+        expect(diagnostic).toContain("STALE mutable launchd launcher");
+      } else {
+        expect(diagnostic).toContain("STALE baked paths");
+        expect(diagnostic).toContain(missingLauncher);
+      }
     } finally {
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
