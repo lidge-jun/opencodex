@@ -49,7 +49,8 @@ test("trust and untrust pass the exact security argv", async () => {
   expect(await trustPickerCa("/ca.pem", f.run, "darwin")).toEqual({ ok: true });
   expect(await untrustPickerCa("/ca.pem", sha1, f.run, "darwin")).toEqual({ ok: true });
   expect(f.calls).toEqual([
-    ["add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-s", "claude.ai", "-k", loginKeychainPath(), "/ca.pem"],
+    // No host policy string: Chromium ignores host-scoped trust settings.
+    ["add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k", loginKeychainPath(), "/ca.pem"],
     find,
     ["remove-trusted-cert", "/ca.pem"],
     ["delete-certificate", "-Z", sha1, loginKeychainPath()],

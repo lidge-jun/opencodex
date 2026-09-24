@@ -56,8 +56,11 @@ export async function trustPickerCa(
 ): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }> {
   if (platform !== "darwin") return { ok: false, reason: "unsupported" };
   try {
+    // No `-s <host>` policy string: Chromium (Claude Desktop) skips trust settings that carry one,
+    // so a host-scoped setting leaves Desktop rejecting the picker leaf. The CA's critical name
+    // constraints already limit it to claude.ai; macOS verify-cert rejects any other name.
     const result = await run(["add-trusted-cert", "-r", "trustRoot", "-p", "ssl",
-      "-s", PICKER_HOST, "-k", loginKeychainPath(), caPath]);
+      "-k", loginKeychainPath(), caPath]);
     return result.code === 0 ? { ok: true } : { ok: false, reason: "declined_or_failed" };
   } catch { // no-excuse-ok: catch -- user decline and command failure share a safe result.
     return { ok: false, reason: "declined_or_failed" };

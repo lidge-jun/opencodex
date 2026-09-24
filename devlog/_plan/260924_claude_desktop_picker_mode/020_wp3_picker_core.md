@@ -93,7 +93,9 @@ export async function inspectPickerTrust(leafPath: string, caSha1: string, run?:
 //   2. ["verify-cert", "-q", "-L", "-c", leafPath, "-p", "ssl", "-n", "claude.ai", "-k", loginKeychainPath()] exits 0
 //   missing record or exit 1 → untrusted; a runner failure → unknown
 export async function trustPickerCa(caPath: string, run?: SecurityRunner, platform?: NodeJS.Platform): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }>;
-//   ["add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-s", "claude.ai", "-k", loginKeychainPath(), caPath]
+//   ["add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k", loginKeychainPath(), caPath]
+//   (no "-s claude.ai": found in the live proof, Chromium skips host-scoped trust settings and
+//   Desktop failed with ERR_CERT_AUTHORITY_INVALID; the name constraints do the scoping)
 export async function untrustPickerCa(caPath: string, fingerprintSha1: string, run?: SecurityRunner, platform?: NodeJS.Platform): Promise<{ ok: boolean }>;
 //   ["remove-trusted-cert", caPath] then ["delete-certificate", "-Z", fingerprintSha1, loginKeychainPath()]
 ```
