@@ -60,6 +60,8 @@ The hub automatically issues a per-client key. The client writes it to the exist
 `service-api-token` file, never `config.json`. While connected, usage comes from the hub usage store
 filtered to that client's stable `apiKeyId`. After disconnect, usage comes from the local store.
 OpenCodex does not mirror usage between the two stores.
+`ocx service uninstall` removes the local service but preserves this key while the client remains
+connected. Use `ocx disconnect` to remove the connected client's local key and state.
 
 If a client saved a remote `http://` Hub URL before the secure transport rule, its Hub
 operations now return `insecure_http_refused`. Run `ocx disconnect` locally, then reconnect

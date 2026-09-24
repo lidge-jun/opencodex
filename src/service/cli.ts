@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { restoreNativeCodexAsync } from "../codex/inject";
 import { describeRetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
+import { withConfigMutationLockSync } from "../config/mutation-lock";
+import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { readClientConnectionState } from "../client/state";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
 import { statusWinswRaw, type WinswStatus } from "../lib/winsw";
 import { withWindowsServiceMutationLock } from "../lib/windows-service-mutation-lock";
@@ -180,6 +183,24 @@ export function parseServiceArgs(args: string[]): ParsedServiceArgs {
     else invalid.push(arg);
   }
   return { sub: normalizeServiceSubcommand(sub), backend, invalid };
+}
+
+/** Remove the service credential only when no client connection can own it. */
+export function removeServiceTokenAfterUninstall(
+  lockDeps: ClientLifecycleLockDeps = {},
+): "removed" | "absent" | "retained" {
+  try {
+    return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+      if (readClientConnectionState().kind !== "disconnected") return "retained";
+      const path = serviceApiTokenFilePath();
+      if (!existsSync(path)) return "absent";
+      unlinkSync(path);
+      return "removed";
+    }), lockDeps);
+  } catch {
+    // An unreadable connection or unavailable lock cannot authorize deleting a key.
+    return "retained";
+  }
 }
 
 export async function serviceCommand(...args: (string | undefined)[]): Promise<void> {
@@ -424,7 +445,9 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         }
       }
       removeServiceInstallState();
-      try { if (existsSync(serviceApiTokenFilePath())) unlinkSync(serviceApiTokenFilePath()); } catch { /* best-effort */ }
+      if (removeServiceTokenAfterUninstall() === "retained") {
+        console.warn("⚠️  Service token retained for a client connection or unresolved ownership.");
+      }
       console.log("✅ service uninstalled.");
       break;
     default:

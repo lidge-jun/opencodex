@@ -187,7 +187,7 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 `runtime-port.json` through `src/config/process-state.ts`, syncs Codex config/catalog, then serves
 until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
-uninstall still restore.
+uninstall still restore. `src/service/cli.ts` removes the service token on uninstall only when persisted client state is disconnected. Connected, invalid, or mismatched client state retains the token; client lifecycle and config mutation locks exclude a concurrent connect or disconnect during this decision.
 The package-tree integrity fence for live package replacement follows the
 [update transaction contract](ops/docs-and-release.md#package-tree-integrity-fence).
 

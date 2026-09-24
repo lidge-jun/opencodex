@@ -32,6 +32,9 @@ import {
   writeTokenBackup,
 } from "../../src/lib/service-secrets";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { loadConfig, saveConfig } from "../../src/config";
+import { readClientConnectionState } from "../../src/client/state";
+import { removeServiceTokenAfterUninstall } from "../../src/service/cli";
 
 let home = "";
 const previousHome = process.env.OPENCODEX_HOME;
@@ -45,6 +48,47 @@ afterEach(() => {
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (home) removeTreeWithRetry(home);
+});
+
+describe("service uninstall credential ownership", () => {
+  function cleanup(): "removed" | "absent" | "retained" {
+    return removeServiceTokenAfterUninstall({ lockPath: join(home, "lifecycle.sqlite") });
+  }
+
+  test("keeps the connected client's key while removing the service", () => {
+    const token = writeServiceApiTokenFile("ocx_client_key");
+    const config = loadConfig();
+    config.runtimeRole = "client";
+    config.client = {
+      serverUrl: "https://hub.example.test", managementUrl: "https://hub.example.test",
+      managementTransport: "direct", selectedClients: ["codex"],
+      tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "client-key",
+      tokenFingerprint: token.fingerprint, protocolVersion: 1,
+      connectedAt: "2026-09-06T00:00:00.000Z",
+    };
+    saveConfig(config);
+    expect(readClientConnectionState().kind).toBe("connected");
+
+    expect(cleanup()).toBe("retained");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_client_key\n");
+  });
+
+  test("removes an unowned service token", () => {
+    const token = writeServiceApiTokenFile("ocx_service_key");
+    expect(readClientConnectionState().kind).toBe("disconnected");
+    expect(cleanup()).toBe("removed");
+    expect(existsSync(token.path)).toBe(false);
+    expect(cleanup()).toBe("absent");
+  });
+
+  test("keeps the token when client metadata is incomplete", () => {
+    const token = writeServiceApiTokenFile("ocx_uncertain_key");
+    writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client" }));
+    expect(readClientConnectionState().kind).toBe("mismatched");
+
+    expect(cleanup()).toBe("retained");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_uncertain_key\n");
+  });
 });
 
 /**
