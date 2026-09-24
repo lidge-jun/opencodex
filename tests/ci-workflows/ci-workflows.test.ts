@@ -635,7 +635,20 @@ describe("GitHub Actions hardening", () => {
     expect(targetFreeness?.env?.INTENDED).toBe("${{ steps.target.outputs.version }}");
     expect(targetFreeness?.run).toContain("git fetch --force --tags origin");
     expect(targetFreeness?.run).toContain('npm view "@bitkyc08/opencodex@${INTENDED#v}" version');
-    // The trusted detector runs against the bumped metadata copied out of the dev tree.
+    // The chosen version must fail on its own tag, not on the shared detector's
+    // release-commit exception. This job's HEAD is the workflow's main checkout while
+    // only package.json came from dev, so "the tag names HEAD" would wrongly allow a
+    // version that is already released. The explicit tag check must run before the
+    // detector sees the copied metadata.
+    expect(chosenFreeness?.env?.NEXT_VERSION).toBe("${{ steps.decide.outputs.version }}");
+    expect(chosenFreeness?.run).toContain('git rev-parse -q --verify "refs/tags/v${NEXT_VERSION#v}"');
+    expect(chosenFreeness?.run).toContain("git fetch --force --tags origin");
+    const tagCheck = chosenFreeness?.run?.indexOf('refs/tags/v${NEXT_VERSION#v}') ?? -1;
+    expect(tagCheck).toBeGreaterThanOrEqual(0);
+    expect(tagCheck).toBeLessThan(chosenFreeness?.run?.indexOf("cp dev-tree/package.json package.json") ?? -1);
+    // The trusted detector still runs against the bumped metadata copied out of the dev
+    // tree: the tag check proves the candidate's own tag is absent, the detector proves
+    // it is not behind any higher release tag.
     expect(chosenFreeness?.run).toContain("cp dev-tree/package.json package.json");
     expect(chosenFreeness?.run).toContain("bun test tests/ci-workflows/release-version-line.test.ts");
     expect(openPr?.env).toMatchObject({
