@@ -649,11 +649,13 @@ export async function syncCatalogModels(
   };
 }
 
-export function invalidateCodexModelsCacheWithPermit(
+export type CodexCacheInvalidationOutcome = "written" | "unchanged" | "missing_catalog" | "desired_disabled" | "failed";
+
+export function invalidateCodexModelsCacheWithPermitOutcome(
   permit: CatalogWritePermit,
   owningCodexHome: string,
   options?: CodexCatalogSyncOptions,
-): boolean {
+): CodexCacheInvalidationOutcome {
   try {
     // This permit is a REACQUISITION: refreshCodexModelCatalog's commit released
     // K before this rewrite runs, so the commit-path desired-state check cannot
@@ -661,9 +663,9 @@ export function invalidateCodexModelsCacheWithPermit(
     // routed cache write — re-read intent under this permit, same as the commit.
     // The catalog-only sync override applies here too so an explicit refresh
     // keeps the cache consistent with the catalog it just wrote.
-    if (!shouldSyncCodexOnStart(loadConfig()) && options?.allowWhenDesiredDisabled !== true) return false;
+    if (!shouldSyncCodexOnStart(loadConfig()) && options?.allowWhenDesiredDisabled !== true) return "desired_disabled";
     const catalogPath = readCodexCatalogPathForHome(owningCodexHome);
-    if (!existsSync(catalogPath)) return false;
+    if (!existsSync(catalogPath)) return "missing_catalog";
     const catalog = JSON.parse(readFileSync(catalogPath, "utf8"));
     const models = catalog.models ?? catalog;
     const cachePath = join(owningCodexHome, "models_cache.json");
@@ -711,12 +713,20 @@ export function invalidateCodexModelsCacheWithPermit(
     // `cacheSynced` mean what its name and its consumers already assume, and what
     // `pullRemoteCatalog` and the early returns in `refreshCodexModelCatalog`
     // already assert: a write happened.
-    if (!preparedBytesDifferFromDisk(preparedCache)) return false;
+    if (!preparedBytesDifferFromDisk(preparedCache)) return "unchanged";
     replaceCodexModelsCache(permit, owningCodexHome, preparedCache);
-    return true;
+    return "written";
   } catch {
-    return false;
+    return "failed";
   }
+}
+
+export function invalidateCodexModelsCacheWithPermit(
+  permit: CatalogWritePermit,
+  owningCodexHome: string,
+  options?: CodexCatalogSyncOptions,
+): boolean {
+  return invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, options) === "written";
 }
 
 export function invalidateCodexModelsCache(options?: CodexCatalogSyncOptions): boolean {

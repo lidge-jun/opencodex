@@ -268,7 +268,7 @@ export function providerFetch(
   // transport (measured ~3s faster TTFT than the SSE POST queue); everything
   // else keeps the provider's HTTP fetch. See ws-upstream.ts for the details.
   const unpaced = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
-    const upstreamWebsocket = provider.upstreamWebsocket === true;
+    const upstreamWebsocket = provider.upstreamWebsocket;
     if (!options.httpOnly && typeof input === "string" && init
       && shouldUseCodexWsUpstream(input, init, runtime, upstreamWebsocket)) {
       const egress = egressFor(input);

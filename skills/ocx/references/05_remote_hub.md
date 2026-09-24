@@ -26,6 +26,11 @@ has to learn a new port. Setting a `port` (`{ "enabled": true, "port": 10104 }`)
 works and puts the two surfaces on separate ports; local integrations then follow the
 listener's port.
 
+This listener is unauthenticated: every process and OS user on the hub machine can spend
+its provider credentials and quota, and can exhaust the shared turn capacity remote
+clients depend on. Enable it only on a dedicated single-tenant host — on a shared or
+multi-tenant host, omit `unauthenticatedLoopbackListener` entirely.
+
 The port-less form is refused on a loopback or wildcard `hostname` — `127.0.0.1`,
 `localhost`, `0.0.0.0`, `::` — because the public listener already holds that loopback
 address. The refusal happens at write time and again at startup, naming the collision. On

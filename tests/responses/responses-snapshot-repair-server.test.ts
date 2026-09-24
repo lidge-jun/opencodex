@@ -23,6 +23,7 @@ setDefaultTimeout(30_000);
 
 const originalFetch = globalThis.fetch;
 let TEST_DIR = "";
+const previousHome = process.env.OPENCODEX_HOME;
 let isolated: IsolatedCodexHome;
 
 const SPARSE_EVENTS = [
@@ -123,6 +124,8 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   releaseSpendHome?.();
   releaseSpendHome = undefined;
   globalThis.fetch = originalFetch;

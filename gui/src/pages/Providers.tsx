@@ -246,10 +246,10 @@ export default function Providers({ apiBase }: { apiBase: string }) {
   const bootstrapKeyRef = useRef<string | null>(null);
   const removeBusyRef = useRef(false);
 
-  const notify = useCallback((msg: string, ok: boolean = true) => {
+  const notify = useCallback((msg: string, ok: boolean = true, tone?: NoticeTone) => {
     setStatus(msg);
     setStatusOk(ok);
-    setStatusTone(ok ? "ok" : "err");
+    setStatusTone(tone ?? (ok ? "ok" : "err"));
     setStatusRevision(revision => revision + 1);
   }, []);
 
@@ -448,7 +448,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     // back empty on the next visit. A microtask cannot be cancelled, so the requests always go out.
     // Guarded per identity because StrictMode double-invokes this effect on mount and an
     // uncancellable microtask would otherwise bootstrap the page twice.
-    // Quotas: workspace shell owns /api/provider-quotas — do not double-fetch on mount.
+    // Quotas: the workspace shell owns this page's /api/provider-quotas read, including the
+    // forced ?refresh=1 fan-out — do not double-fetch on mount. The header QuotaSummaryBar
+    // keeps its own separate, passive 60s read of the same endpoint.
     if (bootstrapKeyRef.current === apiBase) return;
     bootstrapKeyRef.current = apiBase;
     void Promise.resolve().then(() => {

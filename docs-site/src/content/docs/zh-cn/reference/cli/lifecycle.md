@@ -260,6 +260,7 @@ ocx codex-shim uninstall
 
 安装并控制 Windows 状态托盘图标。它会在 Windows 登录时启动，并提供一键代理控制。`start` 和 `stop` 只控制图标本身；要控制代理，请使用其菜单。`--no-start` 适用于 `install`，会安装托盘但不会立即启动。
 已弃用：OpenCodex 桌面应用在 Windows、macOS 和 Linux 上提供托盘；没有桌面应用的安装仍可使用 `ocx tray`。
+当发现有更新的包版本时，托盘会在在线、警告或离线图标上显示蓝点，并显示 **Update available**。托盘大约每分钟检查一次本地缓存的徽标；结果过期或不可用时会移除蓝点。该菜单项会打开仪表板，你可以在那里启动包更新。它不会自动安装。
 
 ## 仪表盘
 
@@ -272,6 +273,8 @@ ocx codex-shim uninstall
 `ocx update` 更新的是 OpenCodex 本身，而不是 Codex CLI。请使用 [system 检查命令](/zh-cn/reference/cli/agents/)中的 `ocx system codex-cli-update check`，对已配置的 Codex CLI 候选项进行有界、只读的 provenance 检查。该命令不会查询 package registry，也不会安装更新。
 
 ### `ocx update [--tag latest|preview]`
+
+当 OpenCodex 由 mise 安装时，此命令会在停止代理或修改软件包文件之前以失败状态退出，并使用经过验证的本地 mise 别名显示 `mise upgrade <tool>`。更新检查仍然可用，并会报告该安装由外部管理。无法读取或不一致的 mise 所有权元数据也会阻止修改，且不会猜测工具名称；`--tag preview` 绝不会更改 mise 中配置的选择。
 
 从 npm 自更新 opencodex。稳定版安装使用 `@latest`；预览版安装保持在 `@preview`，除非你传入 `--tag latest|preview`。它会检测源码检出，并提示你改为运行 `git pull && bun install`；如果你已经是该标签的最新版本，则不会执行任何操作。对于 npm 安装，它会在停止任何进程之前，对 Unix 缓存的所有权和访问权限执行有界检查。嵌套符号链接会通过 `lstat` 检查但不会跟随；Windows 会明确跳过这项仅适用于 Unix 的检查。检查失败时，更新会在托盘和代理仍运行的情况下中止。随后才会在替换文件之前停止正在运行的代理；已安装的服务会自动重建并启动，而前台安装则会打印 `ocx start` 作为下一步。持久化前，仪表板更新记录会隐去用户配置文件/缓存路径以及 UID/GID 值。
 

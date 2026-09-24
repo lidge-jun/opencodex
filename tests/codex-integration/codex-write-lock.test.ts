@@ -8,7 +8,7 @@
  * caller told to retry something that will fail identically forever is how a UI
  * spins on a problem only the user can fix.
  */
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import {
   resolveCodexCoordinatorDatabasePath,
@@ -285,16 +285,35 @@ describe("two real processes contend for one lock", () => {
    */
   const childPath = helperPath("codex-write-lock-child.ts");
 
+  /*
+   * Bun keeps its runtime transpiler cache under the user's home cache directory unless
+   * BUN_RUNTIME_TRANSPILER_CACHE_PATH names one: HOME on macOS/Linux (a child with a fresh HOME
+   * wrote a new Library/Caches/bun/@t@ of 4.1 MB on macOS) and USERPROFILE on Windows. The
+   * home-environment cases below give the children fake HOME/USERPROFILE directories that the
+   * warm-up never populated, so each of them re-transpiled the whole lock graph and the warm-up
+   * paid for nothing: on windows-latest those holders took 5-19 s
+   * against 1-4 s for the same child with the ambient home, and "case 0" crossed
+   * INTERNAL_DEADLINE_MS twice in run 35953803435. The lock identity under test reads only
+   * HOME/USERPROFILE, so sharing Bun's own cache changes no assertion.
+   */
+  const transpilerCache = mkdtempSync(join(tmpdir(), "ocx-write-lock-transpiler-"));
+  const sharedCacheEnv = { BUN_RUNTIME_TRANSPILER_CACHE_PATH: transpilerCache };
+
   // This describe's first spawned child pays the cold codex write-lock helper graph.
   // Load that graph during setup so its readiness bound measures lock behavior alone.
   beforeAll(async () => {
-    await warmModuleGraph({ graph: "codex-write-lock-child", entry: childPath });
+    await warmModuleGraph({ graph: "codex-write-lock-child", entry: childPath, env: sharedCacheEnv });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  afterAll(() => {
+    removeTreeWithRetry(transpilerCache);
+  });
 
   function spawnChild(payload: Record<string, unknown>) {
     return Bun.spawn(["bun", childPath], {
       env: {
         ...process.env,
+        ...sharedCacheEnv,
         CODEX_HOME: codexHome,
         // N is the lock under test. Give the child processes in this case their
         // own C database so unrelated files in the same Bun batch cannot make a
@@ -312,6 +331,7 @@ describe("two real processes contend for one lock", () => {
     return Bun.spawn(["bun", childPath], {
       env: {
         ...process.env,
+        ...sharedCacheEnv,
         CODEX_HOME: codexHome,
         OPENCODEX_HOME: join(root, ".opencodex"),
         ...env,

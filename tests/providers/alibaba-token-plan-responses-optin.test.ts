@@ -4,17 +4,17 @@
  * official Codex integration guide on wire_api = "responses" (#5097). Three models carry live
  * end-to-end evidence on that gateway: qwen3.8-flash, qwen3.7-plus and glm-5.3.
  *
- * That evidence buys a documented OPT-IN, not a default. The registry deliberately declares no
- * modelWireDefaults for this entry, because flipping the wire would change the upstream for
- * every existing Codex user of those models with no config change, and one delta is still
- * unresolved: the entry preserves plaintext reasoning content on the Chat wire through
- * preserveReasoningContentModels, but the Responses serializer reads the separate
- * preserveResponsesReasoningContent flag, which this entry does not set. On the Responses wire
- * those models would therefore replay with blanked reasoning content, which is strictly less
- * state than they carry today. Z.AI and DeepSeek set both flags for exactly this reason.
+ * That evidence now backs the registry modelWireDefaults pin in
+ * alibaba-token-plan-wire-defaults.test.ts together with the entry-level
+ * preserveResponsesReasoningContent flag: the flag that was the open delta when the opt-in
+ * landed (#5198) is measured live on this gateway (#5188), because the entry preserves
+ * plaintext reasoning content on the Chat wire through preserveReasoningContentModels, and
+ * the Responses serializer reads the separate flag. Z.AI and DeepSeek set both flags for
+ * exactly this reason.
  *
- * These cases lock the opt-in so it cannot silently regress, and lock the precondition so a
- * later default flip cannot land without the Responses-side preservation beside it.
+ * These cases lock the documented per-model modelAdapters opt-in for the REST of the family
+ * (and the opt-out against the pins) so neither can silently regress, and keep the guard that
+ * a Responses wire default must carry the Responses-side preservation beside it.
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { providerConfigSeed } from "../../src/providers/derive";
@@ -32,18 +32,22 @@ function tokenPlanProvider(): OcxProviderConfig {
   return { ...providerConfigSeed(getProviderRegistryEntry("alibaba-token-plan")!), apiKey: "sk-test" };
 }
 
-describe("the Token Plan wire default is unchanged", () => {
+describe("chat and anthropic inbound keep the provider chat wire", () => {
   for (const model of LIVE_VERIFIED) {
-    test(`${model} stays on the provider chat wire for every inbound`, () => {
-      for (const inbound of INBOUNDS) {
+    for (const inbound of ["chat", "anthropic"] as const) {
+      test(`${model} stays on the provider chat wire for ${inbound} inbound`, () => {
         expect(resolveWireProtocolOverride("alibaba-token-plan", model, tokenPlanProvider(), inbound).adapter)
           .toBe("openai-chat");
-      }
-    });
+      });
+    }
   }
 
-  test("the entry declares no model wire defaults", () => {
-    expect(getProviderRegistryEntry("alibaba-token-plan")!.modelWireDefaults).toBeUndefined();
+  test("the pins are exactly the live-verified models, scoped to responses inbound", () => {
+    const entry = getProviderRegistryEntry("alibaba-token-plan")!;
+    expect(Object.keys(entry.modelWireDefaults ?? {}).sort()).toEqual([...LIVE_VERIFIED].sort());
+    for (const declared of Object.values(entry.modelWireDefaults ?? {})) {
+      expect(typeof declared === "string" ? undefined : declared.inbound).toEqual(["responses"]);
+    }
   });
 });
 
@@ -111,10 +115,17 @@ describe("the opt-in survives the handleResponses replay", () => {
     expect(url).not.toContain("chat/completions");
   });
 
-  test("qwen3.8-flash reaches /chat/completions without the opt-in", async () => {
-    const url = await drive("qwen3.8-flash");
+  test("an unpinned family member reaches /chat/completions without the opt-in", async () => {
+    const url = await drive("qwen3.8-max");
     expect(url).toContain("token-plan.cn-beijing.maas.aliyuncs.com");
     expect(url).toContain("chat/completions");
+  });
+
+  test("an unpinned family member reaches /responses once opted in", async () => {
+    const url = await drive("qwen3.8-max", { "qwen3.8-max": "openai-responses" });
+    expect(url).toContain("token-plan.cn-beijing.maas.aliyuncs.com");
+    expect(url).toContain("/responses");
+    expect(url).not.toContain("chat/completions");
   });
 });
 

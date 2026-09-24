@@ -6,6 +6,11 @@ const {
   isPlaceholderOnlyValue,
   hasSubstantialStructuredContent,
 } = require(path.join(__dirname, "issue-quality.cjs"));
+// The readiness wording is derived from the threshold the gate enforces, so the
+// sentence in the box and the number it promises cannot drift apart (#4443).
+const { READINESS_LATEST_DEV_BEHIND_MAX } = require(
+  path.join(__dirname, "pr-quality-state.cjs")
+);
 
 const ANCESTRY_BEHIND_THRESHOLD = 20;
 /** Cap on ahead_by vs main so stale `dev` forks (many commits ahead of main) are not flagged. */
@@ -20,13 +25,43 @@ const REVIEW_READINESS_START = "<!-- pr-quality-readiness-checklist:start -->";
 const REVIEW_READINESS_END = "<!-- pr-quality-readiness-checklist:end -->";
 
 /**
+ * The latest-dev box, worded as the condition the gate actually enforces.
+ *
+ * `readinessClaimViolations` clears this claim while the head is at most
+ * `READINESS_LATEST_DEV_BEHIND_MAX` commits behind the base — but the box used
+ * to read "I pushed my PR to the latest dev commit", which asks for the exact
+ * tip. On a fast-moving `dev` that gap is a treadmill: an author who reads the
+ * box literally resyncs for unrelated commits, every resync moves the head,
+ * head-drift resets all four boxes, and the previous exact-head CI evidence is
+ * invalidated — without reducing merge risk, because the gate was already
+ * satisfied (#4443).
+ *
+ * Deriving the sentence from the constant is the point: the wording and the
+ * threshold cannot drift apart again, and raising or lowering the tolerance
+ * rewords the box in the same commit.
+ *
+ * Rewording is safe for open pull requests. `extractReviewReadiness` matches on
+ * box count and checked state, never on item text, and
+ * `appendReviewReadinessSection` is idempotent — a body that already carries the
+ * marker pair is returned untouched. Existing checklists keep their wording and
+ * their ticks; only newly appended ones use this sentence.
+ */
+function latestDevReadinessItem() {
+  return (
+    "I pushed my PR to a recent dev commit " +
+    `(at most ${READINESS_LATEST_DEV_BEHIND_MAX} behind; ` +
+    "a maintainer may still ask for the exact tip before merge)."
+  );
+}
+
+/**
  * The four self-attestation boxes a non-maintainer author must tick before the
  * gate lifts the draft. The final box is intentionally set off by a blank line
  * so the "ready" claim reads as the closing confirmation, not a fourth task.
  */
 const REVIEW_READINESS_ITEMS = [
   "Required local validation passed; commands, results, and any full-suite exception are documented.",
-  "I pushed my PR to the latest dev commit.",
+  latestDevReadinessItem(),
   "I resolved all correct Codex and CodeRabbit findings.",
   "My PR is ready for review.",
 ];

@@ -148,7 +148,6 @@ function isAllowedHomePath(file: string, username: string): boolean {
   if (file.startsWith("tests/") && (username === "example" || username === "test" || username === "x")) {
     return true;
   }
-  if (file.startsWith("docs/") && (username === "me" || username === "user")) return true;
   if (file.startsWith("docs-site/") && username === "example") return true;
   // devlog evidence blocks quote real command invocations, and a reproducible path is
   // the point. The maintainer's own account name is already public through repository

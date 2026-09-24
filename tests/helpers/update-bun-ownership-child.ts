@@ -62,7 +62,11 @@ mock.module(repoPath("src/config/process-state.ts"), () => ({ ...state,
   readRuntimePort: () => running ? { pid: 4321, port, hostname: "127.0.0.1" } : null,
   getRuntimePortPath: () => runtime,
 }));
-mock.module(repoPath("src/update/install-detection.mjs"), () => ({ detectInstallFromPath: () => "bun" }));
+// runUpdate reads ownership (installer plus any external owner) rather than the bare installer.
+mock.module(repoPath("src/update/install-detection.mjs"), () => ({
+  detectInstallFromPath: () => "bun",
+  detectInstallOwnershipFromPath: () => ({ installer: "bun" }),
+}));
 mock.module(repoPath("src/update/registry-integrity.mjs"), () => ({ checkRegistryPackageIntegrity: () => ({ ok: true, integrity: "sha512-fixture" }) }));
 const liveness = await import("../../src/server/proxy-liveness");
 const actualIdentity = liveness.proxyIdentityAt;

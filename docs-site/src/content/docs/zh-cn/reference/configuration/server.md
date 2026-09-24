@@ -136,6 +136,12 @@ Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
 }
 ```
 
+### 目标不可用时
+
+替换目标是操作者选定的唯一目的地，因此无法再解析的目标会让辅助调用失败，而不是把它发到别处。当目标的提供方被禁用或删除，或其组合已不存在时，被拦截的请求会在向上游发送任何内容之前返回 `409` 和错误代码 `intercept_target_unavailable`。请求日志记录同一代码。请求不会透传给原生辅助模型，也不会回退到默认提供方，因为两者都会在你未选择的情况下改变目的地、凭据和费用。组合或路由配置档目标仍会在自身成员之间故障转移。像 `provider/model` 这样的限定目标，如果其提供方部分未指向任何已配置项，也按同样方式处理，设置 API 会拒绝保存。通过默认提供方解析的不带前缀的模型 ID 仍然有效。
+
+禁用（带 `disabled: true` 的 `PATCH /api/providers?name=<provider>`）或删除目标所解析到的提供方仍会成功；响应会加入 `dependentShadowIntercept: { model, enabled }`，仪表板会显示警告。重新启用该提供方或选择其他目标即可恢复拦截。
+
 ## 侧车
 
 ### `images` (`OcxImagesConfig`)
@@ -151,7 +157,7 @@ Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
 
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
-| `enabled?` | `boolean` | 在可用时启用 | 总开关。 |
+| `enabled?` | `boolean` | 在可用时启用 | 总开关。为 `false` 时，OpenCodex 停止拦截 `web_search`，并且 Codex 集成会把 `web_search = "disabled"` 写入 `~/.codex/config.toml`。 |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 显式配置优先；省略时始终使用 `openai`。`anthropic` 和 `xai` 仅在显式配置时运行；`gemini` 和 `exa` 在 executor 发布前仍为保留值。 |
 | `model?` | `string` | 依后端而定 | OpenAI 使用 `gpt-5.6-luna`，Anthropic 使用 `claude-sonnet-5`，xAI 使用 `grok-4.6`。旧的显式 `gpt-5.4-mini` 会在启动时迁移。 |
 | `exaApiKey?` | `string` | 无 | `exa` 后端的操作员密钥。仅可写入：管理读取绝不会返回已存储的值。 |

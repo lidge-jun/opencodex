@@ -77,15 +77,6 @@ function assertExactKeys(value: Record<string, unknown>, keys: readonly string[]
   }
 }
 
-/**
- * Applied-state markers survive every profile rebuild.
- *
- * `parseDesktopProfile`, `reconcileDesktopProfile` and `moveDesktopRoute` each construct a
- * fresh `{ version, assignments, defaults }`, and the management routes persist whatever they
- * return. Without this carry-through, saving an assignment — or merely dragging a model to
- * another family — would erase the fingerprint the apply route wrote, and the GUI would report
- * "not applied" for a config that is applied on disk.
- */
 function appliedMarkers(source: { appliedFingerprint?: unknown; appliedAt?: unknown }): {
   appliedFingerprint?: string;
   appliedAt?: string;
@@ -94,6 +85,19 @@ function appliedMarkers(source: { appliedFingerprint?: unknown; appliedAt?: unkn
     ...(typeof source.appliedFingerprint === "string" ? { appliedFingerprint: source.appliedFingerprint } : {}),
     ...(typeof source.appliedAt === "string" ? { appliedAt: source.appliedAt } : {}),
   };
+}
+
+export function sameProfileContent(left: DesktopProfile, right: DesktopProfile): boolean {
+  return DESKTOP_FAMILIES.every(family => left.defaults[family] === right.defaults[family])
+    && JSON.stringify(Object.entries(left.assignments).sort(([a], [b]) => a.localeCompare(b)))
+      === JSON.stringify(Object.entries(right.assignments).sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** Retain applied-state bookkeeping only when the desired Desktop config is unchanged. */
+export function preserveDesktopAppliedState(source: DesktopProfile, rebuilt: DesktopProfile): DesktopProfile {
+  return sameProfileContent(source, rebuilt)
+    ? { ...rebuilt, ...appliedMarkers(source) }
+    : rebuilt;
 }
 
 function isFamily(value: unknown): value is DesktopFamily {
@@ -244,7 +248,8 @@ export function reconcileDesktopProfile(
     const current = defaults[family];
     defaults[family] = current && assignments[current]?.family === family ? current : (members[0] ?? null);
   }
-  return parseDesktopProfile({ version: 1, assignments, defaults, ...appliedMarkers(profile) });
+  const rebuilt = parseDesktopProfile({ version: 1, assignments, defaults });
+  return preserveDesktopAppliedState(profile, rebuilt);
 }
 
 export function moveDesktopRoute(
@@ -268,7 +273,7 @@ export function moveDesktopRoute(
   const destinationMembers = Object.keys(assignments).filter(key => assignments[key]!.family === family).sort();
   if (makeDefault || !defaults[family] || assignments[defaults[family]!]?.family !== family) defaults[family] = route;
   if (!defaults[family] && destinationMembers.length > 0) defaults[family] = destinationMembers[0]!;
-  return parseDesktopProfile({ version: 1, assignments, defaults, ...appliedMarkers(parsed) });
+  return parseDesktopProfile({ version: 1, assignments, defaults });
 }
 
 export function setDesktopFamilyDefault(
@@ -280,7 +285,12 @@ export function setDesktopFamilyDefault(
   const members = Object.keys(parsed.assignments).filter(key => parsed.assignments[key]!.family === family);
   if (route === null && members.length > 0) throw new DesktopProfileError("cannot clear a non-empty family default", `profile.defaults.${family}`);
   if (route !== null && parsed.assignments[route]?.family !== family) throw new DesktopProfileError("route is not a member of this family", `profile.defaults.${family}`);
-  return parseDesktopProfile({ ...parsed, defaults: { ...parsed.defaults, [family]: route } });
+  const rebuilt = parseDesktopProfile({
+    version: 1,
+    assignments: parsed.assignments,
+    defaults: { ...parsed.defaults, [family]: route },
+  });
+  return preserveDesktopAppliedState(parsed, rebuilt);
 }
 
 export function renderDesktopProfile(

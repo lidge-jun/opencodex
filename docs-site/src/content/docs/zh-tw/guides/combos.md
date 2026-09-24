@@ -166,14 +166,16 @@ Combo 失敗分為**跳轉**失敗與**終端**失敗。
 | 分類為認證、訂閱、配額、限流、過載或上游伺服器錯誤 | 冷卻目標並跳轉，即使單靠狀態碼不足。 |
 | 客戶端取消（499）、`origin_rejected`、cyber-policy 拒絕、上下文溢出或其他無效請求 | 停止並回傳錯誤；另一個目標不會讓請求變為有效。 |
 | 結構化 HTTP 400，明確拒絕 `user`、對 `reasoning.effort`/`reasoning_effort` 回傳不支援值，或回傳模型特定影像輸入拒絕（`param: input`） | 在輸出開始前跳轉到下一個符合條件的目標，且不記錄冷卻時間；參見下方選用參數相容性。 |
+| 由行程內轉接器（`runTurn`）執行的 Responses 回合中，目前請求未宣告的第一個工具呼叫（在任何輸出與不可重播的副作用之前） | 讓該目標進入冷卻，並以相同的工具目錄跳轉到下一個目標。出現可見輸出或不可重播的副作用之後，拒絕即為最終結果。Chat Completions 與 Anthropic Messages 請求不受影響。 |
 | 任何其他未分類錯誤 | 停止並回傳錯誤。 |
 
-跳轉的目標預設進入 60 秒冷卻。若上游回應包含有效的 `Retry-After` 值，opencodex 改用它。接受數字秒與 HTTP-date 值，且每次冷卻上限為 10 分鐘。
+跳轉的目標預設進入 60 秒冷卻。若上游回應包含有效的 `Retry-After` 值，opencodex 改用它。接受數字秒與 HTTP-date 值。明確的上游 `Retry-After` 最長為 24 小時；重設推導、設定與預設冷卻最長為 10 分鐘。
 
 目前請求永不重試同一已嘗試目標。後續請求會略過它直到冷卻到期。若無合格目標剩餘，代理回傳 HTTP 503 並帶 `error.code = "combo_unavailable"`。
 
 :::note
 Failover 是刻意受限的。它有助於目標特定的可用性、認證、配額與過載失敗；不會隱藏呼叫者錯誤或策略拒絕。
+在非 combo 的 Responses 請求上，允許清單中的 xAI 政策 403 會在 Codex 將其當作傳輸失敗重試之前，改寫為 HTTP 200 `incomplete/content_filter`；參見 [xAI policy refusals](/zh-tw/reference/proxy-formats/#xai-policy-refusals)。Combo 跳轉仍把原始 HTTP 403 當作一次跳轉。
 :::
 
 ## 預設推理 effort
@@ -282,7 +284,7 @@ Combo id 未知。回應為 HTTP 404 並帶 type `invalid_request_error`。執�
 
 ### 為什麼我得到 `combo_unavailable`？
 
-每個目標目前都不合格：例如其供應商已停用、冷卻中、已為此請求嘗試過，或加密 v2 任務排除它。檢查目標供應商狀態與近期上游錯誤。對於冷卻，等待 60 秒預設或上游 `Retry-After` 期間（絕不超過 10 分鐘），然後重試。
+每個目標目前都不合格：例如其供應商已停用、冷卻中、已為此請求嘗試過，或加密 v2 任務排除它。檢查目標供應商狀態與近期上游錯誤。對於冷卻，等待 60 秒預設或上游 `Retry-After` 期間（明確的上游 `Retry-After` 最長 24 小時，其他冷卻最長 10 分鐘），然後重試。
 
 ### 為什麼我的別名被拒絕？
 

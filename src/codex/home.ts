@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
-import { expandUserPath } from "../config";
+import { expandUserPath } from "../config/paths";
 import { redactUserPath } from "../lib/redact";
 
 export type CodexHomeDeps = {
@@ -135,9 +135,48 @@ export function findWslWindowsCodexHome(deps: CodexHomeDeps = {}): string | null
 export function defaultCodexHome(deps: CodexHomeDeps = {}): string {
   const home = (deps.homedir ?? homedir)();
   const defaultHome = join(home, ".codex");
-  const exists = deps.existsSync ?? existsSync;
-  const detected = !exists(join(defaultHome, "config.toml")) ? findWslWindowsCodexHome(deps) : null;
-  return detected ?? defaultHome;
+  // A local ~/.codex that Codex is already using is the user's Codex home even before
+  // config.toml exists (a fresh install: login writes auth.json, first use writes
+  // sessions/ and history.jsonl). A local directory with none of that state is not
+  // evidence of a local Codex: before #5441 such a home let WSL discovery pick the
+  // Windows home, and existing WSL users who run against that Windows home must not
+  // be moved to an empty local one on upgrade.
+  if (localCodexHomeIsDirectory(defaultHome, deps) && localCodexHomeInUse(defaultHome, deps)) return defaultHome;
+  return findWslWindowsCodexHome(deps) ?? defaultHome;
+}
+
+function localCodexHomeInUse(home: string, deps: CodexHomeDeps): boolean {
+  // Files and directories Codex itself writes into a home it is using. Kept local: defaultCodexHome
+  // runs during other modules' initialisation (the storage workers reach it through an import
+  // cycle), and a module-level const declared below it is still in its temporal dead zone then.
+  return ["config.toml", "auth.json", "sessions", "history.jsonl"].some(entry => pathPresent(join(home, entry), deps));
+}
+
+/** stat-based presence: an unexpected stat error counts as present, never as a reason to switch homes. */
+function pathPresent(path: string, deps: CodexHomeDeps): boolean {
+  const stat = deps.statSync ?? statSync;
+  try {
+    stat(path);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    return !(code === "ENOENT" || code === "ENOTDIR");
+  }
+}
+
+function localCodexHomeIsDirectory(path: string, deps: CodexHomeDeps): boolean {
+  const stat = deps.statSync ?? statSync;
+  // stat, not existsSync: existsSync reports false for an access error too, and that
+  // must not read as "absent" and hand the user's state to a different home.
+  try {
+    return stat(path).isDirectory();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    // An unreadable local home is still the local home; never switch to a
+    // different Codex home because a stat failed for an unexpected reason.
+    return true;
+  }
 }
 
 export function resolveCodexHomeDir(deps: CodexHomeDeps = {}): string {

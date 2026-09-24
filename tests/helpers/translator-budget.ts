@@ -1,4 +1,4 @@
-import { afterEach } from "bun:test";
+import { afterEach, onTestFinished } from "bun:test";
 import type { IncomingMeta, ProviderAdapter } from "../../src/adapters/base";
 import {
   createTranslatorBudget,
@@ -8,17 +8,29 @@ import {
 
 const liveTestBudgets = new Set<TranslatorBudget>();
 
-export function createTestTranslatorBudget(options?: Parameters<typeof createTranslatorBudget>[0]): TranslatorBudget {
-  const budget = createTranslatorBudget(options);
-  liveTestBudgets.add(budget);
-  return budget;
-}
-
-afterEach(() => {
+function disposeTestTranslatorBudgets(): void {
   for (const budget of liveTestBudgets) budget.dispose();
   liveTestBudgets.clear();
   resetTranslatorAggregateForTests();
-});
+}
+
+export function createTestTranslatorBudget(options?: Parameters<typeof createTranslatorBudget>[0]): TranslatorBudget {
+  const budget = createTranslatorBudget(options);
+  liveTestBudgets.add(budget);
+  // The `afterEach` below only runs for the first test file that imports this module: a
+  // shared Bun process evaluates it once, so every later importer keeps its budgets and the
+  // aggregate for the rest of the run. `onTestFinished` belongs to the running test, whatever
+  // file it is in. Outside a test (module scope, `beforeAll`) it throws, and the `afterEach`
+  // stays the only cleanup.
+  try {
+    onTestFinished(disposeTestTranslatorBudgets);
+  } catch {
+    // Not inside a running test.
+  }
+  return budget;
+}
+
+afterEach(disposeTestTranslatorBudgets);
 
 type TestAdapter<T extends ProviderAdapter> = Omit<T, "buildRequest" | "parseStream" | "parseResponse"> & {
   buildRequest(

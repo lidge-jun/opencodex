@@ -47,6 +47,10 @@ describe("Copilot discovery-only models do not widen the cold-start seed", () =>
   for (const authMode of ["key", "oauth"] as const) {
     test(`${authMode} discovery exposes new models but failure retains the configured seed`, async () => {
       const auth = spyOn(oauth, "resolveModelsAuthToken").mockResolvedValue("test-token");
+      // Refreshing OAuth discovery takes the token and its origin from one snapshot.
+      const snapshot = spyOn(oauth, "getValidAccessTokenSnapshot").mockResolvedValue({
+        provider: "github-copilot", accountId: "acct-test", generation: "gen-test", accessToken: "test-token",
+      });
       const original = globalThis.fetch;
       const provider = { ...providerConfigSeed(getProviderRegistryEntry("github-copilot")!), authMode, apiKey: "test-token" };
       try {
@@ -62,6 +66,7 @@ describe("Copilot discovery-only models do not widen the cold-start seed", () =>
       } finally {
         globalThis.fetch = original;
         auth.mockRestore();
+        snapshot.mockRestore();
         clearModelCache("github-copilot");
       }
     });

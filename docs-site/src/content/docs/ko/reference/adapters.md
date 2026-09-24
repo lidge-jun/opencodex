@@ -203,7 +203,7 @@ discovery에 모두 적용됩니다.
   범위가 제한된 Desktop 대체 식별자는 프로세스 로컬 HMAC 파생 소유자만 보관하며, 원본
   session/thread 헤더나 OAuth/authorization 자료를 checkpoint 상태에 쓰지 않습니다. OAuth 기반
   live transport와 계정별 live model discovery는 아직 실험 기능입니다. 로그인과 transport 설정은
-  [공급자 가이드](/ko/guides/providers/)와 [Cursor 공급자 설정](/ko/reference/configuration/providers/#cursor-provider-adapter-cursor)을
+  [공급자 가이드](/ko/guides/providers/)와 [Cursor 공급자 설정](/ko/reference/configuration/providers/#cursor-공급자-adapter-cursor)을
   참고하세요. checkpoint 재사용 자체는 자동이며 사용자 설정이 없습니다.
 - `cursor/grok-4.5-fast`는 선택 가능한 모델로 유지하되, Cursor에는 정식 `grok-4.5` 모델을 보내고
   별도의 `effort`, `fast=true` 값은 `requested_model.parameters`에 담습니다.
@@ -231,6 +231,9 @@ discovery에 모두 적용됩니다.
 - 요청 구성은 Responses passthrough에 맡깁니다. `baseUrl`에 해석되지 않은 템플릿 placeholder가
   없는지 검증하고 `Authorization`을 `api-key`로 바꿉니다. 설정 URL이 Azure v1 Responses API를
   직접 가리키므로 `api-version`은 덧붙이지 않습니다.
+- 다른 프로바이더가 만든 추론 상태에 대한 Responses 복구를 똑같이 적용합니다.
+  `400 invalid_encrypted_content`를 받으면 그 상태(암호화된 내용과 추론 항목의 `rs_…` id)를 빼고
+  한 번만 다시 보냅니다.
 
 ## 이미지 유틸리티 (`image.ts`)
 

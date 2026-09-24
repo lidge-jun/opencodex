@@ -13,7 +13,14 @@ description: 多代理、組合、可觀測性、存取、整合、系統與設�
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off` 與儀表板中的 **關閉 (Off)** 列是同一個開關：OpenCodex 不再執行該 sidecar，
+Codex 整合會把 `web_search = "disabled"` 寫入 `~/.codex/config.toml`，這正是讓 MCP
+搜尋伺服器成為唯一搜尋路徑的前提。`--enabled on` 會再次移除該行。當儲存確實改變開關狀態時，
+指令會回報由此觸發的 Codex 端寫入（`--json` 中的 `codexWebSearch`，否則為結尾的
+`Codex config:` 行），並在無法寫入時提示 `ocx sync`。該旗標對 `vision` 同樣有效。
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 
@@ -182,7 +189,7 @@ opencode 會插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。Pi 與 OMP 的匯出不�
 `ocx export` 永不寫入你的真實客戶端設定。目的地僅印出供你手動合併，而 `--out` 在沒有 `--force` 時拒絕覆寫既有檔案，因為取代設定檔會毀掉其中已有的其他供應商、代理與 MCP 項目。
 :::
 
-金鑰永不被序列化。設定只帶有文件化的環境變數參考，或非秘密的 loopback 佔位符。loopback 代理（`127.0.0.1`，預設值）完全不需要准入金鑰。只有客戶端 schema 支援、且代理綁定超出 loopback 時，才設定被引用的變數；關於准入金鑰的簽發方式，請見[遠端存取](/zh-tw/reference/configuration/#remote-access)。上游 provider 本身的金鑰是完全不同的事，依[供應商](/zh-tw/guides/providers/)個別設定。
+金鑰永不被序列化。設定只帶有文件化的環境變數參考，或非秘密的 loopback 佔位符。loopback 代理（`127.0.0.1`，預設值）完全不需要准入金鑰。只有客戶端 schema 支援、且代理綁定超出 loopback 時，才設定被引用的變數；關於准入金鑰的簽發方式，請見[遠端存取](/zh-tw/reference/configuration/server/#遠端存取)。上游 provider 本身的金鑰是完全不同的事，依[供應商](/zh-tw/guides/providers/)個別設定。
 
 產生的 gjc 整合使用非機密的本機回環佔位值，不需要環境變數。此整合僅支援本機回環，不設定遠端存取憑證。
 

@@ -62,6 +62,11 @@ transport; it does not infer subscription attribution from the inbound protocol.
   collects `usage`. Providers listed in `reasoningDetailsModels` (MiniMax M-series) instead read
   structured `delta.reasoning_details` segments, whose `text` arrives as cumulative snapshots and
   is prefix-diffed, and replay preserved reasoning as a `reasoning_details` array.
+- Suppresses bare `<tool_call>` text when it duplicates a structured call, and collapses two
+  immediately adjacent identical blocks when exactly one structured call agrees with their function
+  and input. A doubled `input` is reduced to one copy, joined either directly or by one newline,
+  and only when the arguments object holds no key besides `input`. Trailing whitespace after the
+  pair is suppressed; mismatched or example markup remains visible.
 - ClinePass uses the live-verified gateway format `reasoning: { enabled: true, effort }` (or
   `{ enabled: false }` when reasoning is disabled); its public API docs do not currently specify
   this request shape. The adapter preserves requested `low`, `medium`, `high`, `xhigh`, and `max`
@@ -156,6 +161,11 @@ blank strings and mixed encrypted/unknown parts are not partially converted.
 See [agent messages](/reference/configuration/providers/#routed-agent-messages)
 for the separate opt-in encrypted-task recovery behavior.
 
+For xAI Responses, `auto` or `none` tool selection is omitted when normalization leaves no tools
+in the request, including when cached-only search is removed. Valid forced function selections
+remain intact. Replayed custom tool calls with missing or invalid item ids receive stable ids
+when their call id, name, and input are strings; their call/result pairing is preserved.
+
 The canonical ChatGPT Codex forward destination also normalizes two public Responses shapes that
 its stricter backend rejects: fully textual `system` messages inside `input` are appended to the
 top-level `instructions` string in request order, and the top-level `truncation` field is removed.
@@ -201,9 +211,22 @@ classified that key as belonging to one conversation. Shared or unclassified cac
 keys do not establish session affinity; requests without a usable identity receive
 a fresh session ID. Recovery and cached-history replay preserve this classification.
 
-The API-key `commandcode` provider uses the `openai-chat` adapter and supports
-forwarding `prompt_cache_key`. This is separate from the OAuth adapter's session
-header and does not guarantee a provider cache hit.
+The API-key `commandcode` provider uses Chat Completions for most model ids and the
+Anthropic Messages adapter (`x-api-key`) for `claude-*` ids, which Command Code serves
+only on `/provider/v1/messages`; the pin applies only while the provider points at that
+endpoint. It supports forwarding `prompt_cache_key`; this is separate
+from the OAuth adapter's session header and does not guarantee a provider cache hit.
+The OAuth `command-code` preset streams `/alpha/generate` as NDJSON. MiMo tool-call
+markup echoed by the gateway as text is removed when it duplicates a real call, including
+markup the gateway appends after ordinary prose in the same chunk; a marker split across
+chunks is still shown as text. Reasoning or other events arriving in between no longer
+release a held envelope. After a clean stop or tool-call finish, a complete declared-tool
+call with no native counterpart is restored as a real call; an interrupted or failed turn
+leaves the markup as text. A call the parser cannot read is dropped rather than printed
+when it still opens, closes, and names a declared tool, and either the real call for that
+tool arrives or the turn finishes cleanly. A freeform call echoed without its
+`</function>` close counts as complete once `</tool_call>` arrives. This applies to every
+MiMo model Command Code serves.
 
 ## `anthropic`
 
@@ -411,6 +434,15 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   OAuth-backed live transport and account-filtered model discovery remain experimental; see the
   [provider guide](/guides/providers/) and [Cursor provider configuration](/reference/configuration/providers/#cursor-provider-adapter-cursor)
   for login and transport settings. Checkpoint reuse itself is automatic and has no user setting.
+- External-model tool continuations keep the latest actual user request in the active action;
+  automatic summaries and standalone ambient-browser context remain historical context.
+  Blank or image-only user input does not revive an older request. Grok 4.6 code-mode guidance
+  requires explicit result emission and never assumes an empty completed cell emitted output.
+  Missing output calls for a read-only state check, not replay of a completed side effect.
+  Repetition advice resets on a new user/developer turn and permits requested polling.
+  If carried checkpoint roots exceed the replay
+  budget, available history is rebuilt under the same limits. These repairs do not guarantee
+  identical wording or reasoning behavior between Cursor and xAI routes.
 - Honors `upstreamHttpVersion` for both live model discovery and inference. `auto`, `http2`, and `h2`
   preserve the existing HTTP/2 transport; only `http1.1` and `h1` select compatibility mode.
 - Exposes Cursor Router as `cursor/auto` plus explicit `cursor/auto-cost`,
@@ -481,6 +513,16 @@ configuration that names the old id is rewritten at startup.
   `CompletionConfiguration`, #2 is the output cap and #3 is the context window; swapping those two
   makes every turn fail with an opaque `invalid_argument`. A temperature of exactly 0 is refused, so
   it is clamped to the smallest accepted value.
+- A pre-output 429 that states a recovery delay is retried in place only when the full stated
+  delay fits within the remaining cumulative wait allowance. The adapter waits that full delay
+  and replays the request up to twice; the default cumulative allowance is 30 minutes
+  (`OPENCODEX_DEVIN_STATED_RESET_WAIT_MS`, hard ceiling one hour). If the delay exceeds the
+  remaining allowance, the original 429 is surfaced without waiting or replaying. Retrying
+  earlier than the stated delay is deliberately not attempted — the hint is the provider's best
+  estimate of its own window, and each replay slot is finite. If the limit still refuses, the
+  final 429 surfaces to the client with the stated delay preserved as its cooldown hint. A `~`
+  in the surfaced message marks a delay recovered from a secondhand trailer sentence rather
+  than an exact header value; clients still receive the parsed number itself.
 - Experimental unofficial bridge; not shown in the dashboard preset by default. See the
   [provider guide](/guides/providers/) for login instructions.
 
@@ -500,6 +542,9 @@ existing suffix precedence.
 - Delegates request building to the Responses passthrough, validates that `baseUrl` contains no
   unresolved template placeholder, and replaces `Authorization` with `api-key`. The configured URL
   targets Azure's v1 Responses API directly, so the adapter does not append `api-version`.
+- Shares the Responses recovery for reasoning state another provider produced: after a
+  `400 invalid_encrypted_content` it resends once without that state. See
+  [Proxy formats](/reference/proxy-formats/) under "Switching providers in an existing conversation".
 
 ## Image utilities (`image.ts`)
 

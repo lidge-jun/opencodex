@@ -12,7 +12,7 @@ kontrol eder.
 | Alan | Tip | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` her katalog modelini v1 olarak damgalar; `v2` her modeli v2 olarak damgalar. `default` yukarı akış sabitlemelerini geri yükler (Sol/Terra v2, Luna v1) ve aksi takdirde yerel `multi_agent_v2` bayrağını takip eder. Yeni oturumlara uygulanır. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | Alt ajan seçicisinde ilk olarak öne çıkan en fazla beş yalın yerel, hesap nitelikli `<secici>/<yerel-openai-modeli>` veya yönlendirilen `saglayici/model` kimliği. Kontrol paneli yalnızca yalın yerel ve yönlendirilen kimlikleri sunar ve kaydederken tam hesap nitelikli seçimleri atlar; tam seçimler için `ocx agent subagents set` kullanın veya yapılandırmayı düzenleyin. [Tek seferlik Astra yükseltmesinden](/reference/configuration/agents/#astra-roster-upgrade) sonra açık bir boş liste korunur. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` | Alt ajan seçicisinde ilk olarak öne çıkan en fazla beş yalın yerel, hesap nitelikli `<secici>/<yerel-openai-modeli>` veya yönlendirilen `saglayici/model` kimliği. Kontrol paneli yalnızca yalın yerel ve yönlendirilen kimlikleri sunar ve kaydederken tam hesap nitelikli seçimleri atlar; tam seçimler için `ocx agent subagents set` kullanın veya yapılandırmayı düzenleyin. [Tek seferlik Astra yükseltmesinden](/reference/configuration/agents/#astra-roster-upgrade) sonra açık bir boş liste korunur. |
 | `injectionModel?` | `string` | — | Proxy kaynaklı v2 yetkilendirme rehberliğinde kullanılan tercih edilen yerel veya yönlendirilen alt ajan modeli. |
 | `injectionEffort?` | `string` | — | Yalnızca `injectionModel` ile anlamlı olan tercih edilen çaba (`low` ile `ultra` arası). |
 | `injectionPrompt?` | `string` | — | Yerleşik v2 rehberlik gövdesinin yerini alır. `{{model}}`, `{{effort}}`, `{{roster}}` ve `{{fallback}}` destekler. Yapılandırılmış bir `injectionModel`, özel istemi oluşturmak için yeterlidir. |
@@ -23,7 +23,7 @@ kontrol eder.
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Kullanılabilirlik probu önbellek aralığı. 1000 ms'nin altındaki değerler varsayılana geri döner. |
 | `effortCap?` | `string` | — | Uygun v2 ana turları ve işaretlenmiş çocuk turları için kesin tavan. `low` ile `ultra` arasını kabul eder. |
 | `subagentEffortCap?` | `string` | — | Yalnızca oluşturulan çocuk turları için ek tavan. Her iki sınır da geçerli olduğunda daha düşük olan kazanır. |
-| `agentTaskRecovery?` | `object` | — | Yönlendirilen sağlayıcılara gönderilen arka uçta şifrelenmiş v2 görevleri için deneysel isteğe bağlı kurtarma. `enabled: true` olmadıkça devre dışıdır; bkz. [Şifrelenmiş v2 görev kurtarma](#sifrelenmis-v2-gorev-kurtarma). |
+| `agentTaskRecovery?` | `object` | — | Yönlendirilen sağlayıcılara gönderilen arka uçta şifrelenmiş v2 görevleri için deneysel isteğe bağlı kurtarma. `enabled: true` olmadıkça devre dışıdır; bkz. [Şifrelenmiş v2 görev kurtarma](#şifrelenmiş-v2-görev-kurtarma). |
 
 Arayüzü kontrol paneli veya `ocx v2 status|on|off|mode <v1|default|v2>|threads
 <n>|mode-hint <metin|--clear>` ile yönetin. Mod değişiklikleri yeni oturumlara

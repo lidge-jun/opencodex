@@ -1,4 +1,4 @@
-/* ── Desktop connection mode picker (first-party default / gateway opt-in) ── */
+/* ── Desktop connection mode picker (gateway default / first-party risk opt-in) ── */
 .claude-mode-picker {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px;
   margin: 0 0 14px; padding: 10px 14px 12px; border: 1px solid var(--border); border-radius: var(--radius);
@@ -20,3 +20,8 @@
 .claude-mode-default { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 .claude-mode-current { background: color-mix(in srgb, var(--green) 15%, transparent); color: var(--green); }
 .claude-mode-switch-note { grid-column: 1 / -1; font-size: 12px; color: var(--amber); }
+.claude-mode-risk {
+  margin: 0 0 14px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--amber) 35%, var(--border));
+  border-radius: var(--radius); background: var(--amber-soft); color: var(--text); font-size: 12px; line-height: 1.5;
+}
+.claude-mode-picker .claude-mode-risk { grid-column: 1 / -1; margin: 0; }

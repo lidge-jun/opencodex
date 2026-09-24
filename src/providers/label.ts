@@ -5,6 +5,8 @@ export function canonicalUsageProviderLabel(provider: string): string {
   return provider === "chatgpt" || provider === "openai-multi" ? "openai" : provider;
 }
 
+const LEGACY_MAIN_ACCOUNT_PROVIDER_LABELS = new Set(["openai-main", "chatgpt-main", "openai-multi-main"]);
+
 export function usesApiKeyAccount(provider: Pick<OcxProviderConfig, "authMode" | "_apiKeyAttempt">): boolean {
   return provider.authMode === "key"
     || (provider.authMode === undefined && !!provider._apiKeyAttempt?.reference);
@@ -29,11 +31,14 @@ export function baseProviderLabel(provider: string): string {
   const cut = provider.lastIndexOf("-");
   if (cut <= 0) return canonicalUsageProviderLabel(provider);
   const suffix = provider.slice(cut + 1);
-  // `-main` is the legacy log label for the main Codex account (MAIN_CODEX_ACCOUNT_ID). New entries
-  // log under the base provider name, but historical `<provider>-main` entries must still collapse.
+  // `-main` was the legacy log label for the main Codex account (MAIN_CODEX_ACCOUNT_ID). Restrict
+  // that compatibility mapping to the known Codex provider labels so configured providers whose
+  // names naturally end in `-main` remain distinct.
   // ChatGPT auth-pool and OpenAI passthrough are the same Codex/OpenAI usage surface, so display
   // summaries normalize them to one `openai` row after recognized main/pool suffixes are removed.
-  if (suffix === "main") return canonicalUsageProviderLabel(provider.slice(0, cut));
+  if (LEGACY_MAIN_ACCOUNT_PROVIDER_LABELS.has(provider)) {
+    return canonicalUsageProviderLabel(provider.slice(0, cut));
+  }
   return CODEX_ACCOUNT_LOG_LABEL_RE.test(suffix) ? canonicalUsageProviderLabel(provider.slice(0, cut)) : provider;
 }
 

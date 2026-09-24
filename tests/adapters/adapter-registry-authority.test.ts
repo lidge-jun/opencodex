@@ -25,6 +25,7 @@ const EXPECTED_ADAPTER_NAMES = {
   "chatgpt-web": "chatgpt-web",
   "mimo-free": "mimo-free",
   qoder: "qoder",
+  "claude-cli": "claude-cli",
 } as const;
 
 function provider(adapter: string): OcxProviderConfig {

@@ -26,7 +26,7 @@ import {
   isCursorExecutionPathTool,
   isCursorWaitTool,
 } from "./tool-definitions";
-import { lookupCursorThreadConversation } from "./thread-continuity";
+import { lookupCursorThreadConversation, resolveCursorConversationRewrite } from "./thread-continuity";
 import {
   getCursorCheckpoint,
   getCursorCheckpointForPrefix,
@@ -209,8 +209,9 @@ export function cursorRequestEmitsFastVariant(parsed: OcxParsedRequest): boolean
 
 /**
  * Resolve a `cursor/<model>` selection + Codex reasoning effort to Cursor's requested model shape.
- * Most models encode effort in a flat id (`claude-4.6-opus-high`). Grok Fast is parameterized
- * instead: current Cursor clients send the matching Grok base id plus `effort` and `fast` parameters.
+ * Most models encode effort in a flat id (`claude-4.6-opus-high`). Grok 4.5/4.6 Fast is
+ * parameterized: current Cursor clients send the matching base id plus `effort` and `fast` parameters;
+ * Grok 4.7 (no wirePrefix) instead uses the flattened effort-fast id.
  * A fully-qualified id (one that is not a known effort base) passes through unchanged.
  */
 function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: boolean, liveRosterScope?: string): {
@@ -226,8 +227,8 @@ function normalizeCursorModelId(modelId: string, reasoning?: string, fast?: bool
   // resolver owns effort composition, variant dimensions, the synthetic -1m
   // marker (ultra -> Max Mode, evidence-gated), and the cursor- wire prefix.
   const id = selection.modelId;
-  // Grok Fast stays parameterized: current Cursor clients send the base id
-  // plus effort/fast parameters instead of the flattened -fast id.
+  // Grok 4.5/4.6 Fast stays parameterized: current Cursor clients send the base id
+  // plus effort/fast parameters; 4.7 (no wirePrefix) uses the flattened effort-fast id.
   const grokFast = cursorGrokFastSelection(id, reasoning, fast);
   if (grokFast) {
     return {
@@ -366,11 +367,16 @@ export function resolveCursorConversationId(
   // the override check has to exclude it explicitly rather than rely on that flag.
   if (threadId && parsed._compactionRequest !== true) {
     const recovered = lookupCursorThreadConversation(threadId, parsed._cursorIdentityScope);
-    if (recovered) return recovered;
+    if (recovered) return resolveCursorConversationRewrite(recovered, parsed._cursorIdentityScope);
   }
-  if (parsed._cursorConversationId) return parsed._cursorConversationId;
+  if (parsed._cursorConversationId) {
+    return resolveCursorConversationRewrite(parsed._cursorConversationId, parsed._cursorIdentityScope);
+  }
   if (threadId) {
-    return cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope);
+    return resolveCursorConversationRewrite(
+      cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope),
+      parsed._cursorIdentityScope,
+    );
   }
   return generatedCursorConversationId();
 }

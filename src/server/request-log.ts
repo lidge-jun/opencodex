@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
+import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
+export { sealRequestAttemptIdentity };
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import type { ResponsesTerminalStatus } from "../bridge";
 import {
@@ -43,6 +45,7 @@ import {
   normalizeRequestFailureAttribution,
   normalizeRequestSpend,
   readRecentUsageEntries,
+  modelIdentityLogFields, recordObservedServedModel,
   usageForFinalLog,
   usageStatusForFinalLog,
   usageTotalTokens,
@@ -168,8 +171,15 @@ export interface RequestLogContext {
   /** Final-attempt tier summary; attempt rows remain the accounting source of truth. */
   tierOutcome?: AttemptTierOutcome;
   resolvedModel?: string;
+  /** Upstream served model, retained beside resolvedModel so an upstream reroute stays visible. */
+  servedModel?: string;
+  /** The exact model id sent upstream; recorded when a route/virtual rewrite makes it differ
+   * from the client-facing `model`, so a served-model mismatch can be judged against the wire. */
+  wireModel?: string;
   /** Internal: client-facing response metadata must not replace the physical routed model. */
   preserveResolvedModelFromRoute?: boolean;
+  /** Internal: client-facing selector written into response.model; never an upstream observation. */
+  responseModelEcho?: string;
   usage?: OcxUsage;
   usageLogInputTokens?: number;
   /**
@@ -179,6 +189,8 @@ export interface RequestLogContext {
    * is reserved up front and settlement corrects it.
    */
   spendOutputCeilingTokens?: number;
+  /** Pre-send input estimate reserved for spend only; unlike usageLogInputTokens it never enters usage. */
+  spendInputEstimateTokens?: number;
   /** Settles this request's durable spend entries from `addFinalRequestLog`. */
   spendTracker?: RequestSpendSettlement;
   attempts?: PersistedUsageAttempt[];
@@ -295,6 +307,10 @@ export interface RequestLogEntry {
   responseServiceTier?: string;
   tierOutcome?: AttemptTierOutcome;
   resolvedModel?: string;
+  /** Model the upstream actually served (openai-model header or response body). */
+  servedModel?: string;
+  /** The exact model id sent upstream when it differs from the client-facing `model`. */
+  wireModel?: string;
   status: number;
   durationMs: number;
   errorCode?: string;
@@ -444,7 +460,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       : {}),
     ...(entry.responseServiceTier ? { responseServiceTier: entry.responseServiceTier } : {}),
     ...(entry.tierOutcome ? { tierOutcome: entry.tierOutcome } : {}),
-    ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
+    ...modelIdentityLogFields(entry),
     status: entry.status,
     durationMs: entry.durationMs,
     ...(entry.errorCode ? { errorCode: entry.errorCode } : {}),
@@ -556,11 +572,17 @@ export function addRequestLog(entry: RequestLogEntry) {
   // line-oriented viewer — while `usage.jsonl` looked clean, which is the worst shape for a
   // sanitization bug because the safe surface is the one you check.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const servedModel = modelIdentityLogFields(entry).servedModel;
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
-  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom && entry.claudeCompatibility === undefined
+  const retained: RequestLogEntry = shadowCallRewrittenFrom === entry.shadowCallRewrittenFrom
+    && servedModel === entry.servedModel && entry.claudeCompatibility === undefined
     ? entry
     : { ...entry, ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}) };
   if (!shadowCallRewrittenFrom && retained !== entry) delete retained.shadowCallRewrittenFrom;
+  if (!servedModel && retained !== entry) {
+    delete retained.servedModel;
+    if (retained.resolvedModel === entry.servedModel) delete retained.resolvedModel;
+  }
   if (claudeCompatibility) retained.claudeCompatibility = claudeCompatibility;
   else if (retained !== entry) delete retained.claudeCompatibility;
   entry = retained;
@@ -598,6 +620,8 @@ export function addRequestLog(entry: RequestLogEntry) {
         : {}),
       ...(entry.conversationId ? { conversationId: entry.conversationId } : {}),
       ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
+      ...(entry.servedModel ? { servedModel: entry.servedModel } : {}),
+      ...(entry.wireModel ? { wireModel: entry.wireModel } : {}),
       ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
       ...(entry.requestedAlias ? { requestedAlias: entry.requestedAlias } : {}),
       ...(entry.shadowCallRewrittenFrom
@@ -881,12 +905,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
     ? (payload as { response?: unknown }).response
     : payload;
   if (!source || typeof source !== "object") return;
-  const model = (source as { model?: unknown }).model;
-  if (
-    !logCtx.preserveResolvedModelFromRoute
-    && typeof model === "string"
-    && model.trim()
-  ) logCtx.resolvedModel = model;
+  recordObservedServedModel(logCtx, (source as { model?: unknown }).model);
   const serviceTier = (source as { service_tier?: unknown }).service_tier;
   if (typeof serviceTier === "string" && serviceTier.trim()) {
     const sanitized = sanitizeLogMetadataString(serviceTier);
@@ -1519,7 +1538,7 @@ export function addFinalRequestLog(
     ...((attempts?.at(-1)?.tierOutcome ?? logCtx.tierOutcome)
       ? { tierOutcome: attempts?.at(-1)?.tierOutcome ?? { ...logCtx.tierOutcome! } }
       : {}),
-    ...(logCtx.resolvedModel ? { resolvedModel: logCtx.resolvedModel } : {}),
+    ...modelIdentityLogFields(logCtx),
     status: effectiveStatus,
     durationMs,
     ...(logCtx.firstOutputMs !== undefined ? { firstOutputMs: logCtx.firstOutputMs } : {}),
@@ -1731,20 +1750,6 @@ export function beginRequestAttempt(
   };
 }
 
-export function sealRequestAttemptIdentity(
-  attempt: PersistedUsageAttempt | undefined,
-  provider: string,
-  adapter: string,
-  accountLogLabel?: string,
-): void {
-  if (!attempt) return;
-  if (attempt.provider !== provider || attempt.adapter !== adapter) delete attempt.credentialSource;
-  attempt.provider = provider;
-  attempt.adapter = adapter;
-  if (isCodexUsageAccountLogLabel(accountLogLabel)) attempt.accountLogLabel = accountLogLabel;
-  else delete attempt.accountLogLabel;
-}
-
 /** Preserve metered JSON failures before key recovery consumes/cancels their body. */
 export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal): Promise<void> {
   const attempt = logCtx.activeAttempt;
@@ -1788,8 +1793,7 @@ export function noteProviderAttemptSend(
   stampApiKeyAccountLabel(logCtx, providerName, provider);
   const next = logCtx.accountLogLabel;
   if (attempt && usesApiKeyAccount(provider)) keyUsageOwners.add(attempt);
-  if (attempt && attempt.sendCount > 0 && previous !== next
-    && (KEY_ACCOUNT_LOG_LABEL_RE.test(previous ?? "") || KEY_ACCOUNT_LOG_LABEL_RE.test(next ?? ""))) {
+  if (attempt && attempt.sendCount > 0 && attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)) {
     // An input estimate is not evidence that a failed send used that many tokens.
     delete attempt.inputTokenEstimate;
     finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status

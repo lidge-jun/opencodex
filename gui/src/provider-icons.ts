@@ -3,6 +3,7 @@ import type { TFn, TKey } from "./i18n/shared";
 const PROVIDER_ICON_ALIASES: Record<string, string> = {
   anthropic: "claude-color.svg",
   "anthropic-apikey": "claude-color.svg",
+  "claude-cli": "claude-color.svg",
   "azure-openai": "openai.svg",
   chatgpt: "openai.svg",
  "cloudflare-ai-gateway": "cloudflare-ai-gateway-color.svg",
@@ -34,6 +35,7 @@ const PROVIDER_ICON_ALIASES: Record<string, string> = {
   huggingface: "huggingface-color.svg",
   kimi: "kimi-color.svg",
   "kimi-code": "kimi-color.svg",
+  "kimi-responses": "kimi-color.svg",
   kiro: "kiro-color.svg",
   "lm-studio": "lm-studio-color.svg",
   "meta-model": "meta.svg",
@@ -162,6 +164,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   "alibaba-token-plan-intl": "Alibaba Token Plan (Intl)",
   kimi: "Kimi",
   "kimi-code": "Kimi",
+  "kimi-responses": "Kimi",
   moonshot: "Moonshot",
   google: "Google",
   "google-vertex": "Google Vertex",

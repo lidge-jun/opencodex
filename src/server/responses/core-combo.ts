@@ -27,6 +27,7 @@ import {
   comboFailureCooldownScope,
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
+import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
 import {
   expandPreviousResponseInput,
   previousResponseReplayFailure,
@@ -73,6 +74,7 @@ import {
 import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
+import { settleOperatorReplacement } from "../../lib/upstream-retry";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -165,6 +167,7 @@ export function comboTargetSendBudget(
 }
 
 
+/** Dispatch a Responses combo within its shared send budget and preserve terminal child failures. */
 export async function executeComboResponses(
   req: Request,
   rawBody: unknown,
@@ -449,13 +452,17 @@ export async function executeComboResponses(
       countedExternally: true,
     });
     if (hopDecision && hopDecision.allowed) hopDecision.permit.use();
-    else if (hopDecision && !firstComboTarget) {
+    else if (hopDecision && firstComboTarget) {
+      // A refused initial reservation authorizes no child send and has no upstream failure to return.
+      return formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, "request send budget exhausted before combo dispatch");
+    }
+    else if (hopDecision) {
       // Out of budget is not this target's failure. The established exhaustion contract is to
       // return the last real upstream answer with its status, headers and any quota body
       // intact rather than to mint a synthetic error, and a later target only exists because
       // an earlier one already recorded one.
       if (lastFailedChildLog) adoptFailedChildLog(lastFailedChildLog);
-      break;
+      return lastFailure!;
     }
     const targetSendBudget = comboSendScope
       ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
@@ -678,9 +685,20 @@ export async function executeComboResponses(
     attemptRetained = true;
     lastFailure = failure.response;
     lastFailedChildLog = childLog;
+    // A replacement that answers 200 is unmarked, and its zero-output failure only exists once
+    // preflight has rebuilt the stream as a fresh Response. A spent grant never hops: a status the
+    // client would resend becomes the refusal, and anything else reaches the client as it is.
+    const spentReplacement = !failure.nonReplayable && comboSendScope?.ambiguousResendSpent === true;
+    if (spentReplacement) {
+      const settled = settleOperatorReplacement(failure.response);
+      if (settled !== failure.response) {
+        adoptFailedChildLog(childLog);
+        return settled;
+      }
+    }
     // A non-replayable failure (the answer to a spent ambiguous-reset replacement) may follow a
     // send that already ran the turn, so no later target may receive it, whatever its status says.
-    const failureDecision = failure.nonReplayable
+    const failureDecision = failure.nonReplayable || spentReplacement
       ? "stop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {
         code: failure.upstreamCode,

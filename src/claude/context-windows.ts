@@ -3,12 +3,13 @@
  * (devlog/260712_cli_context_cache/010 B2, audit R2#1/R3#1/R3#4/R4#3).
  *
  * The map registers EVERY selector form a Claude Code model slot might store —
- * bare native slug, provider/id, desktop3p alias, legacy claude-ocx-* alias —
+ * bare native slug, provider/id, desktop3p alias, current ocx-claude-* alias and
+ * the legacy claude-ocx-* spelling a saved selector may still carry —
  * with first-wins dedupe (mirrors the desktop3p registry collision policy).
  * Values are authoritative context windows only (native override table /
  * adapter-reported CatalogModel.contextWindow); nothing is guessed.
  */
-import { aliasForNative, aliasForRoute } from "./alias";
+import { aliasForNative, aliasForRoute, currentClaudeAliasSpelling, legacyAliasForNative, legacyAliasForRoute } from "./alias";
 import { desktop3pAlias } from "./desktop-3p";
 import { nativeOpenAiContextWindow, type CatalogModel, type NativeContextLimitsInput } from "../codex/catalog";
 
@@ -62,9 +63,12 @@ function inAutoCompactRange(value: number): boolean {
 
 /**
  * Resolve the auto-context mode from claudeCode config. Disabled when the user
- * turned it off OR when the legacy maxContextTokens override is set — that pair
- * (MAX_CONTEXT_TOKENS + DISABLE_COMPACT) takes rule-1 precedence inside the CLI,
- * making both AUTO_COMPACT_WINDOW and [1m] accounting inert.
+ * turned it off OR when maxContextTokens is set. That override injects only
+ * CLAUDE_CODE_MAX_CONTEXT_TOKENS: compact stays enabled (no DISABLE_COMPACT) and
+ * Claude Code compacts against that window for ocx-claude-* ids, so no
+ * CLAUDE_CODE_AUTO_COMPACT_WINDOW is injected beside it and [1m] auto-marking stays
+ * off. maxContextTokens accepts values outside the compact variable's 100k–1M
+ * range, so deriving that variable from it could only produce ignored values.
  *
  * `envOverride` is the raw CLAUDE_CODE_AUTO_COMPACT_WINDOW the USER already
  * exported (user-wins injection keeps it): a valid value drives the marking
@@ -139,6 +143,7 @@ export function buildClaudeContextWindows(
     put(slug, window);
     put(desktop3pAlias("native", slug), window);
     put(aliasForNative(slug), window);
+    put(legacyAliasForNative(slug), window);
   }
   // Anthropic passthrough guard (audit 021 #3): canonical claude ids ride the
   // subscription passthrough — marking a sub-1M one would strap [1m]/1M-beta onto
@@ -161,6 +166,7 @@ export function buildClaudeContextWindows(
     put(`${m.provider}/${m.id}`, window);
     put(desktop3pAlias(m.provider, m.id), window);
     put(aliasForRoute(m.provider, m.id), window);
+    put(legacyAliasForRoute(m.provider, m.id), window);
     if (bareCounts.get(m.id) === 1) put(m.id, window);
   }
   return out;
@@ -204,8 +210,11 @@ export function effectiveModelEnv(
 ): Record<string, string> {
   const out: Record<string, string> = {};
   const auto = autoOverride ?? resolveAutoContext(claudeCode);
+  // A slot still configured with a legacy claude-ocx selector is emitted in its current
+  // ocx-claude spelling. The route is identical, but Claude Code applies the context window
+  // (and keeps compact) only for ids that do not start with "claude-".
   const set = (name: string, value: string | undefined) => {
-    const marked = withOneMillionMarker(value, windows, auto);
+    const marked = withOneMillionMarker(value === undefined ? undefined : currentClaudeAliasSpelling(value), windows, auto);
     if (marked) out[name] = marked;
   };
   set("ANTHROPIC_MODEL", claudeCode?.model);

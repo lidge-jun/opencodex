@@ -24,7 +24,8 @@ ocx export --client pi
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
       "compat": {
-        "sendSessionAffinityHeaders": true
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false
       },
       "models": [
         {
@@ -41,6 +42,8 @@ ocx export --client pi
 ```
 
 生成される Pi プロバイダーでは `compat.sendSessionAffinityHeaders` が有効です。設定をマージしたり手動で編集したりする際も、このフラグを保持してください。Pi が送る安定したセッション識別子から、OpenCodex が正規の OpenCode Go 接続先用の affinity を生成します。`cacheRetention` が `none` の場合、Pi は識別子を送信しないことがあります。
+
+生成される Pi プロバイダーでは `compat.supportsDeveloperRole` も `false` に設定され、Pi はシステムプロンプトを `developer` ではなく `system` ロールで送ります。OpenCodex は Chat Completions のロールを受け取ったまま転送しますが、OpenAI 互換のアップストリームの中には `developer` を 400 で拒否するものがあります。`system` はすべてのアップストリームが受け付けます。
 
 モデル ID はプロキシの正規セレクターであるため、ルーティングされたモデルは `provider/model` (`anthropic/claude-opus-5`) として表示され、ネイティブ OpenAI スラグはプレフィックスなし (`gpt-5.6-sol`) のままになります。 `name` サフィックス (`(anthropic)`、`(native)`、`(routed)`) により、異なるアップストリームの 2 つの同じ名前のモデルが Pi のピッカーで区別できるようになります。
 
@@ -80,7 +83,7 @@ export OPENCODEX_API_KEY=<your key>
 
 その名前はパイだけです。 opencode は別の変数 (`OPENCODEX_OPENCODE_API_KEY`、`{env:…}` 形式) を使用します。[オープンコードガイド](/guides/opencode/) を参照してください。
 
-**ループバック プロキシにはキーはまったく必要ありません。** opencodex はデフォルトで `127.0.0.1` をバインドし、そこでは何も認証しないため、`$OPENCODEX_API_KEY` 参照は不活性であり、変数を設定しないままにすることができます。これは、`hostname` がループバックを超えて設定されている場合にのみ問題になります。これは、プロキシがトークンなしでの開始を拒否する場合でもあります。[リモートアクセス](/reference/configuration/#remote-access) を参照してください。
+**ループバック プロキシにはキーはまったく必要ありません。** opencodex はデフォルトで `127.0.0.1` をバインドし、そこでは何も認証しないため、`$OPENCODEX_API_KEY` 参照は不活性であり、変数を設定しないままにすることができます。これは、`hostname` がループバックを超えて設定されている場合にのみ問題になります。これは、プロキシがトークンなしでの開始を拒否する場合でもあります。[リモートアクセス](/ja/reference/configuration/server/#リモートアクセス) を参照してください。
 
 ## モデルのメタデータ
 

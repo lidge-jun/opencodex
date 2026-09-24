@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "dashboard-zoom",
+  "description": "Page zoom hotkeys for the main window, including the loopback dashboard",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*"]
+  },
+  "permissions": ["core:webview:allow-set-webview-zoom"]
+}

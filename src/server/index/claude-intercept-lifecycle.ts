@@ -1,4 +1,5 @@
 import type { Server } from "bun";
+import type { PickerRouteInput } from "../../claude/intercept/picker-models";
 import {
   startClaudeIntercept,
   type ClaudeInterceptHandle,
@@ -18,6 +19,28 @@ export interface ClaudeInterceptLifecycle<T> {
   stop(): Promise<void>;
 }
 
+/**
+ * Routes for Desktop's Code-tab picker: the same inputs `/api/sync` gives the gateway profile
+ * (src/server/management/config-routes.ts), read from the persisted config at call time. Dynamic
+ * imports keep the catalog and discovery off the synchronous startup path.
+ */
+export async function loadPickerRoutesFromCatalog(): Promise<PickerRouteInput> {
+  const [{ loadConfig }, { fetchAllModels }, catalog] = await Promise.all([
+    import("../../config"),
+    import("../management-api"),
+    import("../../codex/catalog"),
+  ]);
+  const config = loadConfig();
+  const models = await fetchAllModels(config);
+  return {
+    nativeSlugs: [...catalog.desktopVisibleNativeSlugs(config)],
+    routedModels: catalog.filterCatalogVisibleModels(models, config)
+      .map(model => ({ provider: model.provider, id: model.id, contextWindow: model.contextWindow })),
+    ...(config.claudeCode?.desktopProfile ? { profile: config.claudeCode.desktopProfile } : {}),
+    nativeContextCap: catalog.nativeContextLimits(config),
+  };
+}
+
 export function createClaudeInterceptLifecycle<T>(): ClaudeInterceptLifecycle<T> {
   let listener: Server<T> | null = null;
   let pending: Promise<ClaudeInterceptHandle<T> | null> = Promise.resolve(null);
@@ -27,6 +50,7 @@ export function createClaudeInterceptLifecycle<T>(): ClaudeInterceptLifecycle<T>
       const dispatch = options.dispatch;
       pending = startClaudeIntercept<T>({
         ...options,
+        loadPickerRoutes: options.loadPickerRoutes ?? loadPickerRoutesFromCatalog,
         dispatch: (req, requestServer) => {
           listener ??= requestServer;
           return dispatch(req, requestServer);

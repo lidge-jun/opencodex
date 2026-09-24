@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Run only on a Linux packaging runner, against the completed AppImage.
+# Usage: verify-linux-sidecar.sh [appimage-bundle-dir]
+# The release workflow builds each Linux format in its own Cargo target and stages the AppImage
+# into an isolated read-only directory, which it passes here; a local build keeps the default.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
-bundle="$root/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage"
+bundle="${1:-$root/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage}"
 original="$root/desktop/src-tauri/binaries/ocx-x86_64-unknown-linux-gnu"
 shopt -s nullglob
 images=("$bundle"/*.AppImage)

@@ -184,19 +184,15 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
       thinkingFast: { levels: FULL, order: T },
     },
   },
-  // 260923 Claude Opus 5.5: cursor.com/docs/models/claude-opus-5-5 publishes the id
-  // `claude-opus-5-5`, a thinking variant, a `claude-opus-5-5-fast` tier and a 1M max context.
-  // The ladders mirror the measured claude-opus-5 rows (fast stops at high) until the live
-  // GetUsableModels roster is dumped; the live filter drops any id the account cannot use.
+  // 260923 Claude Opus 5.5: live GetUsableModels roster advertises flat effort-suffixed
+  // wire ids (claude-opus-5-5-{low..max} and -fast) rather than a thinking variant.
   "claude-opus-5-5": {
     displayName: "Claude Opus 5.5",
     window: CONTEXT_1M,
-    defaultVariant: "thinking",
+    defaultVariant: "regular",
     variants: {
       regular: { levels: FULL },
-      thinking: { levels: FULL, order: T },
-      fast: { levels: ["low", "medium", "high"] },
-      thinkingFast: { levels: FULL, order: T },
+      fast: { levels: FULL },
     },
   },
   "glm-5.2": {
@@ -260,6 +256,16 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
     window: CONTEXT_500K,
     defaultVariant: "regular",
     wirePrefix: "cursor-",
+    variants: {
+      regular: { levels: ["low", "medium", "high", "xhigh"] },
+      fast: { levels: ["low", "medium", "high", "xhigh"] },
+    },
+  },
+  // Live Cursor ids and xAI's 500k window: devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+  "grok-4.7": {
+    displayName: "Cursor Grok 4.7",
+    window: CONTEXT_500K,
+    defaultVariant: "regular",
     variants: {
       regular: { levels: ["low", "medium", "high", "xhigh"] },
       fast: { levels: ["low", "medium", "high", "xhigh"] },
@@ -756,6 +762,8 @@ export function cursorGrokFastSelection(
   const kind = fast === true ? upgradeToFast(parsed.baseId, parsed.kind) : parsed.kind;
   if (!parsed.known || kind !== "fast") return undefined;
   const capability = CURSOR_CAPABILITIES[parsed.baseId];
+  // 4.7 has no cursor- prefix and uses a flattened effort-fast id instead:
+  // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
   if (capability?.wirePrefix !== "cursor-") return undefined;
   const spec = capability.variants.fast;
   if (!spec) return undefined;

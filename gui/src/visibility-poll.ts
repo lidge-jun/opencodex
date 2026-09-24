@@ -5,9 +5,14 @@
  * setInterval pollers (log viewers, settings cards, OAuth status) hand-rolled the
  * same pattern nine different ways — most without any visibility handling, so a
  * background tab kept paying full poll cost. This helper is the one place that
- * owns the rule: while document.hidden there is no interval and no callback; on
- * visible-again one make-up tick fires immediately, then the cadence resumes.
+ * owns the rule: while the dashboard is hidden there is no interval and no callback;
+ * on visible-again one make-up tick fires immediately, then the cadence resumes.
+ *
+ * "Hidden" comes from host-visibility.ts rather than `document.visibilityState`, which
+ * on the Windows desktop shell stays "visible" while the window sits in the tray.
  */
+
+import { hostDocumentHidden, onHostVisibilityChange } from "./host-visibility";
 
 export type VisibilityPollOptions = {
   /**
@@ -21,7 +26,7 @@ export type VisibilityPollOptions = {
 };
 
 function hiddenNow(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
+  return hostDocumentHidden();
 }
 
 /**
@@ -95,16 +100,12 @@ export function startVisibilityPoll(
   } else {
     arm();
   }
-  if (pauseWhenHidden && typeof document !== "undefined") {
-    document.addEventListener("visibilitychange", onVisibility);
-  }
+  const unsubscribeVisibility = pauseWhenHidden ? onHostVisibilityChange(onVisibility) : null;
   if (options?.immediate) tick();
 
   return () => {
     stopped = true;
     disarm();
-    if (pauseWhenHidden && typeof document !== "undefined") {
-      document.removeEventListener("visibilitychange", onVisibility);
-    }
+    unsubscribeVisibility?.();
   };
 }

@@ -539,53 +539,6 @@ describe("request log metadata", () => {
     }
   });
 
-  test("records ordered attempts with sealed identity, fresh estimates, and deduplicated recoveries", () => {
-    const a = beginRequestAttempt(1, "provisional-a", "model-a", "openai-chat");
-    noteAttemptSend(a, 100);
-    noteAttemptSend(a, 120, "transient-5xx");
-    noteAttemptSend(a, 120, "transient-5xx");
-    sealRequestAttemptIdentity(a, "chatgpt-pabcdef", "openai-responses", "pabcdef");
-    finishRequestAttempt(a, 503, 12);
-
-    const b = beginRequestAttempt(2, "prov-b", "model-b", "openai-chat");
-    noteAttemptSend(b, undefined);
-    finishRequestAttempt(b, 200, 8, {
-      inputTokens: 10,
-      outputTokens: 2,
-      cachedInputTokens: 4,
-      cacheReadInputTokens: 4,
-    });
-
-    expect(a).toMatchObject({
-      ordinal: 1,
-      provider: "chatgpt-pabcdef",
-      accountLogLabel: "pabcdef",
-      adapter: "openai-responses",
-      status: 503,
-      sendCount: 3,
-      inputTokenEstimate: 120,
-      recoveryKinds: ["transient-5xx"],
-      usageStatus: "estimated",
-      usage: { inputTokens: 120, outputTokens: 0, estimated: true },
-      totalTokens: 120,
-      errorCode: "server_is_overloaded",
-    });
-    expect(b).toMatchObject({ status: 200, sendCount: 1, usageStatus: "reported", totalTokens: 12 });
-
-    expect(aggregateAttemptUsage([a, b])).toEqual({
-      status: "estimated",
-      totalTokens: 132,
-      usage: {
-        inputTokens: 130,
-        outputTokens: 2,
-        totalTokens: 132,
-        cachedInputTokens: 4,
-        cacheReadInputTokens: 4,
-        estimated: true,
-      },
-    });
-  });
-
   test("folds partial and unsupported attempt measurement honestly", () => {
     const reported = finishRequestAttempt(
       beginRequestAttempt(1, "a", "m1", "openai-chat"),

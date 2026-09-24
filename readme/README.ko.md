@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex — Codex, Claude Code, Claude Desktop, Grok Build를 위한 범용 프로바이더 프록시" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>OpenAI Codex, Claude Code, Claude Desktop, Grok Build를 위한 범용 프로바이더 프록시</b><br>
 명령어 두 줄이면, 그 모두가 지정한 LLM으로 돌아갑니다.</p>
@@ -13,6 +17,13 @@
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="macOS용 다운로드 (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Windows용 다운로드 (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Linux용 다운로드 (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Linux용 다운로드 (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -78,7 +89,7 @@ DeepSeek, Kimi, Qwen, Ollama를 비롯한 어떤 LLM이든 Codex, Claude Code, C
 
 ## 빠른 시작
 
-### 개인 설치
+### 개인 설치 (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; Bun 런타임은 자동으로 번들됩니다
@@ -91,25 +102,27 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
 
 <details>
-<summary><b>데스크톱 앱과 macOS 위젯 — 베타</b></summary>
+<summary><b>데스크톱 앱 (베타)</b></summary>
 
-같은 대시보드를 감싼 네이티브 앱과, 브라우저를 열지 않고 프록시 상태·오늘의 사용량·프로바이더
-쿼터를 보여 주는 WidgetKit 확장입니다. 프록시 자체는 그대로입니다. 앱은 실행 중인 프록시를 찾거나
-번들된 `ocx` 사이드카를 시작하며, 대시보드는 계속 **http://localhost:10100**에서 열립니다.
+데스크톱 앱은 같은 프록시와 대시보드를 네이티브 창에 담은 것으로, 트레이와 번들된 `ocx`를 갖춥니다.
+이미 실행 중인 프록시에 붙거나 번들된 프록시를 시작하며, 대시보드는 프록시 포트에서 열립니다
+(다른 포트를 설정하지 않았다면 **http://localhost:10100**). 플랫폼에 맞는 파일을
+[최신 릴리스](https://github.com/lidge-jun/opencodex/releases/latest)에서 고르세요.
 
-현재 베타 버전입니다. 빌드는 무결성을 확인할 수 있도록 서명되어 있지만 공증되지는 않았습니다.
-따라서 macOS에서는 처음 실행할 때 마우스 오른쪽 버튼을 클릭한 뒤 **열기**를 선택해야 하고,
-Windows 설치 파일에는 SmartScreen 경고가 표시됩니다. 위젯은 macOS 14 이상에서 쓸 수 있으며,
-위젯이 그리는 스냅샷 모델은 [`app/`](../app)의 `MenuBarCore`에 있습니다.
+| 플랫폼 | 파일 | 참고 |
+|---|---|---|
+| macOS 13+ (Apple Silicon 및 Intel) | `OpenCodex-<version>-macos.dmg` | 유니버설 빌드, Developer ID로 서명 및 공증됨 |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 아직 코드 서명되지 않음: SmartScreen이 한 번 물으면 **추가 정보 → 실행**을 선택 |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` 또는 `-linux-amd64.deb` | 트레이는 AppIndicator를 지원하는 데스크톱이 필요 |
 
-[최신 릴리스](https://github.com/lidge-jun/opencodex/releases)에서 다운로드하거나
-`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`로 직접 빌드하세요.
-
-설치 위치, 서비스 파일을 비롯해 디스크에 쓰는 항목은
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에 정리되어 있습니다.
-[데스크톱 앱 가이드](https://lidge-jun.github.io/opencodex/guides/desktop-app/)와
-[macOS 메뉴 막대 앱 가이드](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)에서
-플랫폼별 설치 방법과 Gatekeeper 안내를 확인할 수 있습니다.
+릴리스 페이지에서 모든 파일 옆에 `.sha256`이 함께 있습니다. macOS 14 이상에서는 프록시 상태,
+오늘의 사용량, 프로바이더 쿼터를 보여 주는 WidgetKit 확장도 함께 설치됩니다. 위젯이 그리는
+스냅샷 모델은 [`app/`](../app)의 `MenuBarCore`에 있습니다. 앱을 직접 빌드하려면 저장소 루트에서
+`bun install && bun run build:gui`를 실행한 다음,
+`desktop/`에서 macOS라면 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`을, Windows와 Linux라면 `bun install && bun run prepare-sidecar && bun run build:local`을 실행하세요. 위젯 빌드 단계는 macOS에서만 돌아갑니다.
+[데스크톱 앱 가이드](https://opencodex.me/ko/guides/desktop-app/)와
+[macOS 메뉴 막대 앱 가이드](https://opencodex.me/ko/guides/macos-menu-bar/)에서 첫 실행 안내를 볼 수 있고,
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에는 디스크에 쓰는 모든 항목이 정리되어 있습니다.
 
 </details>
 
@@ -201,8 +214,9 @@ services:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -210,8 +224,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -242,13 +257,13 @@ ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 �
 
 ## 지원 플랫폼
 
-| OS | 지원 상태 | 서비스 관리자 |
-|---|---|---|
-| macOS (arm64 / x64) | 완전 지원 | launchd |
-| Linux (x64 / arm64) | 완전 지원 | systemd (user unit) |
-| Windows (x64) | 완전 지원 | Task Scheduler (숨김) / 선택적 네이티브 서비스 (`--native`, WinSW) |
+| OS | 지원 상태 | 서비스 관리자 | 데스크톱 앱 (베타) |
+|---|---|---|---|
+| macOS (arm64 / x64) | 완전 지원 | launchd | 유니버설 `.dmg` |
+| Linux (x64 / arm64) | 완전 지원 | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | 완전 지원 | Task Scheduler (숨김) / 선택적 네이티브 서비스 (`--native`, WinSW) | x64 `.msi` |
 
-[Node](https://nodejs.org) 18 이상이 필요합니다. Bun 런타임은 `npm install` 때 번들되므로 따로 설치할
+CLI 설치에는 [Node](https://nodejs.org) 18 이상이 필요하고, 데스크톱 앱은 Node와 Bun 모두 필요 없습니다. Bun 런타임은 `npm install` 때 번들되므로 따로 설치할
 필요가 없고, Windows에서도 WSL이 필요 없습니다. npm이 번들 런타임의 설치 스크립트를 막았다면
 [설치 문서](https://opencodex.me/ko/getting-started/installation/)를 보세요.
 
@@ -284,14 +299,14 @@ ocx init      # 대화형 설정: ~/.opencodex/config.json을 쓰고 Codex를 �
 <details>
 <summary>메모리 소유권 상세</summary>
 
-OpenCodex는 프로세스가 붙잡고 있는 상태 36종을 추적합니다. 각각에 문서화된 한도가 있습니다:
+OpenCodex는 프로세스가 붙잡고 있는 상태를 아래 항목에서 추적합니다. 각각에 문서화된 한도가 있습니다:
 
-- **유지 저장소 12개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
+- **유지 저장소 14개**(요청 로그, debug ring, image cache, model cache, vision 설명, cursor blob,
   responses continuation 등)는 바이트 단위로 집계되며, 앱이 소유한 메모리 예산(기본 256 MiB)이
-  eviction합니다.
+  eviction합니다. 단, native control replay 저장소는 고정되어 eviction되지 않습니다.
 - **관측 버퍼 4개**(translator accumulator, image/OAuth/Grok tail)는 진행 중 바이트 압력을 감시만
   하고 eviction하지 않습니다.
-- **state-store 등록 24개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
+- **state-store 등록 28개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
   낡은 프로바이더/계정 키를 지웁니다.
 - **경로·fingerprint 메모**(워크스페이스 메타데이터, hardened identity, 설치 salt, mode-hint
   capability)는 삽입 순서 LRU cap(8–128개)을 씁니다.

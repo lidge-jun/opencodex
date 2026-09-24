@@ -1,6 +1,7 @@
 import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "./types";
 import { createHash } from "node:crypto";
 import { peekAuthStore } from "./oauth/store";
+import { resolveDevinApiBaseUrl, validateDevinApiBaseUrl } from "./oauth/devin/api-base";
 import {
   getCombo,
   isComboTargetInCooldown,
@@ -25,6 +26,7 @@ import {
 import { registryModelIdKeys } from "./providers/registry/model-ids";
 import { applyDirectReasoningEffortContracts, hasLegacyClinePassReasoningEfforts } from "./providers/derive";
 import { cloneFastWire } from "./providers/fastwire";
+import { fastSwitchOff } from "./providers/fast-opt-in";
 import {
   providerMatchesRegistryTransportWithStaticGuards,
   providerSupportsLiveModelDiscovery,
@@ -155,14 +157,21 @@ export function knownModelIdsForProvider(
     // This callback runs only for a scoped entry, not for each provider in an alias scan.
     const routed = routedProviderConfig(provName, prov);
     let key = routed.apiKey;
+    let destination = routed.baseUrl;
     if (routed.authMode === "oauth") {
       const set = peekAuthStore()[provName];
       const account = set?.accounts.find(row => row.id === set.activeAccountId);
       if (!account || account.needsReauth || !Number.isFinite(account.credential.expires)
         || account.credential.expires <= Date.now()) return undefined;
       key = account.credential.access;
+      if (routed.adapter === "devin") destination = validateDevinApiBaseUrl(account.credential.apiBaseUrl) ?? routed.baseUrl;
     }
-    return key ? createHash("sha256").update(key).digest("hex") : undefined;
+    if (!key) return undefined;
+    return createHash("sha256")
+      .update(routed.adapter === "devin"
+        ? JSON.stringify([key, resolveDevinApiBaseUrl(destination)])
+        : key)
+      .digest("hex");
   });
   for (const cached of cachedModels ?? []) ids.add(cached.id);
   for (const model of config?.customModels ?? []) {
@@ -331,12 +340,14 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
   const noReasoningModels = staticPolicy.noReasoningModels;
   const noTemperatureModels = staticPolicy.noTemperatureModels;
   const noTopPModels = staticPolicy.noTopPModels;
+  const noStopModels = staticPolicy.noStopModels;
   const noPenaltyModels = staticPolicy.noPenaltyModels;
   const noJsonSchemaModels = staticPolicy.noJsonSchemaModels;
   const autoToolChoiceOnlyModels = staticPolicy.autoToolChoiceOnlyModels;
   const preserveReasoningContentModels = staticPolicy.preserveReasoningContentModels;
   const requiresReasoningPlaceholderModels = staticPolicy.requiresReasoningPlaceholderModels;
   const reasoningSplitModels = staticPolicy.reasoningSplitModels;
+  const inlineThinkTagModels = staticPolicy.inlineThinkTagModels;
   const reasoningDetailsModels = staticPolicy.reasoningDetailsModels;
   const thinkingToggleModels = staticPolicy.thinkingToggleModels;
   const thinkingBudgetModels = staticPolicy.thinkingBudgetModels;
@@ -383,6 +394,9 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(provider.supportsServiceTier === undefined && registryEntry.supportsServiceTier !== undefined
       ? { supportsServiceTier: registryEntry.supportsServiceTier }
       : {}),
+    // An off Fast switch is a provider-wide denial on the runtime provider, so a Fast policy
+    // resolved without the provider name still refuses (providerFastSwitchOff).
+    ...(fastSwitchOff(provider, registryEntry) ? { supportsServiceTier: false } : {}),
     // Registry-only web-search capability: without this backfill a saved provider row reaches
     // the Responses adapter with the flag `undefined`, so the capability gate added in #2262
     // reads "unclassified" and forwards Codex's OpenAI-only `web_search` config fields. xAI
@@ -473,12 +487,14 @@ export function routedProviderConfig(providerName: string, provider: OcxProvider
     ...(noReasoningModels ? { noReasoningModels } : {}),
     ...(noTemperatureModels ? { noTemperatureModels } : {}),
     ...(noTopPModels ? { noTopPModels } : {}),
+    ...(noStopModels ? { noStopModels } : {}),
     ...(noPenaltyModels ? { noPenaltyModels } : {}),
     ...(noJsonSchemaModels ? { noJsonSchemaModels } : {}),
     ...(autoToolChoiceOnlyModels ? { autoToolChoiceOnlyModels } : {}),
     ...(preserveReasoningContentModels ? { preserveReasoningContentModels } : {}),
     ...(requiresReasoningPlaceholderModels ? { requiresReasoningPlaceholderModels } : {}),
     ...(reasoningSplitModels ? { reasoningSplitModels } : {}),
+    ...(inlineThinkTagModels ? { inlineThinkTagModels } : {}),
     ...(reasoningDetailsModels ? { reasoningDetailsModels } : {}),
     ...(thinkingToggleModels ? { thinkingToggleModels } : {}),
     ...(thinkingBudgetModels ? { thinkingBudgetModels } : {}),

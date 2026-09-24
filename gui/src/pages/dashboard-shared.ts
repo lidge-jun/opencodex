@@ -102,6 +102,9 @@ export interface WebSearchPickerOption {
 export interface SidecarData {
   webSearch: SidecarSetting;
   vision: SidecarSetting;
+  /** The Codex-side write a sidecar PUT attempted, when the switch actually moved.
+   *  Absent on an older server; the client then shows nothing rather than guessing. */
+  codexWebSearch?: SidecarCodexApply;
   /** Server-computed eligible describers. Optional: an older server omits it and
    *  the client falls back to the legacy provider-name list rather than showing
    *  an empty picker. */
@@ -111,8 +114,16 @@ export interface SidecarData {
    *  falls back to the legacy list; a current server's [] means none. */
   webSearchModels?: WebSearchModelOption[];
 }
+
+/** The Codex-config apply report a management write returns (same shape as the Desktop switches'). */
+export interface SidecarCodexApply {
+  applied?: boolean;
+  reason?: string;
+  retryable?: boolean;
+  detail?: string;
+}
 export interface SidecarPatch {
-  webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean };
+  webSearch?: { backend?: SidecarBackend | null; model?: string; streamRoutedModelOutput?: boolean; enabled?: boolean };
   vision?: {
     backend?: VisionBackend | null;
     model?: string;
@@ -125,7 +136,7 @@ export interface SidecarPatch {
 export interface ShadowCallData { enabled: boolean; model: string; sourceModels?: string[] }
 export type UsageSummary30d = import("../usage-summary-resource").UsageReadMetadata & { summary: { requests: number; totalTokens: number; coverageRatio: number } };
 export type UpdateChannel = "latest" | "preview";
-export type Installer = "npm" | "bun" | "source";
+export type Installer = "bun" | "mise" | "npm" | "pnpm" | "source";
 export type UpdateJobStatus = "running" | "restarting" | "succeeded" | "failed";
 export interface SyncResult {
   ok: boolean;
@@ -189,6 +200,8 @@ export function updateReasonLabel(reason: string | undefined, t: (key: TKey) => 
     case "source_checkout": return t("dash.updateReason.source_checkout");
     case "latest_unavailable": return t("dash.updateReason.latest_unavailable");
     case "already_latest": return t("dash.updateReason.already_latest");
+    case "externally_managed": return t("dash.updateReason.externally_managed");
+    case "external_ownership_invalid": return t("dash.updateReason.external_ownership_invalid");
     default: return t("dash.updateReason.unknown");
   }
 }
@@ -233,6 +246,41 @@ export function visionReasoningPatch(reasoning: VisionReasoning): SidecarPatch {
 
 export function visionEnabledPatch(enabled: boolean): SidecarPatch {
   return { vision: { enabled } };
+}
+
+/**
+ * The web-search master switch, as the Dashboard's Off row sends it. Off is the operator saying
+ * "no native web search at all": OpenCodex stops intercepting it AND writes Codex's own
+ * `web_search` mode off, which is what lets an MCP search server be the only search path.
+ */
+export function webSearchEnabledPatch(enabled: boolean): SidecarPatch {
+  return { webSearch: { enabled } };
+}
+
+/**
+ * True when the last sidecar save asked for a Codex-config write and the write did not happen.
+ *
+ * The sidecar's own switch is stored either way — this is the client-side half that keeps an
+ * operator from reading a stored "Off" as a native `web_search` tool that is already gone. The
+ * ordinary "nothing moved" answer (`not_requested`) stays silent: it is not a failure.
+ */
+export function sidecarCodexWritePending(report: SidecarCodexApply | undefined): boolean {
+  return report?.applied === false && report.reason !== "not_requested";
+}
+
+/**
+ * Which Codex-config report the Dashboard keeps after a save.
+ *
+ * A save that did not move the web-search switch (`not_requested`) says nothing about the Codex
+ * file — a Vision save answers that way while the failed web-search write is still outstanding. So
+ * a pending report outlives it instead of being cleared by an answer that never described the
+ * file. An applied write and the model sync both replace it with a settled report.
+ */
+export function nextSidecarCodexApply(
+  previous: SidecarCodexApply | undefined,
+  report: SidecarCodexApply | undefined,
+): SidecarCodexApply | undefined {
+  return report?.reason === "not_requested" && sidecarCodexWritePending(previous) ? previous : report;
 }
 
 export function visionMaxDescriptionsPatch(maxDescriptionsPerTurn: number): SidecarPatch {

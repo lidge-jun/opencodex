@@ -172,7 +172,8 @@ export async function proxyStillLiveAfterStop(deps: {
     const probeDeadline = canRespawn
       ? deadline
       : now() + (SERVICE_STOP_LIVENESS.timeoutMs! * SERVICE_STOP_LIVENESS.attempts! + 250);
-    return findLiveProxy({ ...SERVICE_STOP_LIVENESS, deadlineAt: probeDeadline, nowFn: now });
+    // A package-tree-fenced proxy (#5496) still holds the port; stop must not call it gone.
+    return findLiveProxy({ ...SERVICE_STOP_LIVENESS, deadlineAt: probeDeadline, nowFn: now, acceptPackageTreeFenced: true });
   });
   for (;;) {
     try {
@@ -205,6 +206,7 @@ async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult> {
   const live = await findLiveProxy({
     ...SERVICE_STOP_LIVENESS,
     deadlineAt: Date.now() + 7000,
+    acceptPackageTreeFenced: true,
   });
   const liveKillPid = verifiedKillTarget(live?.pid);
   if (liveKillPid !== null) {

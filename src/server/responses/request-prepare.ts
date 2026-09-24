@@ -13,6 +13,7 @@ import {
 } from "./core-errors";
 import { parseSyntheticRowId } from "../fast-row";
 import { resolveComboId, comboIdFromRawBody, NoAvailableComboTargetsError } from "../../combos";
+import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveShadowCallTarget } from "./shadow-target-availability";
 import { recallComboForLane } from "./combo-session-recall";
 import {
   sessionLaneIdFromRequest,
@@ -38,6 +39,7 @@ import {
   applyCodexAuthContextToProvider,
   hasCallerCodexBearer,
   requestOwnedMainPinState,
+  requestOwnedMainCredentialIsLive,
 } from "../../codex/auth-context";
 import {
   copyPreviousResponseReplayProvenance,
@@ -226,6 +228,7 @@ export async function prepareResponsesRequest(
   // hops — which only exist inside that loop — are unreachable (#4129). Rewrite the selector
   // here instead, before comboIdFromRawBody reads `model`, and identify the combo by CONFIG
   // LOOKUP so the check can never observe a one-candidate collapse.
+  let shadowCallIntercepted = false;
   if (!options.comboAttempt && !options.compactionRoutingOverride && body && typeof body === "object" && !Array.isArray(body)) {
     const shadowIntercept = config.shadowCallIntercept;
     const rawShadowModel = (body as { model?: unknown }).model;
@@ -233,6 +236,7 @@ export async function prepareResponsesRequest(
       && isShadowSourceModel(rawShadowModel, shadowIntercept.sourceModels)) {
       const shadowComboId = resolveComboId(config, shadowIntercept.model);
       if (shadowComboId && Object.hasOwn(config.combos ?? {}, shadowComboId)) {
+        shadowCallIntercepted = true;
         (body as Record<string, unknown>).model = shadowIntercept.model;
         // Same rule as the late intercept site: record the operator-configured prefix that
         // matched, never the caller's raw model string. Matching is by prefix, so the raw
@@ -248,6 +252,9 @@ export async function prepareResponsesRequest(
     options.onRequestBodyRead?.();
     return requestDispatchers.handleComboResponses(req, body, comboId, config, logCtx, {
       ...options,
+      // Concrete combo child selectors no longer match the shadow source model. Carry the
+      // interception decision explicitly so provider-specific helper isolation still applies.
+      shadowCallIntercepted,
       // The original request body was accepted above. Combo children are synthetic
       // replays and must not repeat the caller-owned timeout transition.
       onRequestBodyRead: undefined,
@@ -370,6 +377,7 @@ export async function prepareResponsesRequest(
       }
     }
     if (cursorClientThreadId) parsed._cursorClientThreadId = cursorClientThreadId;
+    if (options.shadowCallIntercepted === true) parsed._cursorIsolateConversation = true;
   } catch (err) {
     if (isTranslatorBudgetExceededError(err)) {
       return formatErrorResponse(413, "request_too_large", "request translation buffer exceeded the safe limit", {
@@ -482,7 +490,15 @@ export async function prepareResponsesRequest(
         const resolvedSource = routeConcreteModel(config, parsed.modelId);
         sourceIdentity = { providerName: resolvedSource.providerName, modelId: sourcePrefix };
       } catch { /* Native Codex helper calls remain OpenAI-owned without an enabled OpenAI route. */ }
-      const targetRoute = resolveRoute(_sci.model);
+      // A dead target fails this helper call once, before any send; it never falls through to
+      // the native source model or to the default provider (#5618).
+      const target = resolveShadowCallTarget(_sci.model, resolveRoute);
+      if ("unavailable" in target) {
+        logCtx.shadowCallRewrittenFrom = sanitizeLogMetadataString(sourcePrefix);
+        logCtx.errorCode = INTERCEPT_TARGET_UNAVAILABLE_CODE;
+        return interceptTargetUnavailableResponse(_sci.model, target.unavailable);
+      }
+      const targetRoute = target.route;
       if (shouldInterceptShadowCall(parsed.modelId, _sci.sourceModels, sourceIdentity, targetRoute)) {
         credentialDomainWasRewritten = true;
         const _sciOriginal = parsed.modelId;
@@ -580,7 +596,19 @@ export async function prepareResponsesRequest(
     options.codexAuthPolicy ?? config,
     previewRequestScopedMainCredential,
     route.codexAccountId,
+    codexQuotaScopeForModel(route.modelId),
   ).preserve;
+  // Final auth's own liveness answer for a request-owned bearer, from its own shared expression
+  // (#5019). Predicting the pin alone dropped main here and handed subagent fallback a different
+  // account than the one that serves.
+  const previewRequestOwnedMainCredentialLive = requestOwnedMainCredentialIsLive({
+    preserveRequestOwnedMainPin: previewRequestOwnedMainPin,
+    requestScopedMainCredential: previewRequestScopedMainCredential,
+    nativeMainTrafficBlocked: nativeMainRecoveryBlocked,
+    mainProfileDraining: previewSelectionAdmission?.mainProfileDraining === true,
+    // Final-auth-only, and stated rather than defaulted: see the field's own note.
+    callerOwnsCooledPoolSubscription: false,
+  });
   // Deliberately NOT fenced on ownership: final auth derives `nativeMainSelectionOnly` from the
   // drain alone, and adding a term here would diverge from it in the other direction.
   const previewSelectionOptions = {
@@ -592,12 +620,13 @@ export async function prepareResponsesRequest(
     // spawn, because subagent fallback re-enters the preview through the callback below.
     //
     // Scoped to ownership, and carrying final auth's value rather than a constant, because
-    // preview exists to predict final auth. Under an effective main pin the request really is
-    // served by its own main credential, so main must stay eligible; without the pin final auth
-    // scores main `main_credential_unavailable` and drops it, so preview has to drop it too. A
-    // hardcoded `true` would be wrong in the second case and `false` in the first.
+    // preview exists to predict final auth. The request really is served by its own main
+    // credential whenever that bearer is forwardable, so main stays eligible; while retained
+    // recovery or a profile drain fences the physical identity, final auth drops main and preview
+    // has to drop it too. A hardcoded `true` would be wrong in the second case and `false` in
+    // the first.
     isMainAccountTokenLive: previewRequestScopedMainCredential
-      ? () => previewRequestOwnedMainPin
+      ? () => previewRequestOwnedMainCredentialLive
       : undefined,
     // Preview must reach the same answer as the final resolution, including the uploaded-file
     // retention (#4778): a preview that reported a quota move the request will not make would
@@ -836,12 +865,22 @@ export async function prepareResponsesRequest(
                 options.codexAuthPolicy ?? config,
                 recoveryRequestScopedMainCredential,
                 route.codexAccountId,
+                codexQuotaScopeForModel(route.modelId),
               ).preserve;
+              // Same shared expression as the first preview and as final auth (#5019), recomputed
+              // against the route recovery may have moved to.
+              const recoveryRequestOwnedMainCredentialLive = requestOwnedMainCredentialIsLive({
+                preserveRequestOwnedMainPin: recoveryRequestOwnedMainPin,
+                requestScopedMainCredential: recoveryRequestScopedMainCredential,
+                nativeMainTrafficBlocked: recoveryNativeMainBlocked,
+                mainProfileDraining: recoverySelectionAdmission?.mainProfileDraining === true,
+                callerOwnsCooledPoolSubscription: false,
+              });
               const recoverySelectionOptions = {
                 nativeMainSelectionOnly: !recoveryNativeMainBlocked
                   && recoverySelectionAdmission?.mainProfileDraining === true,
                 isMainAccountTokenLive: recoveryRequestScopedMainCredential
-                  ? () => recoveryRequestOwnedMainPin
+                  ? () => recoveryRequestOwnedMainCredentialLive
                   : undefined,
                 // #4778, same reason as `previewSelectionOptions` above: this preview decides
                 // which account subagent fallback scores against, and final auth passes the

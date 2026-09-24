@@ -127,6 +127,44 @@ describe("streamChatEventsWithResetRetry", () => {
     expect(out.map(e => e.kind)).toEqual(["text", "finish"]);
   });
 
+  test("waits the generated approximate retry delay and replays", async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const stream = () => {
+      calls += 1;
+      return calls === 1
+        ? exhausting("Cognition chat failed (resource_exhausted); retry after ~180s")()
+        : events({ kind: "finish", reason: "stop" } as CloudChatEvent);
+    };
+    const out = await drain(streamChatEventsWithResetRetry(REQ, {
+      stream,
+      sleep: async (ms) => { waits.push(ms); },
+    }));
+    expect(calls).toBe(2);
+    expect(waits).toEqual([180_000]);
+    expect(out.map(e => e.kind)).toEqual(["finish"]);
+  });
+
+  test("re-evaluates the delay when retry failures use different wording", async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const stream = () => {
+      calls += 1;
+      if (calls === 1) return exhausting("Your limit will reset in 35 seconds")();
+      if (calls === 2) {
+        return exhausting("Cognition chat failed (resource_exhausted); retry after ~180s")();
+      }
+      return events({ kind: "finish", reason: "stop" } as CloudChatEvent);
+    };
+    const out = await drain(streamChatEventsWithResetRetry(REQ, {
+      stream,
+      sleep: async (ms) => { waits.push(ms); },
+    }));
+    expect(calls).toBe(3);
+    expect(waits).toEqual([35_000, 180_000]);
+    expect(out.map(e => e.kind)).toEqual(["finish"]);
+  });
+
   test("does not replay once any event was yielded", async () => {
     const stream = () => (async function* (): AsyncGenerator<CloudChatEvent> {
       yield { kind: "text", text: "partial" } as CloudChatEvent;

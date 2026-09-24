@@ -67,7 +67,7 @@ export interface StopSummaryJson {
   schema: typeof STOP_SUMMARY_SCHEMA;
   /** Strict exit-code view: true only for exit 0. */
   ok: boolean;
-  outcome: "stopped" | "not-running" | "history-incomplete" | "history-deferred" | "failed";
+  outcome: "stopped" | "not-running" | "history-incomplete" | "history-deferred" | "failed" | "approval-changed" | "manager-still-active";
   exitCode: number;
   /** True when this stop left no proxy of this home running by its own paths. */
   runtimeDown: boolean;

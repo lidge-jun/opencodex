@@ -132,14 +132,20 @@ ocx combo set balanced \
 | 인증, 구독, 쿼터, 속도 제한, 과부하, 또는 상위 서버 오류로 분류됨 | 상태 코드만으로는 충분하지 않더라도 대상을 쿨다운으로 보내고 넘어갑니다. |
 | 클라이언트 취소(499), `origin_rejected`, cyber-policy refusal, context overflow, 또는 기타 invalid request | 멈추고 오류를 반환합니다. 다른 대상을 써도 요청이 유효해지지 않기 때문입니다. |
 | `user`를 명시적으로 거부하거나, `reasoning.effort`/`reasoning_effort`의 지원되지 않는 값 또는 모델별 이미지 입력 거부(`param: input`)를 나타내는 구조화된 HTTP 400 | 출력 시작 전에 쿨다운 기록 없이 다음 적격 대상으로 넘어갑니다. 선택적 매개변수 호환성을 참조하세요. |
+| 인프로세스 어댑터(`runTurn`)가 실행하는 Responses 턴에서 현재 요청이 선언하지 않은 첫 도구 호출(출력이나 재전송 불가 부작용 이전) | 대상을 쿨다운하고 같은 도구 카탈로그로 다음 대상으로 넘어갑니다. 출력이 보였거나 재전송 불가 부작용이 생긴 뒤에는 거부가 그대로 확정됩니다. Chat Completions와 Anthropic Messages 요청은 바뀌지 않습니다. |
 | 그 밖의 분류되지 않은 오류 | 멈추고 오류를 반환합니다. |
 
-`cooldownMs`가 설정되지 않으면 홉된 대상은 업스트림 폴백을 사용합니다. 업스트림 코드 `1302` 또는 `1305`인 요청 속도 제한 429는 5초, 그 외에는 60초입니다. 설정하면 사용 가능한 업스트림 `Retry-After` 또는 Codex 재설정 신호가 없을 때, 해당 요청 속도 제한 429를 포함해 `cooldownMs`가 적용됩니다. 숫자로 된 `Retry-After` 초와 HTTP-date 값을 허용하며, 모든 쿨다운은 최대 10분으로 제한됩니다. 우선순위는 강한 순서대로 명시적 `Retry-After` → Codex 재설정 헤더(`x-codex-primary-reset-at`, `x-codex-secondary-reset-at`, 또는 `x-codex-tertiary-reset-at`) → 콤보의 `cooldownMs`(설정된 경우) → 업스트림 속도 제한 코드 `1302`/`1305`의 5초 요청 속도 제한 폴백 → 60초 기본값입니다. 유효한 즉시 지시인 `Retry-After: 0`은 설정된 쿨다운으로 대체하지 않고 업스트림의 즉시 지시로 유지합니다.
+공유 요청 전송 예산이 첫 대상을 거부하면 공급자에 요청하지 않고 로컬 429
+`request_send_budget_exhausted`를 반환합니다. 이후 대상을 거부하면 그 대상에 보내지 않고
+마지막 실제 업스트림 실패를 반환합니다.
+
+`cooldownMs`가 설정되지 않으면 홉된 대상은 업스트림 폴백을 사용합니다. 업스트림 코드 `1302` 또는 `1305`인 요청 속도 제한 429는 5초, 그 외에는 60초입니다. 설정하면 사용 가능한 업스트림 `Retry-After` 또는 Codex 재설정 신호가 없을 때, 해당 요청 속도 제한 429를 포함해 `cooldownMs`가 적용됩니다. 숫자로 된 `Retry-After` 초와 HTTP-date 값을 허용합니다. 명시적 서버 지연은 최대 24시간, 재설정 신호·설정값·폴백 쿨다운은 최대 10분으로 제한됩니다. 우선순위는 강한 순서대로 명시적 `Retry-After` → Codex 재설정 헤더(`x-codex-primary-reset-at`, `x-codex-secondary-reset-at`, 또는 `x-codex-tertiary-reset-at`) → 콤보의 `cooldownMs`(설정된 경우) → 업스트림 속도 제한 코드 `1302`/`1305`의 5초 요청 속도 제한 폴백 → 60초 기본값입니다. 유효한 즉시 지시인 `Retry-After: 0`은 설정된 쿨다운으로 대체하지 않고 업스트림의 즉시 지시로 유지합니다.
 
 현재 요청은 이미 시도한 대상을 다시 시도하지 않습니다. 이후 요청은 쿨다운이 끝날 때까지 해당 대상을 건너뜁니다. 이미 지난 시각을 가리키는 `Retry-After` HTTP-date도 `Retry-After: 0`과 마찬가지로 업스트림의 즉시 지시로 유지됩니다. `waitForCooldownMs`를 설정하면 이후 요청은 가장 먼저 적합해지는 대상의 쿨다운을 선택 시도마다 이 한도까지 기다린 뒤 새로 한 번 선택합니다. 따라서 여러 failover 홉을 거치는 요청은 총 `hops × waitForCooldownMs`까지 기다릴 수 있습니다. 기본값은 `0`입니다. 모든 적합한 대상이 쿨다운 중이고 대기 한도가 0이거나 가장 이른 만료 시각이 대기 한도를 넘으면 요청은 즉시 HTTP 503으로 종료됩니다. 이 `combo_unavailable` 503에는 가장 이른 잔여 쿨다운과 같은 `Retry-After` 헤더가 포함되며, 값은 올림해 정수 초로 표시되고 최소 1초입니다. 대기에 지터를 적용하지 않으므로 동시에 깨어날 수 있습니다. 요청이 중단되면 이 대기가 취소되고 정상 `client_cancelled` 응답이 반환됩니다. 취소 후 백업 대상을 디스패치하지 않습니다. 콤보 대상 쿨다운은 프로세스 로컬 콤보별 상태입니다. 네이티브 계정 라우팅에서 사용하는 계정 수준 Codex 쿼터 쿨다운과는 별개입니다.
 
 :::note
 페일오버는 의도적으로 범위를 제한합니다. 대상별 가용성, 인증, 쿼터, 과부하 실패에는 도움이 되지만, 호출자 오류나 정책 거부를 숨기지는 않습니다.
+콤보가 아닌 Responses 요청에서는 allowlist에 오른 xAI 정책 403이 Codex가 전송 실패로 재시도하기 전에 HTTP 200 `incomplete/content_filter`로 바뀝니다. [xAI policy refusals](/reference/proxy-formats/#xai-policy-refusals)를 보세요. 콤보 홉은 원래 HTTP 403을 홉으로 분류합니다.
 :::
 
 스트리밍 요청에서는 상위 HTTP 상태만으로 최종 결정을 내리지 않습니다. OpenCodex는 선택한 하위 대상의 Responses SSE를 출력 시작 전의 제한된 구간까지만 버퍼링합니다. 텍스트, 추론, 도구 호출 또는 그 밖의 출력 이벤트가 시작되기 전에 재시도 가능한 `response.failed` 종결 이벤트가 오면 해당 시도를 실패로 기록하고 다음 적합한 대상을 시도할 수 있습니다. 출력이 시작되거나 버퍼 상한에 도달하면 현재 대상에 커밋하며, 이후의 스트림 실패를 다른 공급자에서 다시 실행하지 않습니다. 따라서 텍스트와 도구 실행이 중복되지 않습니다.
@@ -209,7 +215,7 @@ ocx combo remove <id> --yes
 
 ### Management API
 
-헤드리스 클라이언트는 `/api/combos`에 `GET`, `PUT`, `DELETE`를 사용합니다. `GET`은 정규화된 콤보 정의를 나열하고, `PUT`은 새 항목을 만들거나 교체하며(이름 바꾸기도 가능), `DELETE`는 id 쿼리 파라미터를 사용합니다. 인증과 요청/응답 세부 내용은 [Management API reference](/reference/management-api/)에 있습니다. `PUT` 본문에서 `cooldownMs` 또는 `waitForCooldownMs`를 생략하면 해당 콤보에 이미 저장된 값이 유지됩니다. 변경하려면 값을 명시적으로 보내세요. 명시적 `cooldownMs`(`60000` 포함)는 요청 속도 제한 폴백을 덮어쓰므로 보낸 값 그대로 저장됩니다. 저장된 `cooldownMs`는 구성 파일을 편집할 때만 삭제할 수 있습니다. `waitForCooldownMs`는 `PUT`에서 `0`을 명시적으로 보내면 기본값으로 돌아갑니다. 희소 직렬화기가 이 기본값을 생략하기 때문입니다. 생략한 값은 유지되고, 대시보드에서는 아직 두 값을 설정할 수 없습니다.
+헤드리스 클라이언트는 `/api/combos`에 `GET`, `PUT`, `DELETE`를 사용합니다. `GET`은 정규화된 콤보 정의를 나열하고, `PUT`은 새 항목을 만들거나 교체하며(이름 바꾸기도 가능), `DELETE`는 id 쿼리 파라미터를 사용합니다. 인증과 요청/응답 세부 내용은 [Management API reference](/reference/management-api/)에 있습니다. `PUT` 본문에서 `cooldownMs` 또는 `waitForCooldownMs`를 생략하면 해당 콤보에 이미 저장된 값이 유지됩니다. 변경하려면 값을 명시적으로 보내세요. 명시적 `cooldownMs`(`60000` 포함)는 요청 속도 제한 폴백을 덮어쓰므로 보낸 값 그대로 저장됩니다. 저장된 `cooldownMs`는 구성 파일을 편집할 때만 삭제할 수 있습니다. `waitForCooldownMs`는 `PUT`에서 `0`을 명시적으로 보내면 기본값으로 돌아갑니다. 희소 직렬화기가 이 기본값을 생략하기 때문입니다. 생략한 값은 유지되고, 대시보드에서는 아직 두 값을 설정할 수 없습니다. 마찬가지로 `defaultEffortMode`, `reasoningEffortMode`, `imageInput`, `cooldownWaitPolicy`를 생략해도 저장된 값이 유지되며, `lastResort` 없이 다시 보낸 대상은 해당 대상의 플래그를 유지합니다(공급자와 모델로 대조). 대시보드는 항상 `imageInput`과 `reasoningEffortMode`를 보내므로, 대시보드에서 `auto`나 `strict`로 되돌려도 저장된 값은 그대로 교체됩니다.
 
 전체 지속 설정은 [Configuration](/reference/configuration/)을 보십시오.
 
@@ -238,10 +244,12 @@ ocx combo remove <id> --yes
 | --- | --- | --- | --- |
 | `targets` | 예 | — | 설정된 `{ provider, model, weight? }` 대상의 비어 있지 않은 순서가 있는 배열이어야 합니다. 중복된 provider/model 쌍은 거부됩니다. |
 | `targets[].weight` | 아니요 | `1` | 1에서 10,000 사이의 정수입니다. `round-robin`과 `random`에서 사용되며, `failover`, `least-used`, `reset-window`에서는 무시됩니다. |
+| `targets[].lastResort` | 아니요 | `false` | 비상용 대상임을 표시합니다. `cooldownWaitPolicy`를 설정하지 않으면 아무 효과가 없습니다. 대상을 영구히 제외하지는 않습니다. 일반 대상에 도달할 수 없으면 평소대로 디스패치됩니다. |
 | `strategy` | 아니요 | `"failover"` | 허용되는 값은 `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`입니다. |
 | `stickyLimit` | 아니요 | `1` | 한 번의 `round-robin` 선택에 유지되는 성공 요청 수로, 1에서 100 사이의 정수입니다. `round-robin`에만 적용됩니다. |
 | `cooldownMs` | 아니요 | 미설정 → 업스트림 폴백(요청 속도 제한 429 코드 `1302`/`1305`는 5초, 그 외는 60초) | 1에서 600000 사이의 정수입니다. 설정하면 사용 가능한 업스트림 `Retry-After` 또는 Codex 재설정 신호가 없을 때 요청 속도 제한 429를 포함한 대상별 쿨다운으로 적용됩니다. 설정하지 않으면 업스트림 폴백을 사용합니다. |
 | `waitForCooldownMs` | 아니요 | `0` | 0에서 600000 사이의 정수입니다. `combo_unavailable`을 반환하기 전에 가장 먼저 적합해지는 쿨다운 중인 대상을 기다리는 최대 시간입니다. 중단하면 대기가 취소됩니다. |
+| `cooldownWaitPolicy` | 아니요 | 미설정 | `"before-last-resort"`는 일반 대상이 쿨다운 중이고 그 잔여 시간이 `waitForCooldownMs` 안에 들어올 때 `lastResort` 대상을 뒤로 미룹니다. `lastResort`로 표시된 대상은 사용할 수 있는 일반 대상이 하나도 없을 때만 사용됩니다. 이 문자열만 적용됩니다. 미루는 대기와 일반 대기는 선택 시도마다 같은 `waitForCooldownMs` 한도를 함께 씁니다. |
 | `defaultEffort` | 아니요 | `null` | `low`, `medium`, `high`, `xhigh`, `max`, 또는 `ultra`입니다. 호출자가 effort를 생략하고 대상이 지원을 광고할 때만 적용됩니다. |
 | `reasoningEffortMode` | 아니요 | `"strict"` | `strict` 또는 `adaptive`; 혼합 capability의 교집합과 대상별 제어 정규화를 선택합니다. |
 | `alias` | 아니요 | 없음 | 선택적으로 앞뒤 공백을 제거한 공개 모델 ID입니다. 위의 alias 규칙을 따릅니다. 빈 값은 alias 없음으로 저장됩니다. |
@@ -260,7 +268,7 @@ opencodex 인스턴스에 기록했는지 확인하세요.
 
 모든 대상이 현재 부적격 상태입니다. 예를 들어 프로바이더가 비활성화되었거나, cooldown 중이거나,
 이 요청에서 이미 시도되었거나, 암호화된 v2 작업 때문에 제외되었을 수 있습니다. 대상 프로바이더 상태와
-최근 업스트림 오류를 확인하세요. 쿨다운에서는 먼저 응답의 `Retry-After` 값을 따르세요. Codex 재설정 헤더도 `cooldownMs`보다 우선합니다. 두 업스트림 신호를 모두 사용할 수 없을 때 설정된 `cooldownMs`를 적용하고, 미설정이면 업스트림 폴백(요청 속도 제한 코드 `1302`/`1305`는 5초, 그 외는 60초)을 적용하며 모든 쿨다운은 최대 10분으로 제한됩니다.
+최근 업스트림 오류를 확인하세요. 쿨다운에서는 먼저 응답의 `Retry-After` 값을 따르세요. Codex 재설정 헤더도 `cooldownMs`보다 우선합니다. 두 업스트림 신호를 모두 사용할 수 없을 때 설정된 `cooldownMs`를 적용하고, 미설정이면 업스트림 폴백(요청 속도 제한 코드 `1302`/`1305`는 5초, 그 외는 60초)을 적용합니다. 명시적 `Retry-After` 지연은 최대 24시간, 나머지 쿨다운은 최대 10분입니다.
 
 ### alias가 거부된 이유는 무엇인가요?
 

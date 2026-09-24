@@ -1,9 +1,12 @@
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { restoreNativeCodexAsync } from "../codex/inject";
 import { describeRetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
-import { serviceApiTokenFilePath } from "../lib/service-secrets";
+import { withConfigMutationLockSync } from "../config/mutation-lock";
+import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { pendingClientConnectMayOwnToken, readClientConnectionState } from "../client/state";
+import { readServiceApiTokenState, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { statusWinswRaw, type WinswStatus } from "../lib/winsw";
 import { withWindowsServiceMutationLock } from "../lib/windows-service-mutation-lock";
 import { maybeShowStarPrompt } from "../cli/star-prompt";
@@ -21,6 +24,7 @@ import { inspectWindowsSchedulerServiceStatus, schtasksErrorDetail, probeWindows
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { win32 } from "node:path";
 import { serviceDiagnosticsSummary } from "./diagnostics";
+import { runServiceClaim } from "./claim";
 
 /**
  * `restart` is NO LONGER folded into `repair`.
@@ -181,9 +185,43 @@ export function parseServiceArgs(args: string[]): ParsedServiceArgs {
   return { sub: normalizeServiceSubcommand(sub), backend, invalid };
 }
 
+/** Remove the service credential only when no client connection can own it. */
+export function removeServiceTokenAfterUninstall(
+  lockDeps: ClientLifecycleLockDeps = {},
+): "removed" | "absent" | "retained" | "unverified" {
+  try {
+    return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+      const path = serviceApiTokenFilePath();
+      try { lstatSync(path); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+        throw error;
+      }
+      if (readClientConnectionState().kind !== "disconnected") return "retained";
+      const token = readServiceApiTokenState();
+      if (token.kind !== "present") return token.kind === "absent" ? "absent" : "unverified";
+      if (pendingClientConnectMayOwnToken(token.fingerprint)) return "retained";
+      unlinkSync(path);
+      return "removed";
+    }), lockDeps);
+  } catch {
+    // Lock, state-read and unlink failures all leave cleanup unverified, not successful.
+    return "unverified";
+  }
+}
+
+/** Execute a service verb while preserving client-owned credentials during uninstall. */
 export async function serviceCommand(...args: (string | undefined)[]): Promise<void> {
   const filteredArgs = args.filter((a): a is string => Boolean(a));
   const execute = async (): Promise<void> => {
+    // `claim` is not an install verb: it is deliberately outside planServiceCommand (whose
+    // backend/installation checks do not apply to an ownership write) and outside
+    // assertServiceEnvironmentMatchesInstall — a takeover is not an install.
+    if (filteredArgs[0] === "claim") {
+      const code = await runServiceClaim(filteredArgs.slice(1));
+      if (code !== 0) process.exitCode = code;
+      return;
+    }
     // Planning reads manager state. Repeat it only after the writer lock is held, otherwise a
     // bare command can choose install from a snapshot another service command already changed.
     const plan = planServiceCommand(filteredArgs);
@@ -415,11 +453,13 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         }
       }
       removeServiceInstallState();
-      try { if (existsSync(serviceApiTokenFilePath())) unlinkSync(serviceApiTokenFilePath()); } catch { /* best-effort */ }
+      const tokenCleanup = removeServiceTokenAfterUninstall();
+      if (tokenCleanup === "retained") console.warn("⚠️  Service token kept because client state may own it.");
+      else if (tokenCleanup === "unverified") console.warn("⚠️  Service token cleanup could not be verified; inspect client state before deleting it.");
       console.log("✅ service uninstalled.");
       break;
     default:
-      console.error("Usage: ocx service [install|repair|restart|start|stop|status|uninstall|remove] [--native|--scheduler]");
+      console.error("Usage: ocx service [install|repair|restart|start|stop|status|uninstall|remove|claim] [--native|--scheduler]");
       console.error("       With no subcommand, installs when absent or repairs/restarts an existing service.");
       console.error("       repair: refresh the installed backend, reloading it only when the definition changed; stale Windows tasks may request admin approval.");
       console.error("       restart: the same refresh, but always restarts the service — on macOS a healthy job is kickstarted in place.");

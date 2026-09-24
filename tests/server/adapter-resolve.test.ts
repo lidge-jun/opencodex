@@ -6,6 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
+import { createAnthropicAdapter } from "../../src/adapters/anthropic";
 import type { OcxProviderConfig } from "../../src/types";
 
 function gateway(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
@@ -62,6 +63,53 @@ describe("per-model wire override (#404)", () => {
       .toBe("anthropic");
     expect(resolveWireProtocolOverride("opencode-go", "glm-5.2", provider).adapter)
       .toBe("openai-chat");
+  });
+
+  test("pins only Command Code API-key Claude ids, including mixed-case ids", () => {
+    const provider = gateway({
+      baseUrl: "https://api.commandcode.ai/provider/v1",
+      modelAdapters: { "claude-opus-5-5": "openai-chat" },
+    });
+    const pinned = resolveWireProtocolOverride("commandcode", "claude-opus-5-5", provider);
+    expect(pinned.adapter).toBe("anthropic");
+    expect(resolveWireProtocolOverride("commandcode", "Claude-Opus-5-5", provider).adapter)
+      .toBe("anthropic");
+    expect(resolveWireProtocolOverride("commandcode", "xiaomi/mimo-v2.6-flash", provider).adapter)
+      .toBe("openai-chat");
+    for (const name of ["command-code", "openrouter"]) {
+      expect(resolveWireProtocolOverride(name, "claude-opus-5-5", provider).adapter)
+        .toBe("openai-chat");
+    }
+    expect(resolveWireProtocolOverride("commandcode", "claude-opus-5-5", pinned).adapter)
+      .toBe("anthropic");
+  });
+
+  test("a custom provider reusing the commandcode name for another endpoint keeps its wire", () => {
+    const custom = gateway({
+      baseUrl: "https://gateway.example.test/v1",
+      modelAdapters: { "claude-opus-5-5": "openai-responses" },
+    });
+    expect(resolveWireProtocolOverride("commandcode", "claude-opus-5-5", custom).adapter)
+      .toBe("openai-responses");
+    expect(resolveWireProtocolOverride("commandcode", "claude-sonnet-5", gateway({ baseUrl: "https://gateway.example.test/v1" })).adapter)
+      .toBe("openai-chat");
+  });
+
+  test("builds Command Code Claude requests on the Messages endpoint", async () => {
+    const provider = resolveWireProtocolOverride("commandcode", "claude-opus-5-5", gateway({
+      baseUrl: "https://api.commandcode.ai/provider/v1",
+    }));
+    const request = await createAnthropicAdapter(provider).buildRequest({
+      modelId: "claude-opus-5-5",
+      context: { messages: [{ role: "user", content: "hello" }], tools: [] },
+      stream: true,
+      options: {},
+    });
+    expect(request.url).toBe("https://api.commandcode.ai/provider/v1/messages");
+    // Command Code accepted both x-api-key and Bearer on /provider/v1/messages (probed 2026-09-23).
+    const headers = new Headers(request.headers);
+    expect(headers.get("x-api-key")).toBe("test-key");
+    expect(headers.get("anthropic-version")).toBeTruthy();
   });
 
   test("a pinned model survives a second resolve pass", () => {

@@ -553,16 +553,16 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
     const setCalls = launchctlCommands();
     expect(setCalls).toContain("launchctl setenv CLAUDE_CODE_MAX_CONTEXT_TOKENS 1000000");
-    expect(setCalls).toContain("launchctl setenv DISABLE_COMPACT 1");
+    expect(setCalls.some(c => c.includes("DISABLE_COMPACT"))).toBe(false);
     expect(setCalls).toContain("launchctl setenv CLAUDE_CODE_ALWAYS_ENABLE_EFFORT 1");
     const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
     expect(JSON.parse(trackingWrite!.data).injectedKeys).toEqual(expect.arrayContaining([
-      "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "DISABLE_COMPACT", "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
+      "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "CLAUDE_CODE_ALWAYS_ENABLE_EFFORT",
     ]));
     // Shell env file: lever keys are CONDITIONAL exports so a shell-only user value wins.
     const shellWrite = writes.find(w => w.path.includes("claude-env.sh"));
     expect(shellWrite!.data).toContain(`[ -z "\${CLAUDE_CODE_MAX_CONTEXT_TOKENS+x}" ] && export CLAUDE_CODE_MAX_CONTEXT_TOKENS='1000000'`);
-    expect(shellWrite!.data).toContain(`[ -z "\${DISABLE_COMPACT+x}" ] && export DISABLE_COMPACT='1'`);
+    expect(shellWrite!.data).not.toContain("DISABLE_COMPACT");
     expect(shellWrite!.data).toContain(`[ -z "\${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT+x}" ] && export CLAUDE_CODE_ALWAYS_ENABLE_EFFORT='1'`);
   });
 
@@ -572,11 +572,59 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
     const setCalls = launchctlCommands();
     expect(setCalls).not.toContain("launchctl setenv CLAUDE_CODE_MAX_CONTEXT_TOKENS 1000000");
-    expect(setCalls).toContain("launchctl setenv DISABLE_COMPACT 1");
+    expect(setCalls.some(c => c.includes("DISABLE_COMPACT"))).toBe(false);
     const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
     const keys = JSON.parse(trackingWrite!.data).injectedKeys as string[];
     expect(keys).not.toContain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
-    expect(keys).toContain("DISABLE_COMPACT");
+    expect(keys).not.toContain("DISABLE_COMPACT");
+  });
+
+  // An older release injected DISABLE_COMPACT=1 next to CLAUDE_CODE_MAX_CONTEXT_TOKENS and
+  // tracked it. A same-port restart keeps that record (this proxy already answers the stale
+  // probe), so without an explicit unset launchd would keep disabling compact after upgrade.
+  test("an upgrade unsets the DISABLE_COMPACT an older release injected and tracked", async () => {
+    const writes = capturedWrites();
+    trackingFile = JSON.stringify({
+      pid: 123,
+      port: 4096,
+      injectedAt: "2026-07-11T00:00:00.000Z",
+      injectedKeys: [
+        "ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "DISABLE_COMPACT",
+      ],
+    });
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.DISABLE_COMPACT = "1";
+    expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain("launchctl unsetenv DISABLE_COMPACT");
+    const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
+    expect(JSON.parse(trackingWrite!.data).injectedKeys).not.toContain("DISABLE_COMPACT");
+  });
+
+  test("a tracked DISABLE_COMPACT the user changed by hand is released, not deleted", async () => {
+    const writes = capturedWrites();
+    trackingFile = JSON.stringify({
+      pid: 123,
+      port: 4096,
+      injectedAt: "2026-07-11T00:00:00.000Z",
+      injectedKeys: [
+        "ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS", "DISABLE_COMPACT",
+      ],
+    });
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.DISABLE_COMPACT = "0";
+    expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).not.toContain("launchctl unsetenv DISABLE_COMPACT");
+    const trackingWrite = writes.filter(w => w.path.includes("system-env-port")).at(-1);
+    expect(JSON.parse(trackingWrite!.data).injectedKeys).not.toContain("DISABLE_COMPACT");
+  });
+
+  test("a DISABLE_COMPACT the user set in launchd is left alone", async () => {
+    capturedWrites();
+    launchctlEnvValues.DISABLE_COMPACT = "1";
+    expect(await injectSystemEnv(4096, leverConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).not.toContain("launchctl unsetenv DISABLE_COMPACT");
   });
 
   test("levers disabled: no lever keys injected or exported", async () => {
@@ -633,6 +681,68 @@ describe("systemEnv lever keys (devlog 136 B6)", () => {
     ]));
     const shellWrite = writes.find(w => w.path.includes("claude-env.sh"));
     expect(shellWrite!.data).toContain('[ -z "${ANTHROPIC_DEFAULT_OPUS_MODEL+x}" ] && export ANTHROPIC_DEFAULT_OPUS_MODEL=');
+  });
+
+  // A slot opencodex injected earlier is opencodex-owned (revertSystemEnv already unsets every
+  // tracked key regardless of its value). Re-injection must therefore refresh it and drop it once
+  // the config stops producing it; before this, the user-wins guard froze the old value in launchd
+  // until the proxy restarted.
+  function trackingWithLevers(keys: string[]): string {
+    return JSON.stringify({
+      pid: 123, port: 4096, injectedAt: "2026-07-11T00:00:00.000Z",
+      injectedKeys: ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", ...keys],
+    });
+  }
+
+  test("re-inject refreshes a tracked slot whose configured value changed", async () => {
+    const writes = capturedWrites();
+    trackingFile = trackingWithLevers(["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.ANTHROPIC_DEFAULT_HAIKU_MODEL = "mock/old-small";
+    launchctlEnvValues.ANTHROPIC_SMALL_FAST_MODEL = "mock/old-small";
+    const config = { ...baseConfig, claudeCode: { systemEnv: true, smallFastModel: "mock/new-small" } } satisfies OcxConfig;
+    expect(await injectSystemEnv(4096, config)).toEqual({ injected: true });
+    const setCalls = launchctlCommands();
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_DEFAULT_HAIKU_MODEL mock/new-small");
+    expect(setCalls).toContain("launchctl setenv ANTHROPIC_SMALL_FAST_MODEL mock/new-small");
+    const keys = JSON.parse(writes.filter(w => w.path.includes("system-env-port")).at(-1)!.data).injectedKeys as string[];
+    expect(keys).toEqual(expect.arrayContaining(["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"]));
+  });
+
+  test("re-inject unsets a tracked slot the config no longer produces", async () => {
+    const writes = capturedWrites();
+    trackingFile = trackingWithLevers(["ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.ANTHROPIC_DEFAULT_HAIKU_MODEL = "mock/old-small";
+    launchctlEnvValues.ANTHROPIC_SMALL_FAST_MODEL = "mock/old-small";
+    expect(await injectSystemEnv(4096, baseConfig)).toEqual({ injected: true });
+    const setCalls = launchctlCommands();
+    expect(setCalls).toContain("launchctl unsetenv ANTHROPIC_DEFAULT_HAIKU_MODEL");
+    expect(setCalls).toContain("launchctl unsetenv ANTHROPIC_SMALL_FAST_MODEL");
+    const keys = JSON.parse(writes.filter(w => w.path.includes("system-env-port")).at(-1)!.data).injectedKeys as string[];
+    expect(keys).not.toContain("ANTHROPIC_DEFAULT_HAIKU_MODEL");
+    expect(keys).not.toContain("ANTHROPIC_SMALL_FAST_MODEL");
+    expect(keys).toEqual(expect.arrayContaining(["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"]));
+  });
+
+  test("a tracked auto-compact value is refreshed, not read back as a user override", async () => {
+    capturedWrites();
+    trackingFile = trackingWithLevers(["CLAUDE_CODE_AUTO_COMPACT_WINDOW"]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.CLAUDE_CODE_AUTO_COMPACT_WINDOW = "500000";
+    expect(await injectSystemEnv(4096, baseConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain("launchctl setenv CLAUDE_CODE_AUTO_COMPACT_WINDOW 829800");
+  });
+
+  test("an untracked (user-owned) slot is neither overwritten nor unset on re-inject", async () => {
+    capturedWrites();
+    trackingFile = trackingWithLevers([]);
+    launchctlBaseUrl = "http://127.0.0.1:4096";
+    launchctlEnvValues.ANTHROPIC_DEFAULT_HAIKU_MODEL = "user/own-haiku";
+    const config = { ...baseConfig, claudeCode: { systemEnv: true, smallFastModel: "mock/new-small" } } satisfies OcxConfig;
+    expect(await injectSystemEnv(4096, config)).toEqual({ injected: true });
+    const haikuCalls = launchctlCommands().filter(c => c.includes("ANTHROPIC_DEFAULT_HAIKU_MODEL") && !c.includes("getenv"));
+    expect(haikuCalls).toEqual([]);
   });
 });
 

@@ -28,7 +28,30 @@ const FORBIDDEN_TRACKED_FILENAMES = [".DS_Store", "Thumbs.db"];
  * #820 campaign, and the third one rode a merge into `dev`. `.gitignore` cannot
  * catch that on its own, because an already-tracked path ignores the rule.
  */
-const RETIRED_TRACKED_DIRS = ["go"];
+/**
+ * The root `docs/` folder and the PR screenshot folders were retired together.
+ * `docs/` had become 4.9 MB, 4.5 MB of it pull-request evidence images that
+ * authors committed on their branch and every squash merge carried into `dev`.
+ * Moving the images did not help: `docs-site/public/pr-screenshots/` grew the
+ * same way and was published to GitHub Pages besides. Evidence images now go in
+ * the PR description or on the orphan `pr-assets` branch.
+ */
+const RETIRED_TRACKED_DIRS = [
+  "go",
+  "docs",
+  ".github/pr-assets",
+  "assets/pr-screenshots",
+  "docs-site/public/pr-screenshots",
+];
+
+/** Loose PR evidence images deleted with the folders above. */
+const RETIRED_TRACKED_FILES = [
+  "assets/pr-gate-screenshot-required.png",
+  "assets/pr2950-capacity-expiry.png",
+  "assets/pr715-selection-order.png",
+  "assets/request-pacing-dashboard.jpg",
+  "assets/zh-tw-providers.png",
+];
 
 function trackedFiles(): string[] {
   const result = Bun.spawnSync(["git", "ls-files"], { cwd: repoRoot });
@@ -75,12 +98,17 @@ describe("repository hygiene", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("the retired Go runtime stays untracked", () => {
+  test("retired directories stay untracked", () => {
     const offenders = trackedFiles().filter((path) =>
       RETIRED_TRACKED_DIRS.some((dir) => path === dir || path.startsWith(`${dir}/`)),
     );
 
     expect(offenders).toEqual([]);
+  });
+
+  test("retired PR evidence images stay untracked", () => {
+    const tracked = new Set(trackedFiles());
+    expect(RETIRED_TRACKED_FILES.filter((path) => tracked.has(path))).toEqual([]);
   });
 
   test("gitignore still declares the agent-state directories", async () => {

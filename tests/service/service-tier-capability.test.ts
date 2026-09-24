@@ -123,6 +123,7 @@ describe("xAI Fast capability follows the captured authentication transport", ()
     // (devlog/_fin/260913_xai_oauth_fast/020_probe-evidence.md), never provider-wide.
     expect(entry.chatServiceTier).toBe(true);
     expect(entry.modelSupportsServiceTier).toEqual({
+      "grok-4.7": true,
       "grok-4.6": true,
       "grok-4.5": true,
       "grok-4.3": true,
@@ -142,6 +143,11 @@ describe("xAI Fast capability follows the captured authentication transport", ()
 
     const oauthPolicy = fastPolicyForModel(xaiProvider("oauth"), "grok-4.6", "xai");
     expect(oauthPolicy).toMatchObject({
+      capability: true,
+      eligibility: "eligible",
+      forwardCallerTier: true,
+    });
+    expect(fastPolicyForModel(xaiProvider("oauth"), "grok-4.7", "xai")).toMatchObject({
       capability: true,
       eligibility: "eligible",
       forwardCallerTier: true,

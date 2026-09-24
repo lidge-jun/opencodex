@@ -15,9 +15,15 @@
  *   <scopeDir>/.ocx-staging-<ts>/             npm --prefix root (contains node_modules/...)
  *   <scopeDir>/.ocx-backup-<ts>/opencodex     previous live tree during/after the swap
  *   <scopeDir>/.ocx-recovery.json             double-fault marker with a one-line restore
+ *
+ * A staging directory is created exclusively and immediately carries an ownership marker
+ * (`.ocx-update-owner.json`). Only a marked staging directory is ever swept by a later
+ * update; anything else next to the package — an unmarked stage from an older updater, npm's
+ * own `.<name>-<random>` rename-aside, a link — is reported and left alone (#5624).
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 /**
@@ -160,6 +166,146 @@ function stampedName(prefix) {
   return prefix + "-" + new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+export const UPDATE_OWNER_MARKER = ".ocx-update-owner.json";
+const STAGE_PREFIX = ".ocx-staging-";
+/**
+ * A marked stage younger than this is left alone by the sweep. npm's staging install is bounded
+ * at three minutes by the launcher; the floor is far above it so an update running from another
+ * home against the same global prefix never loses its in-flight stage.
+ */
+export const STALE_STAGE_MIN_AGE_MS = 30 * 60 * 1000;
+const RETRYABLE_REMOVE_CODES = new Set(["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
+
+/** Create a fresh staging directory that did not exist before, and mark it as ours. */
+function createOwnedStage(scopeDir, pkgName, deps = {}) {
+  const mkdir = deps.mkdir ?? mkdirSync;
+  const stageRoot = join(scopeDir, stampedName(".ocx-staging") + "-" + randomBytes(4).toString("hex"));
+  // Not recursive: an existing directory of the same name must fail, never be reused.
+  mkdir(stageRoot);
+  try {
+    writeFileSync(join(stageRoot, UPDATE_OWNER_MARKER), JSON.stringify({
+      schema: 1,
+      kind: "staging",
+      pkgName,
+      pid: process.pid,
+      createdAt: (deps.now ?? Date.now)(),
+    }), { flag: "wx" });
+  } catch (error) {
+    // Still empty and created by this call: remove it rather than leave an unmarked stage.
+    try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* reported by the caller */ }
+    throw error;
+  }
+  return stageRoot;
+}
+
+/** The marker of a real (non-link) staging directory this updater created, or null. */
+function readOwnedStageMarker(dir, pkgName) {
+  try {
+    const dirStat = lstatSync(dir);
+    // A symlink or junction is never ours to delete: removing through it reaches its target.
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) return null;
+    const markerPath = join(dir, UPDATE_OWNER_MARKER);
+    if (!lstatSync(markerPath).isFile()) return null;
+    const marker = JSON.parse(readFileSync(markerPath, "utf8"));
+    if (marker?.schema !== 1 || marker.kind !== "staging" || marker.pkgName !== pkgName) return null;
+    if (typeof marker.createdAt !== "number" || !Number.isFinite(marker.createdAt)) return null;
+    return marker;
+  } catch {
+    return null;
+  }
+}
+
+function removeWithRetry(rm, target, attempts = 3) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      rm(target, { recursive: true, force: true });
+      return null;
+    } catch (error) {
+      const code = typeof error?.code === "string" ? error.code : "EUNKNOWN";
+      if (!RETRYABLE_REMOVE_CODES.has(code) || attempt >= attempts - 1) return code;
+      const until = Date.now() + 100 * (attempt + 1);
+      while (Date.now() < until) { /* brief synchronous backoff, as renameWithRetry */ }
+    }
+  }
+}
+
+/**
+ * Remove an owned staging directory. The marker goes last and only once everything else is
+ * gone, so a tree held open by a running executable (the reported locked `bunx.exe`) stays
+ * provably ours and the next update can finish the job.
+ */
+export function removeOwnedStage(stageRoot, deps = {}) {
+  const rm = deps.rm ?? rmSync;
+  let names;
+  try {
+    names = readdirSync(stageRoot);
+  } catch (error) {
+    return error?.code === "ENOENT" ? { removed: true } : { removed: false, code: error?.code ?? "EUNKNOWN" };
+  }
+  let failure = null;
+  for (const name of names) {
+    if (name === UPDATE_OWNER_MARKER) continue;
+    const code = removeWithRetry(rm, join(stageRoot, name));
+    if (code && !failure) failure = code;
+  }
+  if (failure) return { removed: false, code: failure };
+  const markerCode = removeWithRetry(rm, join(stageRoot, UPDATE_OWNER_MARKER));
+  if (markerCode) return { removed: false, code: markerCode };
+  const dirCode = removeWithRetry(rm, stageRoot);
+  return dirCode ? { removed: false, code: dirCode } : { removed: true };
+}
+
+/**
+ * Clear what earlier update attempts left next to the package, without ever deleting anything
+ * this updater cannot prove it created. Never throws and never fails the update: every stage is
+ * a fresh, uniquely named directory, so a leftover can only cost disk space, not block staging.
+ */
+export function sweepUpdateLeftovers({ packageDir, pkgName, log = () => {}, deps = {} }) {
+  const scopeDir = dirname(packageDir);
+  const now = (deps.now ?? Date.now)();
+  const result = { removed: [], inUse: [], recent: [], notOwned: [] };
+  let names = [];
+  try {
+    names = readdirSync(scopeDir);
+  } catch {
+    return result;
+  }
+  // npm renames a package it is replacing to ".<name>-<random>" during a direct global install.
+  const renameAsidePrefix = "." + basename(packageDir) + "-";
+  for (const name of names.sort()) {
+    const full = join(scopeDir, name);
+    if (name.startsWith(STAGE_PREFIX)) {
+      const marker = readOwnedStageMarker(full, pkgName);
+      if (!marker) {
+        result.notOwned.push(full);
+      } else if (now - marker.createdAt < STALE_STAGE_MIN_AGE_MS) {
+        result.recent.push(full);
+      } else {
+        const removal = removeOwnedStage(full, deps);
+        if (removal.removed) result.removed.push(full);
+        else result.inUse.push({ path: full, code: removal.code });
+      }
+    } else if (name.startsWith(renameAsidePrefix)) {
+      result.notOwned.push(full);
+    }
+  }
+  // Names only: the full path under a user-scoped npm prefix carries the account name, and
+  // this logger is the launcher's console.
+  for (const path of result.removed) log("Removed a staging directory left by an earlier update: " + basename(path));
+  for (const entry of result.inUse) {
+    log("Left an earlier update's staging directory in place (" + entry.code + "; a file inside is still in use); the next update retries it: " + basename(entry.path));
+  }
+  for (const path of result.notOwned) {
+    log("Not removing " + basename(path) + " next to the package: this updater did not create it. Delete it by hand once no OpenCodex process is running from it.");
+  }
+  return result;
+}
+
+/** Whether the launcher that ran this npm update can still drive service/tray recovery. */
+export function launcherUsableAfterNpmUpdate(tx) {
+  return Boolean(tx?.ok || tx?.rolledBack === true || ["stage", "verify", "swap-backup"].includes(tx?.phase));
+}
+
 /** Largest regular file under a directory tree (bounded depth) — locates the Bun binary. */
 function findLargestFile(root, depth = 3) {
   let best;
@@ -247,29 +393,37 @@ export function transactionalNpmUpdate({
 }) {
   const rename = deps.rename ?? renameSync;
   const scopeDir = dirname(packageDir);
-  const stageRoot = join(scopeDir, stampedName(".ocx-staging"));
+  // Leftovers from earlier attempts are cleared or stepped around first; this never fails.
+  try { sweepUpdateLeftovers({ packageDir, pkgName, log, deps }); } catch { /* report-only */ }
+  let stageRoot;
   // GLOBAL-style staging (-g --prefix): npm nests the package's dependencies INSIDE the
   // package dir, exactly like the live global tree this stage will replace. A local-style
   // install would hoist bun/zod to stageRoot/node_modules — siblings that the swap would
   // leave behind, shipping a dependency-less live tree (release-audit blocker).
   // Layout: <stageRoot>/lib/node_modules/<pkg> on POSIX, <stageRoot>/node_modules/<pkg>
   // on Windows.
-  const stagedCandidates = [
-    join(stageRoot, "lib", "node_modules", ...pkgName.split("/")),
-    join(stageRoot, "node_modules", ...pkgName.split("/")),
-  ];
 
   // D1: stage to the side. --prefix keeps npm entirely inside stageRoot; the live tree
   // and the npm bin shims are untouched until the swap. A failure HERE (mkdir EACCES,
   // ENOSPC) must NOT fall back to the destructive legacy install (review High 4): the
   // caller sees a normal phase failure with live untouched.
   try {
-    mkdirSync(stageRoot, { recursive: true });
+    stageRoot = createOwnedStage(scopeDir, pkgName, deps);
   } catch (error) {
     return { ok: false, phase: "stage", error: "could not create staging directory: " + (error?.message ?? String(error)) };
   }
+  const stagedCandidatesIn = root => [
+    join(root, "lib", "node_modules", ...pkgName.split("/")),
+    join(root, "node_modules", ...pkgName.split("/")),
+  ];
+  const discardStage = () => {
+    const removal = removeOwnedStage(stageRoot, deps);
+    if (!removal.removed) {
+      log("Left this update's staging directory in place (" + removal.code + "; a file inside is still in use); the next update removes it: " + basename(stageRoot));
+    }
+  };
   const spec = pkgName + "@" + (targetVersion || tag);
-  log("Staging " + spec + " into " + stageRoot);
+  log("Staging " + spec + " into " + basename(stageRoot) + " next to the package");
   // npm 12 blocks lifecycle scripts by default. Bun's postinstall copies the selected
   // @oven/bun-* executable into bun/bin, so a successful npm exit without this narrow
   // approval leaves the staged tree intentionally incomplete. Allow only the package
@@ -279,19 +433,19 @@ export function transactionalNpmUpdate({
     "--allow-scripts=bun", "--no-audit", "--no-fund", spec,
   ]);
   if (install.status !== 0) {
-    try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    discardStage();
     return { ok: false, phase: "stage", error: "npm staging install failed (" + (install.status ?? "?") + ")" };
   }
-  const stagedPackage = stagedCandidates.find(dir => existsSync(join(dir, "package.json")));
+  const stagedPackage = stagedCandidatesIn(stageRoot).find(dir => existsSync(join(dir, "package.json")));
   if (!stagedPackage) {
-    try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    discardStage();
     return { ok: false, phase: "verify", error: "staged package directory not found under " + stageRoot };
   }
 
   // D2: verify INSIDE the stage. Live is still untouched on any failure here.
   const staged = verifyInstallTree(stagedPackage, targetVersion || undefined);
   if (!staged.ok) {
-    try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    discardStage();
     return { ok: false, phase: "verify", error: "staged tree failed verification: " + staged.failures.join("; ") };
   }
 
@@ -301,13 +455,13 @@ export function transactionalNpmUpdate({
   try {
     mkdirSync(backupRoot, { recursive: true });
   } catch (error) {
-    try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    discardStage();
     return { ok: false, phase: "swap-backup", error: "could not create backup directory: " + (error?.message ?? String(error)) };
   }
   try {
     renameWithRetry(rename, packageDir, backupPackage);
   } catch (error) {
-    try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+    discardStage();
     try { rmSync(backupRoot, { recursive: true, force: true }); } catch { /* best effort */ }
     return { ok: false, phase: "swap-backup", error: "could not move live tree aside: " + (error?.message ?? String(error)) };
   }
@@ -317,7 +471,7 @@ export function transactionalNpmUpdate({
     // Rollback: reverse the first rename. Double fault leaves the recovery marker.
     try {
       renameWithRetry(rename, backupPackage, packageDir);
-      try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+      discardStage();
       try { rmSync(backupRoot, { recursive: true, force: true }); } catch { /* best effort */ }
       return { ok: false, phase: "swap-live", rolledBack: true, error: "could not place staged tree: " + (error?.message ?? String(error)) };
     } catch (rollbackError) {
@@ -335,9 +489,12 @@ export function transactionalNpmUpdate({
   const liveCheck = verifyInstallTree(packageDir, targetVersion || undefined);
   if (!liveCheck.ok) {
     try {
-      rmSync(packageDir, { recursive: true, force: true });
-      rename(backupPackage, packageDir);
-      try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+      // Move the rejected tree into our own stage instead of deleting it in place: a file held
+      // open there must not turn a clean rollback into a double fault. The stage's marker keeps
+      // it sweepable by the next update.
+      renameWithRetry(rename, packageDir, join(stageRoot, "rejected"));
+      renameWithRetry(rename, backupPackage, packageDir);
+      discardStage();
       try { rmSync(backupRoot, { recursive: true, force: true }); } catch { /* best effort */ }
       return { ok: false, phase: "post-verify", rolledBack: true, error: "live tree failed post-swap verification: " + liveCheck.failures.join("; ") };
     } catch (rollbackError) {
@@ -355,6 +512,6 @@ export function transactionalNpmUpdate({
   // Success: stage scaffolding is disposable now; the backup stays until the next
   // healthy boot reaps it (bootRestoreProbe) — the process that spawned this update may
   // still hold the old cwd.
-  try { rmSync(stageRoot, { recursive: true, force: true }); } catch { /* best effort */ }
+  discardStage();
   return { ok: true, phase: "done", backup: backupPackage };
 }

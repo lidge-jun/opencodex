@@ -1559,7 +1559,9 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // trace id are the only upstream-controlled fields that reach the error.
     // The stated delay rides along in our own words so a client can still
     // tell how long to wait when local retry gives up, exceeds its cap, or
-    // is disabled; the `~` keeps it from re-parsing as a downstream hint.
+    // is disabled. The `~` marks the delay as approximate; the shared
+    // parser accepts it once after Retry-After, so the outer client cooldown
+    // reads this same delay back from the message.
     throw new CloudChatError(
       `Cognition chat failed${trailerError.code ? ` (${trailerError.code})` : ''} ` +
       `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})` +

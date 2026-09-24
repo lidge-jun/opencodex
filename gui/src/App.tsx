@@ -12,7 +12,9 @@ import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import RemoteWorkspace from "./pages/RemoteWorkspace";
 import ErrorBoundary from "./components/ErrorBoundary";
+import QuotaSummaryBar from "./components/quota-summary-bar/QuotaSummaryBar";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
+import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Select, ToastNotice, type NoticeTone } from "./ui";
@@ -25,7 +27,7 @@ import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
 import { useCodexRestart } from "./use-codex-restart";
 import { confirmAction } from "./action-dialogs";
-import { isDesktopShell, isExternalLink } from "./lib/desktop-shell";
+import { isDesktopShell, isExternalLink, openDesktopUpdatePage } from "./lib/desktop-shell";
 
 type Theme = "light" | "dark" | "system";
 
@@ -338,6 +340,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <DesktopStarOnboarding apiBase={sharedBase} enabled={targetsSettled && !targets.connected} />
       {actionFeedback && (
         <ToastNotice tone={actionFeedback.tone} onDismiss={() => setActionFeedback(null)} dismissLabel={t("common.close")}>
           {actionFeedback.text}
@@ -453,10 +456,8 @@ export default function App() {
           <SidebarGithubRow
             apiBase={sharedBase}
             onOpenUpdate={() => {
-              // The update dialog lives on the dashboard maintenance panel. Deep-link to
-              // `#dashboard/update` and let the dashboard own the check/run flow — no
-              // cross-component event bus, and the link survives a refresh.
               setNavOpen(false);
+              if (openDesktopUpdatePage()) return;
               navigateToPage("dashboard", "update");
             }}
           />
@@ -464,6 +465,11 @@ export default function App() {
       </aside>
 
       <main className="main" inert={navOpen}>
+        {targetsSettled && page !== "startup" && (!targets.connected || sharedSessionReady) && (
+          <ErrorBoundary key={sharedBase} pageName={t("quotaSummary.aria")} title={t("errorBoundary.title")} message={t("errorBoundary.message")} detailsLabel={t("errorBoundary.details")} reloadLabel={t("errorBoundary.reload")}>
+            <QuotaSummaryBar apiBase={sharedBase} />
+          </ErrorBoundary>
+        )}
         {/*
           Combos is full-bleed, unlike every other surface, and it is reachable only as
           a Models tab. `.main-inner` is App's element, so App is the only place that

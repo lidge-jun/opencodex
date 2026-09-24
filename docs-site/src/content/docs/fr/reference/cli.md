@@ -23,6 +23,12 @@ Pour observer une installation Windows x64, consultez [`attest`](/fr/reference/c
 
 L’affichage d’une liste ou d’un état est l’action par défaut lorsqu’il n’y a aucune ambiguïté. Utilisez `--json` pour obtenir des instantanés structurés et `ocx observe logs --follow --jsonl` pour suivre un flux de journaux de requêtes. Le thème, la langue, la navigation et les autres états purement visuels du navigateur n’ont pas d’équivalent dans la CLI. La configuration de Cloudflare Tunnel ne fait pas partie de cet ensemble de commandes.
 
+## Plafond des sondes de disponibilité
+
+`ocx health`, `ocx status`, `ocx account *`, `ocx login codex` et `ocx ready` trouvent le proxy en cours d'exécution grâce à une courte sonde : 750 ms par tentative par défaut, 1500 ms avec nouvelles tentatives pour les décisions d'arrêt et de démarrage. Si une couche de sécurité (filtre de contenu, extension réseau de type EDR) ajoute un coût fixe à chaque connexion loopback, ces plafonds peuvent expirer avant qu'un proxy sain réponde.
+
+Définissez `OCX_PROBE_TIMEOUT_MS` pour relever les plafonds, par exemple `OCX_PROBE_TIMEOUT_MS=5000 ocx status`. La valeur est un nombre entier de millisecondes entre 1 et 30000. Elle ne peut que relever : le défaut de 750 ms et les budgets d'arrêt/démarrage de 1500 ms gardent leur plancher, donc `1000` n'allonge que la sonde par défaut. Une valeur absente, vide, fractionnaire, négative, nulle ou supérieure est ignorée.
+
 ## Codes de sortie et confirmation
 
 Une commande réussie renvoie le code 0. Une syntaxe non valide, une commande ou une ressource inconnue, l’échec d’une opération d’API ou l’indisponibilité d’un service requis produit un code non nul. Plus précisément, `ocx health` renvoie 0 uniquement lorsque le proxy est sain, et 1 dans le cas contraire ; cette commande peut donc servir de sonde de service. Les scripts doivent tester le code de sortie plutôt que d’analyser le texte destiné aux utilisateurs.

@@ -68,6 +68,10 @@ export function stripOpenAiOnlyWebSearchFields(body: unknown): unknown {
  * same-shaped successor to 1.2 on the same Zen wire, and an equality check would
  * have let a Codex-emitted `web_search` body reach the
  * gateway and come back 400 for every request the moment 1.3 was selected.
+ *
+ * This list gates the two Zen destinations only. Zen serves nothing but the Contributor
+ * tiers there, so the id is a proxy for "this gateway"; the direct Meta host below serves
+ * a non-Contributor default and is gated by destination instead.
  */
 const MUSE_SPARK_WEB_SEARCH_STRICT_MODELS = new Set([
   "muse-spark-1.3-contributor",
@@ -76,10 +80,21 @@ const MUSE_SPARK_WEB_SEARCH_STRICT_MODELS = new Set([
   "muse-spark-1.2-contributor-free",
 ]);
 
+/**
+ * Direct Meta Muse / Meta Model Responses. Its refusal is a gateway schema rule applied
+ * before inference, so it holds for every Muse model Meta serves — including the default
+ * `muse-spark-1.3`, which no Contributor-shaped list contains. Gating that host on model
+ * membership sent `search_content_types` through on every Codex `web_search` turn and 400ed
+ * the whole request. Same reading as the 64-char tool-name rewrite in
+ * `src/responses/muse-tool-name-alias.ts`, which is host-scoped and deliberately not
+ * model-gated for this reason.
+ */
+const MUSE_SPARK_STRICT_ANY_MODEL_DESTINATION = "https://api.meta.ai/v1/responses";
+
 const MUSE_SPARK_WEB_SEARCH_STRICT_RESPONSE_URLS = new Set([
   "https://opencode.ai/zen/v1/responses",
   "https://opencode.ai/zen/go/v1/responses",
-  "https://api.meta.ai/v1/responses",
+  MUSE_SPARK_STRICT_ANY_MODEL_DESTINATION,
 ]);
 
 const MUSE_SPARK_UNSUPPORTED_WEB_SEARCH_FIELDS = [
@@ -94,7 +109,8 @@ const MUSE_SPARK_UNSUPPORTED_WEB_SEARCH_FIELDS = [
  * malformed, credentialed, or parameterized destinations keep their original body
  * instead of assuming this gateway contract. Keep the rejected names together so a
  * newly identified field is a one-line compatibility update rather than another
- * bespoke rewrite.
+ * bespoke rewrite. The destination is the whole predicate on direct Meta; the Zen
+ * wires additionally require a known Contributor id.
  */
 export function stripMuseSparkUnsupportedWebSearchFields(
   body: unknown,
@@ -102,8 +118,6 @@ export function stripMuseSparkUnsupportedWebSearchFields(
   responseUrl: string,
 ): unknown {
   if (!isPlainObject(body)) return body;
-  if (typeof modelId !== "string") return body;
-  if (!MUSE_SPARK_WEB_SEARCH_STRICT_MODELS.has(modelId.trim().toLowerCase())) return body;
   let destination: string;
   try {
     const url = new URL(responseUrl);
@@ -113,6 +127,10 @@ export function stripMuseSparkUnsupportedWebSearchFields(
     return body;
   }
   if (!MUSE_SPARK_WEB_SEARCH_STRICT_RESPONSE_URLS.has(destination)) return body;
+  if (
+    destination !== MUSE_SPARK_STRICT_ANY_MODEL_DESTINATION
+    && (typeof modelId !== "string" || !MUSE_SPARK_WEB_SEARCH_STRICT_MODELS.has(modelId.trim().toLowerCase()))
+  ) return body;
 
   const rewriteTools = (tools: unknown[]): { tools: unknown[]; changed: boolean } => {
     let changed = false;

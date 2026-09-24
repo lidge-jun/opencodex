@@ -68,6 +68,8 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "dash.backendOpenAI",
   // Claude app labels
   "claude.pageTitle",
+  // A literal Claude Desktop picker model id used as the input placeholder, not prose.
+  "claudeDesktop.firstParty.bindings.pickerPlaceholder",
   "claude.tabCode",
   "claude.tabDesktop",
   // Claude Desktop model-family labels (proper nouns)

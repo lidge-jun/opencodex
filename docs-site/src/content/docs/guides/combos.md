@@ -218,18 +218,64 @@ Combo failures are divided into **hop** failures and **terminal** failures.
 | Classified authentication, subscription, quota, rate-limit, overload, or upstream-server error | Cool the target and hop, even when the status alone is not sufficient. |
 | Client cancellation (499), `origin_rejected`, cyber-policy refusal, context overflow, or other invalid request | Stop and return the error; another target would not make the request valid. |
 | Structured HTTP 400 rejecting optional `user`, an unsupported reasoning effort, or model-scoped image input | Hop before output commitment without cooling; see request-local target compatibility below. |
+| First tool call of a Responses turn run by an in-process adapter (`runTurn`) that the current request did not declare, before any output or replay-unsafe side effect | Cool the target and hop with the same tool catalog. After visible output or a replay-unsafe side effect the refusal is final. Chat Completions and Anthropic Messages requests are unchanged. |
 | Any other unclassified error | Stop and return the error. |
+
+If the shared request send budget refuses the first target, the combo returns a local 429
+`request_send_budget_exhausted` without contacting a provider. If it refuses a later target,
+the combo returns the last real upstream failure without sending to that target.
 
 When `cooldownMs` is unset, a hopped target uses an upstream fallback: 5 seconds for request-rate
 429s with upstream code `1302` or `1305`, and 60 seconds otherwise. When it is set, `cooldownMs`
 applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including those
-request-rate 429s. Numeric `Retry-After` seconds and HTTP-date values are accepted, and every
-cooldown is capped at 10 minutes. The precedence is, from strongest to weakest, explicit
+request-rate 429s. Numeric `Retry-After` seconds and HTTP-date values are accepted. Explicit
+server delays are capped at 24 hours; reset-derived, configured, and fallback cooldowns are capped
+at 10 minutes. The precedence is, from strongest to weakest, explicit
 `Retry-After` → Codex reset headers (`x-codex-primary-reset-at`, `x-codex-secondary-reset-at`, or
 `x-codex-tertiary-reset-at`) → the combo's `cooldownMs` (when set) → the 5-second request-rate
 fallback for upstream rate-limit codes `1302`/`1305` → the 60-second default. A valid immediate
 `Retry-After: 0` remains an immediate upstream directive rather than being replaced by a configured
 cooldown.
+
+### Last-resort targets
+
+A brief cooldown on a preferred target otherwise routes straight to whatever
+comes next in the list — including a target you only ever wanted used in an
+emergency. Mark it, and tell the combo to wait first:
+
+```json
+{
+  "strategy": "failover",
+  "cooldownWaitPolicy": "before-last-resort",
+  "waitForCooldownMs": 10000,
+  "targets": [
+    { "provider": "provider-a", "model": "model-a" },
+    { "provider": "provider-b", "model": "model-b" },
+    { "provider": "provider-c", "model": "model-c", "lastResort": true }
+  ]
+}
+```
+
+With the policy set, selection tries the normal targets first. If they are only
+cooling and the earliest cooldown expires inside `waitForCooldownMs`, the
+request waits for that instead of dispatching the last-resort target. That
+deferral does not depend on the wait: a `lastResort` target is skipped whenever
+any normal target is available, for every strategy, and under `round-robin` or
+`random` it does not join the rotation at all. `waitForCooldownMs` only adds the
+wait for a cooling normal target, so at the default `0` nothing waits: the last
+resort is used as soon as no normal target is available. After a failed attempt,
+the next pick follows the same rule.
+
+**The policy only ever defers.** When no normal target can be reached — every
+one cooling past the budget, already attempted, or ruled out — the last-resort
+target is dispatched as usual. A policy that could withhold it would turn a
+fallback into an outage, which is worse than the premature routing it prevents.
+The same applies to a combo whose targets are *all* marked `lastResort`: it
+dispatches normally.
+
+`lastResort` is inert unless `cooldownWaitPolicy` is set, and both are omitted
+by default, so existing combos are unaffected. Only the exact string
+`before-last-resort` opts in.
 
 The current request never retries the same attempted target. Later requests skip a cooled target until its
 cooldown expires; request-local compatibility rejections do not cool the target. A `Retry-After` HTTP-date that is already in the past is also preserved as an
@@ -247,6 +293,10 @@ used by native account routing.
 :::note
 Failover is intentionally bounded. It helps with target-specific availability, authentication,
 quota, and overload failures; it does not hide caller errors or policy refusals.
+On a non-combo Responses request, an allowlisted xAI policy 403 is rewritten to HTTP 200
+`incomplete/content_filter` before Codex retries it as a transport failure; see
+[xAI policy refusals](/reference/proxy-formats/#xai-policy-refusals). Combo hops still
+classify the original HTTP 403 as a hop.
 :::
 
 For streaming requests, the upstream HTTP status is not the final decision. OpenCodex buffers a
@@ -385,6 +435,10 @@ value to change it. An explicit `cooldownMs` (even `60000`) is persisted as-is b
 the request-rate fallback. A stored `cooldownMs` can only be removed by editing the configuration file;
 `waitForCooldownMs` resets to its default when a `PUT` explicitly sends `0`, because the sparse
 serializer omits that default. Omission preserves both values and the dashboard does not expose them yet.
+Omitting `defaultEffortMode`, `reasoningEffortMode`, `imageInput`, or `cooldownWaitPolicy` likewise
+keeps the stored value, and a re-sent target without `lastResort` keeps that target's flag (matched by
+provider and model). The dashboard always sends `imageInput` and `reasoningEffortMode`, so switching
+them back to `auto` or `strict` there still replaces the stored value.
 
 For the complete persisted configuration, see [Configuration](/reference/configuration/).
 
@@ -411,12 +465,14 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 
 | Field | Required | Default | Rules |
 | --- | --- | --- | --- |
-| `targets` | Yes | — | Non-empty ordered array of configured `{ provider, model, weight? }` targets. Duplicate provider/model pairs are rejected. |
+| `targets` | Yes | — | Non-empty ordered array of configured `{ provider, model, weight?, lastResort? }` targets. Duplicate provider/model pairs are rejected. |
 | `targets[].weight` | No | `1` | Integer from 1 to 10,000. Used by round-robin and random; ignored by failover, least-used, and reset-window. |
+| `targets[].lastResort` | No | `false` | Marks an emergency-only target. Inert unless `cooldownWaitPolicy` is set. Never makes a target permanently ineligible: when no normal target can be reached it is dispatched as usual. |
 | `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, or `"reset-window"`. |
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. Applies only to round-robin. |
 | `cooldownMs` | No | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Integer from 1 to 600000. When set, applies as the per-target cooldown whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. |
 | `waitForCooldownMs` | No | `0` | Integer from 0 to 600000. Maximum time to wait for the earliest eligible cooling target before returning `combo_unavailable`; abort cancels the wait. |
+| `cooldownWaitPolicy` | No | unset | `"before-last-resort"` defers targets marked `lastResort`: they are used only when no normal target is available, for every strategy, and `waitForCooldownMs` only adds the wait for a cooling normal target, so at its `0` default nothing waits and the last resort is used as soon as no normal target is available. Only that exact string opts in. The deferral wait and the ordinary wait share one `waitForCooldownMs` budget per selection attempt. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
 | `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |
@@ -440,8 +496,8 @@ it has already been attempted for this request, or an encrypted v2 task excludes
 provider state and recent upstream errors. For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies
-when it is unset (5 seconds for request-rate codes `1302`/`1305`, otherwise 60 seconds); every cooldown is
-capped at 10 minutes.
+when it is unset (5 seconds for request-rate codes `1302`/`1305`, otherwise 60 seconds). Explicit
+`Retry-After` delays are capped at 24 hours; the other cooldowns are capped at 10 minutes.
 
 ### Why was my alias rejected?
 

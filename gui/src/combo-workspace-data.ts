@@ -420,8 +420,8 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
     strategy: ComboStrategy;
     stickyLimit?: number;
     defaultEffort: ComboEffort | null;
-    imageInput?: "disabled";
-    reasoningEffortMode?: "adaptive";
+    imageInput: "auto" | "disabled";
+    reasoningEffortMode: "strict" | "adaptive";
     alias?: string;
     nativeAlias?: true;
     displayName?: string;
@@ -437,8 +437,11 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
         : { provider: target.provider.trim(), model: target.model.trim() }),
       strategy: item.strategy,
       defaultEffort: item.defaultEffort,
-      ...(item.imageInput === "disabled" ? { imageInput: "disabled" as const } : {}),
-      ...(item.reasoningEffortMode === "adaptive" ? { reasoningEffortMode: "adaptive" as const } : {}),
+      // The server preserves an omitted field from the stored combo (#5687), so the dashboard
+      // must send both explicitly or switching back to auto/strict would never take effect.
+      // Storage stays sparse: the server drops the defaults before persisting.
+      imageInput: item.imageInput === "disabled" ? "disabled" : "auto",
+      reasoningEffortMode: item.reasoningEffortMode === "adaptive" ? "adaptive" : "strict",
       ...(item.strategy === "round-robin" ? { stickyLimit: item.stickyLimit } : {}),
       ...(item.alias && item.alias.trim() ? { alias: item.alias.trim() } : {}),
       ...(item.nativeAlias ? { nativeAlias: true } : {}),

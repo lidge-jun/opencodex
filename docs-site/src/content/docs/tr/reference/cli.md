@@ -46,6 +46,12 @@ logs --follow --jsonl` kullanın. Tema, dil, gezinme ve diğer tamamen görsel
 tarayıcı durumlarının CLI eşdeğeri yoktur; Cloudflare Tünel kurulumu bu komut
 kümesinin dışındadır.
 
+## Canlılık yoklaması üst sınırının geçersiz kılınması
+
+`ocx health`, `ocx status`, `ocx account *`, `ocx login codex` ve `ocx ready`, çalışan proxy'yi kısa bir canlılık yoklamasıyla bulur: varsayılan olarak deneme başına 750 ms, durdurma ve başlatma kararlarında yeniden denemelerle 1500 ms. Bir güvenlik katmanının (içerik filtresi veya EDR tarzı ağ uzantısı) her loopback bağlantısına sabit bir gecikme eklediği ana makinelerde bu sınırlar, sağlıklı bir proxy yanıt vermeden dolabilir.
+
+Bu durumda sınırları `OCX_PROBE_TIMEOUT_MS` ile yükseltin, örneğin `OCX_PROBE_TIMEOUT_MS=5000 ocx status`. Değer 1 ile 30000 arasında tam sayı milisaniyedir. Geçersiz kılma yalnızca yükseltir: 750 ms varsayılan ve 1500 ms durdurma/başlatma bütçeleri alt sınırlarını korur, bu yüzden `1000` yalnızca varsayılan yoklamayı uzatır. Boş, kesirli, negatif, sıfır veya daha büyük değerler yok sayılır.
+
 ## Çıkış kodları ve onaylama
 
 Başarılı komutlar 0 ile çıkar. Geçersiz kullanım, bilinmeyen komutlar veya

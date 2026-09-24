@@ -111,6 +111,7 @@ const CLAUDE_FABLE_51: Cost4 = { input: 10, output: 50, cacheRead: 0.25, cacheWr
 // Opus 5 was first priced from the maintainer's confirmation that it matched Opus 4.6. The
 // pricing page now lists it at that same 5 / 25 / 0.50 / 6.25 tuple (re-verified 2026-09-23).
 const CLAUDE_OPUS_5 = CLAUDE_OPUS_46;
+const CURSOR_OPUS_48 = CLAUDE_OPUS_46;
 // Claude Opus 5.5 (claude-opus-5-5, released 2026-09-22): 4 / 20, 5m cache write 5.00. Cache
 // hits are 0.05x base input (0.20), a model-specific footnote on the pricing page, NOT the
 // 0.1x most families use. 1M context and 128K output at one flat rate (no long-context tier).
@@ -119,6 +120,50 @@ const ANTHROPIC_PRICING = "https://platform.claude.com/docs/en/about-claude/pric
 const CLAUDE_OPUS_5_SOURCE = `anthropic official Claude Opus 5 ${ANTHROPIC_PRICING}`;
 const CLAUDE_OPUS_55_SOURCE = `anthropic official Claude Opus 5.5 ${ANTHROPIC_PRICING}; cache hit = 0.05x base input`;
 const CURSOR_OPUS_55_PRICING = "https://cursor.com/docs/models/claude-opus-5-5 (Cursor Other Models pool; same list rate as Anthropic, Fast Mode billed separately)";
+const CURSOR_OPUS_48_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-4-8";
+const CURSOR_OPUS_5_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-5";
+const CURSOR_OPUS_55_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-5-5";
+
+const CURSOR_FAST_PRICE_MODELS = new Set(["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]);
+const CURSOR_FAST_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
+const CURSOR_FAST_PRICE_SOURCES: Readonly<Record<string, string>> = {
+  "claude-opus-4-8": CURSOR_OPUS_48_FAST_PRICING,
+  "claude-opus-5": CURSOR_OPUS_5_FAST_PRICING,
+  "claude-opus-5-5": CURSOR_OPUS_55_FAST_PRICING,
+};
+
+function supportsCursorFastId(parsed: ReturnType<typeof normalizeCursorClaudeId>): boolean {
+  if (!parsed?.fast || !CURSOR_FAST_PRICE_MODELS.has(parsed.canonicalBaseId)) return false;
+  if (parsed.canonicalBaseId === "claude-opus-5-5" && parsed.thinking) return false;
+  if (parsed.level !== undefined && !CURSOR_FAST_LEVELS.has(parsed.level)) {
+    return false;
+  }
+  if (parsed.canonicalBaseId === "claude-opus-5" && !parsed.thinking
+      && parsed.level !== undefined && !["low", "medium", "high"].includes(parsed.level)) {
+    return false;
+  }
+  return true;
+}
+
+/** Cursor's published Fast rows are exactly 2x the standard rows for these Opus models. */
+export function cursorFastPriceMultiplier(provider: string, modelId: string): number {
+  if (provider !== "cursor") return 1;
+  const parsed = normalizeCursorClaudeId(modelId);
+  return supportsCursorFastId(parsed) ? 2 : 1;
+}
+
+/** Whether a parsed Cursor Fast id belongs to a published, supported Fast ladder. */
+export function cursorFastPriceSupported(provider: string, modelId: string): boolean {
+  if (provider !== "cursor") return true;
+  const parsed = normalizeCursorClaudeId(modelId);
+  return !parsed?.fast || supportsCursorFastId(parsed);
+}
+
+export function cursorFastPriceSource(provider: string, modelId: string): string | undefined {
+  if (provider !== "cursor") return undefined;
+  const parsed = normalizeCursorClaudeId(modelId);
+  return supportsCursorFastId(parsed) ? CURSOR_FAST_PRICE_SOURCES[parsed!.canonicalBaseId] : undefined;
+}
 
 const GEMINI_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-07-22); cacheWrite=0: storage is billed per-hour, not per-token";
 const GEMINI_37_PRICING = "https://ai.google.dev/gemini-api/docs/pricing (2026-08-14); promotional rate through 2026-12-31, rises to 1.50/7.50 on 2027-01-01; cacheWrite=0: storage is billed per-hour, not per-token";
@@ -146,9 +191,12 @@ const DEEPSEEK_PRICING = "https://api-docs.deepseek.com/quick_start/pricing-deta
  * cache-write charge.
  */
 const DEEPSEEK_V41_FLASH: Cost4 = { input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 };
-// Kimi official tables publish input/output/cache-hit only; cacheWrite is mapped to the
-// cache-miss input price (Kimi auto-caches with no separate write billing). 2026-07-20 re-verified.
-const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (official table; cacheWrite derived = input, Kimi auto-cache has no write billing)";
+// Historical K2 rows retain their 2026-07-20 verification; they do not price retargeted aliases.
+const KIMI_PRICING = "https://platform.kimi.ai/docs/pricing (historical official table; cacheWrite derived from cache-miss input)";
+// K3 publishes a separate cache-write price: $3/1M for the default 5-minute TTL.
+// Coding presets share an endpoint/product, but these API reference estimates are not plan
+// billing or quota: K3's 1M model consumes about twice the quota of k3-256k.
+const KIMI_K3_PRICING = "https://platform.kimi.ai/docs/pricing/chat (API reference estimate; default 5-minute cache-write rate, not Code Plan billing/quota); https://www.kimi.com/code/docs/en/kimi-code/models.html";
 // Z.AI publishes one USD table for the international surface; the Coding Plan
 // subscription and the domestic bigmodel.cn endpoints bill differently
 // (subscription quota / CNY tiers), so every GLM row below is verified-derived:
@@ -221,6 +269,7 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // anthropic row would not cover cursor/kiro — each exposing provider needs its own.
   { provider: "anthropic", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_5, source: CLAUDE_OPUS_5_SOURCE, verifiedAt: "2026-09-23", status: "verified" },
   { provider: "cursor", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_5, source: `${CLAUDE_OPUS_5_SOURCE}; vendor list price applied to the Cursor surface`, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "cursor", modelId: "claude-opus-4-8", cost4: CURSOR_OPUS_48, source: "https://cursor.com/docs/models/claude-opus-4-8", verifiedAt: "2026-09-24", status: "verified" },
   { provider: "kiro", modelId: "claude-opus-5", cost4: CLAUDE_OPUS_5, source: `${CLAUDE_OPUS_5_SOURCE}; vendor list price applied to the Kiro credit surface`, verifiedAt: "2026-09-23", status: "verified-derived" },
   // Claude Opus 5.5. The anthropic bundle row wins for the bare provider id; these overlays
   // cover account-label namespaces. Cursor publishes the same list rate on its own model page.
@@ -306,25 +355,31 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // Kimi / Moonshot — official price tables are now published (2026-07-20 re-check;
   // previously empty). kimi = Kimi Code OAuth surface, moonshot = CN key surface,
   // kimi-code = API key surface (expected list price, not actual billing).
-  { provider: "kimi", modelId: "k3", cost4: KIMI_K3, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: k3 (official docs: k3[1m] is the 1M-context compat notation for k3) ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi", modelId: "kimi-for-coding", cost4: KIMI_K27_CODE, source: `derived: kimi-k2.7-code (Kimi Code maps to K2.7 Code per official model docs) ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "moonshot", modelId: "kimi-k3", cost4: KIMI_K3, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
+  // kimi-for-coding now serves K2.8 Preview. No verified K2.8 price: keep all three
+  // Coding presets unknown rather than reusing the alias's retired K2.7 price.
+  { provider: "moonshot", modelId: "kimi-k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "moonshot", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "k3", cost4: KIMI_K3, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: k3 ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi-code", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.7-code", cost4: KIMI_K27_CODE, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.7-code-highspeed", cost4: KIMI_K27_CODE_HIGHSPEED, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.6", cost4: KIMI_K26, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
   { provider: "kimi-code", modelId: "kimi-k2.5", cost4: KIMI_K25, source: KIMI_PRICING, verifiedAt: "2026-07-20", status: "verified-derived" },
-  { provider: "kimi-code", modelId: "kimi-for-coding", cost4: KIMI_K27_CODE, source: `derived: kimi-k2.7-code ${KIMI_PRICING}`, verifiedAt: "2026-07-20", status: "verified-derived" },
+  // Responses reuses the kimi OAuth account and the same Coding endpoint/model seeds.
+  { provider: "kimi-responses", modelId: "k3", cost4: KIMI_K3, source: KIMI_K3_PRICING, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi-responses", modelId: "k3[1m]", cost4: KIMI_K3, source: `derived: local alias sent as k3; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
+  { provider: "kimi-responses", modelId: "k3-256k", cost4: KIMI_K3, source: `derived: K3 with a fixed 256K ceiling; ${KIMI_K3_PRICING}`, verifiedAt: "2026-09-23", status: "verified-derived" },
   // Qwen3.8-Max: vendor-published input/output rate (verified). See QWEN38_MAX_PRICING
   // for what that source does and does not cover.
   { provider: "alibaba-token-plan", modelId: "qwen3.8-max", cost4: QWEN38_MAX, source: QWEN38_MAX_PRICING, verifiedAt: "2026-08-04", status: "verified" },
@@ -440,6 +495,14 @@ export const VERIFIED_PRICE_OVERRIDES: readonly ExpectedPriceOverlay[] = [
     verifiedAt: "2026-08-18",
     status: "verified",
   },
+  {
+    provider: "xai",
+    modelId: "grok-4.7",
+    cost4: { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+    source: "https://docs.x.ai/developers/models/grok-4.7",
+    verifiedAt: "2026-09-23",
+    status: "verified",
+  },
 ];
 
 export function findVerifiedPriceOverride(
@@ -503,6 +566,7 @@ export interface PriorityPricingRule {
 }
 
 const XAI_PRIORITY_PRICING = "https://docs.x.ai/developers/advanced-api-usage/priority-processing";
+const ANTHROPIC_FAST_PRICING = "https://platform.claude.com/docs/en/about-claude/pricing";
 
 /**
  * Exact provider/model priority premiums. Routed resellers never inherit a vendor rule merely
@@ -529,13 +593,35 @@ export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
     source: "https://developers.openai.com/api/docs/pricing (derived from the virtual selection's base wire model)",
     verifiedAt: "2026-09-05",
   })),
-  ...["grok-4.5", "grok-4.6"].map((modelId): PriorityPricingRule => ({
+  ...["grok-4.5", "grok-4.6", "grok-4.7"].map((modelId): PriorityPricingRule => ({
     provider: "xai",
     modelId,
     multiplier: 2,
     requiresResponseConfirmation: true,
     source: XAI_PRIORITY_PRICING,
-    verifiedAt: "2026-08-18",
+    verifiedAt: modelId === "grok-4.7" ? "2026-09-23" : "2026-08-18",
+  })),
+  // Claude Code subscription fast draws usage credits at API fast rates, so OAuth is included.
+  ...["anthropic", "anthropic-apikey"].flatMap(provider =>
+    ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"].map((modelId): PriorityPricingRule => ({
+      provider,
+      modelId,
+      multiplier: 2,
+      requiresResponseConfirmation: true,
+      source: ANTHROPIC_FAST_PRICING,
+      verifiedAt: "2026-09-23",
+    })),
+  ),
+  ...[
+    ["claude-opus-4-8", CURSOR_OPUS_48_FAST_PRICING],
+    ["claude-opus-5", CURSOR_OPUS_5_FAST_PRICING],
+    ["claude-opus-5-5", CURSOR_OPUS_55_FAST_PRICING],
+  ].map(([modelId, source]): PriorityPricingRule => ({
+    provider: "cursor",
+    modelId,
+    multiplier: 2,
+    source,
+    verifiedAt: "2026-09-24",
   })),
 ];
 
@@ -661,6 +747,19 @@ export const CONTEXT_TIERS: readonly ContextTier[] = [
     confirmedPriorityRelation: "lower-bound",
     source: "https://docs.x.ai/developers/pricing",
     verifiedAt: "2026-08-18",
+  },
+  {
+    // xAI documents the same whole-request >=200k band for grok-4.7;
+    // priority stacking remains a lower bound. See
+    // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
+    provider: "xai",
+    modelId: "grok-4.7",
+    thresholdInputTokens: 200_000,
+    inclusive: true,
+    multiplier: UNIFORM_DOUBLE,
+    confirmedPriorityRelation: "lower-bound",
+    source: "https://docs.x.ai/developers/models/grok-4.7",
+    verifiedAt: "2026-09-23",
   },
   ...["minimax", "minimax-cn"].map((provider): ContextTier => ({
     provider,

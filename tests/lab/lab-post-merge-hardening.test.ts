@@ -26,6 +26,7 @@ import type { ObservationEvent, ProtocolSubjectV1 } from "../../src/lab/events/t
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const HOMES: string[] = [];
+const previousHome = process.env.OPENCODEX_HOME;
 
 function tempHome(): string {
   const dir = join(tmpdir(), `ocx-lab-hardening-${process.pid}-${Math.random().toString(16).slice(2)}`);
@@ -42,7 +43,8 @@ afterEach(() => {
       /* ignore */
     }
   }
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
 });
 
 function createHashHex(value: string): string {

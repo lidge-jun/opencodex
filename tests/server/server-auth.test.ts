@@ -1,3 +1,4 @@
+import { createPoolRetryHarness, POOL_RETRY_MODEL } from "../helpers/codex-pool-retry";
 import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -9,7 +10,7 @@ import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { clearCodexWebSocketRegistry, getTrackedCodexWebSocketCountForAccount } from "../../src/codex/websocket-registry";
+import { getTrackedCodexWebSocketCountForAccount } from "../../src/codex/websocket-registry";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
 import { clearAccountNeedsReauth, clearAccountQuota, getAccountQuota, isAccountNeedsReauth, markAccountNeedsReauth, updateAccountQuota } from "../../src/codex/auth-api";
 import {
@@ -22,6 +23,8 @@ import {
   recordCodexUpstreamOutcome,
 } from "../../src/codex/routing";
 import { loadConfig, saveConfig } from "../../src/config";
+import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
+import { settleServerAuthFixture, managementHeaders, startManagementServerFixture, type ManagementServerFixture } from "../helpers/server-auth-fixture";
 import { clearUpstreamHostHealth, getUpstreamHostHealth, recordUpstreamHostFailure, upstreamHostHealthKey } from "../../src/codex/upstream-host-health";
 import { deriveProviderPresets } from "../../src/providers/derive";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
@@ -50,13 +53,16 @@ import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspec
 import { configuredAdminToken } from "../../src/lib/admin-secrets";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../../src/lib/system-restart-contract";
 import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../../src/lib/local-provider-reload-contract";
+import { LOCAL_ASIDE_SYNC_CAPABILITY_VERSION } from "../../src/lib/local-aside-sync-contract";
 import { GUI_PAIR_CAPABILITY_VERSION } from "../../src/lib/gui-pair-capability";
 import { resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
-import { getDebugLogEntries, resetDebugLogBufferForTests } from "../../src/lib/debug-log-buffer";
-import { resetDebugSettingsForTests, setDebugSettings } from "../../src/lib/debug-settings";
+import { getDebugLogEntries } from "../../src/lib/debug-log-buffer";
+import { setDebugSettings } from "../../src/lib/debug-settings";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { deferredResetSseUpstream } from "../helpers/deferred-reset-sse-upstream";
+import { serverAuthConfig as config } from "../helpers/server-auth-config";
+import { POOL_RETRY_TEST_DIR, redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 const previousApiToken = process.env.OPENCODEX_API_AUTH_TOKEN;
 const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalGlobalFetch = globalThis.fetch;
@@ -72,23 +78,7 @@ const originalGlobalWebSocket = globalThis.WebSocket;
 // isolation convention already used by tests/helpers/isolated-codex-home.ts.
 const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-server-auth-"));
 let isolatedCodexHome: IsolatedCodexHome | null = null;
-
-function config(hostname?: string): OcxConfig {
-  return {
-    port: 10100,
-    hostname,
-    defaultProvider: "openai",
-    providers: {
-      openai: {
-        adapter: "openai-chat",
-        baseUrl: "https://api.example.test/v1",
-        apiKey: "sk-secret-value",
-        headers: { "X-Custom": "provider-secret" },
-        defaultModel: "gpt-test",
-      },
-    },
-  };
-}
+let managementFixture: ManagementServerFixture | null = null;
 
 const REMOTE_CATALOG_BYTES = '{"models":[{"slug":"fixture/model","display_name":"Fixture Model","priority":1,"visibility":"list","base_instructions":"Fixture instructions","input_modalities":["text"]}]}';
 const REMOTE_DATA_KEY = "ocx_data_remote_catalog";
@@ -106,14 +96,6 @@ function writeRemoteCatalog(): void {
   writeFileSync(join(isolatedCodexHome.path, "opencodex-catalog.json"), REMOTE_CATALOG_BYTES);
 }
 
-function managementHeaders(initial?: HeadersInit): Headers {
-  const token = configuredAdminToken();
-  if (!token) throw new Error("management token was not initialized");
-  const headers = new Headers(initial);
-  headers.set("x-opencodex-api-key", token);
-  return headers;
-}
-
 const canonicalDirect = {
   adapter: "openai-responses",
   baseUrl: "https://chatgpt.com/backend-api/codex",
@@ -125,33 +107,6 @@ function poolProviders(): OcxConfig["providers"] {
   return {
     openai: { ...canonicalDirect, codexAccountMode: "pool" },
   };
-}
-
-function redirectCanonicalCodexTo(baseUrl: string): void {
-  const prefix = "/backend-api/codex";
-  const currentWebSocket = globalThis.WebSocket;
-  // These fixtures serve HTTP/SSE only. Refuse the native upstream upgrade
-  // deterministically so its existing SSE fallback stays on the mocked fetch;
-  // downstream loopback WebSockets and other destinations remain real.
-  globalThis.WebSocket = new Proxy(currentWebSocket, {
-    construct(target, args, newTarget) {
-      const url = new URL(String(args[0]));
-      if (url.protocol === "wss:" && url.hostname === "chatgpt.com"
-        && (url.pathname === prefix || url.pathname.startsWith(`${prefix}/`))) {
-        throw new Error("HTTP-only Codex fixture rejects native upstream WebSocket");
-      }
-      return Reflect.construct(target, args, newTarget);
-    },
-  });
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const url = new URL(requestUrl);
-    if (url.hostname === "chatgpt.com" && url.pathname.startsWith(prefix)) {
-      const target = new URL(`${url.pathname.slice(prefix.length)}${url.search}`, baseUrl);
-      return originalGlobalFetch(target, init);
-    }
-    return originalGlobalFetch(input, init);
-  }) as typeof fetch;
 }
 
 function stubModelDiscoveryFor(...origins: string[]): void {
@@ -170,225 +125,27 @@ beforeEach(() => {
   isolatedCodexHome = installIsolatedCodexHome("ocx-server-auth-codex-");
 });
 
-afterEach(() => {
+afterEach(async () => {
+  if (managementFixture) {
+    await managementFixture.close();
+    managementFixture = null;
+  }
   globalThis.fetch = originalGlobalFetch;
   globalThis.WebSocket = originalGlobalWebSocket;
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
+  await settleServerAuthFixture(TEST_DIR, isolatedCodexHome?.path);
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   isolatedCodexHome?.restore();
   isolatedCodexHome = null;
-  clearCodexUpstreamHealth();
-  clearThreadAccountMap();
-  clearAccountNeedsReauth("pool-a");
-  clearAccountNeedsReauth("pool-b");
-  clearAccountQuota();
-  resetCodexModelEntitlementCacheForTests();
-  resetDebugSettingsForTests();
-  resetDebugLogBufferForTests();
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  if (existsSync(POOL_RETRY_TEST_DIR)) removeTreeWithRetry(POOL_RETRY_TEST_DIR);
 });
 
-const POOL_RETRY_MODEL = "gpt-5.5";
-
-function unsupportedModelBody(model = POOL_RETRY_MODEL): string {
-  return JSON.stringify({
-    detail: `The '${model}' model is not supported when using Codex with a ChatGPT account.`,
-  });
-}
-
-type PoolRetryHarness = {
-  config: OcxConfig;
-  dispatches: string[];
-  request: (init?: {
-    stream?: boolean;
-    signal?: AbortSignal;
-    model?: string;
-    path?: "/v1/responses" | "/v1/responses/compact";
-    callerBearer?: boolean;
-    headers?: Record<string, string>;
-    extraBody?: Record<string, unknown>;
-  }) => Promise<Response>;
-  restoreFetch: () => void;
-  server: ReturnType<typeof startServer>;
-  upstream: ReturnType<typeof Bun.serve>;
-};
-
-async function removeTestDirBestEffort(dir: string): Promise<void> {
-  if (!existsSync(dir)) return;
-  // Windows can keep the prior harness's ACL/icacls handles for a beat after
-  // stop; a single EBUSY must not take down the rest of the file.
-  for (let attempt = 0; attempt < 8; attempt++) {
-    try {
-      removeTreeWithRetry(dir);
-      return;
-    } catch (err) {
-      const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
-      if (code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") throw err;
-      await Bun.sleep(25 * (attempt + 1));
-    }
-  }
-  removeTreeWithRetry(dir);
-}
-
-async function startPoolRetryHarness(
-  reply: (accountId: string, request: Request) => Response | Promise<Response>,
-  options: {
-    secondAccount?: boolean;
-    streamMode?: "legacy-tee" | "eager-relay";
-    accountMode?: "direct" | "pool";
-    activeAccountId?: string;
-    accountNamespaces?: Record<string, string>;
-    noVisionModels?: string[];
-    visionSidecarModel?: string;
-    websockets?: boolean;
-    forwardApiKey?: string;
-    pausedAccountIds?: string[];
-    reauthAccountIds?: string[];
-    omitCredentialAccountIds?: string[];
-    combos?: OcxConfig["combos"];
-    modelRosterByAccount?: Record<string, string[]>;
-  } = {},
-): Promise<PoolRetryHarness> {
-  await removeTestDirBestEffort(TEST_DIR);
-  mkdirSync(TEST_DIR, { recursive: true });
-  process.env.OPENCODEX_HOME = TEST_DIR;
-  clearCodexUpstreamHealth();
-  clearThreadAccountMap();
-  clearAccountQuota();
-  resetCodexModelEntitlementCacheForTests();
-  clearRequestLogsForTests();
-  clearAccountNeedsReauth("pool-a");
-  clearAccountNeedsReauth("pool-b");
-  // The registry is process-global and survives a harness teardown. WS-REBIND-01
-  // asserts exact per-account socket counts, so a socket leaked by any earlier test
-  // in this file shifts its snapshots and fails it in milliseconds — which reads as
-  // a flake next to the timeouts, but is ordinary shared state. Reset it with the
-  // rest rather than leaving one of six kinds of state uncleaned.
-  clearCodexWebSocketRegistry();
-
-  const dispatches: string[] = [];
-  const upstream = Bun.serve({
-    port: 0,
-    async fetch(request) {
-      const accountId = request.headers.get("chatgpt-account-id") ?? "missing";
-      if (new URL(request.url).pathname === "/models") {
-        return Response.json({
-          models: (options.modelRosterByAccount?.[accountId] ?? []).map(slug => ({
-            slug,
-            supported_in_api: true,
-            visibility: "list",
-          })),
-        });
-      }
-      dispatches.push(accountId);
-      return reply(accountId, request);
-    },
-  });
-  redirectCanonicalCodexTo(upstream.url.toString());
-  const redirectedFetch = globalThis.fetch;
-
-  const secondAccount = options.secondAccount ?? true;
-  const config = {
-    port: 0,
-    defaultProvider: "openai",
-    openaiProviderTierVersion: 2,
-    providers: {
-      openai: {
-        ...canonicalDirect,
-        codexAccountMode: options.accountMode ?? "pool",
-        ...(options.noVisionModels ? { noVisionModels: options.noVisionModels } : {}),
-        ...(options.forwardApiKey ? { apiKey: options.forwardApiKey } : {}),
-      },
-    },
-    codexAccounts: [
-      { id: "main", email: "main@example.test", isMain: true },
-      { id: "pool-a", email: "pool-a@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
-      ...(secondAccount
-        ? [{ id: "pool-b", email: "pool-b@example.test", isMain: false, chatgptAccountId: "acct-pool-b" }]
-        : []),
-    ],
-    activeCodexAccountId: options.activeAccountId ?? "pool-a",
-    ...(options.accountNamespaces ? { codexAccountNamespaces: options.accountNamespaces } : {}),
-    ...(options.pausedAccountIds ? { pausedCodexAccountIds: options.pausedAccountIds } : {}),
-    ...(options.visionSidecarModel ? { visionSidecar: { model: options.visionSidecarModel } } : {}),
-    ...(options.websockets ? { websockets: true } : {}),
-    ...(options.streamMode ? { streamMode: options.streamMode } : {}),
-    ...(options.combos ? { combos: options.combos } : {}),
-  } as OcxConfig;
-  saveConfig(config);
-  if (!options.omitCredentialAccountIds?.includes("pool-a")) {
-    saveCodexAccountCredential("pool-a", {
-      accessToken: "pool-a-token",
-      refreshToken: "pool-a-refresh",
-      expiresAt: Date.now() + 10 * 60_000,
-      chatgptAccountId: "acct-pool-a",
-    });
-  }
-  updateAccountQuota("pool-a", 10);
-  if (secondAccount) {
-    if (!options.omitCredentialAccountIds?.includes("pool-b")) {
-      saveCodexAccountCredential("pool-b", {
-        accessToken: "pool-b-token",
-        refreshToken: "pool-b-refresh",
-        expiresAt: Date.now() + 10 * 60_000,
-        chatgptAccountId: "acct-pool-b",
-      });
-    }
-    updateAccountQuota("pool-b", 20);
-  }
-  for (const accountId of options.reauthAccountIds ?? []) markAccountNeedsReauth(accountId);
-
-  const server = startServer(0);
-  return {
-    config,
-    dispatches,
-    restoreFetch: () => {
-      if (globalThis.fetch === redirectedFetch) globalThis.fetch = originalGlobalFetch;
-    },
-    server,
-    upstream,
-    request: ({
-      stream = false,
-      signal,
-      model = POOL_RETRY_MODEL,
-      path = "/v1/responses",
-      callerBearer = true,
-      headers = {},
-      extraBody = {},
-    } = {}) => originalGlobalFetch(new URL(path, server.url), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(callerBearer ? { authorization: "Bearer inbound-token" } : {}),
-        ...headers,
-      },
-      body: JSON.stringify({ model, input: path.endsWith("/compact") ? [] : "hello", stream, ...extraBody }),
-      signal,
-    }),
-  };
-}
-
-async function stopPoolRetryHarness(harness: PoolRetryHarness): Promise<void> {
-  harness.restoreFetch();
-  await harness.server.stop(true);
-  await harness.upstream.stop(true);
-}
-
-function rejectionResponse(body: BodyInit, headers: Record<string, string> = {}): Response {
-  return new Response(body, {
-    status: 400,
-    statusText: "Account Model Rejected",
-    headers: { "content-type": "application/json", "x-pool-retry-test": "original", ...headers },
-  });
-}
-
-async function expectOriginal400(response: Response, body: string): Promise<void> {
-  expect(response.status).toBe(400);
-  expect(response.headers.get("x-pool-retry-test")).toBe("original");
-  expect(await response.text()).toBe(body);
-}
+const { startPoolRetryHarness, stopPoolRetryHarness, rejectionResponse, expectOriginal400, unsupportedModelBody } =
+  createPoolRetryHarness({ testDir: POOL_RETRY_TEST_DIR, originalFetch: originalGlobalFetch,
+    redirectCanonicalCodexTo, canonicalDirect });
 
 describe("Responses request identity handoff", () => {
   test("returns the generated request id and overwrites an upstream value", async () => {
@@ -1166,6 +923,7 @@ describe("server local API auth", () => {
       expect(health.status).toBe(200);
       const healthBody = await health.json() as Record<string, unknown>;
       expect(Object.keys(healthBody).sort()).toEqual([
+        "asideSyncCapability",
         "guiPairCapability",
         "pid",
         "port",
@@ -1178,6 +936,7 @@ describe("server local API auth", () => {
       ]);
       expect(healthBody.restartCapability).toBe(SYSTEM_RESTART_CAPABILITY_VERSION);
       expect(healthBody.providerReloadCapability).toBe(LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION);
+      expect(healthBody.asideSyncCapability).toBe(LOCAL_ASIDE_SYNC_CAPABILITY_VERSION);
       expect(healthBody.guiPairCapability).toBe(GUI_PAIR_CAPABILITY_VERSION);
       expect("rss" in healthBody).toBe(false);
     } finally {
@@ -1330,64 +1089,82 @@ describe("server local API auth", () => {
     }
   });
 
-  test("management CORS echoes validated loopback Origin and covers delegated codex-auth responses", async () => {
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    saveConfig(config("127.0.0.1"));
-
-    const server = startServer(0);
-    const origin = `http://127.0.0.1:${server.port}`;
-    try {
-      const settings = await fetch(new URL("/api/settings", server.url), {
-        headers: managementHeaders({ origin }),
-      });
-      expect(settings.status).toBe(200);
-      expect(settings.headers.get("access-control-allow-origin")).toBe(origin);
-      expect(settings.headers.get("vary")).toContain("Origin");
-
-      const active = await fetch(new URL("/api/codex-auth/active", server.url), {
-        headers: managementHeaders({ origin }),
-      });
-      expect(active.status).toBe(200);
-      expect(active.headers.get("access-control-allow-origin")).toBe(origin);
-    } finally {
-      await server.stop(true);
-    }
-  });
-
-  test("non-loopback management API allows same-origin GUI requests with API token", async () => {
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
-    process.env.OPENCODEX_HOME = TEST_DIR;
-    process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
-    saveConfig({
-      ...config("0.0.0.0"),
-      port: 0,
+  describe("management CORS fixture", () => {
+    beforeEach(async () => {
+      managementFixture = await startManagementServerFixture(TEST_DIR, config("127.0.0.1"));
     });
 
-    const server = startServer(0);
-    const origin = `http://lan.example.test:${server.port}`;
-    try {
-      const missing = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
-        headers: {
-          host: `lan.example.test:${server.port}`,
-          origin,
-        },
-      });
-      expect(missing.status).toBe(401);
+    test("management CORS echoes validated loopback Origin and covers delegated codex-auth responses", async () => {
+      const fixture = managementFixture!;
+      const origin = `http://127.0.0.1:${fixture.server.port}`;
+      await fixture.run(async () => {
+        const settings = await fetch(new URL("/api/settings", fixture.server.url), {
+          headers: managementHeaders({ origin }), signal: fixture.signal,
+        });
+        expect(settings.status).toBe(200);
+        expect(settings.headers.get("access-control-allow-origin")).toBe(origin);
+        expect(settings.headers.get("vary")).toContain("Origin");
+        await settings.text();
 
-      const ok = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
-        headers: managementHeaders({
-          host: `lan.example.test:${server.port}`,
-          origin,
-        }),
+        const active = await fetch(new URL("/api/codex-auth/active", fixture.server.url), {
+          headers: managementHeaders({ origin }), signal: fixture.signal,
+        });
+        expect(active.status).toBe(200);
+        expect(active.headers.get("access-control-allow-origin")).toBe(origin);
+        await active.text();
       });
-      expect(ok.status).toBe(200);
-      expect(ok.headers.get("access-control-allow-origin")).toBe(origin);
-    } finally {
-      await server.stop(true);
-    }
+    });
+
+    test("management CORS fixture cancellation settles its body and releases the real spend lease", async () => {
+      const fixture = managementFixture!;
+      let aborted = false;
+      let settled = false;
+      const entered = Promise.withResolvers<void>();
+      const work = fixture.run(async () => {
+        const response = abortableSseUpstream("data: pending\n\n", fixture.signal, () => { aborted = true; });
+        const reading = response.text();
+        entered.resolve();
+        try { await reading; } finally { settled = true; }
+      });
+      await entered.promise;
+      expect(spendLedgerOwnerSnapshot().ownership).toBe("held");
+      const stopped = fixture.close();
+      expect(fixture.close()).toBe(stopped);
+      await stopped;
+      await work;
+      expect(aborted).toBe(true);
+      expect(settled).toBe(true);
+      expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
+    });
+  });
+
+  describe("non-loopback management fixture", () => {
+    beforeEach(async () => {
+      process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
+      managementFixture = await startManagementServerFixture(TEST_DIR, { ...config("0.0.0.0"), port: 0 });
+    });
+
+    test("non-loopback management API allows same-origin GUI requests with API token", async () => {
+      const fixture = managementFixture!;
+      const server = fixture.server;
+      const origin = `http://lan.example.test:${server.port}`;
+      await fixture.run(async () => {
+        const missing = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
+          headers: { host: `lan.example.test:${server.port}`, origin },
+          signal: fixture.signal,
+        });
+        expect(missing.status).toBe(401);
+        await missing.text();
+
+        const ok = await fetch(`http://127.0.0.1:${server.port}/api/settings`, {
+          headers: managementHeaders({ host: `lan.example.test:${server.port}`, origin }),
+          signal: fixture.signal,
+        });
+        expect(ok.status).toBe(200);
+        expect(ok.headers.get("access-control-allow-origin")).toBe(origin);
+        await ok.text();
+      });
+    });
   });
 
   test("websocket upgrade rejects hostile Origin even with a valid API token", async () => {
@@ -2573,6 +2350,59 @@ describe("server local API auth", () => {
     }
   });
 
+  test("Astra error-envelope refusal recovers once and avoids the refused account next turn", async () => {
+    const model = "gpt-6-astra";
+    const body = JSON.stringify({ error: { type: "invalid_request_error", code: "invalid_request_error",
+      message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+    const harness = await startPoolRetryHarness(accountId => accountId === "acct-pool-a"
+      ? rejectionResponse(body)
+      : Response.json({ id: "alternate-success", status: "completed", output: [] }));
+    try {
+      const first = await harness.request({ model });
+      expect(first.status).toBe(200);
+      expect((await first.json() as { id: string }).id).toBe("alternate-success");
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+      const next = await harness.request({ model });
+      expect(next.status).toBe(200);
+      await next.text();
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b", "acct-pool-b"]);
+      expect(harness.config.activeCodexAccountId).toBe("pool-a");
+    } finally { await stopPoolRetryHarness(harness); }
+  });
+
+  test("Astra error-envelope refusal can recover to the request-owned main account", async () => {
+    const model = "gpt-6-astra";
+    const body = JSON.stringify({ error: { type: "invalid_request_error",
+      message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+    const seen: Array<{ account: string; authorization: string | null }> = [];
+    const harness = await startPoolRetryHarness((account, request) => {
+      seen.push({ account, authorization: request.headers.get("authorization") });
+      return account === "acct-pool-a" ? rejectionResponse(body)
+        : Response.json({ id: "main-success", status: "completed", output: [] });
+    }, { secondAccount: false });
+    try {
+      const response = await harness.request({ model, headers: { "chatgpt-account-id": "acct-caller-main" } });
+      expect(response.status).toBe(200);
+      expect((await response.json() as { id: string }).id).toBe("main-success");
+      expect(seen).toEqual([
+        { account: "acct-pool-a", authorization: "Bearer pool-a-token" },
+        { account: "acct-caller-main", authorization: "Bearer inbound-token" },
+      ]);
+      expect(loadConfig().activeCodexAccountId).toBe("pool-a");
+    } finally { await stopPoolRetryHarness(harness); }
+  });
+
+  test("Astra error-envelope recovery still stops after one refused alternate", async () => {
+    const model = "gpt-6-astra";
+    const body = JSON.stringify({ error: { type: "invalid_request_error",
+      message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+    const harness = await startPoolRetryHarness(() => rejectionResponse(body));
+    try {
+      await expectOriginal400(await harness.request({ model }), body);
+      expect(harness.dispatches).toEqual(["acct-pool-a", "acct-pool-b"]);
+    } finally { await stopPoolRetryHarness(harness); }
+  });
+
   test("#2097: account-gated model selection skips an unentitled active Pool account", async () => {
     const model = "gpt-daybreak-blue-latest";
     const harness = await startPoolRetryHarness(
@@ -3675,7 +3505,7 @@ describe("server local API auth", () => {
 
   test("valid JSON wrong top-level shape never authorizes a pool retry", async () => {
     // One harness, five bodies — same reason as the sibling above. Each
-    // startPoolRetryHarness() wipes and recreates TEST_DIR, binds a server, and
+    // startPoolRetryHarness() wipes and recreates its OPENCODEX_HOME directory, binds a server, and
     // redirects global fetch; five of those did not fit Bun's 5s default on a
     // Windows runner, and the request still in flight when the budget expired
     // raced the next test through that same global fetch.

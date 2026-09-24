@@ -419,9 +419,10 @@ describe("registry-derived routed tool conformance", () => {
     }
   });
 
-  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder"]);
+  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder", "claude-cli"]);
   // Devin and chatgpt-web are runTurn-only: Devin streams Connect-RPC from
   // runTurn, and chatgpt-web delegates every turn to an injected transport, so
+
   // buildRequest returns a placeholder and tools never travel the wire path.
   // Both Devin provider rows share an adapter and differ only in where the
   // credential came from.

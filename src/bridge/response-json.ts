@@ -45,6 +45,7 @@ import { adapterFailureFromEvent, emptyChunks, joinChunks, responsesUsage, toolC
 import type { OutputItem, StringChunks } from "./internal";
 import { bridgeToResponsesSSE } from "./sse";
 
+/** Build a buffered Responses result within a caller-owned or temporary translator budget. */
 export function buildResponseJSON(
   events: AdapterEvent[],
   modelId: string,
@@ -68,13 +69,14 @@ export function buildResponseJSON(
   }
 }
 
+/** Fold adapter events into a Responses result while enforcing the requested tool boundary. */
 function buildResponseJSONWithBudget(
   events: AdapterEvent[],
   modelId: string,
   options?: {
     hideThinkingSummary?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>;
-    /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
+    /** Request-visible tool names. Required for client calls when enforcement is explicitly enabled. */
     declaredToolNames?: ReadonlySet<string>;
     /** See `bridgeToResponsesSSE`: enforcement is separate from normalization (#4735). */
     enforceDeclaredToolNames?: boolean;
@@ -443,9 +445,9 @@ function buildResponseJSONWithBudget(
         flushToolCall();
         const effectiveName = normalizeDeclaredToolName(e.name, options?.declaredToolNames);
         if (
-          options?.declaredToolNames
-          && options.enforceDeclaredToolNames !== false
-          && !options.declaredToolNames.has(effectiveName)
+          (options?.enforceDeclaredToolNames === true || options?.declaredToolNames != null)
+          && options?.enforceDeclaredToolNames !== false
+          && !options?.declaredToolNames?.has(effectiveName)
         ) {
           errorEvent = {
             type: "error",

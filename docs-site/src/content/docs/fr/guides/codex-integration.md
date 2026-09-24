@@ -153,7 +153,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-Sous WSL, si `CODEX_HOME` n'est pas défini et que `~/.codex/config.toml` n'existe pas côté Linux, opencodex
+Sous WSL, si `CODEX_HOME` n'est pas défini et que le répertoire `~/.codex` côté Linux est absent ou ne contient aucun état Codex
+(`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex
 recherche également un unique répertoire personnel de Codex Desktop pour Windows à l'emplacement
 `/mnt/c/Users/*/.codex/config.toml`. S'il trouve exactement un candidat, il utilise ce répertoire afin que le
 mode app-server sous WSL et Codex Desktop sous Windows partagent les mêmes fichiers de configuration et
@@ -413,7 +414,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-Lorsque opencodex s'exécute comme [service d'arrière-plan géré](/fr/reference/cli/lifecycle/#ocx-service-installrepairstartstopstatusuninstallremove), il définit
+Lorsque opencodex s'exécute comme [service d'arrière-plan géré](/fr/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove), il définit
 `OCX_SERVICE=1` afin qu'un redémarrage déclenché par le service ne modifie **pas** sans cesse la configuration
 Codex. Seule l'exécution explicite de `ocx stop` ou `ocx service stop` restaure Codex natif.
 

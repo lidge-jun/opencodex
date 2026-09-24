@@ -6,7 +6,7 @@
  */
 import { afterCatalogWriteHandleAppServers } from "../codex/app-server-processes";
 import type { AfterCatalogWriteAppServerResult } from "../codex/app-server-processes";
-import type { DesktopAppRestartResult } from "../codex/desktop-app-restart";
+import type { DesktopAppRestartIo, DesktopAppRestartResult } from "../codex/desktop-app-restart";
 
 /**
  * Which restart a command was asked for.
@@ -102,10 +102,12 @@ export async function handleRestartScopeAfterWrite(
  */
 export async function handleDesktopAppRestart(
   log: Pick<Console, "log" | "error">,
+  io: DesktopAppRestartIo = {},
 ): Promise<DesktopAppRestartResult> {
   const { restartCodexDesktopApp } = await import("../codex/desktop-app-restart");
   const { startDesktopRestartHandoff } = await import("../codex/desktop-app/handoff");
   const result = restartCodexDesktopApp({
+    ...io,
     // The CLI is the one caller whose exit is exactly the signal the helper waits for,
     // so it is the one caller allowed to hand off. The management service is not (it
     // runs in a proxy that never exits) and the helper itself is not (recursion).
@@ -121,6 +123,12 @@ export async function handleDesktopAppRestart(
       log.error(
         `Restarting the Codex desktop app is not supported on ${process.platform}; `
         + "nothing was stopped.",
+      );
+      return result;
+    case "test_environment":
+      log.error(
+        "Skipped the Codex desktop app restart: this is an armed opencodex test process "
+        + "(OCX_TEST_HOME_GUARD=1), so the real app was not touched.",
       );
       return result;
     case "restart_in_flight":

@@ -29,6 +29,14 @@ parsing and ownership rules below.
 | `src/integrations/mutation-plan.ts` | The shared observation both a preview and a mutation read, and the value-free plan an operator confirms. It owns no IO of its own, takes no lock, and must never import `writer.ts`. |
 | `src/integrations/store.ts` / `journal.ts` | One-root persistence for ownership records, operation history, snapshots, and retention maintenance. |
 
+## Cursor installed capability reads
+
+`src/integrations/cursor-effort-table.ts` reads the installed agent bundle through one regular-file
+handle, refuses final symlinks where supported, and caps bytes read even if the file grows after
+inspection. Failure retains the static-table fallback. Parsed content is cached by path, mtime and
+size; the returned table always uses the current install version, including on a cache hit.
+`tests/providers/cursor/cursor-effort-table.test.ts` covers cache reuse, version refresh and unsafe files.
+
 ## Data Flow
 
 ```text
@@ -166,6 +174,26 @@ model object so Hermes receives no guessed capability. OpenCodex does not emit `
 because its authoritative input-modality vocabulary currently has no video value.
 
 > Decision record: [ADR-0090](../decisions/ADR-0090-hermes-model-capabilities.md)
+
+## Hermes session affinity
+
+Hermes exports include `session_affinity_header: session-id` on the entire OpenCodex provider,
+independent of the model roster. This is a header name: Hermes generates the conversation-scoped
+value. No static session identifier or protocol switch is emitted, and upstream header-forwarding
+rules remain unchanged. Hermes must support the documented per-provider affinity option to use it.
+
+`src/integrations/ownership-policy.ts` recognizes exactly one predecessor: an owned Hermes block
+without this setting. The block may remain unchanged or have gained only the supported value; after
+removing that field, its exact or recorded semantic fingerprint must match the previous record.
+Client, config path and fragment-path ownership still apply. Other edits remain conflicts, and
+after adoption the affinity field is fully protected, including against deletion.
+
+Legacy blocks report `stale` until an explicit Apply records the new contribution. Implicit refresh
+leaves both their configuration and ownership unchanged, reporting that Apply is needed; this also
+defers catalog updates until Apply. Once upgraded, normal refresh resumes and preserves affinity.
+Replace emits the setting too. The existing source-preserving YAML, snapshot and restore paths
+remain authoritative. `tests/clients/integrations-hermes-affinity.test.ts` exercises the real writer
+against temporary client homes, including exact-workaround adoption, refusal, refresh and undo.
 
 ## Ownership Axes
 
@@ -309,6 +337,9 @@ admin token — or logs that it is degrading. Composing `http://127.0.0.1:<publi
 what produced a dead socket on a tailnet-bound hub in the first place.
 
 ## Aside profile ownership
+
+The local CLI sync shares one absolute deadline across listener attestation and the
+capability-bearing POST, even if the listener keeps sending partial bytes.
 
 Aside discovery projects only registered numeric account IDs, labels and current status. Catalog
 paths derive from the configured root/u/id, never from browser profilePath. Guarded filesystem

@@ -1,4 +1,4 @@
-import { estimateTokens } from "../../lib/token-estimate";
+import { estimateTokens, estimateTokensFromCharacterCounts } from "../../lib/token-estimate";
 import { KIRO_MODEL_CONTEXT_WINDOWS, normalizeKiroModelId } from "../../providers/kiro-models";
 import { modelRecordValue } from "../../reasoning-effort";
 import { sniffImageDimensions } from "../anthropic-image-guard";
@@ -98,8 +98,9 @@ export function estimateKiroWireTokens(text: string, modelId: string): number {
   if (!text) return 0;
   const cjk = kiroCjkCount(text);
   if (cjk === 0) return Math.ceil(estimateKiroTokens(text, modelId) * KIRO_LATIN_WIRE_EXPANSION);
-  const latinTokens = estimateKiroTokens("x".repeat(text.length - cjk), modelId);
-  const cjkTokens = estimateKiroTokens("\uac00".repeat(cjk), modelId);
+  const prefixedModelId = `kiro/${modelId}`;
+  const latinTokens = estimateTokensFromCharacterCounts(text.length - cjk, 0, prefixedModelId);
+  const cjkTokens = estimateTokensFromCharacterCounts(0, cjk, prefixedModelId);
   return Math.ceil(latinTokens * KIRO_LATIN_WIRE_EXPANSION + cjkTokens);
 }
 

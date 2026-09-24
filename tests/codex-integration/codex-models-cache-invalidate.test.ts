@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { invalidateCodexModelsCache } from "../../src/codex/catalog";
-import { invalidateCodexModelsCacheWithPermit } from "../../src/codex/catalog/sync";
+import { invalidateCodexModelsCacheWithPermit, invalidateCodexModelsCacheWithPermitOutcome } from "../../src/codex/catalog/sync";
 import { withCatalogWriteSerialization } from "../../src/codex/catalog-write-serialization";
 import {
   collectCodexAppServerCatalogStateForRequest,
@@ -62,6 +62,23 @@ describe("invalidateCodexModelsCache write gate (#476 / #518)", () => {
     };
     expect(cache.fetched_at).toBe("2000-01-01T00:00:00Z");
     expect(cache.models).toEqual([{ slug: "gpt-5.5" }]);
+  });
+
+  test("distinguishes an unchanged cache from a failed refresh", () => {
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), JSON.stringify({
+      models: [{ slug: "gpt-5.5" }],
+    }, null, 2) + "\n");
+    const invalidate = () => withCatalogWriteSerialization(codexHome, permit =>
+      invalidateCodexModelsCacheWithPermitOutcome(permit, codexHome));
+
+    expect(invalidate()).toMatchObject({ kind: "completed", value: "written" });
+    const cachePath = join(codexHome, "models_cache.json");
+    const before = readFileSync(cachePath);
+    expect(invalidate()).toMatchObject({ kind: "completed", value: "unchanged" });
+    expect(readFileSync(cachePath)).toEqual(before);
+
+    writeFileSync(join(codexHome, "opencodex-catalog.json"), "{ not-json");
+    expect(invalidate()).toMatchObject({ kind: "completed", value: "failed" });
   });
 
   test("permit-bound invalidation stays on its owning home after ambient drift", () => {

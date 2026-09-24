@@ -85,6 +85,8 @@ hatalar" sütunu bu tabloyu tekrarlamak yerine rotaya özgü ek sonuçları list
 | `POST /api/grok/apply` | Kalıcı hale getirilen Grok yapılandırmasını yönetilen senkronizasyon aracılığıyla uygulayın | 409 `grok_apply_busy`; 400/500 uygulama hatası |
 | `GET /api/grok/reset-coupons?accountId=...` | Aktif veya belirtilen xAI hesabı için kalan Grok faturalandırma sıfırlama jetonlarını ve geçerlilik pencerelerini okuyun | 400 eksik hesap; 401 kimlik doğrulaması yok; 502 yukarı akış gRPC-Web hatası |
 | `POST /api/grok/reset-coupons/consume` | Uygun bir sıfırlama kuponunu kullanın. Gövde `{ accountId?, tokenId?, operationId? }`. İsteğe bağlı `operationId` (UUIDv4) kullanımı idempotent yapar: aynı kimliği yinelemek, çift kullanım olmadan kalıcı sonucu yeniden oynatır. | 400 geçersiz JSON/UUID; 401 kimlik doğrulaması yok; 409 `identity_mismatch`; 502 yukarı akış hatası; 503 kayıt defteri kapasitesi |
+| `GET /api/anthropic/reset-grants?accountId=...` | Bir Anthropic OAuth hesabının Claude kullanım limiti sıfırlama haklarını okuyun: uygunluk durumu, her hakkın kalan sıfırlama sayısı, geçerlilik aralığı ve sıfırladığı pencereler ile hâlâ yeniden denenebilen doğrulanmamış girişimler | 400 eşleşen hesap yok; 401 yeniden kimlik doğrulaması gerekli; 502 yukarı akış kullanılamıyor |
+| `POST /api/anthropic/reset-grants/consume` | Bir sıfırlama hakkı kullanın. Gövde `{ accountId, grantId, operationId }`; `operationId`, istek kimliği olarak yukarı akışa gönderilen bir UUIDv4'tür; aynı kimliği yinelemek aynı talebi yeniden dener. Kontrol paneli oturumu gerektirir. | 400 geçersiz gövde; 401 yeniden kimlik doğrulaması gerekli; 403 `session_required`; 409 `grant_not_usable`, `in_flight`, `unresolved_prior_operation`, `unknown_outcome_expired`, `operation_identity_mismatch`; 500 `journal_write_failed`; 502 `unknown_outcome`; 503 günlük meşgul, kullanılamıyor veya dolu |
 | `GET, PUT /api/claude-desktop` | Claude Desktop yönlendirilen/yerel profilini okuyun veya kalıcı hale getirin | 400 geçersiz veya kullanılamaz atama |
 | `POST /api/claude-desktop/apply` | Kaydedilen profili Claude Desktop'ın yönetilen yapılandırmasına yazın | 400/500 yazma hatası |
 | `GET /api/claude-desktop/status` | Kaydedilen ve uygulanan profili ve Desktop sağlığını inceleyin | 400 durum okuma hatası |
@@ -98,6 +100,17 @@ istemci tarafından üretilen bir `operationId` gönderir ve yeniden denemek yer
 zaman aşımından sonra göndermeyi durdurur; çünkü günlük kaydı hâlâ açık olan
 bir kullanım yeniden yürütülür. `ocx account grok-reset-coupons` uçbirim
 eşdeğeri olarak kalır.
+
+Claude kullanım sıfırlamaları **Providers > Anthropic > Accounts** üzerinden aynı
+şekilde çalışır. Oturum açmış her hesap satırında kalan sıfırlamaları gösteren
+bir bilet rozeti bulunur; iletişim kutusu ikinci bir onaydan sonra bir sıfırlama
+kullanır. Sıfırlama, haftalık sıfırlama gününü değiştirmeden 5 saatlik ve
+haftalık limitleri yeniler. Bir talep zamanında yanıt vermezse iletişim kutusu
+`operationId` değerini korur ve on dakika boyunca aynı kimlikle yeniden deneme
+olanağı sunar; Claude Code istemcisi de bu şekilde toparlanır. Bu süre içinde
+aynı sıfırlama hakkı için yeni bir işlem reddedilir. Sıfırlama yalnızca kontrol
+panelinden kullanılabilir: tek başına yönetici belirteci `403 session_required`
+yanıtını alır.
 
 Model kadrosunun ve şifrelenmiş çalışan görevi davranışının arkasındaki
 kavramlar için [Alt Ajan Arayüzü](/tr/guides/sub-agent-surface/) sayfasına
@@ -167,6 +180,21 @@ her istemcinin en yeni işlemi sunucu tarafında korunur.
 Hedef stratejileri, soğuma süreleri, takma adlar ve yönlendirme hataları için
 [Kombolar](/tr/guides/combos/) sayfasına bakın.
 
+### Codex istem katmanları
+
+| Yöntem ve yol | Amaç | Dikkate değer hatalar |
+| --- | --- | --- |
+| `GET /api/codex-prompt` | İstem katmanı anlık görüntüsünü okuyun: katmanlar, temel varyantlar, seçim ve drift durumu | — |
+| `GET /api/codex-prompt/text` | `codex debug prompt-input` üzerinden modele görünen istem metnini yoklayın | Fail-soft: kullanılamayan yoklama HTTP hatası yerine gövdede bir duruma düşer |
+| `PUT /api/codex-prompt/toggle` | Değiştirilebilir bir katmanı etkinleştirin veya devre dışı bırakın | 400 geçersiz gövde veya bilinmeyen katman; 409 `stale_revision`, `layer_not_toggleable` |
+| `PUT /api/codex-prompt/custom` | Özel katman kümesini değiştirin | 400 geçersiz gövde, `invalid_characters`, normalleştirilmiş UTF-8 katmanı 65.536 baytı aşarsa `body_too_large`, 131.072 baytı aşarsa `composed_too_large`; 409 `stale_revision` |
+| `PUT /api/codex-prompt/base/select` | Varsayılan temel istemi veya kayıtlı bir varyantı seçin | 400 geçersiz gövde, kayıtlı varyantla eşleşmeyen bir id için `unknown_layer`; 409 `stale_revision`, mevcut temel istem harici olduğunda `developer_instructions_not_owned` |
+| `PUT /api/codex-prompt/base` | Bir temel varyantı oluşturun (`id` atlandı veya `id: null`), düzenleyin veya silin (`delete: true`). Sağlanan `id` yalnızca düzenleme içindir ve kayıtlı bir varyanta başvurmalıdır. `body` ölçülmeden veya saklanmadan önce normalleştirilir (sekmeler genişletilir, CR/CRLF LF'e katlanır) | 400 geçersiz gövde, `default` id veya kayıtlı varyantla eşleşmeyen bir id için `unknown_layer`, normalleştirilmiş UTF-8 gövdesi 65.536 baytı aşarsa `body_too_large`; 409 `stale_revision` |
+| `POST /api/codex-prompt/adopt` | `config.toml` içindeki `developer_instructions` değerini özel katman olarak içe aktarın | 400 geçersiz gövde, `invalid_characters`, `body_too_large`, `composed_too_large`; 409 `config_unreadable`, `nothing_to_adopt`, `adopt_unsupported_form`, `stale_revision` |
+| `POST /api/codex-prompt/repair` | `config.toml` ile sahip olunan projeksiyon arasındaki drift'i onarın | 400 geçersiz gövde; 409 `config_unreadable`, `nothing_to_repair`, `repair_unsupported`, `stale_revision` |
+
+Katman modeli ve her katmanın yazdığı anahtarlar için [Codex İstem Katmanları](/tr/guides/codex-prompt/) sayfasına bakın.
+
 ### Yapılandırma, başlangıç, senkronizasyon ve güncellemeler
 
 | Yöntem ve yol | Amaç | Dikkate değer hatalar |
@@ -179,13 +207,18 @@ Hedef stratejileri, soğuma süreleri, takma adlar ve yönlendirme hataları iç
 | `GET, POST /api/windows-tray` | Windows tepsisi durumunu okuyun veya kurun/başlatın/durdurun/kaldırın | 400 desteklenmeyen platform/eylem; 500 işlem hatası |
 | `GET /api/diagnostics/project-config` | Önbelleğe alınmış proje yapılandırma uyarılarını okuyun | — |
 | `POST /api/sync` | Geçerli model kataloğunu Codex ile senkronize edin | 500 başarısız senkronizasyon |
-| `GET /api/update/check` | `latest` veya `preview` güncelleme kanalını kontrol edin | 400 geçersiz etiket |
-| `POST /api/update/run` | İsteğe bağlı olarak yeniden başlatmanın takip ettiği bir güncelleme işini başlatın | 400 geçersiz gövde; işe özgü çakışma/hata durumu |
+| `GET /api/update/check` | `latest` veya `preview` paket kanalını eşzamansız denetleyip başarılı olursa önbelleği yenile | 400 geçersiz etiket |
+| `POST /api/update/run` | Yeni paket sürümünü eşzamansız denetle, ardından isteğe bağlı yeniden başlatmayla güncelleme işini başlat | 400 geçersiz gövde; işe özgü çakışma/hata durumu |
 | `GET /api/update/status` | Bir güncelleme işini kimliğe göre yoklayın | 404 bilinmeyen iş |
 | `GET, PUT /api/sidecar-settings` | Web arama ve vizyon sidecar model/arka uç ayarlarını okuyun veya güncelleyin | 400 geçersiz şekil, arka uç veya sınır |
 | `GET, PUT /api/shadow-call-settings` | Gölge çağrı müdahale ayarlarını okuyun veya güncelleyin | 400 geçersiz şekil veya değer |
 
 ### Günlükler, kullanım ve depolama
+
+İstek günlükleri, üst servis yanıt veren modeli bildirdiğinde `servedModel` alanını saklar. Üst servise gönderilen model
+istemciye gösterilen modelden farklı olduğunda `wireModel` alanını da saklar. Bu modeller farklıysa kontrol paneli
+`wire → served` gösterir; bilgi balonunda her iki değer de korunur. Üst servisten yanıt veren modele ilişkin bilgi
+gelmezse bu alan boş kalır; istenen modelden çıkarım yapılmaz.
 
 | Yöntem ve yol | Amaç | Dikkate değer hatalar |
 | --- | --- | --- |
@@ -310,7 +343,12 @@ yeniden yüklemeden sonra da saklar, ancak bir sınır olarak uygulamaz.
 | --- | --- | --- |
 | `GET /api/github/star` | Kullanıcının `gh` oturumu aracılığıyla depo yıldız durumunu okuyun | Duruma özgü sabit sonuç kodları |
 | `POST /api/github/star` | Depoyu yalnızca kimliği doğrulanmış bir insan eyleminden yıldızlayın | Kontrol paneli oturumu kanıtı olmayan ajan odaklı arayanlar için 403 `agent_consent_required` |
-| `GET /api/update/badge` | Ucuz kenar çubuğu güncelleme rozeti durumunu okuyun | — |
+| `GET /api/update/badge` | Kayıt sorgusu yapmadan önbellekteki paket rozetini oku; önbellek yoksa, kanal farklıysa veya 40 saatten eskiyse `unknown: true` döndür. `surface=desktop&session=<id>` yalnızca belirtilen masaüstü uygulaması oturumunu okur. | 400 geçersiz surface; eksik veya süresi dolmuş masaüstü oturumu `unknown: true` döndürür |
+| `POST /api/update/desktop-snapshot` | Masaüstü kabuğu, Tauri güncelleyicisinin görüntü durumunu bağlı proxy istemcisi üzerinden yayımlar | `Origin` üstbilgisi varsa veya ham `admin-token` principal yoksa 403; geçersiz alanlarda 400; 1 KiB üzerinde 413 |
+
+Masaüstü snapshot geçici görüntü durumudur, kurulum isteği değildir. Proxy bellekte en fazla 32 oturum tutar ve bir oturumu son heartbeat sonrasında 180 saniyede sona erdirir. surface=desktop olmayan normal tarayıcı paket rozetini okumaya devam eder.
+
+Proxy, uygun paket kurulumunda başlangıçtan sonra önbellek eksikse veya 20 saatten eskiyse denetim yapar; ardından tazeliği saat başı kontrol eder. `OCX_DISABLE_UPDATE_CHECK=1` yalnızca otomatik denetimleri kapatır. Açıkça yapılan denetim ve çalıştırma istekleri kullanılabilir.
 
 :::caution
 Yönetim kimlik doğrulaması proxy'ye erişimi kanıtlar; kullanıcının kimliğini
@@ -351,7 +389,7 @@ devreder. Rotaları şunlardır:
 | `PUT /api/codex-auth/accounts/pause-exhausted` | Kotası tükenen hesapları duraklatın | Mutasyon kilidi arızaları 503 olur |
 | `POST /api/codex-auth/accounts/clear-cooldown` | Bir hesap veya tüm hesaplar için çalışma zamanı soğuma süresini temizleyin | 400 geçersiz kimlik |
 | `GET, PUT /api/codex-auth/active` | Aktif hesabı okuyun veya seçin | 400 geçersiz veya eksik hesap; 409 duraklatılmış/eski satır çakışması |
-| `PUT /api/codex-auth/auto-switch` | Otomatik hesap geçişi için kota eşiğini ayarlayın | 400 geçersiz eşik |
+| `PUT /api/codex-auth/auto-switch` | `id` olmadan `{ threshold }` ile genel eşiği, `{ id, threshold }` ile hesaba özel eşiği ayarlayın; `id: '__main__'` Codex Desktop hesabını seçer. `id` belirtilmişken `threshold: null` hesaba özel değeri kaldırır ve genel eşikten kalıtımı geri yükler | 400 geçersiz kimlik/eşik; 404 eksik hesap |
 | `PUT, PATCH /api/codex-auth/pool-strategy` | Codex hesap havuzu seçim stratejisini güncelleyin | 400 geçersiz strateji/yapılandırma |
 | `PUT /api/codex-auth/failover` | Hesap yük devretme eşiğini ayarlayın | 400 geçersiz eşik |
 | `GET /api/codex-auth/quota` | Hesaba göre önbelleğe alınmış kota durumunu okuyun | — |
@@ -359,7 +397,7 @@ devreder. Rotaları şunlardır:
 | `POST /api/codex-auth/reset-credits/consume` | Uygun bir sıfırlama kredisini tüketin. İsteğe bağlı `operationId` (UUIDv4) kullanımı işlemi idempotent yapar: aynı kimlik ikinci bir kredi harcamak yerine tek bir kalıcı sonucu yeniden oynatır. | 400 eksik hesap kimliği veya geçersiz `operationId`; kimlik başka bir hesaba aitse 409 `identity_mismatch`; yukarı akış durum doğrudan geçişi; 503 `server_busy`, `capacity` veya `unavailable`; 500 tüketme hatası |
 | `POST /api/codex-auth/login` | Codex girişini veya yeniden kimlik doğrulamasını başlatın | 400 geçersiz istek; çakışma/meşgul giriş durumları |
 | `POST /api/codex-auth/login/code` | Bir Codex giriş akışı için manuel bir kod gönderin | 400 geçersiz akış/kod |
-| `POST /api/codex-auth/login/cancel` | Bir Codex giriş akışını iptal edin | — |
+| `POST /api/codex-auth/login/cancel` | Yalnızca `{ "flowId": "..." }` ile belirtilen bekleyen Codex girişini iptal edin | 400 akış kimliği eksik, bilinmiyor veya beklemede değil |
 | `GET /api/codex-auth/login-status` | Bir akışı veya hesap giriş durumunu yoklayın. Tamamlanan yeni hesap akışı yalnızca kurtarma gerektiğinde `catalogRefreshPending: true` içerir. | Bilinmeyen akışlar `expired` bildirir; aktif olmayan akış `idle` bildirir |
 
 Yeni bir hesap yapılandırma satırı kaydedilirse ancak kimlik bilgisi kurulumu

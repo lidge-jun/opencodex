@@ -32,7 +32,7 @@ function runStatusJson(opencodexHome: string) {
 }
 
 async function withStatusVersionFixture<T>(
-  proxyVersion: string | undefined,
+  proxyVersion: string | null | undefined,
   prefix: string,
   work: (fixture: { home: string; codexHome: string }) => Promise<T>,
 ): Promise<T> {
@@ -113,15 +113,18 @@ describe("status version skew projection", () => {
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 
   test.each([
-    ["0.0.1", "the running proxy is older"],
-    ["999999.0.0", "this ocx on PATH is older"],
-    [packageVersion(), null],
-    [`${packageVersion()}+skew-fixture`, "neither can be identified as older"],
-    ["not-a-version", "neither can be identified as older"],
-    ["unknown", null],
-    ["0.0.0", null],
-    [undefined, null],
-  ] as const)("projects proxy %s in JSON and human output", async (proxyVersion, expected) => {
+    ["0.0.1", "0.0.1", "the running proxy is older"],
+    ["999999.0.0", "999999.0.0", "this ocx on PATH is older"],
+    [packageVersion(), packageVersion(), null],
+    [`${packageVersion()}+skew-fixture`, `${packageVersion()}+skew-fixture`, "neither can be identified as older"],
+    ["not-a-version", null, null],
+    ["unknown", null, null],
+    ["0.0.0", "0.0.0", null],
+    [null, null, null],
+    [undefined, null, null],
+    ["1.2.3\nuntrusted-health-marker", null, null],
+    [`1.2.3+${"x".repeat(59)}`, null, null],
+  ] as const)("projects proxy %s in JSON and human output", async (proxyVersion, projectedVersion, expected) => {
     await withStatusVersionFixture(proxyVersion, "ocx-status-skew-", async ({ home, codexHome }) => {
       for (const json of [true, false]) {
         // Async child execution lets the fixture answer the real identity/health probes.
@@ -138,7 +141,9 @@ describe("status version skew projection", () => {
           expect(parsed.schemaVersion).toBe(1);
           expect(Object.keys(parsed.versionSkew).sort()).toEqual(["cliVersion", "proxyVersion", "skewed", "warning"]);
           expect(parsed.versionSkew.cliVersion).toBe(packageVersion());
-          expect(parsed.versionSkew.proxyVersion).toBe(proxyVersion ?? null);
+          // Health identity carries only bounded semver; arbitrary listener text
+          // must not become a version or an operator-facing skew warning.
+          expect(parsed.versionSkew.proxyVersion).toBe(projectedVersion);
           expect(parsed.versionSkew.skewed).toBe(expected !== null);
           if (expected === null) expect(parsed.versionSkew.warning).toBeNull();
           else expect(parsed.versionSkew.warning).toContain(expected);
@@ -146,6 +151,10 @@ describe("status version skew projection", () => {
           expect(result.stdout).not.toContain("does not match the running proxy");
         } else {
           expect(result.stdout).toContain(expected);
+        }
+        if (projectedVersion === null && typeof proxyVersion === "string" && proxyVersion !== "unknown") {
+          expect(result.stdout).not.toContain(proxyVersion);
+          expect(result.stdout).not.toContain("untrusted-health-marker");
         }
       }
       expect(existsSync(join(home, "ocx.pid"))).toBe(false);

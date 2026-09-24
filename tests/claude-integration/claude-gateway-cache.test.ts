@@ -195,3 +195,30 @@ describe("Claude Code gateway-model cache pre-write (devlog 260712 030)", () => 
     }
   });
 });
+
+describe("gateway-model cache carries the picker description", () => {
+  test("writer keeps description so the picker stops reading \"From gateway\"", () => {
+    const dir = tempDir();
+    const path = writeGatewayModelCache("http://127.0.0.1:10100", [
+      { id: "claude-ocx-xai--grok-4.7", display_name: "grok-4.7 (xai)", description: "Routed by OpenCodex to xai/grok-4.7" },
+      { id: "claude-ocx-native--gpt-5.5", display_name: "gpt-5.5 (native)" },
+    ], dir);
+    expect(JSON.parse(readFileSync(path!, "utf8")).models).toEqual([
+      { id: "claude-ocx-xai--grok-4.7", display_name: "grok-4.7 (xai)", description: "Routed by OpenCodex to xai/grok-4.7" },
+      { id: "claude-ocx-native--gpt-5.5", display_name: "gpt-5.5 (native)" },
+    ]);
+  });
+
+  test("proxy refresh copies description from /v1/models and ignores non-strings", async () => {
+    const dir = tempDir();
+    const fetchImpl = (async () => new Response(JSON.stringify({ data: [
+      { id: "claude-ocx-xai--grok-4.7", display_name: "grok-4.7 (xai)", description: "Routed by OpenCodex to xai/grok-4.7" },
+      { id: "claude-ocx-p--odd", display_name: "odd (p)", description: 42 },
+    ] }), { headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+    const path = await refreshGatewayModelCacheFromProxy(10100, { timeoutMs: 1000, configDir: dir, env: {}, fetchImpl });
+    expect(JSON.parse(readFileSync(path!, "utf8")).models).toEqual([
+      { id: "claude-ocx-xai--grok-4.7", display_name: "grok-4.7 (xai)", description: "Routed by OpenCodex to xai/grok-4.7" },
+      { id: "claude-ocx-p--odd", display_name: "odd (p)" },
+    ]);
+  });
+});

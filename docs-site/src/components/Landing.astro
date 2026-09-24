@@ -6,8 +6,10 @@
 import { Image } from 'astro:assets';
 import {
 	siAnthropic,
+	siApple,
 	siDeepseek,
 	siGoogle,
+	siLinux,
 	siMoonshotai,
 	siOllama,
 	siOpenrouter,
@@ -91,6 +93,24 @@ const fr = {
 	'Documentation map': 'Plan de la documentation',
 	'Explore the docs': 'Explorer la documentation',
 	'opencodex is an independent community project, not affiliated with or endorsed by OpenAI, Anthropic, or any other provider. Some providers may restrict accounts that route traffic through third-party proxies — review each provider’s Terms of Service before connecting.': 'opencodex est un projet communautaire indépendant, sans affiliation avec OpenAI, Anthropic ou tout autre fournisseur, et sans approbation de leur part. Certains fournisseurs peuvent restreindre les comptes qui acheminent leur trafic par des proxys tiers ; consultez les conditions d’utilisation de chaque fournisseur avant de vous connecter.',
+	'Desktop beta': 'App de bureau bêta',
+	'Other platforms': 'Autres plateformes',
+	'Download': 'Télécharger',
+	'Download for macOS': 'Télécharger pour macOS',
+	'Download for Windows': 'Télécharger pour Windows',
+	'Download for Linux': 'Télécharger pour Linux',
+	'Download OpenCodex': 'Télécharger OpenCodex',
+	'The desktop app bundles the proxy, the dashboard and a tray. Beta.': 'L’app de bureau regroupe le proxy, le tableau de bord et une icône de barre d’état. Bêta.',
+	'Universal · Apple Silicon and Intel · macOS 13+ · .dmg': 'Universel · Apple Silicon et Intel · macOS 13+ · .dmg',
+	'Installer not code-signed yet': 'Programme d’installation pas encore signé',
+	'.deb package': 'Paquet .deb',
+	'Recommended for your system': 'Recommandé pour votre système',
+	'Prefer the terminal?': 'Vous préférez le terminal ?',
+	'Installation guide': 'Guide d’installation',
+	'All releases and checksums': 'Toutes les versions et sommes de contrôle',
+	'Desktop app guide': 'Guide de l’app de bureau',
+	'Desktop App': 'App de bureau',
+	'Latest release': 'Dernière version',
 } as const;
 
 const t = <K extends keyof typeof fr>(en: K, ko: string, zh: string, ru: string, ja: string, zhTW: string, tr: string): string =>
@@ -109,6 +129,10 @@ const icons: Record<string, string> = {
 	code: 'M16 18l6-6-6-6M8 6l-6 6 6 6',
 	terminal: 'M4 17l6-6-6-6M12 19h8',
 	folder: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z',
+	// Windows four-pane mark (not in simple-icons); fill, not stroke
+	windows: 'M3 3h8.5v8.5H3Zm9.5 0H21v8.5h-8.5ZM3 12.5h8.5V21H3Zm9.5 0H21V21h-8.5Z',
+	// Lucide download glyph (arrow into a tray); stroke, not fill
+	download: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3',
 };
 
 // Official monochrome marks from simple-icons where the brand exists in the
@@ -145,6 +169,7 @@ const docsMap = [
 		icon: 'rocket',
 		links: [
 			{ label: t('Installation', '설치', '安装', 'Установка', 'インストール', '安裝', 'Kurulum'), href: `${prefix}getting-started/installation/` },
+			{ label: t('Desktop App', '데스크톱 앱', '桌面应用', 'Десктопное приложение', 'デスクトップアプリ', '桌面應用程式', 'Masaüstü Uygulaması'), href: `${prefix}guides/desktop-app/` },
 			{ label: t('Quickstart', '빠른 시작', '快速开始', 'Быстрый старт', 'クイックスタート', '快速入門', 'Hızlı Başlangıç'), href: `${prefix}getting-started/quickstart/` },
 			{ label: t('How It Works', '동작 원리', '工作原理', 'Как это работает', '仕組み', '運作原理', 'Nasıl Çalışır'), href: `${prefix}getting-started/how-it-works/` },
 			{ label: t('Agent Quickstart', '에이전트 퀵스타트', 'Agent 快速上手', 'Быстрый старт для агентов', 'エージェント向けクイックスタート', 'Agent 快速上手', 'Ajanlar İçin Hızlı Başlangıç'), href: `${prefix}getting-started/for-agents/` },
@@ -208,6 +233,10 @@ const docsMap = [
 			<Image src={heroFieldDark} alt="" class="lp-field-dark" loading="lazy" widths={[1024, 2048]} sizes="100vw" />
 		</div>
 		<div class="lp-hero-copy">
+			<a class="lp-announce" href="#download">
+				<span class="lp-announce-text">{t('Desktop beta', '데스크톱 베타', '桌面版 Beta', 'Бета для десктопа', 'デスクトップ版ベータ', '桌面版 Beta', 'Masaüstü beta')}</span>
+				<svg viewBox="0 0 16 16" width="13" height="13" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+			</a>
 			{/* Product-word drum: the H1 performs the claim — the proxy serves both
 			    Codex and Claude Code. 4-face rotateX cylinder, fixed slot width via
 			    inline-grid stacking; reduced-motion collapses to a static pairing. */}
@@ -226,11 +255,14 @@ const docsMap = [
 				{t('opencodex is a local proxy that serves Codex and Claude Code from one port — translating each wire format to any provider, with streaming, tool calls, reasoning, and images in both directions. Zero client patches.', 'opencodex는 포트 하나로 Codex와 Claude Code를 함께 서빙하는 로컬 프록시입니다 — 각 wire 포맷을 어떤 프로바이더로든 양방향 변환하고, 스트리밍·tool call·reasoning·이미지까지 그대로 통과시킵니다. 클라이언트 패치는 없습니다.', 'opencodex 是一个本地代理，用同一个端口同时服务 Codex 与 Claude Code —— 将各自的线路格式双向翻译为任意 provider，支持流式、工具调用、推理与图像。无需修补客户端。', 'opencodex — локальный прокси, который обслуживает Codex и Claude Code через один порт: транслирует каждый wire-формат под любого провайдера, пропуская стриминг, вызовы инструментов, рассуждения и изображения в обе стороны. Никаких патчей на стороне клиента.', 'opencodex は 1 つのポートで Codex と Claude Code をまとめて提供するローカルプロキシです — 各 wire フォーマットを任意のプロバイダーへ双方向に変換し、ストリーミング・ツール呼び出し・推論・画像までそのまま通します。クライアントのパッチは不要です。', 'opencodex 是一個本機代理，用同一個連接埠同時服務 Codex 與 Claude Code —— 將各自的線路格式雙向翻譯為任意供應商，支援流式、工具呼叫、推理與圖像。無需修補用戶端。', 'opencodex, Codex ve Claude Code’u tek bir port üzerinden sunan yerel bir proxy’dir — her bir hat formatını dilediğiniz sağlayıcıya dönüştürür; akış (streaming), araç çağrıları (tool calls), akıl yürütme (reasoning) ve görseller her iki yönde de sorunsuz iletilir. İstemci tarafında sıfır yama.')}
 			</p>
 			<div class="lp-cta">
-				<a class="lp-btn-primary" href={`${prefix}getting-started/installation/`}>
-					{t('Get Started', '시작하기', '快速开始', 'Начать', 'はじめに', '快速入門', 'Başlarken')}
+				<a class="lp-btn-primary" id="lp-hero-download" href="#download"
+					data-label-macos={t('Download for macOS', 'macOS용 다운로드', '下载 macOS 版', 'Скачать для macOS', 'macOS 版をダウンロード', '下載 macOS 版', "macOS için indir")}
+					data-label-windows={t('Download for Windows', 'Windows용 다운로드', '下载 Windows 版', 'Скачать для Windows', 'Windows 版をダウンロード', '下載 Windows 版', 'Windows için indir')}
+					data-label-linux={t('Download for Linux', 'Linux용 다운로드', '下载 Linux 版', 'Скачать для Linux', 'Linux 版をダウンロード', '下載 Linux 版', 'Linux için indir')}>
+					<span id="lp-hero-download-label">{t('Download', '다운로드', '下载', 'Скачать', 'ダウンロード', '下載', 'İndir')}</span>
 					<svg viewBox="0 0 16 16" width="14" height="14" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
 				</a>
-				<a class="lp-btn-ghost" href="https://github.com/lidge-jun/opencodex">GitHub</a>
+				<a class="lp-btn-ghost" href={`${prefix}getting-started/installation/`}>{t('Get Started', '시작하기', '快速开始', 'Начать', 'はじめに', '快速入門', 'Başlarken')}</a>
 			</div>
 		<ul class="lp-chips" aria-label={t('Supported providers', '지원 프로바이더', '支持的 provider', 'Поддерживаемые провайдеры', '対応プロバイダー', '支援的供應商', 'Desteklenen sağlayıcılar')}>
 				{providers.map((p) => (
@@ -250,6 +282,57 @@ const docsMap = [
 			<Image src={dashboard} alt={t('The opencodex dashboard — live proxy status, routed providers, and available models', 'opencodex 대시보드 — 실시간 프록시 상태, 라우팅된 프로바이더, 사용 가능한 모델', 'opencodex 控制台 —— 实时代理状态、路由的 provider 与可用模型', 'Дашборд opencodex — статус прокси в реальном времени, маршрутизированные провайдеры и доступные модели', 'opencodex ダッシュボード — プロキシのリアルタイム状態、ルーティング済みプロバイダー、利用可能モデル', 'opencodex 儀表板 —— 即時代理狀態、路由的供應商與可用模型', 'opencodex kontrol paneli — canlı proxy durumu, yönlendirilen sağlayıcılar ve kullanılabilir modeller')} loading="eager" />
 		</div>
 	</div>
+	</section>
+
+	<!-- download sheet: real asset URLs resolved client-side from the latest
+	     GitHub release; every href falls back to releases/latest so the
+	     section stays useful with JS off or the API rate-limited. -->
+	<section class="lp-download" id="download">
+		<h2 class="lp-download-title">{t('Download OpenCodex', 'OpenCodex 다운로드', '下载 OpenCodex', 'Скачать OpenCodex', 'OpenCodex をダウンロード', '下載 OpenCodex', 'OpenCodex’u İndirin')}</h2>
+		<p class="lp-download-sub">{t('The desktop app bundles the proxy, the dashboard and a tray. Beta.', '데스크톱 앱 하나에 프록시, 대시보드, 트레이까지. 베타입니다.', '桌面应用集成了代理、控制台与托盘。Beta 版。', 'Десктопное приложение объединяет прокси, дашборд и трей. Бета.', 'デスクトップアプリにはプロキシ、ダッシュボード、トレイが同梱されています。ベータ版です。', '桌面應用整合了代理、儀表板與系統匣。Beta 版。', 'Masaüstü uygulaması proxy’yi, kontrol panelini ve tepsi simgesini bir araya getirir. Beta.')}</p>
+		<p class="lp-download-version"><span data-lp-version-wrap hidden>{t('Latest release', '최신 릴리스', '最新版本', 'Последний релиз', '最新リリース', '最新版本', 'Son sürüm')} <span data-lp-version></span></span></p>
+		<div class="lp-dl-grid">
+			<article class="lp-dl-card" data-platform="macos">
+				<svg class="lp-dl-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={siApple.path} /></svg>
+				<h3>macOS</h3>
+				<p class="lp-dl-meta">{t('Universal · Apple Silicon and Intel · macOS 13+ · .dmg', '유니버설 · Apple Silicon 및 Intel · macOS 13+ · .dmg', 'Universal · Apple Silicon 与 Intel · macOS 13+ · .dmg', 'Universal · Apple Silicon и Intel · macOS 13+ · .dmg', 'ユニバーサル · Apple Silicon と Intel · macOS 13+ · .dmg', 'Universal · Apple Silicon 與 Intel · macOS 13+ · .dmg', 'Evrensel · Apple Silicon ve Intel · macOS 13+ · .dmg')}</p>
+				<div class="lp-dl-actions">
+					<a class="lp-dl-btn" data-lp-asset="dmg" href="https://github.com/lidge-jun/opencodex/releases/latest"><svg class="lp-dl-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.download} /></svg>{t('Download', '다운로드', '下载', 'Скачать', 'ダウンロード', '下載', 'İndir')}<span class="lp-dl-btn-fmt">.dmg</span></a>
+				</div>
+				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 추천', '推荐用于您的系统', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '推薦用於您的系統', 'Sisteminiz için önerilir')}</p>
+			</article>
+			<article class="lp-dl-card" data-platform="windows">
+				<svg class="lp-dl-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={icons.windows} /></svg>
+				<h3>Windows</h3>
+				<p class="lp-dl-meta">x64 · .msi</p>
+				<p class="lp-dl-note">{t('Installer not code-signed yet', '아직 코드 서명되지 않은 설치 프로그램', '安装程序尚未进行代码签名', 'Установщик пока не имеет цифровой подписи', 'インストーラーはまだコード署名されていません', '安裝程式尚未進行程式碼簽署', 'Yükleyici henüz kod imzalı değil')}</p>
+				<div class="lp-dl-actions">
+					<a class="lp-dl-btn" data-lp-asset="msi" href="https://github.com/lidge-jun/opencodex/releases/latest"><svg class="lp-dl-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.download} /></svg>{t('Download', '다운로드', '下载', 'Скачать', 'ダウンロード', '下載', 'İndir')}<span class="lp-dl-btn-fmt">.msi</span></a>
+				</div>
+				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 추천', '推荐用于您的系统', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '推薦用於您的系統', 'Sisteminiz için önerilir')}</p>
+			</article>
+			<article class="lp-dl-card" data-platform="linux">
+				<svg class="lp-dl-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d={siLinux.path} /></svg>
+				<h3>Linux</h3>
+				<p class="lp-dl-meta">x86_64 · .AppImage</p>
+				<div class="lp-dl-actions">
+					<a class="lp-dl-btn" data-lp-asset="appimage" href="https://github.com/lidge-jun/opencodex/releases/latest"><svg class="lp-dl-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={icons.download} /></svg>{t('Download', '다운로드', '下载', 'Скачать', 'ダウンロード', '下載', 'İndir')}<span class="lp-dl-btn-fmt">.AppImage</span></a>
+					<a class="lp-dl-alt" data-lp-asset="deb" href="https://github.com/lidge-jun/opencodex/releases/latest">{t('.deb package', '.deb 패키지', '.deb 软件包', 'Пакет .deb', '.deb パッケージ', '.deb 套件', '.deb paketi')}</a>
+				</div>
+				<p class="lp-dl-reco">{t('Recommended for your system', '내 시스템에 추천', '推荐用于您的系统', 'Рекомендуется для вашей системы', 'お使いのシステムにおすすめ', '推薦用於您的系統', 'Sisteminiz için önerilir')}</p>
+			</article>
+		</div>
+		<details class="lp-dl-more" hidden>
+			<summary>{t('Other platforms', '다른 플랫폼 더보기', '其他平台', 'Другие платформы', 'その他のプラットフォーム', '其他平台', 'Diğer platformlar')}</summary>
+			<div class="lp-dl-more-grid"></div>
+		</details>
+		<p class="lp-dl-foot">
+			{t('Prefer the terminal?', '터미널이 더 편하다면', '更喜欢终端？', 'Предпочитаете терминал?', 'ターミナル派ですか？', '偏好終端機？', 'Terminali mi tercih edersiniz?')}
+			<code>npm install -g @bitkyc08/opencodex</code>
+			<a href={`${prefix}getting-started/installation/`}>{t('Installation guide', '설치 가이드', '安装指南', 'Руководство по установке', 'インストールガイド', '安裝指南', 'Kurulum kılavuzu')}</a>
+			<a href="https://github.com/lidge-jun/opencodex/releases/latest">{t('All releases and checksums', '전체 릴리스와 체크섬', '所有版本与校验和', 'Все релизы и контрольные суммы', 'すべてのリリースとチェックサム', '所有版本與校驗碼', 'Tüm sürümler ve sağlama toplamları')}</a>
+			<a href={`${prefix}guides/desktop-app/`}>{t('Desktop app guide', '데스크톱 앱 가이드', '桌面应用指南', 'Руководство по приложению', 'デスクトップアプリガイド', '桌面應用程式指南', 'Masaüstü uygulaması kılavuzu')}</a>
+		</p>
 	</section>
 
 	<!-- quickstart sheet scene -->
@@ -439,4 +522,86 @@ const docsMap = [
 			if (entries.some((e) => e.isIntersecting)) { obs.disconnect(); start(); }
 		}, { rootMargin: '100% 0px' }).observe(section);
 	}
+</script>
+
+<script>
+	// Desktop download surface: platform detection upgrades the hero CTA label
+	// and flags the matching card; the latest-release fetch then swaps each
+	// placeholder href for the real asset URL. Every step is optional — a
+	// missing element, a failed fetch or a rate limit leaves the
+	// server-rendered defaults (releases/latest) untouched.
+	const uaPlatform = (navigator as Navigator & { userAgentData?: { platform?: string } })
+		.userAgentData?.platform || navigator.userAgent || '';
+	// Phones, tablets and ChromeOS cannot run the desktop builds; iOS user agents
+	// also say "like Mac OS X", so they are ruled out before the desktop tests.
+	// iPadOS in desktop mode reports a Mac user agent; a touch screen gives it away.
+	const handheld = /iphone|ipad|ipod|android|cros|mobile/i.test(`${uaPlatform} ${navigator.userAgent}`)
+		|| (/mac/i.test(uaPlatform) && navigator.maxTouchPoints > 1);
+	const platform = handheld
+		? ''
+		: /mac/i.test(uaPlatform)
+		? 'macos'
+		: /win/i.test(uaPlatform)
+			? 'windows'
+			: /linux|x11/i.test(uaPlatform)
+				? 'linux'
+				: '';
+	const recommend = (platform: string) => {
+		const heroLabel = document.getElementById('lp-hero-download-label');
+		const heroBtn = document.getElementById('lp-hero-download');
+		const label = heroBtn?.dataset[`label${platform[0].toUpperCase()}${platform.slice(1)}`];
+		if (heroLabel && label) heroLabel.textContent = label;
+		const card = document.querySelector<HTMLElement>(`.lp-dl-card[data-platform="${platform}"]`);
+		if (!card) return;
+		card.setAttribute('data-recommended', '');
+		// Show only this platform's card; the others move into the disclosure.
+		// Without detection (or JavaScript) all three stay in the grid.
+		const more = document.querySelector<HTMLDetailsElement>('.lp-dl-more');
+		const moreGrid = more?.querySelector<HTMLElement>('.lp-dl-more-grid');
+		if (!more || !moreGrid) return;
+		document
+			.querySelectorAll<HTMLElement>('.lp-dl-grid .lp-dl-card:not([data-recommended])')
+			.forEach((other) => moreGrid.append(other));
+		more.hidden = false;
+	};
+	// Linux builds are x86_64 only, so an ARM Linux desktop gets no recommendation.
+	// Chromium freezes the Linux user agent to "x86_64", so its architecture hint
+	// wins when present; other browsers report the real machine in the user agent.
+	const uaData = (navigator as Navigator & {
+		userAgentData?: { getHighEntropyValues?: (hints: string[]) => Promise<{ architecture?: string }> };
+	}).userAgentData;
+	if (platform === 'linux') {
+		if (uaData?.getHighEntropyValues) {
+			uaData
+				.getHighEntropyValues(['architecture'])
+				.then((hints) => { if (hints.architecture === 'x86') recommend('linux'); })
+				.catch(() => {});
+		} else if (/x86_64|amd64|x64/i.test(navigator.userAgent)) {
+			recommend('linux');
+		}
+	} else if (platform) {
+		recommend(platform);
+	}
+	fetch('https://api.github.com/repos/lidge-jun/opencodex/releases/latest')
+		.then((res) => (res.ok ? res.json() : Promise.reject(res.status)))
+		.then((release: { tag_name?: string; assets?: { name?: string; browser_download_url?: string }[] }) => {
+			const patterns: Record<string, RegExp> = {
+				dmg: /-macos\.dmg$/,
+				msi: /-windows-x64\.msi$/,
+				appimage: /-linux-x86_64\.AppImage$/,
+				deb: /-linux-amd64\.deb$/,
+			};
+			for (const asset of release.assets ?? []) {
+				const key = Object.keys(patterns).find((k) => asset.name && patterns[k].test(asset.name));
+				if (!key || !asset.browser_download_url) continue;
+				const link = document.querySelector<HTMLAnchorElement>(`[data-lp-asset="${key}"]`);
+				if (link) link.href = asset.browser_download_url;
+			}
+			const version = document.querySelector<HTMLElement>('[data-lp-version]');
+			if (version && release.tag_name) {
+				version.textContent = release.tag_name;
+				version.closest('[data-lp-version-wrap]')?.removeAttribute('hidden');
+			}
+		})
+		.catch(() => {});
 </script>

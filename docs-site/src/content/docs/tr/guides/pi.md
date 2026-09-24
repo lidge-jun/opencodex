@@ -32,7 +32,8 @@ export line, and how many models carry authoritative context limits.
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
       "compat": {
-        "sendSessionAffinityHeaders": true
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false
       },
       "models": [
         {
@@ -49,6 +50,8 @@ export line, and how many models carry authoritative context limits.
 ```
 
 Oluşturulan Pi sağlayıcılarında `compat.sendSessionAffinityHeaders` etkinleştirilir. Sağlayıcıyı birleştirirken veya elle düzenlerken bu ayarı koruyun: Pi sabit bir oturum kimliği gönderir ve OpenCodex bu kimlikten kanonik OpenCode Go hedefi için oturum yakınlığı üretir. `cacheRetention` değeri `none` olduğunda Pi kimliği göndermeyebilir.
+
+Oluşturulan Pi sağlayıcıları ayrıca `compat.supportsDeveloperRole` değerini `false` yapar; böylece Pi sistem istemini `developer` yerine `system` rolüyle gönderir. OpenCodex Chat Completions rollerini olduğu gibi iletir ve OpenAI uyumlu bazı sağlayıcılar `developer` rolünü 400 hatasıyla reddeder; `system` rolünü hepsi kabul eder.
 
 Model ids are the proxy's canonical selectors, so routed models appear as
 `provider/model`
@@ -113,7 +116,7 @@ the variable unset.
 It matters only when `hostname` is set beyond loopback, which is also the case
 where the proxy
 refuses to start without a token — see [Remote
-access](/reference/configuration/#remote-access).
+access](/tr/reference/configuration/server/#uzaktan-erişim).
 
 ## Model metadata
 

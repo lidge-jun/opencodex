@@ -317,6 +317,37 @@ describe("run-turn adapter event preflight", () => {
     expect(await collect(preflight.stream)).toEqual(values);
   });
 
+  test("first-event classifier replaces only the first meaningful event", async () => {
+    const values: AdapterEvent[] = [
+      heartbeat,
+      { type: "tool_call_start", id: "call_stale", name: "stale_tool" },
+      text("must not run"),
+    ];
+    const classified: Extract<AdapterEvent, { type: "error" }> = {
+      type: "error",
+      status: 502,
+      message: "undeclared tool",
+    };
+    const preflight = await preflightAdapterEvents(events(values), event =>
+      event.type === "tool_call_start" ? classified : undefined);
+    expect(preflight.error).toEqual(classified);
+    expect(preflight.empty).toBe(false);
+    expect(await collect(preflight.stream)).toEqual([heartbeat, classified]);
+  });
+
+  test("first-event classifier cannot replace after a replay-unsafe heartbeat", async () => {
+    const tool: AdapterEvent = { type: "tool_call_start", id: "call_stale", name: "stale_tool" };
+    const values: AdapterEvent[] = [{ type: "heartbeat", replayUnsafe: true }, tool];
+    const preflight = await preflightAdapterEvents(events(values), () => ({
+      type: "error",
+      status: 502,
+      message: "must not replace",
+    }));
+    expect(preflight.error).toBeUndefined();
+    expect(preflight.replayUnsafe).toBe(true);
+    expect(await collect(preflight.stream)).toEqual(values);
+  });
+
   test("immediate done is a commit", async () => {
     const preflight = await preflightAdapterEvents(events([done]));
     expect(preflight.error).toBeUndefined();

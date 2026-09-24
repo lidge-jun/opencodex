@@ -50,6 +50,7 @@ import {
 import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../types";
 import type { DesktopProfileModel } from "../claude/desktop-profile";
 import { drainAndShutdown } from "./lifecycle";
+import { noteExplicitShutdownRequested } from "./management/system-restart";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "./request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../usage/cost";
 import type { PersistedUsageAttempt } from "../usage/log";
@@ -75,6 +76,7 @@ import { handleCompanionRoutes } from "./management/companion-routes";
 import { handleCodexPromptRoutes } from "./management/codex-prompt-routes";
 import { handleIntegrationRoutes } from "./management/integration-routes";
 import { handleNativeIntegrationRoutes } from "./management/native-integration-routes";
+import { handleClaudeDesktopPickerRoutes } from "./management/claude-desktop-picker-routes";
 import { handleCursorIntegrationRoutes } from "./management/cursor-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal, ManagementSessionControl } from "./management-auth";
@@ -160,6 +162,12 @@ async function handleGrokCouponRoutesOnDemand(ctx: ManagementContext): Promise<R
   return handleGrokCouponRoutes(ctx);
 }
 
+async function handleAnthropicResetGrantRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/anthropic/reset-grants", true)) return null;
+  const { handleAnthropicResetGrantRoutes } = await import("./management/anthropic-reset-grant-routes");
+  return handleAnthropicResetGrantRoutes(ctx);
+}
+
 async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/remote-workspace")) return null;
   if (!remoteWorkspaceEnabled(ctx.config)) {
@@ -167,8 +175,11 @@ async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Prom
       status: ctx.req.method === "GET" ? 200 : 404, headers: { "cache-control": "no-store" },
     });
   }
-  if (ctx.req.method !== "GET" && ctx.principal !== "gui-session") {
-    return Response.json({ error: "A dashboard session is required for Remote Workspace changes." }, { status: 403 });
+  if (ctx.req.method !== "GET" && (
+    ctx.principal !== "gui-session"
+    || ctx.sessionControl?.isPaired(ctx.req, ctx.config) !== true
+  )) {
+    return Response.json({ error: "A paired dashboard session is required for Remote Workspace changes." }, { status: 403 });
   }
   const { handleRemoteWorkspaceRoutes } = await import("./management/remote-workspace-routes");
   return handleRemoteWorkspaceRoutes(ctx);
@@ -275,6 +286,7 @@ export async function handleManagementAPI(
     ??     (await handleQuotaResetRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleGrokCouponRoutesOnDemand(ctx))
+    ??     (await handleAnthropicResetGrantRoutesOnDemand(ctx))
     ??     handleMetricsRoutes(ctx)
     ??     (await handleRoutingAnalyticsRoutes(ctx))
     ??     (await handleRoutingProfileRoutesOnDemand(ctx))
@@ -283,6 +295,7 @@ export async function handleManagementAPI(
     ??     (await handleIntegrationRoutes(ctx))
     ??     (await handleNativeIntegrationRoutes(ctx))
     ??     (await handleCursorIntegrationRoutes(ctx))
+    ??     (await handleClaudeDesktopPickerRoutes(ctx))
     ??     (await handleAgentSettingsRoutes(ctx))
     ??     (await handleCodexPromptRoutes(ctx))
     ??     (await handleOauthAccountRoutes(ctx))
@@ -417,6 +430,9 @@ export async function handleManagementAPI(
     // syncCleanup skips this when OCX_SERVICE is set (so a crash/respawn keeps the fence),
     // which is exactly why an intentional stop has to do it here — unless the caller is
     // `ocx stop`, which does it itself once the proxy is proven down.
+    // Mark the stop before the first await after acceptance, so an automatic restart draining
+    // concurrently cannot reach its handoff while teardown is still pending.
+    noteExplicitShutdownRequested();
     const teardown = await performStopTeardown(url, { ownsReceipt: deferralMatchesReceipt });
     setTimeout(async () => {
       let shutdownSucceeded = false;

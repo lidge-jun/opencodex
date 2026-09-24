@@ -131,6 +131,27 @@ function oneLogicalRequest() {
 }
 
 describe("one resend budget across composed recovery legs", () => {
+  test("a fresh budget has not spent an ambiguous resend", () => {
+    const budget = createRequestExecutionBudget();
+    expect(budget.ambiguousResendSpent).toBe(false);
+    expect(budget.claimAmbiguousResend?.(0)).toBe(false);
+    expect(budget.ambiguousResendSpent).toBe(false);
+  });
+
+  test("a derived scope observes the parent's spent ambiguous resend", () => {
+    const parent = createRequestExecutionBudget();
+    const child = deriveRequestExecutionBudget(parent, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    expect(parent.claimAmbiguousResend?.(GRANT)).toBe(true);
+    expect(child.ambiguousResendSpent).toBe(true);
+  });
+
+  test("a parent observes a derived scope's spent ambiguous resend", () => {
+    const parent = createRequestExecutionBudget();
+    const child = deriveRequestExecutionBudget(parent, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    expect(child.claimAmbiguousResend?.(GRANT)).toBe(true);
+    expect(parent.ambiguousResendSpent).toBe(true);
+  });
+
   test("the whole chain spends the grant once, whatever each leg was separately entitled to", async () => {
     silenceWarn();
     const request = oneLogicalRequest();
@@ -233,15 +254,49 @@ describe("one resend budget across composed recovery legs", () => {
       get lastTargetKey(): string | undefined { return owner.lastTargetKey; },
       remainingBaseSends: (cap: number): number => owner.remainingBaseSends(cap),
       claimAmbiguousResend: (limit: number): boolean => owner.claimAmbiguousResend?.(limit) === true,
+      get ambiguousResendSpent(): boolean | undefined { return owner.ambiguousResendSpent; },
       reserveDispatch: intent => owner.reserveDispatch(intent),
     };
 
     const first = deriveRequestExecutionBudget(view, CODEX_TEXT_GUARDED_BUDGET_POLICY);
     const second = deriveRequestExecutionBudget(view, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    expect(second.ambiguousResendSpent).toBe(false);
     expect(first.claimAmbiguousResend?.(GRANT)).toBe(true);
+    expect(second.ambiguousResendSpent).toBe(true);
+    expect(view.ambiguousResendSpent).toBe(true);
     expect(second.claimAmbiguousResend?.(GRANT)).toBe(false);
     expect(view.claimAmbiguousResend?.(GRANT)).toBe(false);
     expect(owner.claimAmbiguousResend?.(GRANT)).toBe(false);
+  });
+
+  test("a bridged parent without a spent flag still reports a grant claimed through the bridge", () => {
+    // A hand-built parent that predates `ambiguousResendSpent` can still grant through
+    // `claimAmbiguousResend`. Reading only the parent's missing flag would report "not spent"
+    // after a scope spent the grant, and a combo would then hop on a zero-output 200 from the
+    // replacement: a third send of a turn that may already have run.
+    const owner = createRequestExecutionBudget(CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    const legacy: RequestExecutionBudget = {
+      get used(): number { return owner.used; },
+      set used(next: number) { owner.used = next; },
+      logicalRequestId: owner.logicalRequestId,
+      policyVersion: owner.policyVersion,
+      policy: owner.policy,
+      get reserveSpent(): boolean { return owner.reserveSpent; },
+      get alternateTargetSends(): number { return owner.alternateTargetSends; },
+      get targetTransitions(): number { return owner.targetTransitions; },
+      get lastTargetKey(): string | undefined { return owner.lastTargetKey; },
+      remainingBaseSends: (cap: number): number => owner.remainingBaseSends(cap),
+      claimAmbiguousResend: (limit: number): boolean => owner.claimAmbiguousResend?.(limit) === true,
+      reserveDispatch: intent => owner.reserveDispatch(intent),
+    };
+
+    const first = deriveRequestExecutionBudget(legacy, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    const second = deriveRequestExecutionBudget(legacy, CODEX_TEXT_GUARDED_BUDGET_POLICY);
+    expect(first.ambiguousResendSpent).toBe(false);
+    expect(first.claimAmbiguousResend?.(GRANT)).toBe(true);
+    expect(first.ambiguousResendSpent).toBe(true);
+    expect(second.ambiguousResendSpent).toBe(true);
+    expect(deriveRequestExecutionBudget(legacy, CODEX_TEXT_GUARDED_BUDGET_POLICY).ambiguousResendSpent).toBe(true);
   });
 
   test("a parent that grants nothing cannot be bridged into a grant", () => {

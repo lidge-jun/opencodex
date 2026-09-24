@@ -18,6 +18,7 @@ import { lookupReplayThoughtSignature } from "./thought-signature-replay";
 import { compactionItemToText, isCompactionItemType } from "./compaction";
 import { previousResponseReplayPrefixLength } from "./state";
 import { decodeReasoningEnvelope } from "./reasoning-envelope";
+import { hasRoutedIdentity, nameRoutedIdentity } from "../adapters/identity";
 import { extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
 import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
@@ -40,6 +41,28 @@ function replayThoughtSignatureMetadata(
 ): { google: { thoughtSignature: string } } | undefined {
   const signature = lookupReplayThoughtSignature(callId, scope);
   return signature ? { google: { thoughtSignature: signature } } : undefined;
+}
+
+/**
+ * Repair one bounded inbound-history corruption: a JSON object literal that lost exactly
+ * its opening brace (observed as `code":"…}` after `{"` went missing, taking the key's
+ * opening quote with it). Only a text that ends with `}` and parses into an object once
+ * the brace is restored counts — anything looser keeps the tolerated-{} fallback so
+ * freeform text that merely resembles JSON is never rewritten.
+ */
+function repairJsonObjectEnvelope(text: string): Record<string, unknown> | undefined {
+  if (!text.endsWith("}")) return undefined;
+  // A body that still opens with a quoted key lost only `{`; the observed shape lost
+  // `{"` together, taking the key's opening quote with it. Both restorations must parse
+  // into an object, so freeform text that merely resembles JSON is never rewritten.
+  const candidate = text.startsWith('"') ? `{${text}` : `{"${text}`;
+  try {
+    const parsed: unknown = JSON.parse(candidate);
+    if (isObj(parsed)) return parsed;
+  } catch {
+    /* fall through to the tolerated-{} path */
+  }
+  return undefined;
 }
 
 
@@ -94,6 +117,37 @@ function attachPendingReasoningToCallOwner(
 
 const REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
+export function hasValidatedActiveReasoningEffort(options: Pick<OcxRequestOptions, "reasoning">): boolean {
+  return options.reasoning !== undefined && options.reasoning !== "none";
+}
+
+
+/**
+ * Name this request's destination in an instruction text inherited from a stored session block.
+ *
+ * Returns the input unchanged when it carries no sentence of ours, which is every request that has
+ * not gone through a sub-agent spawn. The catalog block is model-neutral on disk (#5217) and some
+ * routed adapters build their own system text instead of calling `identifyRoutedModel`, so both the
+ * neutral line and a sentence naming an earlier model are handled here — request time is the first
+ * point where the destination model is known.
+ */
+function nameDestinationText(text: string, modelId: string): string {
+  return hasRoutedIdentity(text) ? nameRoutedIdentity(text, modelId) : text;
+}
+
+function nameDestinationContent(
+  content: string | OcxContentPart[],
+  modelId: string,
+): string | OcxContentPart[] {
+  if (typeof content === "string") return nameDestinationText(content, modelId);
+  let changed = false;
+  const parts = content.map((part) => {
+    if (part.type !== "text" || !hasRoutedIdentity(part.text)) return part;
+    changed = true;
+    return { ...part, text: nameRoutedIdentity(part.text, modelId) };
+  });
+  return changed ? parts : content;
+}
 
 export function parseRequest(
   body: unknown,
@@ -142,7 +196,10 @@ export function parseRequest(
   let continuationConversationMessageIndex: number | undefined;
 
   if (typeof data.instructions === "string" && data.instructions.length > 0) {
-    systemPrompt.push(data.instructions);
+    // #5217: this is the stored session instruction block. A sub-agent spawned on a DIFFERENT model
+    // receives the parent's copy verbatim, so the identity sentence inside it names the parent
+    // unless it is renamed here, where the destination model is known.
+    systemPrompt.push(nameDestinationText(data.instructions, data.model));
   }
 
   if (typeof data.input === "string") {
@@ -248,14 +305,25 @@ export function parseRequest(
             const flat = typeof text === "string"
               ? text
               : text.map(p => (p.type === "text" || p.type === "document" ? p.text : "")).join("");
-            if (flat.length > 0) systemPrompt.push(flat);
+            // #5217: a system-role item is instruction text, exactly like `instructions` and a
+            // developer item, so it needs the same request-time naming — it lands in the system
+            // block verbatim, and Codex replays the parent's copy to a sub-agent on another model.
+            if (flat.length > 0) systemPrompt.push(nameDestinationText(flat, data.model));
             break;
           }
           case "user":
           case "developer": {
             pendingReasoning.length = 0;
             const content = inputContentParts(msg.content);
-            messages.push({ role: msg.role, content, timestamp: now });
+            messages.push({
+              role: msg.role,
+              // #5217: Codex replays the PARENT session's instruction block as the worker's
+              // developer message, so a sub-agent on another model inherits an identity sentence
+              // naming the parent. Only this proxy's own sentence is rewritten, and only on a
+              // developer item; user turns are the caller's content and stay byte-identical.
+              content: msg.role === "developer" ? nameDestinationContent(content, data.model) : content,
+              timestamp: now,
+            });
             break;
           }
           case "assistant": {
@@ -333,7 +401,16 @@ export function parseRequest(
             const parsed: unknown = JSON.parse(rawArgs);
             if (isObj(parsed)) args = parsed;
           } catch {
-            console.warn(`[parser] function_call ${call.call_id} has non-JSON arguments; defaulting to {}`);
+            // One observed serialization corruption loses exactly the JSON object's opening
+            // brace; the closed envelope is tight enough to repair back into a call the
+            // routed model can still see and retry, instead of replaying {} forever.
+            const repaired = repairJsonObjectEnvelope(rawArgs);
+            if (repaired === undefined) {
+              console.warn(`[parser] function_call ${call.call_id} has non-JSON arguments; defaulting to {}`);
+            } else {
+              args = repaired;
+              console.warn(`[parser] function_call ${call.call_id} arguments lost the JSON opening brace; repaired from history`);
+            }
           }
         }
         // Do NOT map Responses item `id` (fc_/ctc_/…) onto `thoughtSignature`. That field is
@@ -542,7 +619,8 @@ export function parseRequest(
     options.reasoning = requestedEffort;
   }
   const summaryMode = data.reasoning?.summary;
-  if (!summaryMode || summaryMode === "none") options.hideThinkingSummary = true;
+  const reasoningActive = hasValidatedActiveReasoningEffort(options);
+  if (summaryMode === "none" || (!summaryMode && !reasoningActive)) options.hideThinkingSummary = true;
   if (data.presence_penalty !== undefined) options.presencePenalty = data.presence_penalty;
   if (data.frequency_penalty !== undefined) options.frequencyPenalty = data.frequency_penalty;
   if (data.service_tier !== undefined) options.serviceTier = data.service_tier;

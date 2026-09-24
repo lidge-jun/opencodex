@@ -1,4 +1,6 @@
 import type { IncomingMeta, ProviderAdapter } from "./base";
+import { createAdapterTierMetadata, type AdapterTierMetadata } from "../providers/fastwire";
+import { ANTHROPIC_FAST_MODE_BETA, mergeAnthropicBetaHeader } from "../providers/anthropic-fast";
 import { createToolCallIdAllocator, type ToolCallIdAllocator } from "./tool-call-id";
 import { debugDroppedFrame } from "../lib/debug";
 import type {
@@ -173,6 +175,31 @@ function applyPromptCaching(
       applyCacheControlToLastText(msg.content as Array<Record<string, unknown>>, cc);
     }
   }
+}
+
+/**
+ * The fast-mode wire this request should carry, if any. Only a settled `set` decision on a
+ * declared `anthropic-speed` wire emits it, and only with the value that wire maps canonical
+ * Fast to; everything else (drop, forwarded caller tiers, a declaration for another wire)
+ * sends no `speed`, which is the API's standard speed.
+ */
+function anthropicFastSpeed(
+  parsed: OcxParsedRequest,
+  provider: OcxProviderConfig,
+): { value: string; betas: readonly string[] } | undefined {
+  const decision = parsed.options.tierDecision;
+  if (decision?.kind !== "set") return undefined;
+  const wire = parsed.options.tierObservation?.fastWire ?? provider.fastWire ?? null;
+  if (wire?.kind !== "anthropic-speed") return undefined;
+  if (decision.value !== wire.canonicalToWire.priority) return undefined;
+  return { value: decision.value, betas: wire.betas?.length ? wire.betas : [ANTHROPIC_FAST_MODE_BETA] };
+}
+
+/** Feed a `usage.speed` echo ("fast" | "standard") to the attempt's tier observer. */
+function observeAnthropicSpeed(usage: unknown, tierMetadata: AdapterTierMetadata | undefined): void {
+  if (!tierMetadata || !usage || typeof usage !== "object" || Array.isArray(usage)) return;
+  const speed = (usage as { speed?: unknown }).speed;
+  if (speed !== undefined) tierMetadata.observeResponseServiceTier(speed);
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +611,11 @@ const EXPLICIT_THINKING_DISABLE_FAMILY_MINIMUMS: Record<string, readonly [major:
 
 function supportsExplicitThinkingDisable(modelId: string): boolean {
   return meetsFamilyMinimum(modelId, EXPLICIT_THINKING_DISABLE_FAMILY_MINIMUMS);
+}
+
+function rejectsForcedToolChoice(modelId: string): boolean {
+  const parsed = claudeFamilyVersion(modelId);
+  return parsed?.family === "opus" && parsed.major === 5 && parsed.minor === 5;
 }
 
 /** `output_config.effort` accepts low|medium|high|xhigh|max — "minimal" is rejected with a 400. */
@@ -1071,6 +1103,20 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         // has to be stated before the flag has somewhere to live.
         body.tool_choice = { type: "auto" };
       }
+      const selectedToolChoice = body.tool_choice as { type?: string; name?: string } | undefined;
+      if (rejectsForcedToolChoice(parsed.modelId) && (selectedToolChoice?.type === "any" || selectedToolChoice?.type === "tool")) {
+        // Claude Opus 5.5 rejects forced tool use regardless of whether adaptive thinking is
+        // explicit. Anthropic's migration guidance recommends auto plus a prompt instruction;
+        // this keeps the request usable but cannot preserve the caller's forced-tool guarantee.
+        if (selectedToolChoice.type === "tool" && Array.isArray(body.tools)) {
+          // A named choice still narrows the candidate set even though the upstream cannot
+          // enforce the forced call. Do not let the compatibility downgrade widen it to every
+          // declared tool.
+          body.tools = body.tools.filter(tool => tool && typeof tool === "object" && "name" in tool
+            && (tool as { name?: unknown }).name === selectedToolChoice.name);
+        }
+        body.tool_choice = { type: "auto" };
+      }
       // disable_parallel_tool_use is nested in tool_choice and caps the model at one
       // tool call for auto/any/tool. Under type "none" tool use is already off, so the
       // flag is irrelevant there, and with no tools on the wire no tool_choice exists.
@@ -1088,6 +1134,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       if (unresolvedPlaceholder) {
         throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
       }
+      // Anthropic fast mode: `speed` is only accepted beside its beta; without it the API
+      // answers 400 "speed: Extra inputs are not permitted". The beta is merged below, after
+      // any header override, so a request never carries one without the other.
+      const fastSpeed = anthropicFastSpeed(parsed, provider);
+      if (fastSpeed) body.speed = fastSpeed.value;
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
@@ -1108,6 +1159,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         else headers["x-api-key"] = provider.apiKey;
       }
       if (provider.headers) Object.assign(headers, provider.headers);
+      mergeAnthropicBetaHeader(headers, fastSpeed?.betas ?? []);
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which
       // follows the moving final block across turns. Keep one breakpoint slot free for it.
@@ -1122,10 +1174,27 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);
 
-      return { url, method: "POST", headers, body: JSON.stringify(body) };
+      return {
+        url,
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+        // Adapter-owned: the registry wrapper would otherwise report the exact absence of a
+        // tier field and mislabel every fast turn as downgraded.
+        tierLog: createAdapterTierMetadata(
+          parsed.options.tierObservation,
+          parsed.options.tierDecision,
+          fastSpeed ? "anthropic-speed" : null,
+          fastSpeed?.value ?? null,
+        ),
+      };
     },
 
-    async *parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
+    async *parseStream(
+      response: Response,
+      budget: TranslatorBudget,
+      tierMetadata?: AdapterTierMetadata,
+    ): AsyncGenerator<AdapterEvent> {
       if (!response.body) {
         yield { type: "error", message: "No response body" };
         return;
@@ -1172,7 +1241,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
 
       try {
       for await (const record of decodeServerSentEvents(response.body, { includeComments: true, translatorBudget: budget })) {
-        if (record.kind === "comment") {
+        // Anthropic's streaming API sends `event: ping` / `{"type":"ping"}` records alongside
+        // SSE comments ("Event streams may also include any number of ping events"). Both mean the
+        // upstream is still alive, so a long silent thinking block must not look like a dead
+        // upstream to the bridge stall watchdog (#5707).
+        if (record.kind === "comment" || record.event === "ping") {
           yield { type: "heartbeat" };
           continue;
         }
@@ -1199,10 +1272,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               case "message_start": {
                 const message = data.message as { usage?: unknown } | undefined;
                 pendingUsage = mergeAnthropicUsage(pendingUsage, message?.usage);
+                // Fast mode reports the speed actually served here (`usage.speed`).
+                observeAnthropicSpeed(message?.usage, tierMetadata);
                 break;
               }
               case "content_block_start": {
-                const block = data.content_block as { type: string; id?: string; name?: string; data?: string; thinking?: string } | undefined;
+                const block = data.content_block as { type: string; id?: string; name?: unknown; data?: string; thinking?: string } | undefined;
                 if (!block) break;
                 currentBlockType = block.type;
                 if (block.type === "thinking") {
@@ -1212,7 +1287,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                 }
                 if (block.type === "tool_use") {
                   currentToolCallId = usableToolUseId(block.id);
-                  currentToolCallName = toolNames.fromWire(block.name ?? "");
+                  currentToolCallName = toolNames.fromWire(typeof block.name === "string" ? block.name : "");
                   currentToolCallJson = "";
                   budget.openCall(currentToolCallId);
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
@@ -1288,12 +1363,20 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
               case "message_delta": {
                 const usage = data.usage;
                 pendingUsage = mergeAnthropicUsage(pendingUsage, usage);
+                // Later frames win: a speed here (not seen live, but usage is cumulative) supersedes message_start.
+                observeAnthropicSpeed(usage, tierMetadata);
                 const delta = data.delta as { stop_reason?: unknown } | undefined;
                 if (typeof delta?.stop_reason === "string") pendingStopReason = delta.stop_reason;
                 break;
               }
               case "message_stop": {
                 yield* emitDone();
+                break;
+              }
+              case "ping": {
+                // A data-only `{"type":"ping"}` record carries no SSE `event:` line, so the
+                // liveness check above cannot see it (#5707).
+                yield { type: "heartbeat" };
                 break;
               }
               case "error": {
@@ -1377,7 +1460,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       }
     },
 
-    async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
+    async parseResponse(
+      response: Response,
+      budget: TranslatorBudget,
+      tierMetadata?: AdapterTierMetadata,
+    ): Promise<AdapterEvent[]> {
       const parsed: unknown = await response.json();
       // `response.json()` resolves a body of `null` to `null` without throwing, so the cast below
       // used to reach `json.content` on it — the #1219 defect at the buffered body root. The
@@ -1426,7 +1513,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           }
         }
       }
-      const content = rawContent as { type: string; text?: string; id?: string; name?: string; input?: unknown; thinking?: string; reasoning?: string; signature?: string; data?: string }[] | undefined;
+      const content = rawContent as { type: string; text?: string; id?: string; name?: unknown; input?: unknown; thinking?: string; reasoning?: string; signature?: string; data?: string }[] | undefined;
       if (content) {
         for (const block of content) {
           if (block.type === "text" && block.text) {
@@ -1442,13 +1529,14 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
             events.push({ type: "redacted_thinking", data: block.data });
           } else if (block.type === "tool_use") {
             const id = usableToolUseId(block.id);
-            events.push({ type: "tool_call_start", id, name: toolNames.fromWire(block.name ?? "") });
+            events.push({ type: "tool_call_start", id, name: toolNames.fromWire(typeof block.name === "string" ? block.name : "") });
             events.push({ type: "tool_call_delta", arguments: toolUseArguments(block.input, provider.anthropicEofTolerance === true) });
             events.push({ type: "tool_call_end" });
           }
         }
       }
       const usage = json.usage as Record<string, number> | undefined;
+      observeAnthropicSpeed(json.usage, tierMetadata);
       const stopReason = typeof json.stop_reason === "string" ? json.stop_reason : undefined;
       // An Anthropic-compatible upstream can forward an `error` stop reason verbatim. As a
       // `done` it reads as a clean completion, so the turn reports success and — on a compaction

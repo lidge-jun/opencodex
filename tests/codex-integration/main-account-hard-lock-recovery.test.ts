@@ -30,10 +30,12 @@ let previousHome: string | undefined;
 let previousCodexHome: string | undefined;
 let previousFetch: typeof fetch;
 
+/** Build the minimal proxy configuration with main-account hard-lock recovery enabled. */
 function config(): OcxConfig {
   return { port: 10100, defaultProvider: "openai", providers: {}, codexMainAccountHardLock: true };
 }
 
+/** Encode synthetic account and expiry claims for the fixture; this is not a signed credential. */
 function bearer(expired = false): string {
   const payload = Buffer.from(JSON.stringify({
     exp: Math.floor(Date.now() / 1000) + (expired ? -120 : 86_400),
@@ -42,6 +44,7 @@ function bearer(expired = false): string {
   return `header.${payload}.signature`;
 }
 
+/** Write fixture credentials into the isolated home and reconcile the active main identity. */
 function writeMain(expired = false): void {
   writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: {
     access_token: bearer(expired), refresh_token: "fixture-refresh", account_id: accountId,
@@ -49,6 +52,7 @@ function writeMain(expired = false): void {
   reconcileMainCodexAccountRuntimeState();
 }
 
+/** Seed a 99% short-window block for the observed fixture identity, even though its reset elapsed. */
 function block(): void {
   const writer = captureMainQuotaWriter(accountId);
   if (!writer) throw new Error("Fixture identity must be observed");
@@ -61,6 +65,10 @@ function usage(percent = 0): Response {
   } });
 }
 
+/**
+ * Stub recovery HTTP calls, requiring a known metadata/token URL and an active native-main drain.
+ * Return the captured URL list so tests can verify the requests made by background recovery.
+ */
 function fetchWith(handler: (url: string, init?: RequestInit) => Promise<Response>) {
   const calls: string[] = [];
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -123,6 +131,18 @@ afterEach(async () => {
 });
 
 describe("main hard-lock background recovery", () => {
+  test("owned metadata recovery replaces an obsolete short block with the current weekly window", async () => {
+    const calls = fetchWith(async () => Response.json({ plan_type: "pro", rate_limit: {
+      primary_window: { used_percent: 35, limit_window_seconds: 604_800 }, secondary_window: null, tertiary_window: null,
+    } }));
+    await runMainAccountHardLockRecovery(config());
+    expect(calls).toEqual([whamUrl]);
+    expect(getMainAccountHardLockStatus(config())).toEqual({ enabled: true, state: "ready" });
+    expect(getMainPolicyQuota()?.shortPercent).toBeUndefined();
+    expect(getMainPolicyQuota()?.weeklyPercent).toBe(35);
+    expect(getNativeMainProfileRequestCount()).toBe(0);
+  });
+
   test("existing sweep hook forces fresh WHAM past cache/reset without adding a timer", async () => {
     let percent = 99;
     const calls = fetchWith(async () => usage(percent));

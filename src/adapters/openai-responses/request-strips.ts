@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
+import { debugProviderDiagnostic } from "../../lib/debug";
+import { modelInList } from "../../types";
 import { isPlainObject } from "./internal";
 import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
@@ -164,18 +167,66 @@ export function stripCanonicalOnlyTopLevelFields(body: unknown): unknown {
 }
 
 /**
+ * Sampling fields a model on the provider's `noStopModels` / `noPenaltyModels` list rejects on
+ * every wire. Claude inbound translates `stop_sequences` into a Responses `stop`
+ * (`src/claude/inbound.ts`), and a direct Responses caller can send penalties. Some listed models
+ * only have the Responses wire (xAI grok-4.20-multi-agent-0309 answers Chat Completions with 400),
+ * so the Chat adapter's omission cannot cover them. Returns the input unchanged when nothing is
+ * removed, so the caller-owned raw body is never mutated.
+ */
+export function stripRejectedSamplingParams(
+  body: unknown,
+  provider: { noStopModels?: string[]; noPenaltyModels?: string[] },
+  modelId: string,
+): unknown {
+  if (!isPlainObject(body)) return body;
+  const dropStop = Object.hasOwn(body, "stop") && modelInList(provider.noStopModels, modelId);
+  const penalties = ["presence_penalty", "frequency_penalty"].filter(field => Object.hasOwn(body, field));
+  const dropPenalties = penalties.length > 0 && modelInList(provider.noPenaltyModels, modelId);
+  if (!dropStop && !dropPenalties) return body;
+  const next = { ...body };
+  if (dropStop) delete next.stop;
+  if (dropPenalties) for (const field of penalties) delete next[field];
+  return next;
+}
+
+/**
  * When `store` is false, the upstream API does not persist response items. Any item ID
  * forwarded in `input` is then interpreted as a reference to a stored item that does not
  * exist, producing a 404. Strip all item IDs in this case — `call_id` pairing is unaffected.
  * Matches codex-rs behavior (core/src/client.rs:918-925).
  */
-export function stripItemIdsWhenUnstored(body: unknown): unknown {
-  if (!isPlainObject(body) || body.store !== false) return body;
+export function stripItemIdsWhenUnstored(body: unknown, requireCustomCallIds = false): unknown {
+  const repairCustomCallIds = requireCustomCallIds === true;
+  if (!isPlainObject(body) || (body.store !== false && !repairCustomCallIds)) return body;
   if (!Array.isArray(body.input)) return body;
 
   let changed = false;
   const input = body.input.map(item => {
-    if (!isPlainObject(item) || !("id" in item)) return item;
+    if (!isPlainObject(item)) return item;
+    if (repairCustomCallIds && item.type === "custom_tool_call") {
+      try {
+        if (typeof item.id === "string" && item.id.startsWith("ctc_")) return item;
+        if (
+          typeof item.call_id !== "string"
+          || typeof item.name !== "string"
+          || typeof item.input !== "string"
+        ) return item;
+        const digest = createHash("sha256")
+          .update(JSON.stringify([item.call_id, item.name, item.input]))
+          .digest("hex")
+          .slice(0, 40);
+        changed = true;
+        debugProviderDiagnostic("openai-responses", "xai-custom-tool-call-id-repaired", {
+          hadId: typeof item.id === "string",
+        });
+        return { ...item, id: `ctc_${digest}` };
+      } catch {
+        debugProviderDiagnostic("openai-responses", "xai-custom-tool-call-id-unrepaired", {});
+        return item;
+      }
+    }
+    if (body.store !== false || !("id" in item)) return item;
     changed = true;
     const next = { ...item };
     delete next.id;

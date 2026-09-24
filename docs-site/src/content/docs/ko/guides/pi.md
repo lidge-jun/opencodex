@@ -28,7 +28,8 @@ ocx export --client pi
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
       "compat": {
-        "sendSessionAffinityHeaders": true
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false
       },
       "models": [
         {
@@ -45,6 +46,8 @@ ocx export --client pi
 ```
 
 생성된 Pi provider에는 `compat.sendSessionAffinityHeaders`가 활성화됩니다. provider를 병합하거나 직접 수정할 때 이 설정을 유지하세요. Pi가 안정적인 세션 식별자를 보내면 OpenCodex가 이를 바탕으로 정규 OpenCode Go 대상의 affinity를 계산합니다. `cacheRetention`이 `none`이면 Pi가 식별자를 보내지 않을 수 있습니다.
+
+생성된 Pi provider는 `compat.supportsDeveloperRole`도 `false`로 설정합니다. 그래서 Pi는 시스템 프롬프트를 `developer`가 아닌 `system` 역할로 보냅니다. OpenCodex는 Chat Completions 역할을 받은 그대로 전달하는데, OpenAI 호환 업스트림 중 일부는 `developer`를 400으로 거부합니다. `system`은 모든 업스트림이 받습니다.
 
 모델 id는 프록시의 정규 선택자이므로, 라우팅된 모델은 `provider/model`
 (`anthropic/claude-opus-5`) 형태로 나타나고, 네이티브 OpenAI slug는 접두사 없이
@@ -96,7 +99,7 @@ export OPENCODEX_API_KEY=<your key>
 바인드하고 그곳에서는 아무 것도 인증하지 않으므로, `$OPENCODEX_API_KEY` 참조는
 실제로는 비어 있어도 됩니다. 이 값은 `hostname`이 루프백 바깥으로 설정될 때만
 의미가 있으며, 그 경우에는 프록시가 토큰 없이 시작하지 않습니다. 자세한 내용은
-[Remote access](/reference/configuration/#remote-access)를 보세요.
+[Remote access](/ko/reference/configuration/server/#remote-access)를 보세요.
 
 ## 모델 메타데이터
 

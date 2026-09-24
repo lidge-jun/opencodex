@@ -80,9 +80,14 @@ export interface AnthropicModelInfo {
   capabilities: ReturnType<typeof modelCapabilities>;
   max_input_tokens: number | null;
   max_tokens: null;
+  /**
+   * Claude Code (>= 2.1.257) shows this under the picker row instead of the generic
+   * "From gateway". Readable (CLI) rows only; Desktop 3P rows keep the ModelInfo shape.
+   */
+  description?: string;
 }
 
-function modelInfo(id: string, displayName: string, ladder: readonly string[], imageInput: boolean, contextWindow?: number): AnthropicModelInfo {
+function modelInfo(id: string, displayName: string, ladder: readonly string[], imageInput: boolean, contextWindow?: number, description?: string): AnthropicModelInfo {
   return {
     id,
     display_name: displayName,
@@ -91,6 +96,7 @@ function modelInfo(id: string, displayName: string, ladder: readonly string[], i
     capabilities: modelCapabilities(ladder, imageInput),
     max_input_tokens: typeof contextWindow === "number" && contextWindow > 0 ? contextWindow : null,
     max_tokens: null,
+    ...(description === undefined ? {} : { description }),
   };
 }
 
@@ -182,7 +188,13 @@ export function buildAnthropicModelInfos(
     // A real model always wins its own id, whatever the iteration order.
     if (realDiscoveryIds.has(id) || seen.has(id)) return;
     seen.add(id);
-    out.push({ ...base, id, display_name: `${base.display_name} · Fast` });
+    out.push({
+      ...base,
+      id,
+      display_name: `${base.display_name} · Fast`,
+      // Fast picks a different tier/variant, so the picker line says so like the name does.
+      ...(base.description === undefined ? {} : { description: `${base.description} · Fast` }),
+    });
   };
   for (const slug of nativeSlugs) {
     const id = idStyle === "readable" ? claudeCodeNativeAlias(slug) : aliasForRoute("native", slug);
@@ -192,7 +204,8 @@ export function buildAnthropicModelInfos(
     const nativeMaxInput = nativeOpenAiMaxInputTokens(slug, nativeContextCap);
     // max_input_tokens is an INPUT limit, so it follows the measured input ceiling rather
     // than the total window whenever the model publishes one.
-    const info = modelInfo(id, `${slug} (native)`, nativeEffectiveLadder(slug), true, nativeMaxInput ?? nativeWindow);
+    const description = idStyle === "readable" ? `Routed by OpenCodex to native ${slug}` : undefined;
+    const info = modelInfo(id, `${slug} (native)`, nativeEffectiveLadder(slug), true, nativeMaxInput ?? nativeWindow, description);
     out.push(info);
     push1mVariant(info, nativeWindow, nativeMaxInput);
     // Natives too, not only routed rows: gpt-5.6-sol is the flagship Fast model, and
@@ -225,7 +238,8 @@ export function buildAnthropicModelInfos(
         ? Math.min(m.maxInputTokens, m.contextWindow)
         : m.maxInputTokens)
       : undefined;
-    const info = modelInfo(id, `${listedModelId} (${m.provider})`, ladder, imageInput, routedMaxInput ?? m.contextWindow);
+    const description = idStyle === "readable" ? `Routed by OpenCodex to ${m.provider}/${listedModelId}` : undefined;
+    const info = modelInfo(id, `${listedModelId} (${m.provider})`, ladder, imageInput, routedMaxInput ?? m.contextWindow, description);
     out.push(info);
     // Anthropic passthrough guard (audit 021 #3): never auto-widen canonical claude
     // routes — only a genuine >=1M window earns the variant row there.

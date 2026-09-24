@@ -7,12 +7,12 @@ const createOpenAIChatAdapter = (
   ...args: Parameters<typeof createOpenAIChatAdapterProduction>
 ) => withTestTranslatorBudget(createOpenAIChatAdapterProduction(...args));
 
-function parsedRequest(tool: OcxTool): OcxParsedRequest {
+function parsedRequest(tool: OcxTool | OcxTool[]): OcxParsedRequest {
   return {
     modelId: "k3",
     context: {
       messages: [{ role: "user", content: "run the tool", timestamp: 0 }],
-      tools: [tool],
+      tools: [tool].flat(),
     },
     stream: true,
     options: {},
@@ -185,7 +185,6 @@ describe("Moonshot tool schema normalization (issue #2673)", () => {
     expect(properties.value).toEqual({ $ref: "https://example.com/schema.json#/Thing" });
   });
 
-
   test("composes duplicate required, properties, and same-key assertions", async () => {
     // The reviewer's first blocker. `$ref` under 2020-12 is an in-place applicator: the
     // node and its target BOTH apply. Overwriting made a tool that required `a` and `b`
@@ -305,6 +304,77 @@ describe("Moonshot tool schema normalization (issue #2673)", () => {
     expect(siblingRefPaths(parameters)).toEqual([]);
   });
 
+  test("bounds repeated large property-map inlining by serialized bytes", async () => {
+    const bigProperties = Object.fromEntries(
+      Array.from({ length: 10_000 }, (_, index) => [`property_${index}`, true]),
+    );
+    const references = Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [
+        `value_${index}`,
+        { $ref: "#/$defs/Big", properties: { sibling: { type: "string" } } },
+      ]),
+    );
+    const tool: OcxTool = {
+      name: "bounded_amplification_tool",
+      parameters: {
+        type: "object",
+        $defs: { Big: { type: "object", properties: bigProperties } },
+        properties: references,
+      },
+    };
+
+    const request = await adapterFor("https://api.moonshot.ai/v1").buildRequest(parsedRequest(tool));
+    const inputBytes = new TextEncoder().encode(JSON.stringify(tool.parameters)).byteLength;
+    const outputBytes = new TextEncoder().encode(request.body).byteLength;
+    const parameters = JSON.parse(request.body).tools[0].function.parameters as Record<string, unknown>;
+
+    // The original definition remains available, but repeated sibling refs stop inlining once
+    // their cumulative serialized cost reaches the fixed allowance.
+    expect(outputBytes).toBeLessThan(inputBytes + 2 * 1024 * 1024);
+    expect(siblingRefPaths(parameters)).toEqual([]);
+    const emitted = parameters.properties as Record<string, Record<string, unknown>>;
+    expect(Object.values(emitted).some(value => Object.keys(value).length === 1 && "$ref" in value)).toBe(true);
+  });
+
+  test("shares the inline-byte budget across the tools of one request", async () => {
+    // A per-tool allowance would multiply the cap by the catalog size: the second tool
+    // must spend what the first already charged.
+    const bigTool = (name: string): OcxTool => ({
+      name,
+      parameters: {
+        type: "object",
+        $defs: {
+          Big: {
+            type: "object",
+            properties: Object.fromEntries(
+              Array.from({ length: 30_000 }, (_, index) => [`property_${index}`, true]),
+            ),
+          },
+        },
+        properties: {
+          a: { $ref: "#/$defs/Big", properties: { s: { type: "string" } } },
+          b: { $ref: "#/$defs/Big", properties: { s: { type: "string" } } },
+        },
+      },
+    });
+
+    const request = await adapterFor("https://api.moonshot.ai/v1").buildRequest(
+      parsedRequest([bigTool("first_tool"), bigTool("second_tool")]),
+    );
+    const tools = (JSON.parse(request.body) as {
+      tools: { function: { parameters: { properties: Record<string, Record<string, unknown>> } } }[];
+    }).tools;
+    const bareRefCount = (tool: (typeof tools)[number]) =>
+      Object.values(tool.function.parameters.properties).filter(
+        value => Object.keys(value).length === 1 && "$ref" in value,
+      ).length;
+
+    // Each inline costs ~0.6 MB of the shared 1 MiB allowance, so only the first of the
+    // four sibling refs fits; the rest degrade to the bare-$ref fallback.
+    expect(bareRefCount(tools[0])).toBe(1);
+    expect(bareRefCount(tools[1])).toBe(2);
+  });
+
 
   test("composes a property that both the target and the node define", async () => {
     // The same conjunction problem `required` had, one level down. Letting the sibling
@@ -323,6 +393,107 @@ describe("Moonshot tool schema normalization (issue #2673)", () => {
     const shared = (v.properties as Record<string, Record<string, unknown>>).shared!;
     expect(shared.minLength).toBe(3);
     expect(shared.type).toBe("string");
+  });
+
+  test("counts type-inference growth before retaining an inlined target", async () => {
+    const target = {
+      properties: Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`p${index}`, { const: "v" }])),
+      description: "",
+    };
+    target.description = "x".repeat(1024 * 1024 - JSON.stringify(target).length - 100);
+    const parameters = await emittedParameters("https://api.kimi.com/coding/v1", {
+      name: "inferred_byte_growth",
+      parameters: { type: "object", $defs: { Big: target }, properties: { value: { $ref: "#/$defs/Big", required: ["p0"] } } },
+    });
+    const value = (parameters!.properties as Record<string, Record<string, unknown>>).value;
+    // Raw target bytes fit, but the inferred types push the copied target over 1 MiB.
+    expect(Object.keys(value)).toEqual(["$ref"]);
+    expect(value.$ref).toBe("#/$defs/Big");
+    const definition = (parameters!.$defs as Record<string, typeof target>).Big;
+    expect(definition.properties.p0).toMatchObject({ const: "v", type: "string" });
+  });
+
+  test("restores a rejected outer candidate before later sibling and tool expansions", async () => {
+    const outer = {
+      properties: {
+        child: { $ref: "#/$defs/Inner", minLength: 1 },
+        ...Object.fromEntries(Array.from({ length: 1_000 }, (_, index) => [`p${index}`, { const: "v" }])),
+      },
+      description: "",
+    };
+    outer.description = "x".repeat(1024 * 1024 - JSON.stringify(outer).length - 96);
+    const small = { type: "string", description: "small".repeat(24) };
+    const first: OcxTool = {
+      name: "first",
+      parameters: {
+        type: "object",
+        properties: {
+          rejected: { $ref: "#/$defs/Outer", required: ["child"] },
+          later: { $ref: "#/$defs/Small", minLength: 1 },
+        },
+        $defs: { Outer: outer, Inner: { type: "string", minLength: 2 }, Small: small },
+      },
+    };
+    const second: OcxTool = {
+      name: "second",
+      parameters: {
+        type: "object",
+        properties: { later: { $ref: "#/$defs/Small", minLength: 1 } },
+        $defs: { Small: small },
+      },
+    };
+    const request = await adapterFor(MOONSHOT_HOSTS[0]!).buildRequest(parsedRequest([first, second]));
+    const tools = (JSON.parse(request.body) as {
+      tools: { function: { parameters: { properties: Record<string, Record<string, unknown>> } } }[];
+    }).tools;
+    const firstProps = tools[0]!.function.parameters.properties;
+    const secondProps = tools[1]!.function.parameters.properties;
+    expect(firstProps.rejected).toEqual({ $ref: "#/$defs/Outer" });
+    expect(firstProps.later?.type).toBe("string");
+    expect(firstProps.later?.description).toBe(small.description);
+    expect(secondProps.later?.description).toBe(small.description);
+    expect(siblingRefPaths(tools)).toEqual([]);
+  });
+
+  test("does not charge nested inline bytes again as outer growth", async () => {
+    const parameters = await emittedParameters(MOONSHOT_HOSTS[0]!, {
+      name: "nested_growth",
+      parameters: {
+        type: "object",
+        properties: { value: { $ref: "#/$defs/Outer", required: ["child"] } },
+        $defs: {
+          Outer: {
+            type: "object",
+            description: "o".repeat(500_000),
+            properties: { child: { $ref: "#/$defs/Inner", minLength: 1 } },
+          },
+          Inner: { type: "string", description: "i".repeat(300_000) },
+        },
+      },
+    });
+    const value = (parameters!.properties as Record<string, Record<string, unknown>>).value!;
+    const child = (value.properties as Record<string, Record<string, unknown>>).child!;
+    expect(value.type).toBe("object");
+    expect(child.type).toBe("string");
+    expect(child.description).toBe("i".repeat(300_000));
+  });
+
+  test("composed-property re-normalization spends the shared catalog byte allowance", async () => {
+    const bigProperties = Object.fromEntries(Array.from({ length: 30_000 }, (_, index) => [`property_${index}`, true]));
+    const tool = (name: string): OcxTool => ({ name, parameters: {
+      type: "object",
+      $defs: { Big: { type: "object", properties: bigProperties }, Base: { type: "object", properties: { child: { $ref: "#/$defs/Big" } } } },
+      properties: { value: { $ref: "#/$defs/Base", properties: { child: { properties: { sibling: { type: "string" } } } } } },
+    } });
+    const request = await adapterFor("https://api.kimi.com/coding/v1").buildRequest(parsedRequest([tool("first"), tool("second")]));
+    const emitted = JSON.parse(request.body).tools;
+    const first = emitted[0].function.parameters.properties.value.properties.child;
+    const second = emitted[1].function.parameters.properties.value.properties.child;
+    expect(first.properties.sibling).toEqual({ type: "string" });
+    expect(first.properties.property_0).toBe(true);
+    expect(Object.keys(second)).toEqual(["$ref"]);
+    expect(second.$ref).toBe("#/$defs/Big");
+    expect(siblingRefPaths(emitted)).toEqual([]);
   });
 
   test("intersects bounds when both sides define the same property", async () => {
@@ -446,5 +617,71 @@ describe("Moonshot tool schema normalization (issue #2673)", () => {
     // schema Codex sent, including the $defs bag verbatim.
     expect(parameters?.$defs).toEqual(CODEX_STYLE_SCHEMA.$defs as Record<string, unknown>);
     expect(siblingRefPaths(parameters).length).toBeGreaterThan(0);
+  });
+
+  test("infers object type for allOf/properties and scalar types for const/enum", async () => {
+    const parameters = await emittedParameters("https://api.kimi.com/coding/v1", {
+      name: "inference_tool",
+      parameters: {
+        type: "object",
+        properties: {
+          leaf: {
+            allOf: [{ properties: { id: { type: "integer" } } }],
+          },
+          status: { const: "ACTIVE" },
+          count: { const: 42 },
+          flag: { const: true },
+          color: { enum: ["red", "blue"] },
+          toggle: { enum: [true, false] },
+          stringAllOf: { allOf: [{ type: "string" }, { minLength: 1 }] },
+        },
+      },
+    });
+
+    const props = parameters?.properties as Record<string, Record<string, unknown>>;
+    expect(props.leaf.type).toBe("object");
+    expect(props.status.type).toBe("string");
+    expect(props.count.type).toBe("number");
+    expect(props.flag.type).toBe("boolean");
+    expect(props.color.type).toBe("string");
+    expect(props.toggle.type).toBe("boolean");
+    expect(props.stringAllOf.type).toBeUndefined();
+  });
+
+  test("re-normalizes composed properties when sibling narrows a referenced property", async () => {
+    // When Base defines `op: { $ref: "#/$defs/Op" }` and a sibling node narrows it with
+    // `properties: { op: { const: "AND" } }`, `composeProperties` merges them. The merged
+    // property must re-normalize rather than emitting a `$ref` beside `const`.
+    const parameters = await emittedParameters("https://api.kimi.com/coding/v1", {
+      name: "ast_tool",
+      parameters: {
+        type: "object",
+        $defs: {
+          Op: { type: "string", enum: ["AND", "OR"] },
+          Base: {
+            type: "object",
+            properties: {
+              op: { $ref: "#/$defs/Op" },
+              left: { type: "string" },
+            },
+          },
+        },
+        properties: {
+          andNode: {
+            $ref: "#/$defs/Base",
+            properties: {
+              op: { const: "AND" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(siblingRefPaths(parameters)).toEqual([]);
+    const andNode = (parameters?.properties as Record<string, Record<string, unknown>>).andNode;
+    const op = (andNode.properties as Record<string, Record<string, unknown>>).op;
+    expect(op.$ref).toBeUndefined();
+    expect(op.const).toBe("AND");
+    expect(op.type).toBe("string");
   });
 });
