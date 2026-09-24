@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import {
   inspectPickerTrust, loginKeychainPath, trustPickerCa, untrustPickerCa,
   type SecurityResult, type SecurityRunner,
@@ -19,10 +20,44 @@ function fake(...results: SecurityResult[]): { run: SecurityRunner; calls: reado
 test("inspection requires the current root fingerprint and verifies the persisted leaf", async () => {
   const f = fake({ ...ok, stdout: `SHA-1 hash: ${sha1}\n` }, ok);
   expect(await inspectPickerTrust("/leaf.pem", sha1, f.run, "darwin")).toBe("trusted");
-  expect(f.calls).toEqual([
+  expect(f.calls.slice(0, 2)).toEqual([
     ["find-certificate", "-a", "-Z", "-c", PICKER_CA_COMMON_NAME, loginKeychainPath()],
     ["verify-cert", "-q", "-L", "-c", "/leaf.pem", "-p", "ssl", "-n", "claude.ai", "-k", loginKeychainPath()],
   ]);
+  // Then the user trust settings are read to rule out a host-scoped setting.
+  expect(f.calls[2]?.[0]).toBe("trust-settings-export");
+  expect(f.calls).toHaveLength(3);
+});
+
+function plist(entries: Record<string, string>): string {
+  const body = Object.entries(entries).map(([hash, settings]) =>
+    `<key>${hash}</key><dict><key>trustSettings</key><array>${settings}</array></dict>`).join("");
+  return `<?xml version="1.0"?><plist><dict><key>trustList</key><dict>${body}</dict></dict></plist>`;
+}
+
+test("a host-scoped trust setting for the current CA reads as untrusted so trust is added again", async () => {
+  const sslOnly = "<dict><key>kSecTrustSettingsPolicyName</key><string>sslServer</string></dict>";
+  const hostScoped = "<dict><key>kSecTrustSettingsPolicyName</key><string>sslServer</string>"
+    + "<key>kSecTrustSettingsPolicyString</key><string>claude.ai</string></dict>";
+  const other = "C".repeat(40);
+  const cases: Array<[string, string, string]> = [
+    ["host-scoped current CA", plist({ [sha1]: hostScoped }), "untrusted"],
+    ["SSL-only current CA", plist({ [sha1]: sslOnly }), "trusted"],
+    ["host scope on another cert only", plist({ [sha1]: sslOnly, [other]: hostScoped }), "trusted"],
+  ];
+  for (const [, exported, expected] of cases) {
+    const run: SecurityRunner = async args => {
+      if (args[0] === "find-certificate") return { ...ok, stdout: `SHA-1 hash: ${sha1}\n` };
+      if (args[0] === "trust-settings-export") writeFileSync(args[1]!, exported);
+      return ok;
+    };
+    expect(await inspectPickerTrust("/leaf.pem", sha1, run, "darwin")).toBe(expected);
+  }
+  // Unreadable settings are no evidence either way: verify-cert decides.
+  const failing: SecurityRunner = async args => args[0] === "find-certificate"
+    ? { ...ok, stdout: `SHA-1 hash: ${sha1}\n` }
+    : args[0] === "trust-settings-export" ? { ...ok, code: 1 } : ok;
+  expect(await inspectPickerTrust("/leaf.pem", sha1, failing, "darwin")).toBe("trusted");
 });
 
 test("missing or stale root never reaches leaf verification", async () => {

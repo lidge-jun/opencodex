@@ -2,6 +2,7 @@ import { createHash, X509Certificate } from "node:crypto";
 import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  ALL_IP_ADDRESS_BASES,
   ensurePersistedAuthority,
   issueServerLeaf,
   type LocalInterceptCa,
@@ -59,7 +60,17 @@ function constrainedToPickerHost(value: Buffer): boolean {
   const root = readDer(value, 0);
   if (!root || root.tag !== 0x30 || root.next !== value.length) return false;
   const fields = children(root.body);
-  if (!fields || fields.length !== 1 || fields[0]!.tag !== 0xa0) return false;
+  // permittedSubtrees [0] with exactly claude.ai, excludedSubtrees [1] with every IPv4 and IPv6 address.
+  if (!fields || fields.length !== 2 || fields[0]!.tag !== 0xa0 || fields[1]!.tag !== 0xa1) return false;
+  const excluded = children(fields[1]!.body);
+  if (!excluded || excluded.length !== ALL_IP_ADDRESS_BASES.length) return false;
+  const excludesAllIps = excluded.every((subtree, index) => {
+    if (subtree.tag !== 0x30) return false;
+    const base = children(subtree.body);
+    return !!base && base.length === 1 && base[0]!.tag === 0x87
+      && base[0]!.body.equals(Buffer.from(ALL_IP_ADDRESS_BASES[index]!));
+  });
+  if (!excludesAllIps) return false;
   const subtrees = children(fields[0]!.body);
   if (!subtrees || subtrees.length !== 1 || subtrees[0]!.tag !== 0x30) return false;
   const subtree = children(subtrees[0]!.body);

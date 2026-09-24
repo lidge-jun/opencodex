@@ -1,4 +1,5 @@
-import { homedir } from "node:os";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "./picker-ca";
 
@@ -28,6 +29,31 @@ function hasFingerprint(output: string, expected: string): boolean {
   });
 }
 
+/**
+ * Whether the current CA's user trust settings carry a policy string (a host scope such as the
+ * `-s claude.ai` earlier builds used). verify-cert honours those, but Chromium skips them, so
+ * Desktop would reject the picker leaf; the CA then counts as untrusted and trust is added again,
+ * which replaces the setting. `null` when the settings cannot be read: no evidence either way.
+ */
+async function hostScopedTrust(caSha1: string, run: SecurityRunner): Promise<boolean | null> {
+  let dir: string | undefined;
+  try {
+    dir = mkdtempSync(join(tmpdir(), "ocx-picker-trust-"));
+    const file = join(dir, "trust-settings.plist");
+    if ((await run(["trust-settings-export", file])).code !== 0) return null;
+    const xml = readFileSync(file, "utf8");
+    const at = xml.indexOf(`<key>${caSha1.replace(/:/g, "").toUpperCase()}</key>`);
+    if (at < 0) return false;
+    // The entry's trustSettings array holds flat dictionaries, so its first </array> ends it.
+    const end = xml.indexOf("</array>", at);
+    return xml.slice(at, end < 0 ? undefined : end).includes("<key>kSecTrustSettingsPolicyString</key>");
+  } catch { // no-excuse-ok: catch -- unreadable trust settings are no evidence of a host scope.
+    return null;
+  } finally {
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export async function inspectPickerTrust(
   leafPath: string,
   caSha1: string,
@@ -43,7 +69,8 @@ export async function inspectPickerTrust(
     if (!hasFingerprint(found.stdout, caSha1)) return "untrusted";
     const verified = await run(["verify-cert", "-q", "-L", "-c", leafPath,
       "-p", "ssl", "-n", PICKER_HOST, "-k", keychain]);
-    return verified.code === 0 ? "trusted" : verified.code === 1 ? "untrusted" : "unknown";
+    if (verified.code === 0) return (await hostScopedTrust(caSha1, run)) === true ? "untrusted" : "trusted";
+    return verified.code === 1 ? "untrusted" : "unknown";
   } catch { // no-excuse-ok: catch -- OS command unavailable or denied; never claim trust.
     return "unknown";
   }

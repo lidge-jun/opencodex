@@ -138,7 +138,9 @@ test("enable orders trust, fresh recheck, profile, and rearm", async () => {
   const result = await controller.enable({ persist: true, context: "server" });
   expect(result).toMatchObject({ reason: "restart_required", profile: "applied", effective: true, models: 3 });
   expect(events).toEqual(["persist:true", "profile", "rearm"]);
-  expect(trust.calls.map(call => call[0])).toEqual(["find-certificate", "add-trusted-cert", "find-certificate", "verify-cert"]);
+  expect(trust.calls.map(call => call[0])).toEqual([
+    "find-certificate", "add-trusted-cert", "find-certificate", "verify-cert", "trust-settings-export",
+  ]);
 });
 
 test("persisted false is allowed to become true on explicit enable", async () => {

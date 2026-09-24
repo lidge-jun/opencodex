@@ -113,10 +113,21 @@ function extension(oid: string, critical: boolean, value: Uint8Array): Uint8Arra
     : sequence(objectIdentifier(oid), octetString(value));
 }
 
-/** RFC 5280 permittedSubtrees: each GeneralSubtree has one dNSName base. */
-function nameConstraints(permitted: readonly string[]): Uint8Array {
+/** iPAddress bases (address + mask, all zero) that cover every IPv4 and every IPv6 address. */
+export const ALL_IP_ADDRESS_BASES: readonly Uint8Array[] = [new Uint8Array(8), new Uint8Array(32)];
+
+/**
+ * RFC 5280 NameConstraints. permittedSubtrees holds one dNSName base per name. A DNS-only permitted
+ * list leaves other name forms unconstrained, so excludedSubtrees names every IPv4 and IPv6
+ * address unless the caller opts out.
+ */
+function nameConstraints(permitted: readonly string[], excludeAllIpAddresses: boolean): Uint8Array {
   const subtrees = permitted.map(name => sequence(contextTag(2, new TextEncoder().encode(name), false)));
-  return sequence(contextTag(0, concat(...subtrees)));
+  const excluded = ALL_IP_ADDRESS_BASES.map(base => sequence(contextTag(7, base, false)));
+  return sequence(
+    contextTag(0, concat(...subtrees)),
+    ...(excludeAllIpAddresses ? [contextTag(1, concat(...excluded))] : []),
+  );
 }
 
 function subjectPublicKeyInfo(key: KeyObject): Uint8Array {
@@ -183,6 +194,8 @@ export interface LocalInterceptCa extends PemKeyPair {
 export interface AuthorityOptions {
   commonName: string;
   permittedDnsNames?: readonly string[];
+  /** With permittedDnsNames: also exclude every IP address (default true). */
+  excludeAllIpAddresses?: boolean;
 }
 
 export function createCertificateAuthority(options: AuthorityOptions): LocalInterceptCa {
@@ -200,7 +213,7 @@ export function createCertificateAuthority(options: AuthorityOptions): LocalInte
       extension(OID.keyUsage, true, bitString(Uint8Array.of(0x06), 1)),
       extension(OID.subjectKeyIdentifier, false, octetString(keyIdentifier(publicKey))),
       ...(options.permittedDnsNames?.length
-        ? [extension(OID.nameConstraints, true, nameConstraints(options.permittedDnsNames))]
+        ? [extension(OID.nameConstraints, true, nameConstraints(options.permittedDnsNames, options.excludeAllIpAddresses !== false))]
         : []),
     ],
   });
@@ -216,7 +229,17 @@ export function createLocalInterceptCa(): LocalInterceptCa {
   return createCertificateAuthority({ commonName: CLAUDE_INTERCEPT_CA_COMMON_NAME });
 }
 
-/** Issue a serverAuth leaf for `hosts` (first entry becomes the CN; all become SAN dNSNames). */
+/** IPv4 literal to its four octets, or null. Only the leaf SAN encoder needs it. */
+function ipv4Octets(host: string): Uint8Array | null {
+  const parts = host.split(".");
+  if (parts.length !== 4 || !parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)) return null;
+  return Uint8Array.from(parts.map(Number));
+}
+
+/**
+ * Issue a serverAuth leaf for `hosts` (first entry becomes the CN). Names become SAN dNSNames and
+ * IPv4 literals become iPAddress entries.
+ */
 export function issueServerLeaf(ca: LocalInterceptCa, issuerCommonName: string, hosts: readonly string[]): PemKeyPair {
   if (hosts.length === 0) throw new Error("intercept leaf requires at least one host");
   const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
@@ -232,7 +255,10 @@ export function issueServerLeaf(ca: LocalInterceptCa, issuerCommonName: string, 
       extension(OID.keyUsage, true, bitString(Uint8Array.of(0x80), 7)),
       extension(OID.extendedKeyUsage, false, sequence(objectIdentifier(OID.serverAuth))),
       extension(OID.subjectAltName, false, sequence(
-        ...hosts.map(host => contextTag(2, new TextEncoder().encode(host), false)),
+        ...hosts.map(host => {
+          const octets = ipv4Octets(host);
+          return octets ? contextTag(7, octets, false) : contextTag(2, new TextEncoder().encode(host), false);
+        }),
       )),
       extension(OID.authorityKeyIdentifier, false, sequence(contextTag(0, keyIdentifier(ca.publicKey), false))),
     ],

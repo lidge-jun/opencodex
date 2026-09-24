@@ -75,9 +75,12 @@ Reload validation (audit wp3 r1, High). The shared loader only checks CA status,
 self-signature, so `ensurePersistedAuthority` gains `accept?: (cert: X509Certificate) => boolean`,
 and `ensurePickerCa` passes one that requires subject CN `PICKER_CA_COMMON_NAME` and a **critical**
 nameConstraints extension whose permittedSubtrees hold exactly one dNSName, `claude.ai`, and no
-excludedSubtrees. A persisted CA that fails it (for example a valid, key-matching CA without
-constraints) is regenerated under the lease. The new fingerprint makes trust `untrusted` until the
-operator trusts it again, so an unconstrained root is never loaded and trusted as the picker CA.
+whose excludedSubtrees hold exactly two iPAddress bases, all-zero IPv4 (8 bytes) and all-zero IPv6
+(32 bytes), so no IP-address leaf chains to it (PR #5731 review: a DNS-only permitted list leaves the
+iPAddress form unconstrained). A persisted CA that fails it (for example a valid, key-matching CA
+without constraints, or the first claude.ai-only format) is regenerated under the lease. The new
+fingerprint makes trust `untrusted` until the operator trusts it again, so an unconstrained root is
+never loaded and trusted as the picker CA.
 
 ## picker-trust.ts
 
@@ -91,6 +94,9 @@ export async function inspectPickerTrust(leafPath: string, caSha1: string, run?:
 //   darwin only; "trusted" needs both:
 //   1. ["find-certificate", "-a", "-Z", "-c", PICKER_CA_COMMON_NAME, loginKeychainPath()] lists caSha1 (the current CA)
 //   2. ["verify-cert", "-q", "-L", "-c", leafPath, "-p", "ssl", "-n", "claude.ai", "-k", loginKeychainPath()] exits 0
+//   3. ["trust-settings-export", <temp plist>] does not show kSecTrustSettingsPolicyString in the
+//      caSha1 entry (a host-scoped setting from an earlier build; Chromium skips it, so it counts
+//      as untrusted and the trust step replaces it); an unreadable export is no evidence either way
 //   missing record or exit 1 → untrusted; a runner failure → unknown
 export async function trustPickerCa(caPath: string, run?: SecurityRunner, platform?: NodeJS.Platform): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }>;
 //   ["add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k", loginKeychainPath(), caPath]
