@@ -1564,20 +1564,26 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     note: "StepFun (阶跃星辰) official OpenAI-compatible API.",
   },
   {
-    // Official Claude Code CLI as the transport for a Claude subscription (§三十一). The CLI owns
-    // the account: this row stores no token and the adapter reads and injects none, so the request
-    // path is Anthropic's own harness rather than a replayed Claude Code identity against the
-    // Messages API. `baseUrl` is the destination the subscription's traffic reaches; OpenCodex
-    // never sends it. Fails closed if the row's base URL is overridden.
-    // v1 runs tools-disabled (`--tools ""`, no `--mcp-config`) so the client keeps tool ownership:
-    // text/reasoning only until the shared capture-only tool bridge lands. Requires the CLI:
-    // `npm i -g @anthropic-ai/claude-code`, plus a signed-in session (`claude` -> /login).
+    // Anthropic's Claude Agent SDK as the transport for a Claude subscription (§三十一). The
+    // harness owns the account: this row stores no token and the adapter reads and injects none, so
+    // the request path is Anthropic's own harness rather than a replayed Claude Code identity
+    // against the Messages API. `baseUrl` is the destination the subscription's traffic reaches;
+    // OpenCodex never sends it. Fails closed if the row's base URL is overridden.
+    // The harness owns the session too: the caller's instructions are appended to the harness
+    // system prompt instead of replacing it, and the client's tool catalog reaches the model
+    // through an in-process MCP server that captures calls rather than executing them. Requires the
+    // CLI: `npm i -g @anthropic-ai/claude-code`, plus a signed-in session (`claude` -> /login).
+    // Renamed from `claude-cli` on 2026-09-24 — the id 2.65.0 shipped — because the old name
+    // described the one-shot `claude -p` turn this row used to be and collided with
+    // `src/providers/claude-cli-identity.ts`, which forges a `claude-cli/<ver>` user agent for the
+    // Messages-API rows. The retired id survives via `DEPRECATED_PROVIDER_ALIASES` and
+    // `claude-provider-rename-migration`.
     // GOVERNANCE: whether a subscription login may be driven through a proxy for a third-party
     // agent is Anthropic's call rather than OpenCodex's — flagged for maintainer review, as with
     // the CodeBuddy rows above.
-    id: "claude-cli",
-    label: "Claude Code CLI (subscription)",
-    adapter: "claude-cli",
+    id: "claude-agent-sdk",
+    label: "Claude Agent SDK (subscription)",
+    adapter: "claude-agent-sdk",
     baseUrl: "https://api.anthropic.com",
     // `key` + `keyOptional`, deliberately not `local`. "local" (Ollama, vLLM, LM Studio) means the
     // traffic never leaves the machine and there is no credential to classify; this row reaches
@@ -1590,6 +1596,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // reachable from the Providers page.
     authKind: "key",
     keyOptional: true,
+    // Lookup metadata for surfaces that match on names (integrations, dashboards) rather than for
+    // provider resolution, which goes through `DEPRECATED_PROVIDER_ALIASES`.
+    extraMetadataAliases: ["claude-cli"],
     // There is no key console for a keyless row: the link that helps an operator is the one that
     // documents the install and sign-in this provider requires.
     dashboardUrl: "https://docs.claude.com/en/docs/claude-code/setup",
@@ -1611,6 +1620,6 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     reasoningEfforts: ANTHROPIC_REASONING_EFFORTS,
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token, reads none and injects none — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership: text/reasoning only for now. Subscription routing authorization flagged for maintainer review.",
+    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI, driven through Anthropic's Claude Agent SDK. OpenCodex stores no Claude token, reads none and injects none — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). The harness owns the session: the caller’s instructions are appended to the harness system prompt instead of replacing it, and the client keeps tool ownership because its catalog is served through an in-process MCP server that captures calls instead of executing them. Subscription routing authorization flagged for maintainer review.",
   },
 ];

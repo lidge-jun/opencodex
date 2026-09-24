@@ -1056,17 +1056,18 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Quota:** No public quota API is used, so totals and reset times are unavailable. Insufficient-credit errors (vendor code 118) surface as HTTP 429 `insufficient_quota`.
 - **Operators:** Qoder Global is operated by BRIGHT ZENITH PRIVATE LIMITED under the [product service terms](https://qoder.com/product-service); Qoder CN by 通义云启（杭州）信息技术有限公司 with Alibaba Cloud. Verify `ocx provider test qoder` (or `qoder-cn`) after configuring.
 
-### Claude Code CLI (subscription)
+### Claude Agent SDK (subscription)
 
 OpenCodex can spend a Claude subscription through Anthropic's own harness instead of replaying a
-Claude Code identity against the Messages API. The `claude-cli` preset runs the official Claude Code
-CLI headlessly (`claude -p`, `stream-json`) once per turn:
+Claude Code identity against the Messages API. The `claude-agent-sdk` preset drives Anthropic's
+Claude Agent SDK — the harness and agent loop behind the Claude Code CLI — so the turn is a real
+harness session rather than a converted Messages request:
 
 ```json
 {
   "providers": {
-    "claude-cli": {
-      "adapter": "claude-cli",
+    "claude-agent-sdk": {
+      "adapter": "claude-agent-sdk",
       "baseUrl": "https://api.anthropic.com"
     }
   }
@@ -1099,27 +1100,28 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   an image sent straight to this provider is refused (`unsupported_input_modality`, the same
   refusal the Qoder presets make) instead of being silently dropped and answered blind. With the
   vision sidecar on the request path, images are captioned into text before they reach the row.
-- **Isolation:** every turn runs in a scoped child environment with no inherited `ANTHROPIC_*`
-  variable (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry,
-  feedback and the auto-updater disabled, and `--tools ""`, `--strict-mcp-config` plus
-  `--setting-sources ""`. The harness loads no CLAUDE.md, skill, hook, plugin or MCP server from the
-  machine and can neither read, write, exec nor browse. No session is persisted between turns.
-- **System prompt:** the caller's system and developer prompts replace the Claude Code preset
-  (`--system-prompt-file`), so the turn answers the client's contract rather than the harness
-  persona. The folded prompt is staged in a private per-turn file (mode `0600`) and passed by path,
-  because process arguments are world-readable through process listing; a request that carries
-  neither a system nor a developer prompt gets an empty file, which replaces the preset with nothing.
-- **Tool ownership:** v1 is text and reasoning only, exactly like the CodeBuddy and Qoder presets:
-  with no tool channel, approval, sandboxing and execution stay with the client. The shared
-  capture-only tool bridge is the documented follow-up.
+- **Isolation:** every turn runs in a scoped environment with no inherited `ANTHROPIC_*` variable
+  (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry, feedback
+  and the auto-updater disabled, built-in tools off (`tools: []`) and no setting sources, so the
+  harness loads no CLAUDE.md, skill, hook, plugin or MCP server from the machine and can neither
+  read, write, exec nor browse.
+- **Session:** the harness owns the conversation session instead of a one-shot invocation, so a
+  follow-up turn of the same conversation resumes it and reuses its prompt cache. The client still
+  replays its own transcript, which keeps a client switch from leaking into the session.
+- **System prompt:** the caller's system and developer prompts are appended to the harness preset
+  rather than replacing it, so the turn is the genuine agent loop with the client's contract added
+  on top. No part of the prompt travels through a world-readable argument.
+- **Tool ownership:** the client keeps it, like the CodeBuddy and Qoder presets: the request's tool
+  catalog is served to the model through an isolated in-process MCP server that captures calls
+  instead of executing them, so approval, sandboxing and execution stay with the client.
 - **Destination:** the canonical row names `https://api.anthropic.com` because that is where the
   subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
   URL fails closed rather than handing the turn to another environment.
 
-> **Terms:** this preset spends your Claude subscription through Anthropic's own CLI. Whether
-> driving that harness headlessly from a proxy fits your plan's terms is a question between you and
-> Anthropic. OpenCodex does not convert the login into an API key and does not reproduce the CLI's
-> HTTP identity.
+> **Terms:** this preset spends your Claude subscription through Anthropic's own harness, the
+> Claude Agent SDK. Whether driving that harness from a proxy for another client fits your plan's
+> terms is a question between you and Anthropic. OpenCodex does not convert the login into an API
+> key and does not reproduce the harness's HTTP identity itself.
 
 ### A6API credit quota
 

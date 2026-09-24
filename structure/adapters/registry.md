@@ -30,16 +30,18 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   The inherited contract includes Meta Muse's host-gated 64-character tool-name alias when the
   constructed send URL is `api.meta.ai` (`src/responses/muse-tool-name-alias.ts`).
 - `mimo-free` inherits the `openai-chat` contract.
-- `claude-cli` inherits the `codebuddy` contract. Claude Code speaks the same stream-json
+- `claude-agent-sdk` inherits the `codebuddy` contract. Claude Code speaks the same stream-json
   protocol this repository already parses for CodeBuddy and Qoder, so the wire is inherited and the
-  family module (`src/adapters/claude-cli/`) supplies only its own arguments and child environment.
-  That profile is the first credentialless one: it omits `tokenEnv`, the CLI reads the operator's
-  own Claude Code sign-in, and the turn neither requires nor injects an API key. The proxy-safety
-  controls are set per invocation, through CLI arguments and the child environment, and
-  `tests/providers/claude-cli-adapter.test.ts` pins them: `--tools ""`, `--strict-mcp-config`,
-  `--setting-sources ""`, `--no-session-persistence`, no permission bypass, a folded prompt staged
-  in a 0600 per-turn file and passed as `--system-prompt-file` rather than as a world-readable
-  argument, and a child environment that carries no inherited `ANTHROPIC_*` value.
+  family module (`src/adapters/claude-agent-sdk/`) supplies only its own options and child
+  environment. That profile is the first credentialless one: it omits `tokenEnv`, the harness reads
+  the operator's own Claude Code sign-in, and the turn neither requires nor injects an API key.
+  The turn itself runs through Anthropic's Claude Agent SDK — the harness behind the Claude Code CLI
+  — and `tests/providers/claude-agent-sdk-adapter.test.ts` pins the options it sets: built-in tools
+  off (`tools: []`), no setting sources, an isolated in-process MCP server as the only tool channel,
+  the caller's prompt appended to the harness preset instead of replacing it, and a child environment
+  that carries no inherited `ANTHROPIC_*` value. The id shipped in 2.65.0 as `claude-cli`; that name
+  resolves through `DEPRECATED_PROVIDER_ALIASES` and is moved by
+  `src/providers/claude-provider-rename-migration.ts`.
   Its registry row is `authKind: "key"` with `keyOptional: true`, NOT `local`: the turn leaves the
   machine for `api.anthropic.com`, and `local` (Ollama, vLLM, LM Studio) is the classification for
   traffic that never does. `keyOptional` is the existing exemption from key enforcement, and key

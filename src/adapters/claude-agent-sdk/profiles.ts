@@ -20,7 +20,7 @@ export interface ClaudeCliProfile extends CodingAgentProviderProfile {
 }
 
 export const CLAUDE_CLI_PROFILE: ClaudeCliProfile = {
-  providerId: "claude-cli",
+  providerId: "claude-agent-sdk",
   family: "claude",
   // Not a vendor region switch: Claude Code has one destination, and the shared seam's region slot
   // carries the neutral value. The profile stays the single authority either way.

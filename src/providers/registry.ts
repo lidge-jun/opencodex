@@ -39,7 +39,26 @@ for (const entry of PROVIDER_REGISTRY) {
 }
 
 export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | undefined {
-  return PROVIDER_REGISTRY.find(entry => entry.id === id);
+  return PROVIDER_REGISTRY.find(entry => entry.id === resolveDeprecatedProviderId(id));
+}
+
+/**
+ * Provider ids that were renamed and still have to resolve.
+ *
+ * `claude-cli` shipped in 2.65.0 and became `claude-agent-sdk` on 2026-09-24, when the row moved
+ * from a hand-built `claude -p` turn onto Anthropic's Claude Agent SDK. Saved rows and references
+ * are rewritten by `claude-provider-rename-migration`, but three paths read an id before or
+ * outside that pass: a config read that happens first, `ocx provider test claude-cli` typed by
+ * hand, and any row the projection refused to move because the destination was taken. Same shape
+ * as `DEPRECATED_OAUTH_PROVIDER_ALIASES` in src/oauth/index.ts, and deliberately not a second
+ * registry row: one row per mechanism is what the registry means.
+ */
+export const DEPRECATED_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  "claude-cli": "claude-agent-sdk",
+};
+
+export function resolveDeprecatedProviderId(id: string): string {
+  return DEPRECATED_PROVIDER_ALIASES[id] ?? id;
 }
 
 /**

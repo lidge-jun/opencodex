@@ -10,9 +10,9 @@ import {
   createClaudeCliAdapter,
   withClaudeLoginHint,
   type SpawnFn,
-} from "../../src/adapters/claude-cli/adapter";
+} from "../../src/adapters/claude-agent-sdk/adapter";
 import { baseScopedEnv } from "../../src/adapters/coding-agent/turn";
-import { CLAUDE_CLI_PROFILE, clearClaudeCliBinaryCache } from "../../src/adapters/claude-cli/profiles";
+import { CLAUDE_CLI_PROFILE, clearClaudeCliBinaryCache } from "../../src/adapters/claude-agent-sdk/profiles";
 import { effectiveAdapterContract, getAdapterDefinition } from "../../src/adapters/registry";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { deriveProviderPresets, providerConfigSeed } from "../../src/providers/derive";
@@ -50,7 +50,7 @@ function fakeChild(stdout: Uint8Array[], opts: { stderr?: string; exitCode?: num
 
 function provider(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
   return {
-    adapter: "claude-cli",
+    adapter: "claude-agent-sdk",
     baseUrl: CLAUDE_CLI_PROFILE.canonicalBaseUrl,
     reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
     ...overrides,
@@ -77,11 +77,11 @@ async function run(adapter: ReturnType<typeof createClaudeCliAdapter>, p: OcxPar
   return events;
 }
 
-describe("claude-cli is an official-harness provider, not a Messages relay", () => {
+describe("claude-agent-sdk is an official-harness provider, not a Messages relay", () => {
   test("the registry row and the adapter agree on the one canonical destination", () => {
-    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === "claude-cli");
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === "claude-agent-sdk");
     expect(entry).toBeDefined();
-    expect(entry!.adapter).toBe("claude-cli");
+    expect(entry!.adapter).toBe("claude-agent-sdk");
     expect(entry!.baseUrl).toBe(CLAUDE_CLI_PROFILE.canonicalBaseUrl);
     expect(entry!.defaultModel).toBe("claude-sonnet-5");
     expect(entry!.models).toContain(entry!.defaultModel!);
@@ -96,7 +96,7 @@ describe("claude-cli is an official-harness provider, not a Messages relay", () 
   });
 
   test("the row is a keyless key provider, not a local runtime, and needs no dashboardPreset flag", () => {
-    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === "claude-cli")!;
+    const entry = PROVIDER_REGISTRY.find(candidate => candidate.id === "claude-agent-sdk")!;
     // "local" is the Ollama / vLLM / LM Studio classification: the traffic never leaves the machine
     // and there is no credential to classify. This row's turn leaves for api.anthropic.com, and the
     // account surface answers from `authKind` (`classifyAccount` in src/cli/account-api.ts), where
@@ -112,17 +112,17 @@ describe("claude-cli is an official-harness provider, not a Messages relay", () 
     // are listed already, so it is gone rather than duplicated.
     expect(entry.dashboardPreset).toBeUndefined();
     expect(providerConfigSeed(entry)).toMatchObject({ authMode: "key", keyOptional: true });
-    expect(deriveProviderPresets().find(candidate => candidate.id === "claude-cli"))
+    expect(deriveProviderPresets().find(candidate => candidate.id === "claude-agent-sdk"))
       .toMatchObject({ auth: "key", keyOptional: true });
   });
 
   test("the adapter inherits the shared coding-agent contract instead of a second wire", () => {
-    expect(getAdapterDefinition("claude-cli")?.contractParent).toBe("codebuddy");
-    expect(effectiveAdapterContract("claude-cli").wire).toBe("codebuddy");
+    expect(getAdapterDefinition("claude-agent-sdk")?.contractParent).toBe("codebuddy");
+    expect(effectiveAdapterContract("claude-agent-sdk").wire).toBe("codebuddy");
   });
 });
 
-describe("claude-cli headless arguments keep tool ownership with the client", () => {
+describe("claude-agent-sdk headless arguments keep tool ownership with the client", () => {
   test("disables built-in tools and every MCP source, and never requests a bypass", () => {
     const args = buildArgs(CLAUDE_CLI_PROFILE, parsed(), provider());
     expect(args[0]).toBe("-p");
@@ -170,7 +170,7 @@ describe("claude-cli headless arguments keep tool ownership with the client", ()
   });
 });
 
-describe("claude-cli child environment carries no credential and no proxy destination", () => {
+describe("claude-agent-sdk child environment carries no credential and no proxy destination", () => {
   test("an inherited ANTHROPIC_* variable cannot point the harness back at this proxy", () => {
     const previous = { base: process.env.ANTHROPIC_BASE_URL, key: process.env.ANTHROPIC_API_KEY };
     process.env.ANTHROPIC_BASE_URL = "http://127.0.0.1:10100";
@@ -237,7 +237,7 @@ describe("claude-cli child environment carries no credential and no proxy destin
   });
 });
 
-describe("claude-cli runTurn fails closed before any spawn", () => {
+describe("claude-agent-sdk runTurn fails closed before any spawn", () => {
   test("a non-canonical base URL is refused", async () => {
     let spawned = 0;
     const spawn: SpawnFn = () => { spawned++; return fakeChild([]) as unknown as ChildProcess; };
@@ -273,7 +273,7 @@ describe("claude-cli runTurn fails closed before any spawn", () => {
   });
 });
 
-describe("claude-cli stages the folded prompt out of argv", () => {
+describe("claude-agent-sdk stages the folded prompt out of argv", () => {
   test("keeps the folded prompt out of argv, in a private file that is removed afterwards", async () => {
     const secret = "private-system-instruction";
     let promptFile = "";
@@ -319,7 +319,7 @@ describe("claude-cli stages the folded prompt out of argv", () => {
   });
 });
 
-describe("claude-cli runTurn streams a subscription turn", () => {
+describe("claude-agent-sdk runTurn streams a subscription turn", () => {
   test("runs without any stored API key, because the CLI owns the account", async () => {
     let spawned = 0;
     const stdout = [

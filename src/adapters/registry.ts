@@ -1,7 +1,7 @@
 import { createAnthropicAdapter } from "./anthropic";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
-import { createClaudeCliAdapter } from "./claude-cli/adapter";
+import { createClaudeCliAdapter } from "./claude-agent-sdk/adapter";
 import { withClinePassDeepSeekV4ToolReplayCompatibility } from "./cline-pass-deepseek-v4-tool-replay";
 import { withUniqueToolCallIds } from "./unique-tool-call-ids";
 import { createCodeBuddyAdapter } from "./codebuddy/adapter";
@@ -147,10 +147,10 @@ export const ADAPTER_REGISTRY = {
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createQoderAdapter(provider),
   },
-  "claude-cli": {
-    // Claude Code speaks the same stream-json contract this repo already parses for CodeBuddy and
-    // Qoder, so the contract is inherited rather than restated. The family owns its args and env,
-    // and the CLI owns the credential: the adapter stores and injects none.
+  "claude-agent-sdk": {
+    // Anthropic's Claude Agent SDK drives the same harness this repo already reaches through the
+    // CodeBuddy and Qoder CLIs, so the contract is inherited rather than restated. The family owns
+    // its options and env, and the harness owns the credential: the adapter stores and injects none.
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeCliAdapter(provider),
   },

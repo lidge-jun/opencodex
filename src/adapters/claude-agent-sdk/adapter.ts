@@ -156,7 +156,7 @@ export function withClaudeLoginHint(emit: (event: AdapterEvent) => void): (event
  */
 export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: ClaudeCliAdapterDeps = {}): ProviderAdapter {
   return {
-    name: "claude-cli",
+    name: "claude-agent-sdk",
 
     buildRequest(): AdapterRequest {
       return { url: provider.baseUrl, method: "POST", headers: {}, body: "" };
@@ -184,7 +184,7 @@ export function createClaudeCliAdapter(provider: OcxProviderConfig, deps: Claude
       let promptDir: string | undefined;
       let promptFile: string | undefined;
       try {
-        promptDir = await mkdtemp(join(tmpdir(), "ocx-claude-cli-prompt-"));
+        promptDir = await mkdtemp(join(tmpdir(), "ocx-claude-agent-sdk-prompt-"));
         promptFile = join(promptDir, "system-prompt.txt");
         await writeFile(promptFile, buildSystemPrompt(parsed) ?? "", { encoding: "utf8", mode: 0o600, flag: "wx" });
       } catch {
