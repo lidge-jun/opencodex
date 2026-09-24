@@ -258,7 +258,9 @@ emergency. Mark it, and tell the combo to wait first:
 
 With the policy set, selection tries the normal targets first. If they are only
 cooling and the earliest cooldown expires inside `waitForCooldownMs`, the
-request waits for that instead of dispatching the last-resort target.
+request waits for that instead of dispatching the last-resort target. The policy
+needs a nonzero `waitForCooldownMs`; at the default `0` there is no wait to
+take, so the last resort is dispatched as before.
 
 **The policy only ever defers.** When no normal target can be reached — every
 one cooling past the budget, already attempted, or ruled out — the last-resort
