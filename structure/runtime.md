@@ -187,7 +187,7 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 `runtime-port.json` through `src/config/process-state.ts`, syncs Codex config/catalog, then serves
 until shutdown. Normal shutdown restores native Codex. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
-uninstall still restore.
+uninstall still restore. `src/service/cli.ts` removes the service token on uninstall only when persisted client state is disconnected and no pending connect marker owns the newly issued key. `src/client/connect.ts` publishes that fingerprint marker before the key, then clears it with the connection commit or rollback under the client lifecycle and config mutation locks. Connected, invalid, or mismatched client state retains an existing token. A valid pending marker retains only its matching fingerprint; an older marker does not own a replacement service key. An absent token is reported as absent; unsafe, malformed, or unreadable markers and lock, state-read, or deletion failures leave cleanup unverified.
 The package-tree integrity fence for live package replacement follows the
 [update transaction contract](ops/docs-and-release.md#package-tree-integrity-fence).
 

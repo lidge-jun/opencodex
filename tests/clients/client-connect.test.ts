@@ -392,8 +392,9 @@ describe("remote hub client boundary", () => {
 /** A catalog the user already had before ever connecting. */
 const PRIOR_CATALOG_BYTES = '{"models":[{"slug":"local/only-model"}]}';
 
+/** Exercise enrollment and rollback in a fresh process with isolated client homes. */
 function runTransactionScenario(
-  stage: "success" | "catalog" | "preflight" | "commit" | "prior-catalog" | "coordinator",
+  stage: "success" | "catalog" | "preflight" | "commit" | "prior-catalog" | "coordinator" | "uninstall-during-catalog",
   options: { script?: string; timeoutMs?: number } = {},
 ) {
   const opencodexHome = mkdtempSync(join(tmpdir(), "ocx-client-connect-home-"));
@@ -430,6 +431,7 @@ function runTransactionScenario(
     const stage = ${JSON.stringify(stage)};
     markTransaction("module_ready");
     let commitFaultTriggered = false;
+    let uninstallDuringCatalog = null;
     const catalog = '{"models":[]}';
     const etag = '"sha256-' + createHash("sha256").update(catalog).digest("base64url") + '"';
     const calls = [];
@@ -447,6 +449,13 @@ function runTransactionScenario(
       if (url.endsWith("/api/keys") && init.method === "DELETE") return Response.json({ success: true });
       if (url.endsWith("/v1/catalog")) {
         if (stage === "catalog") return Response.json({ error: "down" }, { status: 503 });
+        if (stage === "uninstall-during-catalog") {
+          const { removeServiceTokenAfterUninstall } = require("./src/service/cli");
+          uninstallDuringCatalog = {
+            cleanup: removeServiceTokenAfterUninstall({ lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" }),
+            tokenExists: existsSync(serviceApiTokenFilePath()),
+          };
+        }
         return new Response(catalog, { headers: { ETag: etag, "Content-Type": "application/json" } });
       }
       throw new Error("unexpected request " + url);
@@ -500,7 +509,7 @@ function runTransactionScenario(
       if ((stage === "success" || stage === "prior-catalog") && connected) disconnected = await disconnectClient({}, { lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/lifecycle.sqlite" } });
       const catalogAfter = existsSync(DEFAULT_CATALOG_PATH) ? readFileSync(DEFAULT_CATALOG_PATH, "utf8") : null;
       const hubStateCacheAfter = existsSync(hubStateCachePath());
-      writeSync(1, JSON.stringify({ connected, error, coordinatorUnavailable, beforeDisconnect, artifacts, disconnected, catalogAfter, hubStateCacheBefore, hubStateCacheAfter, after: readClientConnectionState(), calls, commitFaultTriggered }) + "\\n");
+      writeSync(1, JSON.stringify({ connected, error, coordinatorUnavailable, beforeDisconnect, artifacts, disconnected, catalogAfter, hubStateCacheBefore, hubStateCacheAfter, after: readClientConnectionState(), calls, commitFaultTriggered, uninstallDuringCatalog, pendingAtResult: existsSync(process.env.OPENCODEX_HOME + "/client-connect-pending") }) + "\\n");
       markTransaction("result_published");
     })();
   `;
@@ -669,7 +678,19 @@ describe("connect transaction and offline disconnect", () => {
       expect(run.parsed.after).toEqual({ kind: "disconnected" });
       expect(run.parsed.calls.filter((call: any) => call.method === "DELETE")).toEqual([]);
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
+
+  test("service uninstall during catalog download retains the pending client key", () => {
+    const run = runTransactionScenario("uninstall-during-catalog");
+    try {
+      expect(run.status).toBe(0);
+      expect(run.parsed.uninstallDuringCatalog).toEqual({ cleanup: "retained", tokenExists: true });
+      expect(run.parsed.error).toBeNull();
+      expect(run.parsed.connected.apiKeyId).toBe("issued-id");
+      expect(run.parsed.beforeDisconnect.kind).toBe("connected");
+      expect(run.parsed.pendingAtResult).toBe(false);
+    } finally { run.cleanup(); }
+  }, SPAWN_BUDGET_MS);
 
   test("disconnect puts back the catalog the user had before connecting", () => {
     // Connect overwrites whatever catalog is already on disk. Disconnect used to delete the
@@ -684,7 +705,7 @@ describe("connect transaction and offline disconnect", () => {
       expect(run.parsed.catalogAfter).toBe(PRIOR_CATALOG_BYTES);
       expect(run.parsed.after).toEqual({ kind: "disconnected" });
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
 
   test("disconnect removes the catalog when the user had none", () => {
     // The other half of the same contract: `priorCatalog: ""` records "there genuinely was
@@ -694,7 +715,7 @@ describe("connect transaction and offline disconnect", () => {
       expect(run.parsed.disconnected).toMatchObject({ catalogRemoved: true, catalogRestored: false });
       expect(run.parsed.catalogAfter).toBeNull();
     } finally { run.cleanup(); }
-  });
+  }, SPAWN_BUDGET_MS);
 
   for (const stage of ["catalog", "preflight", "commit"] as const) {
     test(`rolls back local artifacts when ${stage} fails before final commit`, () => {
@@ -704,11 +725,13 @@ describe("connect transaction and offline disconnect", () => {
         expect(run.parsed.connected).toBeNull();
         expect(run.parsed.beforeDisconnect).toEqual({ kind: "disconnected" });
         expect(run.parsed.artifacts.token).toBe(false);
+        expect(run.parsed.pendingAtResult).toBe(false);
         expect(run.parsed.artifacts.catalog).toBe(false);
         expect(run.parsed.artifacts.credentialZeroed).toBe(true);
         expect(run.parsed.calls.some((call: any) => call.method === "DELETE")).toBe(true);
         if (stage === "commit") {
           expect(run.parsed.commitFaultTriggered).toBe(true);
+          expect(run.parsed.error).not.toContain("client cleanup ownership unavailable");
           expect(run.parsed.calls.some((call: any) => call.method === "POST" && call.url.endsWith("/api/keys"))).toBe(true);
         }
         expect(run.configBytes).not.toContain("issued-id");
