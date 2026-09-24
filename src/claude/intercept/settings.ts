@@ -124,7 +124,7 @@ export type ClaudeInterceptSettingsWrite =
 /** Capture only the managed keys. Rollback preserves unrelated edits and refuses
  * to overwrite a newer proxy/CA choice made after this apply. */
 export function captureClaudeInterceptSettingsRollback(
-  expected: ClaudeInterceptEnv,
+  expected: ClaudeInterceptEnv | (() => ClaudeInterceptEnv),
   configDir = claudeConfigDir(),
 ): () => boolean {
   const path = settingsPath(configDir);
@@ -133,10 +133,11 @@ export function captureClaudeInterceptSettingsRollback(
   const previous = "doc" in before ? { ...envRecord(before.doc) } : {};
   return () => {
     try {
+      const target = typeof expected === "function" ? expected() : expected;
       const current = readSettings(path);
       if (!("doc" in current)) return false;
       const env = envRecord(current.doc);
-      if (CLAUDE_INTERCEPT_MANAGED_ENV.some(key => env[key] !== expected[key])) return false;
+      if (CLAUDE_INTERCEPT_MANAGED_ENV.some(key => env[key] !== target[key])) return false;
       for (const key of CLAUDE_INTERCEPT_MANAGED_ENV) {
         if (previous[key] === undefined) delete env[key];
         else env[key] = previous[key];

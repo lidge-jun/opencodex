@@ -178,6 +178,9 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
       try {
         pickerProxy = await startConnectProxy(claudePickerProxyPort(options.config, options.publicPort), {
           interceptPort,
+          // No authToken: Desktop's egressProxyUrl cannot present proxy credentials, so this
+          // listener stays an unauthenticated loopback relay until the profile format can carry
+          // one. The intercept proxy above is the credential-bearing hop.
           // No host list here: the choice below depends on which client opened the tunnel.
           interceptHosts: [],
           selectTunnel: (host, port, request) => {

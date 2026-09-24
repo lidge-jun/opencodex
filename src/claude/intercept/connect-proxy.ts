@@ -24,8 +24,12 @@ const UPSTREAM_CONNECT_TIMEOUT_MS = 15_000;
 export interface ConnectProxyOptions {
   /** Loopback port of the TLS listener that terminates intercepted tunnels. */
   interceptPort: number;
-  /** Per-install bearer carried as HTTP Basic proxy credentials. */
-  authToken: string;
+  /**
+   * Per-install bearer carried as HTTP Basic proxy credentials. Omit only for listeners whose
+   * clients cannot present proxy credentials at all; an unauthenticated CONNECT proxy stays an
+   * open loopback relay, so every consumer that can carry the credential must set this.
+   */
+  authToken?: string;
   /** Hostnames (lowercase) whose 443 tunnels are spliced onto `interceptPort`. */
   interceptHosts?: readonly string[];
   /** Per-connection override, consulted before interceptHosts; null keeps the default. */
@@ -63,7 +67,7 @@ function connectRequestInfo(head: string): ConnectRequestInfo {
 }
 
 type ResolvedConnectProxyOptions = Required<Pick<ConnectProxyOptions, "interceptPort" | "interceptHosts" | "dialUpstream">>
-  & Pick<ConnectProxyOptions, "selectTunnel">;
+  & Pick<ConnectProxyOptions, "selectTunnel" | "authToken">;
 
 export interface ConnectProxyHandle {
   port: number;
@@ -162,7 +166,7 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
       respond(socket, 405, "Method Not Allowed");
       return;
     }
-    if (!proxyAuthorized(requestHead, options.authToken)) {
+    if (options.authToken && !proxyAuthorized(requestHead, options.authToken)) {
       respond(socket, 407, "Proxy Authentication Required");
       return;
     }

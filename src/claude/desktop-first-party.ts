@@ -156,8 +156,11 @@ export function captureDesktopFirstPartyRollback(
   config: Pick<OcxConfig, "claudeCode" | "port">,
   options: DesktopFirstPartyOptions = {},
 ): () => boolean {
+  // The expected env resolves at rollback time: the apply mints the proxy token, so capturing it
+  // here would both mint on a path that may never apply and throw when the intercept directory is
+  // unavailable — a failure the apply already reports as ca_unavailable.
   return captureClaudeInterceptSettingsRollback(
-    desktopFirstPartyTarget(config, options.opencodexConfigDir).env, options.claudeConfigDir,
+    () => desktopFirstPartyTarget(config, options.opencodexConfigDir).env, options.claudeConfigDir,
   );
 }
 
@@ -218,12 +221,13 @@ export function applyDesktopFirstParty(
   options: DesktopFirstPartyOptions = {},
 ): DesktopFirstPartyApplyResult {
   const opencodexConfigDir = options.opencodexConfigDir ?? getConfigDir();
-  const target = desktopFirstPartyTarget(config, opencodexConfigDir);
   if (!claudeInterceptEnabled(config)) return { ok: false, reason: "intercept_disabled", path: "" };
+  let target: DesktopFirstPartyTarget;
   try {
     ensureLocalInterceptCa(opencodexConfigDir);
+    target = desktopFirstPartyTarget(config, opencodexConfigDir);
   } catch {
-    return { ok: false, reason: "ca_unavailable", path: target.caCertPath };
+    return { ok: false, reason: "ca_unavailable", path: claudeInterceptCaCertPath(opencodexConfigDir) };
   }
   const written = applyClaudeInterceptSettings(target.env, options.claudeConfigDir);
   if (!written.ok) return { ok: false, reason: written.reason, path: written.path };
