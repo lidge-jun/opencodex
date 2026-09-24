@@ -242,6 +242,19 @@ pub fn run() {
                     // to the loopback dashboard by `capabilities/dashboard-zoom.json`.
                     .zoom_hotkeys_enabled(true)
                     .on_navigation(window::navigation_allowed(app.handle().clone()))
+                    // A hidden window still loads pages: wry builds this one with WebView2
+                    // IsVisible=false, and the bootstrap page navigates to the dashboard URL
+                    // afterwards, so the eval that a later show or hide would rely on has nowhere
+                    // to land during a reload. Re-sending the current state here is what keeps the
+                    // GUI's answer correct across navigation.
+                    .on_page_load(|window, payload| {
+                        if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                            window::report_visibility(
+                                &window,
+                                window.is_visible().unwrap_or(false),
+                            );
+                        }
+                    })
                     .build()?;
             window::configure(&window);
             if startup::LaunchOrigin::detect() == startup::LaunchOrigin::User {

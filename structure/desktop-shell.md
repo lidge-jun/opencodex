@@ -105,6 +105,19 @@ window, closes the usage popup if it is open, and loads the dashboard if a hidde
 it. This is separate from the single-instance callback, which handles a second process notifying
 the existing one.
 
+The host window also answers whether the dashboard is visible at all. Windows WebView2 is reported
+to keep `document.visibilityState === "visible"` while the Tauri window sits hidden in the tray
+(tauri issues #10592 and #6864; macOS WKWebView does flip it, measured), so a hidden dashboard went
+on polling for nobody. `desktop/src-tauri/src/window.rs` therefore publishes the shell's own
+answer — the page global `window.__OPENCODEX_HOST_VISIBLE__` and an `opencodex:host-visibility`
+CustomEvent — from `show` and `hide`, with a label guard so only `main` reports while
+`exit::hide_windows` hides every window through the same `hide`; the main window's builder in
+`lib.rs` re-sends the current state on every `PageLoadEvent::Finished`, which covers a reload or
+the bootstrap page's later navigation to the dashboard URL. The GUI folds both the standard event
+and this one into a single predicate in `gui/src/host-visibility.ts`, which
+`gui/src/visibility-poll.ts` and `gui/src/client-resource.ts` read in place of
+`document.visibilityState`. The tray popup keeps its own equivalent bridge.
+
 Every ending drains first, and so does the tray's Stop, which is not an ending: all of them take the
 same phase, so Stop pressed twice, Stop then Quit, and Stop during an update are one execution over
 one child rather than several racing. Ownership is re-established at the start of each drain rather

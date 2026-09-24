@@ -1,4 +1,5 @@
 import { useCallback, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { hostDocumentHidden, onHostVisibilityChange } from "./host-visibility";
 
 export type ResourceSnapshot<T> = {
   data: T | undefined;
@@ -196,7 +197,7 @@ function joinPollBucket<T>(store: Store<T>, intervalMs: number) {
 
 /** True when the document is currently hidden. Safe on non-browser runtimes. */
 function documentIsHidden(): boolean {
-  return typeof document !== "undefined" && document.visibilityState === "hidden";
+  return hostDocumentHidden();
 }
 
 /**
@@ -274,11 +275,14 @@ function recomputePoll<T>(store: Store<T>) {
  *
  * `replaceInflight: false` keeps this from cancelling work a visible-again mount just
  * started; if something is already loading, that request is the fresh answer.
+ *
+ * The subscription is host-visibility's deduped one, so a single hide (both the
+ * document event and the desktop host event on macOS) sweeps once, not twice.
  */
-let moduleVisibilityListener: (() => void) | null = null;
+let moduleVisibilityUnsubscribe: (() => void) | null = null;
 
 function ensureVisibilityListener<T>(_store: Store<T>) {
-  if (typeof document === "undefined" || moduleVisibilityListener) return;
+  if (typeof document === "undefined" || moduleVisibilityUnsubscribe) return;
   const onVisibility = () => {
     syncAllBuckets();
     if (documentIsHidden()) return;
@@ -291,18 +295,15 @@ function ensureVisibilityListener<T>(_store: Store<T>) {
       }
     }
   };
-  document.addEventListener("visibilitychange", onVisibility);
-  moduleVisibilityListener = onVisibility;
+  moduleVisibilityUnsubscribe = onHostVisibilityChange(onVisibility);
 }
 
 /** Drop the shared listener once nothing polls at all. */
 function removeVisibilityListener<T>(_store: Store<T>) {
-  if (!moduleVisibilityListener) return;
+  if (!moduleVisibilityUnsubscribe) return;
   if (pollBuckets.size > 0) return;
-  if (typeof document !== "undefined") {
-    document.removeEventListener("visibilitychange", moduleVisibilityListener);
-  }
-  moduleVisibilityListener = null;
+  moduleVisibilityUnsubscribe();
+  moduleVisibilityUnsubscribe = null;
 }
 
 async function runFetch<T>(
@@ -675,10 +676,8 @@ export function clearClientResourceStoresForTests(): void {
   }
   // The shared listener outlives individual stores, so the reset must drop it too or
   // a later suite's document would keep a handler bound to the previous one.
-  if (moduleVisibilityListener && typeof document !== "undefined") {
-    document.removeEventListener("visibilitychange", moduleVisibilityListener);
-  }
-  moduleVisibilityListener = null;
+  moduleVisibilityUnsubscribe?.();
+  moduleVisibilityUnsubscribe = null;
 }
 
 /**

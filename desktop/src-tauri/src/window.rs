@@ -79,12 +79,35 @@ fn is_app_origin(url: &Url) -> bool {
 pub fn show(window: &WebviewWindow) {
     let _ = window.show();
     let _ = window.set_focus();
+    report_visibility(window, true);
     apply_tray_policy(window.app_handle(), true);
 }
 
 pub fn hide(window: &WebviewWindow) {
     let _ = window.hide();
+    report_visibility(window, false);
     apply_tray_policy(window.app_handle(), false);
+}
+
+/// Tell the main window's page whether its host window is visible.
+///
+/// Windows WebView2 does not flip `document.visibilityState` when the host window is hidden
+/// (tauri issues #10592 and #6864), so the dashboard's pollers keep running while the app sits in
+/// the tray; macOS WKWebView does flip it. Publishing the host's own answer gives the GUI one
+/// signal on every platform instead of one that is correct on only some of them.
+///
+/// Only the `main` window publishes: `exit::hide_windows` hides every window through `hide`,
+/// and the tray popup carries its own equivalent bridge, so an unguarded report would claim the
+/// dashboard was hidden because a popup was. A page that has not loaded yet simply misses the eval;
+/// the page-load hook re-sends the current state.
+pub fn report_visibility(window: &WebviewWindow, visible: bool) {
+    if window.label() != "main" {
+        return;
+    }
+    let script = format!(
+        "window.__OPENCODEX_HOST_VISIBLE__ = {visible}; window.dispatchEvent(new CustomEvent('opencodex:host-visibility', {{detail: {visible}}}));"
+    );
+    let _ = window.eval(script);
 }
 
 #[cfg(target_os = "macos")]

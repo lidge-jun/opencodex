@@ -8,6 +8,7 @@ import {
   nextProviderQuotaStateExpiration,
   toPutBody,
 } from "../combo-workspace-data";
+import { hostDocumentHidden, onHostVisibilityChange } from "../host-visibility";
 import { hideRedundantChatGptForwardProviders } from "../provider-workspace/catalog";
 import { readSessionListCacheEntry, writeSessionListCacheEntry } from "../session-list-cache";
 import { Notice } from "../ui";
@@ -252,11 +253,11 @@ export default function Combos({
     // A new snapshot may be newer than this clock, so unknown state also gets one immediate check.
     const timer = window.setTimeout(recheck,
       quotaExpiry === undefined ? 0 : Math.max(0, quotaExpiry - Date.now()));
-    const onVisible = () => { if (document.visibilityState === "visible") recheck(); };
-    document.addEventListener("visibilitychange", onVisible);
+    const onVisible = () => { if (!hostDocumentHidden()) recheck(); };
+    const unsubscribeVisibility = onHostVisibilityChange(onVisible);
     return () => {
       window.clearTimeout(timer);
-      document.removeEventListener("visibilitychange", onVisible);
+      unsubscribeVisibility();
     };
   }, [active, apiBase, quotaResource.data, quotaResource.lastAttemptOk, quotaExpiry]);
 
