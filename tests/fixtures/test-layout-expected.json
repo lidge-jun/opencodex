@@ -361,6 +361,7 @@
   "codex-history-worker.test.ts": "codex-integration",
   "codex-history-writer.test.ts": "codex-integration",
   "codex-home-wsl.test.ts": "codex-integration",
+  "codex-home-wsl-local-state.test.ts": "codex-integration",
   "codex-inject-history-wording.test.ts": "codex-integration",
   "codex-inject-integration.test.ts": "codex-integration",
   "codex-inject-missing-config.test.ts": "codex-integration",

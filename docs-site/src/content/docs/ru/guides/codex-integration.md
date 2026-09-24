@@ -156,7 +156,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-В WSL, если `CODEX_HOME` не задан и Linux-каталог `~/.codex` отсутствует, opencodex
+В WSL, если `CODEX_HOME` не задан и Linux-каталог `~/.codex` отсутствует или не содержит состояния Codex
+(`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex
 дополнительно проверяет, нет ли единственного Windows-home Codex Desktop в
 `/mnt/c/Users/*/.codex/config.toml`. Если существует ровно один такой кандидат, используется его
 каталог, чтобы режим app-server в WSL и Windows Codex Desktop разделяли одни и те же config- и

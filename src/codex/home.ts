@@ -135,11 +135,33 @@ export function findWslWindowsCodexHome(deps: CodexHomeDeps = {}): string | null
 export function defaultCodexHome(deps: CodexHomeDeps = {}): string {
   const home = (deps.homedir ?? homedir)();
   const defaultHome = join(home, ".codex");
-  // A local ~/.codex directory is the user's Codex home even before Codex has
-  // written config.toml into it (a fresh install). Only an absent local home,
-  // or a path that is not a directory, lets WSL discovery pick a Windows home.
-  const detected = localCodexHomeIsDirectory(defaultHome, deps) ? null : findWslWindowsCodexHome(deps);
-  return detected ?? defaultHome;
+  // A local ~/.codex that Codex is already using is the user's Codex home even before
+  // config.toml exists (a fresh install: login writes auth.json, first use writes
+  // sessions/ and history.jsonl). A local directory with none of that state is not
+  // evidence of a local Codex: before #5441 such a home let WSL discovery pick the
+  // Windows home, and existing WSL users who run against that Windows home must not
+  // be moved to an empty local one on upgrade.
+  if (localCodexHomeIsDirectory(defaultHome, deps) && localCodexHomeInUse(defaultHome, deps)) return defaultHome;
+  return findWslWindowsCodexHome(deps) ?? defaultHome;
+}
+
+/** Files and directories Codex itself writes into a home it is using. */
+const LOCAL_CODEX_STATE = ["config.toml", "auth.json", "sessions", "history.jsonl"] as const;
+
+function localCodexHomeInUse(home: string, deps: CodexHomeDeps): boolean {
+  return LOCAL_CODEX_STATE.some(entry => pathPresent(join(home, entry), deps));
+}
+
+/** stat-based presence: an unexpected stat error counts as present, never as a reason to switch homes. */
+function pathPresent(path: string, deps: CodexHomeDeps): boolean {
+  const stat = deps.statSync ?? statSync;
+  try {
+    stat(path);
+    return true;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code;
+    return !(code === "ENOENT" || code === "ENOTDIR");
+  }
 }
 
 function localCodexHomeIsDirectory(path: string, deps: CodexHomeDeps): boolean {
