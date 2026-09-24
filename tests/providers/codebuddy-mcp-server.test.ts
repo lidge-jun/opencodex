@@ -1,9 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { CODEBUDDY_TOOL_LIMITS } from "../../src/adapters/codebuddy/tool-bridge";
 import { codeBuddyMcpInvocation } from "../../src/adapters/coding-agent/turn";
 
@@ -49,7 +50,10 @@ async function rejectedCatalog(rawCatalog: string): Promise<string> {
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
+    // Windows keeps the compiled ocx executable locked for a moment after its process exits, so
+    // a plain rmSync fails with EBUSY; the shared helper waits on the same bounded schedule as
+    // every other fixture teardown.
+    removeTreeWithRetry(dir);
   }
 });
 

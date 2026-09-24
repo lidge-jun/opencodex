@@ -145,11 +145,11 @@ export function defaultCodexHome(deps: CodexHomeDeps = {}): string {
   return findWslWindowsCodexHome(deps) ?? defaultHome;
 }
 
-/** Files and directories Codex itself writes into a home it is using. */
-const LOCAL_CODEX_STATE = ["config.toml", "auth.json", "sessions", "history.jsonl"] as const;
-
 function localCodexHomeInUse(home: string, deps: CodexHomeDeps): boolean {
-  return LOCAL_CODEX_STATE.some(entry => pathPresent(join(home, entry), deps));
+  // Files and directories Codex itself writes into a home it is using. Kept local: defaultCodexHome
+  // runs during other modules' initialisation (the storage workers reach it through an import
+  // cycle), and a module-level const declared below it is still in its temporal dead zone then.
+  return ["config.toml", "auth.json", "sessions", "history.jsonl"].some(entry => pathPresent(join(home, entry), deps));
 }
 
 /** stat-based presence: an unexpected stat error counts as present, never as a reason to switch homes. */
