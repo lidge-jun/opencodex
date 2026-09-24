@@ -809,6 +809,27 @@ describe("durable readiness re-attestation", () => {
     assert.equal(result.pending.checkpointAt, null);
   });
 
+  it("rejects future author events and missing or invalid live timestamps", () => {
+    const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase: "await-clear", checkpointAt: CHECKPOINT };
+    for (const [name, liveUpdatedAt, eventUpdatedAt] of [
+      ["future author event", LIVE_TIME, "2026-09-22T01:00:02.000Z"],
+      ["missing live timestamp", undefined, LIVE_TIME],
+      ["invalid live timestamp", "not-a-time", LIVE_TIME],
+    ]) {
+      const result = advanceReattestation({
+        pending,
+        legacy: false,
+        current: true,
+        readiness: readiness(0),
+        live: live(body0, { updatedAt: liveUpdatedAt }),
+        event: authorEdit(body0, body4, { updatedAt: eventUpdatedAt }),
+      });
+      assert.equal(result.pending.phase, "await-clear", name);
+      assert.equal(result.changed, false, name);
+      assert.equal(result.canComplete, false, name);
+    }
+  });
+
   it("rejects equal timestamps, title-only edits, and stale or reordered payloads", () => {
     const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase: "await-clear", checkpointAt: CHECKPOINT };
     const cases = [
@@ -819,7 +840,6 @@ describe("durable readiness re-attestation", () => {
       authorEdit(body0, body4, { senderId: 7 }),
       authorEdit(body0, body4, { senderType: "Bot" }),
       authorEdit(body0, body4, { name: "status" }),
-      authorEdit(body0, body4, { updatedAt: "2026-09-22T01:00:02.000Z" }),
     ];
     for (const event of cases) {
       const result = advanceReattestation({
