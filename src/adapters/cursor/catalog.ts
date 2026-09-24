@@ -184,19 +184,15 @@ export const CURSOR_CAPABILITIES: Record<string, CursorCapability> = {
       thinkingFast: { levels: FULL, order: T },
     },
   },
-  // 260923 Claude Opus 5.5: cursor.com/docs/models/claude-opus-5-5 publishes the id
-  // `claude-opus-5-5`, a thinking variant, a `claude-opus-5-5-fast` tier and a 1M max context.
-  // The ladders mirror the measured claude-opus-5 rows (fast stops at high) until the live
-  // GetUsableModels roster is dumped; the live filter drops any id the account cannot use.
+  // 260923 Claude Opus 5.5: live GetUsableModels roster advertises flat effort-suffixed
+  // wire ids (claude-opus-5-5-{low..max} and -fast) rather than a thinking variant.
   "claude-opus-5-5": {
     displayName: "Claude Opus 5.5",
     window: CONTEXT_1M,
-    defaultVariant: "thinking",
+    defaultVariant: "regular",
     variants: {
       regular: { levels: FULL },
-      thinking: { levels: FULL, order: T },
-      fast: { levels: ["low", "medium", "high"] },
-      thinkingFast: { levels: FULL, order: T },
+      fast: { levels: FULL },
     },
   },
   "glm-5.2": {
