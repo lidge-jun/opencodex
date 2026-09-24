@@ -1482,6 +1482,7 @@
   "url-normalization.test.ts": "config",
   "usage-aggregate-cache.test.ts": "usage",
   "usage-anthropic-fast-pricing.test.ts": "usage",
+  "usage-cursor-fast-pricing.test.ts": "usage",
   "usage-attempt-delivery.test.ts": "usage",
   "usage-cost.test.ts": "usage",
   "usage-debug.test.ts": "usage",
