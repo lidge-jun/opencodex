@@ -96,7 +96,8 @@ export async function inspectPickerTrust(leafPath: string, caSha1: string, run?:
 //   2. ["verify-cert", "-q", "-L", "-c", leafPath, "-p", "ssl", "-n", "claude.ai", "-k", loginKeychainPath()] exits 0
 //   3. ["trust-settings-export", <temp plist>] does not show kSecTrustSettingsPolicyString in the
 //      caSha1 entry (a host-scoped setting from an earlier build; Chromium skips it, so it counts
-//      as untrusted and the trust step replaces it); an unreadable export is no evidence either way
+//      as untrusted and the trust step replaces it); an unreadable export → unknown, so the picker
+//      never arms on a setting it could not inspect
 //   missing record or exit 1 → untrusted; a runner failure → unknown
 export async function trustPickerCa(caPath: string, run?: SecurityRunner, platform?: NodeJS.Platform): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }>;
 //   ["add-trusted-cert", "-r", "trustRoot", "-p", "ssl", "-k", loginKeychainPath(), caPath]

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -45,6 +45,10 @@ function pickerSecurity(options: { trusted?: boolean; addTrust?: boolean; remove
         : { code: 1, stdout: "", stderr: "" };
     }
     if (args[0] === "verify-cert") return trusted ? ok : { code: 1, stdout: "", stderr: "" };
+    if (args[0] === "trust-settings-export") {
+      writeFileSync(args[1]!, "<plist><dict></dict></plist>");
+      return ok;
+    }
     if (args[0] === "add-trusted-cert") {
       trusted = options.addTrust ?? true;
       return trusted ? ok : { code: 1, stdout: "", stderr: "" };

@@ -138,7 +138,8 @@ trusted in the login keychain (`picker-trust.ts`). The picker CA (`picker-ca.ts`
 `claude.ai` and excluding every IPv4 and IPv6 address, and is regenerated on reload when either is
 missing, which gives it a new fingerprint to trust. Trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
-trust settings carry `kSecTrustSettingsPolicyString` as untrusted and the trust step replaces it. A
+trust settings carry `kSecTrustSettingsPolicyString` as untrusted and the trust step replaces it; an
+export it cannot read makes trust `unknown`, which never arms. A
 rotated-out picker certificate stays in the login keychain because `untrustPickerCa` removes only the
 current one; its key was overwritten, so it can no longer sign a leaf. The relay verifies the upstream
 certificate, streams every body and upgrade unchanged, and rewrites only the bootstrap response's

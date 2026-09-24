@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +41,7 @@ function keychain(state: { trusted: boolean }) {
       return { code: 0, stdout: `SHA-1 hash: ${sha1}\n`, stderr: "" };
     }
     if (args[0] === "verify-cert") return { code: state.trusted ? 0 : 1, stdout: "", stderr: "" };
+    if (args[0] === "trust-settings-export") writeFileSync(args[1]!, "<plist><dict></dict></plist>");
     return { code: 0, stdout: "", stderr: "" };
   };
   return { run, calls };

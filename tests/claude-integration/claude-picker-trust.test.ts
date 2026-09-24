@@ -8,12 +8,16 @@ import { PICKER_CA_COMMON_NAME } from "../../src/claude/intercept/picker-ca";
 
 const sha1 = "A".repeat(40);
 const ok: SecurityResult = { code: 0, stdout: "", stderr: "" };
+/** A readable trust-settings export with no entry for the picker CA. */
+const NO_ENTRIES = "<?xml version=\"1.0\"?><plist><dict><key>trustList</key><dict></dict></dict></plist>";
 
 function fake(...results: SecurityResult[]): { run: SecurityRunner; calls: readonly string[][] } {
   const calls: string[][] = [];
   return { calls, run: async args => {
     calls.push([...args]);
-    return results.shift() ?? ok;
+    const result = results.shift() ?? ok;
+    if (args[0] === "trust-settings-export" && result.code === 0) writeFileSync(args[1]!, NO_ENTRIES);
+    return result;
   } };
 }
 
@@ -53,11 +57,15 @@ test("a host-scoped trust setting for the current CA reads as untrusted so trust
     };
     expect(await inspectPickerTrust("/leaf.pem", sha1, run, "darwin")).toBe(expected);
   }
-  // Unreadable settings are no evidence either way: verify-cert decides.
+  // Unreadable settings could hide a host scope Chromium skips, so trust stays unknown and unarmed.
   const failing: SecurityRunner = async args => args[0] === "find-certificate"
     ? { ...ok, stdout: `SHA-1 hash: ${sha1}\n` }
     : args[0] === "trust-settings-export" ? { ...ok, code: 1 } : ok;
-  expect(await inspectPickerTrust("/leaf.pem", sha1, failing, "darwin")).toBe("trusted");
+  expect(await inspectPickerTrust("/leaf.pem", sha1, failing, "darwin")).toBe("unknown");
+  const unwritten: SecurityRunner = async args => args[0] === "find-certificate"
+    ? { ...ok, stdout: `SHA-1 hash: ${sha1}\n` }
+    : ok;
+  expect(await inspectPickerTrust("/leaf.pem", sha1, unwritten, "darwin")).toBe("unknown");
 });
 
 test("missing or stale root never reaches leaf verification", async () => {

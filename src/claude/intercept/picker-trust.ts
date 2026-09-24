@@ -33,7 +33,8 @@ function hasFingerprint(output: string, expected: string): boolean {
  * Whether the current CA's user trust settings carry a policy string (a host scope such as the
  * `-s claude.ai` earlier builds used). verify-cert honours those, but Chromium skips them, so
  * Desktop would reject the picker leaf; the CA then counts as untrusted and trust is added again,
- * which replaces the setting. `null` when the settings cannot be read: no evidence either way.
+ * which replaces the setting. `null` when the settings cannot be read; the caller then reports
+ * `unknown`, because arming on a setting Chromium skips would cut Desktop off from claude.ai.
  */
 async function hostScopedTrust(caSha1: string, run: SecurityRunner): Promise<boolean | null> {
   let dir: string | undefined;
@@ -69,7 +70,10 @@ export async function inspectPickerTrust(
     if (!hasFingerprint(found.stdout, caSha1)) return "untrusted";
     const verified = await run(["verify-cert", "-q", "-L", "-c", leafPath,
       "-p", "ssl", "-n", PICKER_HOST, "-k", keychain]);
-    if (verified.code === 0) return (await hostScopedTrust(caSha1, run)) === true ? "untrusted" : "trusted";
+    if (verified.code === 0) {
+      const scoped = await hostScopedTrust(caSha1, run);
+      return scoped === null ? "unknown" : scoped ? "untrusted" : "trusted";
+    }
     return verified.code === 1 ? "untrusted" : "unknown";
   } catch { // no-excuse-ok: catch -- OS command unavailable or denied; never claim trust.
     return "unknown";

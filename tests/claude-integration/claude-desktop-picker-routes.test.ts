@@ -42,6 +42,7 @@ const security: SecurityRunner = async args => {
       return { code: 0, stdout: `SHA-1 hash: ${sha1}\n`, stderr: "" };
     }
     case "verify-cert": return { code: keychain.trusted ? 0 : 1, stdout: "", stderr: "" };
+    case "trust-settings-export": writeFileSync(args[1]!, "<plist><dict></dict></plist>"); return { code: 0, stdout: "", stderr: "" };
     case "add-trusted-cert": keychain.trusted = true; return { code: 0, stdout: "", stderr: "" };
     case "remove-trusted-cert": keychain.trusted = false; return { code: 0, stdout: "", stderr: "" };
     default: return { code: 0, stdout: "", stderr: "" };
