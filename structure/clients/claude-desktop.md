@@ -125,7 +125,11 @@ the tunnel is chosen per client from the CONNECT head: a tunnel without a browse
 Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and every other target
 blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
 login keychain) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
-blind-tunnels every target except `claude.ai:443`. That one is
+blind-tunnels every target except `claude.ai:443`.
+The User-Agent is a routing hint, not a trust boundary: a client that fakes it reaches only what
+any local process already reaches (the `api.anthropic.com` intercept is on the Claude Code proxy
+too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
+because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
 terminated by a `node:https` HTTP/1.1 relay (`picker-listener.ts`) only while the runtime's cached
 decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA

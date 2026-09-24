@@ -42,6 +42,8 @@ export type PickerInjectionOutcome =
  * remote session never reaches this machine's proxy, so an opencodex route could not run there.
  */
 export const PICKER_SURFACE_IDS = ["ccd", "code"] as const;
+/** Surface names the log may print; anything else from the body is counted, never echoed. */
+const KNOWN_SURFACE_IDS = new Set(["ccd", "code", "cc", "ccr", "cowork", "chat", "design"]);
 
 function injectIntoSurface(surface: Record<string, unknown>, models: readonly PickerModelEntry[]): number | string {
   if (!Array.isArray(surface.models)) return "no_models";
@@ -83,9 +85,10 @@ export function injectPickerModels(
   const targets = rows.filter((entry): entry is Record<string, unknown> =>
     entry !== null && (PICKER_SURFACE_IDS as readonly unknown[]).includes(entry.id));
   if (targets.length === 0) {
-    // Surface ids are Anthropic's fixed names (for example "ccd"), not user data.
-    const ids = rows.map(entry => typeof entry?.id === "string" ? entry.id.slice(0, 32) : "?");
-    return unchanged(`no_code_surface(${ids.join(",")})`);
+    // Only known surface names reach the log; any other body-derived value is counted.
+    const known = rows.flatMap(entry => typeof entry?.id === "string" && KNOWN_SURFACE_IDS.has(entry.id) ? [entry.id] : []);
+    const other = rows.length - known.length;
+    return unchanged(`no_code_surface(${[...known, ...(other > 0 ? [`other:${other}`] : [])].join(",")})`);
   }
   let added = 0;
   const skipped: string[] = [];

@@ -41,7 +41,14 @@ export interface ConnectRequestInfo {
 
 /**
  * Chromium (Claude Desktop's app) sends its browser User-Agent on CONNECT; the Claude Code
- * processes Desktop spawns send none. The two trust different CAs, so the choice depends on it.
+ * processes Desktop spawns send none. The two trust different CAs, so the tunnel choice uses it.
+ *
+ * This is a routing hint, not a trust boundary: a local client can send any User-Agent. Neither
+ * answer grants anything a local process lacks already. A non-browser tunnel reaches the
+ * api.anthropic.com intercept, which the Claude Code proxy offers every local process; a browser
+ * tunnel reaches the claude.ai relay, which verifies upstream and injects no credential. A client
+ * that lies only breaks its own TLS, because each terminator presents a certificate only its
+ * intended client trusts.
  */
 export function isBrowserConnect(request: ConnectRequestInfo): boolean {
   return request.userAgent !== null && /^Mozilla\//.test(request.userAgent);
@@ -126,7 +133,8 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
   const onData = (chunk: Buffer) => {
     head = head.length === 0 ? chunk : Buffer.concat([head, chunk]);
     const end = head.indexOf("\r\n\r\n");
-    if (end === -1) {
+    // The cap holds however the head arrives: across reads or in one oversized read.
+    if (end === -1 || end + 4 > MAX_HEAD_BYTES) {
       if (head.length > MAX_HEAD_BYTES) {
         socket.off("data", onData);
         respond(socket, 431, "Request Header Fields Too Large");

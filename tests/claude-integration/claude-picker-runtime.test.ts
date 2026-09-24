@@ -338,6 +338,15 @@ describe("startClaudeIntercept wiring", () => {
       // The app's own tunnels carry its browser User-Agent and are the only ones the picker sees.
       expect(await connectStatusLine(port + 1, "picker-probe.invalid", BROWSER_UA)).toContain("502");
       expect(asked).toEqual(["picker-probe.invalid"]);
+      // The User-Agent is a routing hint. A client that fakes a browser one only reaches the picker
+      // decision (claude.ai relay, which needs the keychain-trusted CA); one that omits it only
+      // reaches the api.anthropic.com intercept, which the Claude Code proxy already offers any
+      // local process, and its api.anthropic.com tunnel is not asked of the picker.
+      expect(await connectStatusLine(port + 1, "api.anthropic.com", "curl/8.7.1")).toContain("200");
+      // An empty User-Agent is not a browser: blind, not asked. A faked browser one is only asked.
+      expect(await connectStatusLine(port + 1, "empty-ua.invalid", "")).toContain("502");
+      expect(await connectStatusLine(port + 1, "spoofed-ua.invalid", `${BROWSER_UA} spoofed`)).toContain("502");
+      expect(asked).toEqual(["picker-probe.invalid", "spoofed-ua.invalid"]);
     } finally {
       await handle?.stop();
     }

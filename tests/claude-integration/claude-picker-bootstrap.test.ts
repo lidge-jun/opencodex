@@ -130,3 +130,12 @@ test("the Desktop Code surfaces ccd and code both gain the routes; remote ccr an
   expect(injectPickerModels(fallback, models)).toBe(1);
   expect(fallback.model_selector_config[1]!.models).toHaveLength(1);
 });
+
+test("unknown surface ids from the body are counted in the outcome, never echoed", () => {
+  const outcomes: string[] = [];
+  const secretish = "sk-ant-should-never-reach-a-log";
+  injectPickerModels({ model_selector_config: [{ id: "cowork", models: [] }, { id: secretish, models: [] }, { id: 7, models: [] }] }, models,
+    outcome => { outcomes.push(outcome.kind === "unchanged" ? outcome.reason : "rewritten"); });
+  expect(outcomes).toEqual(["no_code_surface(cowork,other:2)"]);
+  expect(outcomes.join("")).not.toContain(secretish);
+});
