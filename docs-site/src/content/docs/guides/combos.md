@@ -258,9 +258,13 @@ emergency. Mark it, and tell the combo to wait first:
 
 With the policy set, selection tries the normal targets first. If they are only
 cooling and the earliest cooldown expires inside `waitForCooldownMs`, the
-request waits for that instead of dispatching the last-resort target. The policy
-needs a nonzero `waitForCooldownMs`; at the default `0` there is no wait to
-take, so the last resort is dispatched as before.
+request waits for that instead of dispatching the last-resort target. That
+deferral does not depend on the wait: a `lastResort` target is skipped whenever
+any normal target is available, for every strategy, and under `round-robin` or
+`random` it does not join the rotation at all. `waitForCooldownMs` only adds the
+wait for a cooling normal target, so at the default `0` nothing waits: the last
+resort is used as soon as no normal target is available. After a failed attempt,
+the next pick follows the same rule.
 
 **The policy only ever defers.** When no normal target can be reached — every
 one cooling past the budget, already attempted, or ruled out — the last-resort
@@ -468,7 +472,7 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. Applies only to round-robin. |
 | `cooldownMs` | No | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Integer from 1 to 600000. When set, applies as the per-target cooldown whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. |
 | `waitForCooldownMs` | No | `0` | Integer from 0 to 600000. Maximum time to wait for the earliest eligible cooling target before returning `combo_unavailable`; abort cancels the wait. |
-| `cooldownWaitPolicy` | No | unset | `"before-last-resort"` defers targets marked `lastResort` while a normal target is cooling and that cooldown fits inside `waitForCooldownMs`. Only that exact string opts in. The deferral wait and the ordinary wait share one `waitForCooldownMs` budget per selection attempt. |
+| `cooldownWaitPolicy` | No | unset | `"before-last-resort"` defers targets marked `lastResort`: they are used only when no normal target is available, for every strategy, and `waitForCooldownMs` only adds the wait for a cooling normal target, so at its `0` default nothing waits and the last resort is used as soon as no normal target is available. Only that exact string opts in. The deferral wait and the ordinary wait share one `waitForCooldownMs` budget per selection attempt. |
 | `defaultEffort` | No | `null` | `low`, `medium`, `high`, `xhigh`, `max`, or `ultra`; resolved against each target's advertised ladder. |
 | `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserves explicit caller effort. `"force"` overrides valid caller effort, requires a valid non-null default, and can increase cost and latency. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersects every known target ladder, so one target advertising no effort control empties the combo's picker. `"adaptive"` excludes those empty ladders from the published intersection. At dispatch, explicit empty or adaptive unknown ladders remove unsupported effort/thinking controls while preserving supported non-effort reasoning fields such as `reasoning.summary`; known non-empty targets keep existing effort resolution. |

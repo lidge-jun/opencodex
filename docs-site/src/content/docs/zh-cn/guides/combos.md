@@ -270,7 +270,7 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | `stickyLimit` | 否 | `1` | 每次 `round-robin` 选择可连续处理 1 到 100 个成功请求。仅适用于 `round-robin`。 |
 | `cooldownMs` | 否 | 未设置 → 上游回退值（请求速率限制代码为 `1302`/`1305` 的 429 为 5 秒，否则为 60 秒） | 1 到 600000 的整数。设置后，只要没有可用的上游 `Retry-After` 或 Codex 重置信号，就会作为每个目标的冷却时间应用，包括请求速率限制 429；未设置时使用上游回退值。 |
 | `waitForCooldownMs` | 否 | `0` | 0 到 600000 的整数。在返回 `combo_unavailable` 前等待最早恢复资格的冷却中目标的最长时间；请求中止会取消等待。 |
-| `cooldownWaitPolicy` | 否 | 未设置 | `"before-last-resort"` 会在普通目标处于冷却中、且其剩余时间在 `waitForCooldownMs` 之内时，推迟使用标记为 `lastResort` 的目标。仅此字符串生效。推迟等待与普通等待在每次选择中共用同一个 `waitForCooldownMs` 预算。 |
+| `cooldownWaitPolicy` | 否 | 未设置 | `"before-last-resort"` 会在普通目标处于冷却中、且其剩余时间在 `waitForCooldownMs` 之内时，推迟使用标记为 `lastResort` 的目标。标记为 `lastResort` 的目标只有在没有普通目标可用时才会使用。仅此字符串生效。推迟等待与普通等待在每次选择中共用同一个 `waitForCooldownMs` 预算。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；仅当调用方省略 effort 且目标声明支持时才会应用。 |
 | `reasoningEffortMode` | 否 | `"strict"` | `strict` 或 `adaptive`；选择混合能力交集和目标级控制归一化。 |
 | `imageInput` | 否 | `"auto"` | `"auto"` 或 `"disabled"`。`"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
