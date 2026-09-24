@@ -17,7 +17,10 @@ import {
   sniffImageDimensions,
   TOTAL_IMAGE_BASE64_BUDGET,
 } from "../../../src/adapters/anthropic-image-guard";
-import { TIER0_COUNT } from "../../../src/adapters/anthropic-image-codec";
+import {
+  recordEmittedPosition,
+  TIER0_COUNT,
+} from "../../../src/adapters/anthropic-image-codec";
 
 /** 1x1 red PNG — the smallest real, fully-decodable fixture. */
 const ONE_PX_PNG =
@@ -127,7 +130,7 @@ describe("bounded normalization cache accounting", () => {
     await Promise.all([first, second]);
     const stats = getNormalizeStatsForTests();
     expect(stats.cacheEntries).toBe(1);
-    expect(stats.cacheBytes).toBe(anthropicImageNormalizeRetainedStoreSnapshot().bytes);
+    expect(anthropicImageNormalizeRetainedStoreSnapshot().bytes).toBeGreaterThan(stats.cacheBytes);
     expect(stats.cacheBytes).toBeGreaterThan(1_000);
   });
 
@@ -164,6 +167,19 @@ describe("bounded normalization cache accounting", () => {
     expect(released).toBeGreaterThan(0);
     expect(released).toBeGreaterThanOrEqual(getNormalizeStatsForTests().metadataBytes / Math.max(1, before.count));
     expect(anthropicImageNormalizeRetainedStoreSnapshot().bytes).toBe(before.bytes - released);
+  });
+
+  test("position identities retain a fixed amount for caller-controlled media types", () => {
+    const hugeMediaType = `image/${"x".repeat(1024 * 1024)}`;
+    recordEmittedPosition(ONE_PX_PNG, hugeMediaType, 1);
+    const first = anthropicImageNormalizeRetainedStoreSnapshot();
+    expect(first.count).toBe(1);
+    expect(first.bytes).toBeLessThan(256);
+
+    recordEmittedPosition(ONE_PX_PNG, `${hugeMediaType}y`, 2);
+    const second = anthropicImageNormalizeRetainedStoreSnapshot();
+    expect(second.count).toBe(first.count);
+    expect(second.bytes).toBe(first.bytes);
   });
 });
 
