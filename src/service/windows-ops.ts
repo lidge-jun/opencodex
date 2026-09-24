@@ -201,8 +201,10 @@ export interface ElevatedSchedulerStagingDeps {
  *   inside a directory that did not exist a moment ago. The explicit check is what keeps
  *   that guarantee from depending on a reading of `O_EXCL` semantics.
  * - **Pinned namespace and content.** Before UAC, the launcher opens every ancestor and
- *   payload without following reparse points and without sharing write/delete access.
- *   Those handles stay open until elevation exits. The digest then verifies the exact,
+ *   payload without following reparse points. Ancestor handles share read/write but
+ *   deny delete, so the namespace cannot be redirected while sibling payloads can
+ *   still be written; payload handles deny write/delete outright. Those handles stay
+ *   open until elevation exits. The digest then verifies the exact,
  *   length-bounded bytes read by the elevated process.
  *
  * Payloads are UTF-16LE with no BOM, and the elevated process decodes them straight into

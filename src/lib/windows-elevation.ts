@@ -663,7 +663,9 @@ export function runWindowsElevated(file: string, args: string[]): Promise<number
  * A task definition staged for the elevated process.
  *
  * Before elevation, the launcher pins the file and every ancestor with non-reparse
- * handles that deny write/delete sharing. The elevated script additionally bounds and
+ * handles: payload files deny write/delete sharing, ancestor directories deny delete
+ * sharing only (writes inside them stay possible so the stage can be populated).
+ * The elevated script additionally bounds and
  * hashes the exact bytes it decodes.
  */
 export interface StagedWindowsTaskXml {
@@ -710,7 +712,9 @@ const READ_STAGED_TASK_XML = "function Read-OcxStagedTaskXml([string]$path, [lon
  * longer depends on the size of the XML at all.
  *
  * The unelevated launcher opens every ancestor and payload with OPEN_REPARSE_POINT,
- * validates its type, and denies write/delete sharing until the elevated process exits.
+ * validates its type, and holds them until the elevated process exits: ancestors deny
+ * delete sharing (read/write stay shared, so sibling files can still be staged) and
+ * each payload denies write/delete sharing.
  * Thus the privileged open cannot be redirected during UAC; the length and digest are
  * defense in depth for the bytes read from the pinned regular file.
  *
