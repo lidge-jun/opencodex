@@ -32,17 +32,32 @@ export interface StructuredToolCallReference {
   argumentsText: string;
 }
 
+const CLOSED_BLOCK = /<tool_call>\s*<function=([^>\r\n]+)>([\s\S]*?)(?:<\/parameter>)?\s*<\/function>\s*<\/tool_call>/y;
+const UNCLOSED_FUNCTION_BLOCK = /<tool_call>\s*<function=([^>\r\n]+)>([\s\S]*?)(?:<\/parameter>)?\s*<\/tool_call>/y;
+
+/**
+ * The block starting at `offset`. MiMo's echo may close a freeform body with a stray `</parameter>`
+ * and may omit `</function>` (#5724), the grammar the Command Code reader accepts too. The closed
+ * form is tried first so a body can still carry a literal `</tool_call>`; a closed match that
+ * swallowed a second opening tag belongs to two blocks, so the unclosed form reads the first.
+ */
+function blockAt(text: string, offset: number): RegExpExecArray | null {
+  CLOSED_BLOCK.lastIndex = offset;
+  const closed = CLOSED_BLOCK.exec(text);
+  if (closed && !closed[2]!.includes(OPEN_TAG)) return closed;
+  UNCLOSED_FUNCTION_BLOCK.lastIndex = offset;
+  return UNCLOSED_FUNCTION_BLOCK.exec(text);
+}
+
 /** Finds complete bare blocks outside literal Markdown; ambiguous outer blocks stop the scan. */
 function callsIn(text: string, context: TextContext = { fence: null, lineStart: true }): SerializedToolCall[] {
-  const pattern = /<tool_call>\s*<function=([^>\r\n]+)>([\s\S]*?)(?:<\/parameter>)?\s*<\/function>\s*<\/tool_call>/y;
   const calls: SerializedToolCall[] = [];
   let offset = 0;
   while (offset < text.length) {
     const split = splitAtPossibleSerializedToolCall(text.slice(offset), context, true);
     offset += split.emit.length;
     if (!split.hasOpenTag) break;
-    pattern.lastIndex = offset;
-    const match = pattern.exec(text);
+    const match = blockAt(text, offset);
     if (!match) break; // An incomplete/ambiguous outer block cannot authorize an inner call.
     calls.push({
       name: match[1]!.trim(),
@@ -50,7 +65,7 @@ function callsIn(text: string, context: TextContext = { fence: null, lineStart: 
       start: match.index,
       end: match.index + match[0].length,
     });
-    offset = pattern.lastIndex;
+    offset = match.index + match[0].length;
     context = { fence: null, lineStart: false };
   }
   return calls;
@@ -279,6 +294,11 @@ function inputFromArguments(argumentsText: string): string | undefined {
   }
 }
 
+/** One wrapping newline after the function header is template layout, not input (vLLM `_trim_wrapping_newlines`). */
+function freeformBody(value: string): string {
+  return value.replace(/^\r?\n/, "").trimEnd();
+}
+
 /** The `[start, end)` ranges of blocks whose function identity and freeform input match a dispatched call. */
 function duplicatedSerializedToolCallRanges(
   text: string,
@@ -287,9 +307,11 @@ function duplicatedSerializedToolCallRanges(
 ): { start: number; end: number }[] {
   if (structuredCalls.length === 0) return [];
   return callsIn(text, context).filter(call => {
-    const body = call.body.trimEnd();
-    return structuredCalls.some(structured =>
-      structured.names.has(call.name) && inputFromArguments(structured.argumentsText)?.trimEnd() === body);
+    const body = freeformBody(call.body);
+    return structuredCalls.some(structured => {
+      const input = structured.names.has(call.name) ? inputFromArguments(structured.argumentsText) : undefined;
+      return input !== undefined && freeformBody(input) === body;
+    });
   });
 }
 

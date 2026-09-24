@@ -11,3 +11,4 @@
 - Why: Agreement between both representations is deterministic and avoids changing ordinary commentary, mismatched markup, or unrelated providers' valid text.
 - Consequences: Matching calls no longer appear twice; same-name/different-body examples remain visible; the small held region is translator-budgeted and emits heartbeats while held; terminal failures retain held text without dispatching tools; malformed concatenated arguments are repaired only for the exact duplicated wrapper shape.
 - Follow-up (260924): the streaming hold is bounded (8 KiB of prose after a closed block, 4 MiB total); past a bound held text is released unsuppressed. See structure/providers/chat-compat.md.
+- Follow-up (#5724): MiMo echoes that omit `</function>` or put a template newline after the function header are read as the same block, matching the Command Code reader's grammar; suppression still requires the name and body to agree with a structured call.
