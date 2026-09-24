@@ -125,6 +125,7 @@ const CURSOR_OPUS_5_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-5
 const CURSOR_OPUS_55_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-5-5";
 
 const CURSOR_FAST_PRICE_MODELS = new Set(["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]);
+const CURSOR_FAST_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const CURSOR_FAST_PRICE_SOURCES: Readonly<Record<string, string>> = {
   "claude-opus-4-8": CURSOR_OPUS_48_FAST_PRICING,
   "claude-opus-5": CURSOR_OPUS_5_FAST_PRICING,
@@ -134,6 +135,9 @@ const CURSOR_FAST_PRICE_SOURCES: Readonly<Record<string, string>> = {
 function supportsCursorFastId(parsed: ReturnType<typeof normalizeCursorClaudeId>): boolean {
   if (!parsed?.fast || !CURSOR_FAST_PRICE_MODELS.has(parsed.canonicalBaseId)) return false;
   if (parsed.canonicalBaseId === "claude-opus-5-5" && parsed.thinking) return false;
+  if (parsed.level !== undefined && !CURSOR_FAST_LEVELS.has(parsed.level)) {
+    return false;
+  }
   if (parsed.canonicalBaseId === "claude-opus-5" && !parsed.thinking
       && parsed.level !== undefined && !["low", "medium", "high"].includes(parsed.level)) {
     return false;

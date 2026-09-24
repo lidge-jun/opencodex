@@ -52,6 +52,12 @@ describe("Cursor Fast pricing", () => {
       status: "verified",
     });
     expect(resolveMatchedPrice("cursor", "claude-opus-5-minimal-fast")).toBeNull();
+    expect(resolveMatchedPrice("cursor", "claude-opus-4-8-minimal-fast")).toBeNull();
+    expect(resolveMatchedPrice("cursor", "claude-opus-4-8-none-fast")).toBeNull();
+    expect(resolveMatchedPrice("cursor", "claude-opus-5-thinking-minimal-fast")).toBeNull();
+    expect(resolveMatchedPrice("cursor", "claude-opus-5-thinking-none-fast")).toBeNull();
+    expect(resolveMatchedPrice("cursor", "claude-opus-5-5-minimal-fast")).toBeNull();
+    expect(resolveMatchedPrice("cursor", "claude-opus-5-5-none-fast")).toBeNull();
     expect(resolveMatchedPrice("cursor", "claude-opus-5-5-thinking-high-fast")).toBeNull();
   });
 
