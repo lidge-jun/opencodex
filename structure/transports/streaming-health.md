@@ -31,6 +31,8 @@ NOT count as activity for the bridge's own watchdog: a bounded stall deadline (d
 configurable via `stallTimeoutSec`, checked on the 2 s heartbeat tick) closes the stream with
 `response.incomplete` / `upstream_stall_timeout` and cancels the upstream request if no real
 adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset the watchdog.
+The Anthropic adapter maps both SSE comments and `ping` events to that heartbeat (#5707), so an
+upstream that only pings while a long thinking block is silent still counts as live.
 
 Top-level `emptyCompletionRetry: true` opts Responses turns into one identical replay when an
 upstream turn produces neither output text nor a tool call, including a stream that ends before a
