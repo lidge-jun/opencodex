@@ -26,7 +26,7 @@ tool-result repair), or a `previous_response_id` continuation whose history live
 (`[Tool Result]`, `[Tool Error]`, `[tool_result]`, `[Tool Call]`, trailing whitespace allowed) or a
 `[Tool call:` line counts (`isWholeLineEchoMarker` in `src/lib/tool-envelope-echo-filter.ts`): prose that
 merely starts with a result or error marker, such as `[Tool Result] shows the build passed.`, is an
-answer and reaches the client whole (`tests/lib/tool-envelope-echo-whole-line.test.ts`). The same filter preserves leading prose and
+answer and reaches the client whole (`tests/adapters/tool-envelope-echo-whole-line.test.ts`). The same filter preserves leading prose and
 normalizes text-done events, completed snapshots, non-streaming JSON, and the stored
 continuation snapshot. It does not rotate an xAI upstream conversation.
 
