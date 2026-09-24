@@ -240,6 +240,11 @@ identity and proven-dead liveness; unknown or transferred ownership never starts
 Direct recovery retains the lease until readiness or its bounded deadline. The normal successful
 manual-runtime update still prints the existing restart hint.
 
+The npm transaction creates each staging directory exclusively and may clean that fresh path
+while the creating process still owns it. A later update only reports staging leftovers. It does
+not recursively delete them from a marker: the marker is not an authorization secret, and a
+neighbouring writer could replace a previously checked pathname with a link before traversal.
+
 The probe ceilings are module-load constants in `src/server/proxy-liveness.ts`: 750 ms for the
 shared default and 1500 ms (three attempts) for `SERVICE_STOP_LIVENESS` and
 `START_OWNERSHIP_LIVENESS`. `OCX_PROBE_TIMEOUT_MS` (whole milliseconds, 1 to 30000) only raises
