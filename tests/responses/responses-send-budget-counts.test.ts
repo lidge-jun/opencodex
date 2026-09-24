@@ -334,6 +334,25 @@ describe("upstream sends per logical request", () => {
     expect(hits).toEqual(["Bearer sk-t0"]);
   });
 
+  test("a denied later combo reservation preserves a classified 413 response", async () => {
+    const budget = createRequestExecutionBudget();
+    const hits: string[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      hits.push(new Headers(init?.headers).get("authorization") ?? "");
+      budget.used = comboExecutionBudgetPolicy(2).maxTotalModelSends;
+      return Response.json({ error: { message: "maximum context length exceeded", type: "invalid_request_error" } }, { status: 413 });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    takeSpendHome();
+    const response = await handleResponses(
+      responsesRequest("combo/fan"), comboOverTargets(2), logCtx, { sendBudget: budget },
+    );
+    expect(response.status).toBe(413);
+    expect(await response.text()).toContain("maximum context length exceeded");
+    expect(hits).toEqual(["Bearer sk-t0"]);
+  });
+
   test("a three-target combo fan-out gives every declared target a send and stays bounded", async () => {
     const upstream = alwaysFailing(502, "upstream busy");
     const logCtx: RequestLogContext = { model: "", provider: "" };

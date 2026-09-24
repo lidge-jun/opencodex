@@ -167,6 +167,7 @@ export function comboTargetSendBudget(
 }
 
 
+/** Dispatch a Responses combo within its shared send budget and preserve terminal child failures. */
 export async function executeComboResponses(
   req: Request,
   rawBody: unknown,
@@ -461,7 +462,7 @@ export async function executeComboResponses(
       // intact rather than to mint a synthetic error, and a later target only exists because
       // an earlier one already recorded one.
       if (lastFailedChildLog) adoptFailedChildLog(lastFailedChildLog);
-      break;
+      return lastFailure!;
     }
     const targetSendBudget = comboSendScope
       ? comboTargetSendBudget(comboSendScope, combo.targets.length - 1 - comboTargetsDispatched)
