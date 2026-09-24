@@ -237,7 +237,7 @@ ikiye ayrılır.
 Atlanan bir hedef varsayılan olarak 60 saniye boyunca soğuma süresine girer.
 Yukarı akış yanıtı geçerli bir `Retry-After` değeri içeriyorsa opencodex bunun
 yerine onu kullanır. Sayısal saniyeler ve HTTP tarihi değerleri kabul edilir ve
-her soğuma süresi en fazla 10 dakika ile sınırlandırılır.
+açık `Retry-After` gecikmesi en fazla 24 saat, sıfırlama kaynaklı, yapılandırılmış ve varsayılan soğuma süreleri en fazla 10 dakika ile sınırlandırılır.
 
 Geçerli istek denenen aynı hedefi asla yeniden denemez. Daha sonraki istekler
 soğuma süresi dolana kadar onu atlar. Uygun hiçbir hedef kalmazsa proxy
@@ -390,7 +390,7 @@ Her hedef şu anda uygun değildir: örneğin sağlayıcısı devre dışıdır,
 soğumaktadır, bu istek için zaten denenmiştir veya şifrelenmiş bir v2 görevi onu
 hariç tutmaktadır. Hedef sağlayıcı durumunu ve son yukarı akış hatalarını
 kontrol edin. Soğuma süreleri için 60 saniyelik varsayılanı veya yukarı akış
-`Retry-After` süresini (asla 10 dakikadan fazla olamaz) bekleyin, ardından
+`Retry-After` süresini (açık `Retry-After` için en fazla 24 saat, diğer soğuma süreleri için en fazla 10 dakika) bekleyin, ardından
 yeniden deneyin.
 
 ### Takma adım neden reddedildi?
