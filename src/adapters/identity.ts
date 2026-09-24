@@ -226,9 +226,19 @@ export function repairIdentityInResponsesBody(body: unknown, repair: (text: stri
  * sentence instead of rewriting it. A native worker keeps Codex's own identity wording, which the
  * client already sends in its `model_switch` block; re-stating a routed sentence there would tell
  * a first-party model it is some third-party model.
+ *
+ * The model-neutral catalog line goes too. It is proxy-authored text as well, and unlike the named
+ * form it does not even have to be inherited from a routed parent: the on-disk catalog block
+ * carries it since #5217, so it rides along on every instruction block Codex replays to a worker.
+ * Left in place it reaches a first-party model as an instruction that contradicts the model_switch
+ * identity Codex sends for the same request.
  */
 export function stripRoutedIdentity(text: string): string {
-  return text.replace(ROUTED_IDENTITY_RE, () => "").replace(/\n{3,}/g, "\n\n").trim();
+  return text
+    .replace(ROUTED_IDENTITY_RE, () => "")
+    .replace(NEUTRAL_IDENTITY_RE, () => "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /** The catalog (static, on-disk) replacement for `base_instructions`. Same neutral wording. */

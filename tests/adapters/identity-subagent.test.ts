@@ -34,15 +34,28 @@ function textOf(content: unknown): string {
 }
 
 /** The Responses passthrough forwards `_rawBody` mostly verbatim, so identity repair is its own step. */
-function passthroughBody(provider: OcxProviderConfig, instructions: string): Record<string, unknown> {
+function passthroughBody(
+  provider: OcxProviderConfig,
+  instructions: string,
+  input: unknown = "ping",
+): Record<string, unknown> {
   const request = withTestTranslatorBudget(createResponsesPassthroughAdapter(provider)).buildRequest({
     modelId: WORKER_MODEL,
     context: { messages: [] },
     stream: true,
     options: {},
-    _rawBody: { model: WORKER_MODEL, instructions, input: "ping" },
+    _rawBody: { model: WORKER_MODEL, instructions, input },
   }, { headers: new Headers() });
   return JSON.parse(request.body) as Record<string, unknown>;
+}
+
+/** A first-party destination: Codex's own model_switch identity is authoritative there. */
+function forwardProvider(): OcxProviderConfig {
+  return {
+    adapter: "openai-responses",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+    authMode: "forward",
+  } as unknown as OcxProviderConfig;
 }
 
 describe("sub-agent identity inheritance (#5217)", () => {
@@ -72,6 +85,15 @@ describe("sub-agent identity inheritance (#5217)", () => {
     const out = stripRoutedIdentity(`${PARENT_IDENTITY}\n\nYou and the user share one workspace.`);
     expect(out).not.toContain("powered by the");
     expect(out).not.toContain("deepseek-v4.1-flash");
+    expect(out).toBe("You and the user share one workspace.");
+  });
+
+  test("a native destination drops the model-neutral catalog line too", () => {
+    // Since #5217 the on-disk catalog block carries this line, so it reaches a native worker with
+    // no routed parent involved — and there it contradicts the identity Codex sends itself.
+    const out = stripRoutedIdentity(`${NEUTRAL_IDENTITY_LINE}\n\nYou and the user share one workspace.`);
+    expect(out).not.toContain("Do not claim to be GPT-5");
+    expect(out).not.toContain(NEUTRAL_IDENTITY_LINE);
     expect(out).toBe("You and the user share one workspace.");
   });
 
@@ -198,14 +220,27 @@ describe("sub-agent identity inheritance (#5217)", () => {
   });
 
   test("the Responses passthrough drops our sentence on a forward destination", () => {
-    const provider = {
-      adapter: "openai-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      authMode: "forward",
-    } as unknown as OcxProviderConfig;
+    const provider = forwardProvider();
     // Codex's own identity wording is the correct one at a first-party destination, and an empty
     // instruction string is a different payload from an absent key.
     expect(passthroughBody(provider, `${PARENT_IDENTITY}\n\nKeep this.`).instructions).toBe("Keep this.");
     expect(passthroughBody(provider, PARENT_IDENTITY)).not.toHaveProperty("instructions");
+  });
+
+  test("the Responses passthrough drops the neutral line from instructions and developer items", () => {
+    const body = passthroughBody(forwardProvider(), `${NEUTRAL_IDENTITY_LINE}\n\nKeep this.`, [
+      {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: `${NEUTRAL_IDENTITY_LINE}\n\nAlso keep this.` }],
+      },
+    ]);
+    expect(body.instructions).toBe("Keep this.");
+    const item = (body.input as { content: { text: string }[] }[])[0]!;
+    expect(item.content[0]!.text).toBe("Also keep this.");
+  });
+
+  test("the Responses passthrough drops an instructions value that was only the neutral line", () => {
+    expect(passthroughBody(forwardProvider(), NEUTRAL_IDENTITY_LINE)).not.toHaveProperty("instructions");
   });
 });
