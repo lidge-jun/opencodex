@@ -19,6 +19,7 @@ import { shouldPreparePlaintextV2AgentMessages } from "../../responses/plaintext
 import { hasValidatedActiveReasoningEffort } from "../../responses/parser";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { applyOpenAiVirtualModel } from "../../providers/openai-virtual-models";
+import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import {
   fastPolicyForModel,
   serviceTierSupportFromPolicy,
@@ -137,6 +138,12 @@ export async function applyFinalRouteRequestNormalization(args: {
     }
     parsed.modelId = route.modelId;
   }
+  // #5221: the parser named the identity sentence from the CLIENT selector, because routing had
+  // not run when it read the body, and only the adapters that build their own system text rename
+  // it afterwards. Settle it on the id this request really sends, here where that id is final —
+  // every dispatch path (passthrough, runTurn, adapter request build) reads the context after
+  // this, and a combo child runs this for its own target.
+  parsed.context = renameRoutedIdentityInContext(parsed.context, route.modelId);
   // Transport-neutral reliability policy (#875): applies to any Responses
   // upstream whose final adapter is openai-responses, not only WS turns.
   const responsesUpstreamStreaming = route.staticPolicy.model.responsesUpstreamStreaming;

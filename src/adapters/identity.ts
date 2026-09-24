@@ -1,3 +1,5 @@
+import type { OcxContext } from "../types";
+
 /**
  * Central routed-model identity repair.
  *
@@ -146,6 +148,54 @@ export function nameRoutedIdentity(text: string, modelName: string): string {
   // Name the neutral line first, then let the rename pass settle any earlier model id the block
   // still carries — including the one just written, which the second pass rewrites to itself.
   return repairRoutedIdentity(text.replace(NEUTRAL_IDENTITY_RE, () => replacement), modelName);
+}
+
+/**
+ * Settle this proxy's identity sentence on the model a routed request is actually dispatched to.
+ *
+ * The parser writes the CLIENT-selected id (an alias, a namespaced slug, a combo name) because
+ * routing has not run yet, and only some adapters rename the sentence afterwards: the ones that
+ * build their own system text and call `identifyRoutedModel`. Every other adapter — the native-wire
+ * ones and the `runTurn` ones — ships whatever the parser wrote, so a request routed anywhere else
+ * would hand the upstream an id it never sees, and an inherited sub-agent block the parent's id.
+ *
+ * The route owner knows the model id that will be sent, and this is the one place every dispatch
+ * path (passthrough, runTurn, request build) reads the context from. Text without a sentence of
+ * ours is returned unchanged, and the same by reference: the guard is a regex test, not a scan of
+ * every turn's text.
+ */
+export function renameRoutedIdentityInContext(context: OcxContext, wireModelId: string): OcxContext {
+  let changed = false;
+  const mapText = (text: string): string => {
+    if (!hasRoutedIdentity(text)) return text;
+    const next = repairRoutedIdentity(text, wireModelId);
+    if (next !== text) changed = true;
+    return next;
+  };
+  const systemPrompt = context.systemPrompt?.map(mapText);
+  const messages = context.messages.map((message) => {
+    // Instruction text only. A user turn is the caller's own content, and every other role is
+    // either model output or tool output — none of it is ours to rewrite.
+    if (message.role !== "developer") return message;
+    const content = message.content;
+    if (typeof content === "string") {
+      const next = mapText(content);
+      return next === content ? message : { ...message, content: next };
+    }
+    let partChanged = false;
+    const parts = content.map((part) => {
+      if (part.type !== "text" || !hasRoutedIdentity(part.text)) return part;
+      const next = repairRoutedIdentity(part.text, wireModelId);
+      if (next === part.text) return part;
+      partChanged = true;
+      return { ...part, text: next };
+    });
+    if (!partChanged) return message;
+    changed = true;
+    return { ...message, content: parts };
+  });
+  if (!changed) return context;
+  return { ...context, ...(systemPrompt ? { systemPrompt } : {}), messages };
 }
 
 /** A content part carrying no text is not content; every other part shape stays. */

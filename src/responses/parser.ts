@@ -305,7 +305,10 @@ export function parseRequest(
             const flat = typeof text === "string"
               ? text
               : text.map(p => (p.type === "text" || p.type === "document" ? p.text : "")).join("");
-            if (flat.length > 0) systemPrompt.push(flat);
+            // #5217: a system-role item is instruction text, exactly like `instructions` and a
+            // developer item, so it needs the same request-time naming — it lands in the system
+            // block verbatim, and Codex replays the parent's copy to a sub-agent on another model.
+            if (flat.length > 0) systemPrompt.push(nameDestinationText(flat, data.model));
             break;
           }
           case "user":

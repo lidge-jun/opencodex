@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import {
   CODEX_GPT5_IDENTITY_LINE,
   identifyRoutedModel,
   nameRoutedIdentity,
   NEUTRAL_IDENTITY_LINE,
+  renameRoutedIdentityInContext,
   repairIdentityInResponsesBody,
   repairRoutedIdentity,
   stripRoutedIdentity,
@@ -11,8 +12,21 @@ import {
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
 import { parseRequest } from "../../src/responses/parser";
-import type { OcxProviderConfig, OcxTextContent } from "../../src/types";
+import type { OcxConfig, OcxProviderConfig, OcxTextContent } from "../../src/types";
+import { handleResponses } from "../../src/server/responses/core";
+import type { RequestLogContext } from "../../src/server/request-log";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+const originalFetch = globalThis.fetch;
+let releaseSpendHome: (() => void) | undefined;
+
+afterEach(() => {
+  // Release the ledger lease before later teardown can replace the preload sandbox home.
+  releaseSpendHome?.();
+  releaseSpendHome = undefined;
+  globalThis.fetch = originalFetch;
+});
 
 /** The sentence the proxy generated for the PARENT session, which a spawned worker inherits (#5217). */
 const PARENT_IDENTITY = "You are a coding agent powered by the deepseek-v4.1-flash. If asked which model you are, identify as deepseek-v4.1-flash. Do not claim to be a different model or to have a different creator.";
@@ -140,6 +154,50 @@ describe("sub-agent identity inheritance (#5217)", () => {
     expect(textOf(user!.content)).toBe(PARENT_IDENTITY);
   });
 
+  test("the parser names a system-role instruction item too", () => {
+    // A system-role item is instruction text on the same terms as `instructions` and a developer
+    // item: the parser flattens it into the system block, which a sub-agent then inherits.
+    const parsed = parseRequest({
+      model: WORKER_MODEL,
+      input: [
+        { type: "message", role: "system", content: [{ type: "input_text", text: PARENT_IDENTITY }] },
+        { type: "message", role: "system", content: NEUTRAL_IDENTITY_LINE },
+        { type: "message", role: "system", content: "Keep this line." },
+      ],
+    });
+    const system = parsed.context.systemPrompt!.join("\n");
+    expect(system).toContain(`identify as ${WORKER_MODEL}`);
+    expect(system).not.toContain("deepseek-v4.1-flash");
+    expect(system).not.toContain(NEUTRAL_IDENTITY_LINE);
+    expect(system).toContain("Keep this line.");
+  });
+
+  test("the request-time rename rewrites every instruction carrier and nothing else", () => {
+    const parsed = parseRequest({
+      model: WORKER_MODEL,
+      instructions: PARENT_IDENTITY,
+      input: [
+        developerItem(PARENT_IDENTITY),
+        { type: "message", role: "system", content: [{ type: "input_text", text: PARENT_IDENTITY }] },
+        { type: "message", role: "user", content: [{ type: "input_text", text: PARENT_IDENTITY }] },
+      ],
+    });
+    // The parser named the CLIENT-side model; the route owner settles the id that is really sent.
+    const renamed = renameRoutedIdentityInContext(parsed.context, "wire-model-9");
+    expect(renamed).not.toBe(parsed.context);
+    expect(renamed.systemPrompt!.join("\n")).toContain("identify as wire-model-9");
+    expect(textOf(renamed.messages[0]!.content)).toContain("identify as wire-model-9");
+    // A user turn is the caller's own content, so it stays byte-identical — and the context the
+    // caller passed in is left as it was rather than mutated under it.
+    expect(textOf(renamed.messages[1]!.content)).toBe(PARENT_IDENTITY);
+    expect(parsed.context.systemPrompt!.join("\n")).toContain(`identify as ${WORKER_MODEL}`);
+  });
+
+  test("a context with no sentence of ours is returned by reference", () => {
+    const parsed = parseRequest({ model: WORKER_MODEL, input: [developerItem("plain instructions")] });
+    expect(renameRoutedIdentityInContext(parsed.context, "wire-model-9")).toBe(parsed.context);
+  });
+
   test("a routed chat destination sends the worker's own model in the system message", async () => {
     const provider = {
       adapter: "openai-chat",
@@ -242,5 +300,82 @@ describe("sub-agent identity inheritance (#5217)", () => {
 
   test("the Responses passthrough drops an instructions value that was only the neutral line", () => {
     expect(passthroughBody(forwardProvider(), NEUTRAL_IDENTITY_LINE)).not.toHaveProperty("instructions");
+  });
+});
+
+/**
+ * A routed destination whose adapter never calls `identifyRoutedModel`: the parsed context is the
+ * wire payload, so the sentence the parser wrote is the sentence the provider reads.
+ */
+function nativeWireConfig(): OcxConfig {
+  return {
+    port: 0,
+    defaultProvider: "local-llm",
+    providers: {
+      "local-llm": {
+        adapter: "ollama-native",
+        baseUrl: "http://127.0.0.1:11434",
+        authMode: "local",
+        allowPrivateNetwork: true,
+      },
+    },
+  } as unknown as OcxConfig;
+}
+
+describe("routed identity names the wire model, not the client selector (#5221)", () => {
+  test("a namespaced client selector is settled on the routed model id before the send", async () => {
+    let upstreamSystem = "";
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      // A native Ollama provider with live models enabled probes `/api/tags` while routing; only
+      // the chat call carries the context under test.
+      if (!request.url.includes("/api/chat")) {
+        return new Response(JSON.stringify({ models: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      const body = await request.clone().json() as {
+        stream?: boolean;
+        messages?: { role: string; content: string }[];
+      };
+      upstreamSystem = body.messages?.find(message => message.role === "system")?.content ?? "";
+      const summary = {
+        model: "llama3.1:8b",
+        message: { role: "assistant", content: "ok" },
+        done: true,
+        done_reason: "stop",
+        prompt_eval_count: 1,
+        eval_count: 1,
+      };
+      return new Response(JSON.stringify(summary), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    // Direct dispatch needs the writer lease that prevents spend-ledger ownership failures.
+    releaseSpendHome = acquireOwnedSpendHome();
+    const response = await handleResponses(
+      new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "local-llm/llama3.1:8b",
+          instructions: PARENT_IDENTITY,
+          input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+        }),
+      }),
+      nativeWireConfig(),
+      { model: "", provider: "" } as RequestLogContext,
+      {},
+    );
+
+    expect(response.status).toBe(200);
+    // The parser could only name the CLIENT selector — routing had not run. The id that reaches
+    // the provider is the routed one, so that is the id the identity sentence must name.
+    expect(upstreamSystem).toContain("identify as llama3.1:8b");
+    expect(upstreamSystem).not.toContain("local-llm/llama3.1:8b");
+    expect(upstreamSystem).not.toContain("deepseek-v4.1-flash");
   });
 });
