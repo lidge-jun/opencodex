@@ -20,6 +20,11 @@ Existing spellings keep their names and map through explicit functions in the sa
 `anthropic` are the three protocol wires, and Lab identities `openai-responses` / `openai-chat`
 / `anthropic-messages` map one to one. Persisted rows are not rewritten.
 
+`nativeChatDeclineReason` in `src/server/chat-native-eligibility.ts` names, as one of these
+reason codes, the first rule that keeps a Chat request off the native Chat lane;
+`isNativeChatRouteEligible` is defined as "no reason", so the lane decision and the reason a plan
+or trace reports cannot disagree.
+
 `contract.ts`, `src/protocols/features.ts`, `src/protocols/baseline.ts` and
 `src/protocols/dto.ts` are leaf modules: the dashboard imports them directly, so they import
 nothing but each other and the type-only compatibility vocabulary in
