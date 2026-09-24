@@ -755,8 +755,17 @@ function sanitizeSchema(
   }
   // Gemini rejects an array declaration with no `items` (#5689). A string item keeps the declaration
   // valid. It narrows an unconstrained item rather than widening a constraint, so the loss report,
-  // which counts widened or dropped constraints, does not record it.
-  if (out.type === "array" && !Object.hasOwn(out, "items")) out.items = { type: "string" };
+  // which counts widened or dropped constraints, does not record it. The synthesized node is part
+  // of the emitted tree, so it charges the node budget like any other: a wide enough fan-out of
+  // `items`-less arrays otherwise pushed the output past MAX_SCHEMA_NODES.
+  if (out.type === "array" && !Object.hasOwn(out, "items")) {
+    if (state.remainingNodes <= 0) {
+      reportBudgetExhausted(state);
+    } else {
+      state.remainingNodes -= 1;
+      out.items = { type: "string" };
+    }
+  }
   return out;
 }
 

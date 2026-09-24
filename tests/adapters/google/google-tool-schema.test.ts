@@ -482,6 +482,22 @@ describe("sanitizeGeminiToolParameters", () => {
     expect(countSchemaNodes(out)).toBe(1_024);
   });
 
+  test("charges synthesized array items to the node budget", () => {
+    const names = Array.from({ length: 2_000 }, (_, index) => `field_${index}`);
+    const result = sanitizeGeminiToolParametersWithReport({
+      type: "object",
+      properties: Object.fromEntries(names.map(name => [name, { type: "array" }])),
+    }, { endpointClass: "ai-studio" });
+
+    // Every retained array leaf costs two nodes: the leaf and the `items` synthesized for it.
+    expect(countSchemaNodes(result.parameters)).toBeLessThanOrEqual(1_024);
+    const properties = result.parameters.properties as Record<string, Record<string, unknown>>;
+    const retained = Object.keys(properties);
+    expect(retained).toHaveLength(512);
+    expect(retained.filter(name => properties[name].items !== undefined)).toHaveLength(511);
+    expect(result.lossReport.categories["node-budget-widened"]).toBeGreaterThan(0);
+  });
+
   test("falls back to an object schema for non-object input", () => {
     expect(sanitizeGeminiToolParameters(undefined)).toEqual({ type: "object", properties: {} });
     expect(sanitizeGeminiToolParameters("nope")).toEqual({ type: "object", properties: {} });
