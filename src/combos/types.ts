@@ -1,6 +1,6 @@
 import { isCodexReasoningEffort } from "../reasoning-effort";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
-import type { OcxComboConfig, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
+import type { OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
 import { COMBO_NAMESPACE, isValidComboId, targetKey } from "./identifiers";
 
 export const COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS = 0;
@@ -25,6 +25,8 @@ export interface NormalizedComboConfig {
   stickyLimit: number;
   cooldownMs?: number;
   waitForCooldownMs: number;
+  /** `before-last-resort` defers lastResort targets while a normal one can be waited out (#5691). */
+  cooldownWaitPolicy: OcxComboCooldownWaitPolicy | null;
   defaultEffort: OcxComboDefaultEffort | null;
   /** Client-precedence policy; `fallback` preserves legacy behavior. */
   defaultEffortMode: OcxComboDefaultEffortMode;
@@ -161,6 +163,13 @@ export function comboConfigIssues(
       || body.waitForCooldownMs > 600_000)) {
     issues.push({ path: ["waitForCooldownMs"], message: "waitForCooldownMs must be an integer from 0 to 600000" });
   }
+  if (body.cooldownWaitPolicy !== undefined && body.cooldownWaitPolicy !== null
+    && body.cooldownWaitPolicy !== "before-last-resort") {
+    issues.push({
+      path: ["cooldownWaitPolicy"],
+      message: 'cooldownWaitPolicy must be "before-last-resort" when set',
+    });
+  }
   if (body.defaultEffort !== undefined
     && body.defaultEffort !== null
     && (typeof body.defaultEffort !== "string" || !isCodexReasoningEffort(body.defaultEffort))) {
@@ -277,6 +286,12 @@ export function comboConfigIssues(
         message: `targets[${i}].weight must be an integer from 1 to 10000`,
       });
     }
+    if (target.lastResort !== undefined && typeof target.lastResort !== "boolean") {
+      issues.push({
+        path: ["targets", i, "lastResort"],
+        message: `targets[${i}].lastResort must be a boolean`,
+      });
+    }
 
     if (provider && model) {
       const key = targetKey({ provider, model });
@@ -318,6 +333,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     stickyLimit: raw.stickyLimit ?? 1,
     cooldownMs: raw.cooldownMs,
     waitForCooldownMs: raw.waitForCooldownMs ?? COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS,
+    cooldownWaitPolicy: raw.cooldownWaitPolicy === "before-last-resort" ? "before-last-resort" : null,
     defaultEffort,
     defaultEffortMode: raw.defaultEffortMode === "force" && defaultEffort !== null ? "force" : "fallback",
     reasoningEffortMode: raw.reasoningEffortMode === "adaptive" ? "adaptive" : "strict",
@@ -329,6 +345,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
       provider: target.provider.trim(),
       model: target.model.trim(),
       weight: target.weight ?? 1,
+      lastResort: target.lastResort === true,
     })),
   };
 }

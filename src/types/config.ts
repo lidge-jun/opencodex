@@ -1147,11 +1147,20 @@ export type OcxComboDefaultEffortMode = "fallback" | "force";
  */
 export type OcxComboReasoningEffortMode = "strict" | "adaptive";
 
+/** Policy for how target cooldowns interact with `lastResort` targets (#5691). */
+export type OcxComboCooldownWaitPolicy = "before-last-resort";
+
 export interface OcxComboTarget {
   provider: string;
   model: string;
   /** Relative target weight for round-robin batches and random selection. Default 1; valid range 1..10000. */
   weight?: number;
+  /**
+   * Marks an emergency-only target. Inert unless the combo sets
+   * `cooldownWaitPolicy`, and never makes a target permanently ineligible —
+   * see `OcxComboConfig.cooldownWaitPolicy` (#5691).
+   */
+  lastResort?: boolean;
 }
 
 export interface OcxComboConfig {
@@ -1168,6 +1177,18 @@ export interface OcxComboConfig {
   cooldownMs?: number;
   /** Maximum wait for an eligible target cooldown to expire before failing closed. Default 0; range 0..600000, per selection attempt. */
   waitForCooldownMs?: number;
+  /**
+   * `before-last-resort` defers targets marked `lastResort` while a normal
+   * target is merely cooling and that cooldown can be waited out inside
+   * `waitForCooldownMs`. Omitted keeps today's behavior, where a brief cooldown
+   * on a preferred target routes straight to the emergency target (#5691).
+   *
+   * It only ever defers. When no normal target can be reached — all cooling
+   * past the budget, excluded, or ruled out by the caller — the last-resort
+   * target is dispatched, because a policy that could withhold it would turn a
+   * fallback into an outage.
+   */
+  cooldownWaitPolicy?: OcxComboCooldownWaitPolicy;
   /** Used as a fallback when the client omits reasoning.effort, or as an override in `force` mode. null/omitted leaves the target default unchanged. */
   defaultEffort?: OcxComboDefaultEffort | null;
   /** `force` makes the combo default override a valid client effort. Omitted / `fallback` preserves client precedence. */

@@ -385,6 +385,62 @@ export async function pickComboTargetWithWait(
   const eligible = (target: Required<OcxComboTarget>): boolean =>
     !isComboTargetInCooldown(comboId, target, now)
     && (customEligible?.(target) ?? true);
+
+  // #5691: `cooldownWaitPolicy: "before-last-resort"` makes one extra attempt
+  // over the normal targets alone, so a *brief* cooldown on a preferred target
+  // waits rather than dispatching a target the operator marked emergency-only.
+  //
+  // It only ever defers. Every exit below falls through to the unchanged
+  // selection, which still sees the last-resort target — a policy that could
+  // withhold it when no normal target is reachable would turn a fallback into
+  // an outage, which is worse than the premature routing it prevents.
+  const policyCombo = getCombo(config, comboId);
+  const defersLastResort = policyCombo?.cooldownWaitPolicy === "before-last-resort"
+    && policyCombo.targets.some(target => !target.lastResort);
+  if (defersLastResort && !options.abortSignal?.aborted) {
+    const normalOnly = (target: Required<OcxComboTarget>): boolean =>
+      !target.lastResort && eligible(target);
+    const normalPick = pickComboTarget(config, comboId, {
+      exclude: excluded,
+      eligible: normalOnly,
+      now,
+    });
+    if (normalPick) return normalPick;
+
+    const waitable = policyCombo.targets.filter(target =>
+      !target.lastResort
+      && targetProviderIsUsable(config, target, now)
+      && !excluded.has(targetKey(target))
+      && isComboTargetInCooldown(comboId, target, now)
+      && (customEligible?.(target) ?? true),
+    );
+    const soonest = earliestComboCooldown(comboId, waitable, now);
+    const normalDelay = soonest === undefined ? undefined : soonest.expiry - now;
+    if (normalDelay !== undefined && normalDelay <= options.waitForCooldownMs) {
+      console.warn(
+        `[combo] ${comboId}: deferring last resort, waiting ${normalDelay}ms for ${targetKey(soonest!.target)}`,
+      );
+      try {
+        await (options.sleep ?? sleepWithAbort)(normalDelay, options.abortSignal);
+      } catch (error) {
+        if (options.abortSignal?.aborted) return null;
+        throw error;
+      }
+      if (options.abortSignal?.aborted) return null;
+      // The combo can be deleted or renamed while this request sleeps.
+      if (!getCombo(config, comboId)) return null;
+      const waited = pickComboTarget(config, comboId, {
+        exclude: excluded,
+        now: now + normalDelay,
+        eligible: target => !target.lastResort
+          && !isComboTargetInCooldown(comboId, target, now + normalDelay)
+          && (customEligible?.(target) ?? true),
+      });
+      if (waited) return waited;
+    }
+    // No normal target is reachable. Fall through; the last resort is eligible.
+  }
+
   const pick = pickComboTarget(config, comboId, { exclude: excluded, eligible, now });
   if (pick || options.waitForCooldownMs <= 0 || options.abortSignal?.aborted) return pick;
   const combo = getCombo(config, comboId);

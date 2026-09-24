@@ -237,6 +237,40 @@ fallback for upstream rate-limit codes `1302`/`1305` → the 60-second default. 
 `Retry-After: 0` remains an immediate upstream directive rather than being replaced by a configured
 cooldown.
 
+### Last-resort targets
+
+A brief cooldown on a preferred target otherwise routes straight to whatever
+comes next in the list — including a target you only ever wanted used in an
+emergency. Mark it, and tell the combo to wait first:
+
+```json
+{
+  "strategy": "failover",
+  "cooldownWaitPolicy": "before-last-resort",
+  "waitForCooldownMs": 10000,
+  "targets": [
+    { "provider": "provider-a", "model": "model-a" },
+    { "provider": "provider-b", "model": "model-b" },
+    { "provider": "provider-c", "model": "model-c", "lastResort": true }
+  ]
+}
+```
+
+With the policy set, selection tries the normal targets first. If they are only
+cooling and the earliest cooldown expires inside `waitForCooldownMs`, the
+request waits for that instead of dispatching the last-resort target.
+
+**The policy only ever defers.** When no normal target can be reached — every
+one cooling past the budget, already attempted, or ruled out — the last-resort
+target is dispatched as usual. A policy that could withhold it would turn a
+fallback into an outage, which is worse than the premature routing it prevents.
+The same applies to a combo whose targets are *all* marked `lastResort`: it
+dispatches normally.
+
+`lastResort` is inert unless `cooldownWaitPolicy` is set, and both are omitted
+by default, so existing combos are unaffected. Only the exact string
+`before-last-resort` opts in.
+
 The current request never retries the same attempted target. Later requests skip a cooled target until its
 cooldown expires; request-local compatibility rejections do not cool the target. A `Retry-After` HTTP-date that is already in the past is also preserved as an
 immediate upstream directive, just like `Retry-After: 0`. Set `waitForCooldownMs` to allow a later

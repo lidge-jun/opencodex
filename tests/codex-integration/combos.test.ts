@@ -1571,6 +1571,9 @@ describe("combo validation and normalization", () => {
       stickyLimit: 1,
       cooldownMs: undefined,
       waitForCooldownMs: 0,
+      // #5691: null unless explicitly configured, so an absent or malformed
+      // value can never silently opt a combo into deferring its last resort.
+      cooldownWaitPolicy: null,
       defaultEffort: "high",
       defaultEffortMode: "fallback",
       reasoningEffortMode: "strict",
@@ -1578,9 +1581,34 @@ describe("combo validation and normalization", () => {
       alias: null,
       nativeAlias: false,
       displayName: null,
-      targets: [{ provider: "a", model: "m1", weight: 2 }],
+      targets: [{ provider: "a", model: "m1", weight: 2, lastResort: false }],
     });
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
+    // #5691: both new fields default to the inert value, and only the exact
+    // literal opts in — the same rule reasoningEffortMode follows below.
+    expect(normalizeComboConfig({
+      cooldownWaitPolicy: "eventually" as never,
+      targets: [{ provider: "a", model: "m1" }],
+    }).cooldownWaitPolicy).toBeNull();
+    expect(normalizeComboConfig({
+      cooldownWaitPolicy: "before-last-resort",
+      targets: [{ provider: "a", model: "m1", lastResort: true }],
+    })).toMatchObject({
+      cooldownWaitPolicy: "before-last-resort",
+      targets: [{ provider: "a", model: "m1", lastResort: true }],
+    });
+    expect(comboConfigIssues("free", {
+      cooldownWaitPolicy: "eventually" as never,
+      targets: [{ provider: "a", model: "m1" }],
+    }, baseConfig().providers).some(issue => issue.path[0] === "cooldownWaitPolicy")).toBe(true);
+    expect(comboConfigIssues("free", {
+      targets: [{ provider: "a", model: "m1", lastResort: "yes" as never }],
+    }, baseConfig().providers).some(issue => issue.path[2] === "lastResort")).toBe(true);
+    // …and a truthy non-boolean normalizes to false rather than opting in, so a
+    // config that fails validation cannot still change routing if it is loaded.
+    expect(normalizeComboConfig({
+      targets: [{ provider: "a", model: "m1", lastResort: "yes" as never }],
+    }).targets[0]!.lastResort).toBe(false);
     // Anything that is not the literal "adaptive" normalizes to today's behavior, so a
     // malformed or absent value can never silently opt a user in.
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).reasoningEffortMode).toBe("strict");

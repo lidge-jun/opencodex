@@ -52,7 +52,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { OcxClaudeCodeConfig, OcxComboConfig, OcxConfig, OcxCustomModel, OcxProviderConfig, OcxComboCooldownWaitPolicy } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
@@ -78,12 +78,14 @@ import { COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS } from "../../combos";
 function sparseComboConfig<T extends {
   cooldownMs?: number;
   waitForCooldownMs?: number;
+  cooldownWaitPolicy?: OcxComboCooldownWaitPolicy | null;
   imageInput?: "auto" | "disabled";
   reasoningEffortMode?: "strict" | "adaptive";
   defaultEffortMode?: "fallback" | "force";
-}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode"> & {
+}>(combo: T): Omit<T, "cooldownMs" | "waitForCooldownMs" | "cooldownWaitPolicy" | "imageInput" | "reasoningEffortMode" | "defaultEffortMode"> & {
   cooldownMs?: number;
   waitForCooldownMs?: number;
+  cooldownWaitPolicy?: OcxComboCooldownWaitPolicy;
   imageInput?: "disabled";
   reasoningEffortMode?: "adaptive";
   defaultEffortMode?: "force";
@@ -91,6 +93,7 @@ function sparseComboConfig<T extends {
   const {
     cooldownMs,
     waitForCooldownMs,
+    cooldownWaitPolicy,
     imageInput,
     reasoningEffortMode,
     defaultEffortMode,
@@ -99,6 +102,9 @@ function sparseComboConfig<T extends {
   return {
     ...rest,
     ...(cooldownMs !== undefined ? { cooldownMs } : {}),
+    // #5691: the normalizer yields null for "unset"; persisting that would put a
+    // meaningless key in every stored combo. Only the opt-in value is written.
+    ...(cooldownWaitPolicy ? { cooldownWaitPolicy } : {}),
     ...(waitForCooldownMs !== undefined && waitForCooldownMs !== COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS
       ? { waitForCooldownMs }
       : {}),
