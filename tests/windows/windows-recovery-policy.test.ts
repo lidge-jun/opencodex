@@ -53,7 +53,7 @@ test("manual stop, dead launcher, foreign identity, and unknown ownership never 
   expect(launcherGone.observe({ ...unavailable, launcherAlive: false }, 0)).toMatchObject({ state: "stopped", action: "none" });
 
   const foreign = new RecoveryPolicy({ startupGraceMs: 0 });
-  expect(foreign.observe({ ...unavailable, owned: false, identityChanged: true }, 0)).toMatchObject({ state: "foreign", useFallback: true, action: "none" });
+  expect(foreign.observe({ ...unavailable, owned: false }, 0)).toMatchObject({ state: "foreign", useFallback: true, action: "none" });
   expect(foreign.observe({ ...unavailable, owned: false }, 60_000)).toMatchObject({ state: "foreign", action: "none" });
 
   const unknown = new RecoveryPolicy({ startupGraceMs: 0 });

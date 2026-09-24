@@ -70,26 +70,74 @@ describe("Windows recovery guardian action ownership", () => {
     expect(start).toBeGreaterThan(collision);
   });
 
-  test("refuses malformed manual intent in an isolated fake project without invoking a child", () => {
+  test("refuses a malformed or field-less manual intent in an isolated fake project without invoking a child", () => {
     if (process.platform !== "win32") return;
+    // StrictMode turns a missing `version`/`mode`/`at` into a terminating
+    // PropertyNotFound, and the early Recover read runs outside any try: an
+    // unreadable intent must still produce one structured receipt line.
+    for (const body of ["{ not-json", '{"mode":"running","at":100}', '{"version":1,"at":100}', '{"version":1,"mode":"running"}', '{"version":1,"mode":"running","at":"soon"}']) {
+      const fixture = makeFixture();
+      try {
+        writeFileSync(join(fixture.home, "recovery-intent.json"), body);
+        const run = Bun.spawnSync([
+          join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+          "-NoProfile", "-NonInteractive", "-File", actionPath,
+          "-Mode", "Recover", "-ProjectRoot", fixture.project,
+          "-OpenCodexHome", fixture.home, "-CodexHome", fixture.codex,
+          "-Port", "18991", "-ExpectedPid", "424242", "-ExpectedStart", "1",
+          "-ExpectedLauncherPid", "424243", "-ExpectedLauncherStart", "1",
+        ], { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+        expect(run.exitCode, `${body}: ${Buffer.from(run.stderr).toString()}`).toBe(0);
+        const result = JSON.parse(Buffer.from(run.stdout).toString()) as { action: string; reason: string };
+        expect(result).toMatchObject({ action: "refused", reason: "invalid-intent" });
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    }
+  }, 60_000);
+
+  test("quotes a native launcher argument so a trailing backslash cannot merge parameters", () => {
+    if (process.platform !== "win32") return;
+    const source = readFileSync(actionPath, "utf8");
+    const start = source.indexOf("function ConvertTo-NativeArgument");
+    const end = source.indexOf("function Invoke-GracefulProjectStop", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    // The graceful-stop command line is the second consumer of the same quoting.
+    expect(source).toContain("$info.Arguments = ('{0} stop' -f (ConvertTo-NativeArgument $CliPath))");
     const fixture = makeFixture();
+    const ps = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    const child = join(fixture.root, "child.ps1");
+    writeFileSync(child, "param([string]$ProjectRoot = 'MISSING', [int]$Port = -1)\n[Console]::Out.WriteLine((@{ ProjectRoot = $ProjectRoot; Port = $Port } | ConvertTo-Json -Compress))\n");
+    const runner = join(fixture.root, "run.ps1");
+    const out = join(fixture.root, "out.txt");
+    // Get-FullPath keeps the separator for a rooted path, which is the shape the
+    // old hand-rolled quoting turned into one merged argument.
+    const trailing = join(fixture.project, "scripts") + "\\";
+    writeFileSync(runner, [
+      `$ErrorActionPreference='Stop'`,
+      `Set-StrictMode -Version Latest`,
+      source.slice(start, end),
+      `$path = ${quote(trailing)}`,
+      `$line = '-NoProfile -NonInteractive -File ' + (ConvertTo-NativeArgument ${quote(child)}) + ' -ProjectRoot ' + (ConvertTo-NativeArgument $path) + ' -Port 10100'`,
+      `Start-Process -FilePath ${quote(ps)} -ArgumentList $line -RedirectStandardOutput ${quote(out)} -NoNewWindow -Wait`,
+      `$rejected = $true`,
+      `try { ConvertTo-NativeArgument 'a"b' | Out-Null; $rejected = $false } catch { }`,
+      `@($path, ('' + (Get-Content -LiteralPath ${quote(out)} -Raw)), $rejected) | ConvertTo-Json -Compress`,
+      ``,
+    ].join("\n"));
     try {
-      writeFileSync(join(fixture.home, "recovery-intent.json"), "{ not-json");
-      const run = Bun.spawnSync([
-        join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-        "-NoProfile", "-NonInteractive", "-File", actionPath,
-        "-Mode", "Recover", "-ProjectRoot", fixture.project,
-        "-OpenCodexHome", fixture.home, "-CodexHome", fixture.codex,
-        "-Port", "18991", "-ExpectedPid", "424242", "-ExpectedStart", "1",
-        "-ExpectedLauncherPid", "424243", "-ExpectedLauncherStart", "1",
-      ], { stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+      const run = Bun.spawnSync([ps, "-NoProfile", "-NonInteractive", "-File", runner], { stdout: "pipe", stderr: "pipe", timeout: 30_000 });
       expect(run.exitCode, Buffer.from(run.stderr).toString()).toBe(0);
-      const result = JSON.parse(Buffer.from(run.stdout).toString()) as { action: string; reason: string };
-      expect(result).toMatchObject({ action: "refused", reason: "invalid-intent" });
+      const [sent, received, rejected] = JSON.parse(Buffer.from(run.stdout).toString()) as [string, string, boolean];
+      const bound = JSON.parse(received.trim()) as { ProjectRoot: string; Port: number };
+      expect(bound).toEqual({ ProjectRoot: sent, Port: 10100 });
+      expect(rejected).toBe(true);
     } finally {
       rmSync(fixture.root, { recursive: true, force: true });
     }
-  }, 20_000);
+  }, 45_000);
 
   test("uses the shared version/at intent envelope rather than a divergent schema", async () => {
     const source = await actionSource();

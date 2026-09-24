@@ -115,29 +115,6 @@ function readBody(request) {
   });
 }
 
-function hasPreviousResponseId(body) {
-  try {
-    const parsed = JSON.parse(body.toString("utf8"));
-    return typeof parsed.previous_response_id === "string" && parsed.previous_response_id.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-function exactFallbackModel(body, models) {
-  let parsed;
-  try { parsed = JSON.parse(body.toString("utf8")); } catch { return null; }
-  if (!parsed || typeof parsed !== "object" || typeof parsed.model !== "string") return null;
-  const mapped = Object.prototype.hasOwnProperty.call(models, parsed.model) ? models[parsed.model] : null;
-  return typeof mapped === "string" && mapped.length > 0 ? mapped : null;
-}
-
-function rewriteFallbackModel(body, mappedModel) {
-  const parsed = JSON.parse(body.toString("utf8"));
-  parsed.model = mappedModel;
-  return Buffer.from(JSON.stringify(parsed));
-}
-
 function requestUpstream({ origin, method, path, body, headers, headerTimeoutMs, clientRequest, clientResponse, onFailure, log }) {
   return new Promise(resolve => {
     const upstreamHeaders = { ...headers };
@@ -152,8 +129,13 @@ function requestUpstream({ origin, method, path, body, headers, headerTimeoutMs,
     });
     let settled = false;
     let failureNotified = false;
+    // A client that hangs up makes the upstream teardown look like an upstream
+    // failure (ECONNRESET/aborted). That is the reader leaving, not the primary
+    // dying, and charging it would push every in-flight request onto the
+    // fallback model for the whole stability window.
+    let clientCancelled = false;
     const notifyFailure = () => {
-      if (failureNotified) return;
+      if (failureNotified || clientCancelled) return;
       failureNotified = true;
       try { onFailure(); } catch { /* recovery notification cannot affect the request */ }
     };
@@ -184,9 +166,9 @@ function requestUpstream({ origin, method, path, body, headers, headerTimeoutMs,
       if (!clientResponse.headersSent) writeJson(clientResponse, 502, { error: { code: "upstream_unavailable" } });
       settle({ ok: false });
     });
-    clientRequest.once("aborted", () => upstream.destroy());
+    clientRequest.once("aborted", () => { clientCancelled = true; upstream.destroy(); });
     clientResponse.once("close", () => {
-      if (!clientResponse.writableEnded) upstream.destroy();
+      if (!clientResponse.writableEnded) { clientCancelled = true; upstream.destroy(); }
     });
     if (body && body.length) upstream.end(body); else upstream.end();
   });
@@ -238,8 +220,6 @@ async function createGateway(options) {
     response.once("finish", release);
     response.once("close", release);
     try {
-    const localPort = server.address().port;
-    const allowedHosts = new Set([`127.0.0.1:${localPort}`, `localhost:${localPort}`]);
     if (!allowedHosts.has(String(request.headers.host || "").toLowerCase())) {
       writeJson(response, 421, { error: { code: "invalid_host" } });
       return;
@@ -298,18 +278,23 @@ async function createGateway(options) {
       });
       return;
     }
-    if (request.method === "POST" && hasPreviousResponseId(body)) {
-      writeJson(response, 503, { error: { code: "fallback_requires_fresh_full_context" } });
-      return;
-    }
     let fallbackBody = body;
     if (request.method === "POST") {
-      const mappedModel = exactFallbackModel(body, modelMap);
-      if (!mappedModel) {
+      // One parse per request: this body can be 8 MiB and every decision below
+      // reads the same document.
+      let parsed = null;
+      try { parsed = JSON.parse(body.toString("utf8")); } catch { /* not JSON, so neither a continuation nor a mappable model */ }
+      if (typeof parsed?.previous_response_id === "string" && parsed.previous_response_id.length > 0) {
+        writeJson(response, 503, { error: { code: "fallback_requires_fresh_full_context" } });
+        return;
+      }
+      const mapped = typeof parsed?.model === "string" && Object.prototype.hasOwnProperty.call(modelMap, parsed.model)
+        ? modelMap[parsed.model] : null;
+      if (typeof mapped !== "string" || !mapped) {
         writeJson(response, 503, { error: { code: "fallback_model_unavailable" } });
         return;
       }
-      fallbackBody = rewriteFallbackModel(body, mappedModel);
+      fallbackBody = Buffer.from(JSON.stringify({ ...parsed, model: mapped }));
     }
     let fallbackKey;
     try { fallbackKey = await readFallbackKey(); } catch {
@@ -347,6 +332,9 @@ async function createGateway(options) {
     });
   });
   const localPort = server.address().port;
+  // Fixed once the socket is bound. Rebuilding this per request cost a `server.address()`
+  // object, two template strings and a Set on every proxied call.
+  const allowedHosts = new Set([`127.0.0.1:${localPort}`, `localhost:${localPort}`]);
   if (primaryOrigin.port === String(localPort) || fallbackOrigin.port === String(localPort)) {
     await new Promise(resolve => server.close(resolve));
     throw new Error("gateway cannot proxy to itself");

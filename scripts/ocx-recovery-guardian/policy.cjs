@@ -50,7 +50,7 @@ class RecoveryPolicy {
     if (!sample || typeof sample !== "object") return this.#foreign();
     if (sample.manualStop === true) return this.#stop("manual-stop");
     if (sample.owned === true && sample.launcherAlive === false) return this.#stop("launcher-stopped");
-    if (sample.owned !== true || sample.identityChanged === true) return this.#foreign();
+    if (sample.owned !== true) return this.#foreign();
     const ready = sample.ready === true && sample.health === true && sample.alive === true;
     if (this.recoveryStartedAt !== null || this.awaitingReady) return this.#observeRecovery(ready, current);
     if (ready) return this.#observeReady(current);

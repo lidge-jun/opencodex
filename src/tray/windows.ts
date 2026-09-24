@@ -6,6 +6,7 @@ import { join, resolve, win32 as win32Path } from "node:path";
 import { expandUserPath, getConfigDir } from "../config";
 import { durableBunRuntime } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
+import { recoveryGuardianEnabled } from "../lib/recovery-intent";
 import { forgetEphemeralSecretPath, hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { renameAtomicFile } from "../lib/windows-atomic-replace";
@@ -73,6 +74,32 @@ function installedTrayIconPaths(): string[] {
 
 function installedTrayRecoveryIntentPath(): string {
   return join(getConfigDir(), INSTALLED_TRAY_RECOVERY_INTENT_FILE);
+}
+
+/** A published install ships no `scripts/` directory, so there is no helper to copy. */
+function trayRecoveryIntentHelperShipped(): boolean {
+  return existsSync(sourceTrayRecoveryIntentPath());
+}
+
+/**
+ * Whether THIS home requires the installed intent helper. The installed tray script
+ * refuses every lifecycle click when a guardian marker sits without its helper, so
+ * ownership must ask the same question of the home — asking the observer's source tree
+ * certified an npm-installed proxy as healthy while each click threw, and a reinstall
+ * could not fix what status had just approved. Install gates the copy on the same
+ * shipped test, so neither side can leave a hand-placed marker permanently stale.
+ */
+export function trayHomeRequiresRecoveryIntentHelper(
+  home = getConfigDir(),
+  helperShipped = trayRecoveryIntentHelperShipped(),
+): boolean {
+  if (!helperShipped) return false;
+  try {
+    return recoveryGuardianEnabled(home);
+  } catch {
+    // A malformed marker is fail-closed in the tray script too.
+    return true;
+  }
 }
 
 export function windowsTrayStatePathsOwned(
@@ -480,7 +507,7 @@ function trayStatusFrom(registered: string | null): WindowsTrayStatus {
   const running = heartbeatProcessAlive(heartbeat);
   const registrationOwned = state !== null
     && registered === state.runCommand
-    && [state.bun, state.cli, state.script, ...(state.launcherPath ? [state.launcherPath] : []), ...installedTrayIconPaths(), ...(existsSync(sourceTrayRecoveryIntentPath()) ? [installedTrayRecoveryIntentPath()] : [])]
+    && [state.bun, state.cli, state.script, ...(state.launcherPath ? [state.launcherPath] : []), ...installedTrayIconPaths(), ...(trayHomeRequiresRecoveryIntentHelper() ? [installedTrayRecoveryIntentPath()] : [])]
       .every(path => existsSync(path));
   const stale = windowsTrayRegistrationIsStale({
     registered: registered !== null,
@@ -714,9 +741,10 @@ export function installWindowsTray(startNow = true): WindowsTrayStatus {
     if (!hardenedDir.ok) throw new Error("Windows tray directory ACL hardening did not complete; refusing to install persistence.");
     replaceWindowsTrayOwnedFile(entry.script, readFileSync(sourceScript));
     // `scripts/` is outside the npm package allowlist, so a published install has no
-    // guardian to carry and gets no helper. The tray script keeps its own fail-closed
-    // check for a home whose marker exists without the helper beside it.
-    if (existsSync(sourceRecoveryIntent)) {
+    // guardian to carry and gets no helper — the same test status applies to the home, and
+    // the tray script keeps its own fail-closed check for a marker without a helper beside
+    // it.
+    if (trayRecoveryIntentHelperShipped()) {
       replaceWindowsTrayOwnedFile(installedRecoveryIntent, readFileSync(sourceRecoveryIntent));
     }
     for (const pair of iconPairs) replaceWindowsTrayOwnedFile(pair.installed, readFileSync(pair.source));

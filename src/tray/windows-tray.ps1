@@ -221,17 +221,51 @@ function Read-ListenTarget {
 }
 
 function Read-JsonUrl([string]$Url) {
-  $request = [System.Net.HttpWebRequest]::Create($Url)
-  $request.Method = "GET"
-  $request.Timeout = 700
-  $request.ReadWriteTimeout = 700
-  $response = $request.GetResponse()
-  try {
-    $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
-    try { return ($reader.ReadToEnd() | ConvertFrom-Json) } finally { $reader.Dispose() }
-  } finally {
-    $response.Dispose()
+  # GetResponse() stalled the WinForms UI thread for up to its 700 ms timeout on every
+  # 3 s tick. The request now runs on its own task: a tick waits 100 ms for the loopback
+  # round-trip and otherwise repeats what the last completed read proved. The 3 s ceiling
+  # replaces the timeout the task-based call ignores, so a wedged proxy still goes stale.
+  $task = $script:jsonTask
+  if ($null -eq $task) {
+    try {
+      $request = [System.Net.HttpWebRequest]::Create($Url)
+      $request.Method = "GET"
+      $request.Timeout = 700
+      $request.ReadWriteTimeout = 700
+      $task = $request.GetResponseAsync()
+    } catch {
+      $script:jsonPayload = $null
+      return $null
+    }
+    $script:jsonRequest = $request
+    $script:jsonTask = $task
+    $script:jsonTaskStarted = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
   }
+  # A faulted task makes Wait() throw, and a task left installed would throw on every later
+  # tick and latch the tray Offline: observe the fault here and re-issue on the next tick.
+  $pending = $true
+  try { $pending = -not $task.Wait(100) } catch { $pending = $false }
+  $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  if ($pending -and ($now - $script:jsonTaskStarted) -lt 3000) {
+    return $script:jsonPayload
+  }
+  $script:jsonTask = $null
+  $script:jsonPayload = $null
+  if ($pending) {
+    # Abandoned at the ceiling and no later tick reads its response, so Abort() is what
+    # releases the socket: without it the tray spends one connection every 3 s.
+    try { $script:jsonRequest.Abort() } catch { }
+  } else {
+    try {
+      $response = $task.Result
+      try {
+        $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+        try { $script:jsonPayload = ($reader.ReadToEnd() | ConvertFrom-Json) } finally { $reader.Dispose() }
+      } finally { $response.Dispose() }
+    } catch { }
+  }
+  $script:jsonRequest = $null
+  return $script:jsonPayload
 }
 
 $notify = New-Object System.Windows.Forms.NotifyIcon
@@ -268,6 +302,10 @@ $script:pendingStarted = 0L
 $script:pendingDeadline = 0L
 $script:pendingOldProxyPid = $null
 $script:pendingProcess = $null
+$script:jsonTask = $null
+$script:jsonRequest = $null
+$script:jsonTaskStarted = 0L
+$script:jsonPayload = $null
 
 function Set-PendingAction([string]$Action, [int]$TimeoutSeconds) {
   if ($null -ne $script:pendingAction) {
@@ -463,9 +501,12 @@ function Update-TrayState {
 }
 
 $openItem.add_Click({ Start-OcxCommand @("gui") })
+# The intent write comes FIRST: a refused write throws, and a latched pending action
+# would lock these three menu items for its whole budget and then report a failure the
+# tray never actually dispatched.
 $startItem.add_Click({
-  if (-not (Set-PendingAction "Start Proxy" 75)) { return }
   Set-RecoveryIntent -OpenCodexHome $OpenCodexHome -Mode "running"
+  if (-not (Set-PendingAction "Start Proxy" 75)) { return }
   $statusItem.Text = "Proxy: Starting..."
   # service start can spend 20s and the CLI then observes health for another 40s.
   $startProcess = Start-OcxCommand @("__tray-start") -TrackExit
@@ -476,8 +517,8 @@ $startItem.add_Click({
   }
 })
 $stopItem.add_Click({
-  if (-not (Set-PendingAction "Stop Proxy" 15)) { return }
   Set-RecoveryIntent -OpenCodexHome $OpenCodexHome -Mode "stopped"
+  if (-not (Set-PendingAction "Stop Proxy" 15)) { return }
   $statusItem.Text = "Proxy: Stopping..."
   $stopProcess = Start-OcxCommand @("stop") -TrackExit
   if ($stopProcess -is [System.Diagnostics.Process]) {
@@ -487,8 +528,9 @@ $stopItem.add_Click({
   }
 })
 $restartItem.add_Click({
+  # No intent write here: `ocx __tray-restart` signs the maintenance fence and clears it in
+  # the same function, and a second signature per restart resets the guardian's window.
   if (-not (Set-PendingAction "Restart Proxy" 160)) { return }
-  Set-RecoveryIntent -OpenCodexHome $OpenCodexHome -Mode "maintenance" -Until ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() + 180000)
   $statusItem.Text = "Proxy: Restarting..."
   # /api/system/restart may drain active work for 60s and then spend up to 70s
   # handing off to an identity-verified replacement. The tray observes health/PID

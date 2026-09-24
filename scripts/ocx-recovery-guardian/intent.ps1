@@ -9,7 +9,9 @@ $maxBytes = 16KB
 
 function Assert-RecoveryIntentPath([string]$Path) {
   $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
-  if ((([int]$item.Attributes -band [int][System.IO.FileAttributes]::ReparsePoint) -ne 0) -or -not $item.PSIsContainer -and $item.Length -gt $maxBytes) {
+  # Windows PowerShell binds -or and -and left-to-right at equal precedence, so
+  # the reparse test must be parenthesised or a small symlink fails open.
+  if ((([int]$item.Attributes -band [int][System.IO.FileAttributes]::ReparsePoint) -ne 0) -or ((-not $item.PSIsContainer) -and ($item.Length -gt $maxBytes))) {
     throw 'Recovery guardian marker is malformed; manual lifecycle action was not dispatched.'
   }
   return $item
@@ -28,12 +30,20 @@ function Test-RecoveryGuardianEnabled([string]$OcHome) {
 }
 
 if (Test-RecoveryGuardianEnabled $OpenCodexHome) {
-  if ($Mode -ne 'maintenance' -and $Until -ne 0) { throw 'Recovery intent maintenance deadline is invalid.' }
-  if ($Mode -eq 'maintenance' -and $Until -le 0) { throw 'Recovery intent maintenance deadline is invalid.' }
+  $at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  if ($Mode -ne 'maintenance') {
+    if ($Until -ne 0) { throw 'Recovery intent maintenance deadline is invalid.' }
+  } elseif ($Until -le $at -or $Until -gt ($at + 180000)) {
+    # Same contract as parseIntent in main.cjs: at < until <= at + 180000. A
+    # reader decodes any other maintenance intent as 'stopped', which fences all
+    # gateway traffic and refuses recovery, so an out-of-window deadline must
+    # never be persisted.
+    throw 'Recovery intent maintenance deadline is invalid.'
+  }
 
   $intentPath = Join-Path $OpenCodexHome 'recovery-intent.json'
   if (Test-Path -LiteralPath $intentPath) { $null = Assert-RecoveryIntentPath $intentPath }
-  $intent = [ordered]@{ version = 1; mode = $Mode; at = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+  $intent = [ordered]@{ version = 1; mode = $Mode; at = $at }
   if ($Mode -eq 'maintenance') { $intent.until = $Until }
   $tmpPath = Join-Path $OpenCodexHome ('.recovery-intent.' + $PID + '.' + [Guid]::NewGuid().ToString('N') + '.tmp')
   try {

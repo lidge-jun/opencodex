@@ -8,6 +8,15 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 
 const MODEL = "glm-5.3-flash";
+// The only endpoints this companion will talk to, each with the wire model that
+// vendor expects. main.cjs admits configuration against the same list, so an
+// origin cannot be accepted by one and unknown to the other.
+const WIRE_MODELS = Object.freeze({
+  "http://127.0.0.1:11434/v1": "glm-5.3-flash:cloud",
+  "http://127.0.0.1:20128/v1": "ollama-local/glm-5.3-flash:cloud",
+  "https://api.mnnai.ru/v1": MODEL,
+});
+const REPAIR_ORIGINS = Object.freeze(Object.keys(WIRE_MODELS));
 const DEADLINE_MS = 90_000;
 const MAX_RESPONSE_BYTES = 128 * 1024;
 const MAX_SOURCE_BYTES = 16 * 1024;
@@ -53,19 +62,13 @@ function sanitizeIncident(incident) {
 function normalizeEndpoint(value) {
   let parsed;
   try { parsed = new URL(value); } catch { return null; }
-  const normalizedPath = parsed.pathname.replace(/\/+$/, "");
   if (parsed.username || parsed.password || parsed.search || parsed.hash) return null;
-  const loopback = parsed.protocol === "http:" && parsed.hostname === "127.0.0.1" && parsed.port === "20128";
-  const ollama = parsed.protocol === "http:" && parsed.hostname === "127.0.0.1" && parsed.port === "11434";
-  const mnn = parsed.protocol === "https:" && parsed.hostname === "api.mnnai.ru" && (parsed.port === "" || parsed.port === "443");
-  if ((loopback || ollama || mnn) && normalizedPath === "/v1") return `${parsed.protocol}//${parsed.host}/v1`;
-  return null;
+  const endpoint = `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, "")}`;
+  return REPAIR_ORIGINS.includes(endpoint) ? endpoint : null;
 }
 
 function wireModelFor(endpoint) {
-  if (endpoint === "http://127.0.0.1:11434/v1") return "glm-5.3-flash:cloud";
-  if (endpoint === "http://127.0.0.1:20128/v1") return "ollama-local/glm-5.3-flash:cloud";
-  return MODEL;
+  return WIRE_MODELS[endpoint];
 }
 
 function isWithin(base, target) {
@@ -351,4 +354,4 @@ async function runRepair({ incident, projectRoot, incidentDir, endpoint, fallbac
   return receipt(sanitized, { outcome: "failed", failureClass: lastFailure, requestCount });
 }
 
-module.exports = { runRepair };
+module.exports = { runRepair, REPAIR_ORIGINS };

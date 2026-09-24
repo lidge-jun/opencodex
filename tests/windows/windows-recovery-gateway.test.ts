@@ -167,11 +167,13 @@ test("a post-dispatch primary failure is never replayed to fallback", async () =
   const primary = await listen((_req, res) => { primaryFailures += 1; res.writeHead(503); res.end("down"); });
   let fallbackHits = 0;
   const fallback = await listen((_req, res) => { fallbackHits += 1; res.end("fallback"); });
-  const instance = await gateway(primary.port, fallback.port);
+  let charged = 0;
+  const instance = await gateway(primary.port, fallback.port, true, { onPrimaryFailure: () => { charged += 1; } });
   const result = await call(instance.port, { method: "POST", path: "/v1/responses", body: JSON.stringify({ model: "codex-test" }) });
   expect(result.status).toBe(503);
   expect(primaryFailures).toBe(1);
   expect(fallbackHits).toBe(0);
+  expect(charged).toBe(1);
 });
 
 test("primary 4xx is relayed without declaring the primary globally failed", async () => {
@@ -212,30 +214,6 @@ test("streaming primary output is passed through once and client close does not 
   const instance = await gateway(primary.port, fallback.port);
   const result = await call(instance.port, { method: "POST", path: "/v1/responses", body: JSON.stringify({ model: "codex-test" }) });
   expect(result.body).toContain("data: first");
-  expect(primaryHits).toBe(1);
-  expect(fallbackHits).toBe(0);
-});
-
-test("disconnecting a streaming client aborts upstream without fallback replay", async () => {
-  let primaryHits = 0;
-  const primary = await listen((_req, res) => {
-    primaryHits += 1;
-    res.writeHead(200, { "content-type": "text/event-stream" });
-    res.write("data: first\n\n");
-    setTimeout(() => res.write("data: later\n\n"), 100);
-  });
-  let fallbackHits = 0;
-  const fallback = await listen((_req, res) => { fallbackHits += 1; res.end("fallback"); });
-  const instance = await gateway(primary.port, fallback.port);
-  await new Promise<void>((resolve, reject) => {
-    const req = httpRequest({ host: "127.0.0.1", port: instance.port, method: "POST", path: "/v1/responses",
-      headers: { host: `127.0.0.1:${instance.port}`, "content-type": "application/json" } }, response => {
-      response.once("data", () => { response.destroy(); resolve(); });
-    });
-    req.once("error", reject);
-    req.end(JSON.stringify({ model: "codex-test", stream: true }));
-  });
-  await Bun.sleep(50);
   expect(primaryHits).toBe(1);
   expect(fallbackHits).toBe(0);
 });
@@ -320,6 +298,87 @@ test("only canonical numeric IPv4 loopback origins are accepted", async () => {
 
 test("a real Node child relays GET models through both primary and fallback", async () => {
   await nodeGatewayGetProof();
+});
+
+// The guardian runs under Node, where a torn-down upstream surfaces as an aborted
+// or reset response. Bun does not emit those events, so only a child process can
+// tell a client hang-up apart from a primary that actually failed.
+async function nodeGatewayCancelProof() {
+  const gatewayPath = JSON.stringify(repoPath("scripts", "ocx-recovery-guardian", "gateway.cjs"));
+  const script = `
+    const http = require("node:http");
+    const { createGateway } = require(${gatewayPath});
+    const listen = handler => new Promise(resolve => {
+      const server = http.createServer(handler);
+      server.listen(0, "127.0.0.1", () => resolve(server));
+    });
+    const close = server => new Promise(resolve => { server.close(resolve); server.closeAllConnections?.(); });
+    (async () => {
+      let charged = 0;
+      let mode = "hold";
+      let primary = null;
+      let gateway = null;
+      try {
+        primary = await listen((_req, res) => {
+          res.writeHead(200, { "content-type": "text/event-stream" });
+          res.write("data: first\\n\\n");
+          if (mode === "abort") res.socket.destroy();
+        });
+        gateway = await createGateway({
+          port: 0,
+          primaryOrigin: "http://127.0.0.1:" + primary.address().port,
+          fallbackOrigin: "http://127.0.0.1:9",
+          models: {}, readFallbackKey: async () => "fixed-test-key", isPrimaryReady: () => true,
+          isStopped: () => false, onPrimaryFailure: () => { charged += 1; }, log: () => {},
+        });
+        await new Promise((resolve, reject) => {
+          const request = http.request({ host: "127.0.0.1", port: gateway.port, method: "POST", path: "/v1/responses",
+            headers: { host: "127.0.0.1:" + gateway.port, "content-type": "application/json" } }, response => {
+            response.once("data", () => { response.destroy(); resolve(); });
+          });
+          request.on("error", reject);
+          request.end(JSON.stringify({ model: "codex-test", stream: true }));
+        });
+        await new Promise(resolve => setTimeout(resolve, 400));
+        if (charged !== 0) throw new Error("a client cancel charged " + charged + " primary failure(s)");
+        // Positive control: the same counter must dare to move, or the line above
+        // only proves that nothing ever charges it.
+        mode = "abort";
+        await new Promise(resolve => {
+          const again = http.request({ host: "127.0.0.1", port: gateway.port, method: "POST", path: "/v1/responses",
+            headers: { host: "127.0.0.1:" + gateway.port, "content-type": "application/json" } }, response => {
+            response.resume();
+            response.once("end", resolve);
+          });
+          again.on("error", resolve);
+          again.end(JSON.stringify({ model: "codex-test", stream: true }));
+        });
+        await new Promise(resolve => setTimeout(resolve, 400));
+        if (charged === 0) throw new Error("an upstream abort charged nothing, so the cancel assertion above is vacuous");
+      } finally {
+        // Always release the sockets: a child that hangs on a leaked stream would
+        // report this check as a timeout instead of as the failure it is.
+        if (gateway) await gateway.close();
+        if (primary) await close(primary);
+      }
+    })().catch(error => { console.error(error && error.message || error); process.exitCode = 1; });
+  `;
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn("node.exe", ["-e", script], { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    let stderr = "";
+    const timer = setTimeout(() => child.kill(), 20_000);
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.once("error", error => { clearTimeout(timer); reject(error); });
+    child.once("close", code => {
+      clearTimeout(timer);
+      if (code === 0) resolve(); else reject(new Error(`Node gateway cancel proof failed (${code}): ${stderr}`));
+    });
+  });
+}
+
+test("a real Node child keeps the primary ready across a client cancel", async () => {
+  await nodeGatewayCancelProof();
 });
 
 test("WebSocket upgrades receive 426 rather than a proxied connection", async () => {

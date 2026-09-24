@@ -65,6 +65,28 @@ It does not enter the forced-stop fallback for a process already observed to hav
 receipt-backed deferral still leaves final restoration and receipt cleanup with the parent;
 failure to restore shared client configuration keeps the stop failed and its receipt outstanding.
 
+On Windows, `ocx stop` can also record the durable manual-stop instruction for the recovery
+guardian, but only when that guardian is opted in. The switch is the file
+`$OPENCODEX_HOME/recovery-guardian.json`, and it is not a two-key flag: that file *is* the
+guardian's whole configuration — `projectRoot`, `openCodexHome`, `codexHome`, `nodePath`,
+`listenPort`, `primaryPort`, `fallback.models` and `repair` — validated field by field by both the
+visible launcher and the guardian itself, which refuse to start the proxy unless it describes the
+approved local companion. The lifecycle commands look only at `version` and `enabled`, so an
+operator who writes a minimal `{"version": 1, "enabled": true}` marker gets intent bookkeeping
+without a running guardian. No `ocx` command creates that file for you today; treat the guardian as
+operator-managed.
+
+Once the marker is present, `ocx stop` writes `recovery-intent.json` as `stopped` so the guardian
+does not bring the proxy back, while `ocx start` and `ocx ensure` affirm `running`, and a tray
+restart signs a bounded `maintenance` window (`until` must be after `at` and no more than three
+minutes out). Without the marker neither file is created, and a guardian-spawned recovery child
+writes no `stopped` intent of its own. A missing or malformed intent is decoded as `stopped`, and
+while a home reads as stopped the guardian's gateway answers `/readyz` and every proxied route with
+`503` — only `/healthz` keeps answering, reporting `primaryReady: false` — fail-closed on purpose.
+When the stop cannot record that intent, nothing is dispatched: `ocx stop` prints
+`❌ Stop refused: <reason>` and exits 1, and the dashboard's stop route answers
+`503 recovery_intent_unavailable` — rather than reporting a stop the guardian will immediately undo.
+
 `ocx stop --json` runs exactly the same stop path and prints one versioned summary document
 (`schema: "ocx-stop/1"`) on stdout, while the human progress lines move to stderr. The summary
 carries the outcome class (`stopped`, `not-running`, `history-incomplete`, `history-deferred`,

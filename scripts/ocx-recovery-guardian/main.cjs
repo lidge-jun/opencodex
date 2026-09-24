@@ -8,7 +8,17 @@ const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
 const { createGateway } = require('./gateway.cjs');
 const { RecoveryPolicy } = require('./policy.cjs');
-const { runRepair } = require('./repair.cjs');
+const { runRepair, REPAIR_ORIGINS } = require('./repair.cjs');
+
+// The local OpenRouter-style listener the fallback and repair routes share.
+const LOCAL_ORIGIN = 'http://127.0.0.1:20128';
+// Incident directories are read by a human once and by nothing in the repository, so the
+// newest few are all a long-lived guardian should keep.
+const REPAIR_INCIDENTS_KEPT = 20;
+// How far the boot instant implied by /healthz's `uptime` may sit from the one a snapshot
+// was taken at before it counts as another process generation. A wrap that slips inside
+// this window is caught by a later observation.
+const BOOT_TOLERANCE_MS = 5000;
 
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
@@ -20,12 +30,17 @@ async function jsonFile(file, max = 65536) {
   return JSON.parse(await fs.readFile(file, 'utf8'));
 }
 async function atomicJson(file, value) {
+  const encoded = JSON.stringify(value) + '\n';
   const next = (writes.get(file) || Promise.resolve()).catch(() => {}).then(async () => {
     const stat = await fs.lstat(file).catch(error => { if (error.code !== 'ENOENT') throw error; });
     if (stat && (!stat.isFile() || stat.isSymbolicLink())) throw Error('unsafe_state_file');
+    // The observation loop rewrites status and budget every couple of seconds.
+    // Compare inside the queue so a concurrent writer cannot slip between this
+    // read and the replacement below.
+    if (stat && await fs.readFile(file, 'utf8') === encoded) return;
     const temp = `${file}.${process.pid}.${randomUUID()}.tmp`;
     try {
-      await fs.writeFile(temp, JSON.stringify(value) + '\n', { mode: 0o600, flag: 'wx' });
+      await fs.writeFile(temp, encoded, { mode: 0o600, flag: 'wx' });
       await fs.rename(temp, file);
     } finally { await fs.unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
   });
@@ -48,10 +63,10 @@ async function loadSettings(file) {
     if (!Number.isInteger(cfg[key]) || cfg[key] < 1 || cfg[key] > 65535) throw Error('invalid_port');
   }
   if (cfg.listenPort === cfg.primaryPort) throw Error('gateway_loop');
-  if (cfg.fallback?.origin !== 'http://127.0.0.1:20128' || !cfg.fallback.models || Array.isArray(cfg.fallback.models)) throw Error('missing_fallback');
+  if (cfg.fallback?.origin !== LOCAL_ORIGIN || !cfg.fallback.models || Array.isArray(cfg.fallback.models)) throw Error('missing_fallback');
   if (Object.entries(cfg.fallback.models).some(([k, v]) => !k || typeof v !== 'string' || !v)) throw Error('invalid_models');
-  if (!['http://127.0.0.1:11434/v1', 'http://127.0.0.1:20128/v1', 'https://api.mnnai.ru/v1'].includes(cfg.repair?.origin)) throw Error('invalid_repair');
-  if (cfg.repair.fallbackOrigin !== undefined && cfg.repair.fallbackOrigin !== 'http://127.0.0.1:20128/v1') throw Error('invalid_repair_fallback');
+  if (!REPAIR_ORIGINS.includes(cfg.repair?.origin)) throw Error('invalid_repair');
+  if (cfg.repair.fallbackOrigin !== undefined && cfg.repair.fallbackOrigin !== `${LOCAL_ORIGIN}/v1`) throw Error('invalid_repair_fallback');
   return cfg;
 }
 
@@ -112,8 +127,10 @@ async function createGuardian(configFile, dependencies = {}) {
   const statusFile = path.join(cfg.openCodexHome, 'recovery-status.json');
   const budgetFile = path.join(cfg.openCodexHome, 'recovery-budget.json');
   const intentFile = path.join(cfg.openCodexHome, 'recovery-intent.json');
+  const blockedFile = path.join(cfg.openCodexHome, 'recovery-blocked.json');
   const policy = new RecoveryPolicy(dependencies.policyOptions);
   let primaryReady = false, stopped = true, closing = false, snapshot = null;
+  let snapshotBoot = null, lastStatusKey = '', openingInspection = false, snapshotAt = 0;
   let recovering = false, repairRunning = false, currentState = 'starting', lastIntentAt = -1;
   let lastIntentSignature = '', recoveryBlocked = null, failureSince = null, lastRecovery = null, lastRepair = null;
   let readyIdentity = '', readySince = null, repairController = null;
@@ -134,20 +151,20 @@ async function createGuardian(configFile, dependencies = {}) {
     '-ProjectRoot', cfg.projectRoot, '-OpenCodexHome', cfg.openCodexHome, '-CodexHome', cfg.codexHome, '-Port', String(cfg.primaryPort)];
   const inspect = dependencies.inspect || (() => boundedCommand(powershell, actionArgs('Inspect')));
   const initial = await inspect();
-  if (initial.ok && initial.value?.owned === true) snapshot = initial.value;
+  if (initial.ok && initial.value?.owned === true) { snapshot = initial.value; openingInspection = true; snapshotAt = now(); }
   try {
     const saved = await jsonFile(budgetFile);
     if (!policy.importSafeState(saved, now())) throw Error('invalid_budget');
   } catch (error) {
     if (error.code !== 'ENOENT') throw Error('guardian_budget_invalid');
   }
-  try { recoveryBlocked = await jsonFile(path.join(cfg.openCodexHome, 'recovery-blocked.json')); }
+  try { recoveryBlocked = await jsonFile(blockedFile); }
   catch (error) { if (error.code !== 'ENOENT') throw Error('guardian_block_invalid'); }
   // A previous companion may have exited while its external stop command was
   // still running. A new observer must not replay that uncertain transaction.
   if (policy.exportSafeState().recoveryStartedAt !== null && !recoveryBlocked) {
     recoveryBlocked = { version: 1, at: now(), reason: 'previous_recovery_uncertain' };
-    await atomicJson(path.join(cfg.openCodexHome, 'recovery-blocked.json'), recoveryBlocked);
+    await atomicJson(blockedFile, recoveryBlocked);
   }
   const server = await createGateway({
     port: cfg.listenPort, primaryOrigin, fallbackOrigin: cfg.fallback.origin,
@@ -170,7 +187,7 @@ async function createGuardian(configFile, dependencies = {}) {
         chunks.push(next.value);
       }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      return { ok: response.ok && body.service === 'opencodex' && (route !== '/readyz' || body.status === 'ready'), pid: body.pid };
+      return { ok: response.ok && body.service === 'opencodex' && (route !== '/readyz' || body.status === 'ready'), pid: body.pid, uptime: body.uptime };
     } catch { return { ok: false }; }
   }
 
@@ -201,6 +218,19 @@ async function createGuardian(configFile, dependencies = {}) {
         healthReady: primaryReady, pid: snapshot?.pid, attempts: policy.exportSafeState().attempts.length,
         timing: { durationMs: Math.max(0, claimAt - (failureSince ?? claimAt)), observedAtMs: claimAt } };
       await atomicJson(path.join(incidentDir, 'incident.json'), incident);
+      // Retention is best-effort: losing a race here must not lose the incident that was
+      // just recorded. Only directories whose name matches the shape written above count
+      // against the budget, so a stray file cannot evict a real incident, and a reparse
+      // point is never walked by `fs.rm(recursive)` the way the rest of this subsystem
+      // refuses to follow one.
+      try {
+        const incidentsRoot = path.dirname(incidentDir);
+        const entries = await fs.readdir(incidentsRoot, { withFileTypes: true });
+        const generated = entries.filter(entry => entry.isDirectory() && !entry.isSymbolicLink()
+          && /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-\d+$/.test(entry.name)).map(entry => entry.name);
+        const stale = generated.sort().reverse().slice(REPAIR_INCIDENTS_KEPT);
+        for (const name of stale) await fs.rm(path.join(incidentsRoot, name), { recursive: true, force: true });
+      } catch { /* the next incident retries */ }
       if (dependencies.beforeRepairDispatch) await dependencies.beforeRepairDispatch();
       const freshIntent = parseIntent(await jsonFile(intentFile, 8192), now());
       if (closing || stopped || controller.signal.aborted || !freshIntent.valid
@@ -241,14 +271,17 @@ async function createGuardian(configFile, dependencies = {}) {
         log('recovery_attempt_failed', { reason: result.uncertain ? 'stop_result_uncertain' : 'recovery_action_failed' });
         if (result.uncertain || ['stop-uncertain', 'stop-not-confirmed'].includes(result.value?.reason)) {
           recoveryBlocked = { version: 1, at: now(), intentAt: lastIntentAt, reason: 'stop_result_uncertain' };
-          await atomicJson(path.join(cfg.openCodexHome, 'recovery-blocked.json'), recoveryBlocked);
+          await atomicJson(blockedFile, recoveryBlocked);
         }
         dispatch(() => diagnose('recovery_action_failed'));
       } else {
         policy.markRecoveryFinished({ ok: true }, now());
         log('recovery_start_received', { confirmedReady: false });
         const updated = await inspect();
-        if (updated.ok && updated.value?.owned === true) snapshot = updated.value;
+        // Recovery replaced the process, so this is a fresh opening inspection: the next
+        // tick that agrees on the pid lends it a boot instant instead of paying for a
+        // second, identical spawn.
+        if (updated.ok && updated.value?.owned === true) { snapshot = updated.value; snapshotBoot = null; openingInspection = true; snapshotAt = now(); }
       }
     } catch { policy.markRecoveryFinished({ ok: false }, now()); log('recovery_aborted', { reason: 'intent_or_identity_changed' }); }
     finally { recovering = false; await atomicJson(budgetFile, policy.exportSafeState()).catch(() => {}); }
@@ -270,18 +303,44 @@ async function createGuardian(configFile, dependencies = {}) {
       stopped = intent.mode === 'stopped';
       maintenanceUntil = intent.mode === 'maintenance' ? intent.until : 0;
       if (hadIntent && !stopped && (wasStopped || currentState === 'foreign')) policy.reset({ now: now() });
+      if (hadIntent && intent.mode === 'running' && recoveryBlocked) {
+        // A fresh durable running intent is a new instruction from the operator.
+        // The uncertain-stop latch must not disable recovery for this home for
+        // the rest of the process' life, or a restart would re-read it from disk.
+        recoveryBlocked = null;
+        await fs.unlink(blockedFile).catch(() => {});
+      }
       log('intent_observed', { mode: intent.mode, valid: intent.valid });
     }
     stopped = intent.mode === 'stopped';
     if (stopped || intent.mode === 'maintenance') repairController?.abort();
     const [health, ready] = await Promise.all([probe('/healthz'), probe('/readyz')]);
     const healthPid = Number.isInteger(health.pid) && health.pid > 0 ? health.pid : null;
-    if (healthPid) {
+    // Inspect resolves the owning process tree through WMI and is far more expensive than
+    // a health probe, so a healthy steady state must not re-run it every couple of seconds.
+    // Skipping is only safe for a generation the snapshot can corroborate: Windows reuses
+    // pids, so a pid alone cannot tell a wrap apart from the process it replaced. The boot
+    // instant derived from /healthz's `uptime` can, and a probe that reports no uptime is
+    // not corroborated at all, so it is always inspected.
+    const boot = Number.isFinite(health.uptime) ? now() - health.uptime * 1000 : null;
+    // The opening inspection resolved this very generation, so the first probe that agrees on
+    // its pid lends it a boot instant instead of paying for a second, identical spawn.
+    if (openingInspection && boot !== null && healthPid === snapshot?.pid) { snapshotBoot = boot; snapshotAt = now(); }
+    openingInspection = false;
+    // Corroboration decays. `snapshot` carries the launcher identity that `recover()` later
+    // hands to the action script, and pid+boot agreeing forever would otherwise freeze it
+    // even if the launching process went away behind us. A minute between re-resolutions
+    // costs one spawn per ~30 ticks instead of one per tick.
+    const corroborated = boot !== null && snapshotBoot !== null && Math.abs(boot - snapshotBoot) <= BOOT_TOLERANCE_MS
+      && now() - snapshotAt <= 60_000;
+    if (healthPid && (healthPid !== snapshot?.pid || !corroborated)) {
       const updated = await inspect();
       if (updated.ok && updated.value?.owned === true && updated.value.pid === healthPid) {
         snapshot = updated.value;
+        snapshotBoot = boot;
+        snapshotAt = now();
         if (currentState === 'foreign') policy.reset({ now: now() });
-      } else snapshot = null;
+      } else { snapshot = null; snapshotBoot = null; }
     }
     const observedReady = !stopped && health.ok && ready.ok && healthPid === ready.pid && snapshot?.owned === true && snapshot.pid === healthPid;
     if (!observedReady && !stopped && failureSince === null) failureSince = now();
@@ -305,7 +364,15 @@ async function createGuardian(configFile, dependencies = {}) {
     if (primaryReady) failureSince = null;
     if (decision.state !== currentState) { currentState = decision.state; log('state_changed', { state: currentState, ready: primaryReady }); }
     if (decision.state === 'stopped') stopped = true;
-    await atomicJson(statusFile, state());
+    // `at` is a wall-clock stamp and this loop runs every couple of seconds, so the status
+    // payload always differs while nothing it records has changed: dedup on the state, not
+    // on the timestamp, or the inspect throttle above buys nothing.
+    const status = state();
+    const statusKey = JSON.stringify({ ...status, at: 0 });
+    if (statusKey !== lastStatusKey) {
+      lastStatusKey = statusKey;
+      await atomicJson(statusFile, status);
+    }
     await atomicJson(budgetFile, policy.exportSafeState());
     if (decision.action === 'recover' && !recoveryBlocked) dispatch(recover);
     if (decision.action === 'diagnose') dispatch(() => diagnose(decision.reason || 'recovery_budget_exhausted'));

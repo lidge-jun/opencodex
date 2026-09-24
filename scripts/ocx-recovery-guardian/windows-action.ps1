@@ -188,12 +188,7 @@ function Test-OptionalPathArgument {
 function Test-VisibleLauncherParent {
     param([AllowNull()]$Parent, [int]$ProcessId, [string]$Start, [string]$ScriptPath, [string]$Root, [string]$OpenHome, [string]$CodexConfigured, [string]$CodexCanonical)
     if (-not (Test-ExpectedIdentity -Process $Parent -ProcessId $ProcessId -Start $Start)) { return $false }
-    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    if (-not (Test-ExactPath -Left $Parent.ExecutablePath -Right $powershell)) { return $false }
-    if (-not (Test-ArgumentToken -Text $Parent.CommandLine -Flag '-File' -Value $ScriptPath)) { return $false }
-    if (-not (Test-ArgumentToken -Text $Parent.CommandLine -Flag '-ProjectRoot' -Value $Root)) { return $false }
-    if (-not (Test-OptionalPathArgument -Text $Parent.CommandLine -Flag '-OpenCodexHome' -Configured $OpenHome -Canonical $OpenHome)) { return $false }
-    return Test-OptionalPathArgument -Text $Parent.CommandLine -Flag '-CodexHome' -Configured $CodexConfigured -Canonical $CodexCanonical
+    return Test-VisibleLauncherCandidate -Parent $Parent -ScriptPath $ScriptPath -Root $Root -OpenHome $OpenHome -CodexConfigured $CodexConfigured -CodexCanonical $CodexCanonical
 }
 
 function Test-VisibleLauncherCandidate {
@@ -324,14 +319,19 @@ function Read-RecoveryIntent {
     $path = Join-Path $OpenCodexDirectory 'recovery-intent.json'
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return [pscustomobject]@{ valid = $false; reason = 'missing-intent'; mode = ''; at = 0L } }
     $intent = Read-BoundedJson -Path $path -MaximumBytes $IntentMaxBytes
-    if ($null -eq $intent -or -not ($intent.version -is [int] -or $intent.version -is [long]) -or $intent.version -ne 1 -or $intent.mode -isnot [string] -or -not ($intent.at -is [int] -or $intent.at -is [long]) -or $intent.at -lt 0) {
+    # Set-StrictMode makes a missing property a terminating error, and the early
+    # Recover read runs outside any try: test presence before reading the value,
+    # or a hand-edited intent file kills the script before it can emit a receipt.
+    if ($null -eq $intent -or $null -eq $intent.PSObject.Properties['version'] -or $null -eq $intent.PSObject.Properties['mode'] -or $null -eq $intent.PSObject.Properties['at'] `
+        -or -not ($intent.version -is [int] -or $intent.version -is [long]) -or $intent.version -ne 1 -or $intent.mode -isnot [string] -or -not ($intent.at -is [int] -or $intent.at -is [long]) -or $intent.at -lt 0) {
         return [pscustomobject]@{ valid = $false; reason = 'invalid-intent'; mode = ''; at = 0L }
     }
     if ($intent.mode -notin @('stopped', 'running', 'maintenance')) { return [pscustomobject]@{ valid = $false; reason = 'invalid-intent'; mode = ''; at = 0L } }
     if ($intent.mode -eq 'stopped') { return [pscustomobject]@{ valid = $false; reason = 'manual-stop'; mode = 'stopped'; at = [long]$intent.at } }
     if ($intent.mode -eq 'maintenance') {
         try {
-            if (-not ($intent.until -is [int] -or $intent.until -is [long]) -or $intent.until -le $intent.at) { throw 'invalid' }
+            # One window for every writer and reader: at < until <= at + 180000 (main.cjs parseIntent).
+            if (-not ($intent.until -is [int] -or $intent.until -is [long]) -or $intent.until -le $intent.at -or $intent.until -gt ($intent.at + 180000)) { throw 'invalid' }
             $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
             if ($intent.until -le $nowMs) { throw 'expired' }
         } catch { return [pscustomobject]@{ valid = $false; reason = 'maintenance-expired'; mode = 'maintenance'; at = [long]$intent.at } }
@@ -418,12 +418,25 @@ public static class OcxGuardianDiscardDrain {
 '@ | Out-Null
 }
 
+function ConvertTo-NativeArgument {
+    param([Parameter(Mandatory)][string]$Value)
+    # Windows flattens an argument array into one command line, where a quoted
+    # path ending in backslashes swallows its own closing quote and merges the
+    # next parameter into it. Rejecting quotes and control characters keeps the
+    # value a single argument whatever follows. Same convention as
+    # ConvertTo-RecoveryGuardianArgument in windows-visible-proxy.ps1.
+    if ([string]::IsNullOrWhiteSpace($Value) -or $Value.IndexOf('"') -ge 0 -or $Value -match '[\x00-\x1F]') {
+        throw 'unsafe-native-argument'
+    }
+    return '"' + ($Value -replace '(\\+)$', '$1$1') + '"'
+}
+
 function Invoke-GracefulProjectStop {
     param([string]$BunPath, [string]$CliPath, [string]$OpenCodexDirectory, [string]$CodexDirectory)
     Initialize-DiscardDrainType
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = $BunPath
-    $info.Arguments = ('"{0}" stop' -f $CliPath.Replace('"', '""'))
+    $info.Arguments = ('{0} stop' -f (ConvertTo-NativeArgument $CliPath))
     $info.WorkingDirectory = $ProjectRoot
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
@@ -455,7 +468,6 @@ function Start-VisibleLauncher {
     param([string]$ScriptPath, [string]$CodexHomeArgument)
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     if (-not (Test-Path -LiteralPath $powershell -PathType Leaf)) { return $false }
-    function ConvertTo-NativeArgument([string]$Value) { return '"' + $Value.Replace('"', '\"') + '"' }
     $launchArguments = @('-NoProfile', '-File', (ConvertTo-NativeArgument $ScriptPath), '-ProjectRoot', (ConvertTo-NativeArgument $ProjectRoot), '-OpenCodexHome', (ConvertTo-NativeArgument $OpenCodexHome), '-CodexHome', (ConvertTo-NativeArgument $CodexHomeArgument), '-Port', ([string]$Port), '-ConsoleLevel', 'Warn')
     $launcher = Start-Process -FilePath $powershell -ArgumentList ($launchArguments -join ' ') -WorkingDirectory $ProjectRoot -WindowStyle Normal -PassThru
     return $null -ne $launcher

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { repoPath } from "../helpers/repo-root";
@@ -249,5 +249,25 @@ describe("ocx recovery guardian isolated GLM repair", () => {
     expect(result).toMatchObject({ outcome: "failed", failureClass: "CANDIDATE_WRITE" });
     expect(readFileSync(candidate, "utf8")).toBe("keep-existing-candidate\n");
     expect(readFileSync(join(paths.projectRoot, "src", "lib", "runtime-diagnostics.ts"), "utf8")).toBe("export const value = 1;\n");
+  });
+
+  test.if(process.platform === "win32")("refuses an incident directory reached through a junction, before any request is sent", async () => {
+    const paths = fixture();
+    const via = join(dirname(paths.incidentDir), "linked-incident");
+    symlinkSync(paths.incidentDir, via, "junction");
+    // Pins the refusal and the runtime fact that makes the `isSymbolicLink()` walk enough
+    // here: bun 1.3.14 reports a junction as a symlink. If a future runtime calls it a
+    // plain directory, this assertion goes red first and the guard then needs the realpath
+    // comparison that was measured unnecessary on 2026-09-24.
+    expect(lstatSync(via).isSymbolicLink()).toBe(true);
+    let asked = 0;
+    const result = await request({
+      projectRoot: paths.projectRoot,
+      incidentDir: via,
+      fetchFn: async () => { asked += 1; return new Response("{}"); },
+    });
+    expect(result).toMatchObject({ outcome: "failed", failureClass: "SAFETY_REJECTED" });
+    expect(asked).toBe(0);
+    expect(existsSync(join(via, "candidate"))).toBe(false);
   });
 });

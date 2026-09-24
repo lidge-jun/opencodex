@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync } from "node:fs";
+import { lstatSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { atomicWriteFileAsync } from "../config/atomic-write";
@@ -19,8 +19,11 @@ export interface WriteRecoveryIntentOptions {
   until?: number;
 }
 
-const MARKER_MAX_BYTES = 16 * 1024;
-const INTENT_MAX_BYTES = 16 * 1024;
+const STATE_MAX_BYTES = 16 * 1024;
+// The guardian reader rejects a maintenance intent outside this window, so a writer
+// must not create one it would decode as `stopped`
+// (scripts/ocx-recovery-guardian/main.cjs, parseIntent).
+const MAINTENANCE_WINDOW_MAX_MS = 180_000;
 
 function unsafeMarker(): never {
   throw new Error("Recovery guardian marker is malformed; manual lifecycle action was not dispatched.");
@@ -30,15 +33,23 @@ function isMissing(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
-function assertSafeExistingFile(path: string, maxBytes: number): ReturnType<typeof lstatSync> {
+function assertSafeExistingFile(path: string): void {
   const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxBytes) unsafeMarker();
-  return stat;
+  if (!stat.isFile() || stat.size > STATE_MAX_BYTES) unsafeMarker();
 }
 
 function assertSafeExistingDirectory(path: string): void {
-  const stat = lstatSync(path);
-  if (!stat.isDirectory() || stat.isSymbolicLink()) unsafeMarker();
+  if (!lstatSync(path).isDirectory()) unsafeMarker();
+}
+
+/** True when the durable intent already reads `running`. */
+function runningIntentWritten(home: string): boolean {
+  try {
+    const stored = JSON.parse(readFileSync(join(home, "recovery-intent.json"), "utf8")) as { mode?: unknown };
+    return stored.mode === "running";
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -52,7 +63,7 @@ export function recoveryGuardianEnabled(home: string = getConfigDir()): boolean 
   const marker = join(root, "recovery-guardian.json");
   try {
     assertSafeExistingDirectory(root);
-    assertSafeExistingFile(marker, MARKER_MAX_BYTES);
+    assertSafeExistingFile(marker);
   } catch (error) {
     if (isMissing(error)) return false;
     throw error;
@@ -70,6 +81,42 @@ export function recoveryGuardianEnabled(home: string = getConfigDir()): boolean 
   return true;
 }
 
+/**
+ * The durable intent exactly as one run found it, so a refusal can put it back. An
+ * unreadable file is a refusal in itself: rolling back to `absent` would delete an
+ * operator's instruction that this run never wrote.
+ */
+export interface RecoveryIntentBackup {
+  path: string;
+  bytes: Buffer | null;
+}
+
+/** Read the intent before a lifecycle write, or null when this home has no guardian. */
+export function backupRecoveryIntent(home = getConfigDir()): RecoveryIntentBackup | null {
+  const root = resolve(home);
+  if (!recoveryGuardianEnabled(root)) return null;
+  const intentPath = join(root, "recovery-intent.json");
+  try {
+    assertSafeExistingFile(intentPath);
+    return { path: intentPath, bytes: readFileSync(intentPath) };
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+    return { path: intentPath, bytes: null };
+  }
+}
+
+/** Restore the bytes a refused action found, removing the file when it found none. */
+export async function restoreRecoveryIntent(backup: RecoveryIntentBackup | null): Promise<boolean> {
+  if (!backup) return true;
+  try {
+    if (backup.bytes === null) rmSync(backup.path, { force: true });
+    else await atomicWriteFileAsync(backup.path, backup.bytes.toString("utf8"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Write a non-secret, bounded manual-recovery intent when the guardian opted in. */
 export async function writeRecoveryIntentIfGuardianEnabled(
   mode: RecoveryIntentMode,
@@ -82,16 +129,26 @@ export async function writeRecoveryIntentIfGuardianEnabled(
   if (mode !== "running" && mode !== "stopped" && mode !== "maintenance") {
     throw new Error("Recovery intent mode is invalid.");
   }
-  if (options.until !== undefined && (!Number.isSafeInteger(options.until) || options.until <= at)) {
+  if (options.until !== undefined
+    && (!Number.isSafeInteger(options.until) || options.until <= at || options.until > at + MAINTENANCE_WINDOW_MAX_MS)) {
     throw new Error("Recovery intent maintenance deadline is invalid.");
   }
   if (mode !== "maintenance" && options.until !== undefined) {
     throw new Error("Only a maintenance intent may carry a deadline.");
   }
+  // A maintenance intent without a deadline decodes as `stopped` in every reader, which
+  // fences the whole home, so the window is mandatory here exactly as in main.cjs.
+  if (mode === "maintenance" && options.until === undefined) {
+    throw new Error("Recovery intent maintenance deadline is invalid.");
+  }
+  // The tray, the visible launcher and the proxy itself all affirm `running` for one
+  // start. Each fresh signature restarts the guardian's stabilisation window, so a
+  // re-affirmation must not rewrite the file.
+  if (mode === "running" && runningIntentWritten(home)) return true;
 
   const intentPath = join(home, "recovery-intent.json");
   try {
-    assertSafeExistingFile(intentPath, INTENT_MAX_BYTES);
+    assertSafeExistingFile(intentPath);
   } catch (error) {
     if (!isMissing(error)) throw error;
   }
