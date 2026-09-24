@@ -224,6 +224,30 @@ test("event privacy admission rejects raw filesystem path bypass forms", () => {
   }
 });
 
+test("event privacy admission stays linear on pathological path strings", () => {
+  // RAW_POSIX_PATH_RE once alternated `\/` with `[^/]+` under a shared `+`; long segment runs
+  // were repartitioned combinatorially. Keep these just under the 4 KiB field cap so a
+  // backtracking regression surfaces as a timeout rather than a wrong verdict.
+  const deep = `cwd=/${"a/".repeat(2000)}`;
+  try {
+    enforceEventStructureLimits({ detail: deep });
+    throw new Error("expected raw_path rejection for a long segment chain");
+  } catch (err) {
+    expect((err as { code?: string }).code).toBe("raw_path");
+  }
+
+  const dense = `cwd=/${"a//".repeat(1300)}`;
+  try {
+    enforceEventStructureLimits({ detail: dense });
+    throw new Error("expected raw_path rejection for a slash-dense chain");
+  } catch (err) {
+    expect((err as { code?: string }).code).toBe("raw_path");
+  }
+
+  const notAPath = `https://example.com/${"a/".repeat(2000)}`;
+  expect(() => enforceEventStructureLimits({ detail: notAPath })).not.toThrow();
+});
+
 test("invalid JSON contract artifacts classify as artifact_mismatch", () => {
   const home = tempHome();
   const artifactsDir = join(home, "artifacts");
