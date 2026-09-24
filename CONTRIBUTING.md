@@ -76,7 +76,8 @@ This installs the `post-merge` hook, which rebuilds the packaged dashboard when 
 merge changes its source. It also removes the unmodified, retired repository
 pre-push hook from Git's resolved hooks directory, including linked worktrees.
 Custom pre-push hooks are preserved. For safety, setup refuses to touch hooks
-when `core.hooksPath` redirects them to a potentially shared directory.
+whenever `core.hooksPath` is configured, whether it points at a repository-local,
+global, or shared directory.
 If an earlier setup already installed these hooks into that shared directory,
 remove them there by hand; the refusal leaves them untouched.
 Validation no longer runs automatically on every push; existing contributors
