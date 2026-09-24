@@ -1,6 +1,12 @@
-use crate::{auth::Auth, endpoint::ProxyEndpoint};
+use crate::{
+    auth::{Auth, RecordedRuntime},
+    endpoint::ProxyEndpoint,
+};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use hmac::{Hmac, Mac};
 use reqwest::{redirect, Client, Method, StatusCode};
 use serde_json::Value;
+use sha2::Sha256;
 use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
@@ -213,12 +219,13 @@ impl ProxyClient {
     /// The binding is re-confirmed here rather than trusted from when it was made: between then and
     /// now the child can have exited and something else can hold the port. A request is therefore
     /// bound to a pid, a port and the generation the shell authorised, and a mismatch is refused
-    /// instead of being sent the credential.
+    /// instead of being sent the credential. The peer also has to prove the recorded attestation
+    /// secret: a pid and port can be replayed by a hostile listener, the proof cannot.
     async fn authorised_token(&self) -> Result<String, ProxyError> {
         let Some(binding) = self.binding() else {
             return Err(ProxyError::Unauthorized);
         };
-        let identity = self.identify().await?;
+        let identity = self.identify_with_attestation().await?;
         if identity != binding.identity {
             return Err(ProxyError::Foreign);
         }
@@ -226,6 +233,45 @@ impl ProxyClient {
             return Err(ProxyError::Foreign);
         }
         self.auth.token().ok_or(ProxyError::Unauthorized)
+    }
+
+    /// Ask the endpoint who it is and make it prove the recorded attestation secret in the same
+    /// round-trip: the challenge goes out as a header and the proof comes back in one. A listener
+    /// that cannot read the secret — a foreign service, or a hostile process that took the port
+    /// after the bound child exited — cannot produce it, so the credential stays put.
+    async fn identify_with_attestation(&self) -> Result<RuntimeIdentity, ProxyError> {
+        let recorded = self
+            .auth
+            .runtime_identity()
+            .ok_or(ProxyError::Unauthorized)?;
+        if recorded.port != self.endpoint.port {
+            return Err(ProxyError::Unauthorized);
+        }
+        let mut challenge_bytes = [0_u8; 32];
+        challenge_bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        challenge_bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        let challenge = URL_SAFE_NO_PAD.encode(challenge_bytes);
+        let response = self
+            .client
+            .get(self.endpoint.url("/healthz"))
+            .header("x-opencodex-attestation-challenge", &challenge)
+            .send()
+            .await
+            .map_err(map_request_error)?;
+        let proof = response
+            .headers()
+            .get("x-opencodex-attestation-proof")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = decode(response).await?;
+        let identity = identity_from(&body, self.endpoint.port).ok_or(ProxyError::Foreign)?;
+        if identity.pid != recorded.pid
+            || !valid_attestation_proof(&recorded, &challenge, proof.as_deref())
+            || self.auth.runtime_identity().as_ref() != Some(&recorded)
+        {
+            return Err(ProxyError::Unauthorized);
+        }
+        Ok(identity)
     }
 
     async fn send(
@@ -238,13 +284,36 @@ impl ProxyClient {
         if let Some(value) = token {
             request = request.header("X-OpenCodex-API-Key", value);
         }
-        request.send().await.map_err(|error| {
-            if error.is_connect() {
-                ProxyError::Unreachable
-            } else {
-                ProxyError::Decode(error)
-            }
-        })
+        request.send().await.map_err(map_request_error)
+    }
+}
+
+fn valid_attestation_proof(
+    recorded: &RecordedRuntime,
+    challenge: &str,
+    proof: Option<&str>,
+) -> bool {
+    // The server keys the MAC with the Base64URL text's UTF-8 bytes, not the decoded secret.
+    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(recorded.attestation_secret.as_bytes()) else {
+        return false;
+    };
+    mac.update(
+        format!(
+            "opencodex-local-management-v1\n{challenge}\n{}\n{}",
+            recorded.pid, recorded.port
+        )
+        .as_bytes(),
+    );
+    proof
+        .and_then(|value| URL_SAFE_NO_PAD.decode(value).ok())
+        .is_some_and(|value| mac.verify_slice(&value).is_ok())
+}
+
+fn map_request_error(error: reqwest::Error) -> ProxyError {
+    if error.is_connect() {
+        ProxyError::Unreachable
+    } else {
+        ProxyError::Decode(error)
     }
 }
 
@@ -260,8 +329,37 @@ async fn decode(response: reqwest::Response) -> Result<Value, ProxyError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{identity_from, RuntimeIdentity};
+    use super::{identity_from, valid_attestation_proof, RuntimeIdentity};
+    use crate::auth::RecordedRuntime;
     use serde_json::json;
+
+    fn recorded_runtime() -> RecordedRuntime {
+        RecordedRuntime {
+            pid: 4242,
+            port: 10100,
+            attestation_secret: "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc".into(),
+        }
+    }
+
+    #[test]
+    fn accepts_only_a_proof_bound_to_the_runtime_identity() {
+        let challenge = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let proof = "Yr9EKHjeAFfsFMsF8Xsd7J6LxBYnObweKZlLyTMk0Lo";
+        assert!(valid_attestation_proof(
+            &recorded_runtime(),
+            challenge,
+            Some(proof)
+        ));
+
+        let mut replacement = recorded_runtime();
+        replacement.pid += 1;
+        assert!(!valid_attestation_proof(
+            &replacement,
+            challenge,
+            Some(proof)
+        ));
+        assert!(!valid_attestation_proof(&recorded_runtime(), challenge, None));
+    }
 
     #[test]
     fn a_health_body_without_the_marker_is_not_this_proxy() {
