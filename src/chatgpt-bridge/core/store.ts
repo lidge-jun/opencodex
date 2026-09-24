@@ -10,6 +10,7 @@ import {
   parseChatGptConversationUrl,
   DEFINITE_NON_DELIVERY_CODES,
   type BridgeErrorCode,
+  MAX_PROMPT_CHARS,
 } from "../contracts";
 
 /**
@@ -21,6 +22,11 @@ import {
 const RESERVATION_STALE_MS = 120_000;
 const DUPLICATE_GUARD_MS = 120_000;
 const MAX_OPERATIONS_PER_BINDING = 40;
+// Age-free ceiling, so a wrong clock at install cannot make the table grow forever.
+const MAX_OPERATIONS_HARD_CAP = 400;
+// A dashboard reload replays the pending action minutes later, so a receipt must stay
+// replayable longer than the send path's own stale window.
+const OPERATION_REPLAY_MS = 15 * 60_000;
 
 export interface CreateBindingInput {
   bindingId?: string;
@@ -38,7 +44,6 @@ export interface ManageBindingInput {
   action: Exclude<BridgeManagementAction, "create">;
   operationId: string;
   expectedRevision: number;
-  replacement?: CreateBindingInput;
   capabilityHash?: string | null;
   capabilityExpiresAt?: string | null;
 }
@@ -79,7 +84,7 @@ export class BridgeBindingStore {
 
   constructor(
     database: Database | string,
-    private readonly options: { now?: () => string; reservationStaleMs?: number; duplicateGuardMs?: number } = {},
+    private readonly options: { reservationStaleMs?: number; duplicateGuardMs?: number } = {},
   ) {
     this.db = typeof database === "string" ? new Database(database) : database;
     this.db.exec("PRAGMA journal_mode = WAL;");
@@ -114,7 +119,6 @@ export class BridgeBindingStore {
         proof_chat_read TEXT,
         proof_checked_at TEXT,
         last_receipt_id TEXT,
-        replaced_by TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
@@ -144,6 +148,12 @@ export class BridgeBindingStore {
         settled_at TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_bridge_deliveries_binding ON chatgpt_bridge_deliveries(binding_id, state);
+      CREATE INDEX IF NOT EXISTS idx_bridge_deliveries_digest ON chatgpt_bridge_deliveries(binding_id, prompt_digest, state);
+      -- The chat side is UNIQUE in schema; the host side was only checked in-process,
+      -- so a second process on this file could bind one Codex target twice.
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_bindings_host_target
+        ON chatgpt_bridge_bindings(host_instance_id, host_target_id)
+        WHERE lifecycle IN ('active', 'paused');
     `);
     this.db
       .prepare(
@@ -154,6 +164,11 @@ export class BridgeBindingStore {
 
   close(): void {
     this.db.close();
+  }
+
+  /** Every multi-statement write below runs in one transaction: a receipt must not outlive its row. */
+  private tx<T>(write: () => T): T {
+    return this.db.transaction(write)();
   }
 
   private rowToBinding(row: Record<string, unknown>): BridgeBinding {
@@ -248,10 +263,30 @@ export class BridgeBindingStore {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(operationId, bindingId, action, requestDigest, revision, outcome, errorCode ?? null, created);
+    this.pruneOperations(bindingId);
     return { operationId, bindingId, action, revision, outcome, errorCode, createdAt: created };
   }
 
+  /**
+   * Trim each binding's receipt history, but never inside the replay window: a
+   * pruned row turns a late retry of `create` into a second insert (or a
+   * `BINDING_EXISTS`) instead of the `alreadyApplied` replay it asked for.
+   *
+   * The age condition can be defeated by the clock: a device that booted with a wrong
+   * RTC writes future `created_at` values that never age out, so the second statement
+   * is an age-free backstop. Growth is then `MAX_OPERATIONS_PER_BINDING` in steady
+   * state and never more than `MAX_OPERATIONS_HARD_CAP` even with a hostile clock.
+   */
   private pruneOperations(bindingId: string): void {
+    const cutoff = new Date(Date.now() - OPERATION_REPLAY_MS).toISOString();
+    this.db
+      .prepare(
+        `DELETE FROM chatgpt_bridge_operations WHERE binding_id = ? AND created_at < ? AND operation_id NOT IN (
+           SELECT operation_id FROM chatgpt_bridge_operations WHERE binding_id = ?
+           ORDER BY created_at DESC LIMIT ?
+         )`,
+      )
+      .run(bindingId, cutoff, bindingId, MAX_OPERATIONS_PER_BINDING);
     this.db
       .prepare(
         `DELETE FROM chatgpt_bridge_operations WHERE binding_id = ? AND operation_id NOT IN (
@@ -259,7 +294,7 @@ export class BridgeBindingStore {
            ORDER BY created_at DESC LIMIT ?
          )`,
       )
-      .run(bindingId, bindingId, MAX_OPERATIONS_PER_BINDING);
+      .run(bindingId, bindingId, MAX_OPERATIONS_HARD_CAP);
   }
 
   private assertOperationIdempotent(
@@ -300,13 +335,24 @@ export class BridgeBindingStore {
 
     const bindingId = input.bindingId ?? randomUUID();
     if (this.getBinding(bindingId)) {
-      throw new BridgeCoreError("OPERATION_ID_CONFLICT", "bindingId already exists");
+      throw new BridgeCoreError("BINDING_EXISTS", "bindingId already exists");
     }
     const duplicateChat = this.db
       .prepare("SELECT binding_id FROM chatgpt_bridge_bindings WHERE chat_conversation_id = ?")
       .get(chat.conversationId) as { binding_id: string } | undefined;
     if (duplicateChat) {
-      throw new BridgeCoreError("OPERATION_ID_CONFLICT", "chat already bound to another target");
+      throw new BridgeCoreError("BINDING_EXISTS", "chat already bound to another target");
+    }
+    // The mirror of the chat guard: two bindings on one host target would both
+    // deliver into the same task, and the per-binding SEND_IN_PROGRESS and
+    // DUPLICATE_PROMPT guards cannot see each other across them.
+    const duplicateHost = this.db
+      .prepare(
+        "SELECT binding_id FROM chatgpt_bridge_bindings WHERE host_instance_id = ? AND host_target_id = ? AND lifecycle IN ('active','paused')",
+      )
+      .get(input.host.instanceId, input.host.targetId) as { binding_id: string } | undefined;
+    if (duplicateHost) {
+      throw new BridgeCoreError("BINDING_EXISTS", "host target already bound to another chat");
     }
 
     const created = now();
@@ -328,32 +374,34 @@ export class BridgeBindingStore {
       createdAt: created,
       updatedAt: created,
     };
-    this.db
-      .prepare(
-        `INSERT INTO chatgpt_bridge_bindings
-         (binding_id, host_kind, host_instance_id, host_target_id, host_workspace_ref,
-          chat_conversation_id, chat_canonical_url, owner_ref, source_kind, source_locator,
-          revision, epoch, lifecycle, attachment_state, capability_hash, capability_expires_at,
-          proof_attachment, proof_host_read, proof_chat_read, proof_checked_at, last_receipt_id,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'bridge-v1', ?, 0, 0, 'active', 'pending', ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
-      )
-      .run(
-        binding.bindingId,
-        binding.host.kind,
-        binding.host.instanceId,
-        binding.host.targetId,
-        binding.host.workspaceRef,
-        binding.chat.conversationId,
-        binding.chat.canonicalUrl,
-        binding.ownerRef,
-        binding.source.locator,
-        binding.capabilityHash,
-        binding.capabilityExpiresAt,
-        binding.createdAt,
-        binding.updatedAt,
-      );
-    const receipt = this.recordOperation(input.operationId, bindingId, "create", digest, 0, "applied");
+    const receipt = this.tx(() => {
+      this.db
+        .prepare(
+          `INSERT INTO chatgpt_bridge_bindings
+           (binding_id, host_kind, host_instance_id, host_target_id, host_workspace_ref,
+            chat_conversation_id, chat_canonical_url, owner_ref, source_kind, source_locator,
+            revision, epoch, lifecycle, attachment_state, capability_hash, capability_expires_at,
+            proof_attachment, proof_host_read, proof_chat_read, proof_checked_at, last_receipt_id,
+            created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'bridge-v1', ?, 0, 0, 'active', 'pending', ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
+        )
+        .run(
+          binding.bindingId,
+          binding.host.kind,
+          binding.host.instanceId,
+          binding.host.targetId,
+          binding.host.workspaceRef,
+          binding.chat.conversationId,
+          binding.chat.canonicalUrl,
+          binding.ownerRef,
+          binding.source.locator,
+          binding.capabilityHash,
+          binding.capabilityExpiresAt,
+          binding.createdAt,
+          binding.updatedAt,
+        );
+      return this.recordOperation(input.operationId, bindingId, "create", digest, 0, "applied");
+    });
     return { binding, receipt };
   }
 
@@ -379,13 +427,15 @@ export class BridgeBindingStore {
     const updated = now();
     const nextState: BridgeBinding["attachmentState"] =
       binding.attachmentState === "readable" ? "readable" : "attached";
-    this.db
-      .prepare(
-        `UPDATE chatgpt_bridge_bindings SET attachment_state = ?, proof_attachment = ?,
-         revision = revision + 1, updated_at = ? WHERE binding_id = ?`,
-      )
-      .run(nextState, input.attachmentProof, updated, bindingId);
-    const receipt = this.recordOperation(input.operationId, bindingId, "attach", digest, binding.revision + 1, "applied");
+    const receipt = this.tx(() => {
+      this.db
+        .prepare(
+          `UPDATE chatgpt_bridge_bindings SET attachment_state = ?, proof_attachment = ?,
+           revision = revision + 1, updated_at = ? WHERE binding_id = ?`,
+        )
+        .run(nextState, input.attachmentProof, updated, bindingId);
+      return this.recordOperation(input.operationId, bindingId, "attach", digest, binding.revision + 1, "applied");
+    });
     return { binding: this.getBinding(bindingId)!, receipt };
   }
 
@@ -394,8 +444,6 @@ export class BridgeBindingStore {
       bindingId: input.bindingId,
       action: input.action,
       capabilityHash: input.capabilityHash ?? null,
-      replacementHost: input.replacement?.host ?? null,
-      replacementChat: input.replacement ? parseChatGptConversationUrl(input.replacement.chatUrl) : null,
     });
     const replay = this.assertOperationIdempotent(input.operationId, input.action, digest);
     if (replay) {
@@ -423,8 +471,6 @@ export class BridgeBindingStore {
           return lifecycle === "revoked" || lifecycle === "active" || lifecycle === "paused" ? "unbound" : null;
         case "renew":
           return lifecycle === "active" || lifecycle === "paused" ? lifecycle : null;
-        case "replace":
-          return lifecycle === "active" || lifecycle === "paused" ? "revoked" : null;
         default:
           return null;
       }
@@ -434,35 +480,33 @@ export class BridgeBindingStore {
     }
 
     const updated = now();
-    const epochBump = input.action === "revoke" || input.action === "replace" ? 1 : 0;
-    const replacedBy = input.action === "replace" ? input.replacement?.bindingId ?? null : null;
-    this.db
-      .prepare(
-        `UPDATE chatgpt_bridge_bindings SET lifecycle = ?, epoch = epoch + ?,
-         revision = revision + 1,
-         capability_hash = COALESCE(?, capability_hash),
-         capability_expires_at = COALESCE(?, capability_expires_at),
-         replaced_by = COALESCE(?, replaced_by),
-         updated_at = ? WHERE binding_id = ?`,
-      )
-      .run(
-        nextLifecycle,
-        epochBump,
-        input.capabilityHash ?? null,
-        input.capabilityExpiresAt ?? null,
-        replacedBy,
-        updated,
+    const epochBump = input.action === "revoke" ? 1 : 0;
+    const receipt = this.tx(() => {
+      this.db
+        .prepare(
+          `UPDATE chatgpt_bridge_bindings SET lifecycle = ?, epoch = epoch + ?,
+           revision = revision + 1,
+           capability_hash = COALESCE(?, capability_hash),
+           capability_expires_at = COALESCE(?, capability_expires_at),
+           updated_at = ? WHERE binding_id = ?`,
+        )
+        .run(
+          nextLifecycle,
+          epochBump,
+          input.capabilityHash ?? null,
+          input.capabilityExpiresAt ?? null,
+          updated,
+          input.bindingId,
+        );
+      return this.recordOperation(
+        input.operationId,
         input.bindingId,
+        input.action,
+        digest,
+        binding.revision + 1,
+        "applied",
       );
-    this.pruneOperations(input.bindingId);
-    const receipt = this.recordOperation(
-      input.operationId,
-      input.bindingId,
-      input.action,
-      digest,
-      binding.revision + 1,
-      "applied",
-    );
+    });
     return { binding: this.getBinding(input.bindingId), receipt };
   }
 
@@ -475,6 +519,15 @@ export class BridgeBindingStore {
     }
     const prompt = input.prompt;
     if (prompt.length === 0) throw new BridgeCoreError("EMPTY_PROMPT", "prompt is empty");
+    if (prompt.length > MAX_PROMPT_CHARS) {
+      throw new BridgeCoreError("PROMPT_TOO_LARGE", `prompt exceeds ${MAX_PROMPT_CHARS} characters`);
+    }
+    if (binding.attachmentState === "pending") {
+      throw new BridgeCoreError("ATTACHMENT_REQUIRED", "binding has no attachment proof yet");
+    }
+    if (binding.capabilityExpiresAt && Date.parse(binding.capabilityExpiresAt) <= Date.now()) {
+      throw new BridgeCoreError("CAPABILITY_EXPIRED", "capability expired before this send");
+    }
 
     const pending = this.db
       .prepare(
@@ -510,23 +563,26 @@ export class BridgeBindingStore {
 
     const reservationId = randomUUID();
     const reservedAt = now();
-    this.db
-      .prepare(
-        `INSERT INTO chatgpt_bridge_deliveries
-         (reservation_id, binding_id, operation_id, direction, source_message_id, prompt_digest,
-          binding_epoch, state, reserved_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?)`,
-      )
-      .run(
-        reservationId,
-        input.bindingId,
-        input.operationId,
-        input.direction,
-        input.sourceMessageId,
-        sha256(prompt),
-        binding.epoch,
-        reservedAt,
-      );
+    this.tx(() => {
+      this.db
+        .prepare(
+          `INSERT INTO chatgpt_bridge_deliveries
+           (reservation_id, binding_id, operation_id, direction, source_message_id, prompt_digest,
+            binding_epoch, state, reserved_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'reserved', ?)`,
+        )
+        .run(
+          reservationId,
+          input.bindingId,
+          input.operationId,
+          input.direction,
+          input.sourceMessageId,
+          sha256(prompt),
+          binding.epoch,
+          reservedAt,
+        );
+      this.pruneDeliveries(input.bindingId);
+    });
     return {
       reservationId,
       bindingId: input.bindingId,
@@ -536,7 +592,21 @@ export class BridgeBindingStore {
     };
   }
 
-  settleDelivery(input: SettleDeliveryInput): { state: BridgeDeliveryState; receiptId: string } {
+  /**
+   * Terminal rows older than the duplicate-guard window are invisible to every
+   * reader by construction — the guard only looks inside the window, and a
+   * reserved or unknown row is a fence that must survive until reconciled.
+   */
+  private pruneDeliveries(bindingId: string): void {
+    const cutoff = new Date(Date.now() - (this.options.duplicateGuardMs ?? DUPLICATE_GUARD_MS)).toISOString();
+    this.db
+      .prepare(
+        "DELETE FROM chatgpt_bridge_deliveries WHERE binding_id = ? AND state IN ('delivered','not-delivered') AND settled_at < ?",
+      )
+      .run(bindingId, cutoff);
+  }
+
+  settleDelivery(input: SettleDeliveryInput): { state: BridgeDeliveryState; receiptId: string | null } {
     const row = this.db
       .prepare("SELECT * FROM chatgpt_bridge_deliveries WHERE reservation_id = ?")
       .get(input.reservationId) as Record<string, unknown> | undefined;
@@ -556,15 +626,22 @@ export class BridgeBindingStore {
     if (input.outcome === "unknown" && !input.operator) {
       throw new BridgeCoreError("DELIVERY_UNKNOWN", "manual unknown resolution requires operator identity");
     }
-    const receiptId = input.receiptId ?? randomUUID();
-    this.db
-      .prepare(
-        "UPDATE chatgpt_bridge_deliveries SET state = ?, failure_code = ?, receipt_id = ?, resolved_by = ?, settled_at = ? WHERE reservation_id = ?",
-      )
-      .run(input.outcome, input.failureCode ?? null, receiptId, input.operator ?? null, now(), input.reservationId);
-    this.db
-      .prepare("UPDATE chatgpt_bridge_bindings SET last_receipt_id = ?, updated_at = ? WHERE binding_id = ?")
-      .run(receiptId, now(), row.binding_id as string);
+    // A receipt attests delivery: a not-delivered or unknown settlement records
+    // a failure code, never a receipt the caller could present as proof.
+    const receiptId = input.outcome === "delivered" ? input.receiptId ?? randomUUID() : null;
+    const settledAt = now();
+    this.tx(() => {
+      this.db
+        .prepare(
+          "UPDATE chatgpt_bridge_deliveries SET state = ?, failure_code = ?, receipt_id = ?, resolved_by = ?, settled_at = ? WHERE reservation_id = ?",
+        )
+        .run(input.outcome, input.failureCode ?? null, receiptId, input.operator ?? null, settledAt, input.reservationId);
+      if (receiptId) {
+        this.db
+          .prepare("UPDATE chatgpt_bridge_bindings SET last_receipt_id = ?, updated_at = ? WHERE binding_id = ?")
+          .run(receiptId, settledAt, row.binding_id as string);
+      }
+    });
     return { state: input.outcome, receiptId };
   }
 

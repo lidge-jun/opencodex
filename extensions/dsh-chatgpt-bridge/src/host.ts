@@ -10,8 +10,9 @@
  *   correlates an inbox item to its turn;
  * - ctx.on("session/event", (session, event)) streams
  *   assistant/message{turn} / turn/end{turn} for attribution;
- * - subagent-owned sessions are rejected on three layers (origin, lineage,
- *   runtime ownership) — bridging never hijacks a child session;
+ * - subagent-owned sessions are rejected on both durable layers the session
+ *   header carries (`origin`, `parentSession`) before anything is enqueued —
+ *   bridging never hijacks a child session;
  * - ctx.storage persists the binding map; ctx.webServer.register exposes the
  *   control endpoints to the OpenCodex core only (loopback + token).
  */
@@ -22,15 +23,9 @@ export interface DshUserMessage {
   readonly content: string;
 }
 
-export interface DshAgent {
-  readonly id: string;
-  followup(message: DshUserMessage): void;
-  whenIdle(): Promise<void>;
-}
-
 export interface DshSessionHeader {
   readonly id: string;
-  readonly origin?: "user" | "subagent";
+  readonly origin?: "subagent";
   readonly parentSession?: string;
   readonly agentPreset?: string;
 }
@@ -39,9 +34,15 @@ export interface DshSession {
   readonly header: DshSessionHeader;
 }
 
+export interface DshAgent {
+  /** Session-backed identity: the same id `ctx.agents.get` takes and `session/event` carries. */
+  readonly id: string;
+  readonly session: DshSession;
+  followup(message: DshUserMessage): void;
+}
+
 export interface DshAgentsRegistry {
   get(id: string): DshAgent | undefined;
-  isOwnedBy(childId: string, parentId: string): boolean;
 }
 
 export interface DshPluginContext {
@@ -87,12 +88,21 @@ export interface BridgeBindingState {
   boundAt: string;
   /** Latest correlated turn per delivered inbox item. */
   lastDeliveredInboxItemId: string | null;
+  lastDeliveredAt: string | null;
   lastClaimedTurn: number | null;
   lastAssistantMessageId: string | null;
   lastTurnEnded: number | null;
 }
 
 export const TOKEN_HEADER = "x-bridge-token";
+
+/**
+ * How long an unclaimed delivery may hold the gate. Same boundary the core store
+ * uses to call a pending send outcome-unknown: past it the host assumes the inbox
+ * item was dropped, because `agent/inbox/discarded` is not an event this plugin
+ * can prove the host ever emits.
+ */
+const OUTSTANDING_DELIVERY_MAX_MS = 120_000;
 
 export interface DshBridgePluginConfig {
   /** Credential reference resolved by ctx.credentials; never a plaintext secret here. */
@@ -103,6 +113,10 @@ export interface DshBridgePluginConfig {
 export function createBridgePlugin(ctx: DshPluginContext, config: DshBridgePluginConfig) {
   let controlToken = config.controlToken ?? "";
   const states = new Map<string, BridgeBindingState>();
+  // A delivery's read-modify-write spans awaits, so two concurrent control calls
+  // for one session would both mint state and both enqueue: at most one runs at
+  // a time, and the loser is refused rather than silently dropped.
+  const delivering = new Set<string>();
 
   const loadState = async (sessionId: string): Promise<BridgeBindingState | undefined> => {
     if (states.has(sessionId)) return states.get(sessionId);
@@ -123,6 +137,14 @@ export function createBridgePlugin(ctx: DshPluginContext, config: DshBridgePlugi
     state.lastClaimedTurn = turn;
     await saveState(String(agent.id));
   });
+  // A delivery that is cancelled before it is claimed never ends a turn, so
+  // without this the outstanding-item gate below would wedge the binding.
+  ctx.on("agent/inbox/discarded", async ({ agent, message }) => {
+    const state = await loadState(String(agent.id));
+    if (!state || state.lastDeliveredInboxItemId !== message.id || state.lastClaimedTurn !== null) return;
+    state.lastDeliveredInboxItemId = null;
+    await saveState(String(agent.id));
+  });
   ctx.on("session/event", async (session, event) => {
     if (event.type !== "assistant/message" && event.type !== "turn/end") return;
     const state = await loadState(String(session.header.id));
@@ -136,10 +158,12 @@ export function createBridgePlugin(ctx: DshPluginContext, config: DshBridgePlugi
   });
 
   /**
-   * Three-layer rejection mirroring hasApiSessionSubagentOwner (0.1.2-rc.1):
-   * durable origin, durable parent lineage, and runtime ownership. A child
-   * session is rejected even when its parent agent is no longer live — the
-   * lineage alone is disqualifying for bridging.
+   * Both durable rejection layers of a session header, mirroring
+   * hasApiSessionSubagentOwner (0.1.2-rc.1): durable origin and durable parent
+   * lineage. A child session is rejected even when its parent agent is no
+   * longer live — the lineage alone is disqualifying for bridging. Runtime
+   * ownership is the third layer there and cannot be consulted here: it needs
+   * the exact parent Agent, which a session-id-keyed control call never carries.
    */
   const isSubagentOwned = (header: DshSessionHeader): boolean => {
     if (header.origin === "subagent") return true;
@@ -149,6 +173,66 @@ export function createBridgePlugin(ctx: DshPluginContext, config: DshBridgePlugi
   const requireToken = (request: BridgeControlRequest): boolean => {
     if (!controlToken) return false;
     return request.headers[TOKEN_HEADER] === controlToken;
+  };
+
+  const deliverToSession = async (
+    sessionId: string,
+    request: BridgeControlRequest,
+  ): Promise<BridgeControlResponse> => {
+    const body = request.body as { message?: string; chatConversationId?: string; inboxItemId?: string } | undefined;
+    const message = body?.message ?? "";
+    if (!message.trim()) return { status: 400, body: { ok: false, code: "EMPTY_PROMPT" } };
+    const agent = ctx.agents.get(sessionId);
+    if (!agent) return { status: 404, body: { ok: false, code: "TARGET_NOT_FOUND" } };
+    if (isSubagentOwned(agent.session.header)) {
+      return { status: 409, body: { ok: false, code: "CONTEXT_INCOMPATIBLE" } };
+    }
+
+    const state: BridgeBindingState = (await loadState(sessionId)) ?? {
+      sessionId,
+      chatConversationId: body?.chatConversationId ?? "",
+      boundAt: new Date().toISOString(),
+      lastDeliveredInboxItemId: null,
+      lastDeliveredAt: null,
+      lastClaimedTurn: null,
+      lastAssistantMessageId: null,
+      lastTurnEnded: null,
+    };
+    if (body?.chatConversationId && state.chatConversationId && state.chatConversationId !== body.chatConversationId) {
+      return { status: 409, body: { ok: false, code: "BINDING_CHANGED" } };
+    }
+
+    // One delivery is outstanding until its turn ends: an item that has not
+    // been claimed yet may still start one, and overwriting it would leave
+    // that turn unattributable. Refuse instead of steering or queueing on top.
+    if (state.lastDeliveredInboxItemId !== null && state.lastTurnEnded === null) {
+      // A claimed turn ends on its own. An item that was never claimed only
+      // clears through `agent/inbox/discarded`, so without this age-out a host
+      // that drops the item quietly refuses every later delivery forever.
+      const parsed = state.lastDeliveredAt ? Date.parse(state.lastDeliveredAt) : 0;
+      // A marker this plugin did not write (an epoch number, a hand-edited row) parses to
+      // NaN, and every comparison against NaN is false: treating it as "very old" is the
+      // only reading that cannot wedge the session forever.
+      const deliveredAt = Number.isFinite(parsed) ? parsed : 0;
+      const dropped = state.lastClaimedTurn === null && Date.now() - deliveredAt > OUTSTANDING_DELIVERY_MAX_MS;
+      if (!dropped) return { status: 409, body: { ok: false, code: "TARGET_ACTIVE" } };
+    }
+
+    const inboxItemId = body?.inboxItemId ?? `bridge-${crypto.randomUUID()}`;
+    const userMessage: DshUserMessage = { id: inboxItemId, role: "user", content: message };
+    state.lastDeliveredInboxItemId = inboxItemId;
+    state.lastDeliveredAt = new Date().toISOString();
+    state.lastClaimedTurn = null;
+    state.lastAssistantMessageId = null;
+    state.lastTurnEnded = null;
+    if (body?.chatConversationId) state.chatConversationId = body.chatConversationId;
+    states.set(sessionId, state);
+    agent.followup(userMessage);
+    await saveState(sessionId);
+    return {
+      status: 202,
+      body: { ok: true, state: "SUBMITTED_UNVERIFIED", inboxItemId },
+    };
   };
 
   const handler = async (request: BridgeControlRequest): Promise<BridgeControlResponse> => {
@@ -162,45 +246,13 @@ export function createBridgePlugin(ctx: DshPluginContext, config: DshBridgePlugi
     }
 
     if (request.method === "POST" && request.path.endsWith("/deliver")) {
-      const body = request.body as { message?: string; chatConversationId?: string; inboxItemId?: string } | undefined;
-      const message = body?.message ?? "";
-      if (!message.trim()) return { status: 400, body: { ok: false, code: "EMPTY_PROMPT" } };
-      const agent = ctx.agents.get(sessionId);
-      if (!agent) return { status: 404, body: { ok: false, code: "TARGET_NOT_FOUND" } };
-
-      const state: BridgeBindingState = (await loadState(sessionId)) ?? {
-        sessionId,
-        chatConversationId: body?.chatConversationId ?? "",
-        boundAt: new Date().toISOString(),
-        lastDeliveredInboxItemId: null,
-        lastClaimedTurn: null,
-        lastAssistantMessageId: null,
-        lastTurnEnded: null,
-      };
-      if (body?.chatConversationId && state.chatConversationId && state.chatConversationId !== body.chatConversationId) {
-        return { status: 409, body: { ok: false, code: "BINDING_CHANGED" } };
+      if (delivering.has(sessionId)) return { status: 409, body: { ok: false, code: "TARGET_ACTIVE" } };
+      delivering.add(sessionId);
+      try {
+        return await deliverToSession(sessionId, request);
+      } finally {
+        delivering.delete(sessionId);
       }
-
-      // A prior delivery whose turn was claimed but not yet ended means the
-      // host is mid-turn: refuse instead of steering or queueing on top.
-      if (state.lastClaimedTurn !== null && state.lastTurnEnded === null) {
-        return { status: 409, body: { ok: false, code: "TARGET_ACTIVE" } };
-      }
-
-      const inboxItemId = body?.inboxItemId ?? `bridge-${crypto.randomUUID()}`;
-      const userMessage: DshUserMessage = { id: inboxItemId, role: "user", content: message };
-      state.lastDeliveredInboxItemId = inboxItemId;
-      state.lastClaimedTurn = null;
-      state.lastAssistantMessageId = null;
-      state.lastTurnEnded = null;
-      if (body?.chatConversationId) state.chatConversationId = body.chatConversationId;
-      states.set(sessionId, state);
-      agent.followup(userMessage);
-      await saveState(sessionId);
-      return {
-        status: 202,
-        body: { ok: true, state: "SUBMITTED_UNVERIFIED", inboxItemId },
-      };
     }
 
     return { status: 404, body: { ok: false, code: "TARGET_NOT_FOUND" } };
@@ -212,7 +264,6 @@ export function createBridgePlugin(ctx: DshPluginContext, config: DshBridgePlugi
       ctx.webServer.register({ kind: "prefix", path: "/chatgpt-bridge", handler });
     },
     handler,
-    isSubagentOwned,
     setControlToken(token: string) {
       controlToken = token;
     },

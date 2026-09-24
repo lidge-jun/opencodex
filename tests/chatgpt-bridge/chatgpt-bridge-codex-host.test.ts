@@ -117,4 +117,59 @@ describe("devspace mcp client", () => {
     await expect(adapter.send("c1", "x".repeat(512 * 1024 + 1))).rejects.toThrow(BridgeCoreError);
     expect(calls).toHaveLength(0);
   });
+
+  test("a retired session id is dropped: the next call re-initializes instead of failing forever", async () => {
+    const sent: string[] = [];
+    let retired = false;
+    let minted = 0;
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const headers = init?.headers as Record<string, string>;
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      sent.push(`${body.method}:${headers["mcp-session-id"] ?? "none"}`);
+      if (body.method === "initialize") {
+        minted += 1;
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), {
+          status: 200,
+          headers: { "mcp-session-id": `session-${minted}` },
+        });
+      }
+      if (body.method === "notifications/initialized") return new Response(null, { status: 202 });
+      // A DevSpace restart retires the minted id, so any call still presenting
+      // session-1 is rejected until the client mints a new one.
+      if (retired && headers["mcp-session-id"] === "session-1") return new Response("no such session", { status: 404 });
+      retired = true;
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: toolResult({ ok: true, state: "READABLE" }) }), { status: 200 });
+    }) as typeof fetch;
+    const client = new DevSpaceMcpClient({ baseUrl: "http://127.0.0.1:17676/mcp", bearerToken: "x", fetchImpl });
+    await client.callTool("codex_bridge_status", { controllerId: "c1" });
+    await expect(client.callTool("codex_bridge_status", { controllerId: "c1" })).rejects.toThrow(BridgeCoreError);
+    await client.callTool("codex_bridge_status", { controllerId: "c1" });
+    expect(sent).toEqual([
+      "initialize:none",
+      "notifications/initialized:session-1",
+      "tools/call:session-1",
+      "tools/call:session-1",
+      "initialize:none",
+      "notifications/initialized:session-2",
+      "tools/call:session-2",
+    ]);
+  });
+
+  test("a shared SSE stream is matched by request id, not by the first response frame", async () => {
+    const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (body.method === "initialize") {
+        return new Response(JSON.stringify({ jsonrpc: "2.0", id: body.id, result: {} }), { status: 200 });
+      }
+      const other = { jsonrpc: "2.0", id: 99, result: toolResult({ ok: true, state: "ANSWER-TO-ANOTHER-CALL" }) };
+      const mine = { jsonrpc: "2.0", id: body.id, result: toolResult({ ok: true, state: "READABLE" }) };
+      return new Response(
+        `data: ${JSON.stringify(other)}\n\ndata: ${JSON.stringify(mine)}\n\n`,
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      );
+    }) as typeof fetch;
+    const client = new DevSpaceMcpClient({ baseUrl: "http://127.0.0.1:17676/mcp", bearerToken: "x", fetchImpl });
+    const status = await new CodexHostAdapter(client).status("c1");
+    expect(status.state).toBe("READABLE");
+  });
 });

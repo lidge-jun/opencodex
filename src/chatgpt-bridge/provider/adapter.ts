@@ -13,7 +13,9 @@ import type { IncomingMeta, ProviderAdapter } from "../../adapters/base";
 export interface ChatGptWebTurnContext {
   modelId: string;
   effort?: string;
-  promptPreview: string;
+  // Deliberately no prompt or context projection: a serialized slice of the
+  // conversation is request content, and any transport that logs this context
+  // would then log the body. AGENTS.md forbids that at the privacy boundary.
 }
 
 export interface ChatGptWebTransport {
@@ -75,7 +77,6 @@ export function createChatGptWebAdapter(
           {
             modelId: parsed.modelId,
             effort: (parsed.options as { reasoningEffort?: string } | undefined)?.reasoningEffort,
-            promptPreview: JSON.stringify(parsed.context ?? {}).slice(0, 200),
           },
           incoming,
           emit,

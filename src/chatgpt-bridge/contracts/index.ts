@@ -3,7 +3,6 @@ import { z } from "zod";
 /** Wire-level error codes shared by Bridge.* contracts. */
 export const BRIDGE_ERROR_CODES = [
   "BINDING_CHANGED",
-  "REVISION_CONFLICT",
   "BINDING_REVISION_CONFLICT",
   "OPERATION_ID_CONFLICT",
   "AUTH_REQUIRED",
@@ -12,6 +11,7 @@ export const BRIDGE_ERROR_CODES = [
   "TARGET_ACTIVE",
   "TARGET_NOT_FOUND",
   "BINDING_NOT_FOUND",
+  "BINDING_EXISTS",
   "HOST_OFFLINE",
   "ATTACHMENT_UNAVAILABLE",
   "ATTACHMENT_REQUIRED",
@@ -24,9 +24,7 @@ export const BRIDGE_ERROR_CODES = [
   "INVALID_CHATGPT_URL",
   "INVALID_REGISTRY",
   "PROTOCOL_UNSUPPORTED",
-  "ENVIRONMENT_UNTRUSTED",
   "CONTEXT_INCOMPATIBLE",
-  "LOOP_DETECTED",
 ] as const;
 
 export type BridgeErrorCode = (typeof BRIDGE_ERROR_CODES)[number];
@@ -127,6 +125,9 @@ export type BridgeBinding = z.infer<typeof bindingSchema>;
 
 export const BRIDGE_PROTOCOL_VERSION = 1;
 
+/** Largest prompt a delivery may carry; the ceiling the Codex host sends at. */
+export const MAX_PROMPT_CHARS = 512 * 1024;
+
 /** Management actions accepted by the unified manage entry point. */
 export const MANAGEMENT_ACTIONS = [
   "create",
@@ -136,7 +137,6 @@ export const MANAGEMENT_ACTIONS = [
   "renew",
   "revoke",
   "unbind",
-  "replace",
 ] as const;
 export type BridgeManagementAction = (typeof MANAGEMENT_ACTIONS)[number];
 

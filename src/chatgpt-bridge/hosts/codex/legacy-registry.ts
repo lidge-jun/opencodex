@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { BridgeCoreError, CHATGPT_CONVERSATION_URL_PATTERN } from "../../contracts";
 
 /**
@@ -8,11 +8,15 @@ import { BridgeCoreError, CHATGPT_CONVERSATION_URL_PATTERN } from "../../contrac
  * - byte-read + JSON.parse only: importing bridge-lib would run mkdir/icacls
  *   side effects, so that module must never be loaded here;
  * - this reader never writes, never locks, and never touches *.cap files;
- * - snapshots are invalidated by managementRevision + mtime so OC always sees
- *   the legacy registry as the single source of truth for existing bindings.
+ * - every read goes to the file: the legacy registry is the single source of
+ *   truth for existing bindings, so any snapshot this class kept would be a
+ *   stale answer, and a same-length rewrite can hide inside mtime granularity.
  */
+// Windows-only by construction: the legacy bridge writes this under %USERPROFILE%.
+// Anywhere else the literal `~` is never expanded, so the read below reports the
+// empty snapshot rather than a foreign path.
 export const LEGACY_REGISTRY_PATH_DEFAULT =
-  `${process.env.USERPROFILE ?? "~"}\\.codex\\state\\chatgpt-codex-live-bridge\\bindings.json`.replace(/~/g, process.env.USERPROFILE ?? "~");
+  `${process.env.USERPROFILE ?? "~"}\\.codex\\state\\chatgpt-codex-live-bridge\\bindings.json`;
 
 export interface LegacyBindingSnapshot {
   source: "legacy-codex";
@@ -40,32 +44,19 @@ export interface LegacyRegistrySnapshot {
   bindings: LegacyBindingSnapshot[];
 }
 
-interface CacheEntry {
-  mtimeMs: number;
-  size: number;
-  snapshot: LegacyRegistrySnapshot;
-}
-
 export class LegacyBindingRegistryReader {
-  private cache: CacheEntry | null = null;
-
   constructor(private readonly registryPath: string = LEGACY_REGISTRY_PATH_DEFAULT) {}
 
   read(): LegacyRegistrySnapshot {
-    let stat: { mtimeMs: number; size: number };
+    let raw: string;
     try {
-      const s = statSync(this.registryPath);
-      stat = { mtimeMs: s.mtimeMs, size: s.size };
+      raw = readFileSync(this.registryPath, "utf8");
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       if (code === "ENOENT" || code === "ENOTDIR") {
-        this.cache = null;
         return { managementRevision: -1, version: 0, readAt: new Date().toISOString(), bindings: [] };
       }
       throw new BridgeCoreError("INVALID_REGISTRY", `legacy registry unreadable: ${String(error)}`);
-    }
-    if (this.cache && this.cache.mtimeMs === stat.mtimeMs && this.cache.size === stat.size) {
-      return this.cache.snapshot;
     }
     let parsed: {
       version?: number;
@@ -73,7 +64,7 @@ export class LegacyBindingRegistryReader {
       bindings?: Record<string, Record<string, unknown>>;
     };
     try {
-      parsed = JSON.parse(readFileSync(this.registryPath, "utf8"));
+      parsed = JSON.parse(raw);
     } catch (error) {
       throw new BridgeCoreError("INVALID_REGISTRY", `legacy registry parse failed: ${String(error)}`);
     }
@@ -89,7 +80,6 @@ export class LegacyBindingRegistryReader {
       readAt: new Date().toISOString(),
       bindings,
     };
-    this.cache = { ...stat, snapshot };
     return snapshot;
   }
 

@@ -1,4 +1,4 @@
-import { BridgeCoreError, type BridgeErrorCode } from "../../contracts";
+import { BridgeCoreError, type BridgeErrorCode, MAX_PROMPT_CHARS } from "../../contracts";
 
 /**
  * Minimal MCP client for the local DevSpace control plane (legacy bridge tools).
@@ -59,7 +59,9 @@ export class DevSpaceMcpClient {
         if (this.sessionId) {
           await this.fetchImpl(this.config.baseUrl, {
             method: "POST",
-            headers: this.headers(false),
+            // Streamable HTTP scopes every frame after initialize to the minted
+            // session, so this notification must carry the id it announces.
+            headers: this.headers(true),
             body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
             signal: this.signal(),
           });
@@ -93,6 +95,13 @@ export class DevSpaceMcpClient {
     if (response.status === 401 || response.status === 403) {
       throw new BridgeCoreError("AUTH_REQUIRED", `devspace rejected credentials (${response.status})`);
     }
+    if (response.status === 404) {
+      // A DevSpace restart retires the minted session id, and every later call
+      // would then be rejected with the same 404. Drop it so the next call
+      // re-initializes instead of failing for the life of this client.
+      this.sessionId = null;
+      this.sessionReady = null;
+    }
     if (!response.ok) {
       const detail = (await response.text().catch(() => "")).slice(0, 300);
       throw new BridgeCoreError("HOST_OFFLINE", `devspace mcp ${response.status}${detail ? `: ${detail}` : ""}`);
@@ -103,13 +112,14 @@ export class DevSpaceMcpClient {
   /** Invoke a DevSpace MCP tool and unwrap the bridge result envelope. */
   async callTool<T = Record<string, unknown>>(tool: string, args: Record<string, unknown> = {}): Promise<T> {
     await this.ensureSession();
+    const id = this.nextId++;
     const response = await this.postRpc({
       jsonrpc: "2.0",
-      id: this.nextId++,
+      id,
       method: "tools/call",
       params: { name: tool, arguments: args },
     });
-    const payload = await this.parseRpcResponse(response);
+    const payload = await this.parseRpcResponse(response, id);
     if (payload.error) {
       throw new BridgeCoreError("HOST_OFFLINE", `devspace rpc error ${payload.error.code}: ${payload.error.message}`);
     }
@@ -123,8 +133,11 @@ export class DevSpaceMcpClient {
   /**
    * Streamable HTTP servers may answer a POST with an SSE stream carrying the
    * JSON-RPC frame; unwrap either transport into a single response object.
+   * A shared stream multiplexes every request, so a frame is only an answer
+   * when it carries this request's id — the first response frame may belong to
+   * an earlier call.
    */
-  private async parseRpcResponse(response: Response): Promise<JsonRpcResponse> {
+  private async parseRpcResponse(response: Response, id: number | string): Promise<JsonRpcResponse> {
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("text/event-stream")) {
       const raw = await response.text();
@@ -134,7 +147,7 @@ export class DevSpaceMcpClient {
         if (!chunk) continue;
         try {
           const frame = JSON.parse(chunk) as JsonRpcResponse;
-          if (frame.id !== null && frame.id !== undefined && (frame.result || frame.error)) return frame;
+          if (frame.id === id && (frame.result || frame.error)) return frame;
         } catch {
           // ignore keep-alive comments / non-JSON frames
         }
@@ -250,7 +263,7 @@ export class CodexHostAdapter {
 
   async send(controllerId: string, prompt: string): Promise<CodexBridgeStatus> {
     if (prompt.length === 0) throw new BridgeCoreError("EMPTY_PROMPT", "prompt is empty");
-    if (prompt.length > 512 * 1024) throw new BridgeCoreError("PROMPT_TOO_LARGE", "prompt exceeds 512 KiB");
+    if (prompt.length > MAX_PROMPT_CHARS) throw new BridgeCoreError("PROMPT_TOO_LARGE", "prompt exceeds 512 KiB");
     const result = await this.client.callTool("codex_bridge_send", { controllerId, prompt });
     return this.toStatus(result);
   }
