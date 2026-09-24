@@ -1,4 +1,4 @@
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, lstatSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { restoreNativeCodexAsync } from "../codex/inject";
 import { describeRetainedCodexProviderTable } from "../codex/inject/restore";
@@ -188,18 +188,22 @@ export function parseServiceArgs(args: string[]): ParsedServiceArgs {
 /** Remove the service credential only when no client connection can own it. */
 export function removeServiceTokenAfterUninstall(
   lockDeps: ClientLifecycleLockDeps = {},
-): "removed" | "absent" | "retained" {
+): "removed" | "absent" | "retained" | "unverified" {
   try {
     return withClientLifecycleSync(() => withConfigMutationLockSync(() => {
-      if (readClientConnectionState().kind !== "disconnected") return "retained";
       const path = serviceApiTokenFilePath();
-      if (!existsSync(path)) return "absent";
+      try { lstatSync(path); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "absent";
+        throw error;
+      }
+      if (readClientConnectionState().kind !== "disconnected") return "retained";
       unlinkSync(path);
       return "removed";
     }), lockDeps);
   } catch {
-    // An unreadable connection or unavailable lock cannot authorize deleting a key.
-    return "retained";
+    // Lock, state-read and unlink failures all leave cleanup unverified, not successful.
+    return "unverified";
   }
 }
 
@@ -445,9 +449,9 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
         }
       }
       removeServiceInstallState();
-      if (removeServiceTokenAfterUninstall() === "retained") {
-        console.warn("⚠️  Service token retained for a client connection or unresolved ownership.");
-      }
+      const tokenCleanup = removeServiceTokenAfterUninstall();
+      if (tokenCleanup === "retained") console.warn("⚠️  Service token kept because client state may own it.");
+      else if (tokenCleanup === "unverified") console.warn("⚠️  Service token cleanup could not be verified; inspect client state before deleting it.");
       console.log("✅ service uninstalled.");
       break;
     default:

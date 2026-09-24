@@ -5,6 +5,7 @@ import {
   chmodSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   renameSync,
@@ -51,7 +52,7 @@ afterEach(() => {
 });
 
 describe("service uninstall credential ownership", () => {
-  function cleanup(): "removed" | "absent" | "retained" {
+  function cleanup(): "removed" | "absent" | "retained" | "unverified" {
     return removeServiceTokenAfterUninstall({ lockPath: join(home, "lifecycle.sqlite") });
   }
 
@@ -71,6 +72,8 @@ describe("service uninstall credential ownership", () => {
 
     expect(cleanup()).toBe("retained");
     expect(readFileSync(token.path, "utf8")).toBe("ocx_client_key\n");
+    rmSync(token.path);
+    expect(cleanup()).toBe("absent");
   });
 
   test("removes an unowned service token", () => {
@@ -88,6 +91,24 @@ describe("service uninstall credential ownership", () => {
 
     expect(cleanup()).toBe("retained");
     expect(readFileSync(token.path, "utf8")).toBe("ocx_uncertain_key\n");
+  });
+
+  test("keeps the token when client metadata is invalid", () => {
+    const token = writeServiceApiTokenFile("ocx_invalid_client_key");
+    writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", client: {} }));
+    expect(readClientConnectionState().kind).toBe("invalid");
+
+    expect(cleanup()).toBe("retained");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_invalid_client_key\n");
+  });
+
+  test("reports unavailable lifecycle ownership separately from retained keys", () => {
+    const token = writeServiceApiTokenFile("ocx_unverified_key");
+    const blockedLock = join(home, "blocked-lifecycle-lock");
+    mkdirSync(blockedLock);
+
+    expect(removeServiceTokenAfterUninstall({ lockPath: blockedLock })).toBe("unverified");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_unverified_key\n");
   });
 });
 
