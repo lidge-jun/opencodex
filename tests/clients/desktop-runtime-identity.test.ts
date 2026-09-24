@@ -126,16 +126,19 @@ describe("desktop runtime identity", () => {
     const window = code(WINDOW);
     const rule = window.slice(window.indexOf("fn is_app_origin("));
     const body = rule.slice(0, rule.indexOf("\n}"));
-    // The custom scheme everywhere, and the http spelling WebView2 needs on Windows.
-    expect(body).toContain('"tauri" => true');
+    // The custom scheme's app host (tauri://localhost, no port), and the http spelling WebView2
+    // needs on Windows. The update page's command guard relies on this exact app origin.
+    expect(body).toContain('"tauri" => url.host_str() == Some("localhost") && url.port().is_none()');
     expect(body).toContain('url.host_str() == Some("tauri.localhost")');
     // Not https, which is not the scheme the pinned Tauri serves the app over, and not a port,
     // which would mean something else is answering.
     expect(body).toContain("url.port().is_none()");
     expect(body).not.toContain('"https"');
     expect(window).toContain("if is_app_origin(url) {");
-    // Not localhost generally, and not a remote IPC widening.
-    expect(window).not.toContain('Some("localhost")');
+    // Not http://localhost generally (only the tauri: scheme may name that host), and not a
+    // remote IPC widening.
+    expect(body).not.toMatch(/"http" =>[^\n]*Some\("localhost"\)/);
+    expect(window.match(/Some\("localhost"\)/g) ?? []).toHaveLength(1);
     expect(readFileSync(repoPath("desktop/src-tauri/capabilities/default.json"), "utf8")).not.toContain(
       "remote",
     );

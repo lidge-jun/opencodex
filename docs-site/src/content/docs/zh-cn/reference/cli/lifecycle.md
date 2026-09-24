@@ -260,6 +260,7 @@ ocx codex-shim uninstall
 
 安装并控制 Windows 状态托盘图标。它会在 Windows 登录时启动，并提供一键代理控制。`start` 和 `stop` 只控制图标本身；要控制代理，请使用其菜单。`--no-start` 适用于 `install`，会安装托盘但不会立即启动。
 已弃用：OpenCodex 桌面应用在 Windows、macOS 和 Linux 上提供托盘；没有桌面应用的安装仍可使用 `ocx tray`。
+当发现有更新的包版本时，托盘会在在线、警告或离线图标上显示蓝点，并显示 **Update available**。托盘大约每分钟检查一次本地缓存的徽标；结果过期或不可用时会移除蓝点。该菜单项会打开仪表板，你可以在那里启动包更新。它不会自动安装。
 
 ## 仪表盘
 

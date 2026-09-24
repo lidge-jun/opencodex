@@ -594,6 +594,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "Hidden detached helper: refresh the cached latest version.",
   },
   {
+    name: "__update-badge",
+    hidden: true,
+    usage: "ocx __update-badge",
+    summary: "Hidden internal: print cached package update badge JSON.",
+  },
+  {
     name: "__tray-start",
     hidden: true,
     usage: "ocx __tray-start",

@@ -178,6 +178,26 @@ impl ProxyClient {
         self.request(Method::GET, path).await
     }
 
+    pub async fn post_desktop_snapshot(&self, body: &Value) -> Result<(), ProxyError> {
+        let token = self.authorised_token().await?;
+        let response = self
+            .client
+            .post(self.endpoint.url("/api/update/desktop-snapshot"))
+            .header("X-OpenCodex-API-Key", token)
+            .json(body)
+            .send()
+            .await
+            .map_err(|error| {
+                if error.is_connect() {
+                    ProxyError::Unreachable
+                } else {
+                    ProxyError::Decode(error)
+                }
+            })?;
+        let _ = decode(response).await?;
+        Ok(())
+    }
+
     async fn request(&self, method: Method, path: &str) -> Result<Value, ProxyError> {
         let response = self.send(&method, path, None).await?;
         if response.status() == StatusCode::UNAUTHORIZED {

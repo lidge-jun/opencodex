@@ -207,8 +207,8 @@ Katman modeli ve her katmanın yazdığı anahtarlar için [Codex İstem Katmanl
 | `GET, POST /api/windows-tray` | Windows tepsisi durumunu okuyun veya kurun/başlatın/durdurun/kaldırın | 400 desteklenmeyen platform/eylem; 500 işlem hatası |
 | `GET /api/diagnostics/project-config` | Önbelleğe alınmış proje yapılandırma uyarılarını okuyun | — |
 | `POST /api/sync` | Geçerli model kataloğunu Codex ile senkronize edin | 500 başarısız senkronizasyon |
-| `GET /api/update/check` | `latest` veya `preview` güncelleme kanalını kontrol edin | 400 geçersiz etiket |
-| `POST /api/update/run` | İsteğe bağlı olarak yeniden başlatmanın takip ettiği bir güncelleme işini başlatın | 400 geçersiz gövde; işe özgü çakışma/hata durumu |
+| `GET /api/update/check` | `latest` veya `preview` paket kanalını eşzamansız denetleyip başarılı olursa önbelleği yenile | 400 geçersiz etiket |
+| `POST /api/update/run` | Yeni paket sürümünü eşzamansız denetle, ardından isteğe bağlı yeniden başlatmayla güncelleme işini başlat | 400 geçersiz gövde; işe özgü çakışma/hata durumu |
 | `GET /api/update/status` | Bir güncelleme işini kimliğe göre yoklayın | 404 bilinmeyen iş |
 | `GET, PUT /api/sidecar-settings` | Web arama ve vizyon sidecar model/arka uç ayarlarını okuyun veya güncelleyin | 400 geçersiz şekil, arka uç veya sınır |
 | `GET, PUT /api/shadow-call-settings` | Gölge çağrı müdahale ayarlarını okuyun veya güncelleyin | 400 geçersiz şekil veya değer |
@@ -343,7 +343,12 @@ yeniden yüklemeden sonra da saklar, ancak bir sınır olarak uygulamaz.
 | --- | --- | --- |
 | `GET /api/github/star` | Kullanıcının `gh` oturumu aracılığıyla depo yıldız durumunu okuyun | Duruma özgü sabit sonuç kodları |
 | `POST /api/github/star` | Depoyu yalnızca kimliği doğrulanmış bir insan eyleminden yıldızlayın | Kontrol paneli oturumu kanıtı olmayan ajan odaklı arayanlar için 403 `agent_consent_required` |
-| `GET /api/update/badge` | Ucuz kenar çubuğu güncelleme rozeti durumunu okuyun | — |
+| `GET /api/update/badge` | Kayıt sorgusu yapmadan önbellekteki paket rozetini oku; önbellek yoksa, kanal farklıysa veya 40 saatten eskiyse `unknown: true` döndür. `surface=desktop&session=<id>` yalnızca belirtilen masaüstü uygulaması oturumunu okur. | 400 geçersiz surface; eksik veya süresi dolmuş masaüstü oturumu `unknown: true` döndürür |
+| `POST /api/update/desktop-snapshot` | Masaüstü kabuğu, Tauri güncelleyicisinin görüntü durumunu bağlı proxy istemcisi üzerinden yayımlar | `Origin` üstbilgisi varsa veya ham `admin-token` principal yoksa 403; geçersiz alanlarda 400; 1 KiB üzerinde 413 |
+
+Masaüstü snapshot geçici görüntü durumudur, kurulum isteği değildir. Proxy bellekte en fazla 32 oturum tutar ve bir oturumu son heartbeat sonrasında 180 saniyede sona erdirir. surface=desktop olmayan normal tarayıcı paket rozetini okumaya devam eder.
+
+Proxy, uygun paket kurulumunda başlangıçtan sonra önbellek eksikse veya 20 saatten eskiyse denetim yapar; ardından tazeliği saat başı kontrol eder. `OCX_DISABLE_UPDATE_CHECK=1` yalnızca otomatik denetimleri kapatır. Açıkça yapılan denetim ve çalıştırma istekleri kullanılabilir.
 
 :::caution
 Yönetim kimlik doğrulaması proxy'ye erişimi kanıtlar; kullanıcının kimliğini

@@ -23,7 +23,9 @@ const SUCCESSOR_IDS = new Set(ROSTER_SUCCESSORS.values());
 function upgradeRetiredRosterRows(models: readonly string[]): string[] {
   const upgraded: string[] = [];
   for (const model of models) {
-    const next = ROSTER_SUCCESSORS.get(model) ?? (RETIRED_ROSTER_FAMILY.test(model) ? null : model);
+    const next = model.includes("/")
+      ? model
+      : ROSTER_SUCCESSORS.get(model) ?? (RETIRED_ROSTER_FAMILY.test(model) ? null : model);
     if (next === null || (SUCCESSOR_IDS.has(next) && upgraded.includes(next))) continue;
     upgraded.push(next);
   }
