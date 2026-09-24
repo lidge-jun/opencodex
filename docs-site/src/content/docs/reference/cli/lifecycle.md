@@ -684,6 +684,7 @@ proxy controls. `start` and `stop` control the icon only; use its menu to contro
 `--no-start` applies to `install` and installs the tray without launching it immediately.
 Deprecated: the OpenCodex desktop app provides the tray on Windows, macOS, and Linux; `ocx tray`
 remains for installs without the desktop app.
+When a newer package version is known, the tray adds a blue dot to its online, warning, or offline icon and shows **Update available**. The tray checks its local cached badge about once a minute; stale or unavailable results remove the dot. The menu item opens the dashboard, where you can start the package update. It does not install automatically.
 
 ## Dashboard
 

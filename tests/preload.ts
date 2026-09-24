@@ -72,6 +72,7 @@ for (const [key, value] of Object.entries(isolated.env)) {
 process.env.OCX_TEST_HOME_GUARD = "1";
 // Lets a test assert one preload per process rather than assuming Bun's scheduling.
 process.env.OCX_TEST_PRELOAD_PID = String(process.pid);
+process.env.OCX_DISABLE_UPDATE_CHECK = "1";
 
 if (!isTestHomeGuardArmed() || !protectedHomeForTests()) {
   throw new Error("test home guard failed to arm; refusing to run tests unprotected");

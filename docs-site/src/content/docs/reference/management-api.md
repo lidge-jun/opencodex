@@ -265,8 +265,8 @@ See [Codex prompt layers](/guides/codex-prompt/) for the layer model and the key
 | `GET, POST /api/windows-tray` | Read Windows tray state or install/start/stop/uninstall it | 400 unsupported platform/action; 500 operation failure |
 | `GET /api/diagnostics/project-config` | Read cached project configuration warnings | — |
 | `POST /api/sync` | Sync the current model catalog into Codex | 500 failed sync |
-| `GET /api/update/check` | Check the `latest` or `preview` update channel | 400 invalid tag |
-| `POST /api/update/run` | Start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
+| `GET /api/update/check` | Asynchronously check the `latest` or `preview` package channel and refresh the package cache on success | 400 invalid tag |
+| `POST /api/update/run` | Asynchronously check a fresh package version, then start an update job, optionally followed by restart | 400 invalid body; job-specific conflict/error status |
 | `GET /api/update/status` | Poll an update job by id | 404 unknown job |
 | `GET, PUT /api/sidecar-settings` | Read or update web-search and vision sidecar model/backend settings | 400 invalid shape, backend, or limit |
 | `GET, PUT /api/shadow-call-settings` | Read or update shadow-call interception settings | 400 invalid shape or value |
@@ -544,7 +544,12 @@ deleting their provider.
 | --- | --- | --- |
 | `GET /api/github/star` | Read repository star status through the user's `gh` session | Status-specific fixed result codes |
 | `POST /api/github/star` | Star the repository only from an authenticated human action | 403 `agent_consent_required` for agent-driven callers without dashboard-session evidence |
-| `GET /api/update/badge` | Read the cheap sidebar update-badge state | — |
+| `GET /api/update/badge` | Read cached package badge without a registry lookup; missing, wrong-channel or 40-hour-old cache returns `unknown: true`. `surface=desktop&session=<id>` reads only that desktop app session. | 400 invalid surface; missing or expired desktop session returns `unknown: true` |
+| `POST /api/update/desktop-snapshot` | Desktop shell publishes its Tauri-updater display state through the bound proxy client | 403 if an `Origin` header is present or the principal is not the raw `admin-token`; 400 invalid fields; 413 over 1 KiB |
+
+The desktop snapshot is temporary display state, not an install request. The proxy stores at most 32 sessions in memory and expires one 180 seconds after its last heartbeat. A normal browser without surface=desktop continues to read the package badge.
+
+The proxy checks an eligible package install after startup when its cache is missing or older than 20 hours, and checks freshness hourly. Set `OCX_DISABLE_UPDATE_CHECK=1` to disable automatic checks. Explicit check and run requests still work.
 
 :::caution
 Management authentication proves access to the proxy; it does not prove consent to spend the

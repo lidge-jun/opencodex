@@ -472,6 +472,7 @@ simgeyi kontrol eder; proxy'yi kontrol etmek için menüsünü kullanın.
 `--no-start`, `install` için geçerlidir ve tepsiyi hemen başlatmadan kurar.
 Kullanımdan kaldırıldı: OpenCodex masaüstü uygulaması Windows, macOS ve Linux'ta tepsi sağlar;
 `ocx tray`, masaüstü uygulaması olmayan kurulumlar için kullanılmaya devam eder.
+Yeni bir paket sürümü bilindiğinde tepsi, çevrimiçi, uyarı veya çevrimdışı simgesine mavi bir nokta ekler ve **Update available** gösterir. Yerel önbellekteki rozeti yaklaşık dakikada bir denetler; eski veya kullanılamayan sonuçlar noktayı kaldırır. Menü öğesi panoyu açar ve paket güncellemesini oradan başlatabilirsiniz. Otomatik yükleme yapmaz.
 
 ## Kontrol Paneli
 

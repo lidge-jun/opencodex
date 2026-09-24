@@ -748,12 +748,13 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/update/check" && req.method === "GET") {
-    const { checkForUpdate, normalizeUpdateChannel } = await import("../../update/job");
+    const { normalizeUpdateChannel } = await import("../../update/job");
+    const { packageRefresh } = await import("../../update/refresh-scheduler");
     const rawTag = url.searchParams.get("tag");
     if (rawTag && rawTag !== "latest" && rawTag !== "preview") {
       return jsonResponse({ error: "tag must be latest or preview" }, 400);
     }
-    return jsonResponse(checkForUpdate(normalizeUpdateChannel(rawTag)));
+    return jsonResponse(await (deps.checkPackageUpdate ?? packageRefresh.check)(normalizeUpdateChannel(rawTag)));
   }
 
   if (url.pathname === "/api/update/run" && req.method === "POST") {
@@ -767,7 +768,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       return jsonResponse({ error: "restart boolean is required" }, 400);
     }
     try {
-      return jsonResponse({ ok: true, job: startUpdateJob(normalizeUpdateChannel(body.tag as string | undefined), body.restart !== false) });
+      const channel = normalizeUpdateChannel(body.tag as string | undefined);
+      const { packageRefresh } = await import("../../update/refresh-scheduler");
+      const checked = await (deps.checkPackageUpdate ?? packageRefresh.check)(channel);
+      return jsonResponse({ ok: true, job: startUpdateJob(channel, body.restart !== false, {
+        checkForUpdateFn: () => checked,
+      }) });
     } catch (err) {
       if (err instanceof UpdateJobError) {
         return jsonResponse({ error: err.message, code: err.code }, err.status);

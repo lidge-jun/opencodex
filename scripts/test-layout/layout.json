@@ -41,6 +41,7 @@
       "match": [
         "^context-history\\.test\\.ts$",
         "^aside-profiles-routes",
+        "^update-async-routes\\.test\\.ts$",
         "^(?:account|alias|bounded|cancel|config\\.test\\.ts|consume|data|debug|error|errors|fetch|health|input|loopback|management|memory|outbound|owned|passive|port|ports\\.test\\.ts|proxy|relay|response|retry|server|session|sidebar|stream|v2)-"
       ]
     },
@@ -454,6 +455,7 @@
     "cli-stop-json.test.ts": "cli",
     "cli-storage-inspect.test.ts": "cli",
     "cli-transport-honesty.test.ts": "cli",
+    "cli-update-badge.test.ts": "cli",
     "cli-usage-hub.test.ts": "cli",
     "cli-usage-report.test.ts": "cli",
     "cli-version-skew.test.ts": "cli",
@@ -787,6 +789,7 @@
     "desktop-runtime-identity.test.ts": "clients",
     "desktop-start-at-login-default.test.ts": "clients",
     "desktop-startup-surface.test.ts": "clients",
+    "desktop-update-surface.test.ts": "clients",
     "desktop-tray-availability.test.ts": "clients",
     "desktop-widget-entry.test.ts": "clients",
     "destination-policy-resolved.test.ts": "routing",
@@ -1653,8 +1656,10 @@
     "ultrafast-tier-honesty.test.ts": "codex-integration",
     "umans-provider.test.ts": "providers",
     "uninstall.test.ts": "cli",
+    "update-async-routes.test.ts": "server",
     "update-badge.test.ts": "update",
     "update-bun-ownership-lease.test.ts": "update",
+    "update-desktop-badge.test.ts": "update",
     "update-desktop-owner.test.ts": "update",
     "update-job.test.ts": "update",
     "update-notify.test.ts": "update",
@@ -1663,6 +1668,7 @@
     "update-mise.test.ts": "update",
     "update-mise-node-runtime.test.ts": "update",
     "update-pnpm.test.ts": "update",
+    "update-refresh.test.ts": "update",
     "update-stop-classification.test.ts": "update",
     "update-stop-first.test.ts": "update",
     "update-transactional-leftovers.test.ts": "update",

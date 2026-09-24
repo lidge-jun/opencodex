@@ -25,6 +25,12 @@ mod popup;
 #[cfg(target_os = "macos")]
 #[path = "native_tray.rs"]
 mod popup;
+// The macOS build selects native_tray.rs as the popup module; compile the portable popup
+// module's tests on macOS too so its navigation rules run on the maintainers' platform.
+#[cfg(all(test, target_os = "macos"))]
+#[allow(dead_code)]
+#[path = "popup.rs"]
+mod popup_portable_test;
 mod proxy;
 mod resolve;
 mod runtime_stop;
@@ -186,6 +192,44 @@ fn decide_takeover(app: tauri::AppHandle, approved: bool) {
     }
 }
 
+#[tauri::command]
+async fn update_status(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<updater::PageUpdateStatus, String> {
+    window::require_update_page(&window)?;
+    Ok(updater::page_status(&app))
+}
+
+#[tauri::command]
+async fn update_check(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<updater::PageUpdateStatus, String> {
+    window::require_update_page(&window)?;
+    let check_result = updater::check_and_show(&app).await;
+    check_result.map_err(|_| "the update check failed; try again".to_owned())?;
+    Ok(updater::page_status(&app))
+}
+
+#[tauri::command]
+async fn update_install(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<updater::PageUpdateStatus, String> {
+    window::require_update_page(&window)?;
+    updater::install_pending(&app).await.map_err(|error| {
+        logging::log_once("updater install failed", &error);
+        "the update could not be installed; try again".to_owned()
+    })
+}
+
+#[tauri::command]
+fn return_to_dashboard(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
+    window::require_update_page(&window)?;
+    startup::return_to_dashboard(&app)
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -218,11 +262,21 @@ pub fn run() {
             startup_snapshot,
             startup_phases,
             retry_startup,
-            decide_takeover
+            decide_takeover,
+            update_status,
+            update_check,
+            update_install,
+            return_to_dashboard
         ])
         .setup(|app| {
             app.manage(AppState::new());
             app.manage(updater::PendingUpdate(Mutex::new(None)));
+            app.manage(updater::DesktopUpdateState::new(
+                app.package_info().version.to_string(),
+            ));
+            app.manage(updater::CheckGeneration::default());
+            updater::start_ui_projection_worker(app.handle().clone());
+            updater::start_snapshot_publisher(app.handle().clone());
             app.manage(tray::TrayState::default());
             app.manage(exit::ExitCoordinator::new());
             app.manage(startup::Startup::new());

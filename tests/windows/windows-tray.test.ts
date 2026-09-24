@@ -27,6 +27,7 @@ import {
   windowsTrayRunValue,
   windowsTrayStatePathsOwned,
   windowsTrayRegistrationIsStale,
+  windowsTrayRequiredFilesPresent,
   windowsRegistryParentShowsRunKey,
   type WindowsTrayEntry,
 } from "../../src/tray/windows";
@@ -227,6 +228,19 @@ describe("Windows tray packaging and command safety", () => {
       .toBe(windowsTrayRunValue("C:\\Users\\Test\\.opencodex\\."));
   });
 
+  test("an install from before the dotted icons still owns its registration", () => {
+    const home = "C:\\Users\\Test\\.opencodex";
+    const state = { bun: "C:\\bun.exe", cli: "C:\\ocx\\cli.ts", script: home + "\\opencodex-tray.ps1" };
+    const icons = ["online", "warning", "offline"].flatMap(name => [
+      `${home}\\opencodex-tray-${name}.ico`, `${home}\\opencodex-tray-${name}-update.ico`]);
+    const legacy = new Set([state.bun, state.cli, state.script, ...icons.filter(path => !path.endsWith("-update.ico"))]);
+    // Only the three base icons exist: still owned, so an update refreshes it instead of dropping it.
+    expect(windowsTrayRequiredFilesPresent(state, icons, path => legacy.has(path))).toBe(true);
+    // A missing base icon still means the install is broken.
+    legacy.delete(`${home}\\opencodex-tray-warning.ico`);
+    expect(windowsTrayRequiredFilesPresent(state, icons, path => legacy.has(path))).toBe(false);
+  });
+
   test("treats an unexpected registry type or unreadable value as foreign", () => {
     const value = "OpenCodexTray-test";
     const command = '"C:\\Windows\\powershell.exe" -File "C:\\tray.ps1"';
@@ -375,7 +389,7 @@ describe("Windows tray packaging and command safety", () => {
     expect(source).toContain('Load-TrayIcon "opencodex-tray-online.ico"');
     expect(source).toContain('Load-TrayIcon "opencodex-tray-warning.ico"');
     expect(source).toContain('Load-TrayIcon "opencodex-tray-offline.ico"');
-    expect(source).toContain("$notify.Icon = $offlineIcon");
+    expect(source).toContain('if ($script:updateAvailable) { $offlineUpdateIcon } else { $offlineIcon }');
     expect(source).not.toContain("$menu.add_Opening({ Update-TrayState })");
     expect(source).not.toContain("Invoke-Expression");
     expect(source).not.toContain("taskkill");
@@ -449,12 +463,13 @@ describe("Windows tray packaging and command safety", () => {
   // no replacement. Either scenario fails if the Kill() is deleted (the child
   // survives) or if maintenance moves inside the online branch (the offline
   // child survives).
-  test("terminates a hung startup-health probe without stacking a replacement", async () => {
+  test("terminates and later reaps hung, overflowing, or failed tray probes without stacking", async () => {
     if (process.platform !== "win32") return;
     const psExe = windowsPowerShellPath();
     const driver = helperPath("windows-tray-probe-lifecycle-driver.ps1");
     const trayScript = repoPath("src", "tray", "windows-tray.ps1");
-    for (const scenario of ["Offline", "Online"] as const) {
+    const scenarios = ["Offline", "Online", "BadgeOffline", "BadgeOverflowStdout", "BadgeOverflowStderr", "BadgeStaleFailure"] as const;
+    for (const scenario of scenarios) {
       const directory = mkdtempSync(join(tmpdir(), "ocx-tray-probe-"));
       const codexHome = join(directory, "codex");
       const openCodexHome = join(directory, "ohome");
@@ -467,7 +482,9 @@ describe("Windows tray packaging and command safety", () => {
       writeFileSync(hangChild, [
         "$pidFile = $env:OCX_PROBE_TEST_PID_FILE",
         "if ($pidFile) { Add-Content -LiteralPath $pidFile -Value $PID }",
-        "Start-Sleep -Seconds 120",
+        ...(scenario === "BadgeOverflowStdout" ? ["[Console]::Out.Write('x' * 32768)"] : []),
+        ...(scenario === "BadgeOverflowStderr" ? ["[Console]::Error.Write('x' * 32768)"] : []),
+        ...(scenario === "BadgeStaleFailure" ? ["exit 1"] : ["Start-Sleep -Seconds 120"]),
       ].join("\r\n"));
       const pidFile = join(directory, "pids.txt");
       const resultPath = join(directory, "verdict.json");
@@ -536,13 +553,45 @@ describe("Windows tray packaging and command safety", () => {
           childTerminated: boolean;
           probeCleared: boolean;
           launches: number;
+          terminatingAfterMaintenance: boolean;
+          trackedAfterMaintenance: boolean;
+          maxTickMs: number;
+          failedProbeExitCode: number | null;
+          iconBeforeMaintenance: string | null;
+          updateAvailableBeforeMaintenance: boolean;
+          iconAfterMaintenance: string | null;
+          updateAvailableAfterMaintenance: boolean;
+          observedAtBeforeMaintenance: number;
+          observedAgeMsAtMaintenance: number;
+          observedAtAfterMaintenance: number;
+          updateItemVisibleAfterMaintenance: boolean;
+          updateItemEnabledAfterMaintenance: boolean;
         };
         expect(verdict.scenario).toBe(scenario);
         expect(verdict.onlineObserved, `${scenario}: online=${verdict.onlineObserved}; the premise of this scenario did not hold`).toBe(scenario === "Online");
         expect(verdict.childTerminated, `${scenario}: hung probe child ${verdict.childPid} survived the timeout`).toBe(true);
         expect(verdict.probeCleared, `${scenario}: probe reference was not released after the kill`).toBe(true);
         expect(verdict.launches, `${scenario}: expected exactly 1 probe launch, saw ${verdict.launches}`).toBe(1);
-        expect(verdict.totalMs, `${scenario}: two ticks took ${verdict.totalMs}ms; a UI-thread block would hang until the 120s sleeper exits`).toBeLessThan(20_000);
+        if (scenario.startsWith("Badge")) {
+          expect(verdict.maxTickMs, `${scenario}: UI tick blocked`).toBeLessThan(250);
+          if (scenario === "BadgeStaleFailure") {
+            expect(verdict.failedProbeExitCode, `${scenario}: probe did not fail`).toBe(1);
+            expect(verdict.iconBeforeMaintenance).toBe("offline-update");
+            expect(verdict.updateAvailableBeforeMaintenance).toBe(true);
+            expect(verdict.observedAtBeforeMaintenance).toBeGreaterThan(0);
+            expect(verdict.observedAgeMsAtMaintenance).toBeGreaterThan(180_000);
+            expect(verdict.observedAtAfterMaintenance).toBe(verdict.observedAtBeforeMaintenance);
+            expect(verdict.updateAvailableAfterMaintenance).toBe(false);
+            expect(verdict.iconAfterMaintenance).toBe("offline-base");
+            expect(verdict.updateItemVisibleAfterMaintenance).toBe(false);
+            expect(verdict.updateItemEnabledAfterMaintenance).toBe(false);
+          } else {
+            expect(verdict.terminatingAfterMaintenance, `${scenario}: no terminating state after kill`).toBe(true);
+            expect(verdict.trackedAfterMaintenance, `${scenario}: disposed on the timeout tick`).toBe(true);
+          }
+        } else {
+          expect(verdict.totalMs, `${scenario}: two ticks took ${verdict.totalMs}ms; a UI-thread block would hang until the 120s sleeper exits`).toBeLessThan(20_000);
+        }
       } finally {
         try {
           if (existsSync(pidFile)) {
@@ -646,6 +695,64 @@ describe("Windows tray packaging and command safety", () => {
     }
   });
 
+  test("update ICOs contain nine valid PNG frames with the base sizes and changed artwork", () => {
+    const sizes = [16, 20, 24, 32, 40, 48, 64, 128, 256];
+    const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    function frames(bytes: Buffer): Map<number, Buffer> {
+      expect(bytes.length).toBeGreaterThanOrEqual(6 + 16 * sizes.length);
+      expect(bytes.readUInt16LE(0)).toBe(0);
+      expect(bytes.readUInt16LE(2)).toBe(1);
+      expect(bytes.readUInt16LE(4)).toBe(9);
+      const found = new Map<number, Buffer>();
+      for (let i = 0; i < 9; i += 1) {
+        const at = 6 + 16 * i;
+        const width = bytes[at] || 256;
+        const height = bytes[at + 1] || 256;
+        const length = bytes.readUInt32LE(at + 8);
+        const offset = bytes.readUInt32LE(at + 12);
+        expect(width).toBe(height);
+        expect(offset).toBeGreaterThanOrEqual(6 + 16 * 9);
+        expect(length).toBeGreaterThanOrEqual(33);
+        expect(offset + length).toBeLessThanOrEqual(bytes.length);
+        const png = bytes.subarray(offset, offset + length);
+        expect(png.subarray(0, 8)).toEqual(signature);
+        expect(png.readUInt32BE(8)).toBe(13);
+        expect(png.toString("ascii", 12, 16)).toBe("IHDR");
+        expect(png.readUInt32BE(16)).toBe(width);
+        expect(png.readUInt32BE(20)).toBe(height);
+        expect(found.has(width)).toBe(false);
+        found.set(width, png);
+      }
+      expect([...found.keys()]).toEqual(sizes);
+      return found;
+    }
+    for (const name of ["online", "warning", "offline"]) {
+      const asset = (suffix: string) => readFileSync(repoPath("src", "tray", "assets", `opencodex-tray-${name}${suffix}.ico`));
+      const base = frames(asset(""));
+      const dotted = frames(asset("-update"));
+      for (const size of sizes) {
+        expect(dotted.get(size)?.equals(base.get(size)!)).toBe(false);
+      }
+    }
+  });
+
+  test("badge probe is bounded and selected after safety classification", () => {
+    const source = readFileSync(repoPath("src", "tray", "windows-tray.ps1"), "utf8");
+    expect(source).toContain('@($CliPath, "__update-badge")');
+    expect(source).toContain('$script:updateBadgeRefreshMs = 60000L');
+    expect(source).toContain('$script:updateBadgeExpiryMs = 180000L');
+    expect(source).toContain('$script:updateBadgeTimeoutMs = 12000L');
+    expect(source).toContain('$script:updateBadgeMaxBytesPerStream = 16384');
+    expect(source).toContain('[TrayUpdateBadgeReader]::ReadAsync');
+    expect(source).toContain('$script:updateBadgeTerminating = $true');
+    expect(source).toContain('Stop-UpdateBadgeProbe');
+    expect(source.indexOf('Maintain-UpdateBadgeProbe $now')).toBeLessThan(source.indexOf('  if ($script:online) {\n'));
+    expect(source.indexOf('  Stop-UpdateBadgeProbe -Shutdown\n  $notify.Dispose()')).toBeGreaterThanOrEqual(0);
+    for (const name of ["online", "warning", "offline"]) {
+      expect(source).toContain(`Load-TrayIcon "opencodex-tray-${name}-update.ico"`);
+    }
+  });
+
   test("serves tray status without blocking the proxy event loop", async () => {
     if (process.platform !== "win32") return;
     const url = new URL("http://localhost/api/windows-tray");
@@ -673,6 +780,9 @@ describe("Windows tray packaging and command safety", () => {
     expect(tray).toContain('join(getConfigDir(), "opencodex-tray.ps1")');
     expect(tray).toContain('join(import.meta.dir, "assets", name)');
     expect(tray).toContain("installedTrayIconPaths()");
+    expect(tray).toContain('"opencodex-tray-online-update.ico"');
+    expect(tray).toContain('"opencodex-tray-warning-update.ico"');
+    expect(tray).toContain('"opencodex-tray-offline-update.ico"');
     expect(tray).toContain("const hardened = hardenSecretPath(target, { required: true, timeoutMemoKey: path })");
     expect(tray).toContain("if (!hardened.ok)");
     expect(tray).toContain("if (!hardenedDir.ok)");

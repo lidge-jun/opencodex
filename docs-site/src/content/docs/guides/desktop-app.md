@@ -96,7 +96,18 @@ whole-number zeros: ten million tokens is `10M`, not `1M`.
 ## Updates
 
 Choose **Check for Updates…** in the tray menu to check immediately. Release builds also
-check automatically after startup and every six hours. Updates are verified with the
+check automatically after startup and every six hours.
+
+When the Tauri updater finds a newer app version, a blue dot appears on the macOS menu-bar icon or the Windows/Linux tray icon where a tray host is available. The embedded dashboard shows the same desktop update signal. A normal browser connected to the same proxy still shows the proxy package update state. If the shell stops reporting for about three minutes, the embedded badge becomes unknown until it reconnects. The dot reports availability; installation remains an explicit action.
+
+In the desktop app, choose the dashboard's update button to open the app's update page.
+There you can check again, install a pending signed update, or return to the dashboard.
+The same install action is available from the tray menu. If installation fails, the
+pending update remains available for retry. This page also works on Linux when the
+desktop has no tray icon. A normal browser dashboard manages the package installation
+on that proxy instead.
+
+Updates are verified with the
 project's signed updater public key before installation. On macOS, in-app updates download
 `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for the first installation.
 The release manifest is generated only when the updater key secret is configured and then

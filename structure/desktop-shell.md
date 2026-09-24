@@ -153,6 +153,15 @@ restart asked for after `install` is never reached, and the package would be rep
 runtime still serving out of those files. A drain that did not complete refuses the install and
 leaves the update pending.
 
+The Tauri updater also publishes a bounded desktop snapshot over its identity-bound ProxyClient. A random process-session id travels in the embedded dashboard URL, and the dashboard requests GET /api/update/badge?surface=desktop&session=<id>. A normal browser keeps the package badge. The shell posts each updater-state change and a 60-second heartbeat; if the proxy loses the snapshot or the shell stops, the desktop badge becomes unknown after 180 seconds. This display path never installs an update or replaces the signed Tauri result. The tray shows the same pending state: macOS draws a blue child NSView dot over the template status-item image; Windows/Linux swap a generated dotted PNG when a tray host exists. The Windows base glyph is unchanged.
+
+The embedded dashboard sends both update entries to the bundled `desktop/ui/update.html`
+on the app origin. Its page is the only WebView route accepted by the four native update
+commands. Tray and page installation share one atomic claim before taking `PendingUpdate`;
+a failed download or drain restores that pending signed update and reenables retry. The
+page returns through the startup sequence's resolved dashboard URL, independently of the
+one-time initial navigation claim. The loopback dashboard has no updater IPC permission.
+
 The window may navigate to the `tauri://` scheme, to the loopback endpoint the sequence resolved,
 and on Windows to `tauri.localhost`, which is where the pinned Tauri serves the app itself because
 wry needs an http origin there. That is the one host and no port — not localhost generally, and not

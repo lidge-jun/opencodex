@@ -53,7 +53,7 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 | **Dashboard 摘要** | 顯示 multi-agent 模式、線上狀態、版本、運行時間、provider 數量、30 天 token 總量、活動 provider 和可用的原生/路由模型。 |
 | **Sub-agent delegation** | 為 v1 委派 prompt 選擇原生或路由模型，並可指定 reasoning 強度。它不是逐次生成的路由器，詳見下文。 |
 | **Sidecar** | 選擇 web-search 模型及強度，以及圖像描述模型；更改從下一次請求開始生效。 |
-| **Maintenance** | 重新同步 Codex 模型目錄，檢視專案級設定繞過警告，檢查 latest/preview 版本，並可在更新後重啟代理。 |
+| **Maintenance** | 重新同步 Codex 模型目錄，檢視專案級設定繞過警告，檢查 latest/preview 版本，並可在更新後重啟代理。 在桌面 shell 中，該更新入口會開啟原生應用程式更新頁面，而不是執行套件更新器。 |
 | **啟動安全** | 顯示注入的 Codex 路由能否在重啟後繼續工作，並分別顯示服務、launcher shim 狀態和準確的修復命令。 |
 | **Windows 托盤** | 安裝使用者登入托盤，一鍵控制代理啟動、停止、重啟、面板和狀態。托盤不是代理重啟服務。 |
 | **Codex 自動啟動** | 允許已安裝的 Codex launcher shim 執行 `ocx ensure`。此開關不會安裝 shim 或後臺服務。 |

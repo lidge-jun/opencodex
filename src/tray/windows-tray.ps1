@@ -41,6 +41,9 @@ function Load-TrayIcon([string]$Name, [System.Drawing.Icon]$Fallback) {
 $onlineIcon = Load-TrayIcon "opencodex-tray-online.ico" ([System.Drawing.SystemIcons]::Information)
 $warningIcon = Load-TrayIcon "opencodex-tray-warning.ico" ([System.Drawing.SystemIcons]::Warning)
 $offlineIcon = Load-TrayIcon "opencodex-tray-offline.ico" ([System.Drawing.SystemIcons]::Error)
+$onlineUpdateIcon = Load-TrayIcon "opencodex-tray-online-update.ico" $onlineIcon
+$warningUpdateIcon = Load-TrayIcon "opencodex-tray-warning-update.ico" $warningIcon
+$offlineUpdateIcon = Load-TrayIcon "opencodex-tray-offline-update.ico" $offlineIcon
 
 function Get-StableHash([string]$Value) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -198,6 +201,148 @@ function Complete-StartupHealthProbe {
   }
 }
 
+function Initialize-UpdateBadgeReader {
+  if (([System.Management.Automation.PSTypeName]"TrayUpdateBadgeReader").Type) { return }
+  Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+using System.Threading.Tasks;
+public static class TrayUpdateBadgeReader {
+  public static async Task<string> ReadAsync(Stream input, int maxBytes) {
+    byte[] chunk = new byte[4096];
+    using (var content = new MemoryStream()) {
+      while (true) {
+        int count = await input.ReadAsync(chunk, 0, chunk.Length).ConfigureAwait(false);
+        if (count == 0) break;
+        if (content.Length + count > maxBytes) throw new InvalidDataException("badge pipe byte cap exceeded");
+        content.Write(chunk, 0, count);
+      }
+      return new UTF8Encoding(false, true).GetString(content.ToArray());
+    }
+  }
+}
+'@
+}
+
+function Parse-UpdateBadgeText([string]$Text) {
+  $lines = @($Text -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  if ($lines.Count -ne 1) { return $null }
+  try {
+    $badge = $lines[0] | ConvertFrom-Json
+    if (($badge.updateAvailable -isnot [bool]) -or ($badge.unknown -isnot [bool]) -or
+        ($badge.canUpdate -isnot [bool])) { return $null }
+    return [bool]($badge.updateAvailable -and -not $badge.unknown -and $badge.canUpdate)
+  } catch { return $null }
+}
+
+function Complete-UpdateBadgeProbe {
+  $process = $script:updateBadgeProcess
+  $script:updateBadgeProcess = $null
+  $script:updateBadgeOutputTask = $null
+  $script:updateBadgeErrorTask = $null
+  $script:updateBadgeTerminating = $false
+  if ($null -ne $process) {
+    try {
+      $process.StandardOutput.Dispose()
+      $process.StandardError.Dispose()
+      $process.Dispose()
+    } catch { Write-ActionLog "update badge probe dispose failed: $($_.Exception.GetType().Name)" }
+  }
+}
+
+function Stop-UpdateBadgeProbe([switch]$Shutdown) {
+  if ($null -eq $script:updateBadgeProcess) { return }
+  $script:updateBadgeTerminating = $true
+  try {
+    if (-not $script:updateBadgeProcess.HasExited) { $script:updateBadgeProcess.Kill() }
+  } catch { Write-ActionLog "update badge probe termination failed: $($_.Exception.GetType().Name)" }
+  if ($Shutdown) {
+    # Only shutdown may wait, and it is bounded; the UI tick never calls this branch.
+    try { [void]$script:updateBadgeProcess.WaitForExit(500) } catch { $null = $_ }
+    Complete-UpdateBadgeProbe
+  }
+}
+
+function Start-UpdateBadgeProbe {
+  try {
+    Initialize-UpdateBadgeReader
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $BunPath
+    $psi.Arguments = ((@($CliPath, "__update-badge") | ForEach-Object { ConvertTo-NativeArgument $_ }) -join " ")
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+    $psi.EnvironmentVariables["CODEX_HOME"] = $CodexHome
+    $psi.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
+    if ($BunRuntimeSource) {
+      $psi.EnvironmentVariables["OCX_BUN_RUNTIME_SOURCE"] = $BunRuntimeSource
+      $psi.EnvironmentVariables["OCX_BUN_RUNTIME_PATH"] = $BunPath
+    }
+    $script:updateBadgeProcess = [System.Diagnostics.Process]::Start($psi)
+    if ($null -eq $script:updateBadgeProcess) { throw "Process did not start" }
+    $script:updateBadgeOutputTask = [TrayUpdateBadgeReader]::ReadAsync($script:updateBadgeProcess.StandardOutput.BaseStream, $script:updateBadgeMaxBytesPerStream)
+    $script:updateBadgeErrorTask = [TrayUpdateBadgeReader]::ReadAsync($script:updateBadgeProcess.StandardError.BaseStream, $script:updateBadgeMaxBytesPerStream)
+    $script:updateBadgeStarted = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  } catch {
+    Write-ActionLog "update badge probe launch failed: $($_.Exception.GetType().Name)"
+    if ($null -ne $script:updateBadgeProcess) { Stop-UpdateBadgeProbe }
+  }
+}
+
+function Maintain-UpdateBadgeProbe([long]$Now) {
+  if ($null -ne $script:updateBadgeProcess) {
+    $terminatingAtStart = $script:updateBadgeTerminating
+    $expired = ($Now - $script:updateBadgeStarted) -gt $script:updateBadgeTimeoutMs
+    $exited = $false
+    try { $exited = $script:updateBadgeProcess.HasExited } catch { Stop-UpdateBadgeProbe }
+    $drained = ($null -eq $script:updateBadgeOutputTask -or $script:updateBadgeOutputTask.IsCompleted) -and
+      ($null -eq $script:updateBadgeErrorTask -or $script:updateBadgeErrorTask.IsCompleted)
+    $failedRead = ($null -ne $script:updateBadgeOutputTask -and
+      ($script:updateBadgeOutputTask.IsFaulted -or $script:updateBadgeOutputTask.IsCanceled)) -or
+      ($null -ne $script:updateBadgeErrorTask -and
+      ($script:updateBadgeErrorTask.IsFaulted -or $script:updateBadgeErrorTask.IsCanceled))
+    if ($failedRead -and -not $script:updateBadgeTerminating) {
+      Write-ActionLog "update badge probe pipe read failed or exceeded byte cap"
+      Stop-UpdateBadgeProbe
+    }
+    if ($script:updateBadgeTerminating) {
+      # Reap on a later tick after both bounded readers settle; no replacement starts meanwhile.
+      if ($terminatingAtStart -and -not $exited) { Stop-UpdateBadgeProbe }
+      if ($terminatingAtStart -and $exited -and $drained) { Complete-UpdateBadgeProbe }
+    } elseif ($exited -and $drained -and $null -ne $script:updateBadgeOutputTask -and
+        $null -ne $script:updateBadgeErrorTask) {
+      $answer = $null
+      try {
+        if ($script:updateBadgeProcess.ExitCode -eq 0) {
+          $answer = Parse-UpdateBadgeText $script:updateBadgeOutputTask.Result
+        }
+      } catch { Write-ActionLog "update badge probe read failed: $($_.Exception.GetType().Name)" }
+      if ($null -ne $answer) {
+        $script:updateAvailable = [bool]$answer
+        $script:updateBadgeObservedAt = $Now
+      }
+      Complete-UpdateBadgeProbe
+    } elseif ($expired) {
+      Write-ActionLog "update badge probe timed out"
+      Stop-UpdateBadgeProbe
+    }
+  }
+  if ($script:updateBadgeObservedAt -eq 0 -or
+      ($Now - $script:updateBadgeObservedAt) -gt $script:updateBadgeExpiryMs) {
+    $script:updateAvailable = $false
+  }
+  if ($null -eq $script:updateBadgeProcess -and -not $script:updateBadgeTerminating -and
+      ($script:updateBadgeAttemptAt -eq 0 -or ($Now - $script:updateBadgeAttemptAt) -ge $script:updateBadgeRefreshMs)) {
+    $script:updateBadgeAttemptAt = $Now
+    Start-UpdateBadgeProbe
+  }
+}
+
 function Read-ListenTarget {
   foreach ($path in @((Join-Path $OpenCodexHome "runtime-port.json"), (Join-Path $OpenCodexHome "config.json"))) {
     try {
@@ -241,6 +386,9 @@ $statusItem.Enabled = $false
 $safetyItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $safetyItem.Enabled = $false
 $openItem = $menu.Items.Add("Open Dashboard")
+$updateItem = $menu.Items.Add("Update available")
+$updateItem.Visible = $false
+$updateItem.Enabled = $false
 $startItem = $menu.Items.Add("Start Proxy")
 $stopItem = $menu.Items.Add("Stop Proxy and Restore Native Routing")
 $restartItem = $menu.Items.Add("Restart Proxy")
@@ -263,6 +411,18 @@ $script:startupProbeOutputTask = $null
 $script:startupProbeErrorTask = $null
 $script:startupProbeStarted = 0L
 $script:startupProbeTimeoutMs = 30000L
+$script:updateAvailable = $false
+$script:updateBadgeObservedAt = 0L
+$script:updateBadgeAttemptAt = 0L
+$script:updateBadgeRefreshMs = 60000L
+$script:updateBadgeExpiryMs = 180000L
+$script:updateBadgeTimeoutMs = 12000L
+$script:updateBadgeMaxBytesPerStream = 16384
+$script:updateBadgeProcess = $null
+$script:updateBadgeOutputTask = $null
+$script:updateBadgeErrorTask = $null
+$script:updateBadgeStarted = 0L
+$script:updateBadgeTerminating = $false
 $script:pendingAction = $null
 $script:pendingStarted = 0L
 $script:pendingDeadline = 0L
@@ -322,6 +482,7 @@ function Update-TrayState {
   $cameOnline = $script:online -and -not $script:wasOnline
   $script:wasOnline = $script:online
   $now = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  Maintain-UpdateBadgeProbe $now
   if ($null -ne $script:startupProbeProcess) {
     $probeExited = $false
     try {
@@ -377,20 +538,26 @@ function Update-TrayState {
     if ($null -ne $startup) {
       $label = if ($startup.status -eq "at-risk") { "At risk" } elseif ($startup.status -eq "protected") { "Protected" } else { "Native routing" }
       $safetyItem.Text = "Restart safety: $label"
-      $notify.Icon = if ($startup.status -eq "at-risk") { $warningIcon } else { $onlineIcon }
+      $notify.Icon = if ($startup.status -eq "at-risk") {
+        if ($script:updateAvailable) { $warningUpdateIcon } else { $warningIcon }
+      } else {
+        if ($script:updateAvailable) { $onlineUpdateIcon } else { $onlineIcon }
+      }
     } else {
       $safetyItem.Text = "Restart safety: unavailable"
-      $notify.Icon = $warningIcon
+      $notify.Icon = if ($script:updateAvailable) { $warningUpdateIcon } else { $warningIcon }
     }
   } else {
     $statusItem.Text = "Proxy: Offline"
     $safetyItem.Text = "Restart safety: start the proxy to inspect"
     $notify.Text = "opencodex: Offline"
-    $notify.Icon = $offlineIcon
+    $notify.Icon = if ($script:updateAvailable) { $offlineUpdateIcon } else { $offlineIcon }
     $startItem.Enabled = $true
     $stopItem.Enabled = $false
     $restartItem.Enabled = $false
   }
+  $updateItem.Visible = $script:updateAvailable
+  $updateItem.Enabled = $script:updateAvailable
   if ($null -ne $script:pendingAction) {
     $startItem.Enabled = $false
     $stopItem.Enabled = $false
@@ -426,6 +593,7 @@ function Update-TrayState {
 }
 
 $openItem.add_Click({ Start-OcxCommand @("gui") })
+$updateItem.add_Click({ Start-OcxCommand @("gui") })
 $startItem.add_Click({
   if (-not (Set-PendingAction "Start Proxy" 75)) { return }
   $statusItem.Text = "Proxy: Starting..."
@@ -489,6 +657,7 @@ $notify.Visible = $true
 $notify.Text = "opencodex: Checking..."
 
 try {
+  Initialize-UpdateBadgeReader
   Update-TrayState
   $timer.Start()
   [System.Windows.Forms.Application]::Run()
@@ -512,6 +681,7 @@ try {
     }
     Complete-StartupHealthProbe
   }
+  Stop-UpdateBadgeProbe -Shutdown
   $notify.Dispose()
   foreach ($icon in $script:ownedIcons) { $icon.Dispose() }
   $menu.Dispose()

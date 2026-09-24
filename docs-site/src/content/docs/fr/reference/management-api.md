@@ -194,8 +194,8 @@ Voir [Couches de prompt Codex](/fr/guides/codex-prompt/) pour le modèle de couc
 | `GET, POST /api/windows-tray` | Lire l'état de l'icône de notification Windows, ou l'installer, la démarrer, l'arrêter ou la désinstaller | 400 plateforme ou action non prise en charge ; 500 échec de l'opération |
 | `GET /api/diagnostics/project-config` | Lire les avertissements de configuration du projet mis en cache | — |
 | `POST /api/sync` | Synchroniser le catalogue de modèles actuel dans Codex | 500 échec de synchronisation |
-| `GET /api/update/check` | Vérifier le canal de mise à jour `latest` ou `preview` | 400 balise invalide |
-| `POST /api/update/run` | Démarrer une tâche de mise à jour, éventuellement suivie d'un redémarrage | 400 corps invalide ; état de conflit ou d'erreur propre à la tâche |
+| `GET /api/update/check` | Vérifier de façon asynchrone le canal `latest` ou `preview` et actualiser le cache du paquet en cas de succès | 400 balise invalide |
+| `POST /api/update/run` | Vérifier de façon asynchrone la dernière version du paquet, puis démarrer une tâche de mise à jour, suivie éventuellement d’un redémarrage | 400 corps invalide ; état de conflit ou d'erreur propre à la tâche |
 | `GET /api/update/status` | Interroger une tâche de mise à jour par identifiant | 404 tâche inconnue |
 | `GET, PUT /api/sidecar-settings` | Lire ou mettre à jour les paramètres de modèle et de moteur des services auxiliaires de recherche Web et de vision | 400 structure, moteur ou limite invalide |
 | `GET, PUT /api/shadow-call-settings` | Lire ou mettre à jour les paramètres d'interception d'appels fantômes | 400 forme ou valeur invalide |
@@ -325,7 +325,12 @@ supprimer leur fournisseur.
 | --- | --- | --- |
 | `GET /api/github/star` | Lire le statut de l'étoile du référentiel via la session `gh` de l'utilisateur | Codes de résultat fixes spécifiques au statut |
 | `POST /api/github/star` | Ajouter une étoile au dépôt uniquement à la suite d'une action humaine authentifiée | 403 `agent_consent_required` pour les appelants pilotés par un agent sans preuve de session du tableau de bord |
-| `GET /api/update/badge` | Lire l'état, peu coûteux à calculer, du badge de mise à jour de la barre latérale | — |
+| `GET /api/update/badge` | Lire le badge du paquet mis en cache sans interroger le registre ; un cache absent, d’un autre canal ou vieux de 40 heures renvoie `unknown: true`. `surface=desktop&session=<id>` ne lit que cette session de l’application de bureau. | 400 surface invalide ; une session de bureau absente ou expirée renvoie `unknown: true` |
+| `POST /api/update/desktop-snapshot` | Le shell de bureau publie l’état d’affichage de son updater Tauri via le client proxy lié | 403 si l’en-tête `Origin` est présent ou sans le principal brut `admin-token` ; 400 champs invalides ; 413 au-delà de 1 KiB |
+
+Le snapshot de bureau est un état d’affichage temporaire, pas une demande d’installation. Le proxy conserve au plus 32 sessions en mémoire et en expire une 180 secondes après son dernier heartbeat. Un navigateur ordinaire sans surface=desktop continue de lire le badge du paquet.
+
+Le proxy vérifie les installations éligibles après le démarrage si le cache est absent ou vieux de plus de 20 heures, puis contrôle sa fraîcheur chaque heure. `OCX_DISABLE_UPDATE_CHECK=1` désactive uniquement les vérifications automatiques. Les demandes explicites de vérification et de mise à jour restent disponibles.
 
 :::caution
 L'authentification de gestion prouve l'accès au proxy, mais pas le consentement à engager
