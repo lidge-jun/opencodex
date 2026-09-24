@@ -144,9 +144,18 @@ export default function ApiKeysWorkspace({
   const [rotationFailed, setRotationFailed] = useState(false);
 
   const selected = selectedId ? (keys.find(k => k.id === selectedId) ?? null) : null;
+  const selectedHasRotationSecret = Boolean(selected && rotationSecret?.id === selected.id);
   const selectedRotationId = selected
     ? (rotationSecret?.id === selected.id ? rotationSecret.rotationId : selected.pendingRotation?.id)
     : undefined;
+  // Each handler is independently optional, so "enabled" holds only when the
+  // key's current state has an action the caller wired: start for an idle key,
+  // commit/abort for a pending one. A revealed one-time secret counts on its
+  // own — hiding the section then would strand the only copy. Rendering the
+  // rest offers operations that can only fail locally.
+  const rotationEnabled = selectedHasRotationSecret || (selectedRotationId
+    ? Boolean(onRotationCommit || onRotationAbort)
+    : Boolean(onRotationStart));
   const mutationPending = deleting || renamePending || rotationPending;
 
   const runRotation = async (operation: "start" | "commit" | "abort") => {
@@ -365,7 +374,7 @@ export default function ApiKeysWorkspace({
                     </div>
                   </dl>
                 </div>
-                <div className="awi-section" aria-live="polite">
+                {rotationEnabled && <div className="awi-section" aria-live="polite">
                   <h3 className="awi-section-title">{t("api.rotation.title")}</h3>
                   {selectedRotationId ? (
                     <>
@@ -378,21 +387,31 @@ export default function ApiKeysWorkspace({
                           <p>{t("api.rotation.secretOnce")}</p>
                           <code>{rotationSecret.key}</code>
                           <span>
-                            <button type="button" className="btn btn-sm" onClick={onCopyRotationSecret}>
-                              {rotationCopied ? t("api.copied") : t("api.copy")}
-                            </button>
-                            <button type="button" className="btn btn-ghost btn-sm" onClick={onDismissRotationSecret}>{t("common.close")}</button>
+                            {onCopyRotationSecret && (
+                              <button type="button" className="btn btn-sm" onClick={onCopyRotationSecret}>
+                                {rotationCopied ? t("api.copied") : t("api.copy")}
+                              </button>
+                            )}
+                            {onDismissRotationSecret && (
+                              <button type="button" className="btn btn-ghost btn-sm" onClick={onDismissRotationSecret}>{t("common.close")}</button>
+                            )}
                           </span>
                         </div>
                       )}
-                      <div className="awi-detail-actions">
-                        <button type="button" className="btn btn-sm" disabled={rotationPending} onClick={() => { void runRotation("commit"); }}>
-                          {t("api.rotation.commit")}
-                        </button>
-                        <button type="button" className="btn btn-ghost btn-sm" disabled={rotationPending} onClick={() => { void runRotation("abort"); }}>
-                          {t("api.rotation.abort")}
-                        </button>
-                      </div>
+                      {(onRotationCommit || onRotationAbort) && (
+                        <div className="awi-detail-actions">
+                          {onRotationCommit && (
+                            <button type="button" className="btn btn-sm" disabled={rotationPending} onClick={() => { void runRotation("commit"); }}>
+                              {t("api.rotation.commit")}
+                            </button>
+                          )}
+                          {onRotationAbort && (
+                            <button type="button" className="btn btn-ghost btn-sm" disabled={rotationPending} onClick={() => { void runRotation("abort"); }}>
+                              {t("api.rotation.abort")}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </>
                   ) : (
                     <>
@@ -403,7 +422,7 @@ export default function ApiKeysWorkspace({
                     </>
                   )}
                   {rotationFailed && <p className="awi-delete-error" role="alert">{t("api.rotation.failed")}</p>}
-                </div>
+                </div>}
                 <div className="awi-section">
                   <h3 className="awi-section-title">{t("api.attribution.title")}</h3>
                   <UsageIncompleteNotice data={usageMetadata} />
