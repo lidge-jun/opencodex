@@ -168,6 +168,7 @@
   },
   "explicit": {
     "abort-idle-deadline.test.ts": "lib",
+    "tool-envelope-echo-whole-line.test.ts": "lib",
     "abort-race.test.ts": "adapters",
     "account-import.test.ts": "server",
     "account-pool-management-api.test.ts": "server",

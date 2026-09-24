@@ -22,7 +22,11 @@ Native xAI Responses delivery strips a line-leading echoed tool-result or tool-c
 envelope across split SSE text deltas. It is armed only when the request can have primed the echo:
 a tool call or tool output in the input (a dangling call gets a synthetic output from the paired
 tool-result repair), or a `previous_response_id` continuation whose history lives upstream
-(`responsesRequestMayReplayToolOutput`); a first turn is delivered untouched. The same filter preserves leading prose and
+(`responsesRequestMayReplayToolOutput`); a first turn is delivered untouched. Only a line that is the marker alone
+(`[Tool Result]`, `[Tool Error]`, `[tool_result]`, `[Tool Call]`, trailing whitespace allowed) or a
+`[Tool call:` line counts (`isWholeLineEchoMarker` in `src/lib/tool-envelope-echo-filter.ts`): prose that
+merely starts with a result or error marker, such as `[Tool Result] shows the build passed.`, is an
+answer and reaches the client whole (`tests/lib/tool-envelope-echo-whole-line.test.ts`). The same filter preserves leading prose and
 normalizes text-done events, completed snapshots, non-streaming JSON, and the stored
 continuation snapshot. It does not rotate an xAI upstream conversation.
 

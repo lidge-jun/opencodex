@@ -1,7 +1,13 @@
 /** Line-aware filter for echoed tool envelopes in incremental assistant text. */
 const MARKERS = ["[Tool Result]", "[Tool Error]", "[tool_result]", "[Tool Call]", "[Tool call:"] as const;
 const UNTERMINATED_MARKERS = ["[Tool Result", "[Tool Error", "[tool_result", "[Tool Call"] as const;
-const TRUNCATED_MARKERS = [...UNTERMINATED_MARKERS, "[Tool call:"] as const;
+/** Lines that are an echoed envelope marker on their own (after trimming trailing whitespace). */
+const WHOLE_LINE_MARKERS: readonly string[] = [...MARKERS, ...UNTERMINATED_MARKERS];
+/**
+ * The coding-agent call line "[Tool call: name (call_id: ...) with args: ...]" can wrap across lines
+ * when its arguments do, so it is recognised by its prefix, as before; prose rarely opens that way.
+ */
+const TOOL_CALL_LINE = "[Tool call:";
 const MAX_INDENT = 128;
 // Markdown fenced code (CommonMark): an opener is a run of at least three backticks or tildes
 // indented at most three spaces; only a run of the same character, at least as long and followed
@@ -11,6 +17,16 @@ const MAX_FENCE_LINE = 1024;
 const FENCE_LINE = /^(\x60{3,}|~{3,})(.*)$/s;
 const FENCE_PREFIX = /^(\x60{1,2}|~{1,2})$/;
 const FENCE_RUN = /^(\x60{3,}|~{3,})/;
+
+/**
+ * The envelope OpenCodex replays is a marker alone on its line ("[Tool Result]\n<payload>"). Only a
+ * line that is exactly such a marker is an echo; prose that merely starts with one ("[Tool Result]
+ * shows the build passed.") is an answer. The call line keeps its prefix rule (TOOL_CALL_LINE).
+ */
+export function isWholeLineEchoMarker(line: string): boolean {
+  const trimmed = line.replace(/^[ \t]*/, "").trimEnd();
+  return WHOLE_LINE_MARKERS.includes(trimmed) || trimmed.startsWith(TOOL_CALL_LINE);
+}
 
 interface FenceLine {
   char: string;
@@ -96,7 +112,7 @@ export class ToolEnvelopeEchoFilter {
       }
       const probe = this.pending.replace(/^[ \t]*/, "");
       const indent = this.pending.length - probe.length;
-      if (indent <= MAX_INDENT && MARKERS.some(marker => probe === marker)) {
+      if (indent <= MAX_INDENT && probe === TOOL_CALL_LINE) {
         if (!this.fence) {
           this.pending = "";
           this.matched = true;
@@ -107,21 +123,28 @@ export class ToolEnvelopeEchoFilter {
         output += this.emit(this.takePending());
         continue;
       }
+      // A marker is decided when its line completes (completeLine): until then a line that is a
+      // marker so far or a marker plus trailing whitespace stays pending. Anything else on the
+      // line makes it prose and releases it.
       const fenceCandidate = indent <= MAX_FENCE_INDENT
         && this.pending.length <= MAX_FENCE_LINE
         && (FENCE_PREFIX.test(probe) || FENCE_RUN.test(probe));
       const markerCandidate = indent <= MAX_INDENT
-        && (probe === "" || MARKERS.some(marker => marker.startsWith(probe)));
-      const unterminatedCr = char === "\r"
-        && (UNTERMINATED_MARKERS as readonly string[]).includes(probe.slice(0, -1).trimEnd());
-      if (fenceCandidate || markerCandidate || unterminatedCr) continue;
+        && (probe === ""
+          || MARKERS.some(marker => marker.startsWith(probe))
+          || WHOLE_LINE_MARKERS.includes(probe.trimEnd()));
+      if (fenceCandidate || markerCandidate) continue;
       this.flushLineStart();
       output += this.emit(this.takePending());
     }
     return output;
   }
 
-  /** At normal end, a distinctive truncated marker or a held fence tail is an echo; other text is prose. */
+  /**
+   * At normal end, a held fence tail, a last line that is a whole marker (or a bare unterminated
+   * marker such as "[Tool Result") or a "[Tool call:" line is an echo; other text, including a
+   * line that merely starts with a result or error marker, is prose.
+   */
   finish(): string {
     if (this.matched) return "";
     // A closing fence may end the stream without a trailing newline; settle it before the hold.
@@ -133,7 +156,7 @@ export class ToolEnvelopeEchoFilter {
       return "";
     }
     const probe = pending.replace(/^[ \t]*/, "");
-    if ((TRUNCATED_MARKERS as readonly string[]).some(marker => probe.startsWith(marker))) {
+    if (isWholeLineEchoMarker(probe)) {
       this.matched = true;
       return settled;
     }
@@ -166,10 +189,7 @@ export class ToolEnvelopeEchoFilter {
       return this.emit(raw);
     }
     const trimmed = line.trimEnd();
-    const markerLine = indent <= MAX_INDENT && (
-      (UNTERMINATED_MARKERS as readonly string[]).includes(trimmed)
-      || (MARKERS as readonly string[]).includes(trimmed)
-    );
+    const markerLine = indent <= MAX_INDENT && isWholeLineEchoMarker(trimmed);
     if (markerLine) {
       if (!this.fence) {
         this.matched = true;

@@ -289,7 +289,8 @@ redirects restored provider-state ids only within the same opaque credential sco
 
 Assistant root replay drops echoed envelopes before they are sent back upstream
 (`stripAssistantEchoedToolEnvelope`), so the transcript stops feeding itself. The strip starts at
-a whole-line marker and ends at the next blank line rather than at the end of the message: the
+a whole-line marker (the live filter's rule, `isWholeLineEchoMarker`: a result or error marker alone on its
+line, or a `[Tool call:` line; prose that starts with a result marker is kept) and ends at the next blank line rather than at the end of the message: the
 envelope has no recognisable terminator and observed copies are not byte-exact, and truncating to
 the end discarded a genuine answer whenever the model resumed after the echo. An envelope whose
 pasted body contains its own blank line therefore leaves a remainder in replay; conversation

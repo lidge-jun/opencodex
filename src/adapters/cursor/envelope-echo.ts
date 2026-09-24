@@ -12,18 +12,13 @@
  * cursor.ts to retry before any invalid text reaches the client.
  */
 
-import { closedFenceLines } from "../../lib/tool-envelope-echo-filter";
+import { closedFenceLines, isWholeLineEchoMarker } from "../../lib/tool-envelope-echo-filter";
 
 const ECHO_MARKERS = ["[Tool Result]", "[Tool Error]", "[tool_result]"] as const;
 const REPLAY_ECHO_PREFIXES = ["[Tool call:", "[Tool Call]", "[Tool Result", "[Tool Error", "[tool_result"] as const;
 
-function isEchoMarkerLine(line: string): boolean {
-  const probe = line.replace(/^[ \t]+/, "");
-  return probe.startsWith("[Tool call:")
-    || probe.startsWith("[Tool Call]")
-    || ["[Tool Result", "[Tool Error", "[tool_result"].some(prefix =>
-      probe === prefix || probe.startsWith(`${prefix}]`));
-}
+// Whole-line only, the same rule as the live filter: prose that starts with a marker survives.
+const isEchoMarkerLine = isWholeLineEchoMarker;
 
 /**
  * Drop echoed tool-result envelopes from assistant history before Cursor root replay.
