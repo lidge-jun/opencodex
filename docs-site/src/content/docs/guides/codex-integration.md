@@ -699,7 +699,7 @@ provider id; replacing the active id can make those intact sessions disappear fr
 view. The same protection applies to an external provider selected by a legacy root profile.
 
 While an external provider owns `config.toml`, the settings report that
-`GET /api/settings` and `ocx system settings --json` return describes the Desktop authless and
+`GET /api/settings` and `ocx system settings --json` return a description of the Desktop authless and
 client-compaction switches — and the Codex sign-in requirement — as controlled by that
 provider instead of showing the effective state OpenCodex would produce. Flipping either
 switch still stores the preference, but `config.toml` is not rewritten; the stored value
