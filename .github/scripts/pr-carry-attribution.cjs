@@ -73,6 +73,12 @@ const INLINE_CODE_RE = /\u0060[^\u0060\n]*\u0060/g;
  * captured the full greedy run first and shortened it one delimiter at a
  * time, so the longest close length still ahead wins and the earliest line
  * carrying it ends the block.
+ *
+ * That closing-length rule is a deliberate parity choice, not GitHub's
+ * display rule. GitHub closes a block only on a fence at least as long as
+ * the opener; this keeps the old regex's shorter-close matching so the
+ * gate reads exactly the text the previous check read. The HTML-comment
+ * rule below does follow the renderer.
  */
 function stripFencedCode(text) {
   const lineStarts = [0];
@@ -133,6 +139,10 @@ function stripFencedCode(text) {
 
   // First pure-fence line after `after` carrying the longest close length
   // that is at most openerLen; -1 when no close length qualifies.
+  // `pos` itself never changes: when a length's lines are exhausted,
+  // `parent` links that length to the next-lower length still alive, so
+  // each pass through the loop advances to a strictly shorter length (or
+  // -1) and the walk cannot stall on one position.
   function closeFor(fence, openerLen, after) {
     const scan = fenceIndex[fence];
     let lo = 0;
