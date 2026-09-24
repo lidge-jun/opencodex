@@ -119,10 +119,11 @@ devraient les essayer :
    de l'erreur 400. Réservez ce réglage aux destinations dont vous savez
    qu'elles peuvent consommer cette charge.
 4. **Enable `agentTaskRecovery`.** Fonction expérimentale désactivée par
-   défaut. Elle récupère la plupart des créations récentes via le backend
-   ChatGPT, au prix de quota, de latence et d'une dépendance à un comportement
-   non documenté. Elle perd encore les suivis de type message et les
-   enveloppes en plusieurs parties.
+   défaut. Elle récupère via le backend ChatGPT les éléments chiffrés
+   illisibles `NEW_TASK`, `MESSAGE`, `FOLLOWUP_TASK` et `FINAL_ANSWER`, au
+   prix de quota, de latence et d'une dépendance à un comportement non
+   documenté ; la récupération combo reste limitée aux tours des enfants
+   lancés, et les fragments de jetons découpés restent non pris en charge.
 
 Consultez [Surface des sous-agents](/fr/guides/sub-agent-surface/) pour le
 fonctionnement détaillé de chaque option et
