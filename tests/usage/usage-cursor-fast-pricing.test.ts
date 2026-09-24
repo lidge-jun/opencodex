@@ -38,8 +38,11 @@ function entry(model: string, tierOutcome?: AttemptTierOutcome): PersistedUsageE
 
 describe("Cursor Fast pricing", () => {
   test("explicit Fast model ids use Cursor's published Fast tuples", () => {
-    expect(resolveMatchedPrice("cursor", "claude-opus-4-8-high-fast")?.cost4)
-      .toEqual({ input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 });
+    expect(resolveMatchedPrice("cursor", "claude-opus-4-8-high-fast")).toMatchObject({
+      cost4: { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
+      sourceRef: "https://cursor.com/docs/models/claude-opus-4-8",
+      status: "verified",
+    });
     expect(resolveMatchedPrice("cursor", "claude-opus-5-high-fast")?.cost4)
       .toEqual({ input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 });
     expect(resolveMatchedPrice("cursor", "claude-opus-5-5-high-fast")?.cost4)
