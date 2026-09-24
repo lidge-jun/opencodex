@@ -164,6 +164,16 @@ le délai d'attente et la limite précédemment choisis.
 les clés omises inchangées. `timeoutMs` utilise les limites entières de l'environnement d'exécution
 (1–2147483647 ms).
 
+La carte du service auxiliaire de recherche web reprend la même forme de contrôle : la première
+ligne du sélecteur de modèle est **Désactivé (Off)**. La désactivation arrête l'interception de
+`web_search` par OpenCodex et l'intégration Codex écrit `web_search = "disabled"` dans
+`~/.codex/config.toml`, car Codex continue sinon d'annoncer son propre outil hébergé
+`web_search` natif, ce qu'il faut lorsqu'un serveur de recherche MCP doit être le seul chemin
+de recherche. La réactivation supprime cette ligne et rétablit la ligne racine `web_search`
+écrite par l'opérateur, enregistrée dans le journal Codex. L'écriture exige un
+`~/.codex/config.toml` géré (`ocx sync`) ; la carte du tableau de bord vous avertit
+lorsqu'elle n'a pas eu lieu et `ocx agent sidecar web --enabled off` indique si elle a réussi.
+
 Vous pouvez toujours définir `enabled: false` dans `config.json` si vous préférez modifier le
 fichier directement. La recherche et la description d'images avec OAuth Anthropic réutilisent les identifiants
 Claude Code existants du magasin d'empreintes précédent. Testez néanmoins ce comportement avec le

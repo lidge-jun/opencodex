@@ -179,7 +179,7 @@ Codex 使用小型 helper 模型處理如標題與 commit 訊息等任務。啟�
 
 | 欄位 | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
-| `enabled?` | `boolean` | 可用時開啟 | 主開關。 |
+| `enabled?` | `boolean` | 可用時開啟 | 主開關。為 `false` 時，OpenCodex 停止攔截 `web_search`，且 Codex 整合會把 `web_search = "disabled"` 寫入 `~/.codex/config.toml`。 |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 明確設定優先；省略時一律使用 `openai`。`anthropic` 與 `xai` 僅在明確設定時執行；`gemini` 與 `exa` 在 executor 推出前仍為保留值。 |
 | `model?` | `string` | 視 backend 而定 | OpenAI 為 `gpt-5.6-luna`、Anthropic 為 `claude-sonnet-5`、xAI 為 `grok-4.6`。舊版明確 `gpt-5.4-mini` 在啟動時遷移。 |
 | `exaApiKey?` | `string` | 無 | `exa` backend 的操作員金鑰。僅可寫入：管理讀取永遠不會傳回已儲存的值。 |

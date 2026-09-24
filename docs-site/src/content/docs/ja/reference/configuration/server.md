@@ -145,7 +145,7 @@ Codex は、タイトルやコミット メッセージなどのタスクに小�
 
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
-| `enabled?` | `boolean` |使用可能な場合はオン |マスタースイッチ。 |
+| `enabled?` | `boolean` |使用可能な場合はオン |マスタースイッチ。`false` のとき OpenCodex は `web_search` への介入をやめ、Codex 統合は `~/.codex/config.toml` に `web_search = "disabled"` を書き込みます。 |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | 明示設定が優先され、未設定なら常に `openai` です。`anthropic` と `xai` は明示設定時のみ実行され、`gemini` と `exa` は executor が提供されるまで予約値です。 |
 | `model?` | `string` |バックエンド依存 | OpenAI は `gpt-5.6-luna`、Anthropic は `claude-sonnet-5`、xAI は `grok-4.6`。従来の明示的な `gpt-5.4-mini` は開始時に移行されます。 |
 | `exaApiKey?` | `string` | なし | `exa` バックエンドのオペレーターキー。書き込み専用で、管理 API の読み取りでは保存値を返しません。 |

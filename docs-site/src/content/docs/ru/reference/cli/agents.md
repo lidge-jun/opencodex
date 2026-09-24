@@ -17,7 +17,16 @@ surface mode, delegation, effort и fallback, описано в
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off` — тот же переключатель, что и строка **Выкл. (Off)** в дашборде: OpenCodex
+перестаёт запускать сайдкар, а интеграция Codex записывает `web_search = "disabled"` в
+`~/.codex/config.toml`, что и позволяет использовать MCP-сервер как единственный путь поиска.
+`--enabled on` снова удаляет эту строку. Когда сохранение действительно переключает
+состояние, команда сообщает о записи на стороне Codex (`codexWebSearch` в `--json`,
+иначе завершающая строка `Codex config:`) и предлагает `ocx sync`, если запись не
+удалась. Флаг работает и для `vision`.
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 

@@ -139,6 +139,15 @@ OpenAI 실행 경로, Dashboard, 관리 API는 `gpt-5.6-luna`를 폴백으로 �
 
 `PUT /api/sidecar-settings`는 같은 필드를 받습니다. 부분 업데이트는 보내지 않은 키를 유지합니다. `timeoutMs`는 런타임 정수 범위(1–2147483647 ms)를 사용합니다.
 
+웹 검색 사이드카 카드도 같은 구성입니다. 모델 선택기의 첫 행은 **끔 (Off)** 행입니다. 끄면
+OpenCodex가 `web_search` 가로채기를 멈추고 Codex 통합이 `~/.codex/config.toml`에
+`web_search = "disabled"`를 씁니다. Codex는 자체 모드가 그렇게 될 때까지 네이티브 호스팅
+`web_search` 도구를 계속 광고하므로, MCP 검색 서버만 유일한 검색 경로가 되어야 할 때
+필요합니다. 다시 켜면 이 줄이 제거되고 Codex 저널에 기록된 운영자가 작성한 루트
+`web_search` 줄이 복원됩니다. 이 쓰기에는 관리되는 `~/.codex/config.toml`
+(`ocx sync`)이 필요하며, 쓰기가 일어나지 않으면 대시보드 카드가 경고하고
+`ocx agent sidecar web --enabled off`가 결과를 보고합니다.
+
 파일을 직접 고치고 싶다면 이전처럼 `config.json`에서 `enabled`를 `false`로 두면 됩니다. Anthropic OAuth 검색과 이미지 설명은 기존 Claude Code OAuth
 fingerprint 선례를 따르지만, 실제 계정과 작업량으로 충분히 soak test하는 편이 좋습니다. 전체
 필드는 [설정 레퍼런스](/ko/reference/configuration/server/#sidecars)를 참고하세요.

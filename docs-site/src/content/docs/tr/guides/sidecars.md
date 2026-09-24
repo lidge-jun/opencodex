@@ -196,6 +196,15 @@ akıl yürütmeyi, zaman aşımını ve sınırı korur.
 atlanan anahtarları değiştirmeden bırakır. `timeoutMs` çalışma zamanı tamsayı
 sınırlarını kullanır (1–2147483647 ms).
 
+Web arama sidecar kartı aynı denetim yapısını taşır: model seçicisinin ilk satırı **Kapalı (Off)**'dır.
+Kapatmak OpenCodex'in `web_search` yakalamasını durdurur ve Codex entegrasyonu
+`~/.codex/config.toml` dosyasına `web_search = "disabled"` yazar; çünkü Codex kendi
+modu aksini söyleyene kadar yerleşik barındırılan `web_search` aracını bildirmeye devam eder ve
+tek arama yolu bir MCP arama sunucusu olacaksa bu gerekir. Yeniden açmak bu satırı kaldırır ve Codex
+günlüğüne kaydedilmiş operatörün kendi kök `web_search` satırını geri getirir. Yazma işlemi
+yönetilen bir `~/.codex/config.toml` (`ocx sync`) gerektirir; gerçekleşmezse kontrol
+paneli kartı uyarır ve `ocx agent sidecar web --enabled off` sonucu bildirir.
+
 Dosyayı doğrudan düzenlemeyi tercih ediyorsanız `config.json` içinde yine de
 `enabled: false` ayarlayabilirsiniz. Anthropic-OAuth araması ve görsel
 açıklaması mevcut Claude Code OAuth parmak izi emsalini yeniden kullanır, ancak

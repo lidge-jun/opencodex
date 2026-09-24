@@ -13,7 +13,14 @@ description: 多代理、組合、可觀測性、存取、整合、系統與設�
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off` 與儀表板中的 **關閉 (Off)** 列是同一個開關：OpenCodex 不再執行該 sidecar，
+Codex 整合會把 `web_search = "disabled"` 寫入 `~/.codex/config.toml`，這正是讓 MCP
+搜尋伺服器成為唯一搜尋路徑的前提。`--enabled on` 會再次移除該行。當儲存確實改變開關狀態時，
+指令會回報由此觸發的 Codex 端寫入（`--json` 中的 `codexWebSearch`，否則為結尾的
+`Codex config:` 行），並在無法寫入時提示 `ocx sync`。該旗標對 `vision` 同樣有效。
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 

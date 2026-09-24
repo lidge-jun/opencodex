@@ -15,7 +15,17 @@ les modes de surface, la délégation, l'effort et le comportement de repli s'em
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off` est le même interrupteur que la ligne **Désactivé (Off)** du tableau de bord :
+OpenCodex cesse d'exécuter le service auxiliaire et l'intégration Codex écrit
+`web_search = "disabled"` dans `~/.codex/config.toml`, ce qui permet à un serveur de
+recherche MCP d'être le seul chemin de recherche. `--enabled on` supprime à nouveau cette ligne.
+Lorsque l'enregistrement déplace réellement l'interrupteur, la commande signale l'écriture côté Codex
+qu'elle a déclenchée (`codexWebSearch` avec `--json`, une ligne `Codex config:`
+sinon) et renvoie vers `ocx sync` quand elle n'a pas pu avoir lieu. L'option fonctionne aussi
+pour `vision`.
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
 

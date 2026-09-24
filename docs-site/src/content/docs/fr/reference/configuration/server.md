@@ -221,7 +221,7 @@ l'API Images d'OpenAI et la forme de réponse attendue par Codex.
 
 | Champ | Type | Par défaut | Signification |
 | --- | --- | --- | --- |
-| `enabled?` | `boolean` | activé lorsqu'il est utilisable | Interrupteur principal. |
+| `enabled?` | `boolean` | activé lorsqu'il est utilisable | Interrupteur principal. Avec `false`, OpenCodex cesse d'intercepter `web_search` et l'intégration Codex écrit `web_search = "disabled"` dans `~/.codex/config.toml`. |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Une valeur explicite est prioritaire ; l'absence de valeur sélectionne toujours `openai`. `anthropic` et `xai` ne s'exécutent que s'ils sont configurés explicitement ; `gemini` et `exa` restent réservés jusqu'à la livraison de leur executor. |
 | `model?` | `string` | dépendant du backend | `gpt-5.6-luna` pour OpenAI, `claude-sonnet-5` pour Anthropic ou `grok-4.6` pour xAI. L'héritage explicite `gpt-5.4-mini` migre au démarrage. |
 | `exaApiKey?` | `string` | aucun | Clé opérateur pour le backend `exa`. Écriture seule : les lectures de gestion ne renvoient jamais la valeur stockée. |

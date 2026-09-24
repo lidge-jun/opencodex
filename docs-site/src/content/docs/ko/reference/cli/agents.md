@@ -14,7 +14,16 @@ description: 멀티 에이전트, 콤보, 관측성, 접근, 통합, 시스템, 
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off`는 대시보드의 **끔 (Off)** 행과 같은 스위치입니다. OpenCodex는 사이드카를
+실행하지 않고 Codex 통합은 `~/.codex/config.toml`에
+`web_search = "disabled"`를 쓰므로, MCP 검색 서버만 검색 경로로 쓸 수 있습니다.
+`--enabled on`은 그 줄을 다시 제거합니다. 저장이 실제로 스위치를 옮기면 명령은 트리거된
+Codex 쪽 쓰기(`--json`에서는 `codexWebSearch`, 그 밖에는 마지막
+`Codex config:` 줄)를 보고하고, 쓰기가 불가능했다면 `ocx sync`를 안내합니다.
+이 플래그는 `vision`에도 동작합니다.
 
 ### `ocx effort [status|set|clear]`
 
