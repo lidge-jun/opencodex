@@ -14,8 +14,12 @@ export function ProviderFastRow({ summary, apiBase, onSaved }: {
 }) {
   const t = useT();
   const [busy, setBusy] = useState(false);
+  // The confirmed save wins until the reloaded summary moves off the value it was saved from, so
+  // the control never falls back to a stale summary while (or if) the catalog reload is pending.
+  const [saved, setSaved] = useState<{ value: boolean; from: boolean } | null>(null);
   if (!summary?.fastOptIn) return null;
-  const enabled = summary.fastOptIn.enabled;
+  const serverEnabled = summary.fastOptIn.enabled;
+  const enabled = saved && saved.from === serverEnabled ? saved.value : serverEnabled;
   const save = async (next: boolean) => {
     if (busy || next === enabled) return;
     setBusy(true);
@@ -26,6 +30,7 @@ export function ProviderFastRow({ summary, apiBase, onSaved }: {
         body: JSON.stringify({ fastEnabled: next }),
       });
       await readJsonOrThrow(response, t("models.fastSaveFailed"));
+      setSaved({ value: next, from: serverEnabled });
       onSaved(true, t(next ? "models.fastEnabled" : "models.fastDisabled"));
     } catch (error) {
       onSaved(false, error instanceof Error ? error.message : t("models.fastSaveFailed"));
