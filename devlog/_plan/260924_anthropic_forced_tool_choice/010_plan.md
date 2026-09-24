@@ -34,5 +34,10 @@ unsupported for Opus 5.5; `auto` and `none` are supported). The compatibility do
 preserves a named or allowed tool's candidate set and preserves `disable_parallel_tool_use`,
 but it cannot preserve the upstream forced-call guarantee.
 
+For completeness, two supplementary requests manually overrode the adapter body to send
+`thinking:{type:"disabled"}` together with `tool_choice` `any` and `tool`. Both returned
+HTTP 400. The published guide also states that Opus 5.5 rejects disabled thinking, so there
+is no thinking-off wire shape that can retain forced tool use for this model.
+
 ## Plan reflection after vendor source check
 Official Opus 5.5 change guide (https://platform.claude.com/docs/en/models/opus-5-5/whats-new-opus-5-5, read 2026-09-24) says thinking cannot be disabled and any/tool forced choices return 400; auto/none are supported. This falsifies a semantics-preserving repair for Opus 5.5. If the adapter-generated live probe agrees, change only Opus 5.5 forced choices to auto and explicitly document that required/named callers lose the guarantee; preserve the choice where upstream accepts it. The guide says the same restriction applies to Fable 5.1, but that model needs separate live or test evidence before expansion.
