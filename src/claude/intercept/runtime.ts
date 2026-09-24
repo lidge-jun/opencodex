@@ -137,7 +137,10 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   try {
     const proxyPort = claudeInterceptProxyPort(options.config, options.publicPort);
     migrateClaudeInterceptSettings(buildClaudeInterceptEnv(proxyPort, claudeInterceptCaCertPath(configDir), authToken));
-  } catch { // no-excuse-ok: catch -- a skipped rewrite degrades to the pre-migration behaviour, and ensure/apply retries it.
+  } catch (error) {
+    // A skipped rewrite degrades to the pre-migration behaviour and ensure/apply retries it,
+    // but silence here leaves upgraded clients hitting 407 with no recorded cause.
+    console.warn(`[claude-intercept] settings migration skipped: ${error instanceof Error ? error.message : String(error)}`);
   }
   const listener = startClaudeInterceptListener<T>({
     leaf,

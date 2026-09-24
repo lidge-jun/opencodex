@@ -1,4 +1,4 @@
-﻿import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -36,13 +36,13 @@ function settings(): { env?: Record<string, string>; [key: string]: unknown } {
   return JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf8")) as { env?: Record<string, string> };
 }
 
-  function expectedProxyUrl(port: number): string {
-    const token = readClaudeInterceptProxyToken(root);
-    if (token === null) throw new Error("expected the proxy token to exist");
-    return claudeInterceptProxyUrl(port, token);
-  }
+function expectedProxyUrl(port: number): string {
+  const token = readClaudeInterceptProxyToken(root);
+  if (token === null) throw new Error("expected the proxy token to exist");
+  return claudeInterceptProxyUrl(port, token);
+}
 
-  async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig = config(), deps: Parameters<typeof handleManagementAPI>[3] = {}) {
+async function dispatch(path: string, init?: RequestInit, inputConfig: OcxConfig = config(), deps: Parameters<typeof handleManagementAPI>[3] = {}) {
   const url = new URL(`http://127.0.0.1:10100${path}`);
   const response = await handleManagementAPI(new Request(url, {
     ...init,
@@ -301,8 +301,8 @@ test("ensure warns instead of touching a gateway profile that contradicts an exp
 });
 
 test("first-party apply rebases the Claude hand-edit guard after its scoped mode save", async () => {
-  // First-party apply ends at the mode-marker write ??no profile-marker save
-  // follows ??so unless that write adopts its committed subtree, live diverges
+  // First-party apply ends at the mode-marker write — no profile-marker save
+  // follows — so unless that write adopts its committed subtree, live diverges
   // from the armed baseline and the next whole-config save stomps a hand edit.
   const snapshot = config({ claudeCode: { authMode: "subscription" } });
   writeFileSync(join(root, "config.json"), JSON.stringify(snapshot));
@@ -599,7 +599,7 @@ for (const surface of ["api", "native", "cli"] as const) {
 
 test("first-party inspection is read-only: an owned legacy env reads stale, no token is minted", () => {
   // A pre-auth apply left a bare loopback URL anchored on our CA. Status must classify it
-  // stale without writing the credential file ??inspection runs on read-only paths too.
+  // stale without writing the credential file — inspection runs on read-only paths too.
   mkdirSync(claudeDir, { recursive: true });
   writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({
     env: { HTTPS_PROXY: "http://127.0.0.1:10200", NODE_EXTRA_CA_CERTS: claudeInterceptCaCertPath(root) },

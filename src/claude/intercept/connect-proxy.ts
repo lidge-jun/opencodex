@@ -136,8 +136,14 @@ function proxyAuthorized(head: string, token: string): boolean {
   const header = head.split("\r\n").find(line => /^proxy-authorization:/i.test(line));
   const supplied = header?.slice(header.indexOf(":") + 1).trim();
   const expected = `Basic ${Buffer.from(`opencodex:${token}`).toString("base64")}`;
-  if (!supplied || supplied.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(supplied), Buffer.from(expected));
+  if (!supplied) return false;
+  // Compare byte lengths, not string lengths: the head decodes latin1 and Buffer.from
+  // re-encodes utf-8, so a non-ASCII header can match in characters while differing in
+  // bytes — and timingSafeEqual throws on a length mismatch instead of returning false.
+  const suppliedBytes = Buffer.from(supplied);
+  const expectedBytes = Buffer.from(expected);
+  if (suppliedBytes.length !== expectedBytes.length) return false;
+  return timingSafeEqual(suppliedBytes, expectedBytes);
 }
 
 function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions): void {
