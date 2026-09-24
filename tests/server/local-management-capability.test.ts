@@ -117,6 +117,38 @@ describe("local management read capability", () => {
     )).toBe(false);
   });
 
+  test("the desktop tray reads stay inside the allowlist", () => {
+    // native_tray_data requests /api/config and /api/codex-auth/active through
+    // the same 401-retry path as the other reads; if either falls off the
+    // allowlist the capability retry 401s and the tray loses its data.
+    for (const path of [
+      LOCAL_MANAGEMENT_READ_PATHS.config,
+      LOCAL_MANAGEMENT_READ_PATHS.codexAuthActive,
+    ]) {
+      const capability = createLocalManagementReadCapability(
+        secret,
+        nonce,
+        "GET",
+        path,
+        pid,
+        port,
+        expiresAt,
+      );
+      expect(capability).not.toBeNull();
+      expect(verifyLocalManagementReadCapability(
+        secret,
+        nonce,
+        "GET",
+        path,
+        pid,
+        port,
+        expiresAt,
+        capability,
+        now,
+      )).toBe(true);
+    }
+  });
+
   test("the query is bound into the grant", () => {
     const usage = `${LOCAL_MANAGEMENT_READ_PATHS.usage}?range=7d`;
     const capability = createLocalManagementReadCapability(
