@@ -119,10 +119,13 @@ event loop. Injected probes may return a state or a promise, so isolated callers
 
 When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
-port (`getClaudeInterceptState()?.pickerProxyPort`), used only as Desktop's egress proxy, whose per-connection
-`selectTunnel` comes from the picker runtime (`src/claude/intercept/picker-runtime.ts`). The two
-proxies never share clients: Claude Code trusts only the intercept CA and Desktop trusts only the
-login keychain. On the egress proxy every target is a blind tunnel except `claude.ai:443`, which is
+port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
+also hands that proxy to the Claude Code processes it spawns, and the two trust different CAs, so
+the tunnel is chosen per client from the CONNECT head: a tunnel without a browser User-Agent (Claude
+Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and every other target
+blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
+login keychain) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
+blind-tunnels every target except `claude.ai:443`. That one is
 terminated by a `node:https` HTTP/1.1 relay (`picker-listener.ts`) only while the runtime's cached
 decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA

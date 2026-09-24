@@ -26,12 +26,31 @@ export interface ConnectProxyOptions {
   /** Hostnames (lowercase) whose 443 tunnels are spliced onto `interceptPort`. */
   interceptHosts?: readonly string[];
   /** Per-connection override, consulted before interceptHosts; null keeps the default. */
-  selectTunnel?: (host: string, port: number) => TunnelDecision | null | Promise<TunnelDecision | null>;
+  selectTunnel?: (host: string, port: number, request: ConnectRequestInfo) => TunnelDecision | null | Promise<TunnelDecision | null>;
   /** Test seam: dial the real destination for a blind tunnel. */
   dialUpstream?: (host: string, port: number) => Socket;
 }
 
 export type TunnelDecision = { kind: "intercept"; port: number } | { kind: "blind" };
+
+/** What the CONNECT head says about its client, for tunnel choice only. Never logged. */
+export interface ConnectRequestInfo {
+  /** The CONNECT request's User-Agent header, or null when it sent none. */
+  userAgent: string | null;
+}
+
+/**
+ * Chromium (Claude Desktop's app) sends its browser User-Agent on CONNECT; the Claude Code
+ * processes Desktop spawns send none. The two trust different CAs, so the choice depends on it.
+ */
+export function isBrowserConnect(request: ConnectRequestInfo): boolean {
+  return request.userAgent !== null && /^Mozilla\//.test(request.userAgent);
+}
+
+function connectRequestInfo(head: string): ConnectRequestInfo {
+  const match = /\r\nuser-agent:[ \t]*([^\r\n]*)/i.exec(head);
+  return { userAgent: match ? match[1]!.trim() : null };
+}
 
 type ResolvedConnectProxyOptions = Required<Pick<ConnectProxyOptions, "interceptPort" | "interceptHosts" | "dialUpstream">>
   & Pick<ConnectProxyOptions, "selectTunnel">;
@@ -164,7 +183,7 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
     }
     let decision: ReturnType<NonNullable<ConnectProxyOptions["selectTunnel"]>>;
     try {
-      decision = options.selectTunnel(target.host, target.port);
+      decision = options.selectTunnel(target.host, target.port, connectRequestInfo(head.subarray(0, end).toString("latin1")));
     } catch {
       dialFor({ kind: "blind" });
       return;

@@ -269,11 +269,14 @@ async function freePortPair(): Promise<number> {
   throw new Error("no free port pair");
 }
 
-function connectStatusLine(port: number, host: string): Promise<string> {
+const BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/2.7032.0";
+
+function connectStatusLine(port: number, host: string, userAgent?: string): Promise<string> {
   return new Promise(resolve => {
     let buffered = "";
     const socket = connect({ host: "127.0.0.1", port }, () => {
-      socket.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n\r\n`);
+      const ua = userAgent ? `User-Agent: ${userAgent}\r\n` : "";
+      socket.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n${ua}\r\n`);
     });
     const done = () => { socket.destroy(); resolve(buffered.split("\r\n")[0] ?? ""); };
     socket.on("data", chunk => { buffered += chunk.toString("latin1"); if (buffered.includes("\r\n")) done(); });
@@ -311,7 +314,7 @@ describe("startClaudeIntercept wiring", () => {
     });
   }
 
-  test("only Desktop's egress proxy consults the picker; the Claude Code proxy never does", async () => {
+  test("only the app's browser tunnels on Desktop's egress proxy consult the picker", async () => {
     const port = await freePortPair();
     const asked: string[] = [];
     const fake = {
@@ -324,9 +327,16 @@ describe("startClaudeIntercept wiring", () => {
       expect(handle?.proxyPort).toBe(port);
       expect(handle?.pickerProxyPort).toBe(port + 1);
       expect(getClaudePickerRuntime()).toBe(fake);
-      expect(await connectStatusLine(port, "picker-probe.invalid")).toContain("502");
+      // The Claude Code proxy never consults the picker, whoever connects.
+      expect(await connectStatusLine(port, "picker-probe.invalid", BROWSER_UA)).toContain("502");
       expect(asked).toEqual([]);
+      // Claude Code processes Desktop spawns reach the egress proxy without a User-Agent: claude.ai
+      // stays blind for them, and api.anthropic.com gets the intercept (a local listener, so 200).
       expect(await connectStatusLine(port + 1, "picker-probe.invalid")).toContain("502");
+      expect(await connectStatusLine(port + 1, "api.anthropic.com")).toContain("200");
+      expect(asked).toEqual([]);
+      // The app's own tunnels carry its browser User-Agent and are the only ones the picker sees.
+      expect(await connectStatusLine(port + 1, "picker-probe.invalid", BROWSER_UA)).toContain("502");
       expect(asked).toEqual(["picker-probe.invalid"]);
     } finally {
       await handle?.stop();

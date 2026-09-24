@@ -2,7 +2,7 @@ import type { Server } from "bun";
 import type { OcxConfig } from "../../types";
 import { getConfigDir } from "../../config/paths";
 import type { DesktopPickerController } from "../desktop-picker";
-import { CLAUDE_INTERCEPT_HOSTS, startConnectProxy, type ConnectProxyHandle } from "./connect-proxy";
+import { CLAUDE_INTERCEPT_HOSTS, isBrowserConnect, startConnectProxy, type ConnectProxyHandle } from "./connect-proxy";
 import { startClaudeInterceptListener } from "./listener";
 import { claudeInterceptCaCertPath, ensureLocalInterceptCaForStartup, issueLocalInterceptLeaf } from "./local-ca";
 import type { PickerRouteInput } from "./picker-models";
@@ -16,12 +16,12 @@ import type { SecurityRunner } from "./picker-trust";
  * public port unless configured, because Claude Code's `settings.json` must name a port that
  * survives restarts; the TLS listener is ephemeral and only ever reached through the proxy.
  *
- * Picker mode adds a second CONNECT proxy on the next port, used only as Claude Desktop's egress
- * proxy. Desktop's app traffic and the Code tab's Claude Code never share a proxy: Claude Code
- * trusts only the intercept CA (NODE_EXTRA_CA_CERTS) and must never meet the picker terminator,
- * and Desktop trusts only the login keychain and must never meet the api.anthropic.com intercept.
- * On the egress proxy every host is a blind tunnel except claude.ai, which the picker runtime may
- * terminate (src/claude/intercept/picker-runtime.ts).
+ * Picker mode adds a second CONNECT proxy on the next port, used as Claude Desktop's pinned egress
+ * proxy. Desktop also hands that proxy to the Claude Code processes it spawns, so the choice is per
+ * client: Claude Code (no User-Agent on CONNECT) trusts only the intercept CA and gets the
+ * api.anthropic.com intercept and nothing else; the app itself (a browser User-Agent) trusts only
+ * the login keychain and never meets the api.anthropic.com intercept, and only its claude.ai
+ * tunnels may be terminated by the picker runtime (src/claude/intercept/picker-runtime.ts).
  */
 
 export const CLAUDE_INTERCEPT_PORT_OFFSET = 100;
@@ -161,12 +161,24 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
         ...(options.pickerPlatform ? { platform: options.pickerPlatform } : {}),
       });
       const runtime = picker;
+      const interceptPort = listener.port!;
       try {
         pickerProxy = await startConnectProxy(claudePickerProxyPort(options.config, options.publicPort), {
-          interceptPort: listener.port!,
-          // Nothing is intercepted by host on Desktop's egress proxy; only the picker may terminate.
+          interceptPort,
+          // No host list here: the choice below depends on which client opened the tunnel.
           interceptHosts: [],
-          selectTunnel: (host, port) => runtime.selectTunnel(host, port),
+          selectTunnel: (host, port, request) => {
+            // Desktop hands its pinned egress proxy to the Claude Code processes it spawns, so their
+            // api.anthropic.com traffic arrives here too and gets the same intercept as on the Claude
+            // Code proxy. Those processes trust only the intercept CA, so the picker never terminates
+            // their claude.ai tunnels; only the app's own (browser) CONNECTs reach the picker.
+            if (!isBrowserConnect(request)) {
+              return port === 443 && (CLAUDE_INTERCEPT_HOSTS as readonly string[]).includes(host.toLowerCase())
+                ? { kind: "intercept", port: interceptPort }
+                : { kind: "blind" };
+            }
+            return runtime.selectTunnel(host, port);
+          },
         });
         pickerProxyLive = true;
       } catch (error) {
