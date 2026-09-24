@@ -367,6 +367,34 @@ describe("ocx agent sidecar --list (#2188)", () => {
       logSpy.mockRestore();
     }
   });
+
+  test("an externally owned Codex config gets no 'ocx sync' retry advice", async () => {
+    const { deps } = fakeRuntime((req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
+        return {
+          ok: true,
+          webSearch: { enabled: false },
+          codexWebSearch: {
+            applied: false,
+            reason: "external_provider",
+            retryable: false,
+            detail: 'config.toml selects the external model_provider "custom".',
+          },
+        };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["sidecar", "web", "--enabled", "off"], deps)).toBe(0);
+      const out = logSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(out).toContain("was not rewritten because an external model provider owns config.toml");
+      expect(out).not.toContain("ocx sync");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
 });
 
 afterEach(() => {
