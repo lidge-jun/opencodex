@@ -8,23 +8,26 @@
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Подписывайтесь на @claudeebum в X"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/github/v/release/lidge-jun/opencodex?label=desktop&logo=github&color=24292f" alt="Последний релиз настольного приложения"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="версия npm"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="лицензия"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="версия Node">
 </p>
 
-<p align="center">
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-macos.svg" alt="Скачать OpenCodex для macOS" width="220"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-windows.svg" alt="Скачать OpenCodex для Windows" width="220"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-linux.svg" alt="Скачать OpenCodex для Linux" width="220"></a>
-</p>
-<p align="center"><sub>Настольное приложение (бета): универсальный <code>.dmg</code> для macOS · <code>.msi</code> для Windows x64 · <code>.AppImage</code> / <code>.deb</code> для Linux x86_64. Предпочитаете терминал? Установите CLI:</sub></p>
-
 ```bash
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<details>
+<summary><b>Настольное приложение (бета)</b> — macOS · Windows · Linux</summary>
+<br>
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="Скачать для macOS (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Скачать для Windows (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Скачать для Linux (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Скачать для Linux (.deb)"></a>
+</p>
+</details>
 
 <table>
 <tr>
@@ -92,32 +95,6 @@ Ollama или любую другую LLM с Codex, Claude Code, Claude Desktop 
 
 ## Быстрый старт
 
-### Настольное приложение (бета)
-
-Настольное приложение — это тот же прокси и та же панель управления в нативном окне,
-с иконкой в трее и встроенным `ocx`. Оно подключается к уже запущенному прокси либо
-запускает встроенный, а панель остаётся на порту прокси (**http://localhost:10100**,
-если вы не настроили другой). Выберите файл для своей платформы в
-[последнем релизе](https://github.com/lidge-jun/opencodex/releases/latest):
-
-| Платформа | Файл | Примечания |
-|---|---|---|
-| macOS 13+ (Apple Silicon и Intel) | `OpenCodex-<version>-macos.dmg` | Универсальная сборка, подписана Developer ID и нотариализована |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Пока без цифровой подписи: SmartScreen спросит один раз — выберите **Подробнее → Выполнить в любом случае** |
-| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` или `-linux-amd64.deb` | Для трея нужен рабочий стол с поддержкой AppIndicator |
-
-Рядом с каждым файлом на странице релиза есть `.sha256`. На macOS 14+ приложение также
-поставляется с расширением WidgetKit, которое показывает состояние прокси, расход за
-сегодня и квоты провайдеров; модель снимков, которую оно отображает, находится в
-[`app/`](../app) (`MenuBarCore`). Чтобы собрать приложение самостоятельно, выполните
-`bun install && bun run build:gui` в корне репозитория, затем в `desktop/` выполните
-`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` на macOS
-или `bun install && bun run prepare-sidecar && bun run build:local` на Windows и Linux (шаг с виджетом
-работает только на macOS). В [руководстве по настольному приложению](https://opencodex.me/ru/guides/desktop-app/) и
-[руководстве по приложению macOS в строке меню](https://opencodex.me/ru/guides/macos-menu-bar/)
-описан первый запуск, а
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) перечисляет всё, что записывается на диск.
-
 ### Личная установка (CLI)
 
 ```bash
@@ -130,6 +107,12 @@ ocx start                         # прокси + панель управлен
 Откройте **http://localhost:10100** и настройте всё в веб-панели: добавьте провайдеров
 (40+ встроенных или любой OpenAI-совместимый endpoint), выберите модели, управляйте
 аккаунтами. `ocx gui` в любой момент снова откроет панель.
+
+### Настольное приложение (бета)
+
+Тот же прокси и дашборд в нативном окне, с треем и встроенным `ocx`. Скачайте из [последнего релиза](https://github.com/lidge-jun/opencodex/releases/latest)
+универсальный `.dmg` (macOS 13+), `.msi` (Windows x64, пока без цифровой подписи) или `.AppImage` / `.deb`
+(Linux x86_64). Первый запуск и локальная сборка описаны в [руководстве по настольному приложению](https://opencodex.me/ru/guides/desktop-app/).
 
 ### Пул аккаунтов ChatGPT
 

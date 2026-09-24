@@ -8,23 +8,26 @@ Deux commandes suffisent pour que chacun d'eux exécute le LLM de votre choix.</
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="Suivre @claudeebum sur X"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/github/v/release/lidge-jun/opencodex?label=desktop&logo=github&color=24292f" alt="Dernière version de l'application de bureau"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="version npm"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="licence"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="version de Node">
 </p>
 
-<p align="center">
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-macos.svg" alt="Télécharger OpenCodex pour macOS" width="220"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-windows.svg" alt="Télécharger OpenCodex pour Windows" width="220"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-linux.svg" alt="Télécharger OpenCodex pour Linux" width="220"></a>
-</p>
-<p align="center"><sub>Application de bureau (bêta) : macOS universel <code>.dmg</code> · Windows x64 <code>.msi</code> · Linux x86_64 <code>.AppImage</code> / <code>.deb</code>. Vous préférez le terminal ? Installez la CLI :</sub></p>
-
 ```bash
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<details>
+<summary><b>Application de bureau (bêta)</b> — macOS · Windows · Linux</summary>
+<br>
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="Télécharger pour macOS (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Télécharger pour Windows (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Télécharger pour Linux (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Télécharger pour Linux (.deb)"></a>
+</p>
+</details>
 
 <table>
 <tr>
@@ -91,30 +94,6 @@ tandis que les fils existants restent associés au compte qui les a démarrés.
 
 ## Démarrage rapide
 
-### Application de bureau (bêta)
-
-L'application de bureau reprend le même proxy et le même tableau de bord dans une fenêtre native, avec une icône dans la barre d'état et le binaire `ocx` inclus.
-Elle se rattache à un proxy déjà en cours d'exécution ou démarre celui qui est fourni, et le tableau de bord reste
-sur le port du proxy (**http://localhost:10100** sauf si vous en avez configuré un autre). Choisissez le fichier
-correspondant à votre plateforme sur la page de la [dernière version publiée](https://github.com/lidge-jun/opencodex/releases/latest) :
-
-| Plateforme | Fichier | Remarques |
-|---|---|---|
-| macOS 13+ (Apple Silicon et Intel) | `OpenCodex-<version>-macos.dmg` | Compilation universelle, signée avec un identifiant Developer ID et notariée |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Pas encore signée numériquement : SmartScreen demande une confirmation, choisissez **Informations complémentaires → Exécuter quand même** |
-| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` ou `-linux-amd64.deb` | La barre d'état nécessite un environnement de bureau compatible AppIndicator |
-
-Chaque fichier est accompagné d'un `.sha256` sur la page de la version. Sous macOS 14+, l'application embarque
-également une extension WidgetKit qui affiche l'état du proxy, l'utilisation du jour et les quotas des
-fournisseurs ; le modèle de données des instantanés qu'elle affiche se trouve dans [`app/`](../app)
-(`MenuBarCore`). Pour compiler l'application vous-même, exécutez
-`bun install && bun run build:gui` à la racine du dépôt, puis, dans `desktop/`,
-`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` sous macOS,
-ou `bun install && bun run prepare-sidecar && bun run build:local` sous Windows et Linux (l'étape du widget
-exige macOS). Le [guide de l'application de bureau](https://opencodex.me/fr/guides/desktop-app/) et le
-[guide de l'application macOS dans la barre des menus](https://opencodex.me/fr/guides/macos-menu-bar/) détaillent le premier lancement, et
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) répertorie tout ce qui est écrit sur le disque.
-
 ### Installation personnelle (CLI)
 
 ```bash
@@ -128,6 +107,12 @@ Ouvrez **http://localhost:10100** et configurez tout dans le tableau de bord web
 fournisseurs (plus de 40 intégrés, ou n'importe quel point de terminaison compatible OpenAI),
 choisissez les modèles, gérez les comptes. `ocx gui`
 rouvre le tableau de bord à tout moment.
+
+### Application de bureau (bêta)
+
+Le même proxy et le même tableau de bord dans une fenêtre native, avec une icône dans la barre système et `ocx` intégré.
+Téléchargez depuis la [dernière version](https://github.com/lidge-jun/opencodex/releases/latest) le `.dmg` universel (macOS 13+), le `.msi` (Windows x64, pas encore signé)
+ou l'`.AppImage` / le `.deb` (Linux x86_64). Le [guide de l'application de bureau](https://opencodex.me/fr/guides/desktop-app/) décrit le premier lancement et la compilation locale.
 
 ### Groupe de comptes ChatGPT
 

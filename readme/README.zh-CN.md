@@ -8,23 +8,26 @@
 
 <p align="center">
   <a href="https://x.com/claudeebum"><img src="https://img.shields.io/badge/%40claudeebum-000000?logo=x&logoColor=white" alt="在 X 上关注 @claudeebum"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/github/v/release/lidge-jun/opencodex?label=desktop&logo=github&color=24292f" alt="最新桌面版发布"></a>
   <a href="https://www.npmjs.com/package/@bitkyc08/opencodex"><img src="https://img.shields.io/npm/v/@bitkyc08/opencodex?color=cb3837&label=npm&logo=npm" alt="npm 版本"></a>
   <a href="https://github.com/lidge-jun/opencodex/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/@bitkyc08/opencodex?color=blue" alt="许可证"></a>
   <img src="https://img.shields.io/node/v/@bitkyc08/opencodex?logo=node.js&label=node" alt="Node 版本">
 </p>
 
-<p align="center">
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-macos.svg" alt="下载 macOS 版 OpenCodex" width="220"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-windows.svg" alt="下载 Windows 版 OpenCodex" width="220"></a>
-  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="../assets/download-linux.svg" alt="下载 Linux 版 OpenCodex" width="220"></a>
-</p>
-<p align="center"><sub>桌面应用（测试版）：macOS 通用 <code>.dmg</code> · Windows x64 <code>.msi</code> · Linux x86_64 <code>.AppImage</code> / <code>.deb</code>。更喜欢终端？安装 CLI：</sub></p>
-
 ```bash
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<details>
+<summary><b>桌面应用（测试版）</b> — macOS · Windows · Linux</summary>
+<br>
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="下载 macOS 版 (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="下载 Windows 版 (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="下载 Linux 版 (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="下载 Linux 版 (.deb)"></a>
+</p>
+</details>
 
 <table>
 <tr>
@@ -89,28 +92,6 @@ Codex 认证管理一个 **ChatGPT 账户池**：添加账户，在仪表板中�
 
 ## 快速开始
 
-### 桌面应用（测试版）
-
-桌面应用把同一个代理和仪表板装进原生窗口，附带系统托盘和内置的 `ocx`。
-它会连接已在运行的代理，或启动自带的代理；仪表板仍使用代理端口
-（未另行配置时为 **http://localhost:10100**）。从
-[最新发布版本](https://github.com/lidge-jun/opencodex/releases/latest)中选择适合你平台的文件：
-
-| 平台 | 文件 | 说明 |
-|---|---|---|
-| macOS 13+（Apple Silicon 和 Intel） | `OpenCodex-<version>-macos.dmg` | 通用构建，使用 Developer ID 签名并完成公证 |
-| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 尚未进行代码签名：SmartScreen 会询问一次，选择 **更多信息 → 仍要运行** |
-| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` 或 `-linux-amd64.deb` | 托盘需要支持 AppIndicator 的桌面环境 |
-
-每个文件在发布页面上都带有对应的 `.sha256`。在 macOS 14+ 上，应用还附带一个
-WidgetKit 扩展，可显示代理状态、今日用量和提供商配额；它所呈现的快照模型位于
-[`app/`](../app)（`MenuBarCore`）。如需自行构建应用，先在仓库根目录运行
-`bun install && bun run build:gui`，然后在
-`desktop/` 中运行：macOS 上用 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`，Windows 和 Linux 上用 `bun install && bun run prepare-sidecar && bun run build:local`（小组件步骤只能在 macOS 上执行）。
-[桌面应用指南](https://opencodex.me/zh-cn/guides/desktop-app/)和
-[macOS 菜单栏应用指南](https://opencodex.me/zh-cn/guides/macos-menu-bar/)介绍了首次启动，
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)列出了写入磁盘的所有内容。
-
 ### 个人安装（CLI）
 
 ```bash
@@ -123,6 +104,11 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 打开 **http://localhost:10100**，在 Web 仪表板中完成所有配置 —— 添加提供商
 （40 多个内置，或任意 OpenAI 兼容端点）、选择模型、管理账户。随时运行 `ocx gui`
 可重新打开仪表板。
+
+### 桌面应用（测试版）
+
+同一个代理和控制台，装进原生窗口，附带托盘和内置的 `ocx`。从[最新版本](https://github.com/lidge-jun/opencodex/releases/latest)下载 macOS 13+ 通用 `.dmg`、
+Windows x64 `.msi`（尚未代码签名）或 Linux x86_64 `.AppImage` / `.deb`。首次启动和本地构建见[桌面应用指南](https://opencodex.me/zh-cn/guides/desktop-app/)。
 
 ### ChatGPT 账户池
 
