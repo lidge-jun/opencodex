@@ -58,6 +58,54 @@ const EMBEDDED_QUOTED_VALUE = {
   api: "openai-completions",
 };
 
+// A quoted scalar may span physical lines. The closing quote on the
+// continuation line is not an opener — the ` #` behind it is a real comment.
+const SOURCE_WITH_MULTILINE_QUOTE_COMMENT = [
+  "providers:",
+  "  opencodex:",
+  "    name: \"alpha",
+  "      \" # keep this note",
+  "    api: openai-completions",
+  "",
+].join("\n");
+
+const MULTILINE_QUOTE_VALUE = {
+  name: "alpha ",
+  api: "openai-completions",
+};
+
+// A `#` on a continuation line still inside an open quote is scalar content,
+// not a comment — the mutation must not refuse it.
+const SOURCE_WITH_MULTILINE_QUOTED_HASH = [
+  "providers:",
+  "  opencodex:",
+  "    name: \"alpha",
+  "      has # inside\"",
+  "    api: openai-completions",
+  "",
+].join("\n");
+
+const MULTILINE_QUOTED_HASH_VALUE = {
+  name: "alpha has # inside",
+  api: "openai-completions",
+};
+
+// A quote character on a plain scalar's continuation line is content too, so
+// the ` #` behind it is a real comment the mutation would silently delete.
+const SOURCE_WITH_PLAIN_CONTINUATION_QUOTE = [
+  "providers:",
+  "  opencodex:",
+  "    name: alpha",
+  "      \" # keep this note",
+  "    api: openai-completions",
+  "",
+].join("\n");
+
+const PLAIN_CONTINUATION_VALUE = {
+  name: "alpha \"",
+  api: "openai-completions",
+};
+
 describe("OMP managed YAML inline comments", () => {
   test("refresh refuses to replace a managed block containing a nested inline comment", () => {
     const nextValue = {
@@ -125,6 +173,56 @@ describe("OMP managed YAML inline comments", () => {
   test("disable refuses an inline comment hidden behind an embedded double quote", () => {
     expect(patchOmpYamlSource(
       SOURCE_WITH_EMBEDDED_DOUBLE_QUOTE,
+      { kind: "remove", removeEmptyProviders: true },
+      {},
+    )).toBeNull();
+  });
+
+  test("refresh refuses a trailing comment on a multiline quoted scalar's closing line", () => {
+    const nextValue = { ...MULTILINE_QUOTE_VALUE, api: "openai-responses" };
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_MULTILINE_QUOTE_COMMENT,
+      { kind: "upsert", value: nextValue },
+      { providers: { opencodex: nextValue } },
+    )).toBeNull();
+  });
+
+  test("disable refuses a trailing comment on a multiline quoted scalar's closing line", () => {
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_MULTILINE_QUOTE_COMMENT,
+      { kind: "remove", removeEmptyProviders: true },
+      {},
+    )).toBeNull();
+  });
+
+  test("refresh accepts a hash inside a multiline quoted scalar continuation", () => {
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_MULTILINE_QUOTED_HASH,
+      { kind: "upsert", value: MULTILINE_QUOTED_HASH_VALUE },
+      { providers: { opencodex: MULTILINE_QUOTED_HASH_VALUE } },
+    )).not.toBeNull();
+  });
+
+  test("disable accepts a hash inside a multiline quoted scalar continuation", () => {
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_MULTILINE_QUOTED_HASH,
+      { kind: "remove", removeEmptyProviders: true },
+      {},
+    )).toBe("");
+  });
+
+  test("refresh refuses a comment hidden behind a quote on a plain-scalar continuation", () => {
+    const nextValue = { ...PLAIN_CONTINUATION_VALUE, api: "openai-responses" };
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_PLAIN_CONTINUATION_QUOTE,
+      { kind: "upsert", value: nextValue },
+      { providers: { opencodex: nextValue } },
+    )).toBeNull();
+  });
+
+  test("disable refuses a comment hidden behind a quote on a plain-scalar continuation", () => {
+    expect(patchOmpYamlSource(
+      SOURCE_WITH_PLAIN_CONTINUATION_QUOTE,
       { kind: "remove", removeEmptyProviders: true },
       {},
     )).toBeNull();

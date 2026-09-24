@@ -81,17 +81,29 @@ function isComment(line: string): boolean {
 }
 
 /**
+ * The lexical state a scalar scan carries out of a line. Quoted and plain
+ * scalars may both continue onto later physical lines, so the state persists
+ * across the owned range: a continuation line opening with the scalar's
+ * closing quote is not a new opener — a ` #` behind it is a real comment —
+ * and a `#` on a line still inside an open quote is scalar content, not a
+ * comment.
+ */
+interface ScalarScan {
+  comment: boolean;
+  quote: "'" | "\"" | null;
+  scalarStarted: boolean;
+}
+
+/**
  * Quote tracking has to work in both directions: a `#` inside a quoted scalar
  * is content (`"model#variant"`), but a quote inside a plain scalar is also
  * content — `user's model` is one plain scalar, and treating its `'` as an
  * opener would hide a real ` #` comment behind quote mode.
  */
-function hasInlineComment(line: string): boolean {
-  let quote: "'" | "\"" | null = null;
+function scanScalarLine(line: string, quote: "'" | "\"" | null, scalarStarted: boolean): ScalarScan {
   // A `'` or `"` opens a quoted scalar only where a scalar may begin — after
   // `key:`, `- `, or a flow indicator — never inside a plain scalar already
   // in progress.
-  let scalarStarted = false;
   let flowDepth = 0;
   for (let index = 0; index < line.length; index += 1) {
     const character = line[index]!;
@@ -106,7 +118,9 @@ function hasInlineComment(line: string): boolean {
       else quote = null;
       continue;
     }
-    if (character === "#" && /\s/u.test(line[index - 1] ?? "")) return true;
+    if (character === "#" && /\s/u.test(line[index - 1] ?? "")) {
+      return { comment: true, quote, scalarStarted };
+    }
     const next = line[index + 1] ?? "";
     if (scalarStarted) {
       // `:` ends a plain scalar where a value boundary follows; inside flow
@@ -142,7 +156,11 @@ function hasInlineComment(line: string): boolean {
     }
     scalarStarted = true;
   }
-  return false;
+  return { comment: false, quote, scalarStarted };
+}
+
+function hasInlineComment(line: string): boolean {
+  return scanScalarLine(line, null, false).comment;
 }
 
 function regexpEscape(value: string): string {
@@ -232,16 +250,29 @@ function childEnd(
   parentEnd: number,
   indent: number,
 ): number | null {
+  // Scalar state carries across physical lines: a scalar continuation is
+  // always deeper than the leaf's indent, so a `spaces <= indent` line can
+  // never be one. Inside an open quote a blank or `#`-leading line is scalar
+  // content; inside a plain scalar a blank line folds but a `#` line is still
+  // a real comment.
+  let quote: "'" | "\"" | null = null;
+  let scalarStarted = false;
   for (let index = start + 1; index < parentEnd; index += 1) {
     const body = lines[index]!.body;
     const spaces = leadingSpaces(body);
     if (spaces === null) return null;
     // Blank lines and same-level comments remain outside our replacement.
     // Deeper comments belong to the leaf and would be destroyed, so refuse.
-    if (isBlank(body)) return index;
-    if (isComment(body)) return spaces <= indent ? index : null;
+    if (isBlank(body)) {
+      if (quote === null && !scalarStarted) return index;
+      continue;
+    }
+    if (quote === null && isComment(body)) return spaces <= indent ? index : null;
     if (spaces <= indent) return index;
-    if (hasInlineComment(body)) return null;
+    const scan = scanScalarLine(body, quote, scalarStarted);
+    if (scan.comment) return null;
+    quote = scan.quote;
+    scalarStarted = scan.scalarStarted;
   }
   return parentEnd;
 }
