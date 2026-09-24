@@ -45,6 +45,7 @@ import { adapterFailureFromEvent, emptyChunks, joinChunks, responsesUsage, toolC
 import type { OutputItem, StringChunks } from "./internal";
 import { bridgeToResponsesSSE } from "./sse";
 
+/** Build a buffered Responses result within a caller-owned or temporary translator budget. */
 export function buildResponseJSON(
   events: AdapterEvent[],
   modelId: string,
@@ -68,6 +69,7 @@ export function buildResponseJSON(
   }
 }
 
+/** Fold adapter events into a Responses result while enforcing the requested tool boundary. */
 function buildResponseJSONWithBudget(
   events: AdapterEvent[],
   modelId: string,
@@ -443,7 +445,7 @@ function buildResponseJSONWithBudget(
         flushToolCall();
         const effectiveName = normalizeDeclaredToolName(e.name, options?.declaredToolNames);
         if (
-          (options?.enforceDeclaredToolNames === true || options?.declaredToolNames !== undefined)
+          (options?.enforceDeclaredToolNames === true || options?.declaredToolNames != null)
           && options?.enforceDeclaredToolNames !== false
           && !options?.declaredToolNames?.has(effectiveName)
         ) {

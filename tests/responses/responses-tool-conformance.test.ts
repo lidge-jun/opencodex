@@ -470,6 +470,7 @@ describe("parallel tool-call capability", () => {
 });
 
 describe("declared tool enforcement at the bridge", () => {
+  /** Compare authorization and failure details across buffered and streamed responses. */
   it("fails closed without a catalog only when enforcement is active on both response shapes", async () => {
     const events: AdapterEvent[] = [
       { type: "tool_call_start", id: "call_1", name: "read_file" },
@@ -485,6 +486,7 @@ describe("declared tool enforcement at the bridge", () => {
       { label: "declared", options: { enforceDeclaredToolNames: true, declaredToolNames: new Set(["read_file"]) }, refused: false },
       { label: "chat/Anthropic scope", options: { enforceDeclaredToolNames: false, declaredToolNames: new Set(["other_tool"]) }, refused: false },
       { label: "unscoped bridge", options: {}, refused: false },
+      { label: "unscoped null", options: { declaredToolNames: null as unknown as ReadonlySet<string> }, refused: false },
     ];
     for (const { label, options, refused } of cases) {
       const frames = await collectSse(bridgeToResponsesSSE(replay(events), MODEL, undefined, undefined, undefined, undefined, 2_000, options));
@@ -492,8 +494,11 @@ describe("declared tool enforcement at the bridge", () => {
       expect(frames.some(frame => frame.event === "response.failed"), label).toBe(refused);
       expect(frames.some(frame => frame.event === "response.output_item.added"), label).toBe(!refused);
       expect(json.status, label).toBe(refused ? "failed" : "completed");
-      if (refused) expect(JSON.stringify(json.error), label).toContain("undeclared client tool");
-      else expect(json.error, label).toBeUndefined();
+      if (refused) {
+        expect(JSON.stringify(json.error), label).toContain("undeclared client tool");
+        const failed = frames.find(frame => frame.event === "response.failed");
+        expect(JSON.stringify(failed), label).toContain("undeclared client tool");
+      } else expect(json.error, label).toBeUndefined();
       expect((json.output as unknown[]).length, label).toBe(refused ? 0 : 1);
     }
   });
