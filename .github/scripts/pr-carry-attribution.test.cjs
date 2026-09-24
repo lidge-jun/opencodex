@@ -131,6 +131,21 @@ describe("assessCarryAttribution", () => {
     assert.ok(performance.now() - started < 2_000, "fence scan should remain linear");
   });
 
+  it("scans many openers past exhausted close lengths in near-linear time", () => {
+    // Pure fence lines are also openers, so descending lengths pair up cheaply and
+    // leave every close-list entry exhausted: the first long opener then walks the
+    // whole parent chain from 2,002 down to 3, and later openers must stay cheap
+    // after path compression. Ascending lengths would link each exhausted entry
+    // straight to an already-dead lower entry and never exercise the walk.
+    const closes = Array.from({ length: 2_000 }, (_, index) => "`".repeat(2_002 - index)).join("\n");
+    const openers = ("`".repeat(2_003) + "x\n").repeat(2_000);
+    const body = `${closes}\n${openers}Reimplements #2797.`;
+    const started = performance.now();
+
+    assert.deepEqual([...referencedCarryNumbers(body)], [2797]);
+    assert.ok(performance.now() - started < 2_000, "fence scan should remain near-linear");
+  });
+
   it("strips a complete tilde fence that follows an unmatched backtick opener", () => {
     // The unclosed opener stays ordinary text, but it must not swallow the
     // independent fenced block after it.
