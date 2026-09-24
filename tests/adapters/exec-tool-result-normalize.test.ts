@@ -5,6 +5,7 @@ import { parseRequest } from "../../src/responses/parser";
 import {
   CODE_MODE_HOST_CONTRACT_SENTENCE,
   CODE_MODE_HOST_FAILURE_GUIDANCE,
+  EMPTY_EXEC_OUTPUT_REGEX,
   annotateCodeModeHostFailure,
 } from "../../src/adapters/exec-tool-result-normalize";
 
@@ -109,6 +110,46 @@ describe("code-mode host failure annotation", () => {
     expect(CODE_MODE_HOST_CONTRACT_SENTENCE).toContain("write_stdin");
     // Never shows the decorated marker as a copyable literal (same rule as the nudge tests).
     expect(CODE_MODE_HOST_CONTRACT_SENTENCE).not.toContain("*** Begin Patch ***");
+  });
+});
+
+describe("empty exec output wrapper detection", () => {
+  test("recognizes each optional section and their combinations", () => {
+    for (const text of [
+      "Script completed\nWall time 0.1 seconds\nOutput:\n",
+      "Script completed\nWall time 0.1 seconds\nOutput:\n<empty>\n",
+      "Command finished\nOutput:\n",
+      "Execution finished\n\n\nWall time 1s\n\nOutput:\n\n<empty>\n\n",
+      "Wall time 5s\n",
+      "Wall time 5s\nOutput:\n<empty>",
+      "Output:<empty>",
+      "Output:\n\n\n",
+      "<empty>",
+      "\n\n\n",
+    ]) {
+      expect(EMPTY_EXEC_OUTPUT_REGEX.test(text)).toBe(true);
+    }
+    for (const text of [
+      "Script completed",
+      "Script completed\nreal output\n",
+      "Script failed\nOutput:\n",
+      "Output: hi\n",
+      "text\n<empty>",
+      "x<empty>",
+      "Script completed\nWall time\nOutput:\n<empty>x",
+      "Wall time\n<empty> trailing",
+    ]) {
+      expect(EMPTY_EXEC_OUTPUT_REGEX.test(text)).toBe(false);
+    }
+  });
+
+  // The previous pattern let adjacent `\n+`/`\s*` quantifiers repartition a newline block
+  // combinatorially; these inputs keep that a timeout-scale regression rather than a silent one.
+  test("stays linear on pathological whitespace runs", () => {
+    const newlines = "\n".repeat(200_000);
+    expect(EMPTY_EXEC_OUTPUT_REGEX.test(`Script completed\n${newlines}!`)).toBe(false);
+    expect(EMPTY_EXEC_OUTPUT_REGEX.test(`Output:${newlines}`)).toBe(true);
+    expect(EMPTY_EXEC_OUTPUT_REGEX.test(`Script completed\nWall time x\n${newlines}trailing`)).toBe(false);
   });
 });
 
