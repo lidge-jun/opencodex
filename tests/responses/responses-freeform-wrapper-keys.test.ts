@@ -104,6 +104,15 @@ describe("freeform wrapper keys the literal matcher could not see", () => {
     expect(unwrapFreeformToolInput('{"code":"a"}', "")).toBe('{"code":"a"}');
     expect(published('{"code":"a"}', "")).toBe('{"code":"a"}');
 
+    // A trailing comma is not a completed object: `JSON.parse` rejects it, so the scan must
+    // not treat the `}` after a top-level comma as the close and unwrap a preview completion
+    // hands back unchanged. Preview and completion both keep the raw bytes.
+    const trailingComma = '{"code":"cmd",}';
+    expect({ body: trailingComma, completed: unwrapFreeformToolInput(trailingComma, "exec") })
+      .toEqual({ body: trailingComma, completed: trailingComma });
+    expect({ body: trailingComma, streamed: published(trailingComma, "exec") })
+      .toEqual({ body: trailingComma, streamed: trailingComma });
+
     // Text that opens like an object but is not JSON is decidable immediately and must not be
     // held: ordinary code-mode JavaScript reaches this function.
     const program = "{ let x = 1; return x; }";

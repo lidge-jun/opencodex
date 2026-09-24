@@ -261,7 +261,15 @@ export function scanFreeformWrapper(text: string, fallbackKeys: readonly string[
     const next = skipWhitespace(bounded, valueEnd);
     if (next === HOLD) return hold();
     if (bounded[next] === ",") {
-      i = next + 1;
+      // A comma promises another member, so the next non-whitespace character must open a
+      // member name. `{"code":"cmd",}` is not a completed object — `JSON.parse` rejects the
+      // trailing comma — and treating its `}` as the close would unwrap a preview completion
+      // hands back unchanged. Nested members already reject this through `scanMemberKey`;
+      // the top level has to ask the same question itself.
+      const member = skipWhitespace(bounded, next + 1);
+      if (member === HOLD) return hold();
+      if (bounded[member] !== '"') return { kind: "raw" };
+      i = member;
       continue;
     }
     if (bounded[next] === "}") return afterTopLevelClose(bounded, next + 1, members, fallbackKeys, wholeText);
