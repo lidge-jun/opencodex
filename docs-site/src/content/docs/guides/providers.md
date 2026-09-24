@@ -1058,6 +1058,15 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 
 ### Claude Agent SDK (subscription)
 
+> **Warning — this preset can get the Claude account banned.** A Claude subscription is licensed
+> for Anthropic's own harnesses, and this preset spends it on a client that is **not** Claude Code:
+> Codex or any other harness drives the loop. That is the traffic Anthropic suspended accounts over
+> when it banned consumer OAuth in third-party apps, so treat this preset as against the terms
+> rather than as a grey area — and the consequence lands on the signed-in account, not on OpenCodex.
+> Automated clients belong on `anthropic-apikey` (console billing; the plan's automated-access
+> clause covers a key). The subscription route that avoids this reading is `ocx claude`, where the
+> genuine Claude Code CLI is the client and OpenCodex only redirects the endpoint.
+
 OpenCodex can spend a Claude subscription through Anthropic's own harness instead of replaying a
 Claude Code identity against the Messages API. The `claude-agent-sdk` preset drives Anthropic's
 Claude Agent SDK — the harness and agent loop behind the Claude Code CLI — so the turn is a real
@@ -1118,10 +1127,9 @@ harness session rather than a converted Messages request:
   subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
   URL fails closed rather than handing the turn to another environment.
 
-> **Terms:** this preset spends your Claude subscription through Anthropic's own harness, the
-> Claude Agent SDK. Whether driving that harness from a proxy for another client fits your plan's
-> terms is a question between you and Anthropic. OpenCodex does not convert the login into an API
-> key and does not reproduce the harness's HTTP identity itself.
+> **Terms:** see the warning at the top of this section. OpenCodex does not convert the login into
+> an API key and does not reproduce the harness's HTTP identity itself — that changes nothing about
+> who is licensed to use the subscription.
 
 ### A6API credit quota
 

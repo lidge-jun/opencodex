@@ -41,7 +41,11 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   the caller's prompt appended to the harness preset instead of replacing it, and a child environment
   that carries no inherited `ANTHROPIC_*` value. The id shipped in 2.65.0 as `claude-cli`; that name
   resolves through `DEPRECATED_PROVIDER_ALIASES` and is moved by
-  `src/providers/claude-provider-rename-migration.ts`.
+  `src/providers/claude-provider-rename-migration.ts`. The row is a stated terms risk, not a
+  supported path: a subscription is licensed for Anthropic's own harnesses and this one serves a
+  client that is not Claude Code, which is the traffic Anthropic suspended accounts over. The
+  registry comment, the row's `note` and the provider guide say so in plain language; `ocx claude`
+  (genuine CLI as client) and `anthropic-apikey` are the routes without that reading.
   Its registry row is `authKind: "key"` with `keyOptional: true`, NOT `local`: the turn leaves the
   machine for `api.anthropic.com`, and `local` (Ollama, vLLM, LM Studio) is the classification for
   traffic that never does. `keyOptional` is the existing exemption from key enforcement, and key
