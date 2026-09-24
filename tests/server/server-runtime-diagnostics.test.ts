@@ -5,13 +5,13 @@ import { join } from "node:path";
 import { fork } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
-  beginRuntimeSyncOperation,
   createBoundedRuntimeDiagnosticSender,
   createCompletedSlowOperationRingForTests,
   disconnectAfterRuntimeDiagnosticsStop,
   startRuntimeDiagnostics,
 } from "../../src/lib/runtime-diagnostics";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { resolvedImportEdges } from "../helpers/import-graph";
 
 test("independent recorder observes a blocked parent and stops with its owner", async () => {
   const dir = mkdtempSync(join(tmpdir(), "ocx-runtime-diagnostics-"));
@@ -22,9 +22,7 @@ test("independent recorder observes a blocked parent and stops with its owner", 
   try {
     await Promise.race([recorder.ready, Bun.sleep(3000).then(() => { throw new Error("recorder did not start"); })]);
     await Bun.sleep(100);
-    const end = beginRuntimeSyncOperation();
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400);
-    end();
     await Bun.sleep(100);
   } finally {
     recorder.stop();
@@ -34,7 +32,6 @@ test("independent recorder observes a blocked parent and stops with its owner", 
     const content = readFileSync(path, "utf8");
     const records = content.trim().split("\n").map(line => JSON.parse(line));
     expect(records.some(r => r.kind === "event-loop-stall" && r.heartbeatGapMs >= 100)).toBe(true);
-    expect(records.some(r => r.kind === "slow-sync-operation" && r.elapsedMs >= 350)).toBe(true);
     expect(records.some(r => r.kind === "event-loop-recovered")).toBe(true);
     const delay = records.find(r => r.kind === "event-loop-delay");
     expect(delay.timerDelayMs).toBeGreaterThanOrEqual(300);
@@ -428,4 +425,14 @@ test("stopping before child initialization rejects ready and closes without an o
     await Promise.race([recorder.closed, Bun.sleep(3000).then(() => { throw new Error("recorder did not close"); })]);
     await expect(ready).rejects.toThrow("runtime diagnostics recorder closed before ready");
   } finally { removeTreeWithRetry(dir); }
+});
+
+test("the server module reaches the recorder only through its opt-in gate", () => {
+  // The recorder stays behind the env gate: only the desktop launcher opts in, so a static
+  // edge would have loaded this module on every install's server start for a branch that
+  // most installs never take.
+  const edges = resolvedImportEdges("src/server/background-lifecycle.ts")
+    .filter(edge => edge.spec.includes("runtime-diagnostics"));
+  expect(edges.map(edge => ({ spec: edge.spec, dynamic: edge.dynamic })))
+    .toEqual([{ spec: "../lib/runtime-diagnostics", dynamic: true }]);
 });

@@ -1,13 +1,11 @@
-import { fork, type ChildProcess, type ForkOptions } from "node:child_process";
+import { fork, type ForkOptions } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // Opt-in, scalar-only diagnostics. A separate process keeps writing even when the
 // server's event loop is blocked in a synchronous native call. No request data crosses IPC.
 export type RuntimeCounters = Record<string, number | boolean | null>;
-let child: ChildProcess | null = null;
 type DiagnosticDeliveryCallback = () => void;
 type RuntimeDiagnosticSender = (message: object, onDelivered?: DiagnosticDeliveryCallback) => boolean;
-let sendToChild: RuntimeDiagnosticSender | null = null;
 let sequence = 0;
 
 const MAX_DIAGNOSTIC_IPC_IN_FLIGHT = 4;
@@ -156,30 +154,6 @@ export function createBoundedRuntimeDiagnosticSender(target: DiagnosticIpcTarget
   };
 }
 
-let completedSlowOperationSink: ((operation: CompletedSlowOperation) => void) | null = null;
-
-export function beginRuntimeSyncOperation(): () => void {
-  const send = sendToChild;
-  if (!child?.connected || !send) return () => {};
-  const id = ++sequence;
-  const startedAt = performance.now();
-  // Keep code locations, never absolute user paths, arguments, or error messages.
-  const sites = (new Error().stack ?? "").split("\n").flatMap(line => {
-    const match = /[\\/](src[\\/][\w./\\-]+:\d+:\d+)/.exec(line);
-    return match ? [match[1]!.replaceAll("\\", "/")] : [];
-  }).slice(1, 9);
-  const started = send({ kind: "sync-start", at: Date.now(), id, sites });
-  const complete = completedSlowOperationSink;
-  return () => {
-    const elapsedMs = Math.max(0, performance.now() - startedAt);
-    if (elapsedMs >= SLOW_SYNC_OPERATION_MS && complete) {
-      complete({ sequence: ++sequence, id, elapsedMs, sites });
-    } else if (started) {
-      send({ kind: "sync-end", at: Date.now(), id });
-    }
-  };
-}
-
 export function startRuntimeDiagnostics(
   path: string,
   sample: () => RuntimeCounters,
@@ -195,14 +169,8 @@ export function startRuntimeDiagnostics(
     detached: process.platform === "win32",
   };
   const target = fork(fileURLToPath(new URL("./runtime-diagnostics-child.ts", import.meta.url)), [], launchOptions);
-  child = target;
   const send = createBoundedRuntimeDiagnosticSender(target);
-  sendToChild = send;
   const completedSlowOperations = createCompletedSlowOperationRingForTests();
-  const enqueueCompletedSlowOperation = (operation: CompletedSlowOperation) => {
-    completedSlowOperations.enqueue(operation);
-  };
-  completedSlowOperationSink = enqueueCompletedSlowOperation;
   let lastSampleAt = performance.now();
   let lastCpu = process.cpuUsage();
   let sampleFailures = 0;
@@ -224,7 +192,7 @@ export function startRuntimeDiagnostics(
     return () => {
       const elapsedMs = Math.max(0, performance.now() - startedAt);
       if (elapsedMs >= SLOW_SYNC_OPERATION_MS) {
-        enqueueCompletedSlowOperation({ sequence: ++sequence, id, elapsedMs, sites: [phase] });
+        completedSlowOperations.enqueue({ sequence: ++sequence, id, elapsedMs, sites: [phase] });
       } else if (started) {
         send({ kind: "sync-end", at: Date.now(), id });
       }
@@ -293,9 +261,6 @@ export function startRuntimeDiagnostics(
     if (closedSettled) return;
     closedSettled = true;
     if (timer) clearInterval(timer);
-    if (child === target) child = null;
-    if (sendToChild === send) sendToChild = null;
-    if (completedSlowOperationSink === enqueueCompletedSlowOperation) completedSlowOperationSink = null;
     rejectReady();
     resolveClosed();
   };
@@ -364,8 +329,6 @@ export function startRuntimeDiagnostics(
   return { ready, closed, stop() {
     stopRequested = true;
     clearInterval(timer);
-    if (child === target) child = null;
-    if (sendToChild === send) sendToChild = null;
     if (target.connected) {
       // Do not extend shutdown, but make one final bounded attempt to carry a
       // completed slow operation that ended between ordinary heartbeats.
