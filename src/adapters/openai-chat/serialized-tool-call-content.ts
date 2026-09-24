@@ -380,27 +380,38 @@ export function stripDuplicatedSerializedToolCalls(
   return result + text.slice(cursor);
 }
 
+/**
+ * The reduced arguments when the freeform body of the repeated block is written twice in the
+ * single string "input" field, or undefined for any other shape. Only the batch reconciler may
+ * apply it: the reduction rewrites executable arguments, so it needs a uniqueness proof.
+ */
+function doubledInputReduction(
+  argumentsText: string,
+  functionNames: ReadonlySet<string>,
+  repeated: SerializedToolCall,
+): string | undefined {
+  if (!functionNames.has(repeated.name)) return undefined;
+  const body = freeformBody(repeated.body);
+  try {
+    const parsed = JSON.parse(argumentsText) as unknown;
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        && Object.keys(parsed).length === 1
+        && ((parsed as Record<string, unknown>).input === body + body
+          || (parsed as Record<string, unknown>).input === body + "\n" + body)) {
+      return JSON.stringify({ input: body });
+    }
+  } catch {
+    // A malformed concatenation is handled by the prefix repair instead.
+  }
+  return undefined;
+}
+
 /** Removes a malformed argument prefix only when a bare block and the JSON suffix prove identical input. */
 export function repairArgumentsDuplicatedBesideSerializedCall(
   argumentsText: string,
   functionNames: ReadonlySet<string>,
   serializedText: string,
 ): string {
-  const repeated = repeatedCallIn(serializedText);
-  if (repeated && functionNames.has(repeated.name)) {
-    const body = freeformBody(repeated.body);
-    try {
-      const parsed = JSON.parse(argumentsText) as unknown;
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
-          && Object.keys(parsed).length === 1
-          && ((parsed as Record<string, unknown>).input === body + body
-            || (parsed as Record<string, unknown>).input === body + "\n" + body)) {
-        return JSON.stringify({ input: body });
-      }
-    } catch {
-      // A malformed concatenation may still match the prefix repair below.
-    }
-  }
   try {
     JSON.parse(argumentsText);
     return argumentsText;
@@ -433,9 +444,60 @@ export function repairArgumentsDuplicatedBesideSerializedCall(
   return argumentsText;
 }
 
+/** One structured call as the reconciler sees it, before its arguments meet the visible text. */
+export interface StructuredToolCallInput {
+  wireName: string;
+  restoredName: string;
+  argumentsText: string;
+}
+
+/**
+ * Repairs the arguments of every structured call in one response against the visible text that
+ * response carried, and returns them in input order. The per-call prefix repair stands alone,
+ * because the markup it proves is matched against that call's own repaired input. The
+ * doubled-input reduction is applied only when exactly ONE call qualifies: it rewrites executable
+ * arguments, and two qualifying calls leave the repeated block ambiguous, so the uniqueness proof
+ * has to cover the whole batch rather than one call at a time.
+ */
+export function reconcileStructuredToolCalls(
+  calls: readonly StructuredToolCallInput[],
+  serializedText: string,
+): StructuredToolCallReference[] {
+  const references = calls.map(call => {
+    const names = new Set([call.wireName, call.restoredName]);
+    return { names, argumentsText: repairArgumentsDuplicatedBesideSerializedCall(call.argumentsText, names, serializedText) };
+  });
+  return reduceUnambiguousDoubledInput(references, serializedText);
+}
+
+/**
+ * Applies the doubled-input reduction across the batch. The doubled shape is valid JSON, so the
+ * prefix repair returns it untouched, and the reduction only ever rewrites a call the repair left
+ * alone. A repeated block with no uniquely qualifying call keeps every argument as sent, which is
+ * also what leaves the markup visible: the range matcher then finds either no agreeing call or
+ * several, and suppresses neither.
+ */
+function reduceUnambiguousDoubledInput(
+  references: readonly StructuredToolCallReference[],
+  serializedText: string,
+): StructuredToolCallReference[] {
+  const repeated = repeatedCallIn(serializedText);
+  if (!repeated) return [...references];
+  const reductions = references.map(reference =>
+    doubledInputReduction(reference.argumentsText, reference.names, repeated));
+  if (reductions.filter(reduction => reduction !== undefined).length !== 1) return [...references];
+  return references.map((reference, index) => {
+    const reduction = reductions[index];
+    return reduction === undefined ? reference : { names: reference.names, argumentsText: reduction };
+  });
+}
+
 /**
  * One structured call as the reconciler sees it: both the wire name and its restored client name
  * identify it, and its arguments are repaired against the visible text the same response carried.
+ * A single call is its own batch, so the doubled-input reduction still applies here; a caller
+ * holding several calls of one response must pass them together to
+ * `reconcileStructuredToolCalls` so the reduction sees all of them.
  */
 export function reconcileStructuredToolCall(
   wireName: string,
@@ -443,8 +505,7 @@ export function reconcileStructuredToolCall(
   argumentsText: string,
   serializedText: string,
 ): StructuredToolCallReference {
-  const names = new Set([wireName, restoredName]);
-  return { names, argumentsText: repairArgumentsDuplicatedBesideSerializedCall(argumentsText, names, serializedText) };
+  return reconcileStructuredToolCalls([{ wireName, restoredName, argumentsText }], serializedText)[0]!;
 }
 
 /**

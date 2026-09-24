@@ -45,7 +45,7 @@ import { messagesToChatFormat } from "./openai-chat/messages";
 import { withOpenAIChatToolNames } from "./openai-chat/tool-name-registry";
 import { openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wire";
 import { toolChoiceToChatFormat, toolsToChatFormatForProvider } from "./openai-chat/tool-schema";
-import { reconcileSerializedToolCallEvents, reconcileStructuredToolCall, SerializedToolCallContentBuffer } from "./openai-chat/serialized-tool-call-content";
+import { reconcileSerializedToolCallEvents, reconcileStructuredToolCall, reconcileStructuredToolCalls, SerializedToolCallContentBuffer } from "./openai-chat/serialized-tool-call-content";
 
 export { stripBracketedModelSuffix } from "./openai-chat/wire";
 export { buildOpenAIChatPassthroughRequest } from "./openai-chat/passthrough";
@@ -337,8 +337,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
             return yield* terminateWithError(unnamedToolCallEvent(pendingUsage));
           }
         }
-        // Held serialized markup is released only now, reconciled against the calls it may duplicate.
-        const references = calls.map(call => reconcileStructuredToolCall(call.name, toolNames.restore(call.name), call.args, toolCallContent.current()));
+        // Held markup is released only now, as one batch per response: the doubled-input repair needs every call.
+        const references = reconcileStructuredToolCalls(calls.map(call => ({ wireName: call.name, restoredName: toolNames.restore(call.name), argumentsText: call.args })), toolCallContent.current());
         calls.forEach((call, index) => { call.args = references[index]!.argumentsText; });
         yield* toolCallContent.drain(references);
         for (const call of calls) {
@@ -772,7 +772,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         if (typeof msg.content === "string") events.push(...splitInlineThinkContent(provider.inlineThinkTagModels, lastRequestedModelId, budget, msg.content));
         const contentEnd = events.length;
         const answerText = events.slice(contentStart).map(event => (event.type === "text_delta" ? event.text : "")).join("");
-        const references: ReturnType<typeof reconcileStructuredToolCall>[] = [];
+        // Each call holds the delta event it emitted, so the batch repair sets its arguments later.
+        const structuredCalls: { wireName: string; restoredName: string; argumentsText: string; delta: Extract<AdapterEvent, { type: "tool_call_delta" }> }[] = [];
         const rawToolCalls = msg.tool_calls;
         if (rawToolCalls !== undefined && rawToolCalls !== null) {
           if (!Array.isArray(rawToolCalls)) {
@@ -795,12 +796,13 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               logInvalidToolCalls("response", rawToolCalls);
               return [invalidToolCallsEvent(rawToolCalls, "response", usage)];
             }
-            references.push(reconcileStructuredToolCall(name, toolNames.restore(name), args, answerText));
-            events.push({ type: "tool_call_start", id, name: toolNames.restore(name) });
-            events.push({ type: "tool_call_delta", arguments: references.at(-1)!.argumentsText });
-            events.push({ type: "tool_call_end" });
+            const delta: Extract<AdapterEvent, { type: "tool_call_delta" }> = { type: "tool_call_delta", arguments: args };
+            structuredCalls.push({ wireName: name, restoredName: toolNames.restore(name), argumentsText: args, delta });
+            events.push({ type: "tool_call_start", id, name: toolNames.restore(name) }, delta, { type: "tool_call_end" });
           }
         }
+        const references = reconcileStructuredToolCalls(structuredCalls, answerText);
+        structuredCalls.forEach((call, index) => { call.delta.arguments = references[index]!.argumentsText; });
         reconcileSerializedToolCallEvents(events, contentStart, contentEnd, references, budget);
         const stopReason = stopReasonFor(choice.finish_reason);
         events.push({

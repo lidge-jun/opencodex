@@ -213,6 +213,55 @@ test("buffered Chat responses reduce a doubled input behind the MiMo wrapping ne
   });
 });
 
+test("buffered Chat responses keep doubled input when two structured calls qualify", async () => {
+  // Two qualifying calls leave the repeated block ambiguous, so rewriting either argument would
+  // execute something the response never proved. Both keep their input and the markup stays visible.
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const content = block + block;
+  const argumentsText = JSON.stringify({ input: script + script });
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: { content, tool_calls: [
+        { id: "call_one", function: { name: "exec", arguments: argumentsText } },
+        { id: "call_two", function: { name: "exec", arguments: argumentsText } },
+      ] },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: argumentsText },
+    { type: "tool_call_delta", arguments: argumentsText },
+  ]);
+});
+
+test("streamed Chat responses keep doubled input when two structured calls qualify", async () => {
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const content = block + block;
+  const argumentsText = JSON.stringify({ input: script + script });
+  const adapter = withTestTranslatorBudget(createOpenAIChatAdapter(provider));
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {}, context: { messages: [{ role: "user", content: "ping", timestamp: 0 }] } });
+  const frames = [
+    { choices: [{ delta: { content: content.slice(0, 40) } }] },
+    { choices: [{ delta: { content: content.slice(40) } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_one", function: { name: "exec", arguments: argumentsText } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 1, id: "call_two", function: { name: "exec", arguments: argumentsText } }] } }] },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+  ];
+  const body = frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n";
+  const events: AdapterEvent[] = [];
+  for await (const event of adapter.parseStream(new Response(body))) if (event.type !== "heartbeat") events.push(event);
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: argumentsText },
+    { type: "tool_call_delta", arguments: argumentsText },
+  ]);
+});
+
 test("buffered Chat responses preserve serialized markup for a different function", async () => {
   const content = "<tool_call><function=other>literal example</function></tool_call>";
   const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
