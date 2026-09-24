@@ -52,7 +52,9 @@ function endsWithAt(text: string, from: number, to: number, suffix: string): boo
  * MiMo's echo may close a freeform body with a stray `</parameter>` and may omit `</function>`
  * (#5724), the grammar the Command Code reader accepts too. The first `</tool_call>` preceded by
  * `</function>` closes the block, so a body can still carry a literal `</tool_call>` or header;
- * with none before the next line-start block header, the first `</tool_call>` does.
+ * with none before the next line-start block header, the first `</tool_call>` does. That header only
+ * bounds an unclosed candidate: with no close at all before it, it is body text, and a closed
+ * `</function></tool_call>` after it still ends the block.
  */
 function blockAt(text: string, offset: number): SerializedToolCall | undefined {
   BLOCK_HEADER.lastIndex = offset;
@@ -63,7 +65,7 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
   const next = NEXT_BLOCK_HEADER.exec(text);
   const limit = next ? next.index + 1 : text.length;
   let unclosed: SerializedToolCall | undefined;
-  for (let close = text.indexOf(CLOSE_TAG, bodyStart); close >= 0 && close < limit;
+  for (let close = text.indexOf(CLOSE_TAG, bodyStart); close >= 0 && (close < limit || !unclosed);
     close = text.indexOf(CLOSE_TAG, close + CLOSE_TAG.length)) {
     let bodyEnd = trimmedEnd(text, bodyStart, close);
     const closed = endsWithAt(text, bodyStart, bodyEnd, FUNCTION_CLOSE);
@@ -76,7 +78,7 @@ function blockAt(text: string, offset: number): SerializedToolCall | undefined {
       end: close + CLOSE_TAG.length,
     };
     if (closed) return call;
-    unclosed ??= call;
+    if (close < limit) unclosed ??= call;
   }
   return unclosed;
 }
