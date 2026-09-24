@@ -154,8 +154,7 @@ describe("DeepSeek wire selection is scoped to the inbound protocol", () => {
     const provider = deepseekProvider();
     expect(providerModelResponsesTerminalRepair("deepseek", provider, MODEL)).toEqual({ graceMs: 5_000 });
     expect(providerModelResponsesTerminalRepair("deepseek", provider, "deepseek-chat")).toBeUndefined();
-    // An alias at the exact official endpoint talks to the same upstream, so it takes that row's policy (#5697).
-    expect(providerModelResponsesTerminalRepair("custom-deepseek", provider, MODEL)).toEqual({ graceMs: 5_000 });
+    expect(providerModelResponsesTerminalRepair("custom-deepseek", provider, MODEL)).toBeUndefined();
   });
 
   test("terminal repair rejects a fractional grace that normalizes to zero", () => {
