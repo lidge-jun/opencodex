@@ -8,8 +8,13 @@ import {
   recordOwnedConfigPath,
   removeOwnedConfigState,
 } from "../../src/lib/config-ownership";
+import { writePristineCatalogBackup } from "../../src/codex/catalog/parsing";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+
+function manifestPaths(dir: string): string[] {
+  return (JSON.parse(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] }).paths;
+}
 
 describe("owned config uninstall", () => {
   test("first owned write creates a missing config root and its metadata", () => {
@@ -243,6 +248,56 @@ describe("owned config uninstall", () => {
       expect(result.status).toBe("partial");
       expect(readFileSync(nested, "utf8")).toBe("mine\n");
     } finally {
+      removeTreeWithRetry(parent);
+    }
+  });
+
+  test("writePristineCatalogBackup records a backup it writes itself", () => {
+    const parent = mkdtempSync(join(tmpdir(), "ocx-uninstall-pristine-write-"));
+    const dir = join(parent, "config");
+    const catalogPath = join(parent, "models.json");
+    const backupPath = join(dir, "catalog-backup-0123456789abcdef.json");
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = dir;
+
+    try {
+      mkdirSync(dir, { recursive: true });
+      // Ownership is claimed by the first owned write into an empty dir, as in production.
+      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
+      writeFileSync(catalogPath, '{"models":[]}\n');
+
+      writePristineCatalogBackup(backupPath, catalogPath, { models: [] });
+
+      expect(readFileSync(backupPath, "utf8")).toBe('{"models":[]}\n');
+      expect(manifestPaths(dir)).toContain("catalog-backup-0123456789abcdef.json");
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
+      removeTreeWithRetry(parent);
+    }
+  });
+
+  test("writePristineCatalogBackup records a hashed backup that already exists", () => {
+    const parent = mkdtempSync(join(tmpdir(), "ocx-uninstall-pristine-existing-"));
+    const dir = join(parent, "config");
+    const catalogPath = join(parent, "models.json");
+    const backupPath = join(dir, "catalog-backup-0123456789abcdef.json");
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = dir;
+
+    try {
+      mkdirSync(dir, { recursive: true });
+      expect(recordOwnedConfigPath(dir, join(dir, "config.json"))).toBe(true);
+      writeFileSync(catalogPath, '{"models":[]}\n');
+      writeFileSync(backupPath, '{"models":[{"slug":"earlier-run"}]}\n');
+
+      writePristineCatalogBackup(backupPath, catalogPath, { models: [] });
+
+      expect(readFileSync(backupPath, "utf8")).toBe('{"models":[{"slug":"earlier-run"}]}\n');
+      expect(manifestPaths(dir)).toContain("catalog-backup-0123456789abcdef.json");
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previous;
       removeTreeWithRetry(parent);
     }
   });

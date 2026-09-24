@@ -36,6 +36,11 @@ import {
   replaceActiveCodexCatalog,
   replaceCodexModelsCache,
 } from "../../src/codex/internal/catalog-writer";
+import {
+  CONFIG_UNINSTALL_MANIFEST,
+  recordOwnedConfigPath,
+  removeOwnedConfigState,
+} from "../../src/lib/config-ownership";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 interface MutatorCase {
@@ -51,9 +56,14 @@ interface MutatorCase {
 let testRoot = "";
 let codexHome = "";
 let otherCodexHome = "";
+let openCodexHome = "";
 let targetDir = "";
 let previousCodexHome: string | undefined;
 let previousOpenCodexHome: string | undefined;
+
+function manifestPaths(dir: string): string[] {
+  return (JSON.parse(readFileSync(join(dir, CONFIG_UNINSTALL_MANIFEST), "utf8")) as { paths: string[] }).paths;
+}
 
 function atomicIo(effects: string[]): AtomicWriteIO {
   return {
@@ -166,12 +176,13 @@ beforeEach(() => {
   testRoot = realpathSync.native(mkdtempSync(join(tmpdir(), "ocx-catalog-writer-")));
   codexHome = join(testRoot, "codex-home");
   otherCodexHome = join(testRoot, "other-codex-home");
+  openCodexHome = join(testRoot, "opencodex-home");
   targetDir = join(testRoot, "external-catalog-targets");
-  for (const path of [codexHome, otherCodexHome, targetDir, join(testRoot, "opencodex-home")]) {
+  for (const path of [codexHome, otherCodexHome, targetDir, openCodexHome]) {
     mkdirSync(path, { recursive: true });
   }
   process.env.CODEX_HOME = codexHome;
-  process.env.OPENCODEX_HOME = join(testRoot, "opencodex-home");
+  process.env.OPENCODEX_HOME = openCodexHome;
 });
 
 afterEach(() => {
@@ -293,3 +304,30 @@ for (const [name, publish] of [
     expect(readdirSync(targetDir).filter(entry => entry.endsWith(".tmp"))).toEqual([]);
   });
 }
+
+test("hashed backup publication records a backup it writes itself", () => {
+  const path = join(openCodexHome, "catalog-backup-0123456789abcdef.json");
+  expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
+
+  const result = withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })
+  );
+
+  expect(result).toBe("written");
+  expect(manifestPaths(openCodexHome)).toContain("catalog-backup-0123456789abcdef.json");
+});
+
+test("hashed backup publication records a backup that already exists", () => {
+  const path = join(openCodexHome, "catalog-backup-0123456789abcdef.json");
+  expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
+  writeFileSync(path, "earlier run\n", { mode: 0o600 });
+
+  const result = withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "late contender\n" })
+  );
+
+  expect(result).toBe("preserved");
+  expect(readFileSync(path, "utf8")).toBe("earlier run\n");
+  expect(manifestPaths(openCodexHome)).toContain("catalog-backup-0123456789abcdef.json");
+  expect(removeOwnedConfigState(openCodexHome).status).toBe("removed");
+});
