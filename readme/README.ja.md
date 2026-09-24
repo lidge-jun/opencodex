@@ -18,16 +18,12 @@ npm install -g @bitkyc08/opencodex
 ocx start
 ```
 
-<details>
-<summary><b>デスクトップアプリ（ベータ版）</b> — macOS · Windows · Linux</summary>
-<br>
 <p align="center">
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="macOS 版をダウンロード (.dmg)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Windows 版をダウンロード (.msi)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Linux 版をダウンロード (.AppImage)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Linux 版をダウンロード (.deb)"></a>
 </p>
-</details>
 
 <table>
 <tr>
@@ -106,11 +102,30 @@ ocx start                         # プロキシとダッシュボードが loca
 組み込み、または任意の OpenAI 互換エンドポイント）、モデルの選択、アカウントの管理はここで行います。
 `ocx gui` でいつでもダッシュボードを開き直せます。
 
-### デスクトップアプリ（ベータ版）
+<details>
+<summary><b>デスクトップアプリ（ベータ版）</b></summary>
 
-同じプロキシとダッシュボードをネイティブウィンドウで使えるアプリで、トレイと `ocx` を同梱しています。
-[最新リリース](https://github.com/lidge-jun/opencodex/releases/latest)から、macOS 13 以降向けユニバーサル `.dmg`、Windows x64 向け `.msi`（まだコード署名なし）、
-Linux x86_64 向け `.AppImage` / `.deb` をダウンロードしてください。初回起動とローカルビルドは[デスクトップアプリガイド](https://opencodex.me/ja/guides/desktop-app/)を参照してください。
+デスクトップアプリは、同じプロキシとダッシュボードをネイティブウィンドウに収め、トレイと同梱の `ocx` を備えたものです。
+すでに起動しているプロキシに接続するか、同梱のプロキシを起動します。ダッシュボードはプロキシの
+ポートで開きます（別のポートを設定していなければ **http://localhost:10100**）。
+[最新リリース](https://github.com/lidge-jun/opencodex/releases/latest)から、お使いのプラットフォーム向けのファイルを選んでください。
+
+| プラットフォーム | ファイル | 備考 |
+|---|---|---|
+| macOS 13 以降（Apple Silicon と Intel） | `OpenCodex-<version>-macos.dmg` | ユニバーサルビルド。Developer ID で署名・公証済み |
+| Windows（x64） | `OpenCodex-<version>-windows-x64.msi` | まだコード署名なし。SmartScreen が一度だけ確認するので、**詳細情報 → 実行**を選択 |
+| Linux（x86_64） | `OpenCodex-<version>-linux-x86_64.AppImage` または `-linux-amd64.deb` | トレイには AppIndicator 対応のデスクトップが必要 |
+
+リリースページでは各ファイルの横に `.sha256` があります。macOS 14 以降では、プロキシの状態、
+今日の使用量、プロバイダーのクォータを表示する WidgetKit 拡張も付属します。表示に使う
+スナップショットモデルは [`app/`](../app)（`MenuBarCore`）にあります。アプリを自分でビルドするには、
+リポジトリのルートで `bun install && bun run build:gui` を実行し、
+`desktop/` で macOS なら `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`、Windows と Linux なら `bun install && bun run prepare-sidecar && bun run build:local` を実行します（ウィジェットの手順は macOS 専用です）。
+[デスクトップアプリガイド](https://opencodex.me/ja/guides/desktop-app/)と
+[macOS メニューバーアプリガイド](https://opencodex.me/ja/guides/macos-menu-bar/)で初回起動について説明しています。
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) にはディスクに書き込まれるすべてのものをまとめています。
+
+</details>
 
 ### ChatGPT アカウントプール
 

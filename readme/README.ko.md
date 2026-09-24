@@ -18,16 +18,12 @@ npm install -g @bitkyc08/opencodex
 ocx start
 ```
 
-<details>
-<summary><b>데스크톱 앱 (베타)</b> — macOS · Windows · Linux</summary>
-<br>
 <p align="center">
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="macOS용 다운로드 (.dmg)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Windows용 다운로드 (.msi)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Linux용 다운로드 (.AppImage)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Linux용 다운로드 (.deb)"></a>
 </p>
-</details>
 
 <table>
 <tr>
@@ -105,11 +101,30 @@ ocx start                         # 프록시 + 대시보드: localhost:10100
 **http://localhost:10100**을 열고 웹 대시보드에서 전부 설정하세요. 프로바이더 추가(내장 40개 이상,
 또는 OpenAI 호환 엔드포인트), 모델 선택, 계정 관리까지 모두 여기서 합니다. `ocx gui`로 대시보드를 언제든 다시 엽니다.
 
-### 데스크톱 앱 (베타)
+<details>
+<summary><b>데스크톱 앱 (베타)</b></summary>
 
-같은 프록시와 대시보드를 네이티브 창으로 띄우는 앱으로, 트레이와 `ocx`가 함께 들어 있습니다.
-[최신 릴리스](https://github.com/lidge-jun/opencodex/releases/latest)에서 macOS 13 이상용 유니버설 `.dmg`, Windows x64용 `.msi`(아직 코드 서명 전),
-Linux x86_64용 `.AppImage` / `.deb`를 받으세요. 첫 실행과 직접 빌드하는 방법은 [데스크톱 앱 가이드](https://opencodex.me/ko/guides/desktop-app/)에 있습니다.
+데스크톱 앱은 같은 프록시와 대시보드를 네이티브 창에 담은 것으로, 트레이와 번들된 `ocx`를 갖춥니다.
+이미 실행 중인 프록시에 붙거나 번들된 프록시를 시작하며, 대시보드는 프록시 포트에서 열립니다
+(다른 포트를 설정하지 않았다면 **http://localhost:10100**). 플랫폼에 맞는 파일을
+[최신 릴리스](https://github.com/lidge-jun/opencodex/releases/latest)에서 고르세요.
+
+| 플랫폼 | 파일 | 참고 |
+|---|---|---|
+| macOS 13+ (Apple Silicon 및 Intel) | `OpenCodex-<version>-macos.dmg` | 유니버설 빌드, Developer ID로 서명 및 공증됨 |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 아직 코드 서명되지 않음: SmartScreen이 한 번 물으면 **추가 정보 → 실행**을 선택 |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` 또는 `-linux-amd64.deb` | 트레이는 AppIndicator를 지원하는 데스크톱이 필요 |
+
+릴리스 페이지에서 모든 파일 옆에 `.sha256`이 함께 있습니다. macOS 14 이상에서는 프록시 상태,
+오늘의 사용량, 프로바이더 쿼터를 보여 주는 WidgetKit 확장도 함께 설치됩니다. 위젯이 그리는
+스냅샷 모델은 [`app/`](../app)의 `MenuBarCore`에 있습니다. 앱을 직접 빌드하려면 저장소 루트에서
+`bun install && bun run build:gui`를 실행한 다음,
+`desktop/`에서 macOS라면 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`을, Windows와 Linux라면 `bun install && bun run prepare-sidecar && bun run build:local`을 실행하세요. 위젯 빌드 단계는 macOS에서만 돌아갑니다.
+[데스크톱 앱 가이드](https://opencodex.me/ko/guides/desktop-app/)와
+[macOS 메뉴 막대 앱 가이드](https://opencodex.me/ko/guides/macos-menu-bar/)에서 첫 실행 안내를 볼 수 있고,
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)에는 디스크에 쓰는 모든 항목이 정리되어 있습니다.
+
+</details>
 
 ### ChatGPT 계정 풀
 

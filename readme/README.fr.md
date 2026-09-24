@@ -18,16 +18,12 @@ npm install -g @bitkyc08/opencodex
 ocx start
 ```
 
-<details>
-<summary><b>Application de bureau (bêta)</b> — macOS · Windows · Linux</summary>
-<br>
 <p align="center">
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="Télécharger pour macOS (.dmg)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Télécharger pour Windows (.msi)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Télécharger pour Linux (.AppImage)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Télécharger pour Linux (.deb)"></a>
 </p>
-</details>
 
 <table>
 <tr>
@@ -108,11 +104,32 @@ fournisseurs (plus de 40 intégrés, ou n'importe quel point de terminaison comp
 choisissez les modèles, gérez les comptes. `ocx gui`
 rouvre le tableau de bord à tout moment.
 
-### Application de bureau (bêta)
+<details>
+<summary><b>Application de bureau (bêta)</b></summary>
 
-Le même proxy et le même tableau de bord dans une fenêtre native, avec une icône dans la barre système et `ocx` intégré.
-Téléchargez depuis la [dernière version](https://github.com/lidge-jun/opencodex/releases/latest) le `.dmg` universel (macOS 13+), le `.msi` (Windows x64, pas encore signé)
-ou l'`.AppImage` / le `.deb` (Linux x86_64). Le [guide de l'application de bureau](https://opencodex.me/fr/guides/desktop-app/) décrit le premier lancement et la compilation locale.
+L'application de bureau reprend le même proxy et le même tableau de bord dans une fenêtre native, avec une icône dans la barre d'état et le binaire `ocx` inclus.
+Elle se rattache à un proxy déjà en cours d'exécution ou démarre celui qui est fourni, et le tableau de bord reste
+sur le port du proxy (**http://localhost:10100** sauf si vous en avez configuré un autre). Choisissez le fichier
+correspondant à votre plateforme sur la page de la [dernière version publiée](https://github.com/lidge-jun/opencodex/releases/latest) :
+
+| Plateforme | Fichier | Remarques |
+|---|---|---|
+| macOS 13+ (Apple Silicon et Intel) | `OpenCodex-<version>-macos.dmg` | Compilation universelle, signée avec un identifiant Developer ID et notariée |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Pas encore signée numériquement : SmartScreen demande une confirmation, choisissez **Informations complémentaires → Exécuter quand même** |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` ou `-linux-amd64.deb` | La barre d'état nécessite un environnement de bureau compatible AppIndicator |
+
+Chaque fichier est accompagné d'un `.sha256` sur la page de la version. Sous macOS 14+, l'application embarque
+également une extension WidgetKit qui affiche l'état du proxy, l'utilisation du jour et les quotas des
+fournisseurs ; le modèle de données des instantanés qu'elle affiche se trouve dans [`app/`](../app)
+(`MenuBarCore`). Pour compiler l'application vous-même, exécutez
+`bun install && bun run build:gui` à la racine du dépôt, puis, dans `desktop/`,
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` sous macOS,
+ou `bun install && bun run prepare-sidecar && bun run build:local` sous Windows et Linux (l'étape du widget
+exige macOS). Le [guide de l'application de bureau](https://opencodex.me/fr/guides/desktop-app/) et le
+[guide de l'application macOS dans la barre des menus](https://opencodex.me/fr/guides/macos-menu-bar/) détaillent le premier lancement, et
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) répertorie tout ce qui est écrit sur le disque.
+
+</details>
 
 ### Groupe de comptes ChatGPT
 

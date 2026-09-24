@@ -18,16 +18,12 @@ npm install -g @bitkyc08/opencodex
 ocx start
 ```
 
-<details>
-<summary><b>Masaüstü uygulaması (beta)</b> — macOS · Windows · Linux</summary>
-<br>
 <p align="center">
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="macOS için indir (.dmg)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Windows için indir (.msi)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Linux için indir (.AppImage)"></a>
   <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Linux için indir (.deb)"></a>
 </p>
-</details>
 
 <table>
 <tr>
@@ -106,11 +102,33 @@ Arka planda çalıştırmak için `ocx service` kullanın.
 ekleyin (40'tan fazla hazır sağlayıcı ya da herhangi bir OpenAI uyumlu uç nokta), model seçin, hesap
 yönetin. `ocx gui` paneli istediğiniz zaman yeniden açar.
 
-### Masaüstü uygulaması (beta)
+<details>
+<summary><b>Masaüstü uygulaması (beta)</b></summary>
 
-Aynı proxy ve kontrol paneli, tepsi simgesi ve yerleşik `ocx` ile yerel bir pencerede. [Son sürümden](https://github.com/lidge-jun/opencodex/releases/latest)
-evrensel `.dmg` (macOS 13+), `.msi` (Windows x64, henüz kod imzalı değil) veya `.AppImage` / `.deb` (Linux x86_64)
-dosyasını indirin. İlk açılış ve yerel derleme [masaüstü uygulaması kılavuzunda](https://opencodex.me/tr/guides/desktop-app/) anlatılıyor.
+Masaüstü uygulaması; aynı proxy ve kontrol panelini yerel bir pencerede, menü çubuğu simgesi ve
+paketlenmiş `ocx` ile sunar. Zaten çalışan bir proxy'ye bağlanır ya da kendi paketlenmiş proxy'sini
+başlatır; kontrol paneli proxy bağlantı noktasında kalır (başka bir tane yapılandırmadıysanız
+**http://localhost:10100**). Platformunuza uygun dosyayı
+[en güncel sürümden](https://github.com/lidge-jun/opencodex/releases/latest) seçin:
+
+| Platform | Dosya | Notlar |
+|---|---|---|
+| macOS 13+ (Apple Silicon ve Intel) | `OpenCodex-<version>-macos.dmg` | Evrensel derleme, Developer ID ile imzalı ve noter onaylı |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Henüz kod imzalı değil: SmartScreen bir kez sorar, **Diğer bilgiler → Yine de çalıştır** seçin |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` veya `-linux-amd64.deb` | Menü çubuğu simgesi AppIndicator destekli bir masaüstü gerektirir |
+
+Her dosyanın yanında sürüm sayfasında bir `.sha256` bulunur. macOS 14 ve üzerinde uygulama ayrıca
+proxy durumunu, bugünkü kullanımı ve sağlayıcı kotalarını gösteren bir WidgetKit uzantısıyla gelir;
+görüntülediği anlık görüntü modeli [`app/`](../app) dizinindedir (`MenuBarCore`). Uygulamayı kendiniz
+derlemek için depo kökünde `bun install && bun run build:gui`, ardından `desktop/` içinde macOS'ta
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`,
+Windows ve Linux'ta ise `bun install && bun run prepare-sidecar && bun run build:local` çalıştırın (widget adımı yalnızca macOS'ta çalışır).
+[Masaüstü uygulaması kılavuzu](https://opencodex.me/tr/guides/desktop-app/) ve
+[macOS menü çubuğu uygulaması kılavuzu](https://opencodex.me/tr/guides/macos-menu-bar/) ilk açılışı
+anlatır; [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) diske yazılan her
+şeyi listeler.
+
+</details>
 
 ### ChatGPT hesap havuzu
 
