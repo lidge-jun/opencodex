@@ -291,7 +291,7 @@ export function sweepUpdateLeftovers({ packageDir, pkgName, log = () => {}, deps
   for (const entry of result.inUse) {
     log(entry.code === "ESTALE"
       ? "Left an earlier update's staging directory in place; delete it by hand once no OpenCodex process is running from it: " + basename(entry.path)
-      : "Left an earlier update's staging directory in place (" + entry.code + "; a file inside is still in use): " + basename(entry.path));
+      : "Left an earlier update's staging directory in place (could not remove it: " + entry.code + "): " + basename(entry.path));
   }
   for (const path of result.notOwned) {
     log("Not removing " + basename(path) + " next to the package: this updater did not create it. Delete it by hand once no OpenCodex process is running from it.");
@@ -417,7 +417,9 @@ export function transactionalNpmUpdate({
   const discardStage = () => {
     const removal = removeOwnedStage(stageRoot, deps);
     if (!removal.removed) {
-      log("Left this update's staging directory in place (" + removal.code + "; a file inside is still in use); later updates will not remove it either — delete it by hand once no OpenCodex process is running from it: " + basename(stageRoot));
+      // EACCES/EUNKNOWN do not prove an open file, so the message names the failure
+      // without blaming a process; the code stays for whoever reads the log.
+      log("Left this update's staging directory in place (could not remove it: " + removal.code + "); later updates will not remove it either — delete it by hand once no OpenCodex process is running from it: " + basename(stageRoot));
     }
   };
   const spec = pkgName + "@" + (targetVersion || tag);
