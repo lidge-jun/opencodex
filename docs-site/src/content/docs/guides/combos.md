@@ -429,6 +429,10 @@ value to change it. An explicit `cooldownMs` (even `60000`) is persisted as-is b
 the request-rate fallback. A stored `cooldownMs` can only be removed by editing the configuration file;
 `waitForCooldownMs` resets to its default when a `PUT` explicitly sends `0`, because the sparse
 serializer omits that default. Omission preserves both values and the dashboard does not expose them yet.
+Omitting `defaultEffortMode`, `reasoningEffortMode`, `imageInput`, or `cooldownWaitPolicy` likewise
+keeps the stored value, and a re-sent target without `lastResort` keeps that target's flag (matched by
+provider and model). The dashboard always sends `imageInput` and `reasoningEffortMode`, so switching
+them back to `auto` or `strict` there still replaces the stored value.
 
 For the complete persisted configuration, see [Configuration](/reference/configuration/).
 

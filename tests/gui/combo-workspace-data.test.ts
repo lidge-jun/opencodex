@@ -283,10 +283,12 @@ describe("combo-workspace-data", () => {
     expect(parsedItem?.reasoningEffortMode).toBe("adaptive");
     expect(toPutBody(parsedItem!).combo.reasoningEffortMode).toBe("adaptive");
 
-    // The default stays off the wire so a GET -> PUT round-trip never writes it back.
-    expect(toPutBody(combo()).combo).not.toHaveProperty("reasoningEffortMode");
-    expect(toPutBody(combo({ reasoningEffortMode: "strict" })).combo)
-      .not.toHaveProperty("reasoningEffortMode");
+    // Strict now goes on the wire explicitly (#5687): the server preserves an omitted field
+    // from the stored combo, so an omitted strict could never replace a stored adaptive.
+    // Storage stays sparse — the server drops the default before persisting.
+    expect(toPutBody(combo()).combo.reasoningEffortMode).toBe("strict");
+    expect(toPutBody(combo({ reasoningEffortMode: "strict" })).combo.reasoningEffortMode)
+      .toBe("strict");
   });
 
   test("draftEquals treats a reasoningEffortMode change as dirty", () => {
@@ -536,6 +538,8 @@ describe("combo-workspace-data", () => {
         ],
         strategy: "round-robin",
         defaultEffort: "high",
+        imageInput: "auto",
+        reasoningEffortMode: "strict",
         stickyLimit: 7,
       },
     });
@@ -550,6 +554,8 @@ describe("combo-workspace-data", () => {
         targets: [{ provider: "a", model: "m1" }],
         strategy: "failover",
         defaultEffort: "medium",
+        imageInput: "auto",
+        reasoningEffortMode: "strict",
       },
     });
     expect("stickyLimit" in failoverBody.combo).toBe(false);
@@ -582,6 +588,8 @@ describe("combo-workspace-data", () => {
         ],
         strategy: "failover",
         defaultEffort: "medium",
+        imageInput: "auto",
+        reasoningEffortMode: "strict",
         alias: "deepseek-v4-flash",
       },
     });
@@ -768,10 +776,10 @@ describe("combo imageInput draft persistence", () => {
     expect(draftEquals(base, disabled)).toBe(false);
   });
 
-  test("toPutBody emits imageInput only when disabled", () => {
+  test("toPutBody always sends imageInput so auto can replace a stored disabled", () => {
     const auto = emptyDraft("x");
     auto.targets = [{ provider: "a", model: "m1" }];
-    expect(toPutBody(auto).combo).not.toHaveProperty("imageInput");
+    expect(toPutBody(auto).combo.imageInput).toBe("auto");
     const disabled = { ...auto, imageInput: "disabled" as const };
     expect(toPutBody(disabled).combo.imageInput).toBe("disabled");
   });

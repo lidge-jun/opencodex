@@ -185,6 +185,14 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...(!Object.hasOwn(requestedCombo, "cooldownWaitPolicy") && previous?.cooldownWaitPolicy !== undefined
         ? { cooldownWaitPolicy: previous.cooldownWaitPolicy }
         : {}),
+      // #5687: an API or CLI client that omits these must not reset them. The dashboard
+      // sends both explicitly, so switching back to auto/strict there still replaces them.
+      ...(!Object.hasOwn(requestedCombo, "reasoningEffortMode") && previous?.reasoningEffortMode !== undefined
+        ? { reasoningEffortMode: previous.reasoningEffortMode }
+        : {}),
+      ...(!Object.hasOwn(requestedCombo, "imageInput") && previous?.imageInput !== undefined
+        ? { imageInput: previous.imageInput }
+        : {}),
       // `lastResort` rides on each target, so a GUI that re-sends the target list without the
       // flag would strip it. Carry it over per target, matched on provider+model.
       ...(Array.isArray(requestedCombo.targets) && Array.isArray(previous?.targets)

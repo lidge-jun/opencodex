@@ -215,7 +215,7 @@ ocx combo remove <id> --yes
 
 ### Management API
 
-헤드리스 클라이언트는 `/api/combos`에 `GET`, `PUT`, `DELETE`를 사용합니다. `GET`은 정규화된 콤보 정의를 나열하고, `PUT`은 새 항목을 만들거나 교체하며(이름 바꾸기도 가능), `DELETE`는 id 쿼리 파라미터를 사용합니다. 인증과 요청/응답 세부 내용은 [Management API reference](/reference/management-api/)에 있습니다. `PUT` 본문에서 `cooldownMs` 또는 `waitForCooldownMs`를 생략하면 해당 콤보에 이미 저장된 값이 유지됩니다. 변경하려면 값을 명시적으로 보내세요. 명시적 `cooldownMs`(`60000` 포함)는 요청 속도 제한 폴백을 덮어쓰므로 보낸 값 그대로 저장됩니다. 저장된 `cooldownMs`는 구성 파일을 편집할 때만 삭제할 수 있습니다. `waitForCooldownMs`는 `PUT`에서 `0`을 명시적으로 보내면 기본값으로 돌아갑니다. 희소 직렬화기가 이 기본값을 생략하기 때문입니다. 생략한 값은 유지되고, 대시보드에서는 아직 두 값을 설정할 수 없습니다.
+헤드리스 클라이언트는 `/api/combos`에 `GET`, `PUT`, `DELETE`를 사용합니다. `GET`은 정규화된 콤보 정의를 나열하고, `PUT`은 새 항목을 만들거나 교체하며(이름 바꾸기도 가능), `DELETE`는 id 쿼리 파라미터를 사용합니다. 인증과 요청/응답 세부 내용은 [Management API reference](/reference/management-api/)에 있습니다. `PUT` 본문에서 `cooldownMs` 또는 `waitForCooldownMs`를 생략하면 해당 콤보에 이미 저장된 값이 유지됩니다. 변경하려면 값을 명시적으로 보내세요. 명시적 `cooldownMs`(`60000` 포함)는 요청 속도 제한 폴백을 덮어쓰므로 보낸 값 그대로 저장됩니다. 저장된 `cooldownMs`는 구성 파일을 편집할 때만 삭제할 수 있습니다. `waitForCooldownMs`는 `PUT`에서 `0`을 명시적으로 보내면 기본값으로 돌아갑니다. 희소 직렬화기가 이 기본값을 생략하기 때문입니다. 생략한 값은 유지되고, 대시보드에서는 아직 두 값을 설정할 수 없습니다. 마찬가지로 `defaultEffortMode`, `reasoningEffortMode`, `imageInput`, `cooldownWaitPolicy`를 생략해도 저장된 값이 유지되며, `lastResort` 없이 다시 보낸 대상은 해당 대상의 플래그를 유지합니다(공급자와 모델로 대조). 대시보드는 항상 `imageInput`과 `reasoningEffortMode`를 보내므로, 대시보드에서 `auto`나 `strict`로 되돌려도 저장된 값은 그대로 교체됩니다.
 
 전체 지속 설정은 [Configuration](/reference/configuration/)을 보십시오.
 

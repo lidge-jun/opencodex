@@ -473,6 +473,107 @@ describe("combo management API", () => {
     });
   });
 
+  test("PUT preserves omitted reasoningEffortMode and imageInput (#5687)", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+
+      const created = await comboApi(config, "PUT", "/api/combos", {
+        id: "keep",
+        combo: {
+          targets: [{ provider: "a", model: "m1" }],
+          reasoningEffortMode: "adaptive",
+          imageInput: "disabled",
+        },
+      });
+      expect(created?.status).toBe(200);
+      expect(config.combos?.keep).toMatchObject({
+        reasoningEffortMode: "adaptive",
+        imageInput: "disabled",
+      });
+
+      // `ocx combo set` and other API clients have no flag for either field, so a whole-combo
+      // PUT that omits them carries the stored values forward instead of resetting to strict/auto.
+      const omitted = await comboApi(config, "PUT", "/api/combos", {
+        id: "keep",
+        combo: {
+          targets: [{ provider: "a", model: "m1" }],
+          strategy: "round-robin",
+        },
+      });
+      expect(omitted?.status).toBe(200);
+      expect(config.combos?.keep).toMatchObject({
+        strategy: "round-robin",
+        reasoningEffortMode: "adaptive",
+        imageInput: "disabled",
+      });
+      const persisted = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(persisted.combos?.keep).toMatchObject({
+        reasoningEffortMode: "adaptive",
+        imageInput: "disabled",
+      });
+      const listed = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect(listed.combos).toEqual([expect.objectContaining({
+        id: "keep", reasoningEffortMode: "adaptive", imageInput: "disabled",
+      })]);
+
+      // Explicit values still replace, and the default is never materialized on disk or on the wire.
+      const defaults = await comboApi(config, "PUT", "/api/combos", {
+        id: "keep",
+        combo: {
+          targets: [{ provider: "a", model: "m1" }],
+          reasoningEffortMode: "strict",
+          imageInput: "auto",
+        },
+      });
+      expect(defaults?.status).toBe(200);
+      const defaultsBody = await responseJson(defaults);
+      expect(defaultsBody.combo).not.toHaveProperty("reasoningEffortMode");
+      expect(defaultsBody.combo).not.toHaveProperty("imageInput");
+      expect(config.combos?.keep).not.toHaveProperty("reasoningEffortMode");
+      expect(config.combos?.keep).not.toHaveProperty("imageInput");
+      const sparseDisk = JSON.parse(readFileSync(getConfigPath(), "utf8")) as OcxConfig;
+      expect(sparseDisk.combos?.keep).not.toHaveProperty("reasoningEffortMode");
+      expect(sparseDisk.combos?.keep).not.toHaveProperty("imageInput");
+
+      // An explicit opt-in survives being re-sent alongside an invalid sibling field: the
+      // rejected request must not have replaced the stored combo either.
+      const reseeded = await comboApi(config, "PUT", "/api/combos", {
+        id: "keep",
+        combo: {
+          targets: [{ provider: "a", model: "m1" }],
+          reasoningEffortMode: "adaptive",
+          imageInput: "disabled",
+        },
+      });
+      expect(reseeded?.status).toBe(200);
+      for (const invalid of [{ reasoningEffortMode: "bogus" }, { imageInput: "bogus" }]) {
+        const rejected = await comboApi(config, "PUT", "/api/combos", {
+          id: "keep",
+          combo: { targets: [{ provider: "a", model: "m1" }], ...invalid },
+        });
+        expect(rejected?.status).toBe(400);
+        expect(config.combos?.keep).toMatchObject({
+          reasoningEffortMode: "adaptive",
+          imageInput: "disabled",
+        });
+      }
+
+      // A rename re-reads the previous combo under its source id, so the carry-over follows it.
+      const renamed = await comboApi(config, "PUT", "/api/combos", {
+        id: "kept",
+        renameFrom: "keep",
+        combo: { targets: [{ provider: "a", model: "m1" }] },
+      });
+      expect(renamed?.status).toBe(200);
+      expect(config.combos?.keep).toBeUndefined();
+      expect(config.combos?.kept).toMatchObject({
+        reasoningEffortMode: "adaptive",
+        imageInput: "disabled",
+      });
+    });
+  });
+
   test("PUT rejects an unknown reasoningEffortMode", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });

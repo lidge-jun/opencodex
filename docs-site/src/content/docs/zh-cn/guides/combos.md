@@ -236,7 +236,7 @@ ocx combo remove <id> --yes
 
 ### Management API
 
-无头客户端会对 `/api/combos` 使用 `GET`、`PUT` 和 `DELETE`。`GET` 会列出规范化后的 combo 定义，`PUT` 会创建或替换一个定义（也可以重命名一个），`DELETE` 则使用 id 查询参数。认证以及请求/响应细节请见 [Management API 参考](/reference/management-api/)。如果 `PUT` 请求体省略 `cooldownMs` 或 `waitForCooldownMs`，API 会保留该 combo 已存储的值；要更改它，请显式发送一个值。显式设置的 `cooldownMs`（即使是 `60000`）会按原值持久化，因为它会覆盖请求速率限制回退值。已存储的 `cooldownMs` 只能通过编辑配置文件删除；如果 `PUT` 显式发送 `0`，`waitForCooldownMs` 会恢复为默认值，因为稀疏序列化器会省略这个默认值。省略字段会保留对应值，dashboard 目前还不能设置这两个参数。
+无头客户端会对 `/api/combos` 使用 `GET`、`PUT` 和 `DELETE`。`GET` 会列出规范化后的 combo 定义，`PUT` 会创建或替换一个定义（也可以重命名一个），`DELETE` 则使用 id 查询参数。认证以及请求/响应细节请见 [Management API 参考](/reference/management-api/)。如果 `PUT` 请求体省略 `cooldownMs` 或 `waitForCooldownMs`，API 会保留该 combo 已存储的值；要更改它，请显式发送一个值。显式设置的 `cooldownMs`（即使是 `60000`）会按原值持久化，因为它会覆盖请求速率限制回退值。已存储的 `cooldownMs` 只能通过编辑配置文件删除；如果 `PUT` 显式发送 `0`，`waitForCooldownMs` 会恢复为默认值，因为稀疏序列化器会省略这个默认值。省略字段会保留对应值，dashboard 目前还不能设置这两个参数。省略 `defaultEffortMode`、`reasoningEffortMode`、`imageInput` 或 `cooldownWaitPolicy` 同样会保留已存储的值，重新提交的目标如果不带 `lastResort`，也会保留该目标的标记（按 provider 和模型匹配）。dashboard 始终发送 `imageInput` 和 `reasoningEffortMode`，因此在 dashboard 中将其切回 `auto` 或 `strict` 仍会替换已存储的值。
 
 如需查看完整的持久化配置，请参见 [配置](/reference/configuration/)。
 
