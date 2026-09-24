@@ -31,7 +31,16 @@ export interface ClaudeProviderRenameProjection {
 
 export function projectClaudeProviderRename(config: OcxConfig): ClaudeProviderRenameProjection {
   const providers = config.providers;
-  const hasLegacyRow = providers !== undefined && providers[CLAUDE_CLI_PROVIDER_ID] !== undefined;
+  const legacyRow = providers?.[CLAUDE_CLI_PROVIDER_ID];
+  // Only the row the retired preset seeded moves. A seeded row names the adapter outright and a row
+  // that omits it inherits the registry entry, so both describe this mechanism. A row that carries
+  // the retired NAME on some other adapter belongs to the operator - the name is plausible for an
+  // `anthropic` row, since `claude-cli-identity.ts` uses the same term - and it keeps its name, its
+  // transport and its billing. Nothing then rewrites a reference that points at it.
+  const foreignLegacyRow = legacyRow !== undefined
+    && legacyRow.adapter !== undefined
+    && legacyRow.adapter !== CLAUDE_CLI_PROVIDER_ID;
+  const hasLegacyRow = legacyRow !== undefined && !foreignLegacyRow;
   const customRows = Object.entries(providers ?? {}).filter(
     ([name, row]) => name !== CLAUDE_CLI_PROVIDER_ID && row?.adapter === CLAUDE_CLI_PROVIDER_ID,
   );
@@ -61,7 +70,9 @@ export function projectClaudeProviderRename(config: OcxConfig): ClaudeProviderRe
     projected.providers![CLAUDE_AGENT_SDK_PROVIDER_ID] = moved;
   }
 
-  const rewritten = rewriteProviderReferences(projected, CLAUDE_CLI_PROVIDER_ID, CLAUDE_AGENT_SDK_PROVIDER_ID);
+  const rewritten = foreignLegacyRow
+    ? { changed: 0, collisions: [] as string[] }
+    : rewriteProviderReferences(projected, CLAUDE_CLI_PROVIDER_ID, CLAUDE_AGENT_SDK_PROVIDER_ID);
   if (rewritten.collisions.length > 0) {
     return {
       config,
@@ -86,9 +97,18 @@ export function projectClaudeProviderRename(config: OcxConfig): ClaudeProviderRe
   }
 
   const changed = hasLegacyRow || adapterRewrites > 0 || rewritten.changed > 0;
-  if (!changed) return { config, changed: false, warnings: [] };
+  if (!changed && !foreignLegacyRow) return { config, changed: false, warnings: [] };
 
   const warnings: string[] = [];
+  if (foreignLegacyRow) {
+    warnings.push(
+      `left provider "${CLAUDE_CLI_PROVIDER_ID}" and every reference to it untouched: the row runs `
+      + `adapter "${legacyRow!.adapter}", not the retired preset, so it is your provider rather than `
+      + `this rename and keeps its own transport. The id "${CLAUDE_CLI_PROVIDER_ID}" now resolves to `
+      + `"${CLAUDE_AGENT_SDK_PROVIDER_ID}" in registry lookups, so rename the row if it was meant `
+      + `to be the subscription mechanism.`,
+    );
+  }
   if (hasLegacyRow) {
     warnings.push(
       `moved provider "${CLAUDE_CLI_PROVIDER_ID}" to "${CLAUDE_AGENT_SDK_PROVIDER_ID}": the row now `
@@ -109,6 +129,7 @@ export function projectClaudeProviderRename(config: OcxConfig): ClaudeProviderRe
     );
   }
 
+  if (!changed) return { config, changed: false, warnings };
   return { config: projected, changed: true, warnings };
 }
 

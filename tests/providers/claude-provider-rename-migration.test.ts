@@ -6,6 +6,7 @@ import {
 } from "../../src/providers/claude-provider-rename-migration";
 import { resolveDeprecatedProviderId } from "../../src/providers/deprecated-provider-aliases";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
+import { effectiveAdapterContract, getAdapterDefinition } from "../../src/adapters/registry";
 import { projectStartupConfigRepairs } from "../../src/providers/model-rename-startup";
 import type { OcxConfig } from "../../src/types";
 
@@ -83,6 +84,41 @@ describe("claude provider rename projection", () => {
     expect(projection.changed).toBe(false);
     expect(projection.config).toBe(config);
     expect(projection.warnings.join("\n")).toContain("already exists");
+  });
+
+  test("leaves a user-named claude-cli row on another adapter alone", () => {
+    // The name is plausible for an `anthropic` row: `claude-cli-identity.ts` uses the same
+    // term. Moving it would swap the operator transport and put its billing on the signed-in
+    // Claude account, so the projection hands the whole row - and every reference to it - back.
+    const config = {
+      defaultProvider: OLD,
+      providers: { [OLD]: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-ant-x" } },
+      disabledModels: [`${OLD}/claude-sonnet-5`],
+    } as unknown as OcxConfig;
+    const projection = projectClaudeProviderRename(config);
+    expect(projection.changed).toBe(false);
+    expect(projection.config).toBe(config);
+    expect(projection.config.providers![OLD]!.adapter).toBe("anthropic");
+    expect(projection.config.defaultProvider).toBe(OLD);
+    expect(projection.config.disabledModels).toEqual([`${OLD}/claude-sonnet-5`]);
+    expect(projection.warnings.join("\n")).toContain("left provider");
+  });
+
+  test("a refused row still names an adapter the registry can build", () => {
+    const config = {
+      providers: {
+        [OLD]: { adapter: OLD, baseUrl: "https://api.anthropic.com" },
+        [NEW]: { adapter: NEW, baseUrl: "https://api.anthropic.com" },
+      },
+    } as unknown as OcxConfig;
+    const projection = projectClaudeProviderRename(config);
+    expect(projection.changed).toBe(false);
+    // The refusal decides which of two rows survives, not what an adapter id means: the retired
+    // adapter is gone from the registry, so a leftover string has to keep resolving to it.
+    const adapterId = projection.config.providers![OLD]!.adapter!;
+    expect(adapterId).toBe(OLD);
+    expect(getAdapterDefinition(adapterId)).toBe(getAdapterDefinition(NEW));
+    expect(effectiveAdapterContract(adapterId).wire).toBe(effectiveAdapterContract(NEW).wire);
   });
 
   test("discards a half-applied projection when a destination key collides", () => {

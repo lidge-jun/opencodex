@@ -18,6 +18,7 @@ import { createResponsesPassthroughAdapter } from "./openai-responses";
 import { createZedAdapter } from "./zed";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
+import { resolveDeprecatedProviderId } from "../providers/deprecated-provider-aliases";
 import { withInputMediaGuard } from "./input-media-guard";
 
 export type AdapterCacheRetention = "none" | "short" | "long";
@@ -164,8 +165,14 @@ export function adapterDefinitions(): Array<[AdapterId, RegisteredAdapterDefinit
 }
 
 export function getAdapterDefinition(adapterId: unknown): RegisteredAdapterDefinition | undefined {
-  if (typeof adapterId !== "string" || !Object.hasOwn(ADAPTER_REGISTRY, adapterId)) return undefined;
-  return ADAPTER_REGISTRY[adapterId as AdapterId];
+  if (typeof adapterId !== "string") return undefined;
+  // A retired provider id is also a retired adapter id, and the adapter string is the half a saved
+  // row can still carry: the rename projection leaves a row in place when the destination is taken,
+  // and a hand-edited config never runs the projection at all. No other form of that mechanism
+  // exists, so both lookups read one table and cannot disagree about what an id means.
+  const resolved = resolveDeprecatedProviderId(adapterId);
+  if (!Object.hasOwn(ADAPTER_REGISTRY, resolved)) return undefined;
+  return ADAPTER_REGISTRY[resolved as AdapterId];
 }
 
 export function effectiveAdapterContract(adapterId: string): Readonly<{

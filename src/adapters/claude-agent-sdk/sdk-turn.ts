@@ -12,6 +12,9 @@
  * and incomplete-call fail-closed paths). Two transports, one contract; the branches are deliberately
  * parallel to that file's so a change to one is visible next to the other.
  */
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isStandaloneBinary } from "../../lib/standalone";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { modelRecordValue } from "../../reasoning-effort";
@@ -72,6 +75,26 @@ export interface ClaudeAgentSdkDeps {
   timeoutMs?: number;
   /** How long to wait for an aborted turn to settle before answering the client (ms). */
   reapTimeoutMs?: number;
+  /** Creates the turn neutral working directory. Test seam; the default uses the system temp dir. */
+  makeScratchDir?: () => Promise<string>;
+  /** Removes that directory once the harness is gone. */
+  removeScratchDir?: (dir: string) => Promise<void>;
+}
+
+/**
+ * The directory a proxied turn runs in.
+ *
+ * Empty on purpose. The harness preset reports its working directory and a git-status summary to
+ * the model, and with `process.cwd()` those describe the machine OpenCodex was started from -
+ * the operator own checkout, by file name. The client own workspace reaches the model through
+ * the request instead, which is the only place it belongs.
+ */
+async function makeScratchDir(): Promise<string> {
+  return await mkdtemp(join(tmpdir(), "ocx-claude-agent-sdk-"));
+}
+
+async function removeScratchDir(dir: string): Promise<void> {
+  await rm(dir, { recursive: true, force: true });
 }
 
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -199,9 +222,29 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     stderrLength += chunk.length;
   };
 
+  let scratchDir: string;
+  try {
+    scratchDir = await (deps.makeScratchDir ?? makeScratchDir)();
+  } catch (err) {
+    emit({
+      type: "error",
+      message: redactSecrets(
+        `Claude Agent SDK turn could not create its scratch directory: ` + (err instanceof Error ? err.message : String(err)),
+        profile.tokenEnv,
+        apiKey,
+      ),
+      status: 500,
+      errorType: "upstream_error",
+      code: "claude_agent_sdk_scratch_unavailable",
+      retryable: false,
+    });
+    return;
+  }
+
   const options = buildAgentSdkTurnOptions({
     provider,
     parsed,
+    cwd: scratchDir,
     env: buildChildEnv(profile as ClaudeCliProfile, apiKey),
     abortController,
     onStderr,
@@ -473,6 +516,8 @@ export async function runClaudeAgentSdkTurn(input: ClaudeAgentSdkTurnInput): Pro
     ]);
   }
   if (reapTimer) clearTimeout(reapTimer);
+  // The harness is gone; nothing of the operator is left in there.
+  await (deps.removeScratchDir ?? removeScratchDir)(scratchDir).catch(() => undefined);
 
   if (terminalEmitted) return;
   const stderr = redactSecrets(boundedStderr(stderrChunks), profile.tokenEnv, apiKey);

@@ -225,6 +225,7 @@ describe("claude-agent-sdk options keep the harness in charge and tools with the
       provider: provider(),
       parsed: parsed(),
       env: { HOME: "/Users/operator" },
+      cwd: "/tmp/ocx-scratch",
       abortController: new AbortController(),
       onStderr: () => undefined,
     });
@@ -233,6 +234,8 @@ describe("claude-agent-sdk options keep the harness in charge and tools with the
     expect(options.strictMcpConfig).toBe(true);
     expect(options.persistSession).toBe(false);
     expect(options.includePartialMessages).toBe(true);
+    // Neutral on purpose: the preset reports its working directory and git state to the model.
+    expect(options.cwd).toBe("/tmp/ocx-scratch");
     expect(options.model).toBe("claude-sonnet-5");
     expect(options.permissionMode).toBeUndefined();
     expect(options.allowedTools).toBeUndefined();
@@ -259,6 +262,7 @@ describe("claude-agent-sdk options keep the harness in charge and tools with the
       provider: provider(),
       parsed: withTools(["alpha", "beta"]),
       env: {},
+      cwd: "/tmp/ocx-scratch",
       abortController: new AbortController(),
       onStderr: () => undefined,
       toolCatalog: {
@@ -457,6 +461,35 @@ describe("claude-agent-sdk runTurn streams a subscription turn", () => {
     expect(JSON.stringify(sdk.prompts[0])).toContain("hello");
     expect(sdk.state.returned).toBe(1);
     expect(sdk.options[0]!.env).toMatchObject({ HOME: process.env.HOME! });
+  });
+
+  test("runs in a scratch working directory and removes it once the harness is gone", async () => {
+    const sdk = fakeSdk([initFrame(), textFrame("ok"), resultFrame({ input_tokens: 1, output_tokens: 1 })]);
+    const removed: string[] = [];
+    const adapter = createClaudeAgentSdkAdapter(provider(), {
+      loadSdk: async () => sdk.module,
+      makeScratchDir: async () => "/tmp/ocx-turn-scratch",
+      removeScratchDir: async (dir) => { removed.push(dir); },
+    });
+    await run(adapter, parsed());
+    expect(sdk.options[0]!.cwd).toBe("/tmp/ocx-turn-scratch");
+    expect(removed).toEqual(["/tmp/ocx-turn-scratch"]);
+  });
+
+  test("a scratch directory that cannot be created fails the turn instead of leaking a cwd", async () => {
+    const sdk = fakeSdk([]);
+    const adapter = createClaudeAgentSdkAdapter(provider(), {
+      loadSdk: async () => sdk.module,
+      makeScratchDir: async () => { throw new Error("EROFS: read-only file system"); },
+    });
+    const events = await run(adapter, parsed());
+    expect(sdk.state.started).toBe(0);
+    expect(events[0]).toMatchObject({
+      type: "error",
+      status: 500,
+      code: "claude_agent_sdk_scratch_unavailable",
+      retryable: false,
+    });
   });
 
   test("an unauthenticated harness becomes an actionable sign-in error", async () => {

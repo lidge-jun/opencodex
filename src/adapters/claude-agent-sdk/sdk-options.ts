@@ -66,6 +66,12 @@ export interface AgentSdkOptionInput {
   abortController: AbortController;
   /** Bounded stderr sink; the SDK hands raw CLI stderr lines here. */
   onStderr: (chunk: string) => void;
+  /**
+   * Working directory for the harness process. The `claude_code` preset puts the working
+   * directory and a git-status summary into its context, so the runner hands it an empty scratch
+   * directory: a proxied turn has no business reporting the proxy own path or tree.
+   */
+  cwd: string;
   toolCatalog?: AgentSdkToolCatalog;
   /** Claude Code build to drive; the one the SDK ships is used when this is absent. */
   executablePath?: string;
@@ -84,6 +90,8 @@ export interface AgentSdkOptionInput {
  *   where another client's conversation belongs.
  * - `includePartialMessages: true` is what produces `stream_event` deltas instead of one block at
  *   the end of the turn.
+ * - `cwd` is a neutral scratch directory rather than `process.cwd()`: the preset describes its
+ *   working directory and git state to the model, and neither is part of the request the client sent.
  * - The tool catalog is served from THIS process (`type: "sdk"`), so no extra executable, no argv
  *   and no temp file is involved in advertising it.
  */
@@ -98,6 +106,7 @@ export function buildAgentSdkTurnOptions(input: AgentSdkOptionInput): Options {
     strictMcpConfig: true,
     persistSession: false,
     includePartialMessages: true,
+    cwd: input.cwd,
     env: input.env,
     abortController: input.abortController,
     stderr: input.onStderr,

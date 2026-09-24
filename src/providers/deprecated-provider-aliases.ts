@@ -10,7 +10,9 @@
  * row: one row per mechanism is what the registry means.
  *
  * It sits beside `./registry` rather than inside it because that file runs at its size cap, and this
- * table is a self-contained lookup: `getProviderRegistryEntry` is its only in-tree consumer.
+ * table is a self-contained lookup with two consumers: `getProviderRegistryEntry` for the provider
+ * id, and `getAdapterDefinition` (`../adapters/registry`) for the adapter string a saved row
+ * still carries after a refused projection.
  */
 export const DEPRECATED_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   "claude-cli": "claude-agent-sdk",

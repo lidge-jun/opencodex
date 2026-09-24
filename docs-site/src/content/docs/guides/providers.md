@@ -1093,7 +1093,10 @@ harness session rather than a converted Messages request:
   `claude setup-token`). The harness then spends that account (the macOS Keychain entry, or
   `~/.claude/.credentials.json` elsewhere). The turn itself needs no separate install — it runs
   through `@anthropic-ai/claude-agent-sdk`, which ships the Claude Code build it drives (about
-  230 MB unpacked per platform; the same binary the `claude` npm package installs). Compiled
+  230 MB unpacked per platform; the same binary the `claude` npm package installs). That payload is
+  why the SDK is an **optional** dependency: an install that omits optional dependencies
+  (`bun install --omit=optional`) leaves it out, and the row then answers
+  `claude_agent_sdk_unavailable` until the package is installed. Compiled
   builds, such as the desktop app's bundled proxy, cannot resolve a package path from inside their
   own bundle: there the row drives the `claude` on `PATH` and reports `cli_not_found` when it is
   missing.
@@ -1124,7 +1127,9 @@ harness session rather than a converted Messages request:
   (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry, feedback
   and the auto-updater disabled, built-in tools off (`tools: []`) and no setting sources, so the
   harness loads no CLAUDE.md, skill, hook, plugin or MCP server from the machine and can neither
-  read, write, exec nor browse.
+  read, write, exec nor browse. Each turn runs in an empty scratch directory of its own, so the
+  working-directory and git-status context the harness preset reports describes no part of the
+  machine OpenCodex happens to run on.
 - **Session:** each turn is its own harness session and nothing is persisted (`persistSession: false`),
   so the operator's `~/.claude` transcript directory does not accumulate another client's
   conversations. Continuity comes from the client replaying its transcript; the harness still owns

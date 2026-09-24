@@ -39,7 +39,8 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   the operator's own Claude Code sign-in, and the turn neither requires nor injects an API key.
   The turn itself runs through Anthropic's Claude Agent SDK — the harness behind the Claude Code CLI
   — and `tests/providers/claude-agent-sdk-adapter.test.ts` pins the options it sets: built-in tools
-  off (`tools: []`), no setting sources, no persisted session, an in-process MCP server as the only tool channel, the
+  off (`tools: []`), no setting sources, no persisted session, an in-process MCP server as the only tool channel, a
+  per-turn scratch working directory so the preset reports no host path or git state, the
   caller's prompt appended to the harness preset instead of replacing it, and a child environment
   that carries no inherited `ANTHROPIC_*` value. The id shipped in 2.65.0 as `claude-cli`; that name
   resolves through `DEPRECATED_PROVIDER_ALIASES` and is moved by
