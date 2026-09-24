@@ -78,12 +78,12 @@ badge or the version value to read the full value.
 
 ### Quota summary bar
 
-A one-line summary at the top of every page shows each provider's current quota usage, for example
-`OpenAI 31% | Claude 54% | xAI 12% | Google 8%`. It reads the same provider quota reports as the
-Providers workspace (`GET /api/provider-quotas`, every 60 seconds while the tab is visible) and
-never forces an upstream refresh.
+A one-line summary at the top of every page except the Startup page shows each provider's current
+quota usage, for example `OpenAI 31% | Claude 54% | xAI 12% | Google 8%`. It reads the same provider
+quota reports as the Providers workspace (`GET /api/provider-quotas`, every 60 seconds while the tab
+is visible) and never forces an upstream refresh.
 
-- Each chip shows the longest reported window: weekly first, then monthly, then 5-hour, then a
+- Each chip shows the preferred reported window: weekly first, then monthly, then 5-hour, then a
   provider-named window or prepaid credits.
 - A chip turns amber at 70% used and red at 90% used.
 - Hover or click a chip to see every reported window with its reset time and the time the reading
@@ -91,8 +91,6 @@ never forces an upstream refresh.
 - Providers that report no quota window are left out. The bar is hidden when no provider reports one.
 - The right edge shows when the dashboard last read the reports. It turns amber when the latest
   read failed and the previous reading is still shown.
-
-The bar is not shown on the Startup page.
 
 ## What you can do
 

@@ -149,7 +149,15 @@ export default function QuotaSummaryBar({ apiBase }: { apiBase: string }) {
         title={stale ? t("quotaSummary.refreshFailed") : undefined}
       >
         {t("quotaSummary.updated", { time: formatClock(data.fetchedAt, locale) })}
-        {stale && <span className="sr-only">{t("quotaSummary.refreshFailed")}</span>}
+      </span>
+      {/*
+        Always mounted so the announcement survives the transition: an element that is
+        inserted already carrying its text is not reliably read out, so the failure and
+        the recovery would otherwise both go unannounced. Only this span is a live
+        region — the timestamp beside it changes every 60s and would not stop talking.
+      */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {stale ? t("quotaSummary.refreshFailed") : ""}
       </span>
     </section>
   );

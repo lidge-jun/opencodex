@@ -151,10 +151,23 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   text-align: right;
+  white-space: nowrap;
 }
 
 .quota-summary-row-reset {
   color: var(--muted);
+  white-space: nowrap;
+}
+
+/*
+  Window labels are provider-named and arrive verbatim, so they can be longer than
+  the popover is wide. `nowrap` on the label cell pushed the percent and reset cells
+  out of a narrow mobile popover; let the label wrap and keep the numbers intact, so
+  the row stays readable instead of losing its figures off the right edge.
+*/
+.quota-summary-table th[scope="row"] {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .quota-summary-row--warn .quota-summary-row-pct {
@@ -212,5 +225,18 @@
     right: 8px;
     min-width: 0;
     margin-top: 4px;
+  }
+
+  /*
+    The mobile app grid already reserves an `auto` row for `.mobile-topbar` above a
+    `1fr` main row (see the narrow-screen block in styles.css). A `100dvh` main row
+    therefore measures a full viewport *below* the bar: the document becomes bar
+    height + viewport, the page scrolls by exactly the bar, and the combos shell is
+    clipped at the fold. Fill the row the grid reserved, mirroring how
+    `.main-inner--combos` itself drops to `height: 100%` on mobile.
+  */
+  .main:has(> .quota-summary-bar):has(> .main-inner--combos .combos-workspace-shell) {
+    height: 100%;
+    min-height: 0;
   }
 }
