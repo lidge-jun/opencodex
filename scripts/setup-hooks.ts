@@ -23,6 +23,9 @@ try {
   execFileSync("git", ["config", "--get", "core.hooksPath"], {
     cwd: repoRoot,
     encoding: "utf8",
+    // A wedged git config read must not stall the setup run: bound the call and treat a
+    // timeout like any other inspection failure below.
+    timeout: 10_000,
   });
   console.error("setup-hooks: refusing to install because core.hooksPath is configured.");
   process.exit(1);
