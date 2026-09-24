@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
-import { expandUserPath } from "../config";
+import { expandUserPath } from "../config/paths";
 import { redactUserPath } from "../lib/redact";
 
 export type CodexHomeDeps = {
