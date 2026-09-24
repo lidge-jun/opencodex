@@ -7,9 +7,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolveWireProtocolOverride } from "../../src/server/adapter-resolve";
 import { createAnthropicAdapter } from "../../src/adapters/anthropic";
-import { providerConfigSeed } from "../../src/providers/derive";
-import { getProviderRegistryEntry } from "../../src/providers/registry";
-import { captureRouteStaticPolicy } from "../../src/router";
 import type { OcxProviderConfig } from "../../src/types";
 
 function gateway(overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
@@ -152,17 +149,6 @@ describe("per-model wire override (#404)", () => {
 });
 
 describe("registry per-model wire defaults", () => {
-  test("uses the captured OpenCode Go alias policy to resolve the Responses adapter", () => {
-    const entry = getProviderRegistryEntry("opencode-go");
-    if (!entry) throw new Error("missing opencode-go registry fixture");
-    const provider = providerConfigSeed(entry);
-    delete provider.statelessResponses;
-    const policy = captureRouteStaticPolicy("OG", "muse-spark-1.3-contributor", provider);
-
-    expect(resolveWireProtocolOverride("OG", "muse-spark-1.3-contributor", provider, "responses", policy).adapter)
-      .toBe("openai-responses");
-  });
-
   function xai(authMode: "oauth" | "key", overrides: Partial<OcxProviderConfig> = {}): OcxProviderConfig {
     return gateway({
       baseUrl: "https://api.x.ai/v1",

@@ -1,36 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { mapReasoningEffort } from "../../src/reasoning-effort";
-import { captureRouteStaticPolicy, NoEnabledOpenAiProviderError, routeCompactionModel, routeModel } from "../../src/router";
-import { providerConfigSeed } from "../../src/providers/derive";
-import { getProviderRegistryEntry } from "../../src/providers/registry";
+import { NoEnabledOpenAiProviderError, routeCompactionModel, routeModel } from "../../src/router";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 
 describe("routeModel registry effort defaults", () => {
-  test("captures the whole OpenCode Go preset for a matching transport alias", () => {
-    const entry = getProviderRegistryEntry("opencode-go");
-    if (!entry) throw new Error("missing opencode-go registry fixture");
-    const provider = providerConfigSeed(entry);
-    delete provider.statelessResponses;
-
-    const policy = captureRouteStaticPolicy("OG", "muse-spark-1.3-contributor", provider, undefined, "responses");
-    expect(policy.transportMatchedRegistry).toBe(true);
-    expect(policy.model.adapter).toBe("openai-responses");
-    expect(policy.model.responsesTerminalRepair).toEqual({ graceMs: 5_000 });
-    expect(policy.provider.statelessResponses).toBe(true);
-  });
-
-  test("chooses the live Cline registry row for a shared destination alias", () => {
-    const policy = captureRouteStaticPolicy("my-cline", "anthropic/claude-sonnet-4-6", {
-      adapter: "openai-chat",
-      baseUrl: "https://api.cline.bot/api/v1",
-      authMode: "key",
-      apiKey: "test-key",
-    });
-    expect(policy.transportMatchedRegistry).toBe(true);
-    expect(policy.provider.liveModels).toBe(true);
-    expect(policy.provenance.provider.liveModels).toBe("registry");
-  });
-
   test("allows only opted-in OAuth presets to use explicit API-key billing", () => {
     const xaiKey: OcxConfig = {
       port: 10100,

@@ -130,14 +130,14 @@ export function providerMatchesRegistryTransport(
  */
 export function registryEntryForProviderDestination(
   provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
-  options: { entryFilter?: (entry: ProviderRegistryEntry) => boolean } = {},
 ): ProviderRegistryEntry | undefined {
   if (typeof provider.baseUrl !== "string" || !provider.baseUrl) return undefined;
   if (provider.authMode !== undefined && provider.authMode !== "key") return undefined;
   const endpoint = normalizedProviderEndpoint(provider.baseUrl);
-  const eligible = (entry: ProviderRegistryEntry): boolean => entry.authKind === "key"
-    && !entry.allowBaseUrlOverride && !/\{[^}]*\}/.test(entry.baseUrl)
-    && (options.entryFilter?.(entry) ?? true);
+  const eligible = (entry: ProviderRegistryEntry): boolean =>
+    entry.authKind === "key"
+    && !entry.allowBaseUrlOverride
+    && !/\{[^}]*\}/.test(entry.baseUrl);
   const direct = PROVIDER_REGISTRY.find(entry =>
     eligible(entry)
     && entry.adapter === provider.adapter
@@ -158,14 +158,6 @@ export function registryEntryForProviderDestination(
  * wire. The resolver receives the allow-list so this helper cannot accidentally widen the
  * adapter-selection boundary when a new registry entry is added.
  */
-function resolveTargetRegistryEntry(
-  id: string,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
-): ProviderRegistryEntry | undefined {
-  const direct = getProviderRegistryEntry(id);
-  return direct ? (providerMatchesRegistryTransport(id, provider) ? direct : registryEntryForProviderDestination(provider)) : registryEntryForProviderDestination(provider);
-}
-
 export function providerModelWireDefault(
   id: string,
   provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
@@ -174,8 +166,8 @@ export function providerModelWireDefault(
   inbound: InboundWire,
 ): string | undefined {
   if (!allowedWires.has(provider.adapter)) return undefined;
-  const entry = resolveTargetRegistryEntry(id, provider);
-  if (!entry?.modelWireDefaults) return undefined;
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.modelWireDefaults || !providerMatchesRegistryTransport(id, provider)) return undefined;
   const declared = entry.modelWireDefaults[modelId.trim().toLowerCase()];
   if (declared === undefined) return undefined;
   // A bare string applies to every inbound/auth mode; the object form may narrow either.
@@ -194,7 +186,9 @@ export function providerModelResponsesUpstreamStreaming(
   provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
   modelId: string,
 ): boolean | undefined {
-  return resolveTargetRegistryEntry(id, provider)?.modelResponsesUpstreamStreaming?.[modelId.trim().toLowerCase()];
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.modelResponsesUpstreamStreaming || !providerMatchesRegistryTransport(id, provider)) return undefined;
+  return entry.modelResponsesUpstreamStreaming[modelId.trim().toLowerCase()];
 }
 
 /** Resolve a registry-only terminal-repair policy for native Responses streams. */
@@ -203,9 +197,12 @@ export function providerModelResponsesTerminalRepair(
   provider: Pick<OcxProviderConfig, "baseUrl" | "adapter"> & Partial<Pick<OcxProviderConfig, "authMode">>,
   modelId: string,
 ): ResponsesTerminalRepairPolicy | undefined {
-  const policy = resolveTargetRegistryEntry(id, provider)?.modelResponsesTerminalRepair?.[modelId.trim().toLowerCase()];
+  const entry = getProviderRegistryEntry(id);
+  if (!entry?.modelResponsesTerminalRepair || !providerMatchesRegistryTransport(id, provider)) return undefined;
+  const policy = entry.modelResponsesTerminalRepair[modelId.trim().toLowerCase()];
   const graceMs = Math.floor(policy?.graceMs ?? 0);
-  return Number.isFinite(graceMs) && graceMs > 0 ? { graceMs } : undefined;
+  if (!Number.isFinite(graceMs) || graceMs <= 0) return undefined;
+  return { graceMs };
 }
 
 /**
@@ -214,9 +211,11 @@ export function providerModelResponsesTerminalRepair(
  * `"pool"`. Other providers keep registry-only metadata (there is no mode for `openai-apikey`).
  */
 export function providerCodexAccountMode(id: string, provider?: OcxProviderConfig): CodexAccountMode | undefined {
-  if (id !== "openai") return getProviderRegistryEntry(id)?.codexAccountMode;
+  const registryMode = getProviderRegistryEntry(id)?.codexAccountMode;
+  if (id !== "openai") return registryMode;
   const persisted = provider?.codexAccountMode;
-  return persisted === "pool" || persisted === "direct" ? persisted : getProviderRegistryEntry(id)?.codexAccountMode ?? "pool";
+  if (persisted === "pool" || persisted === "direct") return persisted;
+  return registryMode ?? "pool";
 }
 
 /**
@@ -228,5 +227,6 @@ export function effectiveGoogleMode(
   providerId: string,
   prov: { adapter?: string; googleMode?: "ai-studio" | "vertex" | "cloud-code-assist" },
 ): "ai-studio" | "vertex" | "cloud-code-assist" | null {
-  return prov.adapter === "google" ? prov.googleMode ?? getProviderRegistryEntry(providerId)?.googleMode ?? "ai-studio" : null;
+  if (prov.adapter !== "google") return null;
+  return prov.googleMode ?? getProviderRegistryEntry(providerId)?.googleMode ?? "ai-studio";
 }
