@@ -231,7 +231,7 @@ jobs:
             git checkout -B "${branch}" "origin/${branch}"
             # The diff above proved every other file matches the merge base with dev, so this is
             # the merge base's checker reading the branch's four committed version sources.
-            bun ../scripts/release-version-sources.ts check "${NEXT_VERSION}" --root . || {
+            (cd .. && env -u GH_TOKEN bun scripts/release-version-sources.ts check "${NEXT_VERSION}" --root dev-tree) || {
               echo "::error::${branch} does not carry ${NEXT_VERSION} in every version source"
               exit 1
             }
@@ -240,7 +240,7 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git checkout -b "${branch}"
             # The trusted checkout's checker reads this tree's four version sources.
-            bun ../scripts/release-version-sources.ts check "${NEXT_VERSION}" --root . || {
+            (cd .. && env -u GH_TOKEN bun scripts/release-version-sources.ts check "${NEXT_VERSION}" --root dev-tree) || {
               echo "::error::the bump did not move every version source to ${NEXT_VERSION}"
               exit 1
             }
@@ -250,8 +250,7 @@ jobs:
             # particular, never persist it in the dev checkout while dev-controlled
             # files could execute.
             auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
-            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" 
-              push origin "${branch}"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin "${branch}"
           fi
 
           gh pr create \

@@ -772,10 +772,17 @@ describe("GitHub Actions hardening", () => {
     );
     expect(bumpWorkflow).toContain("cp dev-tree/package.json package.json");
     expect(bumpWorkflow).toContain("working-directory: dev-tree");
-    expect(bumpWorkflow).toContain('git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}"');
-    // Version-source checks run the trusted checkout's script against the dev tree;
-    // executing dev-tree's own copy would hand the bump job's token to mutable input.
-    expect(count(bumpWorkflow, "bun ../scripts/release-version-sources.ts check")).toBe(2);
+    // The credentialed push must be one command: a trailing line break runs
+    // `git -c` alone (usage, nonzero) and `push origin` as a bare shell word,
+    // so the branch never reaches the remote under `set -euo pipefail`.
+    expect(bumpWorkflow).toContain(
+      'git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin "${branch}"',
+    );
+    // Version-source checks run from the trusted checkout against the dev tree;
+    // executing inside dev-tree would let mutable input steer the runtime, and
+    // GH_TOKEN is dropped for the check so the token outlives only the push.
+    expect(count(bumpWorkflow, 'env -u GH_TOKEN bun scripts/release-version-sources.ts check "${NEXT_VERSION}" --root dev-tree')).toBe(2);
+    expect(bumpWorkflow).not.toContain("bun ../scripts/release-version-sources.ts");
 
     // Workflow-dispatch inputs must reach shell code via env, never by direct
     // interpolation into run: source (script-injection hardening).
