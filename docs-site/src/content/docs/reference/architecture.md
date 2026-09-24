@@ -71,10 +71,11 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
 7. `bridge/sse.ts` / `bridge/response-json.ts` produces Responses SSE or JSON. `server/request-log.ts` and `usage/` collect terminal
    status, latency, provider/model labels, and best-effort token usage without changing the response.
 
-The pre-dispatch input estimate follows the routed adapter: for `openai-chat` models outside
-`preserveReasoningContentModels`, it excludes replayed assistant thinking that the adapter does not
-send. Models that preserve reasoning still count it. This prevents a local context-limit refusal
-based on history that never reaches the provider.
+The pre-dispatch input estimate follows what the routed adapter actually sends. For `openai-chat`
+models outside `preserveReasoningContentModels`, the adapter drops replayed assistant thinking, so
+the estimate excludes it too; history that never reaches the provider therefore cannot cause a local
+context-limit refusal. Models that preserve reasoning, and other adapters,
+send that thinking and still count it.
 
 ## The parser
 
