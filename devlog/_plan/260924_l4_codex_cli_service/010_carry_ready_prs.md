@@ -12,3 +12,9 @@ Files: src/codex/native-residue.ts, structure/config.md, tests/codex-integration
 ## #5548 slice — Vadevious <Vadevious@users.noreply.github.com>
 Only src/codex/home.ts (import expandUserPath from ../config/paths), structure/codex-home.md line, tests/codex-integration/codex-home-wsl.test.ts (new: register in layout.json explicit + test-layout-expected.json if not matched by a seed). Excluded: tests/cli/cli-help.test.ts, tests/service/service-probe-docker.test.ts, tests/service/service.test.ts.
 Audit fold: codex-home-wsl.test.ts already exists on dev (from #5720) and is registered; carry only the PR's added fresh-process case into it. home.ts:4 currently imports from ../config (barrel) — the fix switches to ../config/paths.
+
+## wp1 P (executable)
+- All three squash diffs pass git apply --check -3 on 34fb6d649c (/tmp/l4-5713.diff, /tmp/l4-5703.diff, /tmp/l4-5548.diff limited to 3 files).
+- Commit order: #5713, #5703, #5548 slice; each commit carries Co-authored-by for the PR author.
+- #5713 docs: en/ko remote-hub.md updated by the PR; DeepSeek writer adds the same paragraph to fr, ja, ru, tr, zh-cn, zh-tw remote-hub.md next to the service-api-token paragraph.
+- Focused tests: tests/service/service-secrets.test.ts tests/clients/client-connect.test.ts tests/codex-integration/codex-native-residue.test.ts tests/codex-integration/codex-home-wsl.test.ts tests/test-layout.test.ts; plus the file-size ratchet test.
