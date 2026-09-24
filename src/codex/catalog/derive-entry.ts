@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../../types";
 import { effectiveProviderAlias } from "../../providers/default-aliases";
-import { identifyRoutedModel } from "../../adapters/identity";
+import { neutralizeIdentity } from "../../adapters/identity";
 import { COMBO_NAMESPACE } from "../../combos";
 import {
   CODEX_CUSTOM_MODEL_CATALOG_KIND,
@@ -145,13 +145,13 @@ export function deriveEntry(
         delete e.max_context_window;
         delete e.auto_compact_token_limit;
       }
-      // Native id for identity text + metadata lookups — the slug may be an encoded
-      // alias (`provider/vendor-model`); the model object carries the native id.
-      const modelName = model?.id ?? slug.slice(slug.indexOf("/") + 1);
       if (typeof e.base_instructions === "string") {
         // Proxy-neutral: keep the GPT-5/OpenAI disclaimer but never advertise the opencodex proxy
         // (leaking that into base_instructions is a non-first-party signature → ToS risk).
-        e.base_instructions = identifyRoutedModel(e.base_instructions, modelName);
+        // Model-neutral on disk (#5217): Codex stores this block as the session's instructions and
+        // replays it verbatim into a sub-agent spawned on a DIFFERENT model, so a baked-in model id
+        // follows the worker and misnames it. The destination id is written at request time instead.
+        e.base_instructions = neutralizeIdentity(e.base_instructions);
       }
       applyReasoningLevels(
         e,

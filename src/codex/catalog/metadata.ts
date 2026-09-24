@@ -16,7 +16,7 @@ import { getProviderRegistryEntry, providerCodexAccountMode } from "../../provid
 import { applyProviderContextCap, providerContextCap } from "../../providers/context-cap";
 import { clampAutoCompactTokenLimit } from "../../providers/auto-compact-budget";
 import { routedSlug, slugEquals, slugsEquivalent } from "../../providers/slug-codec";
-import { identifyRoutedModel } from "../../adapters/identity";
+import { neutralizeIdentity } from "../../adapters/identity";
 import { filterCursorConfiguredModelsByLiveDiscovery } from "../../adapters/cursor/discovery";
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
@@ -584,14 +584,14 @@ function upstreamNativeEntryForSlug(slug: string): RawEntry | undefined {
   alias.display_name = presentation.displayName;
   alias.description = presentation.description;
   if (typeof alias.base_instructions === "string") {
-    alias.base_instructions = identifyRoutedModel(alias.base_instructions, slug);
+    alias.base_instructions = neutralizeIdentity(alias.base_instructions);
   }
   if (alias.model_messages && typeof alias.model_messages === "object" && !Array.isArray(alias.model_messages)) {
     const modelMessages = alias.model_messages as Record<string, unknown>;
     if (typeof modelMessages.instructions_template === "string") {
       alias.model_messages = {
         ...modelMessages,
-        instructions_template: identifyRoutedModel(modelMessages.instructions_template, slug),
+        instructions_template: neutralizeIdentity(modelMessages.instructions_template),
       };
     }
   }

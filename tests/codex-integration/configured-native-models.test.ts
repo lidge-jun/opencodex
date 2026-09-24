@@ -25,6 +25,7 @@ import {
   resetConfiguredNativeOpenAiModelsForTests,
   setConfiguredNativeOpenAiModels,
 } from "../../src/codex/catalog/native-models";
+import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
 import { isGpt56NativeSlug, nativeLadderIncludesUltra } from "../../src/codex/catalog/effort";
 import { isUnsupportedOpenAiNativeSlug, nativeOpenAiCapabilityDisplayName } from "../../src/codex/catalog/metadata";
 import { CANONICAL_NATIVE_CATALOG_CONTENT_POLICY } from "../../src/codex/catalog/build-entries";
@@ -105,7 +106,9 @@ describe("configured native GPT models", () => {
     expect(row.slug).toBe(NOVA);
     expect(row.display_name).toBe("GPT-6-Nova");
     expect(efforts(row)).toEqual(SOL_LADDER);
-    expect(String(row.base_instructions)).toContain(NOVA);
+    // #5217: the on-disk block is model-neutral; the destination id is written at request time.
+    expect(String(row.base_instructions)).toContain(NEUTRAL_IDENTITY_LINE);
+    expect(String(row.base_instructions)).not.toContain("powered by the");
 
     const entries = buildCatalogEntries(null, [NATIVE_GPT6_SOL_MODEL, NOVA], []);
     const nova = entries.find(entry => entry.slug === NOVA);

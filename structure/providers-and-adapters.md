@@ -34,6 +34,17 @@ the [bounded ingestion contract](transports/inventory.md#bounded-response-ingest
 Anthropic model-scoped quota labels in `src/providers/quota/vendor-probes-oauth.ts` publish
 only canonical Fable, Opus, or Sonnet labels after removing terminal controls; unknown upstream display names are omitted.
 
+The routed identity sentence a catalog row carries is model-neutral on disk: `base_instructions`,
+and a native capability alias's `model_messages.instructions_template`, hold `NEUTRAL_IDENTITY_LINE`
+rather than a model id, because Codex stores a session's instruction block once and replays it
+verbatim into a sub-agent spawned on a DIFFERENT model, where a baked id makes the worker answer
+identity questions with the parent's id (#5217). The destination model is therefore named at request
+time — `src/responses/parser.ts` names it in the top-level `instructions` string and in developer
+items, and each adapter that builds its own system text calls `identifyRoutedModel` with the wire id.
+The Responses passthrough rewrites the sentence on a routed destination and strips it on a native or
+forward one, where Codex's own identity wording already supplies it;
+`tests/adapters/identity-neutralize.test.ts` pins the rewrite rules.
+
 | Path | Responsibility |
 | --- | --- |
 | `src/providers/registry.ts` | Compatibility facade; canonical provider presets for CLI, dashboard, OAuth, key providers, and metadata live in `src/providers/registry/entries-core.ts` and `entries-extended.ts`, with model seeds in `model-seeds.ts`. |

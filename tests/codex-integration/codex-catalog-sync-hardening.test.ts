@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/native-models";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
 
 const repoRoot = dirname(fileURLToPath(new URL("../../package.json", import.meta.url)));
 
@@ -646,7 +647,8 @@ describe("Codex catalog sync hardening", () => {
       multi_agent_version: "v2",
       opencodex_catalog_kind: "custom-model-v1",
     });
-    expect(daybreak?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
+    expect(daybreak?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
+    expect(daybreak?.base_instructions).not.toContain("powered by the");
     // The explicit custom row is independent of native account entitlement. With no confirmed
     // account roster, the account-gated bare row stays absent instead of collapsing into it.
     expect(rows.filter(row => row.slug === "gpt-daybreak-blue-latest")).toHaveLength(0);
