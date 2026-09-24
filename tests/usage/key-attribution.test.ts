@@ -139,6 +139,28 @@ describe("key attempt accounting", () => {
     sealRequestAttemptIdentity(active, ctx.provider, "anthropic-messages", ctx.accountLogLabel);
     expect(active.provider).toBe("anthropic (pfc164f)");
   });
+  test("an Anthropic account rotation opens its own attempt row", () => {
+    // No label to compare: the account lives in the account-qualified log provider string.
+    const oauth = { adapter: "anthropic-messages", authMode: "oauth" as const, baseUrl: "https://example.test" };
+    const active = beginRequestAttempt(1, "anthropic", "model", "anthropic-messages");
+    const ctx: RequestLogContext = { provider: "anthropic (pfc164f)", model: "model",
+      activeAttempt: active, activeAttemptStartedAt: Date.now(), attempts: [active] };
+    noteProviderAttemptSend(ctx, "anthropic", oauth, undefined);
+    recordKeyAttemptUsage(ctx, { inputTokens: 100, outputTokens: 10 });
+    ctx.provider = "anthropic (p9d2e10)";
+    // The dispatch paths re-seal between sends (src/server/responses/request-transport.ts:691).
+    // That re-stamp is what used to launder the rotation before the split below could read it.
+    sealRequestAttemptIdentity(active, ctx.provider, "anthropic-messages", ctx.accountLogLabel);
+    noteProviderAttemptSend(ctx, "anthropic", oauth, undefined, "rate-limit-429");
+    recordKeyAttemptUsage(ctx, { inputTokens: 50, outputTokens: 5 });
+    expect(ctx.activeAttempt).toBe(active);
+    expect(ctx.attempts).toHaveLength(2);
+    // Each account keeps the tokens it actually spent.
+    expect(ctx.attempts?.[0]).toMatchObject({ ordinal: 1, provider: "anthropic (pfc164f)",
+      sendCount: 1, usage: { inputTokens: 100, outputTokens: 10 } });
+    expect(active).toMatchObject({ ordinal: 2, provider: "anthropic (p9d2e10)",
+      sendCount: 1, usage: { inputTokens: 50, outputTokens: 5 } });
+  });
   test("wire snapshots replace the current send against a pre-send baseline", () => {
     const active = beginRequestAttempt(1, "test", "model", "openai-chat");
     const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active, attempts: [active] };

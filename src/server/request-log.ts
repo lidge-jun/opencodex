@@ -1824,8 +1824,18 @@ export function noteProviderAttemptSend(
   // one attempt on the wrong account, and per-account usage attribution was silently wrong.
   // `isCodexUsageAccountLogLabel` (src/usage/log.ts) already persists those labels onto the
   // attempt through the broad pattern; this is the same pattern, read back at the split.
-  if (attempt && attempt.sendCount > 0 && previous !== next
-    && (ACCOUNT_LOG_LABEL_RE.test(previous ?? "") || ACCOUNT_LOG_LABEL_RE.test(next ?? ""))) {
+  const accountLabelChanged = previous !== next
+    && (ACCOUNT_LOG_LABEL_RE.test(previous ?? "") || ACCOUNT_LOG_LABEL_RE.test(next ?? ""));
+  // The other axis a rotation can move. Anthropic's pool carries no label at all --
+  // `stampOAuthAccountLabel` skips that base provider -- and keeps its account inside the
+  // account-qualified log provider string ("anthropic (pabc123)"), so the label test above can
+  // never see an Anthropic rotation. Safe to compare because a sent attempt's provider is frozen
+  // by `sealRequestAttemptIdentity`: the only way these diverge after a send is the account
+  // moving underneath the row.
+  const accountProviderChanged = attempt !== undefined
+    && attempt.provider !== logCtx.provider
+    && logCtx.provider.length > 0;
+  if (attempt && attempt.sendCount > 0 && (accountLabelChanged || accountProviderChanged)) {
     // An input estimate is not evidence that a failed send used that many tokens.
     delete attempt.inputTokenEstimate;
     finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
