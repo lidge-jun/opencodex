@@ -1089,12 +1089,17 @@ harness session rather than a converted Messages request:
 }
 ```
 
-- **Prerequisites:** `npm install -g @anthropic-ai/claude-code`, then sign in once with `claude`
-  (or `claude setup-token`). The CLI uses the machine's own Claude Code sign-in (the macOS Keychain
-  entry, or `~/.claude/.credentials.json` elsewhere).
+- **Prerequisites:** a Claude Code sign-in on this machine, once: run `claude` and sign in (or
+  `claude setup-token`). The harness then spends that account (the macOS Keychain entry, or
+  `~/.claude/.credentials.json` elsewhere). The turn itself needs no separate install — it runs
+  through `@anthropic-ai/claude-agent-sdk`, which ships the Claude Code build it drives (about
+  230 MB unpacked per platform; the same binary the `claude` npm package installs). Compiled
+  builds, such as the desktop app's bundled proxy, cannot resolve a package path from inside their
+  own bundle: there the row drives the `claude` on `PATH` and reports `cli_not_found` when it is
+  missing.
 - **No credential stored:** this row holds no API key, and OpenCodex never reads, copies or forwards
-  a Claude token. The CLI owns the login and bills the account itself. A CLI that is not signed in
-  fails the turn with a sign-in error naming the command, instead of a generic `401`.
+  a Claude token. The harness owns the login and bills the account itself. An unauthenticated
+  harness fails the turn with a sign-in error naming the command, instead of a generic `401`.
   Classification follows the same fact: the preset is a keyless key row (`keyOptional`), so it needs
   no API key and no key field is offered for it. An API key saved on this row by other means is never
   handed to the harness — key billing belongs to the `anthropic-apikey` preset.
@@ -1110,8 +1115,8 @@ harness session rather than a converted Messages request:
   OpenCodex runs as, so every request routed through this row — from any client of the proxy —
   spends that one Claude account. There is no per-client account, no pooling and no multiplexing;
   giving several people their own Claude usage needs one proxy user per sign-in.
-- **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
-  on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
+- **Input media:** the row publishes its models as text-only for v1. The harness parses an image
+  block without complaint, but no headless turn has been shown to hand those bytes to the model, so
   an image sent straight to this provider is refused (`unsupported_input_modality`, the same
   refusal the Qoder presets make) instead of being silently dropped and answered blind. With the
   vision sidecar on the request path, images are captioned into text before they reach the row.
@@ -1120,15 +1125,18 @@ harness session rather than a converted Messages request:
   and the auto-updater disabled, built-in tools off (`tools: []`) and no setting sources, so the
   harness loads no CLAUDE.md, skill, hook, plugin or MCP server from the machine and can neither
   read, write, exec nor browse.
-- **Session:** the harness owns the conversation session instead of a one-shot invocation, so a
-  follow-up turn of the same conversation resumes it and reuses its prompt cache. The client still
-  replays its own transcript, which keeps a client switch from leaking into the session.
+- **Session:** each turn is its own harness session and nothing is persisted (`persistSession: false`),
+  so the operator's `~/.claude` transcript directory does not accumulate another client's
+  conversations. Continuity comes from the client replaying its transcript; the harness still owns
+  the turn's process, prompt and sign-in, and the shared prefix keeps the prompt-cache read cheap.
 - **System prompt:** the caller's system and developer prompts are appended to the harness preset
   rather than replacing it, so the turn is the genuine agent loop with the client's contract added
   on top. No part of the prompt travels through a world-readable argument.
 - **Tool ownership:** the client keeps it, like the CodeBuddy and Qoder presets: the request's tool
-  catalog is served to the model through an isolated in-process MCP server that captures calls
-  instead of executing them, so approval, sandboxing and execution stay with the client.
+  catalog is served to the model through an in-process MCP server that captures calls instead of
+  executing them, so approval, sandboxing and execution stay with the client. The advertised
+  schemas are the request's own JSON Schema, passed through unchanged; the server runs inside the
+  proxy process, so no extra executable, no `--mcp-config` file and no argument vector is involved.
 - **Destination:** the canonical row names `https://api.anthropic.com` because that is where the
   subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
   URL fails closed rather than handing the turn to another environment.

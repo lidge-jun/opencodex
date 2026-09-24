@@ -32,13 +32,15 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
 - `mimo-free` inherits the `openai-chat` contract.
 - `claude-agent-sdk` inherits the `codebuddy` contract. Claude Code speaks the same stream-json
   protocol this repository already parses for CodeBuddy and Qoder, so the wire is inherited and the
-  family module (`src/adapters/claude-agent-sdk/`) supplies only its own options and child
-  environment. That profile is the first credentialless one: it omits `tokenEnv`, the harness reads
+  family module (`src/adapters/claude-agent-sdk/`) supplies its own option assembly
+  (`sdk-options.ts`), the in-process catalog server (`sdk-bridge.ts`), the scoped child environment
+  (`env.ts`) and the SDK-driven runner (`sdk-turn.ts`), which owns the turn's lifecycle where the
+  spawned-CLI families hand theirs to `../coding-agent/turn.ts`. That profile is the first credentialless one: it omits `tokenEnv`, the harness reads
   the operator's own Claude Code sign-in, and the turn neither requires nor injects an API key.
   The turn itself runs through Anthropic's Claude Agent SDK — the harness behind the Claude Code CLI
   — and `tests/providers/claude-agent-sdk-adapter.test.ts` pins the options it sets: built-in tools
-  off (`tools: []`), no setting sources, an isolated in-process MCP server as the only tool channel,
-  the caller's prompt appended to the harness preset instead of replacing it, and a child environment
+  off (`tools: []`), no setting sources, no persisted session, an in-process MCP server as the only tool channel, the
+  caller's prompt appended to the harness preset instead of replacing it, and a child environment
   that carries no inherited `ANTHROPIC_*` value. The id shipped in 2.65.0 as `claude-cli`; that name
   resolves through `DEPRECATED_PROVIDER_ALIASES` and is moved by
   `src/providers/claude-provider-rename-migration.ts`. The row is a correction of what 2.65.0
