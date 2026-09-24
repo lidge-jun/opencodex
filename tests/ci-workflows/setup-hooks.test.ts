@@ -144,6 +144,9 @@ describe("local hook setup", () => {
     const customDir = join(root, "custom hooks");
     mkdirSync(customDir);
     writeFileSync(join(customDir, "pre-push"), legacyHook);
+    // A stale shim copied into a shared hooksPath keeps executing pulled code in
+    // every repo that resolves it, so setup must retire it there too.
+    writeFileSync(join(customDir, "post-merge"), legacyPostMergeHook);
     git(root, "config", "core.hooksPath", customDir);
     setup(root);
     expect(existsSync(join(customDir, "pre-push"))).toBe(false);
