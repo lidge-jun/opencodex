@@ -262,7 +262,7 @@ export function removeOwnedStage(stageRoot, deps = {}) {
 export function sweepUpdateLeftovers({ packageDir, pkgName, log = () => {}, deps = {} }) {
   const scopeDir = dirname(packageDir);
   const now = (deps.now ?? Date.now)();
-  const result = { removed: [], inUse: [], recent: [], notOwned: [] };
+  const result = { inUse: [], recent: [], notOwned: [] };
   let names = [];
   try {
     names = readdirSync(scopeDir);
@@ -288,7 +288,6 @@ export function sweepUpdateLeftovers({ packageDir, pkgName, log = () => {}, deps
   }
   // Names only: the full path under a user-scoped npm prefix carries the account name, and
   // this logger is the launcher's console.
-  for (const path of result.removed) log("Removed a staging directory left by an earlier update: " + basename(path));
   for (const entry of result.inUse) {
     log(entry.code === "ESTALE"
       ? "Left an earlier update's staging directory in place; delete it by hand once no OpenCodex process is running from it: " + basename(entry.path)
@@ -392,7 +391,7 @@ export function transactionalNpmUpdate({
 }) {
   const rename = deps.rename ?? renameSync;
   const scopeDir = dirname(packageDir);
-  // Leftovers from earlier attempts are cleared or stepped around first; this never fails.
+  // Leftovers from earlier attempts are only reported; fresh unique stages step around them. This never fails.
   try { sweepUpdateLeftovers({ packageDir, pkgName, log, deps }); } catch { /* report-only */ }
   let stageRoot;
   // GLOBAL-style staging (-g --prefix): npm nests the package's dependencies INSIDE the
@@ -418,7 +417,7 @@ export function transactionalNpmUpdate({
   const discardStage = () => {
     const removal = removeOwnedStage(stageRoot, deps);
     if (!removal.removed) {
-      log("Left this update's staging directory in place (" + removal.code + "; a file inside is still in use); the next update removes it: " + basename(stageRoot));
+      log("Left this update's staging directory in place (" + removal.code + "; a file inside is still in use); delete it by hand once no OpenCodex process is running from it: " + basename(stageRoot));
     }
   };
   const spec = pkgName + "@" + (targetVersion || tag);

@@ -20,7 +20,6 @@ export function sweepUpdateLeftovers(args: {
   log?: (line: string) => void;
   deps?: UpdateFsDeps;
 }): {
-  removed: string[];
   inUse: Array<{ path: string; code: string }>;
   recent: string[];
   notOwned: string[];
