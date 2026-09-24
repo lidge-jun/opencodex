@@ -59,7 +59,10 @@ import {
   codexQuotaAutoRefreshStatus,
   runCodexQuotaAutoRefresh,
 } from "../../codex/quota-auto-refresh";
-import { getMainAccountHardLockStatus } from "../../codex/main-account-hard-lock";
+import {
+  getMainAccountHardLockStatus,
+  isMainAccountHardLockEnabled,
+} from "../../codex/main-account-hard-lock";
 import {
   codexAccountPickerEnabled,
   initializeDefaultCodexAccountNamespaces,
@@ -348,7 +351,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       ultraFastTier: config.ultraFastTier === true,
       // Absent means on by default: the GUI renders a switch enabled unless explicit false.
       fastRows: config.fastRows !== false,
-      codexMainAccountHardLock: config.codexMainAccountHardLock === true,
+      codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
       mainAccountHardLock: getMainAccountHardLockStatus(config),
       // Absent means the historical auto-open, so the GUI can render the toggle
       // without having to know that `undefined` and `true` mean the same thing.
@@ -594,8 +597,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (body.ultraFastTier === false) deleteConfigTopLevelKey(config, "ultraFastTier");
       if (body.fastRows === false) config.fastRows = false;
       else if (body.fastRows === true) deleteConfigTopLevelKey(config, "fastRows");
-      if (body.codexMainAccountHardLock === true) config.codexMainAccountHardLock = true;
-      else if (body.codexMainAccountHardLock === false) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
+      // Inverted from the pair above because the default is on (#5694): off is the persisted
+      // decision, so it writes `false`, while on deletes the key and returns to the default.
+      if (body.codexMainAccountHardLock === false) config.codexMainAccountHardLock = false;
+      else if (body.codexMainAccountHardLock === true) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       if (body.codexClientCompaction === true) config.codexClientCompaction = true;
@@ -703,7 +708,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexClientCompaction: clientCompactionIsEnabled,
       codexDesktopSwitches,
       compactionRouting: config.compactionRouting ?? null,
-      codexMainAccountHardLock: config.codexMainAccountHardLock === true,
+      codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
       mainAccountHardLock: getMainAccountHardLockStatus(config),
       startupHealth: await readStartupHealth(config),
     });

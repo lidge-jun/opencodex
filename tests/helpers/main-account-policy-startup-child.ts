@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 
 interface Fixture {
-  scenario: "owned-99" | "owned-98" | "foreign" | "unknown" | "recovery" | "second-listener"
+  scenario: "owned-97" | "owned-98" | "owned-99" | "foreign" | "unknown" | "recovery" | "second-listener"
     | "invalid-access-token" | "invalid-account-id" | "invalid-id-token" | "mismatched-identity" | "renewed-listener"
     | "stage-retry" | "manual-recovery" | "stale-sweep" | "retained-unknown-binding"
     | "conflicting-token-identities" | "conflicting-claims" | "owned-opaque-99";

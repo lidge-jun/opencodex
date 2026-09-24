@@ -67,7 +67,12 @@ import type { CodexAccountMode, OcxConfig, OcxProviderConfig } from "../types";
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import { captureConfigGeneration } from "../lib/state-store-sweeper";
 import { extractAccountId, extractEmail } from "../oauth/chatgpt";
-import { getMainAccountHardLockStatus, isMainAccountHardLocked } from "./main-account-hard-lock";
+import {
+  MAIN_ACCOUNT_HARD_LOCK_PERCENT,
+  getMainAccountHardLockStatus,
+  isMainAccountHardLockEnabled,
+  isMainAccountHardLocked,
+} from "./main-account-hard-lock";
 import {
   captureMainAccountIdentityGeneration,
   captureMainQuotaWriter,
@@ -508,7 +513,7 @@ export class CodexMainAccountHardLockError extends CodexAccountCooldownError {
     super(MAIN_CODEX_ACCOUNT_ID, resetAt ?? 0);
     this.name = "CodexMainAccountHardLockError";
     this.resetAt = resetAt;
-    this.message = "Codex main account is blocked by the 99% main-account quota policy."
+    this.message = `Codex main account is blocked by the ${MAIN_ACCOUNT_HARD_LOCK_PERCENT}% main-account quota policy.`
       + " Choose another account, wait for quota to reset, or disable codexMainAccountHardLock in Settings.";
   }
 }
@@ -957,7 +962,7 @@ export async function resolveCodexAuthContext(
   const requestOwnedMainPinCandidate = mainPinState().candidate;
   // During an owned startup, equality cannot be established until recovery and the
   // memory-only policy binding finish. This read-only fence never probes a foreign home.
-  if (policy.codexMainAccountHardLock === true && requestOwnedMainPinCandidate && isMainAccountPolicyBindingPending()) {
+  if (isMainAccountHardLockEnabled(policy) && requestOwnedMainPinCandidate && isMainAccountPolicyBindingPending()) {
     throw new CodexMainProfileDrainingError();
   }
   const preserveRequestOwnedMainPin = () => mainPinState().preserve;
@@ -970,7 +975,7 @@ export async function resolveCodexAuthContext(
     // Trusted substitution still has to claim and validate stored main below.
     if (!substituteStoredMain && !hasCallerCodexBearer(headers)) throw new CodexDirectAuthenticationError();
     if (!substituteStoredMain) {
-      if (policy.codexMainAccountHardLock === true && isMainAccountPolicyBindingPending()) {
+      if (isMainAccountHardLockEnabled(policy) && isMainAccountPolicyBindingPending()) {
         throw new CodexMainProfileDrainingError();
       }
       if (callerMatchesObservedMain(headers)) assertMainAccountPolicy(policy);
@@ -1014,7 +1019,7 @@ export async function resolveCodexAuthContext(
       ) {
         throw new CodexMainProfileDrainingError();
       }
-      if (policy.codexMainAccountHardLock === true) reconcileMainCodexAccountRuntimeState();
+      if (isMainAccountHardLockEnabled(policy)) reconcileMainCodexAccountRuntimeState();
       assertMainAccountPolicy(policy);
       if (options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)) {
         const entitled = entitledCodexAccountIdsForModel(
@@ -1542,7 +1547,11 @@ export function materializeCodexUpstreamAuth(
     if (accountId) selected.set("chatgpt-account-id", accountId);
   }
   if (ctx.kind === "main" && options.substituteMainCredential === true) {
-    if (options.config?.codexMainAccountHardLock === true) reconcileMainCodexAccountRuntimeState();
+    // No config object is "no policy input", not the persisted opt-out: only a config that
+    // actually says `false` disables the default-on lock (#5694).
+    if (options.config !== undefined && isMainAccountHardLockEnabled(options.config)) {
+      reconcileMainCodexAccountRuntimeState();
+    }
     const writer = captureObservedMainWriter();
     const stored = getMainAccountToken();
     // Fail BEFORE any upstream I/O. Falling through here would send the admission secret.
@@ -1620,7 +1629,9 @@ export async function materializeCodexUpstreamAuthAsync(
     const value = headers.get(name);
     if (value) selected.set(name, value);
   }
-  if (options.config?.codexMainAccountHardLock === true) reconcileMainCodexAccountRuntimeState();
+  if (options.config !== undefined && isMainAccountHardLockEnabled(options.config)) {
+    reconcileMainCodexAccountRuntimeState();
+  }
   const writer = captureObservedMainWriter();
   const stored = await getValidMainAccountToken({
     signal: options.signal,
