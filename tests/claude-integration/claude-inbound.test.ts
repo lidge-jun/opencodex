@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { AnthropicRequestError as LeafAnthropicRequestError } from "../../src/claude/inbound-records";
 import { repoPath } from "../helpers/repo-root";
@@ -525,8 +526,23 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
       model: "m", max_tokens: 1, messages,
       metadata: { user_id: userId },
     });
-    expect(body.user).toMatch(/^[0-9a-f]{64}$/);
-    expect(body.prompt_cache_key).toBe((body.user as string).slice(0, 32));
+    expect(body.user).toBe(createHash("sha256").update(userId).digest("hex"));
+    expect(body.prompt_cache_key).toBe(createHash("sha256").update(userId).digest("hex").slice(0, 32));
+  });
+
+  test("metadata.user_id boundary: exactly 64 chars forwarded, 65 chars hashed", () => {
+    const atLimit = "u".repeat(64);
+    const overLimit = "u".repeat(65);
+    const { body: forwarded } = anthropicToResponsesTranslation({
+      model: "m", max_tokens: 1, messages,
+      metadata: { user_id: atLimit },
+    });
+    expect(forwarded.user).toBe(atLimit);
+    const { body: hashed } = anthropicToResponsesTranslation({
+      model: "m", max_tokens: 1, messages,
+      metadata: { user_id: overLimit },
+    });
+    expect(hashed.user).toBe(createHash("sha256").update(overLimit).digest("hex"));
   });
 
   test("no metadata + system present: fallback key from system hash, source=system", () => {
