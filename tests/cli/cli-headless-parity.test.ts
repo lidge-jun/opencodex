@@ -141,6 +141,33 @@ describe("ocx system settings desktop switches", () => {
     }
   });
 
+  test("reports externally owned switch and authentication state without claiming a rewrite", async () => {
+    const { deps } = fakeRuntime(() => ({
+      ok: true,
+      codexDesktopSwitches: {
+        codexDesktopAuthless: { stored: true, effective: null },
+        codexClientCompaction: { stored: false, effective: null },
+        apply: { applied: false, reason: "external_provider", retryable: false },
+        authSource: {
+          presentsCodexAccount: null,
+          summary: "An external model provider owns Codex sign-in behavior; its account requirement was not changed.",
+        },
+      },
+    }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleSystemCommand(["settings", "--desktop-authless", "on"], deps)).toBe(0);
+      const output = logSpy.mock.calls.flat().join("\n");
+      expect(output).toContain("effective state is controlled by the external model provider");
+      expect(output).toContain("was not rewritten because an external model provider owns config.toml");
+      expect(output).toContain("Auth source: An external model provider owns Codex sign-in behavior");
+      expect(output).not.toContain("was rewritten.");
+      expect(output).not.toContain("ocx sync");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   test("keeps the legacy success line when an older server omits the switch report", async () => {
     const { deps } = fakeRuntime((_req, body) => ({ ok: true, ...body }));
     const logSpy = spyOn(console, "log").mockImplementation(() => {});
