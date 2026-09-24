@@ -312,9 +312,11 @@ export const providerConfigSchema = z.object({
   upstreamHttpVersion: z.enum(UPSTREAM_HTTP_VERSION_VALUES)
     .nullish()
     .transform(value => value ?? undefined),
-  // Opt-in upstream Responses WebSocket for OpenAI-compatible providers (e.g.
-  // aggregators whose WebSocket ingress is measurably faster than SSE). The
-  // canonical ChatGPT backend WS selection is independent of this flag.
+  // Opt-in upstream Responses WebSocket for OpenAI-compatible providers, honored only
+  // for the first-party api.openai.com/v1 upstream; other custom endpoints stay on
+  // bounded HTTP/SSE. On the canonical ChatGPT `openai` provider the same field selects
+  // the transport: omitted keeps the upstream WebSocket on eligible turns, explicit
+  // `false` sends streaming turns over HTTP/SSE, and provider management rejects `true`.
   upstreamWebsocket: z.boolean().optional(),
   directGeminiWireRenames: z.boolean().optional(),
   googleToolSchemaPolicy: z.enum(["compatible", "reject-lossy"]).optional(),

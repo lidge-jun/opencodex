@@ -145,6 +145,11 @@ is validated as `compatible` or `reject-lossy` before live adoption and persiste
 value changes neither state. Omission remains absent and is resolved by the Google adapter rather
 than materialized by the management API.
 
+`GET /api/providers` reports `upstreamWebsocket` as configured rather than coerced, and omits the
+key when it is unset: on the canonical `openai` row an absent value already means the upstream
+WebSocket transport, so answering `false` there would let a save that round-trips the row write
+that disable back to disk.
+
 `src/server/index.ts` authenticates and routes `/api/*`, then delegates to
 `src/server/management-api.ts`, which composes the route modules under `src/server/management/`.
 Codex account routes live in `src/codex/auth-api/routes.ts` because they own the credential store, not
