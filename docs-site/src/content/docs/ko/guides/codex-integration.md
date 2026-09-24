@@ -257,6 +257,8 @@ Codex는 디스크의 카탈로그(`$CODEX_HOME/opencodex-catalog.json`이 기�
 function call만 라우팅합니다. 도구 실행, 권한, 확인은 Codex에 그대로 남고 opencodex가 별도의 browser 또는
 desktop-control executor를 구현하지는 않습니다.
 
+라우팅된 Responses 턴에서 도구 선언 검증이 명시적으로 켜져 있으면, 선언된 도구 목록을 사용할 수 없을 때도 클라이언트 도구 호출을 거부합니다. 명시적으로 빈 목록은 모든 클라이언트 도구 호출을 거부합니다. Chat과 Anthropic 클라이언트의 도구 검증 책임은 그대로 유지됩니다.
+
 Codex의 `exec` custom-tool grammar를 허용하지 않는 key-auth Responses provider의 경우, opencodex는 해당 선언과
 history를 업스트림 function tool로 인코딩한 다음 스트리밍된 function-call lifecycle을 Codex에 전달하기 전에
 `custom_tool_call`로 복원합니다. 네이티브 OpenAI forward routing과 지원되는 `apply_patch` custom tool은 변경되지

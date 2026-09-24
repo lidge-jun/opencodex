@@ -259,7 +259,8 @@ one in another provider's vocabulary, and a replayed item names a call that alre
 is the worst place to guess.
 
 Membership enforcement is that flag, `enforceDeclaredToolNames`, and only the `responses` inbound
-wire enforces. A routed provider that names a tool the request never declared ends the turn there:
+wire enforces. Explicit enforcement with no declared catalog also refuses client tool calls rather
+than treating the missing set as permission. A routed provider that names a tool the request never declared ends the turn there:
 `src/bridge/sse.ts` emits `response.failed` and `src/bridge/response-json.ts` returns a failed
 response, both carrying `undeclared client tool`. That is the #1700 contract and it stands. Codex
 executes a top-level tool call, so a hallucinated `apply_patch` — which under code mode exists only
