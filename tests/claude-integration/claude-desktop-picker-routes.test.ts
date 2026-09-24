@@ -201,7 +201,11 @@ describe("without a running picker controller", () => {
   test("status is offline, enabling is refused, and off persists and cleans up locally", async () => {
     writeFileSync(join(root, "config.json"), JSON.stringify(config({ claudeCode: { desktopMode: "first-party" } })));
     const status = await dispatch("/api/claude-desktop/picker");
-    expect(status.body.picker).toMatchObject({ effective: false, reason: "proxy_unavailable" });
+    // Off macOS the offline status says why first: picker mode is macOS-only.
+    expect(status.body.picker).toMatchObject({
+      effective: false,
+      reason: process.platform === "darwin" ? "proxy_unavailable" : "unsupported_platform",
+    });
     const on = await put({ enabled: true, persist: true });
     expect(on.status).toBe(503);
     expect(on.body.code).toBe("picker_proxy_unavailable");
