@@ -390,6 +390,44 @@ describe("MiMo echo variants (#5724)", () => {
     }
   });
 
+  test("a repeated block pair inside a Markdown fence keeps its doubled input and stays visible", async () => {
+    // The fence opener lands in the first streamed chunk, so the buffer carries an open fence
+    // when the identical pair arrives. Fenced markup is user-visible, so neither the arguments
+    // nor the text may change: the reduction and the suppression scan must read the same context.
+    const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+    const content = `Look at this example here\n\`\`\`\n${block}${block}`;
+    for (const events of [await streamed(content, script + script), await buffered(content, script + script)]) {
+      expect(visible(events)).toBe(content);
+      expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", arguments: JSON.stringify({ input: script + script }) },
+      ]);
+    }
+  });
+
+  test("a fenced echo does not repair the malformed argument prefix beside it", async () => {
+    // The prefix repair reads the same held text through its own `callsIn` scan, so the fenced
+    // pair must not prove an echo there either: the arguments the gateway sent stay untouched.
+    const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+    const argumentsText = script + JSON.stringify({ input: script });
+    const content = `Look at this example here\n\`\`\`\n${block}${block}`;
+    const adapter = withTestTranslatorBudget(createOpenAIChatAdapter(provider));
+    adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {}, context: { messages: [{ role: "user", content: "ping", timestamp: 0 }] } });
+    const frames = [
+      { choices: [{ delta: { content: content.slice(0, 30) } }] },
+      { choices: [{ delta: { content: content.slice(30) } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_exec", function: { name: "exec", arguments: argumentsText } }] } }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ];
+    const body = frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n";
+    const events: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(new Response(body))) if (event.type !== "heartbeat") events.push(event);
+
+    expect(visible(events)).toBe(content);
+    expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+      { type: "tool_call_delta", arguments: argumentsText },
+    ]);
+  });
+
   test("a closed block whose body carries literal tool-call tags is still matched whole", async () => {
     for (const input of [
       "text('</tool_call>');",
