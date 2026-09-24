@@ -61,6 +61,9 @@ let shutdownRequested = false;
 const dispatchDepsByConfigDir = new Map<string, DispatchOwner>();
 const inFlightControllers = new Map<string, AbortController>();
 const cancellingRunIds = new Set<string>();
+// Test seam: invoked after a manual run's queue row and per-run shutdown hook exist but
+// before the post-registration sweep check, so a test can land a sweep in that gap.
+let manualEnqueuePostWriteHookForTests: (() => void) | null = null;
 
 function configKey(configDir?: string): string {
   return configDir ?? "";
@@ -475,6 +478,12 @@ export function resetLabAutomationSchedulerStateForTests(): void {
   dispatchDepsByConfigDir.clear();
   inFlightControllers.clear();
   cancellingRunIds.clear();
+  manualEnqueuePostWriteHookForTests = null;
+}
+
+/** Test-only seam for the gap between a manual run's queue write and its post-write sweep check. */
+export function setLabAutomationManualEnqueuePostWriteHookForTests(hook: (() => void) | null): void {
+  manualEnqueuePostWriteHookForTests = hook;
 }
 
 export async function enqueueManualLabRun(
@@ -507,7 +516,15 @@ export async function enqueueManualLabRun(
   );
   // The sweep may have run in the gap between the entry check and this registration; it
   // snapshots the registry once, so a hook that landed afterwards is orphaned.
-  if (didRunOptionalShutdownHooks()) requestLabAutomationShutdown();
+  manualEnqueuePostWriteHookForTests?.();
+  if (didRunOptionalShutdownHooks()) {
+    requestLabAutomationShutdown();
+    detachShutdownHook();
+    // The queue row was already written; leaving it `queued` would persist a manual run no
+    // scheduler tick ever picks up while the route reports success. Cancel it and fail.
+    cancelLabAutomationRun(created.runId, configDir);
+    return null;
+  }
   try {
     // Manual execution is independent of automation enablement/layer toggles.
     await runDispatchBatch(configDir, { manualRunId: created.runId, abortSignal });

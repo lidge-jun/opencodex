@@ -22,6 +22,7 @@ import {
   resetLabAutomationSchedulerStateForTests,
   runLabAutomationTick,
   setLabAutomationDispatchDeps,
+  setLabAutomationManualEnqueuePostWriteHookForTests,
   startLabAutomationScheduler,
   stopLabAutomationScheduler,
 } from "../../src/lab/automation/orchestrator";
@@ -306,6 +307,27 @@ describe("CL-08 independent review regressions", () => {
     const result = await enqueueManualLabRun(plan, home);
     expect(result).toBeNull();
     expect(loadLabAutomationState(home).runs).toHaveLength(0);
+  });
+
+  // Regression: the post-registration sweep check runs after the queue row is already on
+  // disk. A sweep landing in that gap used to leave the row `queued` forever — scheduler
+  // ticks only pick up scheduled runs — while the route treated the returned record as a
+  // 200 success. The row is now cancelled and the enqueue reports failure.
+  test("a sweep between the queue write and the post-write check cancels the row and fails", async () => {
+    const home = tempHome();
+    prepareHome(home);
+    saveLabAutomationPolicy(defaultLabAutomationPolicyV1(), home);
+    const plan = planManualLabRun({
+      evidenceLayer: "protocol_conformance",
+      scenarioId: "responses-core.protocol.request-shape",
+      configDir: home,
+    });
+    setLabAutomationManualEnqueuePostWriteHookForTests(() => runOptionalShutdownHooks());
+    const result = await enqueueManualLabRun(plan, home);
+    expect(result).toBeNull();
+    const stored = loadLabAutomationState(home).runs.find((row) => row.runKey === plan.runKey);
+    expect(stored?.state).toBe("cancelled");
+    expect(stored?.terminalCode).toBe("cancelled");
   });
 
   // Regression: a policy PUT shares the same post-sweep race as the manual-run POST — the
