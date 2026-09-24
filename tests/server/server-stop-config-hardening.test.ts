@@ -114,8 +114,12 @@ test("a rejected native-lifecycle release still drains the ACL flight before sto
     throw new Error("native release exploded");
   });
   let server: ReturnType<typeof startServer> | null = null;
+  // Kept separate and never nulled: the body nulls `server` to show stop() has settled, but
+  // the real native-lifecycle release still has to run against the object startServer returned.
+  let startedServer: ReturnType<typeof startServer> | null = null;
   try {
     server = startServer(0);
+    startedServer = server;
     let settled: "pending" | "rejected" | "resolved" = "pending";
     let rejection: unknown;
     const stopping = server.stop(true).then(() => { settled = "resolved"; }, (error: unknown) => { settled = "rejected"; rejection = error; });
@@ -136,6 +140,11 @@ test("a rejected native-lifecycle release still drains the ACL flight before sto
     releaseSpy.mockRestore();
     aclSpy.mockRestore();
     if (server) await server.stop(true).catch(() => undefined);
+    if (startedServer) await nativeStartup.releaseNativeMainStartupLifecycle(startedServer);
+    // The spoofed win32 platform makes startServer take a process-wide ownership block, and the
+    // throwing spy meant it was never dropped: this case must not leave that gate blocked for
+    // every later test file sharing the process.
+    expect(nativeStartup.isNativeMainTrafficBlocked()).toBe(false);
   }
 });
 
