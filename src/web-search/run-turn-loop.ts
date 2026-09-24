@@ -406,10 +406,16 @@ export async function* runTurnWebSearchLoop(
       const events: AdapterEvent[] = [];
       let liveWindowOpen = plan.streamRoutedModelOutput;
       let streamedCount = 0;
-      if (deps.emptyCompletionRetry && searchesExecuted < plan.maxSearches) {
+      // One identical-turn retry per request: once it is spent the guard is
+      // not re-applied, so a later empty terminal reaches the loop itself —
+      // at the search cap the forced-answer recovery below handles it, the
+      // same contract loop.ts keeps by running no inner guard at all. A
+      // maxRetries:0 wrap would instead convert that empty done into
+      // empty_completion_retry_failed and end the turn before recovery.
+      if (deps.emptyCompletionRetry && searchesExecuted < plan.maxSearches
+        && ordinaryEmptyRetries === 0) {
         source = guardEmptyCompletionEventStream({
           firstEvents: source,
-          maxRetries: 1 - ordinaryEmptyRetries,
           continuation: () => {
             ordinaryEmptyRetries++;
             return deps.dispatch(currentParsed);
