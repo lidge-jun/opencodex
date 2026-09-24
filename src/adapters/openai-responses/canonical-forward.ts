@@ -71,7 +71,8 @@ export function stripStatefulResponsesParams(body: unknown): unknown {
  * public spec. No-op when the body carries none of the dropped fields, keeping the
  * common Codex path allocation-free.
  *
- * `metadata` sits outside every forward allowlist, so it goes on any forward route.
+ * The canonical ChatGPT backend rejects `metadata`, so the forwarding path removes it on every
+ * forward route for compatibility.
  * `max_output_tokens` does not: it is the caller's cost cap on the turn, and a
  * self-hosted or third-party gateway may honour it — dropping it there silently
  * removes the cap. Only the canonical ChatGPT backend rejects it outright, so only
