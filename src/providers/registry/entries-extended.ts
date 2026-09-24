@@ -1578,16 +1578,28 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // `src/providers/claude-cli-identity.ts`, which forges a `claude-cli/<ver>` user agent for the
     // Messages-API rows. The retired id survives via `DEPRECATED_PROVIDER_ALIASES` and
     // `claude-provider-rename-migration`.
-    // TERMS RISK, STATED PLAINLY: a Claude subscription is licensed for Anthropic's own harnesses,
-    // and this row exists to spend that subscription on an agent loop that is NOT Claude Code —
-    // Codex or any other client drives it. That is the shape of traffic Anthropic suspended
-    // accounts over when it banned consumer OAuth in third-party apps, so the honest reading is
-    // "against the terms, and enforceable", not "grey area with a small risk". The consequence
-    // lands on the operator's account, not on OpenCodex. Two routes exist without that reading:
-    // `anthropic-apikey` for automated clients (console billing; the plan's automated-access
-    // clause covers a key), and `ocx claude`, where the genuine CLI is the client and this proxy
-    // only redirects the endpoint. Whether the row stays at all is a maintainer decision under
-    // MAINTAINERS.md; this comment exists so nobody reads it as a supported path.
+    // TOO IMPORTANT TO BURY: what this row shipped as in 2.65.0 was clearly against Anthropic's
+    // terms, Meridian's route is safer, and this row is the correction that takes it.
+    // (1) WHAT SHIPPED IN 2.65.0 WAS AGAINST THE TERMS, not a borderline reading of them: an
+    // OpenCodex-made one-shot `claude -p` turn with the caller's prompt replacing the harness
+    // prompt, no session and the harness's tools stripped, driven by a client that is not Claude
+    // Code. A Claude subscription — licensed for Anthropic's own harnesses — spent as an API behind
+    // a thin CLI veneer for a third-party agent loop: the traffic accounts get suspended over, and
+    // the loss lands on the operator's account rather than on OpenCodex.
+    // (2) MERIDIAN'S ROUTE IS SAFER AND THIS ROW TAKES IT. Meridian never builds the request; the
+    // harness runs the turn. Neither does this row any more: the turn goes through Anthropic's
+    // Claude Agent SDK, the harness behind the Claude Code CLI, so the official harness owns the
+    // session, the prompt and the sign-in, the caller's instructions are appended to the harness
+    // prompt instead of replacing it, and the client's tool catalog is served through an in-process
+    // MCP server that captures calls instead of executing them. Nothing is impersonated and
+    // OpenCodex forges no request.
+    // (3) SAFER IS NOT CLEAN, AND NOTHING HERE PRETENDS OTHERWISE. The client is still not Claude
+    // Code, so the row stays a grey area. `anthropic-apikey` is the only route without an
+    // interpretation question (console billing; the plan's automated-access clause covers a key).
+    // The neighbouring forged track — OpenCodex building the Messages request and replaying a Claude
+    // Code identity, i.e. the injected instruction and the `claude-cli/<ver>` user agent in
+    // `src/providers/claude-cli-identity.ts` — is impersonation, and it is what the suspensions
+    // target. Whether either row exists at all sits with MAINTAINERS.md.
     id: "claude-agent-sdk",
     label: "Claude Agent SDK (subscription)",
     adapter: "claude-agent-sdk",
@@ -1627,6 +1639,6 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     reasoningEfforts: ANTHROPIC_REASONING_EFFORTS,
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
-    note: "TERMS RISK, PLAINLY: a Claude subscription is licensed for Anthropic's own harnesses, and this row exists to spend that subscription on a client that is not Claude Code — Codex or any other harness drives the loop. That is the traffic Anthropic suspended accounts over when it banned consumer OAuth in third-party apps, so treat this row as against the terms rather than as a grey area: the loss lands on the signed-in account, not on OpenCodex. For automated clients use `anthropic-apikey` — console billing, and the plan's automated-access clause covers a key. The subscription route that avoids this reading is `ocx claude`, where the genuine Claude Code CLI is the client and OpenCodex only redirects the endpoint. Mechanics: the row stores no Claude token, reads none and injects none — the harness signs in and bills the account itself, which is why this row is keyless (an API key saved here never reaches the harness). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). The turn runs through Anthropic's Claude Agent SDK: the harness owns the session, the caller's instructions are appended to the harness system prompt instead of replacing it, and the client keeps tool ownership through an in-process MCP server that captures calls instead of executing them.",
+    note: "TOO IMPORTANT TO BURY: what this row shipped as in 2.65.0 was clearly against Anthropic's terms — OpenCodex ran a one-shot `claude -p` turn with the caller's prompt replacing the harness prompt, no session and the harness tools stripped, driven by a client that is not Claude Code. A Claude subscription is licensed for Anthropic's own harnesses, and that construction spent it as an API behind a thin CLI veneer for a third-party agent loop; accounts were suspended for exactly that, and the loss lands on the account signed in here. This row is the correction and takes the safer route, the one Meridian takes: the turn runs through Anthropic's Claude Agent SDK, so the harness owns the session, the prompt and the sign-in, the caller's instructions are appended to the harness prompt instead of replacing it, and the client's tool catalog is served through an in-process MCP server that captures calls instead of executing them. Nothing is impersonated and OpenCodex forges no request. Safer is not clean: the client is still not Claude Code, so the row stays a grey area, and `anthropic-apikey` remains the only route without an interpretation question (console billing; the plan's automated-access clause covers a key). Mechanics: the row stores no Claude token, reads none and injects none — the harness signs in and bills the account itself, which is why this row is keyless (an API key saved here never reaches the harness). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). Whether a subscription-for-a-foreign-client row should exist at all is a maintainer decision.",
   },
 ];

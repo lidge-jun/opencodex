@@ -1058,14 +1058,20 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 
 ### Claude Agent SDK (subscription)
 
-> **Warning — this preset can get the Claude account banned.** A Claude subscription is licensed
-> for Anthropic's own harnesses, and this preset spends it on a client that is **not** Claude Code:
-> Codex or any other harness drives the loop. That is the traffic Anthropic suspended accounts over
-> when it banned consumer OAuth in third-party apps, so treat this preset as against the terms
-> rather than as a grey area — and the consequence lands on the signed-in account, not on OpenCodex.
-> Automated clients belong on `anthropic-apikey` (console billing; the plan's automated-access
-> clause covers a key). The subscription route that avoids this reading is `ocx claude`, where the
-> genuine Claude Code CLI is the client and OpenCodex only redirects the endpoint.
+> **Where this preset comes from, stated plainly.** The version that shipped in 2.65.0 was
+> **against Anthropic's terms**: OpenCodex built a one-shot `claude -p` turn, replaced the harness
+> system prompt with the caller's, dropped the session and stripped the harness's tools, then let a
+> client that is not Claude Code drive the loop. A Claude subscription is licensed for Anthropic's
+> own harnesses, and that construction spent it as an API behind a thin CLI veneer for a third-party
+> agent — the usage accounts get suspended over, with the loss landing on the signed-in account
+> rather than on OpenCodex. **This preset is the correction.** It takes the route Meridian takes:
+> the turn runs through Anthropic's own harness, which owns the session, the prompt and the sign-in,
+> so nothing impersonates Claude Code and OpenCodex forges no request. That is markedly less risky
+> than building the request ourselves — and still a grey area, because the client is not Claude Code
+> and the subscription is licensed for Anthropic's own harnesses.
+>
+> For automated clients the route without an interpretation question remains `anthropic-apikey`:
+> console billing, and the plan's automated-access clause covers a key.
 
 OpenCodex can spend a Claude subscription through Anthropic's own harness instead of replaying a
 Claude Code identity against the Messages API. The `claude-agent-sdk` preset drives Anthropic's
@@ -1127,9 +1133,9 @@ harness session rather than a converted Messages request:
   subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
   URL fails closed rather than handing the turn to another environment.
 
-> **Terms:** see the warning at the top of this section. OpenCodex does not convert the login into
-> an API key and does not reproduce the harness's HTTP identity itself — that changes nothing about
-> who is licensed to use the subscription.
+> **Terms:** see the warning at the top of this section. The harness runs the turn, signs in and
+> bills, so OpenCodex converts no login into an API key and reproduces no Claude Code HTTP identity
+> itself. That is the safer route, not a clean one.
 
 ### A6API credit quota
 

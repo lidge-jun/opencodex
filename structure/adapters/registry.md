@@ -41,11 +41,16 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   the caller's prompt appended to the harness preset instead of replacing it, and a child environment
   that carries no inherited `ANTHROPIC_*` value. The id shipped in 2.65.0 as `claude-cli`; that name
   resolves through `DEPRECATED_PROVIDER_ALIASES` and is moved by
-  `src/providers/claude-provider-rename-migration.ts`. The row is a stated terms risk, not a
-  supported path: a subscription is licensed for Anthropic's own harnesses and this one serves a
-  client that is not Claude Code, which is the traffic Anthropic suspended accounts over. The
-  registry comment, the row's `note` and the provider guide say so in plain language; `ocx claude`
-  (genuine CLI as client) and `anthropic-apikey` are the routes without that reading.
+  `src/providers/claude-provider-rename-migration.ts`. The row is a correction of what 2.65.0
+  shipped, and it is documented as one: that version drove a one-shot `claude -p` turn with the
+  caller's prompt replacing the harness prompt, no session and no tools, from a client that is not
+  Claude Code — against Anthropic's terms, since a subscription is licensed for Anthropic's own
+  harnesses and that construction spent it as an API for a third-party agent. This row takes the
+  safer route instead, the one Meridian takes: the harness runs the turn, so nothing impersonates
+  Claude Code. Safer rather than clean — the client is still not Claude Code, and
+  `anthropic-apikey` is the only route without an interpretation question. The registry comment,
+  the row's `note`, the provider guide and the PR statement carry that chain in plain language, so
+  no reader takes the row for a clean path.
   Its registry row is `authKind: "key"` with `keyOptional: true`, NOT `local`: the turn leaves the
   machine for `api.anthropic.com`, and `local` (Ollama, vLLM, LM Studio) is the classification for
   traffic that never does. `keyOptional` is the existing exemption from key enforcement, and key
