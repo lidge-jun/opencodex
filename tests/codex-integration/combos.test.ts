@@ -490,6 +490,7 @@ describe("combo request cloning", () => {
 describe("combo target cooldowns", () => {
   const target = { provider: "a", model: "m1" };
 
+  /** Verify numeric and HTTP-date delays obey the selected local or server ceiling. */
   test("parses numeric and date Retry-After values with exact bounds", () => {
     const now = Date.parse("2026-07-18T00:00:00.000Z");
     expect(parseRetryAfterMs("0.001", now)).toBe(1);
@@ -506,6 +507,7 @@ describe("combo target cooldowns", () => {
     expect(parseRetryAfterMs(new Date(now + 2 * 86_400_000).toUTCString(), now, serverDelay)).toBe(86_400_000);
   });
 
+  /** Verify recorded cooldowns expire at their own ceiling without truncating valid delays. */
   test("caps only explicit server cooldowns at one day", () => {
     const now = Date.parse("2026-07-18T00:00:00.000Z");
     coolComboTarget("numeric-retry", target, { now, retryAfter: "999999" });
