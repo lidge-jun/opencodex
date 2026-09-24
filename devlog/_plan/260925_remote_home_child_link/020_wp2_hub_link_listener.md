@@ -320,3 +320,16 @@ supervisor stop slot을 listener보다 앞에 실행한 뒤 이 socket과 Claude
 - BLOCKER 4: `linkRouteAllowed` 첫 단계에서 모든 `Upgrade` 헤더를 거부하고 websocket 및 임의 upgrade 값의 404 회귀 테스트를 추가했다.
 - BLOCKER 6 wp2: `ensureStarted(): Promise<void>` single-flight와 bind 후 idempotence, 마지막 link 삭제 직후 `close()`, wp4 supervisor가 나중에 등록해도 먼저 멈추는 optional-listeners stop slot을 명시했다.
 - K6/K14에 맞춰 field chain, lifecycle 순서, 테스트 표, `structure/runtime.md` 반영 문구의 기존 모호성을 제거했다. `003_decisions.md`와의 남은 불일치는 없다.
+
+## wp2 P 재검증 (아키텍트 Bacon, gpt-6-sol high, 2026-09-25)
+
+| ID | 제안 | 처분 |
+|---|---|---|
+| W2-1 | 앵커와 before 스니펫 현재 코드와 일치, wp1 API 일치 | 유지 |
+| W2-2 | `/readyz`는 현재 인증 없이 응답(serve-options.ts:592-627). 링크 입구만 GET 게이트 뒤, readiness 반환 전에 `resolveApiAuth(req, policy)` 추가. HEAD /readyz 404 유지(K8) | 수용. 테스트: 키 없음 401, 다른 키 401, 기록된 키는 인증을 통과해 기존 readiness 의미대로 200 또는 503(pending/failed, serve-options.ts:608-626)을 받는다 |
+| W2-3 | 일반 경로는 policy로 해석(serve-options.ts:536,678,774,839,1257,1294,1316,1352,1379,1404,1470,1489,1521,1581,1629; 구현 체크리스트로 유지). 직접 소비자 audio-upstream, audio-client, hub-usage 두 호출 모두에 링크 제한 전달 | 수용 |
+| W2-4 | serve-options.ts:1871이 GUI 제공에 `isApiAuthRequired(config)`를 넘긴다. 허용 목록 게이트가 모든 분기보다 앞서 있어야만 도달 불가 | 수용: 그 인자를 `policy`로 바꾸고 `/`와 GUI 경로 404 테스트 추가 |
+| W2-5 | 동기 구간 검사(tests/lab/core-lab-boundary.test.ts:1010-1025)의 수신자 호출 허용 목록에 `optionalListeners.start()` 없음 | 수용: 허용 목록에 추가, start 구현이 동기임을 테스트로 고정 |
+| W2-6 | index.ts 순증 0 주장은 근거 부족(현재 890, 상한 893) | 수용: 최종 줄 수를 재서 893 이하 확인. 넘으면 배선을 optional-listeners.ts로 옮긴다 |
+| W2-7 | structure/runtime.md:260-263의 "선택 리스너 바인드 실패 시 앞선 소켓 롤백" 문장이 K5와 충돌 | 수용: hub-link는 경고 + failed{bind}로 남고 공용 리스너는 유지된다고 고친다 |
+- 반영 확인(Bacon): ALIGNED. 남은 틈 2개(W2-3 전체 줄 목록, W2-2 readiness 상태 허용)를 위 표에 반영.
