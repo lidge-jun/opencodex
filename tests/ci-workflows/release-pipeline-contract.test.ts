@@ -179,6 +179,19 @@ describe("release pipeline contract", () => {
       { env: { ...process.env, RELEASE_VERSION: "2.65.0" } },
     );
     expect(failedDraftRead.exitCode).toBe(41);
+    // Only an explicit "false" may pass: a successful query that answers anything else —
+    // an empty body or an unexpected shape — fails the step rather than leaving a silent draft.
+    const strangeDraftRead = Bun.spawnSync(
+      ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `
+        gh() {
+          if [ "$2" = "view" ]; then echo "null"; return 0; fi
+          return 0
+        }
+        ${attachRun}
+      `],
+      { env: { ...process.env, RELEASE_VERSION: "2.65.0" } },
+    );
+    expect(strangeDraftRead.exitCode).toBe(1);
   });
 
   test("a partial publication has a recorded, explicit recovery path", () => {
