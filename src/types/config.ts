@@ -1,6 +1,37 @@
 import type { OcxProviderConfig } from "./provider";
 import type { CodexAccount } from "./accounts";
 
+/** Public inference API exposure. Responses and Chat Completions are always served. */
+export interface OcxApiSurfacesConfig {
+  /**
+   * `/v1/messages` and `/v1/messages/count_tokens`. Absent means "inherit
+   * `claudeCode.enabled !== false`"; a present non-boolean value disables the surface.
+   */
+  messages?: { enabled?: boolean };
+}
+
+/** Protocol delivery policy (devlog/_plan/260924_protocol_first_class). */
+export interface OcxProtocolsConfig {
+  /**
+   * What happens when the final upstream wire cannot express a requested feature.
+   * `legacy` (default) keeps today's behavior; `reject` refuses before any upstream send.
+   */
+  unrepresentable?: "legacy" | "reject";
+  /** Staged rollout switches. Every switch defaults off and changes no semantics while off. */
+  rollout?: {
+    /** Eligible Chat candidates inside combos and policy routes send natively. */
+    nativeChatCombos?: boolean;
+    /** Proxy-managed key-auth Anthropic targets receive `/v1/messages` natively. */
+    managedMessagesNative?: boolean;
+    /** Extends managed native Messages to Anthropic OAuth accounts. Requires the switch above. */
+    managedMessagesNativeOAuth?: boolean;
+    /** Chat and Messages clients are encoded directly from adapter events. */
+    directEncoders?: boolean;
+    /** Compare the dispatch plan with the observed path; never sends a second request. */
+    shadowPlan?: boolean;
+  };
+}
+
 /**
  * Claude Code inbound settings (devlog/260711_claude_inbound). Consumed by the
  * /v1/messages surface, the `ocx claude` launcher, and the GUI Claude page.
@@ -534,6 +565,14 @@ export interface OcxConfig {
   googleAntigravityStaticCatalogVersion?: 1 | 2;
   /** Claude Code inbound + launcher settings. */
   claudeCode?: OcxClaudeCodeConfig;
+  /**
+   * Which public inference APIs this proxy serves. Read only through
+   * `resolveApiSurfaceSettings` in `src/protocols/settings.ts`, which fails closed on a
+   * malformed value and inherits `claudeCode.enabled` while no explicit value exists.
+   */
+  apiSurfaces?: OcxApiSurfacesConfig;
+  /** Protocol delivery policy and rollout switches; see `resolveProtocolSettings`. */
+  protocols?: OcxProtocolsConfig;
   /**
    * Per-client durable intent. This phase owns only `codex`; later phases extend
    * one key at a time rather than widening a shared union.
