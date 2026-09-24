@@ -328,7 +328,9 @@ and removes the block only when its function name and
 freeform body match a structured call's parsed `input` in the same response.
 A block may close a freeform body with a stray `</parameter>` and may omit `</function>`, and one
 newline after the function header is template layout, so MiMo's echoes of those shapes match too
-(#5724); the closed form is tried first so a body can still carry a literal `</tool_call>`.
+(#5724). Blocks are read by delimiter scan in linear time: the first `</tool_call>` preceded by
+`</function>` closes the block, and only when none appears before the next real block header does
+the first `</tool_call>` close it, so a body can still carry a literal `<tool_call>` or `</tool_call>`.
 If the gateway also prefixes the structured call's JSON
 arguments with the same freeform body, the adapter keeps the JSON suffix only when the block body,
 prefix, and wrapper's `input` value all agree. Mismatched markup and arguments remain byte-exact.
@@ -343,6 +345,7 @@ matching and repair rules; regression coverage enters through `/v1/responses` in
 `tests/responses/responses-chat-tool-call-content.test.ts`.
 
 > Decision record: [ADR-5548](../decisions/ADR-5548-serialized-tool-call-content.md)
+> Decision record: [ADR-5724](../decisions/ADR-5724-serialized-tool-call-content.md)
 
 ## Kimi Coding Plan prompt-cache affinity
 

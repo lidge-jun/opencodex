@@ -32,21 +32,51 @@ export interface StructuredToolCallReference {
   argumentsText: string;
 }
 
-const CLOSED_BLOCK = /<tool_call>\s*<function=([^>\r\n]+)>([\s\S]*?)(?:<\/parameter>)?\s*<\/function>\s*<\/tool_call>/y;
-const UNCLOSED_FUNCTION_BLOCK = /<tool_call>\s*<function=([^>\r\n]+)>([\s\S]*?)(?:<\/parameter>)?\s*<\/tool_call>/y;
+const BLOCK_HEADER = /<tool_call>\s*<function=([^>\r\n]+)>/y;
+const NEXT_BLOCK_HEADER = /<tool_call>\s*<function=[^>\r\n]+>/g;
+const FUNCTION_CLOSE = "</function>";
+const PARAMETER_CLOSE = "</parameter>";
+
+function trimmedEnd(text: string, from: number, to: number): number {
+  while (to > from && /\s/.test(text[to - 1]!)) to--;
+  return to;
+}
+
+function endsWithAt(text: string, from: number, to: number, suffix: string): boolean {
+  return to - suffix.length >= from && text.startsWith(suffix, to - suffix.length);
+}
 
 /**
- * The block starting at `offset`. MiMo's echo may close a freeform body with a stray `</parameter>`
- * and may omit `</function>` (#5724), the grammar the Command Code reader accepts too. The closed
- * form is tried first so a body can still carry a literal `</tool_call>`; a closed match that
- * swallowed a second opening tag belongs to two blocks, so the unclosed form reads the first.
+ * The block starting at `offset`, read by delimiter scan so an unterminated block costs linear time.
+ * MiMo's echo may close a freeform body with a stray `</parameter>` and may omit `</function>`
+ * (#5724), the grammar the Command Code reader accepts too. The first `</tool_call>` preceded by
+ * `</function>` closes the block, so a body can still carry a literal `</tool_call>` or
+ * `<tool_call>`; with none before the next real block header, the first `</tool_call>` does.
  */
-function blockAt(text: string, offset: number): RegExpExecArray | null {
-  CLOSED_BLOCK.lastIndex = offset;
-  const closed = CLOSED_BLOCK.exec(text);
-  if (closed && !closed[2]!.includes(OPEN_TAG)) return closed;
-  UNCLOSED_FUNCTION_BLOCK.lastIndex = offset;
-  return UNCLOSED_FUNCTION_BLOCK.exec(text);
+function blockAt(text: string, offset: number): SerializedToolCall | undefined {
+  BLOCK_HEADER.lastIndex = offset;
+  const header = BLOCK_HEADER.exec(text);
+  if (!header) return undefined;
+  const bodyStart = offset + header[0].length;
+  NEXT_BLOCK_HEADER.lastIndex = bodyStart;
+  const limit = NEXT_BLOCK_HEADER.exec(text)?.index ?? text.length;
+  let unclosed: SerializedToolCall | undefined;
+  for (let close = text.indexOf(CLOSE_TAG, bodyStart); close >= 0 && close < limit;
+    close = text.indexOf(CLOSE_TAG, close + CLOSE_TAG.length)) {
+    let bodyEnd = trimmedEnd(text, bodyStart, close);
+    const closed = endsWithAt(text, bodyStart, bodyEnd, FUNCTION_CLOSE);
+    if (closed) bodyEnd = trimmedEnd(text, bodyStart, bodyEnd - FUNCTION_CLOSE.length);
+    if (endsWithAt(text, bodyStart, bodyEnd, PARAMETER_CLOSE)) bodyEnd -= PARAMETER_CLOSE.length;
+    const call = {
+      name: header[1]!.trim(),
+      body: text.slice(bodyStart, bodyEnd),
+      start: offset,
+      end: close + CLOSE_TAG.length,
+    };
+    if (closed) return call;
+    unclosed ??= call;
+  }
+  return unclosed;
 }
 
 /** Finds complete bare blocks outside literal Markdown; ambiguous outer blocks stop the scan. */
@@ -59,13 +89,8 @@ function callsIn(text: string, context: TextContext = { fence: null, lineStart: 
     if (!split.hasOpenTag) break;
     const match = blockAt(text, offset);
     if (!match) break; // An incomplete/ambiguous outer block cannot authorize an inner call.
-    calls.push({
-      name: match[1]!.trim(),
-      body: match[2]!,
-      start: match.index,
-      end: match.index + match[0].length,
-    });
-    offset = match.index + match[0].length;
+    calls.push(match);
+    offset = match.end;
     context = { fence: null, lineStart: false };
   }
   return calls;

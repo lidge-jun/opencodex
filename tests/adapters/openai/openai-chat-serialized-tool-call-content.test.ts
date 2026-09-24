@@ -107,10 +107,25 @@ describe("MiMo echo variants (#5724)", () => {
   });
 
   test("a closed block whose body carries a literal </tool_call> is still matched whole", async () => {
-    const input = "text('</tool_call>');";
-    const block = `<tool_call><function=exec>${input}</parameter></function></tool_call>`;
-    for (const events of [await streamed(block, input), await buffered(block, input)]) {
-      expect(visible(events)).toBe("");
+    for (const input of ["text('</tool_call>');", "text('<tool_call>');"]) {
+      const block = `<tool_call><function=exec>${input}</parameter></function></tool_call>`;
+      for (const events of [await streamed(block, input), await buffered(block, input)]) {
+        expect(visible(events)).toBe("");
+      }
     }
+  });
+
+  test("an unclosed block followed by a closed block is read as two blocks", async () => {
+    const first = "text('a');";
+    const second = "text('b');";
+    const content = `<tool_call><function=exec>${first}</parameter></tool_call>\n<tool_call><function=exec>${second}</parameter></function></tool_call>`;
+    const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+      choices: [{
+        message: { content, tool_calls: [call(first), { ...call(second), index: 1, id: "call_exec_2" }] },
+        finish_reason: "tool_calls",
+      }],
+    }), createTestTranslatorBudget());
+    expect(visible(events)).toBe("\n");
+    expect(events.filter(event => event.type === "tool_call_start")).toHaveLength(2);
   });
 });
