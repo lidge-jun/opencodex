@@ -100,6 +100,17 @@ function callsIn(text: string, context: TextContext = { fence: null, lineStart: 
   return calls;
 }
 
+/**
+ * The first block, and only when the text after it is exactly one repetition of that same block
+ * (trailing whitespace allowed). The returned range covers the pair and any trailing whitespace.
+ */
+function repeatedCallIn(text: string, context?: TextContext): SerializedToolCall | undefined {
+  const first = callsIn(text, context)[0];
+  if (!first) return undefined;
+  if (text.slice(first.end).trimEnd() !== text.slice(first.start, first.end).trimEnd()) return undefined;
+  return { ...first, end: text.length };
+}
+
 /** Splits safe visible text from a possible control block while carrying Markdown context across chunks. */
 export function splitAtPossibleSerializedToolCall(
   text: string,
@@ -335,6 +346,16 @@ function duplicatedSerializedToolCallRanges(
   context?: TextContext,
 ): { start: number; end: number }[] {
   if (structuredCalls.length === 0) return [];
+  const repeated = repeatedCallIn(text, context);
+  if (repeated) {
+    const body = freeformBody(repeated.body);
+    // Without a single agreeing call the pair is ambiguous, so no shape of it is suppressed.
+    const matching = structuredCalls.filter(structured => {
+      const input = structured.names.has(repeated.name) ? inputFromArguments(structured.argumentsText) : undefined;
+      return input !== undefined && freeformBody(input) === body;
+    });
+    return matching.length === 1 ? [{ start: repeated.start, end: repeated.end }] : [];
+  }
   return callsIn(text, context).filter(call => {
     const body = freeformBody(call.body);
     return structuredCalls.some(structured => {
@@ -365,6 +386,21 @@ export function repairArgumentsDuplicatedBesideSerializedCall(
   functionNames: ReadonlySet<string>,
   serializedText: string,
 ): string {
+  const repeated = repeatedCallIn(serializedText);
+  if (repeated && functionNames.has(repeated.name)) {
+    const body = freeformBody(repeated.body);
+    try {
+      const parsed = JSON.parse(argumentsText) as unknown;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+          && Object.keys(parsed).length === 1
+          && ((parsed as Record<string, unknown>).input === body + body
+            || (parsed as Record<string, unknown>).input === body + "\n" + body)) {
+        return JSON.stringify({ input: body });
+      }
+    } catch {
+      // A malformed concatenation may still match the prefix repair below.
+    }
+  }
   try {
     JSON.parse(argumentsText);
     return argumentsText;

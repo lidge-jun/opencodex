@@ -31,6 +31,188 @@ test("buffered Chat responses reconcile matching serialized and structured tool 
   });
 });
 
+test("buffered Chat responses reconcile two identical echoed blocks and doubled input", async () => {
+  const script = "const names = []; text(names);";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: {
+        content: block + block,
+        tool_calls: [{
+          id: "call_exec",
+          function: { name: "exec", arguments: JSON.stringify({ input: script + script }) },
+        }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.find(event => event.type === "tool_call_delta")).toEqual({
+    type: "tool_call_delta",
+    arguments: JSON.stringify({ input: script }),
+  });
+});
+
+test("buffered Chat responses suppress two echoed blocks when structured input is already single", async () => {
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: {
+        content: block + block,
+        tool_calls: [{
+          id: "call_exec",
+          function: { name: "exec", arguments: JSON.stringify({ input: script }) },
+        }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.find(event => event.type === "tool_call_delta")).toEqual({
+    type: "tool_call_delta",
+    arguments: JSON.stringify({ input: script }),
+  });
+});
+
+test("buffered Chat responses suppress two echoed blocks with a trailing newline", async () => {
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: {
+        content: block + block + "\n",
+        tool_calls: [{ id: "call_exec", function: { name: "exec", arguments: JSON.stringify({ input: script }) } }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.find(event => event.type === "tool_call_delta")).toEqual({
+    type: "tool_call_delta", arguments: JSON.stringify({ input: script }),
+  });
+});
+
+test("buffered Chat responses repair two echoed blocks with newline-joined input", async () => {
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: {
+        content: block + block,
+        tool_calls: [{
+          id: "call_exec",
+          function: { name: "exec", arguments: JSON.stringify({ input: script + "\n" + script }) },
+        }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.find(event => event.type === "tool_call_delta")).toEqual({
+    type: "tool_call_delta",
+    arguments: JSON.stringify({ input: script }),
+  });
+});
+
+test("buffered Chat responses suppress a repeated echo beside an unrelated structured call", async () => {
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: {
+        content: block + block,
+        tool_calls: [
+          { id: "call_exec", function: { name: "exec", arguments: JSON.stringify({ input: script }) } },
+          { id: "call_other", function: { name: "other", arguments: JSON.stringify({ input: "other" }) } },
+        ],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: JSON.stringify({ input: script }) },
+    { type: "tool_call_delta", arguments: JSON.stringify({ input: "other" }) },
+  ]);
+});
+
+test("buffered Chat responses preserve repeated markup when two structured calls match", async () => {
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
+  const content = block + block;
+  const argumentsText = JSON.stringify({ input: script });
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: {
+        content,
+        tool_calls: [
+          { id: "call_one", function: { name: "exec", arguments: argumentsText } },
+          { id: "call_two", function: { name: "exec", arguments: argumentsText } },
+        ],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: argumentsText },
+    { type: "tool_call_delta", arguments: argumentsText },
+  ]);
+});
+
+test("buffered Chat responses preserve repeated markup when the structured input differs", async () => {
+  const script = "text('example');";
+  const content = `<tool_call><function=exec>${script}</function></tool_call>`.repeat(2);
+  const argumentsText = JSON.stringify({ input: script + "text('other');" });
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: {
+        content,
+        tool_calls: [{ id: "call_exec", function: { name: "exec", arguments: argumentsText } }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.find(event => event.type === "text_delta")).toEqual({ type: "text_delta", text: content });
+  expect(events.find(event => event.type === "tool_call_delta")).toEqual({
+    type: "tool_call_delta",
+    arguments: argumentsText,
+  });
+});
+
+test("buffered Chat responses reduce a doubled input behind the MiMo wrapping newline", async () => {
+  // The canonical MiMo layout puts one template newline after the function header, so the block
+  // body and the doubled structured input only agree once both sides are freeform-normalized.
+  const script = "text('ok');";
+  const block = `<tool_call><function=exec>\n${script}\n</parameter></function></tool_call>`;
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{
+      message: {
+        content: block + block,
+        tool_calls: [{
+          id: "call_exec",
+          function: { name: "exec", arguments: JSON.stringify({ input: script + script }) },
+        }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.find(event => event.type === "tool_call_delta")).toEqual({
+    type: "tool_call_delta",
+    arguments: JSON.stringify({ input: script }),
+  });
+});
+
 test("buffered Chat responses preserve serialized markup for a different function", async () => {
   const content = "<tool_call><function=other>literal example</function></tool_call>";
   const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({

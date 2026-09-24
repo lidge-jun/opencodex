@@ -10,12 +10,16 @@ afterEach(() => {
   releaseSpendHome = undefined;
 });
 
-test("/v1/responses suppresses OpenAI Chat tool-call markup duplicated by a structured call", async () => {
+async function checkEchoedToolCall(
+  repeated: boolean,
+  trailingNewline = false,
+  newlineJoinedInput = false,
+): Promise<void> {
   const savedFetch = globalThis.fetch;
   const script = "const result = await tools.exec_command({cmd: \"pwd\"});\ntext(result.output);";
   const leaked = `<tool_call><function=exec>${script}\n</parameter></function></tool_call>`;
   const commentary = "I'll run it now.\n";
-  const content = commentary + leaked;
+  const content = commentary + leaked + (repeated ? leaked : "") + (trailingNewline ? "\n" : "");
   const split = commentary.length + 5;
   const frames = [
     { choices: [{ delta: { content: content.slice(0, split) } }] },
@@ -26,7 +30,12 @@ test("/v1/responses suppresses OpenAI Chat tool-call markup duplicated by a stru
           tool_calls: [{
             index: 0,
             id: "call_exec",
-            function: { name: "exec", arguments: script + JSON.stringify({ input: script }) },
+            function: {
+              name: "exec",
+              arguments: repeated
+                ? JSON.stringify({ input: script + (newlineJoinedInput ? "\n" : "") + script })
+                : script + JSON.stringify({ input: script }),
+            },
           }],
         },
       }],
@@ -85,4 +94,9 @@ test("/v1/responses suppresses OpenAI Chat tool-call markup duplicated by a stru
   } finally {
     globalThis.fetch = savedFetch;
   }
-});
+}
+
+test("/v1/responses suppresses one echoed block", () => checkEchoedToolCall(false));
+test("/v1/responses suppresses two echoed blocks with doubled input", () => checkEchoedToolCall(true));
+test("/v1/responses suppresses trailing newline and repairs newline-joined doubled input", () =>
+  checkEchoedToolCall(true, true, true));
