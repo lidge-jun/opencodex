@@ -45,6 +45,11 @@ export function quotaSeverity(percent: number | undefined): QuotaSummarySeverity
   return "normal";
 }
 
+// Flooring keeps the displayed number on the same side of the 70/90 thresholds as the color.
+export function formatQuotaPercent(percent: number | undefined): string {
+  return finite(percent) ? `${Math.floor(percent)}%` : "-";
+}
+
 /** Long windows first: weekly is the default headline, then monthly, then 5h, then custom. */
 const HEADLINE_ORDER = ["quota.weeklyLimit", "quota.monthlyLimit", "quota.fiveHourLimit"];
 

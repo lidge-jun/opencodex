@@ -10,7 +10,7 @@ import { useDataSurface } from "../../data-surface";
 import { useI18n, type Locale, type TFn } from "../../i18n/shared";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { freshQuotaReportsFromResponse, type ProviderQuotaReportView } from "../../provider-workspace/report";
-import { buildQuotaSummary, type QuotaSummaryRow, type QuotaSummarySeverity, type QuotaSummaryWindow } from "../../quota-summary";
+import { buildQuotaSummary, formatQuotaPercent, type QuotaSummaryRow, type QuotaSummarySeverity, type QuotaSummaryWindow } from "../../quota-summary";
 import { formatResetFuture } from "../QuotaBars";
 import "./quota-summary-bar.css";
 
@@ -27,10 +27,6 @@ function formatClock(ms: number, locale: Locale): string {
   } catch {
     return new Date(ms).toTimeString().slice(0, 5);
   }
-}
-
-function formatPercent(percent: number | undefined): string {
-  return percent === undefined ? "-" : `${Math.round(percent)}%`;
 }
 
 function windowLabel(window: QuotaSummaryWindow, t: TFn): string {
@@ -81,10 +77,13 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
         aria-expanded={open}
         aria-controls={popoverId}
         title={`${row.label} · ${windowLabel(headline, t)}`}
-        onClick={() => setPinned(value => !value)}
+        onClick={() => {
+          // A click while pinned must close the popover even though the pointer still hovers the chip.
+          if (pinned) { setPinned(false); setHovered(false); } else { setPinned(true); }
+        }}
       >
         <span className="quota-summary-name">{row.label}</span>
-        <span className="quota-summary-pct">{formatPercent(headline.percent)}</span>
+        <span className="quota-summary-pct">{formatQuotaPercent(headline.percent)}</span>
         {warning && <span className="quota-summary-flag" aria-hidden="true">!</span>}
         {warning && <span className="sr-only">{warning}</span>}
       </button>
@@ -99,7 +98,7 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
               {row.windows.map(window => (
                 <tr key={window.id} className={`quota-summary-row--${window.severity}`}>
                   <th scope="row">{windowLabel(window, t)}</th>
-                  <td className="quota-summary-row-pct">{formatPercent(window.percent)}</td>
+                  <td className="quota-summary-row-pct">{formatQuotaPercent(window.percent)}</td>
                   <td className="quota-summary-row-reset">
                     {window.resetAt !== undefined ? formatResetFuture(window.resetAt, t, locale) : "-"}
                   </td>

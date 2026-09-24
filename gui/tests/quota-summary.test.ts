@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildQuotaSummary, quotaSeverity } from "../src/quota-summary";
+import { buildQuotaSummary, formatQuotaPercent, quotaSeverity } from "../src/quota-summary";
 import { freshQuotaReportsFromResponse } from "../src/provider-workspace/report";
 
 const now = Date.UTC(2026, 8, 23, 3);
@@ -12,6 +12,13 @@ describe("quota summary", () => {
     expect(quotaSeverity(70)).toBe("warn");
     expect(quotaSeverity(89.9)).toBe("warn");
     expect(quotaSeverity(90)).toBe("critical");
+  });
+
+  test("displayed percent never crosses a severity threshold the color has not reached", () => {
+    expect([formatQuotaPercent(69.6), quotaSeverity(69.6)]).toEqual(["69%", "normal"]);
+    expect([formatQuotaPercent(89.6), quotaSeverity(89.6)]).toEqual(["89%", "warn"]);
+    expect([formatQuotaPercent(90), quotaSeverity(90)]).toEqual(["90%", "critical"]);
+    expect(formatQuotaPercent(undefined)).toBe("-");
   });
 
   test("headline prefers weekly, then monthly, then 5h, then provider windows", () => {
