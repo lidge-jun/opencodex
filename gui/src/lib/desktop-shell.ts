@@ -33,6 +33,21 @@ export function hostOs(ua = currentUserAgent()): HostOs {
   return "unknown";
 }
 
+export function desktopUpdatePageUrl(ua = currentUserAgent()): string | null {
+  if (!isDesktopShell(ua)) return null;
+  const os = hostOs(ua);
+  if (os === "windows") return "http://tauri.localhost/update.html";
+  if (os === "macos" || os === "linux") return "tauri://localhost/update.html";
+  return null;
+}
+
+export function openDesktopUpdatePage(ua = currentUserAgent()): boolean {
+  const url = desktopUpdatePageUrl(ua);
+  if (!url) return false;
+  window.location.assign(url);
+  return true;
+}
+
 export function isExternalLink(
   href: string,
   origin = typeof location === "undefined" ? "" : location.origin,

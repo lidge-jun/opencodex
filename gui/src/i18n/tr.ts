@@ -102,6 +102,7 @@ export const tr: Record<TKey, string> = {
   "onboarding.star.done": "Tamam",
   "sidebar.updateAvailable": "Güncelleme mevcut: {version}",
   "sidebar.checkUpdate": "Güncellemeleri kontrol et",
+  "sidebar.desktopUpdate": "Masaüstü güncellemelerini aç",
   "common.save": "Kaydet",
   "common.saving": "Kaydediliyor…",
   "common.cancel": "İptal",

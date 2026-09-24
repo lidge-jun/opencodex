@@ -170,6 +170,7 @@ export const zh: Record<TKey, string> = {
   "onboarding.star.done": "完成",
   "sidebar.updateAvailable": "有可用更新：{version}",
   "sidebar.checkUpdate": "检查更新",
+  "sidebar.desktopUpdate": "打开桌面应用更新",
   "common.save": "保存",
   "common.saving": "保存中…",
   "common.cancel": "取消",

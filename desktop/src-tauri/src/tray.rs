@@ -219,31 +219,13 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             "check-updates" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    updater::check_and_show(&app).await;
+                    let _ = updater::check_and_show(&app).await;
                 });
             }
             "install-update" => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    let update = app
-                        .state::<crate::updater::PendingUpdate>()
-                        .0
-                        .lock()
-                        .ok()
-                        .and_then(|mut pending| pending.take());
-                    let Some(update) = update else {
-                        return;
-                    };
-                    let version = update.version.clone();
-                    let retry_update = update.clone();
-                    set_installing(&app, &version);
-                    if let Err(error) = updater::install(&app, update).await {
-                        if let Ok(mut pending) =
-                            app.state::<crate::updater::PendingUpdate>().0.lock()
-                        {
-                            *pending = Some(retry_update);
-                        }
-                        set_install_failed(&app, &version);
+                    if let Err(error) = updater::install_pending(&app).await {
                         crate::logging::log_once("updater install failed", &error);
                     }
                 });
@@ -335,10 +317,7 @@ pub fn is_installing(app: &AppHandle) -> bool {
         .is_some_and(|state| state.installing.load(Ordering::Acquire))
 }
 
-fn set_installing(app: &AppHandle, version: &str) {
-    if let Some(state) = app.try_state::<TrayState>() {
-        state.installing.store(true, Ordering::Release);
-    }
+pub fn show_installing(app: &AppHandle, version: &str) {
     if let Some(menu) = menu_handles(app) {
         let _ = menu
             .install_update
@@ -346,17 +325,6 @@ fn set_installing(app: &AppHandle, version: &str) {
         let _ = menu.install_update.set_enabled(false);
         let _ = menu.check_updates.set_enabled(false);
     }
-    app.state::<updater::DesktopUpdateState>()
-        .retain_phase("installing");
-}
-
-fn set_install_failed(app: &AppHandle, version: &str) {
-    if let Some(state) = app.try_state::<TrayState>() {
-        state.installing.store(false, Ordering::Release);
-    }
-    show_update_available(app, version);
-    app.state::<updater::DesktopUpdateState>()
-        .retain_phase("install-failed");
 }
 
 fn refresh_title(app: &AppHandle, tray: &tauri::tray::TrayIcon<Wry>, proxy: &ProxyClient) {

@@ -101,6 +101,7 @@ export const vi: Record<TKey, string> = {
   "onboarding.star.done": "Xong",
   "sidebar.updateAvailable": "Bản cập nhật có sẵn: {version}",
   "sidebar.checkUpdate": "Kiểm tra bản cập nhật",
+  "sidebar.desktopUpdate": "Mở cập nhật ứng dụng máy tính",
   "common.save": "Lưu",
   "common.saving": "Đang lưu…",
   "common.cancel": "Hủy",

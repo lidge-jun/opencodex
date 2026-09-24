@@ -10,8 +10,8 @@
  * Update: always present, so "am I current?" is answerable at any time. It reads the
  * cached badge endpoint (no npm spawn per poll) purely to decide emphasis — an
  * available update renders the accent state plus a dot, otherwise it is a plain orb.
- * Either way a click runs a fresh check and opens the dashboard update dialog, which
- * already owns the install/cancel decision.
+ * Either way a click opens the desktop update page in the app shell, or runs a fresh
+ * package check in a browser dashboard where the existing dialog owns installation.
  */
 import { useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
@@ -49,7 +49,7 @@ export function SidebarGithubRow({
   onOpenUpdate,
 }: {
   apiBase: string;
-  /** Navigates to the dashboard maintenance surface where the update dialog lives. */
+  /** Opens desktop updates in the app shell, or the package update surface in a browser. */
   onOpenUpdate: () => void;
 }) {
   const t = useT();
@@ -128,7 +128,7 @@ export function SidebarGithubRow({
   // action, so the button never reads as "update available" when nothing is waiting.
   const updateLabel = updateAvailable && latestVersion
     ? t("sidebar.updateAvailable", { version: latestVersion })
-    : t("sidebar.checkUpdate");
+    : isDesktopShell() ? t("sidebar.desktopUpdate") : t("sidebar.checkUpdate");
 
   return (
     <div className="sidebar-github-row">

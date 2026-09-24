@@ -788,6 +788,7 @@
     "desktop-runtime-identity.test.ts": "clients",
     "desktop-start-at-login-default.test.ts": "clients",
     "desktop-startup-surface.test.ts": "clients",
+    "desktop-update-surface.test.ts": "clients",
     "desktop-tray-availability.test.ts": "clients",
     "desktop-widget-entry.test.ts": "clients",
     "destination-policy-resolved.test.ts": "routing",

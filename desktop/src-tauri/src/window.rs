@@ -70,10 +70,25 @@ pub fn navigation_allowed(app: AppHandle) -> impl Fn(&Url) -> bool {
 /// generally, nor a name that merely ends in it, is this origin.
 fn is_app_origin(url: &Url) -> bool {
     match url.scheme() {
-        "tauri" => true,
+        "tauri" => url.host_str() == Some("localhost") && url.port().is_none(),
         "http" => url.host_str() == Some("tauri.localhost") && url.port().is_none(),
         _ => false,
     }
+}
+
+pub fn require_update_page(window: &WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("update page unavailable".into());
+    }
+    let url = window.url().map_err(|_| "update page unavailable")?;
+    if !is_update_page_url(&url) {
+        return Err("update page unavailable".into());
+    }
+    Ok(())
+}
+
+fn is_update_page_url(url: &Url) -> bool {
+    is_app_origin(url) && url.path() == "/update.html"
 }
 
 pub fn show(window: &WebviewWindow) {
@@ -130,7 +145,7 @@ pub fn set_tray_policy(app: &AppHandle, visible: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_app_origin, webview_user_agent};
+    use super::{is_app_origin, is_update_page_url, webview_user_agent};
     use tauri::Url;
 
     fn url(value: &str) -> Url {
@@ -164,6 +179,24 @@ mod tests {
             "file:///C:/index.html",
         ] {
             assert!(!is_app_origin(&url(value)), "{value}");
+        }
+    }
+
+    #[test]
+    fn only_the_bundled_update_page_has_update_commands() {
+        for value in [
+            "tauri://localhost/update.html",
+            "http://tauri.localhost/update.html",
+        ] {
+            assert!(is_update_page_url(&url(value)), "{value}");
+        }
+        for value in [
+            "http://127.0.0.1:10100/update.html",
+            "tauri://evil/update.html",
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/update.html.evil",
+        ] {
+            assert!(!is_update_page_url(&url(value)), "{value}");
         }
     }
 

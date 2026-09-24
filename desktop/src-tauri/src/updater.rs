@@ -13,6 +13,7 @@ use uuid::Uuid;
 pub enum UiProjection {
     Available(String),
     Current,
+    Installing(String),
 }
 
 #[derive(Clone)]
@@ -61,25 +62,35 @@ impl CheckGeneration {
         Some((generation, epoch))
     }
 
-    // Commit 3 uses this for both the tray and page install paths.
-    #[allow(dead_code)] // The next ordered commit wires the install action to this gate.
-    pub fn claim_install(&self, installing: &std::sync::atomic::AtomicBool) -> bool {
+    pub fn claim_install(
+        &self,
+        installing: &std::sync::atomic::AtomicBool,
+        pending_version: impl FnOnce() -> Option<String>,
+        on_claim: impl FnOnce(),
+    ) -> InstallClaim {
         let _guard = self
             .application
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if installing.load(Ordering::Acquire) {
+            return InstallClaim::Busy;
+        }
+        let Some(version) = pending_version() else {
+            return InstallClaim::NoPending;
+        };
         if installing
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            return false;
+            return InstallClaim::Busy;
         }
         self.install_epoch.fetch_add(1, Ordering::AcqRel);
         self.latest_ui_revision.fetch_add(1, Ordering::AcqRel);
-        true
+        on_claim();
+        self.queue_ui(UiProjection::Installing(version));
+        InstallClaim::Claimed
     }
 
-    #[allow(dead_code)] // Consumed by the update page in commit 3.
     pub fn epoch_is_current(&self, epoch: u64) -> bool {
         self.install_epoch.load(Ordering::Acquire) == epoch
     }
@@ -95,7 +106,6 @@ impl CheckGeneration {
         Some(apply())
     }
 
-    #[allow(dead_code)] // Consumed by the update page in commit 3.
     pub fn inspect<T>(&self, read: impl FnOnce() -> T) -> T {
         let _guard = self
             .application
@@ -137,6 +147,7 @@ pub fn start_ui_projection_worker(app: AppHandle) {
                 .apply_ui_projection_if_current(update, |projection| match projection {
                     UiProjection::Available(version) => tray::show_update_available(&app, &version),
                     UiProjection::Current => tray::show_up_to_date(&app),
+                    UiProjection::Installing(version) => tray::show_installing(&app, &version),
                 });
         }
     });
@@ -237,11 +248,97 @@ pub fn start_snapshot_publisher(app: AppHandle) {
 
 pub struct PendingUpdate(pub Mutex<Option<Update>>);
 
-// lib.rs selects native_tray.rs as popup on macOS; compile the portable popup tests here too.
-#[cfg(all(test, target_os = "macos"))]
-#[allow(dead_code)]
-#[path = "popup.rs"]
-mod popup_nonmac_test;
+#[derive(Debug, PartialEq, Eq)]
+pub enum InstallClaim {
+    Claimed,
+    Busy,
+    NoPending,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageUpdateStatus {
+    pub current_version: String,
+    pub latest_version: Option<String>,
+    pub available: bool,
+    pub installing: bool,
+    pub checking: bool,
+}
+
+pub fn page_status(app: &AppHandle) -> PageUpdateStatus {
+    app.state::<CheckGeneration>().inspect(|| {
+        let pending = app.state::<PendingUpdate>();
+        let pending = pending
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let latest_version = pending.as_ref().map(|update| update.version.clone());
+        let installing = tray::is_installing(app);
+        let checking = app.state::<DesktopUpdateState>().tx.borrow().phase == "checking";
+        PageUpdateStatus {
+            current_version: env!("CARGO_PKG_VERSION").to_owned(),
+            available: latest_version.is_some(),
+            latest_version,
+            installing,
+            checking,
+        }
+    })
+}
+
+pub async fn install_pending(app: &AppHandle) -> Result<PageUpdateStatus, String> {
+    let state = app.state::<tray::TrayState>();
+    let gate = app.state::<CheckGeneration>();
+    match gate.claim_install(
+        &state.installing,
+        || {
+            app.state::<PendingUpdate>()
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .map(|update| update.version.clone())
+        },
+        || app.state::<DesktopUpdateState>().retain_phase("installing"),
+    ) {
+        InstallClaim::Claimed => {}
+        InstallClaim::Busy => return Err("an update is already installing".into()),
+        InstallClaim::NoPending => return Err("no update is ready to install".into()),
+    }
+    let pending = app.state::<PendingUpdate>();
+    let update = pending
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    let Some(update) = update else {
+        gate.inspect(|| {
+            state.installing.store(false, Ordering::Release);
+            app.state::<DesktopUpdateState>().retain_phase("current");
+            gate.queue_ui(UiProjection::Current);
+        });
+        return Err("no update is ready to install".into());
+    };
+    let version = update.version.clone();
+    let retry_update = update.clone();
+    let result = install(app, update).await;
+    if let Err(error) = result {
+        gate.inspect(|| {
+            let pending = app.state::<PendingUpdate>();
+            *pending
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(retry_update);
+            state.installing.store(false, Ordering::Release);
+            state.update_pending.store(true, Ordering::Release);
+            app.state::<DesktopUpdateState>()
+                .retain_phase("install-failed");
+            gate.queue_ui(UiProjection::Available(version));
+        });
+        return Err(error);
+    }
+    state.installing.store(false, Ordering::Release);
+    Ok(page_status(app))
+}
 
 /// The manifest key a Linux install must resolve, or None to keep the updater's default
 /// os-arch key (linux-x86_64, windows-x86_64, darwin-*).
@@ -320,67 +417,70 @@ pub fn start_background_checks(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         loop {
-            check_and_show(&app).await;
+            let _ = check_and_show(&app).await;
             tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
         }
     });
 }
 
-pub async fn check_and_show(app: &AppHandle) {
+pub async fn check_and_show(app: &AppHandle) -> Result<(), String> {
     let gate = app.state::<CheckGeneration>();
     let state = app.state::<tray::TrayState>();
-    let Some((generation, _epoch)) = gate.begin_if_not_installing(&state.installing, || {
+    let Some((generation, epoch)) = gate.begin_if_not_installing(&state.installing, || {
         app.state::<DesktopUpdateState>().retain_phase("checking");
     }) else {
-        return;
+        return Ok(());
     };
     let answer = check(app).await;
-    let applied_error = gate
-        .apply_if_current(generation, || {
-            if tray::is_installing(app) {
-                return None;
+    let applied = gate.apply_if_current(generation, || {
+        if tray::is_installing(app) || !gate.epoch_is_current(epoch) {
+            return Ok(());
+        }
+        match answer {
+            Ok(Some(update)) => {
+                let version = update.version.clone();
+                if let Ok(mut pending) = app.state::<PendingUpdate>().0.lock() {
+                    *pending = Some(update);
+                }
+                app.state::<DesktopUpdateState>().publish(
+                    "available",
+                    Some(version.clone()),
+                    Some(now_ms()),
+                );
+                state.update_pending.store(true, Ordering::Release);
+                gate.queue_ui(UiProjection::Available(version));
+                Ok(())
             }
-            match answer {
-                Ok(Some(update)) => {
-                    let version = update.version.clone();
-                    if let Ok(mut pending) = app.state::<PendingUpdate>().0.lock() {
-                        *pending = Some(update);
-                    }
-                    app.state::<DesktopUpdateState>().publish(
-                        "available",
-                        Some(version.clone()),
-                        Some(now_ms()),
-                    );
-                    state.update_pending.store(true, Ordering::Release);
-                    gate.queue_ui(UiProjection::Available(version));
-                    None
+            Ok(None) => {
+                if let Ok(mut pending) = app.state::<PendingUpdate>().0.lock() {
+                    *pending = None;
                 }
-                Ok(None) => {
-                    if let Ok(mut pending) = app.state::<PendingUpdate>().0.lock() {
-                        *pending = None;
-                    }
-                    app.state::<DesktopUpdateState>()
-                        .publish("current", None, Some(now_ms()));
-                    state.update_pending.store(false, Ordering::Release);
-                    gate.queue_ui(UiProjection::Current);
-                    None
-                }
-                Err(error) => {
-                    app.state::<DesktopUpdateState>().retain_phase("error");
-                    Some(error)
-                }
+                app.state::<DesktopUpdateState>()
+                    .publish("current", None, Some(now_ms()));
+                state.update_pending.store(false, Ordering::Release);
+                gate.queue_ui(UiProjection::Current);
+                Ok(())
             }
-        })
-        .flatten();
-    if let Some(error) = applied_error {
-        logging::log_once("updater check failed", &error);
+            Err(error) => {
+                app.state::<DesktopUpdateState>().retain_phase("error");
+                Err(error)
+            }
+        }
+    });
+    if let Some(Err(error)) = &applied {
+        logging::log_once("updater check failed", error);
     }
+    applied.unwrap_or(Ok(()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{linux_updater_target, update_label, CheckGeneration, DesktopUpdateState};
-    use std::sync::atomic::AtomicBool;
+    use super::{
+        linux_updater_target, update_label, CheckGeneration, DesktopUpdateState, InstallClaim,
+        UiProjection,
+    };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{mpsc, Arc};
     use tauri_utils::config::BundleType;
 
     #[test]
@@ -468,7 +568,10 @@ mod tests {
     fn checking_publication_rechecks_install_claim_inside_the_gate() {
         let checks = CheckGeneration::default();
         let installing = AtomicBool::new(false);
-        assert!(checks.claim_install(&installing));
+        assert_eq!(
+            checks.claim_install(&installing, || Some("2.66.0".into()), || {}),
+            InstallClaim::Claimed
+        );
         let mut published = false;
         assert_eq!(
             checks.begin_if_not_installing(&installing, || {
@@ -477,6 +580,226 @@ mod tests {
             None
         );
         assert!(!published);
+    }
+
+    #[test]
+    fn install_claim_has_one_winner_and_can_retry_after_failure() {
+        let gate = CheckGeneration::default();
+        let installing = AtomicBool::new(false);
+        assert_eq!(
+            gate.claim_install(&installing, || Some("2.66.0".into()), || {}),
+            InstallClaim::Claimed
+        );
+        assert_eq!(gate.install_epoch.load(Ordering::Acquire), 1);
+        assert_eq!(
+            gate.claim_install(&installing, || Some("2.66.0".into()), || {}),
+            InstallClaim::Busy
+        );
+        assert_eq!(gate.install_epoch.load(Ordering::Acquire), 1);
+        installing.store(false, Ordering::Release);
+        assert_eq!(
+            gate.claim_install(&installing, || Some("2.66.0".into()), || {}),
+            InstallClaim::Claimed
+        );
+        assert_eq!(gate.install_epoch.load(Ordering::Acquire), 2);
+    }
+
+    #[test]
+    fn install_click_without_pending_leaves_in_flight_check_valid() {
+        let gate = CheckGeneration::default();
+        let installing = AtomicBool::new(false);
+        let (generation, epoch) = gate.begin_if_not_installing(&installing, || {}).unwrap();
+        let revision = gate.latest_ui_revision.load(Ordering::Acquire);
+        let mut claimed_hook = false;
+        assert_eq!(
+            gate.claim_install(
+                &installing,
+                || None,
+                || {
+                    claimed_hook = true;
+                }
+            ),
+            InstallClaim::NoPending
+        );
+        assert!(!claimed_hook);
+        assert!(!installing.load(Ordering::Acquire));
+        assert_eq!(gate.install_epoch.load(Ordering::Acquire), 0);
+        assert_eq!(gate.latest_ui_revision.load(Ordering::Acquire), revision);
+        assert!(gate.epoch_is_current(epoch));
+        assert_eq!(
+            gate.apply_if_current(generation, || "current"),
+            Some("current")
+        );
+    }
+
+    #[test]
+    fn page_check_started_before_tray_check_cannot_override_it_in_either_completion_order() {
+        let gate = CheckGeneration::default();
+        let installing = AtomicBool::new(false);
+        let mut pending = Some("previous");
+        let mut phase = "available";
+
+        let (page, _) = gate
+            .begin_if_not_installing(&installing, || {
+                phase = "checking";
+            })
+            .unwrap();
+        let (tray, _) = gate
+            .begin_if_not_installing(&installing, || {
+                phase = "checking";
+            })
+            .unwrap();
+        assert_eq!(
+            gate.apply_if_current(page, || {
+                pending = None;
+                phase = "current";
+            }),
+            None
+        );
+        assert_eq!((pending, phase), (Some("previous"), "checking"));
+        assert_eq!(
+            gate.apply_if_current(tray, || {
+                pending = Some("tray");
+                phase = "available";
+            }),
+            Some(())
+        );
+        assert_eq!((pending, phase), (Some("tray"), "available"));
+
+        let (page, _) = gate
+            .begin_if_not_installing(&installing, || {
+                phase = "checking";
+            })
+            .unwrap();
+        let (tray, _) = gate
+            .begin_if_not_installing(&installing, || {
+                phase = "checking";
+            })
+            .unwrap();
+        assert_eq!(
+            gate.apply_if_current(tray, || {
+                pending = Some("new tray");
+                phase = "available";
+            }),
+            Some(())
+        );
+        assert_eq!(
+            gate.apply_if_current(page, || {
+                pending = None;
+                phase = "current";
+            }),
+            None
+        );
+        assert_eq!((pending, phase), (Some("new tray"), "available"));
+    }
+
+    #[test]
+    fn install_claim_cannot_land_between_check_guard_and_pending_tray_write() {
+        let gate = Arc::new(CheckGeneration::default());
+        let installing = Arc::new(AtomicBool::new(false));
+        let (generation, epoch) = gate.begin_if_not_installing(&installing, || {}).unwrap();
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let (claimed_tx, claimed_rx) = mpsc::channel();
+        let mut pending = None;
+        let mut tray_visible = false;
+
+        let claim_thread = gate
+            .apply_if_current(generation, || {
+                assert!(!installing.load(Ordering::Acquire));
+                assert!(gate.epoch_is_current(epoch));
+                let claim_gate = Arc::clone(&gate);
+                let claim_flag = Arc::clone(&installing);
+                let thread = std::thread::spawn(move || {
+                    attempt_tx.send(()).unwrap();
+                    claimed_tx
+                        .send(claim_gate.claim_install(
+                            &claim_flag,
+                            || Some("signed update".into()),
+                            || {},
+                        ))
+                        .unwrap();
+                });
+                attempt_rx
+                    .recv_timeout(std::time::Duration::from_secs(1))
+                    .unwrap();
+                assert_eq!(
+                    claimed_rx.recv_timeout(std::time::Duration::from_millis(25)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                );
+                pending = Some("signed update");
+                tray_visible = true;
+                assert!(!installing.load(Ordering::Acquire));
+                thread
+            })
+            .unwrap();
+        assert_eq!((pending, tray_visible), (Some("signed update"), true));
+        assert_eq!(
+            claimed_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            InstallClaim::Claimed
+        );
+        claim_thread.join().unwrap();
+        assert!(installing.load(Ordering::Acquire));
+        assert!(!gate.epoch_is_current(epoch));
+    }
+
+    #[test]
+    fn status_read_completes_while_check_ui_setter_is_blocked() {
+        let gate = Arc::new(CheckGeneration::default());
+        let installing = AtomicBool::new(false);
+        let (generation, _) = gate.begin_if_not_installing(&installing, || {}).unwrap();
+        let mut pending = None;
+        assert_eq!(
+            gate.apply_if_current(generation, || {
+                pending = Some("signed update");
+                gate.queue_ui(UiProjection::Available("2.66.0".into()));
+            }),
+            Some(())
+        );
+        let projected = gate.ui.borrow().clone().unwrap();
+        let (setter_entered_tx, setter_entered_rx) = mpsc::channel();
+        let (status_returned_tx, status_returned_rx) = mpsc::channel();
+        let setter_gate = Arc::clone(&gate);
+        let setter = std::thread::spawn(move || {
+            setter_gate.apply_ui_projection_if_current(projected, |_| {
+                setter_entered_tx.send(()).unwrap();
+                status_returned_rx
+                    .recv_timeout(std::time::Duration::from_secs(1))
+                    .unwrap();
+            })
+        });
+        setter_entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let read_gate = Arc::clone(&gate);
+        let (read_tx, read_rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            read_tx.send(read_gate.inspect(|| "available")).unwrap();
+        });
+        assert_eq!(
+            read_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            "available"
+        );
+        status_returned_tx.send(()).unwrap();
+        reader.join().unwrap();
+        assert!(setter.join().unwrap());
+        assert_eq!(pending, Some("signed update"));
+    }
+
+    #[test]
+    fn superseded_ui_projection_never_enters_its_setter() {
+        let gate = CheckGeneration::default();
+        gate.inspect(|| gate.queue_ui(UiProjection::Current));
+        let old = gate.ui.borrow().clone().unwrap();
+        gate.inspect(|| gate.queue_ui(UiProjection::Available("2.66.0".into())));
+        let newest = gate.ui.borrow().clone().unwrap();
+        assert!(!gate.apply_ui_projection_if_current(old, |_| panic!("stale setter ran")));
+        let mut applied = false;
+        assert!(gate.apply_ui_projection_if_current(newest, |_| applied = true));
+        assert!(applied);
     }
 
     #[test]

@@ -100,6 +100,7 @@ export const fr: Record<TKey, string> = {
   "onboarding.star.done": "Terminé",
   "sidebar.updateAvailable": "Mise à jour disponible : {version}",
   "sidebar.checkUpdate": "Rechercher des mises à jour",
+  "sidebar.desktopUpdate": "Ouvrir les mises à jour de l’application",
   "common.save": "Enregistrer",
   "common.saving": "Enregistrement…",
   "common.cancel": "Annuler",

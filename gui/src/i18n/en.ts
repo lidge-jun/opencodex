@@ -103,6 +103,7 @@ export const en = {
   "onboarding.star.done": "Done",
   "sidebar.updateAvailable": "Update available: {version}",
   "sidebar.checkUpdate": "Check for updates",
+  "sidebar.desktopUpdate": "Open desktop updates",
   "common.save": "Save",
   "common.saving": "Saving…",
   "common.cancel": "Cancel",

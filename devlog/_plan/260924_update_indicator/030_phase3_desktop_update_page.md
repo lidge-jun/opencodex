@@ -6,11 +6,11 @@ Commit 3 makes both update entries in the *embedded* dashboard open a bundled de
 
 IN: `desktop/ui/update.html`, the four commands, shared install claim, desktop GUI routing, tests, structure and public docs. OUT: `/api/update/run` changes, remote-origin updater IPC, updater key/signature policy, auto-install, tray icon art, package cache, npm PowerShell tray, and release/deployment. Commit 2 owns the `desktop_session` query key and the desktop badge request through `gui/src/lib/desktop-shell.ts::desktopSession`, `gui/src/lib/desktop-shell.ts::updateBadgeUrl`, and `gui/src/components/sidebar-github-row.tsx` ([020_phase2_desktop_state_icons.md](020_phase2_desktop_state_icons.md), “Embedded GUI poll”); wp3 leaves that code intact. That session is display identity only, never install authority (D3/D4 in `000_plan.md`).
 
-Current anchors (all existing symbols used below): `WebviewUrl::App("index.html".into())` and `generate_handler!` in `desktop/src-tauri/src/lib.rs:212-247`; `PendingUpdate`, `check`, `install`, and `check_and_show` in `desktop/src-tauri/src/updater.rs:6,37-74,91-114`; the tray install arm and `TrayState.installing` in `desktop/src-tauri/src/tray.rs:20-38,198-222,303-325`; `startup::open_dashboard` and its once-only gate in `desktop/src-tauri/src/startup.rs:1448-1489`; origin allowlist in `desktop/src-tauri/src/window.rs:37-76`; `frontendDist`, `withGlobalTauri`, and CSP in `desktop/src-tauri/tauri.conf.json:6-15`; `window.__TAURI__.core.invoke` and the nonce pattern in `desktop/ui/index.html:75-123`; GUI entry points in `gui/src/App.tsx:454-462`, `gui/src/components/sidebar-github-row.tsx:125-156`, and `gui/src/pages/use-dashboard-data.ts:861-901`. The actual maintenance anchor calls `openUpdateDialog` at `gui/src/pages/dashboard-overview-sections.tsx:219-229`; no edit to that file is needed. `gui/src/lib/desktop-shell.ts:7-19` owns desktop/OS detection; commit 2 adds `desktopSession` and `updateBadgeUrl` there ([020_phase2_desktop_state_icons.md](020_phase2_desktop_state_icons.md), “Embedded GUI poll”).
+Current anchors at `9ffa2261ba`: `generate_handler!` and `WebviewUrl::App("index.html".into())` in `desktop/src-tauri/src/lib.rs:214-250`; `CheckGeneration`, `UiProjection`, `DesktopUpdateState`, `PendingUpdate`, and `check_and_show` in `desktop/src-tauri/src/updater.rs:12-238,329-378`; the still-ungated install arm, `TrayState`, and setter functions in `desktop/src-tauri/src/tray.rs:20-40,219-250,312-360`; `startup::open_dashboard`, `ready_dashboard`, and `navigate_dashboard` in `desktop/src-tauri/src/startup.rs:498-504,1454-1495`; app-origin policy in `desktop/src-tauri/src/window.rs:37-77`; `frontendDist`, `withGlobalTauri`, and CSP in `desktop/src-tauri/tauri.conf.json:6-15`; `window.__TAURI__.core.invoke` and nonce pattern in `desktop/ui/index.html:75-123`; GUI entry points in `gui/src/App.tsx:454-462`, `gui/src/components/sidebar-github-row.tsx:127-156`, and `gui/src/pages/use-dashboard-data.ts:861-901`. The maintenance anchor calls `openUpdateDialog` at `gui/src/pages/dashboard-overview-sections.tsx:219-229`; no edit there. `gui/src/lib/desktop-shell.ts:7-33` now owns desktop/session/OS detection and `updateBadgeUrl`.
 
 ## File change map and executable edits
 
-No DELETE paths. Code blocks show the full new file or the exact replacement/addition at the named anchor. Commit 2 extends the same Rust functions: retain its snapshot publishing around the replacement logic and route its new state through the shared function. Do not delete a commit-2 publication call merely because it is absent at this HEAD.
+No DELETE paths. Code blocks show the full new file or the exact replacement/addition at the named current-HEAD anchor. Preserve commit 2's snapshot publication and serialized UI projection worker when replacing check/install logic.
 
 ### NEW `desktop/ui/update.html` — full file
 
@@ -144,7 +144,7 @@ else void refresh("update_status");
 
 ### MODIFY `desktop/src-tauri/src/updater.rs`
 
-Before adding the page command, make these exact commit-3 extensions to commit 2's updater gate. Replace the `UiProjection` enum line with `pub enum UiProjection { Available(String), Current, Installing(String) }`; add `UiProjection::Installing(version) => tray::show_installing(&app, &version),` to `start_ui_projection_worker`'s match after `Current`. Replace the full `CheckGeneration::claim_install` method with this block and add the `InstallClaim` enum next to it. `pending_version` runs under the gate **before** anything is committed: when it returns `None` the claim returns `NoPending` and leaves the install flag, `install_epoch` and `latest_ui_revision` untouched, so an in-flight check stays valid and settles normally. `on_claim` runs under the gate only after a successful claim and may only publish the in-memory snapshot. Neither closure may call a Tauri setter.
+Before adding the page command, extend the current `#[derive(Clone)] pub enum UiProjection` at `updater.rs:12-16` with `Installing(String)`; keep the derive. Add `UiProjection::Installing(version) => tray::show_installing(&app, &version),` to `start_ui_projection_worker`'s match at `updater.rs:137-140`. Replace the full `CheckGeneration::claim_install` at `updater.rs:64-80` with this block and add `InstallClaim` at module level. `pending_version` runs under the gate **before** anything is committed: `NoPending` leaves the flag, `install_epoch`, and `latest_ui_revision` untouched, so an in-flight check remains valid. `on_claim` only publishes the in-memory snapshot under the gate; neither closure calls a Tauri setter. Remove the commit-2 `#[allow(dead_code)]` markers from `claim_install`, `epoch_is_current`, and `inspect` when wp3 wires them (`updater.rs:65,82,98`). Leave the unrelated `popup_nonmac_test` marker at `updater.rs:242` intact.
 
 ```rust
 // Module level in updater.rs, next to CheckGeneration:
@@ -175,7 +175,7 @@ pub fn claim_install(
 }
 ```
 
-Commit 2's tray install arm, which called the commit-2 `claim_install(&installing) -> bool`, is switched in this commit to the same three-way call with the pending-version closure below, so tray and page share one claim path (`desktop/src-tauri/src/tray.rs` install arm; commit 2 “Rust transport and state”).
+The current tray install arm does **not** call commit 2's `claim_install(&installing) -> bool`: it still takes `PendingUpdate` directly at `tray.rs:228-233`. Replace that entire arm with `install_pending` below; the new three-way claim lives in that shared function and runs before either entry takes pending. The existing Rust test at `updater.rs:467-480` is the only live old-signature call site and must be changed as shown below.
 
 Reuse commit 2's `use serde::Serialize;` and `use std::sync::atomic::{AtomicU64, Ordering};` imports; do not add a second `Ordering` import ([020_phase2_desktop_state_icons.md](020_phase2_desktop_state_icons.md), “Rust transport and state”, `desktop/src-tauri/src/updater.rs`). Keep `PendingUpdate`'s single `Mutex<Option<Update>>`; there is no second copy of signed `Update`. Add this after `PendingUpdate` and make all app-origin commands return the same projection. `PageUpdateStatus` is a new serialized type, not a new persisted schema.
 
@@ -252,7 +252,7 @@ pub async fn install_pending(app: &AppHandle) -> Result<PageUpdateStatus, String
 }
 ```
 
-The existing `install(app, update)` body at lines 50-74 remains unchanged: its signed `download` precedes `exit::prepare_restart`, then `update.install` and `exit::complete_restart`. The claim happens *before* taking `PendingUpdate` and increments the gate-owned epoch inside the same short mutex used by check-result application. Its `prepare` closure reads the pending version, publishes the pure `"installing"` snapshot, and queues the install UI projection while still in the gate; it makes no Tauri setter call. Commit 2 adds `DesktopUpdateState` and its publisher ([020_phase2_desktop_state_icons.md](020_phase2_desktop_state_icons.md), “Rust transport and state”, `DesktopUpdateState`/`start_snapshot_publisher`). On a failed download or failed drain, the gate protects pending restoration, claim release, `"install-failed"` publication, and a new available projection together. The serialized UI worker performs all menu/icon/overlay setters afterward. No second app update is fetched during installation. Do not return a raw updater error over IPC if it can contain a URL or local path; map it to fixed user-facing copy and keep detailed error in `logging::log_once` (existing logger at `desktop/src-tauri/src/tray.rs:220`).
+The existing `install(app, update)` body at `updater.rs:288-313` remains unchanged: its signed `download` precedes `exit::prepare_restart`, then `update.install` and `exit::complete_restart`. The claim happens *before* taking `PendingUpdate` and increments the gate-owned epoch inside the same short mutex used by check-result application. Its `pending_version` closure reads the pending version; `on_claim` publishes the pure `"installing"` snapshot; `claim_install` queues the install UI projection while still in the gate. None makes a Tauri setter call. Keep commit 2's `DesktopUpdateState` and `start_snapshot_publisher` (`updater.rs:156-236`), whose 60-second wait uses `tokio::time::timeout`, not `select!`; `wake()` notifies via `send_modify` without replacing the snapshot (`updater.rs:197-204`). On a failed download or drain, the gate protects pending restoration, claim release, `"install-failed"` publication, and a new available projection together. The serialized UI worker performs menu/icon/overlay setters afterward. No second app update is fetched during installation. Do not return a raw updater error over IPC if it can contain a URL or local path; map it to fixed user-facing copy and keep detailed error in `logging::log_once` (current tray logger at `tray.rs:247`).
 
 Commit 2 owns `desktop/src-tauri/src/updater.rs::CheckGeneration` and `check_and_show` ([020_phase2_desktop_state_icons.md](020_phase2_desktop_state_icons.md), “Rust transport and state”). Change only `check_and_show`'s return/error contract; the gate already owns `install_epoch` and `latest_ui_revision`. The page command in `lib.rs::update_check` below calls this same function as the tray action and background loop; it must not call `check(app)` or create a second generation counter. `begin_if_not_installing` captures the epoch and publishes `"checking"` only after a locked install-flag recheck. Compare the epoch **inside** `apply_if_current`, before any pending, tray model, snapshot, or UI projection mutation. A superseded check returns `Ok(())` without publishing or reporting its obsolete error, then `page_status` returns `checking: true` while the newer generation is in flight; the page polls until a settled status arrives.
 
@@ -302,7 +302,7 @@ pub async fn check_and_show(app: &AppHandle) -> Result<(), String> {
 
 `CheckGeneration::apply_if_current` makes pending, the pure tray flag, snapshot, and UI projection one ordered model transition with the install claim. It rejects a page result once the later tray check has started, regardless of completion order. The gate-owned `install_epoch` rejects a check that spans an install even if its generation is still current. `begin_if_not_installing` checks the flag again while holding that gate and publishes `"checking"` before releasing it. The single `start_ui_projection_worker` rechecks `latest_ui_revision` and performs Tauri setters without the gate; if a setter is already waiting on AppKit when a newer revision arrives, the worker applies the newer projection afterward. `page_status` uses `inspect` to read pending and the native phase against the same gate, so it cannot combine pending from before a completed check with phase from after it. In `start_background_checks` and the tray `check-updates` arm use `let _ = check_and_show(&app).await;` because the function itself logs an applied error and publishes `"error"`; the page command maps an applied error to fixed copy. A rejected stale error returns success without falsely replacing the current native state.
 
-Append Rust tests under the existing `#[cfg(test)] mod tests` in `desktop/src-tauri/src/updater.rs`. Retain commit 2's `CheckGeneration` and `AtomicBool` imports; add `InstallClaim`, `UiProjection`, `Ordering`, and `std::sync::{mpsc, Arc}`. `CheckGeneration` comes from commit 2, so these tests are added only after that commit.
+Append Rust tests under the existing `#[cfg(test)] mod tests` at `updater.rs:380-505`. Retain commit 2's `CheckGeneration` and `AtomicBool` imports; add `InstallClaim`, `UiProjection`, `Ordering`, and `std::sync::{mpsc, Arc}`. `CheckGeneration` and its private `ui`, `queue_ui`, and `apply_ui_projection_if_current` methods are accessible to these child-module tests.
 
 Commit 2's inherited test `checking_publication_rechecks_install_claim_inside_the_gate` calls the commit-2 one-argument `claim_install(&installing)` and would stop compiling here. Replace its claim line in this commit:
 
@@ -311,7 +311,7 @@ Commit 2's inherited test `checking_publication_rechecks_install_claim_inside_th
 +        assert_eq!(checks.claim_install(&installing, || Some("2.66.0".into()), || {}), InstallClaim::Claimed);
 ```
 
-Every other commit-2 call site of `claim_install` (the tray install arm) is converted by the “Commit 2's tray install arm” paragraph above; after this commit `rg -n "claim_install\(&" desktop/src-tauri/src` must show only three-argument calls.
+The tray arm currently contains no `claim_install` call. After this change, `rg -n 'claim_install\(' desktop/src-tauri/src/{updater,tray}.rs` should show the new declaration, the shared `install_pending` call, and three-argument test calls, with no old one-argument call.
 
 ```rust
 #[test]
@@ -448,11 +448,38 @@ fn superseded_ui_projection_never_enters_its_setter() {
 }
 ```
 
-The first test checks the install-claim state machine. The second forces the page `None` result before and after a later-started tray `Some` result; both orders leave the tray's pending version and phase intact. The third injects a competing claim after the result guard but before the modeled pending/tray model writes, proves the claim cannot complete while the application closure owns the mutex, then proves it completes afterward and increments the epoch. The fourth runs the production projection-application seam with a fake setter that blocks until the concurrent `inspect` read completes; the one-second channel deadline makes a regression fail instead of hanging. The fifth rejects a queued projection superseded before its setter starts. The page contract test below checks that both page and tray call `check_and_show` and `install_pending`. A packaged signed-update test is left to the desktop CI lane; a unit test cannot safely replace the running application.
+The first test checks the successful/busy/retry claim sequence. The second checks that `NoPending` leaves an in-flight check valid. The third forces a page `None` result before and after a later-started tray `Some` result; both orders leave the tray's pending version and phase intact. The fourth injects a competing claim after the result guard but before the modeled pending/tray model writes, proves the claim cannot complete while the application closure owns the mutex, then proves it completes afterward and increments the epoch. The fifth runs the production projection-application seam with a fake setter that blocks until the concurrent `inspect` read completes; the one-second channel deadline makes a regression fail instead of hanging. The sixth rejects a queued projection superseded before its setter starts. The page contract test below checks that both page and tray call `check_and_show` and `install_pending`. A packaged signed-update test is left to the desktop CI lane; a unit test cannot safely replace the running application.
 
 ### MODIFY `desktop/src-tauri/src/tray.rs`
 
-At lines 198-222 replace the entire install arm with:
+At current HEAD, `tray.rs:225-250` takes `PendingUpdate` before any gate claim and calls the menu/snapshot setters directly. This is the reviewer High carried from wp2. The exact current arm is the **Before** block:
+
+```rust
+"install-update" => {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let update = app
+            .state::<crate::updater::PendingUpdate>()
+            .0
+            .lock()
+            .ok()
+            .and_then(|mut pending| pending.take());
+        let Some(update) = update else { return; };
+        let version = update.version.clone();
+        let retry_update = update.clone();
+        set_installing(&app, &version);
+        if let Err(error) = updater::install(&app, update).await {
+            if let Ok(mut pending) = app.state::<crate::updater::PendingUpdate>().0.lock() {
+                *pending = Some(retry_update);
+            }
+            set_install_failed(&app, &version);
+            crate::logging::log_once("updater install failed", &error);
+        }
+    });
+}
+```
+
+The **After** block replaces it. Both page and tray then enter `updater::install_pending`, which calls `gate.claim_install(&state.installing, pending_version, on_claim)` and handles `Claimed`, `Busy`, and `NoPending` before taking the signed update:
 
 ```rust
 "install-update" => {
@@ -465,11 +492,23 @@ At lines 198-222 replace the entire install arm with:
 }
 ```
 
-Keep `TrayState.installing` as the single flag; `CheckGeneration` owns `install_epoch` from commit 2, so do not add an epoch field to `TrayState`. Rename `set_installing` at line 308 to `pub fn show_installing` and remove both its `state.installing.store(true, ...)` block and commit-2 `DesktopUpdateState::retain_phase("installing")` call. It is a setter-only function, invoked solely by the serialized `start_ui_projection_worker`; the gate's claim owns the flag and snapshot phase. Delete the now-unused private `set_install_failed` (lines 321-326); `install_pending` publishes `"install-failed"` itself under the gate after restoration. Keep `is_installing`, `show_update_available`, `show_up_to_date`, `TrayState.update_pending`, and all commit-2 icon updates, but route every updater call to these menu/icon/overlay functions through that worker. In the check arm at lines 192-196, handle the returned `Result` as described above. Both tray menu handlers (`check-updates`, `install-update`) already spawn async tasks before touching updater state; keep all future `CheckGeneration` reads inside those tasks. Title refresh reads only `TrayState.update_pending` atomically and never reads the gate on the AppKit thread. `TrayState` still exists without a rendered tray: `lib.rs:234` manages it before `startup::begin`, so Linux without an AppIndicator host has the same claim path.
+Keep `TrayState.installing` as the single flag; `CheckGeneration` owns `install_epoch`, so do not add an epoch field to `TrayState`. Replace current `set_installing` at `tray.rs:338-351` with this setter-only function, invoked solely by `start_ui_projection_worker`:
+
+```rust
+pub fn show_installing(app: &AppHandle, version: &str) {
+    if let Some(menu) = menu_handles(app) {
+        let _ = menu.install_update.set_text(format!("Installing update v{version}…"));
+        let _ = menu.install_update.set_enabled(false);
+        let _ = menu.check_updates.set_enabled(false);
+    }
+}
+```
+
+The deleted before-lines are `state.installing.store(true, Ordering::Release)` and `DesktopUpdateState::retain_phase("installing")`; the gate's claim now owns both. Delete private `set_install_failed` at `tray.rs:353-360`; `install_pending` publishes `"install-failed"` under the gate after restoration. Keep `is_installing`, `show_update_available`, `show_up_to_date`, `TrayState.update_pending`, and commit-2 icon updates; all updater-driven calls to those menu/icon/overlay setters go through the worker. In the check arm at `tray.rs:219-224`, use `let _ = updater::check_and_show(&app).await;` for its new `Result` contract. Both menu handlers already spawn async tasks before touching updater state; keep gate reads inside those tasks. Title refresh reads only `TrayState.update_pending` atomically. `TrayState` still exists without a rendered tray: `lib.rs:232` manages it before `startup::begin` at `lib.rs:272`, so Linux without an AppIndicator host has the same claim path.
 
 ### MODIFY `desktop/src-tauri/src/lib.rs`, `desktop/src-tauri/src/startup.rs`, `desktop/src-tauri/src/window.rs`
 
-Add these commands before `run()` in `lib.rs`, and append their names to the existing `generate_handler!` at `lib.rs:212-221`. The origin guard uses the actual requesting `WebviewWindow`, not a URL string supplied by JavaScript. `window::is_update_page` is defined below.
+Add these commands before `run()` in `lib.rs`, and append their names to the existing `generate_handler!` at current `lib.rs:214-222`. The origin guard uses the actual requesting `WebviewWindow`, not a URL string supplied by JavaScript. `window::require_update_page` is defined below.
 
 ```rust
 #[tauri::command]
@@ -575,7 +614,7 @@ Do not bypass `ready_dashboard` with a hardcoded port or local storage. Do not w
 
 ### MODIFY `gui/src/lib/desktop-shell.ts`, `gui/src/App.tsx`, `gui/src/components/sidebar-github-row.tsx`, `gui/src/pages/use-dashboard-data.ts`
 
-Append to `desktop-shell.ts` (using the existing `hostOs` and `isDesktopShell` at lines 11-19):
+Append to `desktop-shell.ts` (using the existing `isDesktopShell` at lines 11-13 and `hostOs` at lines 29-34):
 
 ```ts
 export function desktopUpdatePageUrl(ua = currentUserAgent()): string | null {
@@ -606,7 +645,7 @@ onOpenUpdate={() => {
 
 In `use-dashboard-data.ts:1-6`, import `openDesktopUpdatePage`; prepend `if (openDesktopUpdatePage()) return;` to `openUpdateDialog` at line 861. This catches the dashboard maintenance anchor (`dashboard-overview-sections.tsx:219-229`) and cold `#dashboard/update` deep links consumed at `use-dashboard-data.ts:887-901`; it executes before `fetchUpdateCheck` or `/api/update/run`. The normal browser path then executes the unchanged package dialog. `runUpdate` at lines 903-919 remains unchanged and unreachable from the desktop entry path.
 
-Commit 2 already replaces `sidebar-github-row.tsx`'s badge request with `updateBadgeUrl`, changes the poll to 60 seconds on desktop, and extends `UpdateBadge.installer` to `"desktop"` ([020_phase2_desktop_state_icons.md](020_phase2_desktop_state_icons.md), “Embedded GUI poll”, `badgePoll`). Keep that exact code. In wp3 import `isDesktopShell` from `../lib/desktop-shell` and replace only the label expression at current lines 127-129 with:
+Commit 2 already replaces `sidebar-github-row.tsx`'s badge request with `updateBadgeUrl`, changes the desktop poll to 60 seconds while retaining the 10-minute `BADGE_POLL_MS` browser default, and extends `UpdateBadge.installer` to `"desktop"` ([020_phase2_desktop_state_icons.md](020_phase2_desktop_state_icons.md), “Embedded GUI poll”, `badgePoll`). Keep that exact code. In wp3 import `isDesktopShell` from `../lib/desktop-shell` and replace only the label expression at current lines 127-131 with:
 
 ```tsx
 const updateLabel = updateAvailable && latestVersion
@@ -768,7 +807,7 @@ describe("bundled desktop update surface", () => {
 });
 ```
 
-The first test asserts the command names used by the page and registered by Rust; it catches inadvertent package-update routing. The second is source-oracle coverage only; the Rust gate tests prove ordering and the claim boundary. The supersession test exercises the rendered checking state and 1 s status poll, while packaged smoke proves navigation. Add the new file to both JSON registries, in the existing `desktop-*` explicit group (`scripts/test-layout/layout.json:776-791`, `tests/fixtures/test-layout-expected.json:603-617`):
+The first test asserts the command names used by the page and registered by Rust; it catches inadvertent package-update routing. The second is source-oracle coverage only; the Rust gate tests prove ordering and the claim boundary. The supersession test exercises the rendered checking state and 1 s status poll, while packaged smoke proves navigation. Add the new file to both JSON registries, in the existing `desktop-*` explicit group (`scripts/test-layout/layout.json:777-792`, `tests/fixtures/test-layout-expected.json:603-618`):
 
 ```json
 "desktop-update-surface.test.ts": "clients",
@@ -882,25 +921,25 @@ In each desktop guide, translate the exact new English semantics in place: the d
 
 ## Ratchet and validation
 
-At this HEAD, `tests/fixtures/file-size-baseline.json:1-30` exempts ten i18n files; every other planned scanned file lacks a per-file baseline and therefore has the 2,000-line threshold (`scripts/file-size-ratchet.ts:4-20,114-125`). New `tests/clients/desktop-update-surface.test.ts` starts at 0/2000; new `desktop/ui/update.html` starts at 0/N/A because HTML is not scanned. Counts before commits 1-2:
+At this HEAD, `tests/fixtures/file-size-baseline.json:1-30` exempts the ten planned i18n files; every other planned scanned file lacks a per-file baseline and therefore has the 2,000-line threshold (`scripts/file-size-ratchet.ts:4-20,114-125`). New `tests/clients/desktop-update-surface.test.ts` starts at 0/2000; new `desktop/ui/update.html` starts at 0/N/A because HTML is not scanned. The following counts are current after commits 1-2 and before wp3:
 
 | Paths, in the order named | Current lines / cap |
 | --- | --- |
-| `gui/src/App.tsx`; `gui/src/components/sidebar-github-row.tsx`; `gui/src/pages/use-dashboard-data.ts`; `gui/src/lib/desktop-shell.ts`; `gui/tests/desktop-shell.test.ts` | 527/2000; 161/2000; 951/2000; 32/2000; 37/2000 |
-| `scripts/test-layout/layout.json`; `tests/fixtures/test-layout-expected.json` | 1813/2000; 1620/2000 |
-| `structure/desktop-shell.md`; `structure/gui-and-management-api.md` | 388/2000; 395/2000 |
-| English `docs-site/src/content/docs/guides/{desktop-app,macos-menu-bar,web-dashboard}.md` | 122/2000; 56/2000; 380/2000 |
-| fr guide paths in the locale table above, left to right | 79/2000; 56/2000; 238/2000 |
-| ja guide paths, left to right | 79/2000; 56/2000; 199/2000 |
-| ko guide paths, left to right | 79/2000; 56/2000; 251/2000 |
-| ru guide paths, left to right | 124/2000; 56/2000; 211/2000 |
-| tr guide paths, left to right | 79/2000; 56/2000; 309/2000 |
-| zh-cn guide paths, left to right | 79/2000; 56/2000; 186/2000 |
-| zh-tw guide paths, left to right | 79/2000; 56/2000; 187/2000 |
+| `gui/src/App.tsx`; `gui/src/components/sidebar-github-row.tsx`; `gui/src/pages/use-dashboard-data.ts`; `gui/src/lib/desktop-shell.ts`; `gui/tests/desktop-shell.test.ts` | 527/2000; 163/2000; 951/2000; 46/2000; 51/2000 |
+| `scripts/test-layout/layout.json`; `tests/fixtures/test-layout-expected.json` | 1817/2000; 1623/2000 |
+| `structure/desktop-shell.md`; `structure/gui-and-management-api.md` | 390/2000; 395/2000 |
+| English `docs-site/src/content/docs/guides/{desktop-app,macos-menu-bar,web-dashboard}.md` | 126/2000; 56/2000; 380/2000 |
+| fr guide paths in the locale table above, left to right | 83/2000; 56/2000; 238/2000 |
+| ja guide paths, left to right | 83/2000; 56/2000; 199/2000 |
+| ko guide paths, left to right | 83/2000; 56/2000; 251/2000 |
+| ru guide paths, left to right | 128/2000; 56/2000; 211/2000 |
+| tr guide paths, left to right | 83/2000; 56/2000; 309/2000 |
+| zh-cn guide paths, left to right | 83/2000; 56/2000; 186/2000 |
+| zh-tw guide paths, left to right | 83/2000; 56/2000; 187/2000 |
 | `gui/src/i18n/{en,de,fr,ja,ko,ru,tr,vi,zh,zh-TW}.ts` | 3226, 3190, 3179, 3212, 3212, 3213, 3213, 3182, 3211, 3176 / exempt |
-| `desktop/src-tauri/src/{lib,updater,tray,window,startup}.rs` | 288, 144, 620, 226, 2161 / N/A (Rust not scanned) |
+| `desktop/src-tauri/src/{lib,updater,tray,window,startup}.rs` | 294, 505, 666, 226, 2167 / N/A (Rust not scanned) |
 
-Recalculate after commits 1-2 and before B. No proposed scanned file is at its cap, and no growth is planned in `gui/src/styles.css` (2958/2958). If a preceding commit ratchets a proposed file to cap, move the new GUI helper/test into a sibling module and register any new Bun test in both layout JSONs; never raise a cap.
+Recounted after commits 1-2 and before B. No proposed scanned file is at its cap; the tightest current planned files are `scripts/test-layout/layout.json` at 1817/2000 (183 lines) and `tests/fixtures/test-layout-expected.json` at 1623/2000 (377 lines). No growth is planned in `gui/src/styles.css` (2958/2958). If a preceding commit ratchets a proposed file to cap, move the new GUI helper/test into a sibling module and register any new Bun test in both layout JSONs; never raise a cap.
 
 Fresh commands run on this docs-only source baseline; none of the code gates can prove the proposed page or Rust implementation because those files have not been changed:
 
@@ -919,7 +958,7 @@ cd gui && bun run build
 | `bun test ./gui/tests/desktop-shell.test.ts ./tests/clients/desktop-startup-surface.test.ts` | 0 | 25 pass, 0 fail, 140 assertions; existing shell/startup behavior only |
 | `bun run typecheck` | 0 | `bun x tsc --noEmit`; current TypeScript only |
 | `bun run structure:check` | 0 | `structure/ SSOT checks passed`; current source/docs only |
-| `bun run privacy:scan` | 0 | `Privacy scan passed`; tracked-file walk omits this untracked plan document |
+| `bun run privacy:scan` | 0 | `Privacy scan passed`; this tracked plan is included in the tracked-file walk |
 | `cd gui && bun run lint:i18n` | 0 | existing GUI copy passes |
 | `cd gui && bun run lint` | 0 | existing GUI source passes |
 | `cd gui && bun run build` | 0 | Vite built 355 modules; existing GUI bundle only |
@@ -939,3 +978,16 @@ The complete `check_and_show` replacement and both new Rust test functions were 
 The main risk is origin crossing: if navigation fails, the desktop page never appears; if a remote dashboard can invoke a command, it could request a signed install. The Rust origin/path guard and unchanged remote zoom capability fence the latter, while packaged navigation smoke checks the former. A second risk is check ordering and AppKit deadlock: the page, tray, and background loop share `CheckGeneration` through `check_and_show`; its mutex orders install claims against pure check state writes, and its epoch rejects checks spanning installation. Revisioned UI projections run through one worker after the mutex is released. `update_status` is async, and menu callbacks reach gate reads only in spawned tasks. The delayed-order Rust test covers a page `None` against a later-started tray `Some`, the forced-interleaving test covers the claim race, the blocked-setter test covers concurrent status reads, and the page test covers checking until a tray result settles. A third risk is a failed drain leaving the app and proxy in mixed state; restore pending and report failure, preserving the existing `exit::prepare_restart` behavior. Roll back commit 3 as a unit: the prior tray install path and package dashboard dialog return, while commits 1-2's badge and tray indicators remain. No persisted schema or updater key changes need migration.
 
 No unresolved product decision contradicts `000_plan.md`. Main should revalidate these source anchors after commits 1-2 and ensure the installed Tauri capability schema keeps all four commands restricted to the bundled app page; if it requires an explicit capability, it must have no `remote.urls` entry. Packaged Windows/Linux page transitions and trayless Linux installation remain human/CI proof obligations, not claims of this docs-only pass.
+
+## wp3 P revalidation
+
+Revalidated against current HEAD `9ffa2261ba63158190768be00d338149e95e4de6` after commit 2:
+
+- The original 030 anchors described pre-commit-2 line ranges and an old `claim_install(&installing) -> bool` call site. Lines 9, 147, 178, 255, 305, and 455-507 now name the current `CheckGeneration`, `UiProjection`, `DesktopUpdateState`, `PendingUpdate`, `TrayState`, `queue_ui`, `inspect`, `epoch_is_current`, `begin_if_not_installing`, and `apply_if_current` locations and signatures. The design is unchanged.
+- The carried wp2 High is confirmed: current `tray.rs:225-250` takes `PendingUpdate` at `228-233` before any claim. Lines 455-493 now show the exact current Before arm and the explicit After arm that routes both tray and page through `install_pending` and its three-way gated claim. The old setter calls are accounted for at `tray.rs:338-360`; lines 495-507 remove their flag/snapshot ownership and make `show_installing` setter-only.
+- The three commit-2 `#[allow(dead_code)]` markers are accounted for: `claim_install`, `epoch_is_current`, and `inspect` at current `updater.rs:65,82,98` are removed when commit 3 wires them. The unrelated `popup_nonmac_test` marker at `updater.rs:242` remains.
+- The updater transport details were checked against the implemented code: `start_snapshot_publisher` uses `tokio::time::timeout` at `updater.rs:228-230`, not `select!`; `DesktopUpdateState::wake()` uses `send_modify` at `updater.rs:197-204` without replacing the snapshot; and the popup keeps its validated `/usage` or `/usage/companion` fragment at `popup.rs:288-323,397-408`. No design decision changed.
+- The current GUI poll is 60 seconds for desktop and `BADGE_POLL_MS` is 10 minutes for browser at `sidebar-github-row.tsx:38,76`; the plan now states both. All ten planned i18n catalogs contain the existing `sidebar.checkUpdate` anchor and remain exempt from the ratchet; the new `sidebar.desktopUpdate` key still fits each catalog's existing shape.
+- The headroom table at lines 928-940 was recounted from the current tree. The smallest planned scanned-file margins are 183 lines for `scripts/test-layout/layout.json` and 377 lines for `tests/fixtures/test-layout-expected.json`; `gui/src/styles.css` remains at its existing 2958/2958 cap with no planned growth. Rust files are recorded for reference and are outside the ratchet scan.
+
+No design-decision change.

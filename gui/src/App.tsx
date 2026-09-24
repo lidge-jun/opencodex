@@ -27,7 +27,7 @@ import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
 import { useCodexRestart } from "./use-codex-restart";
 import { confirmAction } from "./action-dialogs";
-import { isDesktopShell, isExternalLink } from "./lib/desktop-shell";
+import { isDesktopShell, isExternalLink, openDesktopUpdatePage } from "./lib/desktop-shell";
 
 type Theme = "light" | "dark" | "system";
 
@@ -456,10 +456,8 @@ export default function App() {
           <SidebarGithubRow
             apiBase={sharedBase}
             onOpenUpdate={() => {
-              // The update dialog lives on the dashboard maintenance panel. Deep-link to
-              // `#dashboard/update` and let the dashboard own the check/run flow — no
-              // cross-component event bus, and the link survives a refresh.
               setNavOpen(false);
+              if (openDesktopUpdatePage()) return;
               navigateToPage("dashboard", "update");
             }}
           />

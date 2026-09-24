@@ -170,6 +170,7 @@ export const ru: Record<TKey, string> = {
   "onboarding.star.done": "Готово",
   "sidebar.updateAvailable": "Доступно обновление: {version}",
   "sidebar.checkUpdate": "Проверить обновления",
+  "sidebar.desktopUpdate": "Открыть обновления приложения",
   "common.save": "Сохранить",
   "common.saving": "Сохранение…",
   "common.cancel": "Отмена",
