@@ -167,6 +167,18 @@ describe("release pipeline contract", () => {
       .find(run => run.includes("gh release upload")) ?? "";
     expect(attachRun).toContain("--draft=false");
     expect(attachRun.indexOf("gh release upload")).toBeLessThan(attachRun.indexOf("--draft=false"));
+
+    const failedDraftRead = Bun.spawnSync(
+      ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `
+        gh() {
+          if [ "$2" = "view" ]; then return 41; fi
+          return 0
+        }
+        ${attachRun}
+      `],
+      { env: { ...process.env, RELEASE_VERSION: "2.65.0" } },
+    );
+    expect(failedDraftRead.exitCode).toBe(41);
   });
 
   test("a partial publication has a recorded, explicit recovery path", () => {

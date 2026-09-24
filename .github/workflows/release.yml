@@ -689,7 +689,8 @@ jobs:
           # release is therefore created as a draft and becomes public here, once the
           # verified bundle is attached. The only edit permitted is this flip — the
           # notes still come from the validated notes file written at creation.
-          if [ "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" = "true" ]; then
+          draft_state="$(gh release view "$release_tag" --json isDraft --jq .isDraft)"
+          if [ "$draft_state" = "true" ]; then
             gh release edit "$release_tag" --draft=false
           fi
 
