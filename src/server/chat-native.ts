@@ -1,6 +1,6 @@
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
-import { chatBodyCarriesImage, chatBodyCarriesToolResultImage } from "../chat/image-parts";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
+import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
   chatCompletionsErrorBody,
   chatCompletionsErrorResponse,
@@ -20,7 +20,6 @@ import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
-import { isModelTextOnly, requiresVisionPreprocessing } from "../vision";
 import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
@@ -72,6 +71,8 @@ import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
+
+export { isNativeChatRouteEligible, nativeChatDeclineReason } from "./chat-native-eligibility";
 
 type Rec = Record<string, unknown>;
 
@@ -152,44 +153,6 @@ function normalizePinnedChatEffort(options: HandleNativeChatOptions): void {
 
 function isRec(value: unknown): value is Rec {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec, config?: OcxConfig): boolean {
-  const provider = route.provider;
-  if (provider.adapter !== "openai-chat") return false;
-  if (provider.authMode !== undefined && provider.authMode !== "key" && provider.authMode !== "local") return false;
-  // Combo and policy execution own multi-candidate retries in the Responses pipeline.
-  if (route.combo || route.routeKind === "combo" || route.routeKind === "policy") return false;
-  if (rawBody.store === true || rawBody.background === true) return false;
-  if (typeof rawBody.previous_response_id === "string" && rawBody.previous_response_id.length > 0) return false;
-  if (rawBody.compaction_trigger !== undefined) return false;
-  // A standard Chat tool message accepts a string or text parts, not image_url, so
-  // normalizing a Pi/Anthropic tool image into image_url is not enough on its own —
-  // the part is still inside a tool message. The translated adapter already places
-  // tool-result images in a following user carrier after the complete paired batch
-  // (flushToolResultImages), so divert these requests there. Ordinary user images and
-  // text-only tool results keep the native fast path.
-  if (chatBodyCarriesToolResultImage(rawBody)) return false;
-  // Vision sidecar coverage (roadmap 180): a text-only routed model with an
-  // image-bearing body must go through the Responses pipeline, whose plan
-  // site describes or strips the image. The native fast path has no vision
-  // handling, so letting it keep such a request forwards raw pixels to a
-  // model the operator declared blind.
-  if (chatBodyCarriesImage(rawBody)) {
-    const needsVision = config
-      ? requiresVisionPreprocessing(config, provider, route.modelId, route.providerName)
-      : isModelTextOnly(provider, route.modelId);
-    if (needsVision) return false;
-  }
-  if (Array.isArray(rawBody.tools)) {
-    for (const tool of rawBody.tools) {
-      if (!isRec(tool)) continue;
-      if (tool.type === "web_search" || tool.type === "web_search_preview" || tool.type === "image_generation") {
-        return false;
-      }
-    }
-  }
-  return true;
 }
 
 function chatCompletionJson(value: unknown): Rec | null {
