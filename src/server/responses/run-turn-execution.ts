@@ -40,6 +40,27 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
 import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
+// LOCAL PATCH (runturn-websearch)
+import { planWebSearch } from "../../web-search";
+import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
+
+// LOCAL PATCH (runturn-websearch): top-level fields route binding or the
+// adapter itself may write during a turn. Iteration-local `turnParsed` objects
+// are shallow copies of `parsed`, so these are mirrored both directions around
+// each runTurn dispatch — clones would otherwise keep stale route state and
+// adapter-written values (e.g. Cursor's conversation id) would be lost.
+const RUNTURN_WS_ROUTE_STATE_KEYS = [
+  "_cursorIdentityScope",
+  "_cursorConversationId",
+  "_cursorClientThreadId",
+  "_kiroAuthContext",
+  "_providerContinuation",
+  "_providerContinuationOwner",
+  "_providerContinuationCandidate",
+  "_stripReasoningEncryptedContent",
+  "_dropForeignReasoningItemIds",
+  "_reasoningReplayScope",
+] as const;
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesRunTurn(
@@ -71,7 +92,7 @@ export async function executeResponsesRunTurn(
     | "noteRoutedAttemptSend"
     | "bindKeyUsageFromBridge"
   >,
-  sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
+  sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction" | "openAiSidecar">,
   responseEffects: Pick<
     ResponsesEffects,
     | "cancelResponseCompletion"
@@ -121,6 +142,17 @@ export async function executeResponsesRunTurn(
   } = responseEffects;
   const { routedCompaction } = sidecarState;
 
+  // LOCAL PATCH (runturn-websearch): when Codex declared hosted web_search and
+  // a sidecar plan resolves, drive the routed model through the same search
+  // interception the fetch-path loop runs — injected as a function tool, calls
+  // intercepted, results appended to the message history between runTurn
+  // dispatches.
+  const wsPlan = !routedCompaction
+    ? planWebSearch(config, parsed, false, route.provider, route.modelId, sidecarState.openAiSidecar, {
+      admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
+    })
+    : undefined;
+
     const runTurnAbort = new AbortController();
     const cleanupRunTurnAbort = linkAbortSignal(runTurnAbort, options.abortSignal);
     const queue = createAdapterEventQueue({
@@ -151,12 +183,24 @@ export async function executeResponsesRunTurn(
       targetQueue: AdapterEventQueue,
       recovery?: AttemptRecoveryKind,
       pacingSlotAcquired = false,
+      // LOCAL PATCH (runturn-websearch): iteration-local parsed — later search
+      // rounds carry the grown message history and adjusted tool list while
+      // selection/replay binding stays on the request's own parsed object.
+      turnParsed: PreparedResponsesRequest["parsed"] = parsed,
     ): Promise<void> => {
       try {
         if (!pacingSlotAcquired) {
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         await refreshRunTurnSelection();
+        // LOCAL PATCH (runturn-websearch): refreshRunTurnSelection binds route
+        // state onto `parsed`; mirror it onto the iteration-local copy the
+        // adapter actually receives.
+        {
+          const routeState: Record<string, unknown> = {};
+          for (const k of RUNTURN_WS_ROUTE_STATE_KEYS) routeState[k] = parsed[k];
+          Object.assign(turnParsed, routeState);
+        }
         // An adapter that reports its own sends accounts for the first one at the boundary that
         // dispatches it. Logging here would claim a send that the adapter's own budget can still
         // refuse, which is exactly what happens once earlier recovery has spent the allowance.
@@ -175,7 +219,7 @@ export async function executeResponsesRunTurn(
           },
         );
         await transportState.runTurnAdapter.runTurn?.(
-          parsed,
+          turnParsed,
           {
             headers: requestState.selectedForwardHeaders,
             abortSignal: runTurnAbort.signal,
@@ -195,6 +239,14 @@ export async function executeResponsesRunTurn(
           },
           targetQueue.push,
         );
+        // LOCAL PATCH (runturn-websearch): adapters may write conversation/
+        // continuation state onto the object they received; merge it back so
+        // the next iteration's copy and request-level consumers observe it.
+        {
+          const routeState: Record<string, unknown> = {};
+          for (const k of RUNTURN_WS_ROUTE_STATE_KEYS) routeState[k] = turnParsed[k];
+          Object.assign(parsed, routeState);
+        }
       } catch (err) {
         targetQueue.push(err instanceof RequestPacingQueueOverloadError
           ? {
@@ -229,7 +281,18 @@ export async function executeResponsesRunTurn(
         targetQueue.close();
       }
     };
-    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true);
+    // LOCAL PATCH (runturn-websearch): the first iteration carries the
+    // synthetic web_search tool; later iterations get their own queue so the
+    // search loop can buffer each turn's events before deciding to intercept.
+    const wsFirstParsed = wsPlan ? runTurnWebSearchInitialParsed(parsed) : parsed;
+    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true, wsFirstParsed);
+    const dispatchSearchIteration = (iterParsed: PreparedResponsesRequest["parsed"]): AsyncIterable<AdapterEvent> => {
+      const iterQueue = createAdapterEventQueue({
+        onBacklogExceeded: () => runTurnAbort.abort(),
+      });
+      void runTurnAttempt(iterQueue, undefined, false, iterParsed);
+      return iterQueue.stream();
+    };
     const rotateRunTurnAdapterOnPreflight429 = async (
       error: Extract<AdapterEvent, { type: "error" }>,
     ): Promise<boolean> => {
@@ -403,7 +466,25 @@ export async function executeResponsesRunTurn(
         }
         eventSource = preflight.stream;
       }
-      const guardedSource = emptyCompletionGuardEnabled
+      // LOCAL PATCH (runturn-websearch): intercept web_search calls across
+      // iterations; terminal output keeps flowing through the same queue/bridge.
+      if (wsPlan) {
+        eventSource = runTurnWebSearchLoop(eventSource, {
+          parsed,
+          plan: wsPlan,
+          forwardProvider: wsPlan.forwardSidecar?.provider,
+          forwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
+          ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
+          recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
+          abortSignal: runTurnAbort.signal,
+          dispatch: dispatchSearchIteration,
+        });
+      }
+      // LOCAL PATCH (runturn-websearch): the empty-completion retry replays
+      // the ORIGINAL parsed request — no synthetic tool, no gathered results —
+      // so it must not fire while the search loop owns the turn. An empty
+      // forced answer is recovered inside runTurnWebSearchLoop instead.
+      const guardedSource = emptyCompletionGuardEnabled && !wsPlan
         ? guardEmptyCompletionEventStream({
             firstEvents: eventSource,
             // Identical-turn retry: same parsed request, same headers, same
@@ -477,7 +558,9 @@ export async function executeResponsesRunTurn(
       )) runTurnEvents.push(event);
     }
     let events: AdapterEvent[];
-    if (emptyCompletionGuardEnabled) {
+    // LOCAL PATCH (runturn-websearch): same exclusion as the streaming branch —
+    // a search-aware retry runs inside runTurnWebSearchLoop, not the raw guard.
+    if (emptyCompletionGuardEnabled && !wsPlan) {
       events = [];
       for await (const event of guardEmptyCompletionEventStream({
         firstEvents: (async function* () { yield* runTurnEvents; })(),
@@ -485,6 +568,25 @@ export async function executeResponsesRunTurn(
       })) events.push(event);
     } else {
       events = runTurnEvents;
+    }
+    // LOCAL PATCH (runturn-websearch): buffered path runs the same interception
+    // loop; iterations dispatch through the same attempt body on fresh queues.
+    if (wsPlan) {
+      const searched: AdapterEvent[] = [];
+      for await (const event of runTurnWebSearchLoop(
+        (async function* () { yield* events; })(),
+        {
+          parsed,
+          plan: wsPlan,
+          forwardProvider: wsPlan.forwardSidecar?.provider,
+          forwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
+          ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
+          recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
+          abortSignal: runTurnAbort.signal,
+          dispatch: dispatchSearchIteration,
+        },
+      )) searched.push(event);
+      events = searched;
     }
     if (options.comboAttempt) {
       const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");

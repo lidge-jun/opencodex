@@ -145,6 +145,9 @@ export async function executeResponsesSidecars(
   //   - non-runTurn: web-search wins over image when both eligible (documented priority)
   //   - runTurn: image bridge may run (it supports runTurn); web-search is skipped so runTurn
   //     can proceed for web-search-only turns
+  // LOCAL PATCH (runturn-websearch): runTurn adapters run their own web-search
+  // loop inside executeResponsesRunTurn (src/web-search/run-turn-loop.ts); the
+  // fetch-path loop below stays non-runTurn-only.
   const wsPlan = !routedCompaction
     ? planWebSearch(config, parsed, false, route.provider, route.modelId, openAiSidecar, {
       admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
