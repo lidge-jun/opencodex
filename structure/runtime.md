@@ -156,7 +156,7 @@ there. Feature code is grouped by responsibility:
 | Codex integration | `src/codex/`, `src/combos/`, `src/providers/`, `src/oauth/` |
 | Surfaces | `src/server/`, `src/cli/`, `src/tray/`, `src/github/` |
 | Evidence and contracts | `src/compatibility/`, `src/lab/` |
-| Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/` ([package refresh](ops/service-and-sidecars.md#package-cache-refresh)), `src/generated/` |
+| Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/` ([package refresh](ops/service-and-sidecars.md#package-cache-refresh); `desktop-badge.ts` holds bounded process-local display state, never install authority), `src/generated/` |
 
 `src/generated/` is committed build output, not hand-edited; `scripts/generate-model-metadata.ts` derives `kimi-responses` → Moonshot metadata from the registry's `jawcodeBundle` while keeping its provider row distinct.
 

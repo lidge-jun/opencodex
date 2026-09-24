@@ -20,6 +20,7 @@ use tauri_plugin_opener::OpenerExt;
 pub struct TrayState {
     pub menu: Mutex<Option<TrayMenu>>,
     pub installing: AtomicBool,
+    pub update_pending: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -34,8 +35,34 @@ impl Default for TrayState {
         Self {
             menu: Mutex::new(None),
             installing: AtomicBool::new(false),
+            update_pending: AtomicBool::new(false),
         }
     }
+}
+
+#[cfg(any(not(target_os = "macos"), test))]
+fn tray_icon_bytes(pending: bool) -> &'static [u8] {
+    if pending {
+        include_bytes!("../icons/tray/icon-update.png")
+    } else {
+        include_bytes!("../icons/tray/icon.png")
+    }
+}
+
+fn apply_update_indicator(app: &AppHandle, pending: bool) {
+    #[cfg(target_os = "macos")]
+    popup::set_update_dot(app, pending);
+    #[cfg(not(target_os = "macos"))]
+    if let Some(tray) = app.tray_by_id("main") {
+        let image =
+            tauri::image::Image::from_bytes(tray_icon_bytes(pending)).expect("generated tray icon");
+        let _ = tray.set_icon(Some(image));
+    }
+}
+
+fn update_pending(app: &AppHandle) -> bool {
+    app.try_state::<TrayState>()
+        .is_some_and(|state| state.update_pending.load(Ordering::Acquire))
 }
 
 /// Build the tray.
@@ -228,6 +255,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
 
+    apply_update_indicator(app, update_pending(app));
     refresh(app, &tray);
     let tray = tray.clone();
     let app = app.clone();
@@ -241,7 +269,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             else {
                 continue;
             };
-            refresh_title(&tray, &proxy);
+            refresh_title(&app, &tray, &proxy);
             tick += 1;
             if tick % 5 == 0 {
                 widget::refresh(&proxy);
@@ -258,7 +286,7 @@ fn refresh(app: &AppHandle, tray: &tauri::tray::TrayIcon<Wry>) {
     else {
         return;
     };
-    refresh_title(tray, &proxy);
+    refresh_title(app, tray, &proxy);
     widget::refresh(&proxy);
 }
 
@@ -288,6 +316,7 @@ pub fn show_update_available(app: &AppHandle, version: &str) {
         let _ = menu.check_updates.set_enabled(true);
         let _ = menu.check_updates.set_text("Check for Updates…");
     }
+    apply_update_indicator(app, true);
 }
 
 pub fn show_up_to_date(app: &AppHandle) {
@@ -298,6 +327,7 @@ pub fn show_up_to_date(app: &AppHandle) {
         let _ = menu.check_updates.set_enabled(true);
         let _ = menu.install_update.set_enabled(false);
     }
+    apply_update_indicator(app, false);
 }
 
 pub fn is_installing(app: &AppHandle) -> bool {
@@ -316,6 +346,8 @@ fn set_installing(app: &AppHandle, version: &str) {
         let _ = menu.install_update.set_enabled(false);
         let _ = menu.check_updates.set_enabled(false);
     }
+    app.state::<updater::DesktopUpdateState>()
+        .retain_phase("installing");
 }
 
 fn set_install_failed(app: &AppHandle, version: &str) {
@@ -323,9 +355,12 @@ fn set_install_failed(app: &AppHandle, version: &str) {
         state.installing.store(false, Ordering::Release);
     }
     show_update_available(app, version);
+    app.state::<updater::DesktopUpdateState>()
+        .retain_phase("install-failed");
 }
 
-fn refresh_title(tray: &tauri::tray::TrayIcon<Wry>, proxy: &ProxyClient) {
+fn refresh_title(app: &AppHandle, tray: &tauri::tray::TrayIcon<Wry>, proxy: &ProxyClient) {
+    let app = app.clone();
     let proxy = proxy.clone();
     let tray = tray.clone();
     tauri::async_runtime::spawn(async move {
@@ -338,6 +373,8 @@ fn refresh_title(tray: &tauri::tray::TrayIcon<Wry>, proxy: &ProxyClient) {
         let quotas = proxy.quotas().await.unwrap_or(Value::Null);
         let title = render_title(&settings, &usage, &quotas);
         let _ = tray.set_title(title.as_deref());
+        #[cfg(target_os = "macos")]
+        apply_update_indicator(&app, update_pending(&app));
     });
 }
 
@@ -495,8 +532,17 @@ fn tray_anchor(app: &AppHandle) -> tauri::PhysicalPosition<f64> {
 
 #[cfg(test)]
 mod tests {
-    use super::render_title;
+    use super::{render_title, tray_icon_bytes};
     use serde_json::json;
+
+    #[test]
+    fn dotted_tray_variant_is_distinct_and_both_variants_are_png() {
+        let normal = tray_icon_bytes(false);
+        let dotted = tray_icon_bytes(true);
+        assert_eq!(&normal[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(&dotted[..8], b"\x89PNG\r\n\x1a\n");
+        assert_ne!(normal, dotted);
+    }
 
     #[test]
     fn icon_only_clears_the_title_but_a_template_and_unavailable_data_keep_their_meaning() {

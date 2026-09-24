@@ -17,6 +17,7 @@ import { useState } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { IconDownload, IconGithub, IconStar } from "../icons";
 import { useT } from "../i18n/shared";
+import { isDesktopShell, updateBadgeUrl } from "../lib/desktop-shell";
 
 type StarState = "starred" | "not-starred" | "unauthenticated";
 
@@ -28,7 +29,7 @@ interface StarStatus {
 interface UpdateBadge {
   updateAvailable?: boolean;
   latestVersion?: string | null;
-  installer?: "bun" | "mise" | "npm" | "pnpm" | "source";
+  installer?: "bun" | "mise" | "npm" | "pnpm" | "source" | "desktop";
   /** True when no cached registry answer exists, so "no update" is unproven. */
   unknown?: boolean;
 }
@@ -67,11 +68,12 @@ export function SidebarGithubRow({
     (signal) => readJson<StarStatus>(`${apiBase}/api/github/star`, signal),
     { pollMs: STAR_POLL_MS },
   );
+  const badgeUrl = updateBadgeUrl(apiBase);
   const badgePoll = useKeyedClientResource(
-    `sidebar-update-badge:${apiBase}`,
-    [apiBase],
-    (signal) => readJson<UpdateBadge>(`${apiBase}/api/update/badge`, signal),
-    { pollMs: BADGE_POLL_MS },
+    "sidebar-update-badge:" + badgeUrl,
+    [badgeUrl],
+    (signal) => readJson<UpdateBadge>(badgeUrl, signal),
+    { pollMs: isDesktopShell() ? 60_000 : BADGE_POLL_MS },
   );
 
   const polledState = starPoll.data?.state ?? null;

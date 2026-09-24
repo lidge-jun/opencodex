@@ -1411,7 +1411,12 @@ fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
         app.try_state::<AppState>()
             .is_some_and(|state| state.owns_runtime()),
     );
-    let dashboard = endpoint.url("/#/usage");
+    let path = format!(
+        "/?desktop_session={}#/usage",
+        app.state::<crate::updater::DesktopUpdateState>()
+            .session_id()
+    );
+    let dashboard = endpoint.url(&path);
     let mut progress = Progress::new(Phase::Ready, elapsed(started));
     progress.dashboard = Some(dashboard.clone());
     if !emit(app, progress, None) {
@@ -1419,6 +1424,7 @@ fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
         // terminal state stays and the window must not navigate away from it.
         return;
     }
+    app.state::<crate::updater::DesktopUpdateState>().wake();
     if let Some(window) = app.get_webview_window("main") {
         let visible = window.is_visible().unwrap_or(true);
         let startup = app.try_state::<Startup>();

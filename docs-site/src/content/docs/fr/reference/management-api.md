@@ -325,7 +325,10 @@ supprimer leur fournisseur.
 | --- | --- | --- |
 | `GET /api/github/star` | Lire le statut de l'étoile du référentiel via la session `gh` de l'utilisateur | Codes de résultat fixes spécifiques au statut |
 | `POST /api/github/star` | Ajouter une étoile au dépôt uniquement à la suite d'une action humaine authentifiée | 403 `agent_consent_required` pour les appelants pilotés par un agent sans preuve de session du tableau de bord |
-| `GET /api/update/badge` | Lire le cache du badge sans interroger le registre ; un cache absent, d’un autre canal ou vieux de 40 heures renvoie `unknown: true`. | — |
+| `GET /api/update/badge` | Lire le badge du paquet mis en cache sans interroger le registre ; un cache absent, d’un autre canal ou vieux de 40 heures renvoie `unknown: true`. `surface=desktop&session=<id>` ne lit que cette session de l’application de bureau. | 400 surface invalide ; une session de bureau absente ou expirée renvoie `unknown: true` |
+| `POST /api/update/desktop-snapshot` | Le shell de bureau publie l’état d’affichage de son updater Tauri via le client proxy lié | 403 si l’en-tête `Origin` est présent ou sans le principal brut `admin-token` ; 400 champs invalides ; 413 au-delà de 1 KiB |
+
+Le snapshot de bureau est un état d’affichage temporaire, pas une demande d’installation. Le proxy conserve au plus 32 sessions en mémoire et en expire une 180 secondes après son dernier heartbeat. Un navigateur ordinaire sans surface=desktop continue de lire le badge du paquet.
 
 Le proxy vérifie les installations éligibles après le démarrage si le cache est absent ou vieux de plus de 20 heures, puis contrôle sa fraîcheur chaque heure. `OCX_DISABLE_UPDATE_CHECK=1` désactive uniquement les vérifications automatiques. Les demandes explicites de vérification et de mise à jour restent disponibles.
 

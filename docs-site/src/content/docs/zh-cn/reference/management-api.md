@@ -274,7 +274,10 @@ OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上�
 | --- | --- | --- |
 | `GET /api/github/star` | 通过用户的 `gh` 会话读取仓库星标状态 | 与状态相关的固定结果代码 |
 | `POST /api/github/star` | 仅允许来自经过身份验证的人类操作来给仓库加星 | 对缺少仪表板会话证据的 agent 驱动调用返回 403 `agent_consent_required` |
-| `GET /api/update/badge` | 直接读取缓存的更新徽标，不查询注册表；缓存缺失、通道不匹配或超过 40 小时则返回 `unknown: true`。 | — |
+| `GET /api/update/badge` | 直接读取缓存的包更新徽标，不查询注册表；缓存缺失、通道不匹配或已达 40 小时时返回 `unknown: true`。`surface=desktop&session=<id>` 只读取该桌面应用会话。 | 400 无效 surface；桌面会话缺失或过期时返回 `unknown: true` |
+| `POST /api/update/desktop-snapshot` | 桌面 shell 通过已绑定的代理客户端发布 Tauri 更新器的显示状态 | 存在 `Origin` 标头或不是原始 `admin-token` principal 时返回 403；字段无效时返回 400；超过 1 KiB 时返回 413 |
+
+桌面 snapshot 是临时显示状态，不是安装请求。代理最多在内存中保存 32 个会话，并在最后一次 heartbeat 后 180 秒使会话过期。未指定 surface=desktop 的普通浏览器仍读取包更新徽标。
 
 对于符合条件的软件包安装，代理在启动后发现缓存缺失或超过 20 小时时会检查更新，之后每小时检查缓存是否过期。`OCX_DISABLE_UPDATE_CHECK=1` 仅禁用自动检查；显式检查和运行请求仍可使用。
 

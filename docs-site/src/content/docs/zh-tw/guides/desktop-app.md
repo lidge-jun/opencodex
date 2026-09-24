@@ -60,7 +60,11 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 ## 更新
 
-選擇系統匣選單中的 **Check for Updates…** 可立即檢查。正式版也會在啟動後及每六小時自動檢查。安裝前，更新會使用專案簽署的 updater 公鑰驗證。在 macOS 上，應用程式內更新會下載 `OpenCodex-<version>-macos.app.tar.gz`；DMG 用於首次安裝。只有設定 updater 金鑰祕密時才會產生版本 manifest，屆時四個平台都必須完成簽署。
+選擇系統匣選單中的 **Check for Updates…** 可立即檢查。正式版也會在啟動後及每六小時自動檢查。
+
+當 Tauri updater 找到較新的應用程式版本時，macOS 選單列圖示或具備 tray host 的 Windows/Linux 系統匣圖示會顯示藍點。內嵌儀表板顯示相同的桌面更新訊號。連接同一代理的一般瀏覽器仍顯示代理套件的更新狀態。如果 shell 約三分鐘未回報，內嵌徽章會變為 unknown，直到重新連線。藍點只表示有更新；安裝仍須明確操作。
+
+安裝前，更新會使用專案簽署的 updater 公鑰驗證。在 macOS 上，應用程式內更新會下載 `OpenCodex-<version>-macos.app.tar.gz`；DMG 用於首次安裝。只有設定 updater 金鑰祕密時才會產生版本 manifest，屆時四個平台都必須完成簽署。
 
 ## Widget
 

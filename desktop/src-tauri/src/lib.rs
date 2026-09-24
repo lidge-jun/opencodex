@@ -223,6 +223,12 @@ pub fn run() {
         .setup(|app| {
             app.manage(AppState::new());
             app.manage(updater::PendingUpdate(Mutex::new(None)));
+            app.manage(updater::DesktopUpdateState::new(
+                app.package_info().version.to_string(),
+            ));
+            app.manage(updater::CheckGeneration::default());
+            updater::start_ui_projection_worker(app.handle().clone());
+            updater::start_snapshot_publisher(app.handle().clone());
             app.manage(tray::TrayState::default());
             app.manage(exit::ExitCoordinator::new());
             app.manage(startup::Startup::new());

@@ -544,7 +544,10 @@ deleting their provider.
 | --- | --- | --- |
 | `GET /api/github/star` | Read repository star status through the user's `gh` session | Status-specific fixed result codes |
 | `POST /api/github/star` | Star the repository only from an authenticated human action | 403 `agent_consent_required` for agent-driven callers without dashboard-session evidence |
-| `GET /api/update/badge` | Read cached package badge state without a registry lookup; missing, wrong-channel or 40-hour-old cache returns `unknown: true`. | — |
+| `GET /api/update/badge` | Read cached package badge without a registry lookup; missing, wrong-channel or 40-hour-old cache returns `unknown: true`. `surface=desktop&session=<id>` reads only that desktop app session. | 400 invalid surface; missing or expired desktop session returns `unknown: true` |
+| `POST /api/update/desktop-snapshot` | Desktop shell publishes its Tauri-updater display state through the bound proxy client | 403 if an `Origin` header is present or the principal is not the raw `admin-token`; 400 invalid fields; 413 over 1 KiB |
+
+The desktop snapshot is temporary display state, not an install request. The proxy stores at most 32 sessions in memory and expires one 180 seconds after its last heartbeat. A normal browser without surface=desktop continues to read the package badge.
 
 The proxy checks an eligible package install after startup when its cache is missing or older than 20 hours, and checks freshness hourly. Set `OCX_DISABLE_UPDATE_CHECK=1` to disable automatic checks. Explicit check and run requests still work.
 

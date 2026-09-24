@@ -4,13 +4,13 @@ Goal: make the Tauri updater the authority for a desktop-only badge and put its 
 
 **IN:** bounded admin-token-only POST; process-local session snapshot; desktop badge projection; 60-second native heartbeat; embedded dashboard session URL and GUI poll; macOS AppKit dot; generated dotted Windows/Linux Tauri PNG; focused Bun, Rust, and icon tests; structure and user docs. **OUT:** package cache logic owned by commit 1, install page/IPC and click routing owned by commit 3, npm PowerShell tray owned by commit 4, Windows glyph redesign, persistence, automatic install, signature policy changes, and Lab-boundary imports.
 
-This document specifies the diff to apply in B. All paths are repository-relative. Existing symbol anchors were checked in this tree: the raw-token principal is assigned in src/server/management-auth.ts:541-564 and exposed in src/server/management/context.ts:133-150; route dispatch and origin/body gates are src/server/management-api.ts:187-205,276-306; the current badge route is src/server/management/sidebar-routes.ts:100-103 and registry row is src/server/management/route-registry.ts:350-353; package badge shape is src/update/badge.ts:19-75. On desktop, the bound credential gate is desktop/src-tauri/src/proxy.rs:181-228, updater transitions are desktop/src-tauri/src/updater.rs:81-114, tray transitions are desktop/src-tauri/src/tray.rs:198-222,284-325, dashboard construction is desktop/src-tauri/src/startup.rs:1407-1438, and the existing NSStatusItem borrow is desktop/src-tauri/src/native_tray.rs:58-75. The Swift status-button lookup is app/Sources/NativeTray/Popover.swift:24-32. These anchors name APIs that exist; the new symbols below are additions.
+This document specifies the diff to apply in B. All paths are repository-relative. Existing symbol anchors were checked against HEAD b429895f4a: the raw-token principal is assigned in src/server/management-auth.ts:541-564 and exposed in src/server/management/context.ts:136-151; route dispatch and origin/body gates are src/server/management-api.ts:187-205,276-306; the current badge route is src/server/management/sidebar-routes.ts:100-103 and registry row is src/server/management/route-registry.ts:350-353; package badge shape is src/update/badge.ts:6-67. On desktop, the bound credential gate is desktop/src-tauri/src/proxy.rs:181-228, updater transitions are desktop/src-tauri/src/updater.rs:81-114, tray transitions are desktop/src-tauri/src/tray.rs:198-222,284-325, dashboard construction is desktop/src-tauri/src/startup.rs:1407-1438, and the existing NSStatusItem borrow is desktop/src-tauri/src/native_tray.rs:58-75. The Swift status-button lookup is app/Sources/NativeTray/Popover.swift:24-32. These anchors name APIs that exist; the new symbols below are additions.
 
-Additional existing-symbol anchors used in patches: jsonResponse is src/server/auth-cors.ts:267; defaultUpdateTag is src/update/index.ts:177-185; detectInstall/Channel are src/update/index.ts:61-67; useKeyedClientResource is gui/src/client-resource.ts:616; the present sidebar poll is gui/src/components/sidebar-github-row.tsx:67-76; desktop-shell detection is gui/src/lib/desktop-shell.ts:7-13; the Tauri user agent is desktop/src-tauri/src/window.rs:4-14; app.package_info() is used at desktop/src-tauri/src/menu.rs:28; the Popup destination and matcher are desktop/src-tauri/src/popup.rs:256-263,313-320; and the icon generator's render/produced/check chain is desktop/scripts/generate-icons.ts:62-145,157-175. The pinned Tauri set_icon API is called through the existing tray handle at desktop/src-tauri/src/tray.rs:104-107,463-465; B also compiles it against the checked-in Cargo.lock. The AppKit NSButtonCell.imageRect(forBounds:) call was checked with the swift verifier below.
+Additional existing-symbol anchors used in patches: jsonResponse is src/server/auth-cors.ts:267; defaultUpdateTag is src/update/index.ts:176-178; detectInstall/Channel are src/update/index.ts:61-67; useKeyedClientResource is gui/src/client-resource.ts:616; the present sidebar poll is gui/src/components/sidebar-github-row.tsx:67-76; desktop-shell detection is gui/src/lib/desktop-shell.ts:7-13; the Tauri user agent is desktop/src-tauri/src/window.rs:4-14; app.package_info() is used at desktop/src-tauri/src/menu.rs:28; the Popup destination and matcher are desktop/src-tauri/src/popup.rs:256-263,313-320; and the icon generator's render/produced/check chain is desktop/scripts/generate-icons.ts:62-145,157-175. The pinned Tauri set_icon API is called through the existing tray handle at desktop/src-tauri/src/tray.rs:104-107,463-465; B also compiles it against the checked-in Cargo.lock. The AppKit NSButtonCell.imageRect(forBounds:) call was checked with the swift verifier below.
 
 ## File change map and executable patches
 
-The following are the entire commit-2 file set. DELETE: none. Binary NEW output is generated, not hand-edited. MODIFY rows with an insertion block mean insert at the named existing anchor; replacement blocks name the exact old expression. Commit 1 may have changed src/update/badge.ts; preserve its new cache-age behavior and change only the installer type line shown here.
+The following are the entire commit-2 file set. DELETE: none. Binary NEW output is generated, not hand-edited. MODIFY rows with an insertion block mean insert at the named existing anchor; replacement blocks name the exact old expression. Commit 1 changed src/update/badge.ts: its 40-hour cache-age guard and `unknown` result remain package-only. Change only the installer type line shown here; the desktop store supplies the same seven-field response independently.
 
 | Operation | Path | Change |
 | --- | --- | --- |
@@ -43,7 +43,7 @@ The following are the entire commit-2 file set. DELETE: none. Binary NEW output 
 
 ### New src/update/desktop-badge.ts — full content
 
-The current UpdateBadge shape has currentVersion, latestVersion, channel, installer, canUpdate, updateAvailable and unknown (src/update/badge.ts:19-29). Keep precisely that response shape; do not include sessionId or phase in GET output. A session id is a routing nonce, not an install credential. The map is bounded even if clients continually change ids. Expiry is measured from *receipt*, so a six-hour updater check remains displayable while the heartbeat continues.
+The current UpdateBadge shape has currentVersion, latestVersion, channel, installer, canUpdate, updateAvailable and unknown (src/update/badge.ts:6-18). The commit-1 package reader returns `unknown: true` for missing, wrong-channel, invalid-time, future-time or 40-hour-stale cache; the desktop store must use its receipt TTL instead and must not read that cache. Keep precisely that response shape; do not include sessionId or phase in GET output. A session id is a routing nonce, not an install credential. The map is bounded even if clients continually change ids. Expiry is measured from *receipt*, so a six-hour updater check remains displayable while the heartbeat continues.
 
 ~~~ts
 import type { UpdateBadge } from "./badge";
@@ -152,7 +152,7 @@ export const desktopBadgeStore = new DesktopBadgeStore();
 
 Before this parser edit, the last guard was `checked < nowMs - 24 * 60 * 60_000`; after, the two named bounds in the block above enforce only pre-2000 and >60-second-future rejection. `checkedAtMs` records when the native updater last settled; it is not a freshness lease. A 25-hour-old successful check remains valid if the living shell continues to send the same pending snapshot. `DesktopBadgeStore.put()` stamps each accepted POST with a new monotonic receipt time, and `read()` expires that receipt after 180 seconds without a heartbeat. The absolute lower bound rejects nonsensical timestamps without coupling display lifetime to check cadence. A null timestamp remains valid only for phases permitted by the schema.
 
-MODIFY src/update/badge.ts:19-29: replace only the installer declaration (commit 1 may add other fields). Before: installer: ReturnType<typeof detectInstall>;. After:
+MODIFY src/update/badge.ts:12: replace only the installer declaration. Exact current before: `installer: ReturnType<typeof detectInstall>;`. Keep `UpdateBadgeDeps.now`, the cache-age guard, and every other field unchanged. After:
 
 ~~~ts
 installer: ReturnType<typeof detectInstall> | "desktop";
@@ -887,7 +887,7 @@ describe("desktop badge snapshot store", () => {
 });
 ~~~
 
-MODIFY tests/server/sidebar-routes.test.ts:18-33. Keep its existing call helper and add the following helper after it. Direct dispatch already models principal selection (sidebar-routes.test.ts:18-32); no real admin token is put into fixtures.
+MODIFY tests/server/sidebar-routes.test.ts:23-38. Keep its existing `call()` helper and add the following helper immediately after its closing brace at line 38, before `withStarDeps()`. Direct dispatch already models principal selection (lines 23-38); no real admin token is put into fixtures.
 
 ~~~ts
 const DESKTOP_A = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -911,7 +911,7 @@ async function desktopPost(body: string | Uint8Array, principal?: "admin-token" 
 }
 ~~~
 
-Add after the existing GET badge describe at sidebar-routes.test.ts:99-116:
+Add after the existing GET badge describe, which now includes commit 1's read-only cache test and closes at sidebar-routes.test.ts:139; insert before the `GET /api/github/star` describe at line 141:
 
 ~~~ts
 describe("desktop snapshot route", () => {
@@ -1079,7 +1079,7 @@ MODIFY desktop/src-tauri/src/tray.rs:496-623: inside its existing tests module i
 
 All three proposed Rust tests are pure and run on this Mac. The Windows/Linux set_icon path still needs hosted builds and human visual review at 16/20/24/32 px. The Swift overlay needs local highlighted, dark/light, title-width and 1×/2× QA; no unit assertion proves its final pixels.
 
-MODIFY scripts/test-layout/layout.json explicit object, alphabetical insertion between update-bun-ownership-lease and update-desktop-owner (layout.json:1653-1657):
+MODIFY scripts/test-layout/layout.json explicit object, alphabetical insertion between update-bun-ownership-lease and update-desktop-owner (layout.json:1655-1659):
 
 ~~~json
     "update-bun-ownership-lease.test.ts": "update",
@@ -1087,7 +1087,7 @@ MODIFY scripts/test-layout/layout.json explicit object, alphabetical insertion b
     "update-desktop-owner.test.ts": "update",
 ~~~
 
-MODIFY tests/fixtures/test-layout-expected.json similarly at :1480-1484:
+MODIFY tests/fixtures/test-layout-expected.json similarly at :1481-1485:
 
 ~~~json
   "update-bun-ownership-lease.test.ts": "update",
@@ -1143,13 +1143,19 @@ No new GUI i18n catalog key: the orb and its existing aria label remain at gui/s
 
 The source ownership table in structure/INDEX.md:154 maps src/update/ to *both* structure/runtime.md and structure/ops/service-and-sidecars.md. This corrects the shorter commit-2 doc list in 000_plan.md; it does not change a decision D1-D3. structure/manifest.json:3 caps each structure page at 600 lines. structure/runtime.md is exactly 600/600 now, so replace one existing line in place and do not append. No new structure document or manifest entry is necessary. The other source-area owners listed in structure/INDEX.md:118-154 were reviewed for consequences; their existing transport/adapter contracts do not change.
 
-MODIFY structure/runtime.md:159, exact one-line replacement:
+MODIFY structure/runtime.md:159, exact one-line replacement. Preserve commit 1's package-refresh link and add the desktop state contract on the same line (600/600 stays 600/600). Current before:
 
 ~~~md
-| Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/`, `src/generated/`. `src/update/desktop-badge.ts` holds only bounded process-local desktop display state; it never feeds package update jobs or installation authority. |
+| Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/` ([package refresh](ops/service-and-sidecars.md#package-cache-refresh)), `src/generated/` |
 ~~~
 
-MODIFY structure/ops/service-and-sidecars.md:226, insert a paragraph immediately before "## Bun updater ownership transaction":
+After:
+
+~~~md
+| Support | `src/lib/`, `src/storage/`, `src/usage/`, `src/update/` ([package refresh](ops/service-and-sidecars.md#package-cache-refresh); `desktop-badge.ts` holds bounded process-local display state, never install authority), `src/generated/` |
+~~~
+
+MODIFY structure/ops/service-and-sidecars.md:250-254, append the paragraph after the existing Package cache refresh text at line 254. That heading and its commit-1 scheduler/async-check paragraphs remain intact:
 
 ~~~md
 The desktop badge snapshot in src/update/desktop-badge.ts is process-local display state keyed by a Tauri session id. A 60-second shell heartbeat renews receipt time; entries expire after 180 seconds and the store retains at most 32 sessions. It is separate from the package version cache and from the updater job/ownership transaction. A proxy restart reports unknown until a bound desktop shell republishes; no update installation can be authorized by this snapshot.
@@ -1167,18 +1173,24 @@ MODIFY structure/companion.md:50-56, insert after the Tauri title paragraph:
 The update dot is independent of companion usage and title filtering. A title refresh asks the macOS status-button overlay to redraw against the current image rectangle; update availability still comes only from the Tauri updater state in desktop/src-tauri/src/updater.rs.
 ~~~
 
-MODIFY structure/gui-and-management-api.md:168 and :195, replace the Updates row's final sentence and Sidebar row with these exact current-state sentences (keep the rest of the rows intact):
+MODIFY structure/gui-and-management-api.md:168 and :195. Keep the current Updates row's asynchronous check/run and 40-hour package-cache sentences verbatim. Replace only its final sentence `The badge links to the update surface rather than gating other actions.` with the three-sentence text below, keeping it in the same table row; replace the complete current Sidebar row (`GET/POST /api/github/star` and `GET /api/update/badge`; cosmetic failure) with the second block:
 
 ~~~md
-GET /api/update/badge backs the package sidebar badge by default. GET /api/update/badge?surface=desktop&session=<id> projects only that process-local Tauri session; missing or expired state is unknown and never falls back to the package cache. POST /api/update/desktop-snapshot is a 1 KiB bounded, admin-token-principal-only display-state mutation with no install permission.
+The badge links to the update surface rather than gating other actions. `GET /api/update/badge?surface=desktop&session=<id>` projects only that process-local Tauri session; missing or expired state is unknown and never falls back to the package cache. `POST /api/update/desktop-snapshot` is a 1 KiB bounded, admin-token-principal-only display-state mutation with no install permission.
 
-| Sidebar | src/server/management/sidebar-routes.ts — GET/POST /api/github/star, GET /api/update/badge and POST /api/update/desktop-snapshot. The POST accepts only the raw admin-token principal; GUI sessions cannot publish desktop state. Badge state is cosmetic and a failed poll degrades silently. |
+| Sidebar | `src/server/management/sidebar-routes.ts` — `GET/POST /api/github/star`, `GET /api/update/badge`, and `POST /api/update/desktop-snapshot`. The POST accepts only the raw admin-token principal; GUI sessions cannot publish desktop state. Badge state is cosmetic and a failed poll degrades silently. |
 ~~~
 
-MODIFY docs-site/src/content/docs/reference/management-api.md:547. Commit 1 has already strengthened this row with package-cache age semantics; replace that row with these exact two rows, and add the desktop paragraph after the table while retaining commit 1's automatic-check paragraph:
+MODIFY docs-site/src/content/docs/reference/management-api.md:547. Exact current before:
 
 ~~~md
-| `GET /api/update/badge` | Read cached package badge without a registry lookup; missing, wrong-channel or 40-hour-old cache is unknown. `surface=desktop&session=<id>` reads only that desktop app session. | 400 invalid surface; missing or expired desktop session returns `unknown` |
+| `GET /api/update/badge` | Read cached package badge state without a registry lookup; missing, wrong-channel or 40-hour-old cache returns `unknown: true`. | — |
+~~~
+
+Replace that row with these exact two rows. Put the desktop paragraph after the table and before the existing automatic-check paragraph at line 549; preserve that paragraph and the async check/run rows at lines 268-269:
+
+~~~md
+| `GET /api/update/badge` | Read cached package badge without a registry lookup; missing, wrong-channel or 40-hour-old cache returns `unknown: true`. `surface=desktop&session=<id>` reads only that desktop app session. | 400 invalid surface; missing or expired desktop session returns `unknown: true` |
 | `POST /api/update/desktop-snapshot` | Desktop shell publishes its Tauri-updater display state through the bound proxy client | 403 unless the raw `admin-token` principal; 400 invalid fields; 413 over 1 KiB |
 
 The desktop snapshot is temporary display state, not an install request. The proxy stores at most 32 sessions in memory and expires one 180 seconds after its last heartbeat. A normal browser without surface=desktop continues to read the package badge.
@@ -1195,38 +1207,58 @@ MODIFY the existing sibling pages at:
 - docs-site/src/content/docs/{fr,ja,ko,ru,tr,zh-cn,zh-tw}/reference/management-api.md
 - docs-site/src/content/docs/{fr,ja,ko,ru,tr,zh-cn,zh-tw}/guides/desktop-app.md
 
-For each management API sibling, replace its existing GET /api/update/badge row with translations of the two English rows above and the 32-session/180-second paragraph immediately after that table. Keep literal route paths, surface=desktop, session=<id>, status numbers, admin-token, unknown and 1 KiB unchanged. For each desktop guide sibling, insert a translation of the five English sentences above in its existing Updates section. Say explicitly that Linux shows a dot only with a tray host, an ordinary browser sees package state, expiry yields unknown, and installation is explicit. Do not claim the commit-3 update page exists yet. These seven locales are the exact existing siblings found in docs-site/src/content/docs; there are no de/vi guide siblings. English remains the source of truth.
+For each management API sibling, replace its existing commit-1 GET /api/update/badge row (which already says missing, wrong-channel or 40-hour-old cache returns `unknown: true`) with translations of the two English rows above. Add the 32-session/180-second paragraph after the table but before the existing translated automatic-check paragraph; preserve each sibling's async check/run rows. Keep literal route paths, surface=desktop, session=<id>, status numbers, admin-token, unknown and 1 KiB unchanged. For each desktop guide sibling, insert a translation of the five English sentences above in its existing Updates section. Say explicitly that Linux shows a dot only with a tray host, an ordinary browser sees package state, expiry yields unknown, and installation is explicit. Do not claim the commit-3 update page exists yet. These seven locales are the exact existing siblings found in docs-site/src/content/docs; there are no de/vi guide siblings. English remains the source of truth.
 
 No GUI i18n catalog edits: no new visible string is introduced in commit 2. The existing sidebar.updateAvailable and sidebar.checkUpdate keys already cover the label (gui/src/components/sidebar-github-row.tsx:137-141); the ten catalogs named earlier stay unchanged. Commit 3 adds localized update-page copy.
 
 ## Ratchets and merge-head check
 
-The baseline at tests/fixtures/file-size-baseline.json currently has no explicit per-file cap for any listed growing text file; scripts/file-size-ratchet.ts:4,114-125 applies the strict *under 2,000 lines* threshold to such files. The following are current physical counts before wp1's edits. Recount on the shared HEAD immediately before B because earlier commits and sibling work can move them. The new plan file is under devlog/ and excluded by scripts/file-size-ratchet.ts:16-31. Rust, Swift and PNG are not scanned extensions. structure/manifest.json:3 imposes a separate 600-line budget; runtime.md is at that cap and its planned edit is one-line-for-one-line.
+The 2026-09-24 HEAD b429895f4a counts below are physical lines before B. `tests/fixtures/file-size-baseline.json` has no explicit cap for any row here. The scanned-file default is **strictly under 2,000**, so the last allowed count is 1,999 and headroom is `1,999 − current`; `structure/manifest.json` independently caps structure pages at 600. New files show 0 before creation. Recount if HEAD moves. `devlog/` is excluded from the file-size ratchet. Rust, Swift and PNG are outside its scanned extensions. The replacement at `structure/runtime.md:159` must be one line for one line.
 
-| Growing path(s) | Current / cap | Planned growth |
-| --- | --- | --- |
-| src/update/badge.ts; NEW src/update/desktop-badge.ts | 75 / <2000; 0 / <2000 | One type line; new small module. |
-| src/server/management/sidebar-routes.ts; route-registry.ts | 106 / <2000; 395 / <2000 | Bounded route block; two data edits. |
-| desktop/src-tauri/src/proxy.rs; updater.rs; lib.rs; startup.rs; native_tray.rs; tray.rs; popup.rs | 277 / N/A; 144 / N/A; 288 / N/A; 2161 / N/A; 273 / N/A; 620 / N/A; 390 / N/A | Rust is not scanned by the JSON file-size baseline; updater.rs gains the native check-generation gate and a delayed-order test. |
-| app/Sources/NativeTray/Popover.swift; NEW desktop/src-tauri/icons/tray/icon-update.png | 68 / N/A; binary / N/A | Swift and PNG are not scanned by that baseline. |
-| desktop/scripts/generate-icons.ts | 178 / <2000 | One SVG composition helper and produced entry. |
-| gui/src/lib/desktop-shell.ts; gui/src/components/sidebar-github-row.tsx; gui/tests/desktop-shell.test.ts | 32 / <2000; 161 / <2000; 37 / <2000 | Helper, poll replacement, test. |
-| NEW tests/update/update-desktop-badge.test.ts; tests/server/sidebar-routes.test.ts; management-route-registry.test.ts | 0 / <2000; 304 / <2000; 274 / <2000 | New store test; route and registry tests. |
-| tests/cli/cli-capabilities.test.ts; tests/ci-workflows/build-desktop-icon-set.test.ts | 372 / <2000; 251 / <2000 | One parity test; icon test. |
-| scripts/test-layout/layout.json; tests/fixtures/test-layout-expected.json | 1813 / <2000; 1620 / <2000 | One line each; no cap increase. |
-| structure/runtime.md; ops/service-and-sidecars.md; desktop-shell.md; companion.md; gui-and-management-api.md | 600 / 600 structure budget; 248 / 600; 388 / 600; 77 / 600; 395 / 600 | runtime replacement holds 600; others gain short paragraphs. |
-| docs-site/src/content/docs/reference/management-api.md; guides/desktop-app.md | 649 / <2000; 122 / <2000 | Two rows/paragraph and guide text. |
-| fr management-api.md / desktop-app.md | 404 / <2000; 79 / <2000 | Same translated update. |
-| ja management-api.md / desktop-app.md | 346 / <2000; 79 / <2000 | Same translated update. |
-| ko management-api.md / desktop-app.md | 372 / <2000; 79 / <2000 | Same translated update. |
-| ru management-api.md / desktop-app.md | 394 / <2000; 124 / <2000 | Same translated update. |
-| tr management-api.md / desktop-app.md | 430 / <2000; 79 / <2000 | Same translated update. |
-| zh-cn management-api.md / desktop-app.md | 340 / <2000; 79 / <2000 | Same translated update. |
-| zh-tw management-api.md / desktop-app.md | 322 / <2000; 79 / <2000 | Same translated update. |
+| Growing path | Current | Last allowed | Headroom |
+| --- | ---: | ---: | ---: |
+| `src/update/badge.ts` | 67 | 1999 | 1932 |
+| `src/update/desktop-badge.ts` | 0 | 1999 | 1999 |
+| `src/server/management/sidebar-routes.ts` | 106 | 1999 | 1893 |
+| `src/server/management/route-registry.ts` | 395 | 1999 | 1604 |
+| `desktop/scripts/generate-icons.ts` | 178 | 1999 | 1821 |
+| `gui/src/lib/desktop-shell.ts` | 32 | 1999 | 1967 |
+| `gui/src/components/sidebar-github-row.tsx` | 161 | 1999 | 1838 |
+| `gui/tests/desktop-shell.test.ts` | 37 | 1999 | 1962 |
+| `tests/update/update-desktop-badge.test.ts` | 0 | 1999 | 1999 |
+| `tests/server/sidebar-routes.test.ts` | 327 | 1999 | 1672 |
+| `tests/server/management-route-registry.test.ts` | 274 | 1999 | 1725 |
+| `tests/cli/cli-capabilities.test.ts` | 372 | 1999 | 1627 |
+| `tests/ci-workflows/build-desktop-icon-set.test.ts` | 251 | 1999 | 1748 |
+| `scripts/test-layout/layout.json` | 1816 | 1999 | 183 |
+| `tests/fixtures/test-layout-expected.json` | 1622 | 1999 | 377 |
+| `structure/runtime.md` | 600 | 600 | 0 |
+| `structure/ops/service-and-sidecars.md` | 254 | 600 | 346 |
+| `structure/desktop-shell.md` | 388 | 600 | 212 |
+| `structure/companion.md` | 77 | 600 | 523 |
+| `structure/gui-and-management-api.md` | 395 | 600 | 205 |
+| `docs-site/src/content/docs/reference/management-api.md` | 651 | 1999 | 1348 |
+| `docs-site/src/content/docs/guides/desktop-app.md` | 122 | 1999 | 1877 |
+| `docs-site/src/content/docs/fr/reference/management-api.md` | 406 | 1999 | 1593 |
+| `docs-site/src/content/docs/fr/guides/desktop-app.md` | 79 | 1999 | 1920 |
+| `docs-site/src/content/docs/ja/reference/management-api.md` | 348 | 1999 | 1651 |
+| `docs-site/src/content/docs/ja/guides/desktop-app.md` | 79 | 1999 | 1920 |
+| `docs-site/src/content/docs/ko/reference/management-api.md` | 374 | 1999 | 1625 |
+| `docs-site/src/content/docs/ko/guides/desktop-app.md` | 79 | 1999 | 1920 |
+| `docs-site/src/content/docs/ru/reference/management-api.md` | 396 | 1999 | 1603 |
+| `docs-site/src/content/docs/ru/guides/desktop-app.md` | 124 | 1999 | 1875 |
+| `docs-site/src/content/docs/tr/reference/management-api.md` | 432 | 1999 | 1567 |
+| `docs-site/src/content/docs/tr/guides/desktop-app.md` | 79 | 1999 | 1920 |
+| `docs-site/src/content/docs/zh-cn/reference/management-api.md` | 342 | 1999 | 1657 |
+| `docs-site/src/content/docs/zh-cn/guides/desktop-app.md` | 79 | 1999 | 1920 |
+| `docs-site/src/content/docs/zh-tw/reference/management-api.md` | 324 | 1999 | 1675 |
+| `docs-site/src/content/docs/zh-tw/guides/desktop-app.md` | 79 | 1999 | 1920 |
+
+Outside the scanned extensions: `desktop/src-tauri/src/proxy.rs` 277, `updater.rs` 144, `lib.rs` 288, `startup.rs` 2161, `native_tray.rs` 273, `tray.rs` 620, `popup.rs` 390; `app/Sources/NativeTray/Popover.swift` 68; generated `desktop/src-tauri/icons/tray/icon-update.png` is binary. Their file-size-ratchet headroom is N/A.
 
 ## Verifiers — PLAN-VERIFIER-REAL-01
 
-The commands below were rerun against the *pre-B* tree on 2026-09-24 after root and GUI dependencies were installed. This plan is an untracked devlog file in a shared worktree. None of the existing tests reads it. The privacy scanner uses git ls-files (scripts/privacy-scan.ts:60-69), so its current pass does **not** scan this untracked plan; stage it before using that command as proof in B. structure:check reads structure/ and its index, not this plan. The commands prove only the baseline stated, not the future implementation.
+The commands below record the earlier *pre-B* runs on 2026-09-24 after root and GUI dependencies were installed; they are historical baseline evidence, not reruns against commit 1. This plan is now tracked in the shared worktree. The existing source tests do not read it except for the explicit transpiler command shown below. The privacy scanner uses git ls-files (scripts/privacy-scan.ts:60-69), so a fresh B run will include this tracked plan. `structure:check` reads `structure/` and its index, not this plan. The commands prove only the stated earlier baseline, not the future implementation.
 
 | Command, exact working directory | Exit | What ran / reads this plan? |
 | --- | --- | --- |
@@ -1235,14 +1267,16 @@ The commands below were rerun against the *pre-B* tree on 2026-09-24 after root 
 | bun test tests/desktop-shell.test.ts (gui/) | 0 | 3 pass, 0 fail; reads existing GUI helper, not the plan. |
 | bun -e 'const text = require("node:fs").readFileSync("devlog/_plan/260924_update_indicator/020_phase2_desktop_state_icons.md", "utf8"); const transpiler = new Bun.Transpiler({ loader: "ts" }); for (const marker of ["### New src/update/desktop-badge.ts", "NEW tests/update/update-desktop-badge.test.ts"]) { const part = text.slice(text.indexOf(marker)); const match = part.match(/~~~ts\n([\s\S]*?)\n~~~/); if (!match) throw new Error("missing " + marker); transpiler.transformSync(match[1]); } console.log("2 complete new TypeScript blocks parse");' (repository root) | 0 | Both complete new TypeScript blocks parsed; this command reads this plan directly. It is syntax evidence, not typechecking or behavior. |
 | bun run icons:check (desktop/) | 0 | 18 generated icons match existing source; reads icon generator/assets, not the plan. The earlier trial spelling bun --cwd desktop run icons:check printed Bun usage with exit 0 and was not treated as a verifier. |
-| cargo test --manifest-path desktop/src-tauri/Cargo.toml (repository root) | 101 | Build stopped before Rust tests: required binaries/ocx-aarch64-apple-darwin sidecar was absent. No test result; does not read plan. |
+| cargo test --manifest-path desktop/src-tauri/Cargo.toml (repository root) | 101 | The earlier run stopped before Rust tests because binaries/ocx-aarch64-apple-darwin was absent. This is environment setup, not a Rust test result. CI prepares an empty host-triple placeholder; B must do the same locally before retesting. |
 | swift -e 'import AppKit; let b = NSStatusBarButton(); print(b.cell?.imageRect(forBounds: b.bounds) as Any)' (repository root) | 0 | Confirmed the existing AppKit imageRect API resolves; this is not an overlay visual test and does not read plan. |
 | swift -e 'import AppKit; @MainActor enum Dot { static weak var button: NSStatusBarButton? }; @MainActor final class DotView: NSView { override func hitTest(_ point: NSPoint) -> NSView? { nil }; override func draw(_ dirtyRect: NSRect) { let b = NSStatusBarButton(); let r = b.cell?.imageRect(forBounds: b.bounds) ?? b.bounds; print(r.isEmpty) } }' (repository root) | 0 | Type-checked the proposed weak/button, hit-test and image-rect call shapes; it does not render the overlay or read plan. |
-| bun run privacy:scan (repository root) | 0 | Privacy scan passed for tracked files only; untracked plan not read. |
+| bun run privacy:scan (repository root) | 0 | Earlier tracked-file scan passed; this plan was untracked then, so the result did not cover it. Re-run in B now that the plan is tracked. |
 | bun run structure:check (repository root) | 0 | Structure SSOT checks passed on current docs; does not read plan or future source. |
 | bun run typecheck (repository root) | 0 | Existing TypeScript compiled with no diagnostics; no proposed source exists yet. Required again after B. |
 
-Runs after B because the new implementation and test files do not exist today: bun test tests/update/update-desktop-badge.test.ts tests/server/sidebar-routes.test.ts tests/server/management-route-registry.test.ts tests/cli/cli-capabilities.test.ts tests/ci-workflows/build-desktop-icon-set.test.ts; bun test tests/test-layout-tooling.test.ts; cd gui && bun test tests/desktop-shell.test.ts && bun run lint && bun run build; cd desktop && bun run icons:check; cargo test --manifest-path desktop/src-tauri/Cargo.toml after preparing its normal sidecar; bun run typecheck; bun run structure:check; bun run privacy:scan after staging the new files; cd docs-site && bun install --frozen-lockfile && bun run build. These are future B/C gates, not pass claims. Host CI must be inspected at the final PR head; Windows and Linux Tauri builds and native visual QA remain distinct evidence.
+For local desktop Cargo tests, mirror `.github/workflows/ci.yml:1399-1415`: derive `triple` from `rustc -vV`, create `desktop/src-tauri/binaries/ocx-${triple}` as an empty executable placeholder, and create the ignored GUI resource placeholder if the Tauri build needs it. `.gitignore:85-86` ignores `desktop/src-tauri/binaries/` and `desktop/src-tauri/resources/`; B must not commit these test prerequisites. The empty file is for compilation/tests, not a runnable sidecar.
+
+Runs after B because the new implementation and test files do not exist today: bun test tests/update/update-desktop-badge.test.ts tests/server/sidebar-routes.test.ts tests/server/management-route-registry.test.ts tests/cli/cli-capabilities.test.ts tests/ci-workflows/build-desktop-icon-set.test.ts; bun test tests/test-layout-tooling.test.ts; cd gui && bun test tests/desktop-shell.test.ts && bun run lint && bun run build; cd desktop && bun run icons:check; cargo test --manifest-path desktop/src-tauri/Cargo.toml after making the same ignored empty host-triple sidecar placeholder as CI; bun run typecheck; bun run structure:check; bun run privacy:scan after staging any new B files; cd docs-site && bun install --frozen-lockfile && bun run build. These are future B/C gates, not pass claims. Host CI must be inspected at the final PR head; Windows and Linux Tauri builds and native visual QA remain distinct evidence.
 
 ## Risks and rollback
 
@@ -1251,3 +1285,22 @@ The in-memory snapshot is cosmetic and forged only by a process already holding 
 The macOS overlay must be checked against changing title width, AppKit highlight, multiple displays and 1×/2× scaling. Windows and Linux generated icons need visual checking on their hosts; this Mac can validate image generation and Rust logic but cannot claim their rendered tray pixels. Linux without an AppIndicator host still has the embedded badge and no tray icon. If this commit must be backed out before commit 3, revert commit 2 as one unit: the default package badge and original template/PNG tray behavior resume, and no persisted desktop schema needs migration. Do not roll back the independent commit-1 package cache change.
 
 Cross-document handoff for main: structure/INDEX.md maps src/update/ to both runtime.md and ops/service-and-sidecars.md, so commit 2 edits both despite the abbreviated D7 row in 000_plan.md. The binding main decision is net-zero for runtime.md at its 600/600 structure budget: use the one-line replacement above, and coordinate any commit-1 or commit-4 replacements on their final merged text. Commit 3 must consume `CheckGeneration::{begin_if_not_installing,claim_install,apply_if_current,epoch_is_current,inspect}`, extend the UI projection for install state, put its install-epoch comparison inside the application closure, and return an explicit checking page status while a newer check remains active. No D1/D2/D3 disposition changes. Commit 3 still owns the desktop update click before the PR is marked ready.
+
+
+## wp2 P revalidation
+
+Revalidated against HEAD `b429895f4a` after commit 1; only this 020 plan was edited. Drifts and fixes:
+
+- `src/update/badge.ts`: the header and type moved from the former lines 19-29 to 6-18/12, and commit 1 added `UpdateBadgeDeps.now` plus the 40-hour unknown guard. The type-only replacement above uses the exact current installer declaration and leaves package cache semantics intact. The desktop projection keeps all seven `UpdateBadge` fields and uses its own heartbeat receipt TTL.
+- `src/update/index.ts` and `src/server/management/context.ts`: `defaultUpdateTag` now starts at 176, and `ManagementContext.principal` is at 151 after new package-check deps imports. The opening anchors were corrected; neither API shape forces a desktop design change.
+- `tests/server/sidebar-routes.test.ts`: commit 1 added the read-only package badge test, moving `call()` to 23-38 and the GET badge describe end to 139. The helper and new describe insertion points now target those exact boundaries and preserve the package test.
+- `scripts/test-layout/layout.json` and `tests/fixtures/test-layout-expected.json`: new update-async and update-refresh entries shifted the alphabetical insertion anchors to 1655-1659 and 1481-1485. The three-line before/after windows above still match HEAD and insert `update-desktop-badge.test.ts` between `update-bun-ownership-lease` and `update-desktop-owner` in both maps.
+- `structure/runtime.md`: commit 1 replaced the 600/600 Support row with a package-refresh link. The revised exact before/after block preserves that link and replaces one line with one line. `structure/ops/service-and-sidecars.md` gained a Package cache refresh section at 250-254; the desktop paragraph now appends there, preserving scheduler and async-check contracts.
+- `structure/gui-and-management-api.md`: the Updates row now specifies asynchronous check/run and package-cache age. Its revised replacement changes only the final sentence; the Sidebar row replacement uses the current row as its before text.
+- English and seven translated `docs-site` management API pages: commit 1 expanded the package badge row and added automatic-check paragraphs, and changed the check/run rows. The English exact-before row, the two replacement rows, and the sibling instructions now preserve those facts and insert the desktop paragraph before the existing automatic-check paragraph.
+- Ratchets: the old pre-wp1 counts were stale for the changed package badge, route test, layout maps, ops structure page, and all management API pages. The per-file current count/last-allowed/headroom table above is recalculated from HEAD and the baseline. `structure/runtime.md` has zero spare lines.
+- Desktop Cargo prerequisite: CI already creates an empty executable `ocx-${triple}` and GUI resource placeholder before `cargo test` (`.github/workflows/ci.yml:1399-1415`). B will prepare the same ignored local placeholders without committing them; `.gitignore:85-86` covers both directories.
+
+Fresh P checks: exact HEAD before-anchor assertions passed for the package badge, structure rows, layout neighbors, and all eight management API pages; all 36 headroom rows matched current file counts and absent baseline caps; both complete proposed TypeScript blocks parsed; `git diff --check` passed. These checks validate this plan, not the unimplemented B behavior.
+
+No D1/D2/D3 design decision changes.

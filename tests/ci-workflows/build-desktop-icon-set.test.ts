@@ -201,6 +201,20 @@ describe("desktop icon set", () => {
     expect(pngDimensions(bytes)).toEqual({ width: size, height: size });
   });
 
+  test("the generated dotted tray variant has the declared size and SVG halo", () => {
+    const generator = generatorSource();
+    expect(generator).toContain('const DOTTED_TRAY_OUTPUT = "tray/icon-update.png"');
+    expect(generator).toContain('renderDottedTray(target);');
+    expect(generator).toContain('produced.push(DOTTED_TRAY_OUTPUT);');
+    expect(generator).toContain('fill="#ffffff"');
+    expect(generator).toContain('fill="#2f81f7"');
+    const normal = readFileSync(join(ICONS_DIR, "tray", "icon.png"));
+    const dotted = readFileSync(join(ICONS_DIR, "tray", "icon-update.png"));
+    expect(pngDimensions(dotted)).toEqual({ width: 44, height: 44 });
+    expect(dotted[25]).toBe(RGBA);
+    expect(dotted.equals(normal)).toBe(false);
+  });
+
   /**
    * The menu bar asset has its own SVG because a template image carries no backdrop, not because
    * it is a second drawing. Two files holding the same curves is exactly the drift the generator

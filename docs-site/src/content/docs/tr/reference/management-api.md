@@ -343,7 +343,10 @@ yeniden yüklemeden sonra da saklar, ancak bir sınır olarak uygulamaz.
 | --- | --- | --- |
 | `GET /api/github/star` | Kullanıcının `gh` oturumu aracılığıyla depo yıldız durumunu okuyun | Duruma özgü sabit sonuç kodları |
 | `POST /api/github/star` | Depoyu yalnızca kimliği doğrulanmış bir insan eyleminden yıldızlayın | Kontrol paneli oturumu kanıtı olmayan ajan odaklı arayanlar için 403 `agent_consent_required` |
-| `GET /api/update/badge` | Kayıt sorgusu yapmadan önbellekteki rozet durumunu oku; önbellek yoksa, kanal farklıysa veya 40 saatten eskiyse `unknown: true` döndür. | — |
+| `GET /api/update/badge` | Kayıt sorgusu yapmadan önbellekteki paket rozetini oku; önbellek yoksa, kanal farklıysa veya 40 saatten eskiyse `unknown: true` döndür. `surface=desktop&session=<id>` yalnızca belirtilen masaüstü uygulaması oturumunu okur. | 400 geçersiz surface; eksik veya süresi dolmuş masaüstü oturumu `unknown: true` döndürür |
+| `POST /api/update/desktop-snapshot` | Masaüstü kabuğu, Tauri güncelleyicisinin görüntü durumunu bağlı proxy istemcisi üzerinden yayımlar | `Origin` üstbilgisi varsa veya ham `admin-token` principal yoksa 403; geçersiz alanlarda 400; 1 KiB üzerinde 413 |
+
+Masaüstü snapshot geçici görüntü durumudur, kurulum isteği değildir. Proxy bellekte en fazla 32 oturum tutar ve bir oturumu son heartbeat sonrasında 180 saniyede sona erdirir. surface=desktop olmayan normal tarayıcı paket rozetini okumaya devam eder.
 
 Proxy, uygun paket kurulumunda başlangıçtan sonra önbellek eksikse veya 20 saatten eskiyse denetim yapar; ardından tazeliği saat başı kontrol eder. `OCX_DISABLE_UPDATE_CHECK=1` yalnızca otomatik denetimleri kapatır. Açıkça yapılan denetim ve çalıştırma istekleri kullanılabilir.
 

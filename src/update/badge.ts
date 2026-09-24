@@ -9,7 +9,7 @@ export interface UpdateBadge {
   currentVersion: string;
   latestVersion: string | null;
   channel: Channel;
-  installer: ReturnType<typeof detectInstall>;
+  installer: ReturnType<typeof detectInstall> | "desktop";
   /** False for source checkouts, where the GUI cannot offer a one-click update. */
   canUpdate: boolean;
   /** True when no cached registry answer exists yet, so "no update" is unproven. */

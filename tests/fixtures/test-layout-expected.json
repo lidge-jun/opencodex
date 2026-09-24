@@ -1483,6 +1483,7 @@
   "update-async-routes.test.ts": "server",
   "update-badge.test.ts": "update",
   "update-bun-ownership-lease.test.ts": "update",
+  "update-desktop-badge.test.ts": "update",
   "update-desktop-owner.test.ts": "update",
   "update-job.test.ts": "update",
   "update-notify.test.ts": "update",
