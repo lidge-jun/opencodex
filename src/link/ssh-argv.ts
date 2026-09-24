@@ -50,10 +50,15 @@ function assertPort(port: number, label: string): number {
  * its working directory. Any of those could name a different file than the one written, so only
  * an absolute path without expansion syntax is accepted; whitespace is quoted.
  */
-function optionPath(path: string): string {
+function assertKnownHostsPath(path: string): string {
   if (!path || !isAbsolute(path) || /["%$\x00-\x1f]/.test(path) || path.startsWith("~")) {
     throw new LinkSshArgumentError("known_hosts path is not usable in an ssh option");
   }
+  return path;
+}
+
+function optionPath(path: string): string {
+  assertKnownHostsPath(path);
   return /\s/.test(path) ? `"${path}"` : path;
 }
 
@@ -144,6 +149,11 @@ export function buildProbeArgv(options: ProbeArgvOptions): string[] {
     "--", alias,
     "true",
   ];
+}
+
+/** Read the fingerprint of the host key recorded by a probe. */
+export function buildFingerprintArgv(tempKnownHostsFile: string): string[] {
+  return ["ssh-keygen", "-l", "-f", assertKnownHostsPath(tempKnownHostsFile)];
 }
 
 /** `ssh -G <alias>`: resolve an alias the same way ssh itself does, without connecting. */

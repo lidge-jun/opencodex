@@ -1809,7 +1809,12 @@
     "client-link-relay.test.ts": "clients",
     "client-link-runtime.test.ts": "clients",
     "link-routes.test.ts": "clients",
-    "injection-link-websocket.test.ts": "codex-integration"
+    "injection-link-websocket.test.ts": "codex-integration",
+    "link-supervisor.test.ts": "clients",
+    "link-status-projection.test.ts": "clients",
+    "link-admission-wait.test.ts": "clients",
+    "link-fingerprint.test.ts": "clients",
+    "cli-link.test.ts": "cli"
   },
   "migrated": [
     "adapters",
