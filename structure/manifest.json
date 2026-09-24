@@ -331,6 +331,18 @@
       ]
     },
     {
+      "path": "providers/zcode-start-plan.md",
+      "tier": 4,
+      "title": "ZCode Start Plan Provider",
+      "scope": "Z.ai Start Plan gateway wire: OAuth CLI login, gateway-required system blocks and identity headers, in-process traceless captcha worker, and billing quota.",
+      "documents": [
+        "src/adapters/zcode-start-plan/",
+        "src/adapters/zcode-start-plan.ts",
+        "src/oauth/zcode-start-plan.ts",
+        "src/providers/quota/vendor-probes-zcode.ts"
+      ]
+    },
+    {
       "path": "providers/chat-compat.md",
       "tier": 4,
       "title": "Chat Provider Compatibility",
