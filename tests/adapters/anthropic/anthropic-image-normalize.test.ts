@@ -185,8 +185,14 @@ describe("bounded normalization cache accounting", () => {
 
     recordEmittedPosition(ONE_PX_PNG, `${hugeMediaType}y`, 2);
     const second = anthropicImageNormalizeRetainedStoreSnapshot();
-    expect(second.count).toBe(first.count);
-    expect(second.bytes).toBe(first.bytes);
+    // Invalid/overlong media types hash to a fixed-size key but stay DISTINCT:
+    // folding them onto application/octet-stream let a different invalid type
+    // reuse a prior emitted position and demote the second image to a smaller
+    // tier. Each now keeps its own position row.
+    expect(second.count).toBe(first.count + 1);
+    expect(second.bytes).toBeLessThan(256);
+    expect(recordedEmittedPosition(ONE_PX_PNG, hugeMediaType)).toBe(1);
+    expect(recordedEmittedPosition(ONE_PX_PNG, `${hugeMediaType}y`)).toBe(2);
   });
 
   test("older position memory is pinned: budget eviction clears cache slots first", async () => {
@@ -719,6 +725,47 @@ describe("bounded parallel first pass (WP170)", () => {
     // Only the three real images encoded; URL + over-limit sources consumed no slot.
     expect(g.stats().arrivals).toBe(3);
     expect(dropped.sort()).toEqual([1, 2]);
+  });
+
+  test("a mid-pass position-store eviction cannot change an unpulled target's pinned position", async () => {
+    // The pinned target sits LAST in the shared index queue: every earlier worker
+    // iteration reads its own position synchronously, then parks inside encode —
+    // so the first encode's 4096+entry fill evicts the pinned entry BEFORE the
+    // pinned target's turn. Without the pre-pass snapshot that late read would
+    // miss and fall back to the age-derived tier (maxEdge 2000 instead of 700).
+    const images = distinctImages(IMAGE_NORMALIZE_CONCURRENCY + 1);
+    const pinned = images[images.length - 1]!;
+    recordEmittedPosition(pinned, "image/png", 2);
+
+    let evicted = false;
+    const seenEdges: number[] = [];
+    const encode: EncodeFn = async (_input, spec) => {
+      seenEdges.push(spec.maxEdge);
+      if (!evicted) {
+        for (let i = 0; i < 4_200; i++) recordEmittedPosition(`filler-${i}`, "image/png", 0);
+        // The oldest entry (the pinned one) must actually be gone, otherwise the
+        // test proves nothing about reading through an eviction.
+        evicted = recordedEmittedPosition(pinned, "image/png") === undefined;
+      }
+      const b64len = 4 * 1024;
+      const px = fakePngBase64(Math.min(64, spec.maxEdge), Math.min(64, spec.maxEdge), Math.ceil((b64len / 4) * 3));
+      return { data: px.slice(0, b64len), mediaType: "image/webp" };
+    };
+
+    const targets: NormalizeTarget[] = images.map(b64 => ({
+      base64: b64,
+      mediaType: "image/png",
+      replace: () => {},
+      drop: () => {},
+    }));
+    await normalizeImageTargets(targets, { encode });
+
+    expect(evicted).toBe(true);
+    expect(seenEdges).toHaveLength(images.length);
+    // The unpinned targets start at their age-derived tier 0; the pinned target —
+    // pulled last, after its store entry was evicted — still resumes at position 2.
+    expect(seenEdges.slice(0, -1).every(edge => edge === TIER_SPECS[0].maxEdge)).toBe(true);
+    expect(seenEdges[seenEdges.length - 1]).toBe(TIER_SPECS[2].maxEdge);
   });
 });
 

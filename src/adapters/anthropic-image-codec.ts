@@ -136,7 +136,11 @@ function positionKey(b64: string, mediaType: string): string {
   const normalized = mediaType.trim().toLowerCase();
   const canonical = normalized.length <= MAX_CANONICAL_MEDIA_TYPE_LENGTH && MEDIA_TYPE_PATTERN.test(normalized)
     ? normalized
-    : "application/octet-stream";
+    // Keep invalid/overlong types distinct under an "invalid:" namespace: folding
+    // them all onto application/octet-stream let a different invalid type reuse a
+    // prior emitted position and demote the second image to a smaller tier. The
+    // prefix cannot collide with a valid canonical type (':' fails the pattern).
+    : `invalid:${normalized}`;
   return new Bun.CryptoHasher("sha256").update(b64).update("\0").update(canonical).digest("hex");
 }
 

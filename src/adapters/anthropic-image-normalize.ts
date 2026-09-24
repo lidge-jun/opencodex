@@ -165,6 +165,15 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
   // peak memory, not throughput (native encode parallelism lives below this layer).
   // entries[] stays index-addressed, so completion order never affects output order
   // or the sequential demotion loop below.
+  // #4532: snapshot every target's recorded emitted position BEFORE any worker
+  // starts. The read used to happen inside the worker loop, so a concurrent request
+  // (or this request's own earlier encodes) could fill the position store's
+  // entry-count cap and evict an entry between collection and processing — a later
+  // occurrence then fell back to an age-derived tier and busted the prompt prefix
+  // cache. Reading a fixed pre-pass snapshot keeps every occurrence on the position
+  // it had when this request started.
+  const recordedPositions = targets.map(t =>
+    !t.base64 ? undefined : recordedEmittedPosition(t.base64, t.mediaType.toLowerCase()));
   let nextIndex = 0;
   let firstError: unknown;
   let failed = false;
@@ -203,16 +212,17 @@ export async function normalizeImageTargets(targets: NormalizeTarget[], options:
       // Anthropic's prompt prefix cache. tierBias (413 retry) applies on top of
       // either base and still clamps to TERMINAL_POS.
       //
-      // Every read in this pass sees the store as it was BEFORE this request,
-      // because nothing is written until the whole request settles (see the
-      // record loop at the end). That is load-bearing, not incidental: an image
-      // can appear more than once in one history, and identity keying collapses
-      // those occurrences onto one entry. Writing during the pass let the OLDEST
-      // occurrence's tier win a race against the newest one and drag it down —
-      // 30 copies of a screenshot all landed on the oldest copy's tier instead of
-      // the age pyramid. Reading a fixed snapshot gives each occurrence its own
-      // age tier on a cold store, which is the pre-#4532 behaviour.
-      const recorded = recordedEmittedPosition(b64, sourceMedia);
+      // Every read sees the pre-request snapshot taken above: nothing is written
+      // until the whole request settles (see the record loop at the end), and no
+      // mid-pass eviction can change what an occurrence sees. That is
+      // load-bearing, not incidental: an image can appear more than once in one
+      // history, and identity keying collapses those occurrences onto one entry.
+      // Writing during the pass let the OLDEST occurrence's tier win a race
+      // against the newest one and drag it down — 30 copies of a screenshot all
+      // landed on the oldest copy's tier instead of the age pyramid. Reading a
+      // fixed snapshot gives each occurrence its own age tier on a cold store,
+      // which is the pre-#4532 behaviour.
+      const recorded = recordedPositions[i];
       const pos = Math.min((recorded ?? initialPosition(newestFirstIndex, 0)) + Math.max(0, bias), TERMINAL_POS);
       const result = await process(b64, pos, sourceMedia);
       if (result.kind === "failed") {
