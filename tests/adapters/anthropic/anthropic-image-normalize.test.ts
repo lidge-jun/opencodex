@@ -19,6 +19,7 @@ import {
 } from "../../../src/adapters/anthropic-image-guard";
 import {
   recordEmittedPosition,
+  recordedEmittedPosition,
   TIER0_COUNT,
 } from "../../../src/adapters/anthropic-image-codec";
 
@@ -130,8 +131,14 @@ describe("bounded normalization cache accounting", () => {
     await Promise.all([first, second]);
     const stats = getNormalizeStatsForTests();
     expect(stats.cacheEntries).toBe(1);
-    expect(anthropicImageNormalizeRetainedStoreSnapshot().bytes).toBeGreaterThan(stats.cacheBytes);
     expect(stats.cacheBytes).toBeGreaterThan(1_000);
+    // The snapshot's byte total is exactly the encode cache plus the pinned
+    // position store — no hidden or double-counted rows.
+    expect(stats.positionBytes).toBeGreaterThan(0);
+    const snapshot = anthropicImageNormalizeRetainedStoreSnapshot();
+    expect(snapshot.bytes).toBe(stats.cacheBytes + stats.positionBytes);
+    expect(snapshot.pinnedBytes).toBe(stats.positionBytes);
+    expect(snapshot.evictableBytes).toBe(stats.cacheBytes);
   });
 
   test("one encoded value above maxEntrySize is returned but not cached", async () => {
@@ -180,6 +187,34 @@ describe("bounded normalization cache accounting", () => {
     const second = anthropicImageNormalizeRetainedStoreSnapshot();
     expect(second.count).toBe(first.count);
     expect(second.bytes).toBe(first.bytes);
+  });
+
+  test("older position memory is pinned: budget eviction clears cache slots first", async () => {
+    // The position entry is written BEFORE the cache entry, so it is the oldest
+    // retained row. Shared-budget eviction must still reclaim the cache slot and
+    // leave the pinned position readable — losing it mid-request would drop the
+    // image back to an age-derived tier and re-encode already-emitted bytes.
+    recordEmittedPosition(ONE_PX_PNG, "image/png", 2);
+    await normalizeImageTargets([target(fakePngBase64(100, 100, 128))], { validate });
+    const before = anthropicImageNormalizeRetainedStoreSnapshot();
+    const stats = getNormalizeStatsForTests();
+    expect(stats.cacheEntries).toBeGreaterThan(0);
+    expect(stats.positionBytes).toBeGreaterThan(0);
+    expect(before.bytes).toBe(stats.cacheBytes + stats.positionBytes);
+    expect(before.pinnedBytes).toBe(stats.positionBytes);
+
+    const released = evictOldestAnthropicImageNormalizeForBudget();
+    expect(released).toBeGreaterThan(0);
+    const after = anthropicImageNormalizeRetainedStoreSnapshot();
+    expect(after.pinnedBytes).toBe(before.pinnedBytes);
+    expect(after.evictableBytes).toBe(before.evictableBytes - released);
+    expect(after.bytes).toBe(before.bytes - released);
+    expect(recordedEmittedPosition(ONE_PX_PNG, "image/png")).toBe(2);
+
+    // With the cache drained there is nothing left the shared budget may take:
+    // position rows are never its eviction candidates.
+    expect(evictOldestAnthropicImageNormalizeForBudget()).toBe(0);
+    expect(recordedEmittedPosition(ONE_PX_PNG, "image/png")).toBe(2);
   });
 });
 

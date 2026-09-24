@@ -118,8 +118,12 @@ let encodeCalls = 0;
  * start position to the image's own identity keeps already-emitted bytes stable across
  * appends. Keys are fixed-size digests of the bytes and canonical media type, so
  * caller-controlled metadata cannot make the retained identity arbitrarily large.
- * The store participates in the shared retained-memory budget as well as its own
- * entry-count cap.
+ * The bytes count toward the shared retained-memory budget but are pinned: the
+ * shared evictor clears normalization cache slots first and never drops position
+ * memory, because a request reads this store before it finishes and a mid-request
+ * eviction would make a repeated image lose its pinned position and fall back to
+ * an age-derived tier. Positions shrink only through this store's own entry-count
+ * cap, applied when positions are committed after the request settles.
  */
 const POSITION_STORE_MAX_ENTRIES = 4_096;
 const MAX_CANONICAL_MEDIA_TYPE_LENGTH = 127;
@@ -246,6 +250,8 @@ export function getNormalizeStatsForTests(): {
   cacheBytes: number;
   sentinelEntries: number;
   metadataBytes: number;
+  positionEntries: number;
+  positionBytes: number;
   oldestAt: number | null;
 } {
   return {
@@ -254,6 +260,8 @@ export function getNormalizeStatsForTests(): {
     cacheBytes,
     sentinelEntries: cacheSentinelEntries,
     metadataBytes: cacheMetadataBytes,
+    positionEntries: emittedPositions.size,
+    positionBytes,
     oldestAt: cache.values().next().value?.storedAt ?? null,
   };
 }
@@ -279,26 +287,23 @@ export function anthropicImageNormalizeRetainedStoreSnapshot(): {
   pinnedBytes: number;
   oldestAt: number | null;
 } {
-  const oldestAt = Math.min(
-    cache.values().next().value?.storedAt ?? Infinity,
-    emittedPositions.values().next().value?.storedAt ?? Infinity,
-  );
   return {
     count: cache.size + emittedPositions.size,
     bytes: cacheBytes + positionBytes,
-    evictableBytes: cacheBytes + positionBytes,
-    pinnedBytes: 0,
-    oldestAt: Number.isFinite(oldestAt) ? oldestAt : null,
+    evictableBytes: cacheBytes,
+    pinnedBytes: positionBytes,
+    oldestAt: cache.values().next().value?.storedAt ?? null,
   };
 }
 
 export function evictOldestAnthropicImageNormalizeForBudget(): number {
+  // Position memory is pinned for the life of a request (see the store comment):
+  // the shared budget reclaims normalization cache slots first, and a position
+  // entry is only released by recordEmittedPosition's own entry-count cap after
+  // the request settles. A cache miss is cheaper than losing an image's pinned
+  // ladder position mid-request.
   const cacheOldest = cache.entries().next().value as [string, CacheEntry] | undefined;
-  const positionOldest = emittedPositions.entries().next().value as [string, PositionEntry] | undefined;
-  if (!positionOldest || (cacheOldest && cacheOldest[1].storedAt <= positionOldest[1].storedAt)) {
-    return cacheOldest ? deleteCacheEntry(cacheOldest[0]) : 0;
-  }
-  return deletePositionEntry(positionOldest[0]);
+  return cacheOldest ? deleteCacheEntry(cacheOldest[0]) : 0;
 }
 
 /** Default encoder: Bun.Image resize-to-fit + JPEG at the given quality. */
