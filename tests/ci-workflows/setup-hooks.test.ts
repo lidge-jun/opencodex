@@ -136,6 +136,18 @@ describe("local hook setup", () => {
       const unreadable = join(hookDir, "pre-push");
       writeFileSync(unreadable, legacyHook);
       chmodSync(unreadable, 0o000);
+      // A process with CAP_DAC_OVERRIDE (e.g. root or some CI containers) can
+      // still read a 0000 file, so the child would succeed and the status-1
+      // expectation would fail despite correct behavior. Probe first and skip
+      // when the mode bit cannot model an unreadable fixture.
+      try {
+        readFileSync(unreadable, "utf8");
+        chmodSync(unreadable, 0o600);
+        console.warn("setup-hooks test skipped: chmod 0000 does not block reads for this process.");
+        return;
+      } catch {
+        // Unreadable as intended; continue.
+      }
       writeFileSync(join(hookDir, "post-merge"), legacyPostMergeHook);
       const run = spawnSync(process.execPath, [join(root, "scripts/setup-hooks.ts")], {
         cwd: root, env: gitEnv(root), encoding: "utf8", timeout: 10_000,

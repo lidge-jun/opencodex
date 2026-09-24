@@ -34,10 +34,18 @@ try {
 // name or a partial marker: a user may have added other work to their hook.
 const retiredPrePushSha256 = "2aa6b5f84ab989954d2ccc1a8680d63ad934034778e0ee99c277f8873fd40508";
 const prePushPath = join(hooksDir, "pre-push");
+// Filesystem error messages can embed the absolute hook path; report only a
+// bounded errno-style code so warnings stay path-free.
+function hookErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object" || !("code" in error)) return "unknown";
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && /^E[A-Z0-9_]{1,15}$/.test(code) ? code : "unknown";
+}
 // Every managed hook is attempted even when an earlier one fails: a surviving
 // shim keeps executing pulled code, so failures are collected and reported
 // with a nonzero exit after all removals ran.
 const failures: string[] = [];
+const failedHooks: string[] = [];
 try {
   const prePushStat = lstatSync(prePushPath, { throwIfNoEntry: false });
   if (prePushStat?.isFile()) {
@@ -52,9 +60,10 @@ try {
 } catch (error) {
   // A failed read or unlink must not skip the post-merge retirement below: the
   // shim keeps executing pulled code on every merge while it remains.
-  const message = error instanceof Error ? error.message : String(error);
-  console.warn("setup-hooks: could not process the pre-push hook: " + message);
-  failures.push(`pre-push: ${message}`);
+  const code = hookErrorCode(error);
+  console.warn(`setup-hooks: could not process the pre-push hook (${code}).`);
+  failures.push(`pre-push: ${code}`);
+  failedHooks.push("pre-push");
 }
 
 // Same exact-match retirement for the repository-managed post-merge shim: an
@@ -74,13 +83,17 @@ try {
     }
   }
 } catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  console.warn("setup-hooks: could not process the post-merge hook: " + message);
-  failures.push(`post-merge: ${message}`);
+  const code = hookErrorCode(error);
+  console.warn(`setup-hooks: could not process the post-merge hook (${code}).`);
+  failures.push(`post-merge: ${code}`);
+  failedHooks.push("post-merge");
 }
 
 if (failures.length > 0) {
-  console.error("setup-hooks: managed hook retirement incomplete; the surviving shim keeps executing pulled code on every merge. "
+  const risks = failedHooks.map(hook => hook === "post-merge"
+    ? "the surviving post-merge shim keeps executing pulled code on every merge"
+    : "the surviving pre-push shim keeps executing pulled code on every push");
+  console.error("setup-hooks: managed hook retirement incomplete; " + risks.join("; ") + ". "
     + "Remove it manually, then re-run: " + failures.join("; "));
   process.exitCode = 1;
 }
