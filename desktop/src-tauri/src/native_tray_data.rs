@@ -131,7 +131,7 @@ pub async fn load(
                     .filter(|source| {
                         settings
                             .as_ref()
-                            .map_or(true, |s| !snapshot::hidden(s, &source.name))
+                            .is_none_or(|s| !snapshot::hidden(s, &source.name))
                     })
                     .collect();
                 Some(json!(load_providers(&proxy, selected).await))
