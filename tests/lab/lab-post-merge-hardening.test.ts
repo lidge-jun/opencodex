@@ -229,8 +229,10 @@ test("event privacy admission stays linear on pathological path strings", () => 
   // polynomial-ReDoS shape static analysis flags — though the group cannot in
   // practice fail mid-run, so no input separates the old verdicts from the new.
   // These cases therefore pin the contract rather than a measurable slowdown:
-  // any rewrite that changes one of these verdicts is wrong regardless of speed,
-  // and a real backtracking regression still surfaces through the test timeout.
+  // each stays under the 4 KiB field cap so it reaches the regex, and any rewrite
+  // that changes one of these verdicts is wrong regardless of speed. The elapsed
+  // assertion below measures the new shape on these inputs instead of relying on
+  // a timeout that the old shape would not have hit either.
   const rejected = [
     `cwd=/${"a/".repeat(2000)}`,        // long segment chain
     `cwd=/${"a//".repeat(1300)}`,       // slash-dense chain
@@ -238,6 +240,7 @@ test("event privacy admission stays linear on pathological path strings", () => 
     "cwd=/a//b",                        // interior double slash keeps matching
     "cwd=/a\tb",                       // a tab inside a segment is still a path
   ];
+  const startedAt = performance.now();
   for (const detail of rejected) {
     try {
       enforceEventStructureLimits({ detail });
@@ -254,6 +257,7 @@ test("event privacy admission stays linear on pathological path strings", () => 
   for (const detail of allowed) {
     expect(() => enforceEventStructureLimits({ detail })).not.toThrow();
   }
+  expect(performance.now() - startedAt).toBeLessThan(1_000);
 }, 10_000);
 
 test("invalid JSON contract artifacts classify as artifact_mismatch", () => {
