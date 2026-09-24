@@ -223,7 +223,8 @@ chunks is still shown as text. Reasoning or other events arriving in between no 
 release a held envelope. After a clean stop or tool-call finish, a complete declared-tool
 call with no native counterpart is restored as a real call; an interrupted or failed turn
 leaves the markup as text. A call the parser cannot read is dropped rather than printed
-when it still opens, closes, and names a declared tool. A freeform call echoed without its
+when it still opens, closes, and names a declared tool, and either the real call for that
+tool arrives or the turn finishes cleanly. A freeform call echoed without its
 `</function>` close counts as complete once `</tool_call>` arrives. This applies to every
 MiMo model Command Code serves.
 

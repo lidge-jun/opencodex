@@ -26,6 +26,9 @@ const MALFORMED = [
 const EXEC_TOOL = { name: "exec", description: "Run JavaScript", freeform: true,
   parameters: { type: "object", properties: { input: { type: "string", description: "Raw freeform input for this tool." } }, required: ["input"] } };
 
+const READ_TOOL = { name: "read", description: "Read a file",
+  parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } };
+
 function ndjson(events: unknown[]): Response {
   return new Response(events.map(event => JSON.stringify(event)).join("\n"));
 }
@@ -70,6 +73,15 @@ const textBlock = (text: string) => [
 function execFilter() {
   const budget = createTestTranslatorBudget();
   return { budget, filter: new CommandCodeToolTextFilter(budget, new Map([["exec", { freeform: true, schema: EXEC_TOOL.parameters }]])) };
+}
+
+/** A filter that also declares a second tool, for native calls that are not the envelope's. */
+function twoToolFilter() {
+  const budget = createTestTranslatorBudget();
+  return { budget, filter: new CommandCodeToolTextFilter(budget, new Map([
+    ["exec", { freeform: true, schema: EXEC_TOOL.parameters }],
+    ["read", { freeform: false, schema: READ_TOOL.parameters }],
+  ])) };
 }
 
 describe("Command Code markup echoed after prose in one text block", () => {
@@ -143,6 +155,31 @@ describe("Command Code malformed envelope echo", () => {
     expect(texts(events)).toBe("");
     expect(calls(events)).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
     expect(done(events)?.stopReason).toBe("tool_calls");
+  });
+
+  test("releases a malformed envelope when the native call is for another tool", () => {
+    const { budget, filter } = twoToolFilter();
+    const args = JSON.stringify({ path: "src/a.ts" });
+    expect(filter.textDelta("t", MALFORMED)).toEqual([]);
+    expect(filter.textEnd("t")).toEqual([]);
+    // A read call proves nothing about an exec envelope, so it must not consume the echo the way a
+    // matching exec call does: the text is released rather than dropped, still ahead of the call.
+    const events = [...filter.nativeCall("call_r1", "read", args), ...filter.releaseAll()];
+    expect(texts(events)).toBe(MALFORMED);
+    expect(calls(events)).toEqual([{ id: "call_r1", name: "read", args }]);
+    expect(events.findIndex(event => event.type === "text_delta"))
+      .toBeLessThan(events.findIndex(event => event.type === "tool_call_start"));
+    expect(budget.snapshot().currentBytes).toBe(0);
+  });
+
+  test("drops a malformed envelope when the native call names it", () => {
+    const { budget, filter } = twoToolFilter();
+    expect(filter.textDelta("t", MALFORMED)).toEqual([]);
+    expect(filter.textEnd("t")).toEqual([]);
+    const events = [...filter.nativeCall("call_c1", "exec", JS), ...filter.releaseAll()];
+    expect(texts(events)).toBe("");
+    expect(calls(events)).toEqual([{ id: "call_c1", name: "exec", args: JS }]);
+    expect(budget.snapshot().currentBytes).toBe(0);
   });
 
   test("drops a malformed envelope on a clean finish instead of restoring it", async () => {
