@@ -10,3 +10,5 @@ The 260923 bundle round landed eight lane PRs (#5672-#5685). A post-merge review
 
 Accepted and out of scope: Claude Code <=2.1.222 picker filter (/^(claude|anthropic)/i) drops ocx-claude-* ids; other residual risks are documented in the round's landing log only.
 
+
+Cycle note: wp1's first close attempt failed on a malformed receipt command and the cycle was re-walked with the same artifacts.
