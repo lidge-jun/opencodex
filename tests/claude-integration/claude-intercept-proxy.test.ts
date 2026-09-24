@@ -147,7 +147,7 @@ test("other CONNECT targets are relayed blind, including pipelined bytes after t
 function tunnelPayload(port: number, host: string, payload = "hello"): Promise<string> {
   return new Promise((resolve, reject) => {
     const socket = connect({ host: "127.0.0.1", port }, () =>
-      socket.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n\r\n${payload}`));
+      socket.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n${AUTH_HEADER}\r\n${payload}`));
     let out = "";
     socket.on("data", chunk => {
       out += chunk.toString("latin1");
@@ -163,6 +163,7 @@ test("per-connection override chooses its own listener or blind tunnel", async (
   const selected: string[] = [];
   const proxy = await startConnectProxy(0, {
     interceptPort: 1,
+    authToken: AUTH_TOKEN,
     selectTunnel: (host, port) => {
       selected.push(`${host}:${port}`);
       return host === "claude.ai" ? { kind: "intercept", port: echo.port } : { kind: "blind" };
@@ -182,6 +183,7 @@ test("pending async choice holds pipelined bytes, then connects; rejection falls
   let dialCount = 0;
   const proxy = await startConnectProxy(0, {
     interceptPort: 1,
+    authToken: AUTH_TOKEN,
     selectTunnel: host => host === "claude.ai"
       ? new Promise(resolve => { settle = resolve; })
       : Promise.reject(new Error("decision failed")),
@@ -203,12 +205,13 @@ test("a closed client during an async decision causes no upstream dial", async (
   let dialCount = 0;
   const proxy = await startConnectProxy(0, {
     interceptPort: 1,
+    authToken: AUTH_TOKEN,
     selectTunnel: () => new Promise(resolve => { settle = resolve; }),
     dialUpstream: () => { dialCount += 1; return connect({ host: "127.0.0.1", port: 1 }); },
   });
   cleanups.push(proxy.close);
   const client: Socket = connect({ host: "127.0.0.1", port: proxy.port }, () =>
-    client.write("CONNECT claude.ai:443 HTTP/1.1\r\n\r\n"));
+    client.write(`CONNECT claude.ai:443 HTTP/1.1\r\n${AUTH_HEADER}\r\n`));
   await new Promise<void>(resolve => {
     const check = setInterval(() => {
       if (!settle) return;
@@ -227,11 +230,12 @@ test("invalid request and loopback are refused before consulting tunnel choice",
   let consulted = 0;
   const proxy = await startConnectProxy(0, {
     interceptPort: 1,
+    authToken: AUTH_TOKEN,
     selectTunnel: () => { consulted += 1; return { kind: "blind" }; },
   });
   cleanups.push(proxy.close);
   expect(await rawRequest(proxy.port, "GET http://example.com/ HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 405");
-  expect(await rawRequest(proxy.port, "CONNECT localhost:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
+  expect(await rawRequest(proxy.port, `CONNECT localhost:443 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");
   expect(consulted).toBe(0);
 });
 

@@ -160,7 +160,7 @@ test("a first-party binding routes a picker id on the intercept only; the public
   try {
     const state = await waitForIntercept();
     const ca = readFileSync(state.caCertPath, "utf8");
-    const proxy = `http://127.0.0.1:${state.proxyPort}`;
+    const proxy = `http://opencodex:${readClaudeInterceptProxyToken(testDir)}@127.0.0.1:${state.proxyPort}`;
     const request = { model: "claude-sonnet-4-6", max_tokens: 8, messages: [{ role: "user", content: "hi" }] };
     const anthropicHeaders = { "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": "sk-ant-not-real" };
 
