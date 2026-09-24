@@ -45,6 +45,7 @@ function config(
   enabled: boolean,
   snapshotRepair = false,
   streamMode?: "auto" | "legacy-tee" | "eager-relay",
+  stallTimeoutSec?: number,
 ): OcxConfig {
   return {
     defaultProvider: "native",
@@ -58,6 +59,7 @@ function config(
     },
     plaintextV2AgentMessages: enabled,
     ...(streamMode ? { streamMode } : {}),
+    ...(stallTimeoutSec ? { stallTimeoutSec } : {}),
   } as OcxConfig;
 }
 
@@ -301,6 +303,142 @@ describe("plaintext v2 agent messages at the Responses server boundary", () => {
         .toMatchObject({ namespace: "collaboration", name: "spawn_agent" });
     },
   );
+
+  test("bounds the headerless prefix probe when the upstream body produces no chunk", async () => {
+    takeInheritedSpendHome();
+    let cancels = 0;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull: () => new Promise<void>(() => {}),
+      cancel: () => { cancels += 1; },
+    }), { status: 200 })) as typeof fetch;
+
+    const started = performance.now();
+    const response = await handleResponses(
+      collaborationRequest(),
+      config(true, false, undefined, 1),
+      { model: "", provider: "" },
+    );
+    const clientBody = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(clientBody).toContain("unsupported content type");
+    expect(cancels).toBeGreaterThan(0);
+    expect(performance.now() - started).toBeLessThan(3_000);
+  });
+
+  test("fails closed when the headerless prefix probe reads a failed body", async () => {
+    takeInheritedSpendHome();
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { controller.error(new Error("upstream body read failed")); },
+    }), { status: 200 })) as typeof fetch;
+
+    const response = await handleResponses(
+      collaborationRequest(),
+      config(true, false, undefined, 1),
+      { model: "", provider: "" },
+    );
+    const clientBody = await response.text();
+
+    expect(response.status).toBe(502);
+    expect(clientBody).toContain("unsupported content type");
+  });
+
+  test("drops the prefix probe deadline once the body is recognized as SSE", async () => {
+    takeInheritedSpendHome();
+    const payload = completedResponsePayload("resp-plaintext-v2-slow-tail");
+    const item = payload.output[0]!;
+    const encoder = new TextEncoder();
+    // Chunk 1 classifies the body at once; every later chunk is a separate event, so the terminal
+    // is the last one and the tail lands after the probe's own one-second budget has passed.
+    const chunks = [
+      `event: response.output_item.added\ndata: ${JSON.stringify({
+        type: "response.output_item.added",
+        output_index: 0,
+        item,
+      })}\n\n`,
+      `event: response.function_call_arguments.done\ndata: ${JSON.stringify({
+        type: "response.function_call_arguments.done",
+        item_id: "fc-spawn",
+        namespace: PLAINTEXT_V2_COLLABORATION_NAMESPACE,
+        name: `${PLAINTEXT_V2_COLLABORATION_NAMESPACE}__start_delegated_task`,
+        arguments: JSON.stringify({ message: "plain assignment" }),
+        encrypted_function_args: [],
+      })}\n\n`,
+      `event: response.completed\ndata: ${JSON.stringify({
+        type: "response.completed",
+        response: payload,
+      })}\n\ndata: [DONE]\n\n`,
+    ];
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(chunks[0]!));
+        const later = (index: number): void => {
+          timers.push(setTimeout(() => {
+            controller.enqueue(encoder.encode(chunks[index]!));
+            if (index + 1 < chunks.length) later(index + 1);
+            else controller.close();
+          }, 700));
+        };
+        later(1);
+      },
+    }), { status: 200 })) as typeof fetch;
+
+    const started = performance.now();
+    try {
+      const response = await handleResponses(
+        collaborationRequest(),
+        config(true, false, undefined, 1),
+        { model: "", provider: "" },
+      );
+      const clientBody = await response.text();
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      expect(clientBody).toContain("data: [DONE]");
+      expect(clientBody).toContain('"namespace":"collaboration"');
+      expect(clientBody).toContain('"name":"spawn_agent"');
+      expect(clientBody).not.toContain(PLAINTEXT_V2_COLLABORATION_NAMESPACE);
+      expect(performance.now() - started).toBeGreaterThan(1_000);
+    } finally {
+      for (const timer of timers) clearTimeout(timer);
+    }
+  });
+
+  test("fails closed when a headerless body drip-feeds bytes that never classify", async () => {
+    takeInheritedSpendHome();
+    const encoder = new TextEncoder();
+    const timers: Array<ReturnType<typeof setTimeout>> = [];
+    let cancelled = false;
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        const tick = (): void => {
+          if (cancelled) return;
+          controller.enqueue(encoder.encode("x"));
+          timers.push(setTimeout(tick, 300));
+        };
+        timers.push(setTimeout(tick, 300));
+      },
+      cancel() { cancelled = true; },
+    }), { status: 200 })) as typeof fetch;
+
+    const started = performance.now();
+    try {
+      const response = await handleResponses(
+        collaborationRequest(),
+        config(true, false, undefined, 1),
+        { model: "", provider: "" },
+      );
+      const clientBody = await response.text();
+
+      expect(response.status).toBe(502);
+      expect(clientBody).toContain("unsupported content type");
+      expect(performance.now() - started).toBeLessThan(3_000);
+    } finally {
+      cancelled = true;
+      for (const timer of timers) clearTimeout(timer);
+    }
+  });
 
   test("recognizes a headerless SSE event split across upstream chunks", async () => {
     takeInheritedSpendHome();

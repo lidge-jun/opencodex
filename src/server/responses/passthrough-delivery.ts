@@ -128,6 +128,8 @@ import { linkAbortSignal, UPSTREAM_JSON_BODY_READ_OPTIONS } from "./core-lifetim
 import { registerTurn, unregisterTurn, trackStreamLifetime } from "../lifecycle";
 import { relaySseEagerBounded } from "../relay-eager";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { idleDeadline } from "../../lib/abort";
+import { resolveStallTimeoutSec } from "../../stall-timeout";
 import { formatErrorResponse } from "../../bridge";
 import { inspectResponseLogJson } from "../request-log";
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
@@ -135,6 +137,12 @@ import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-
 import { responsesJsonToSseStream } from "../responses-json-events";
 
 const PLAINTEXT_V2_SSE_PREFIX_LIMIT = 4096;
+
+/** Prefix-probe budget: bounds one silent gap and the whole probe alike. */
+interface PlaintextV2SseProbeOptions {
+  timeoutMs: number;
+  signal?: AbortSignal;
+}
 
 function classifyPlaintextV2SsePrefix(prefix: string): "sse" | "unknown" | "more" {
   const lastLineEnd = prefix.lastIndexOf("\n");
@@ -160,52 +168,103 @@ function classifyPlaintextV2SsePrefix(prefix: string): "sse" | "unknown" | "more
   return "more";
 }
 
-/** Confirm an unlabeled successful body is Responses SSE before alias restoration. */
-async function classifyPlaintextV2SseResponse(response: Response): Promise<Response> {
+/**
+ * Confirm an unlabeled successful body is Responses SSE before alias restoration.
+ *
+ * The probe waits at most `timeoutMs` for a first recognized event, then hands the body to the
+ * client with no deadline of its own: a stall in the prefix is a probe failure, and a stall after
+ * it belongs to the delivered stream.
+ */
+async function classifyPlaintextV2SseResponse(
+  response: Response,
+  probe: PlaintextV2SseProbeOptions,
+): Promise<Response> {
   if (!response.body) return response;
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const buffered: Uint8Array[] = [];
-  let prefix = "";
-  let inspectedBytes = 0;
-  while (inspectedBytes < PLAINTEXT_V2_SSE_PREFIX_LIMIT) {
-    const next = await reader.read();
-    if (next.done) break;
-    buffered.push(next.value);
-    const inspected = next.value.subarray(0, PLAINTEXT_V2_SSE_PREFIX_LIMIT - inspectedBytes);
-    inspectedBytes += inspected.byteLength;
-    prefix += decoder.decode(inspected, { stream: true });
-    const kind = classifyPlaintextV2SsePrefix(prefix);
-    if (kind === "sse") {
-      let bufferedIndex = 0;
-      const body = new ReadableStream<Uint8Array>({
-        async pull(controller) {
-          if (bufferedIndex < buffered.length) {
-            controller.enqueue(buffered[bufferedIndex++]!);
-            return;
-          }
-          try {
-            const result = await reader.read();
-            if (result.done) controller.close();
-            else controller.enqueue(result.value);
-          } catch (error) {
-            controller.error(error);
-          }
-        },
-        cancel(reason) { return reader.cancel(reason); },
-      });
-      const headers = new Headers(response.headers);
-      headers.set("content-type", "text/event-stream");
-      return new Response(body, { status: response.status, statusText: response.statusText, headers });
+  // A non-conforming stream can throw synchronously from cancel(); neither that nor a
+  // rejected cancel may escape past the probe's own deadline.
+  const cancelReader = (reason?: unknown): void => {
+    try {
+      void reader.cancel(reason).catch(() => undefined);
+    } catch {
+      // Some stream implementations throw synchronously from cancel().
     }
-    if (kind === "unknown") break;
-  }
-  void reader.cancel().catch(() => {});
-  return new Response(null, {
+  };
+  const unrecognized = (): Response => new Response(null, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
   });
+  const { timeoutMs, signal } = probe;
+  const stalled = new DOMException("Plaintext V2 SSE prefix probe stalled", "TimeoutError");
+  let rejectProbe: ((reason: unknown) => void) | undefined;
+  const failed = new Promise<never>((_resolve, reject) => { rejectProbe = reject; });
+  // The race below always observes this rejection; this covers a deadline that fires after the
+  // race already settled with a chunk, which would otherwise be an unhandled rejection.
+  void failed.catch(() => undefined);
+  const inactivity = idleDeadline(timeoutMs, () => rejectProbe?.(stalled));
+  // A drip-fed body can restart the inactivity window forever, so the probe also carries one
+  // total budget that starts when the probe begins.
+  const totalTimer = timeoutMs > 0 ? setTimeout(() => rejectProbe?.(stalled), timeoutMs) : undefined;
+  const onAbort = (): void => rejectProbe?.(signal?.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  const decoder = new TextDecoder();
+  const buffered: Uint8Array[] = [];
+  let prefix = "";
+  let inspectedBytes = 0;
+  try {
+    while (inspectedBytes < PLAINTEXT_V2_SSE_PREFIX_LIMIT) {
+      if (signal?.aborted) throw signal.reason;
+      // Armed for every read, so a chunk that arrives restarts the window at the next iteration.
+      inactivity.reset();
+      const read = reader.read();
+      // Observe a late read rejection when the deadline or the client wins the race.
+      void read.catch(() => undefined);
+      const next = await Promise.race([read, failed]);
+      if (signal?.aborted) throw signal.reason;
+      if (next.done) break;
+      buffered.push(next.value);
+      const inspected = next.value.subarray(0, PLAINTEXT_V2_SSE_PREFIX_LIMIT - inspectedBytes);
+      inspectedBytes += inspected.byteLength;
+      prefix += decoder.decode(inspected, { stream: true });
+      const kind = classifyPlaintextV2SsePrefix(prefix);
+      if (kind === "sse") {
+        let bufferedIndex = 0;
+        const body = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (bufferedIndex < buffered.length) {
+              controller.enqueue(buffered[bufferedIndex++]!);
+              return;
+            }
+            try {
+              const result = await reader.read();
+              if (result.done) controller.close();
+              else controller.enqueue(result.value);
+            } catch (error) {
+              controller.error(error);
+            }
+          },
+          cancel(reason) { return reader.cancel(reason); },
+        });
+        const headers = new Headers(response.headers);
+        headers.set("content-type", "text/event-stream");
+        return new Response(body, { status: response.status, statusText: response.statusText, headers });
+      }
+      if (kind === "unknown") break;
+    }
+  } catch (error) {
+    // Timeout, client abort, or a failed read fails closed through the unrecognized-body exit,
+    // which the caller already answers as the unsupported-content-type 502.
+    cancelReader(error);
+    return unrecognized();
+  } finally {
+    inactivity.cancel();
+    if (totalTimer !== undefined) clearTimeout(totalTimer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+  cancelReader();
+  return unrecognized();
 }
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -294,7 +353,10 @@ export async function deliverPassthroughResponse(
     && !originalContentType?.toLowerCase().includes("application/json")
     && !isCodexWsUpstreamResponse(upstreamResponse)
     && !(options.nativeControl && isNativeControlResponse(upstreamResponse))) {
-    upstreamResponse = await classifyPlaintextV2SseResponse(upstreamResponse);
+    upstreamResponse = await classifyPlaintextV2SseResponse(upstreamResponse, {
+      timeoutMs: resolveStallTimeoutSec(config.stallTimeoutSec) * 1000,
+      signal: options.abortSignal ?? req.signal,
+    });
   }
 
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
