@@ -90,7 +90,10 @@ replacement, and root object coercion. Lossless normalization does not set `loss
 case folding, duplicate enum/required removal, nullable-union collapse, and string-const conversion
 preserve the accepted value set; an array left without `items` is emitted with `items: { type: "string" }`
 because Gemini rejects an array declaration without an item type; that narrows an unconstrained item
-rather than widening a constraint, so it does not set `lossy` either. Annotation-only fields such as title, default, examples, comments,
+rather than widening a constraint, so it does not set `lossy` either. The synthesized item is itself
+part of the emitted tree and charges the 1,024-node allowance, so an array the budget can no longer
+complete is omitted — along with any parent that lost its own `items` to the same rule — and records
+`node-budget-widened` instead of emitting a declaration Gemini would reject. Annotation-only fields such as title, default, examples, comments,
 deprecated, read-only/write-only, external documentation and examples are omitted without loss.
 Local-reference siblings use 2020-12-style conjunctive semantics for loss accounting, while the
 wire transform retains its implemented overlay-wins merge; enum reports compare that intersection
