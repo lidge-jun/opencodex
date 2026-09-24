@@ -392,6 +392,7 @@ describe("remote hub client boundary", () => {
 /** A catalog the user already had before ever connecting. */
 const PRIOR_CATALOG_BYTES = '{"models":[{"slug":"local/only-model"}]}';
 
+/** Exercise enrollment and rollback in a fresh process with isolated client homes. */
 function runTransactionScenario(
   stage: "success" | "catalog" | "preflight" | "commit" | "prior-catalog" | "coordinator" | "uninstall-during-catalog",
   options: { script?: string; timeoutMs?: number } = {},
@@ -730,6 +731,7 @@ describe("connect transaction and offline disconnect", () => {
         expect(run.parsed.calls.some((call: any) => call.method === "DELETE")).toBe(true);
         if (stage === "commit") {
           expect(run.parsed.commitFaultTriggered).toBe(true);
+          expect(run.parsed.error).not.toContain("client cleanup ownership unavailable");
           expect(run.parsed.calls.some((call: any) => call.method === "POST" && call.url.endsWith("/api/keys"))).toBe(true);
         }
         expect(run.configBytes).not.toContain("issued-id");

@@ -66,7 +66,7 @@ import {
   clearClientConnection,
   commitClientConnection,
   readClientConnectionState,
-  markClientConnectPending, clearClientConnectPending,
+  markClientConnectPending, clearClientConnectPending, pendingClientConnectMayOwnToken,
   assertNoClientDisconnectPending, assertClientConnectionUnchanged, sameClientConnectionOwner,
 } from "./state";
 import { assertClientCatalogCompatible, type CatalogCompatibilityDeps } from "./catalog-compatibility";
@@ -629,7 +629,8 @@ export async function connectClient(
         if (pendingConnectFingerprint) {
           const removed = removeServiceApiTokenFileIfOwned(pendingConnectFingerprint);
           if (removed === "changed") rollbackFailures.push("service token changed during rollback");
-          else clearClientConnectPending(pendingConnectFingerprint);
+          // Final commit may fail after this attempt already cleared its marker under the same lock.
+          else if (pendingClientConnectMayOwnToken()) clearClientConnectPending(pendingConnectFingerprint);
         }
       }), deps.lifecycleLockDeps);
     } catch { rollbackFailures.push("client cleanup ownership unavailable"); }
