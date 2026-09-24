@@ -119,6 +119,11 @@ describe("Claude Opus 5.5 forced tool choice compatibility", () => {
     expect(choice).toEqual({ type: "auto" });
   });
 
+  test("Opus 5.5 auto and none choices remain unchanged", async () => {
+    expect(await toolChoiceOf({ toolChoice: "auto" }, true, "anthropic/claude-opus-5-5")).toEqual({ type: "auto" });
+    expect(await toolChoiceOf({ toolChoice: "none" }, true, "anthropic/claude-opus-5-5")).toEqual({ type: "none" });
+  });
+
   test("the parallel-call limit stays attached after the compatibility downgrade", async () => {
     const choice = await toolChoiceOf(
       { toolChoice: "required", reasoning: "medium", parallelToolCalls: false },
