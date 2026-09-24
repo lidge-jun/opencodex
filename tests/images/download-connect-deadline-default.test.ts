@@ -1,10 +1,21 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 
 // The default downloader inside connectPublicHttps is the production path for
 // provider-returned image/video URLs (downloadImageToArtifact and
 // downloadVideoToArtifact both go through it), while pinnedHttpsGet has no
 // production callers. A connect deadline wired only into pinnedHttpsGet would
 // therefore never arm in production — this suite pins the default path.
+
+// `mock.module` outlives this file: Bun keeps both overrides below for every file that
+// runs after this one in the same process, including download-cap-default's own capture of
+// the "real" modules and tests/lib's pinned-http suites (#5439). Keep the real modules,
+// captured before anything here is mocked, and put them back.
+const realDns = { ...(await import("node:dns/promises")) };
+const realPinnedHttp = { ...(await import("../../src/lib/pinned-http")) };
+afterAll(() => {
+  mock.module("node:dns/promises", () => realDns);
+  mock.module("../../src/lib/pinned-http", () => realPinnedHttp);
+});
 
 const lookupMock = mock(async (): Promise<{ address: string; family: number }[]> => [
   { address: "93.184.216.34", family: 4 },
