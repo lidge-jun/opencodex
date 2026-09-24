@@ -61,6 +61,7 @@ function responseError(status: number, type: string, message: string): OcxErrorP
 
 export type ResponsesTerminalStatus = "completed" | "failed" | "incomplete";
 
+/** Stream adapter events as Responses frames, applying tool authorization before relaying calls. */
 export function bridgeToResponsesSSE(
   events: AsyncIterable<AdapterEvent>,
   modelId: string,
@@ -1011,7 +1012,7 @@ export function bridgeToResponsesSSE(
               const mapped = toolNsMap?.get(effectiveName);
               const realName = mapped?.name ?? effectiveName;
               if (
-                (options?.enforceDeclaredToolNames === true || options?.declaredToolNames !== undefined)
+                (options?.enforceDeclaredToolNames === true || options?.declaredToolNames != null)
                 && options?.enforceDeclaredToolNames !== false
                 && !options?.declaredToolNames?.has(effectiveName)
               ) {
