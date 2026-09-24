@@ -89,6 +89,17 @@ function ConvertTo-NativeArgument([string]$Value) {
   return '"' + $Value + '"'
 }
 
+# A CODEX_HOME that does not exist yet (fresh profile) is rejected by the CLI, so
+# let children fall back to their default home resolution instead.
+function Set-OcxChildEnvironment([System.Diagnostics.ProcessStartInfo]$StartInfo) {
+  if ([System.IO.Directory]::Exists($CodexHome)) {
+    $StartInfo.EnvironmentVariables["CODEX_HOME"] = $CodexHome
+  } else {
+    $StartInfo.EnvironmentVariables.Remove("CODEX_HOME")
+  }
+  $StartInfo.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
+}
+
 function Start-OcxCommand([string[]]$CommandArgs, [switch]$TrackExit) {
   try {
     $allArgs = @($CliPath) + $CommandArgs
@@ -98,8 +109,7 @@ function Start-OcxCommand([string[]]$CommandArgs, [switch]$TrackExit) {
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
     $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
-    $psi.EnvironmentVariables["CODEX_HOME"] = $CodexHome
-    $psi.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
+    Set-OcxChildEnvironment $psi
     if ($BunRuntimeSource) {
       $psi.EnvironmentVariables["OCX_BUN_RUNTIME_SOURCE"] = $BunRuntimeSource
       # Paired with the source so a later relaunch can tell the marker still describes
@@ -158,8 +168,7 @@ function Start-StartupHealthProbe {
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-    $psi.EnvironmentVariables["CODEX_HOME"] = $CodexHome
-    $psi.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
+    Set-OcxChildEnvironment $psi
     if ($BunRuntimeSource) {
       $psi.EnvironmentVariables["OCX_BUN_RUNTIME_SOURCE"] = $BunRuntimeSource
       $psi.EnvironmentVariables["OCX_BUN_RUNTIME_PATH"] = $BunPath
@@ -277,8 +286,7 @@ function Start-UpdateBadgeProbe {
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-    $psi.EnvironmentVariables["CODEX_HOME"] = $CodexHome
-    $psi.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
+    Set-OcxChildEnvironment $psi
     if ($BunRuntimeSource) {
       $psi.EnvironmentVariables["OCX_BUN_RUNTIME_SOURCE"] = $BunRuntimeSource
       $psi.EnvironmentVariables["OCX_BUN_RUNTIME_PATH"] = $BunPath

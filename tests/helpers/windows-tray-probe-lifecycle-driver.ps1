@@ -37,6 +37,7 @@ if ($parseErrors.Count -gt 0) { throw "tray script parse failed: $($parseErrors[
 $wanted = @(
   "Write-ActionLog",
   "ConvertTo-NativeArgument",
+  "Set-OcxChildEnvironment",
   "Parse-StartupHealthText",
   "Start-StartupHealthProbe",
   "Complete-StartupHealthProbe",
