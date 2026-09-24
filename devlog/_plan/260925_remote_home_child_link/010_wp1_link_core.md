@@ -60,12 +60,17 @@ export function linkKnownHostsPath(configDir?: string): string {
  * Every command is built here so the security-relevant options live in one place:
  * - BatchMode=yes: no password or passphrase prompt, keys and agents only.
  * - HostKeyAlias=<alias> with UserKnownHostsFile=<link known_hosts> and
- *   GlobalKnownHostsFile=/dev/null: only a host key the user confirmed for this link is trusted,
+ *   GlobalKnownHostsFile=none: only a host key the user confirmed for this link is trusted,
  *   and the stored entry has the same form for every port and ProxyJump route.
+ * - KnownHostsCommand=none, VerifyHostKeyDNS=no and CheckHostIP=no: no other source of host-key
+ *   trust (a helper command, DNS SSHFP records, IP entries) can stand in for the link file.
+ *   Command-line options win over ~/.ssh/config, so a user config cannot re-enable them.
  * - Tunnel and exec commands use StrictHostKeyChecking=yes. Only the probe uses accept-new,
  *   against an empty temporary file, so the key it records can be shown to the user first.
  * - Forwards always bind 127.0.0.1 on both ends.
  */
+
+import { isAbsolute } from "node:path";
 
 export type TunnelDirection = "R" | "L";
 
@@ -79,6 +84,10 @@ export class LinkSshArgumentError extends Error {
 }
 
 /** A host alias as ssh reads it. A leading "-" would be parsed as an option, so it is refused. */
+export function isSshAlias(alias: string): boolean {
+  return ALIAS_PATTERN.test(alias);
+}
+
 export function assertSshAlias(alias: string): string {
   if (!ALIAS_PATTERN.test(alias)) throw new LinkSshArgumentError(`invalid ssh host alias: ${JSON.stringify(alias)}`);
   return alias;
@@ -91,9 +100,16 @@ function assertPort(port: number, label: string): number {
   return port;
 }
 
-/** ssh splits `-o` values on whitespace; quote a path that has any, and refuse a quote character. */
+/**
+ * ssh splits `-o` values on whitespace, expands `%` tokens, `${ENV}` and a leading `~` in
+ * UserKnownHostsFile, treats the value `none` as "no file" and resolves a relative path against
+ * its working directory. Any of those could name a different file than the one written, so only
+ * an absolute path without expansion syntax is accepted; whitespace is quoted.
+ */
 function optionPath(path: string): string {
-  if (!path || /["\x00-\x1f]/.test(path)) throw new LinkSshArgumentError("known_hosts path is not usable in an ssh option");
+  if (!path || !isAbsolute(path) || /["%$\x00-\x1f]/.test(path) || path.startsWith("~")) {
+    throw new LinkSshArgumentError("known_hosts path is not usable in an ssh option");
+  }
   return /\s/.test(path) ? `"${path}"` : path;
 }
 
@@ -106,7 +122,10 @@ function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "a
     "-o", `StrictHostKeyChecking=${strict}`,
     "-o", `HostKeyAlias=${alias}`,
     "-o", `UserKnownHostsFile=${optionPath(knownHostsFile)}`,
-    "-o", "GlobalKnownHostsFile=/dev/null",
+    "-o", "GlobalKnownHostsFile=none",
+    "-o", "KnownHostsCommand=none",
+    "-o", "VerifyHostKeyDNS=no",
+    "-o", "CheckHostIP=no",
     "-o", "UpdateHostKeys=no",
     "-o", "ControlMaster=no",
     "-o", "ControlPath=none",
@@ -203,13 +222,15 @@ export function quoteRemote(argv: readonly string[]): string {
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isSshAlias } from "./ssh-argv";
 
 /**
  * Host candidates from OpenSSH client configuration.
  *
  * Candidates are offers, not trust: a host is usable only after a probe proves key login and the
  * user confirms its host key. Patterns (`*`, `?`, `!`) and `Match` blocks name no single host,
- * so they are skipped.
+ * so they are skipped. An `Include` inside a `Host` or `Match` block applies only under that
+ * block's condition, so only top-level includes are followed.
  */
 export interface HostCandidate {
   alias: string;
@@ -223,20 +244,47 @@ export interface ParseHostCandidatesOptions {
   maxDepth?: number;
 }
 
-function tokens(line: string): string[] {
+/**
+ * Split arguments exactly the way OpenSSH's argv_split (misc.c) does when readconf calls it with
+ * terminate_on_comment set:
+ * - blanks and tabs separate arguments; an unquoted `#` at the start of an argument ends the line;
+ * - a backslash before `'`, `"` or `\\` — or, outside quotes, before a space — yields that
+ *   character; any other backslash (including a trailing one) is kept literally;
+ * - single or double quotes group, and the backslash rule above applies inside them too.
+ * Returns null for an unterminated quote, which OpenSSH rejects as an invalid line.
+ */
+export function splitSshArgs(text: string): string[] | null {
   const out: string[] = [];
-  let current = "";
-  let quoted = false;
-  for (const ch of line) {
-    if (ch === '"') { quoted = !quoted; continue; }
-    if (!quoted && (ch === " " || ch === "\t")) {
-      if (current) out.push(current);
-      current = "";
-      continue;
+  let i = 0;
+  while (i < text.length) {
+    const lead = text[i];
+    if (lead === " " || lead === "\t") { i += 1; continue; }
+    if (lead === "#") break;
+    let arg = "";
+    let quote: "'" | '"' | null = null;
+    for (; i < text.length; i += 1) {
+      const ch = text[i]!;
+      const next = text[i + 1];
+      if (ch === "\\") {
+        if (next === "'" || next === '"' || next === "\\" || (quote === null && next === " ")) {
+          i += 1;
+          arg += next;
+        } else {
+          arg += ch;
+        }
+      } else if (quote === null && (ch === " " || ch === "\t")) {
+        break;
+      } else if (quote === null && (ch === '"' || ch === "'")) {
+        quote = ch;
+      } else if (quote !== null && ch === quote) {
+        quote = null;
+      } else {
+        arg += ch;
+      }
     }
-    current += ch;
+    if (quote !== null) return null;
+    out.push(arg);
   }
-  if (current) out.push(current);
   return out;
 }
 
@@ -245,8 +293,9 @@ function splitDirective(raw: string): { keyword: string; args: string[] } | null
   if (!line || line.startsWith("#")) return null;
   const match = /^([A-Za-z]+)(?:\s*=\s*|\s+)(.*)$/.exec(line);
   if (!match) return null;
-  const rest = match[2]!.replace(/\s+#.*$/, "");
-  return { keyword: match[1]!.toLowerCase(), args: tokens(rest) };
+  const args = splitSshArgs(match[2]!);
+  if (!args) return null;
+  return { keyword: match[1]!.toLowerCase(), args };
 }
 
 export function parseHostCandidates(text: string, options: ParseHostCandidatesOptions = {}): HostCandidate[] {
@@ -254,19 +303,22 @@ export function parseHostCandidates(text: string, options: ParseHostCandidatesOp
   const out: HostCandidate[] = [];
   const maxDepth = options.maxDepth ?? 16;
   const visit = (body: string, depth: number): void => {
+    let block: "top" | "host" | "match" = "top";
     for (const raw of body.split(/\r?\n/)) {
       const directive = splitDirective(raw);
       if (!directive) continue;
+      if (directive.keyword === "match") { block = "match"; continue; }
       if (directive.keyword === "include") {
-        if (depth >= maxDepth || !options.resolveInclude) continue;
+        if (block !== "top" || depth >= maxDepth || !options.resolveInclude) continue;
         for (const pattern of directive.args) {
           for (const included of options.resolveInclude(pattern)) visit(included, depth + 1);
         }
         continue;
       }
       if (directive.keyword !== "host") continue;
+      block = "host";
       for (const alias of directive.args) {
-        if (/[*?!]/.test(alias) || alias.startsWith("-")) continue;
+        if (/[*?!]/.test(alias) || !isSshAlias(alias)) continue;
         const key = alias.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
@@ -293,7 +345,12 @@ function defaultGlob(pattern: string): string[] {
   return [...new Bun.Glob(relative).scanSync({ cwd: base, absolute: true, onlyFiles: true })].sort();
 }
 
-/** Read `~/.ssh/config` and its includes. A missing or unreadable file yields no candidates. */
+/**
+ * Read `~/.ssh/config` and its includes. A missing or unreadable file yields no candidates.
+ * Include patterns support a leading `~/`, absolute and `~/.ssh`-relative paths and globs;
+ * `~user`, environment variables and `%` tokens are not expanded, so such an include adds no
+ * candidates (the host can still be entered by hand).
+ */
 export function loadHostCandidates(options: LoadHostCandidatesOptions = {}): HostCandidate[] {
   const home = options.home ?? homedir();
   const sshDir = join(home, ".ssh");
@@ -381,7 +438,9 @@ export function reduceTunnel(state: TunnelState, event: TunnelEvent, random?: ()
       return { kind: "reconnecting", since, attempt, retryAt: event.now + nextDelayMs(attempt, random), inFlight: false };
     }
     case "tick":
-      if (state.kind === "reconnecting" && !state.inFlight && event.now - state.since >= FAILED_AFTER_MS) {
+      // An attempt in flight does not pause the clock: a first attempt or a retry that hangs past
+      // the limit still fails the link, and the supervisor kills the child on seeing `failed`.
+      if ((state.kind === "reconnecting" || state.kind === "connecting") && event.now - state.since >= FAILED_AFTER_MS) {
         return { kind: "failed", since: event.now, reason: "timeout" };
       }
       return state;
@@ -418,7 +477,7 @@ import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
 import { atomicWriteFile, isMissingPathError } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
-import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
+import { hardenSecretDir } from "../lib/windows-secret-acl";
 import { assertSshAlias } from "./ssh-argv";
 
 /**
@@ -465,22 +524,35 @@ export function newLinkId(): string {
   return `lnk_${randomBytes(8).toString("hex")}`;
 }
 
+const RECORD_KEYS = new Set(["id", "alias", "direction", "hostKeyFingerprint", "tunnelPort", "apiKeyId", "createdAt"]);
+const STORE_KEYS = new Set(["version", "listenerPort", "links"]);
+const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
+const FINGERPRINT = /^[A-Z0-9]+:[A-Za-z0-9+/=]{16,128}$/;
+
+/** A trust-boundary file: an unknown field is an error, not something to drop silently. */
+function assertOnlyKeys(raw: Record<string, unknown>, allowed: Set<string>, where: string): void {
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) throw new LinkStoreError(`${where} has an unknown field ${JSON.stringify(key)}`);
+  }
+}
+
 const isPort = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
 
 function parseRecord(value: unknown, index: number): LinkRecord {
-  const fail = (field: string) => { throw new LinkStoreError(`links[${index}].${field} is invalid`); };
+  const fail = (field: string): never => { throw new LinkStoreError(`links[${index}].${field} is invalid`); };
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new LinkStoreError(`links[${index}] is not an object`);
   const raw = value as Record<string, unknown>;
+  assertOnlyKeys(raw, RECORD_KEYS, `links[${index}]`);
   if (typeof raw.id !== "string" || !/^lnk_[0-9a-f]{16}$/.test(raw.id)) fail("id");
   if (typeof raw.alias !== "string") fail("alias");
   try { assertSshAlias(raw.alias as string); } catch { fail("alias"); }
   if (raw.direction !== "hub-initiated" && raw.direction !== "client-initiated") fail("direction");
   const fingerprint = raw.hostKeyFingerprint;
   if (fingerprint === null ? raw.direction !== "client-initiated"
-    : typeof fingerprint !== "string" || !/^[A-Z0-9]+:[A-Za-z0-9+/=]{16,128}$/.test(fingerprint)) fail("hostKeyFingerprint");
+    : typeof fingerprint !== "string" || !FINGERPRINT.test(fingerprint)) fail("hostKeyFingerprint");
   if (!isPort(raw.tunnelPort)) fail("tunnelPort");
-  if (typeof raw.apiKeyId !== "string" || !raw.apiKeyId || raw.apiKeyId.length > 256) fail("apiKeyId");
+  if (typeof raw.apiKeyId !== "string" || !API_KEY_ID.test(raw.apiKeyId)) fail("apiKeyId");
   if (typeof raw.createdAt !== "string" || Number.isNaN(Date.parse(raw.createdAt))) fail("createdAt");
   return {
     id: raw.id as string,
@@ -498,6 +570,7 @@ export function parseLinkStore(text: string): LinkStore {
   try { raw = JSON.parse(text); } catch { throw new LinkStoreError("links.json is not valid JSON"); }
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new LinkStoreError("links.json is not an object");
   const body = raw as Record<string, unknown>;
+  assertOnlyKeys(body, STORE_KEYS, "links.json");
   if (body.version !== 1) throw new LinkStoreError("links.json has an unsupported version");
   if (body.listenerPort !== null && !isPort(body.listenerPort)) throw new LinkStoreError("listenerPort is invalid");
   if (!Array.isArray(body.links)) throw new LinkStoreError("links is not an array");
@@ -524,9 +597,10 @@ export function writeLinkStore(path: string, store: LinkStore): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform === "win32") hardenSecretDir(dir, { required: true });
   else chmodSync(dir, 0o700);
+  // atomicWriteFile hardens its private temp on Windows before the rename, so only POSIX needs
+  // the explicit mode here.
   atomicWriteFile(path, `${JSON.stringify(normalized, null, 2)}\n`);
-  if (process.platform === "win32") hardenSecretPath(path, { required: true });
-  else chmodSync(path, 0o600);
+  if (process.platform !== "win32") chmodSync(path, 0o600);
 }
 
 /**
@@ -543,35 +617,37 @@ export function hasLinks(path: string): boolean {
 모든 테스트는 `mkdtempSync` 임시 디렉터리와 합성 호스트 이름(`alpha.example.test` 등)만 쓴다. 실제 `~/.ssh`를 읽지 않는다. 권한 검사는 `process.platform === "win32"`에서 건너뛴다.
 
 - link-ssh-argv.test.ts
-  - tunnel R: argv가 `ssh -N -T`로 시작하고 `StrictHostKeyChecking=yes`, `HostKeyAlias=<alias>`, `UserKnownHostsFile=<file>`, `GlobalKnownHostsFile=/dev/null`, `BatchMode=yes`, `ExitOnForwardFailure=yes`, `-R 127.0.0.1:P:127.0.0.1:L`, 마지막 두 원소가 `--`, alias.
+  - tunnel R: argv가 `ssh -N -T`로 시작하고 `StrictHostKeyChecking=yes`, `HostKeyAlias=<alias>`, `UserKnownHostsFile=<abs file>`, `GlobalKnownHostsFile=none`, `KnownHostsCommand=none`, `VerifyHostKeyDNS=no`, `CheckHostIP=no`, `BatchMode=yes`, `ExitOnForwardFailure=yes`, `-R 127.0.0.1:P:127.0.0.1:L`, 마지막 두 원소가 `--`, alias.
   - tunnel L: `-L` 모양 동일.
-  - exec: `ClearAllForwardings=yes`, 원격 명령이 인용된 한 문자열, `-N` 없음, `StrictHostKeyChecking=yes`.
-  - probe: `StrictHostKeyChecking=accept-new`, UserKnownHostsFile이 임시 파일, 원격 명령 `true`.
+  - exec: `ClearAllForwardings=yes`, 원격 명령이 인용된 한 문자열, `-N` 없음, `StrictHostKeyChecking=yes`, 위 세 신뢰 차단 옵션 포함.
+  - probe: `StrictHostKeyChecking=accept-new`, UserKnownHostsFile이 임시 파일, 원격 명령 `true`, 세 신뢰 차단 옵션 포함.
   - 별칭 거부: `-oProxyCommand=x`, 빈 문자열, 공백 포함, 개행 포함 → LinkSshArgumentError.
   - 포트 거부: 0, 65536, 1.5.
-  - 공백 있는 known_hosts 경로는 큰따옴표로 감싸고, 큰따옴표·제어 문자 경로는 거부.
+  - known_hosts 경로: 공백 있는 절대 경로는 큰따옴표로 감쌈. 거부: `none`, `relative/known_hosts`, `~/k`, `/tmp/%h/known_hosts`, `/tmp/${HOME}/k`, 큰따옴표 포함, 제어 문자 포함.
   - quoteRemote: `it's` → `'it'"'"'s'`, NUL 거부.
 - link-ssh-config.test.ts
-  - Host 여러 개, `*`/`?`/`!` 패턴 제외, 대소문자 무시 중복 제거, `Host=alpha` 형식, 주석과 행 끝 주석, 따옴표 인자.
-  - Match 블록 안의 지시어는 후보를 만들지 않는다(다음 Host는 다시 후보).
-  - Include: 임시 디렉터리에 `config`, `conf.d/a.conf`, `conf.d/b.conf`를 쓰고 `loadHostCandidates({home})`가 glob과 상대 경로를 따라간다. 깊이 16 초과 자기 포함은 멈춘다.
+  - splitSshArgs(OpenSSH argv_split 규칙): `alpha\\ one` → [`alpha one`]; `"a b" 'c\\'d' e\\` → [`a b`, `c'd`, `e\\`](끝 역슬래시 유지); `x # c` → [`x`]; `"a#b" z` → [`a#b`, `z`]; `'x\\y'` → [`x\\y`](인식 못 한 이스케이프는 유지); `a\\<TAB>b` → [`a\\`, `b`](탭은 이스케이프 대상 아님); 닫히지 않은 따옴표 → null. 이 7개 기대값은 wp0 중 초안으로 실행해 확인했다.
+  - Host 여러 개, `*`/`?`/`!` 패턴 제외, isSshAlias를 통과하지 못한 별칭(`"alpha beta"`, `-x`) 제외, 대소문자 무시 중복 제거, `Host=alpha` 형식, 행 끝 주석, 닫히지 않은 따옴표 줄은 무시.
+  - Match 블록 뒤의 지시어는 후보를 만들지 않고, 다음 Host는 다시 후보.
+  - Include: 임시 디렉터리에 `config`, `conf.d/a.conf`, `conf.d/b.conf`를 쓰고 최상위 `Include conf.d/*.conf`를 `loadHostCandidates({home})`가 glob과 상대 경로로 따라간다. Host 블록 안의 Include와 Match 블록 안의 Include는 따라가지 않는다. 자기 자신을 포함하는 Include는 깊이 16에서 멈춘다.
   - config 파일이 없으면 빈 배열.
 - link-tunnel-state.test.ts
   - idle →spawn→ connecting →ready→ connected.
   - connected →exit(network)→ reconnecting{attempt 1, inFlight false}; dueForSpawn은 retryAt 전 false, 후 true; spawn → inFlight true; exit → attempt 2.
   - exit(auth|hostkey|forward) → failed{reason}; failed →spawn→ connecting.
-  - reconnecting since 기준 5분 경과 exit 또는 tick → failed{timeout}.
+  - 시간 제한: reconnecting since+5분 exit → failed{timeout}; reconnecting →spawn(inFlight)→ since+5분 tick → failed{timeout}; idle →spawn→ connecting → since+5분 tick → failed{timeout}.
+  - 오래된 이벤트: failed에서 ready·exit는 상태 불변, idle에서 exit·ready 불변, connected에서 spawn 불변.
   - stop은 어떤 상태에서도 idle.
   - nextDelayMs: random=0.5일 때 1→1000, 2→2000, 6→30000 상한; random 0/1에서 ±20%.
   - classifySshStderr: "Permission denied (publickey)." → auth, "Host key verification failed." → hostkey, "Error: remote port forwarding failed for listen port 20100" → forward, "ssh: connect to host x port 22: Connection refused" → network, 기타 → unknown.
 - link-store.test.ts
   - 파일 없음 → emptyLinkStore.
   - 쓰기 후 읽기 왕복, 디렉터리 0700·파일 0600(POSIX).
-  - 손상 JSON, version 2, 잘못된 id/alias/fingerprint/port, 중복 id → LinkStoreError. hasLinks는 손상 파일에서 false.
+  - LinkStoreError: 손상 JSON, version 2, 최상위 모르는 필드, 레코드 모르는 필드, 잘못된 id/alias/fingerprint/port, apiKeyId에 제어 문자·공백·빈 문자열, 중복 id. hasLinks는 손상 파일에서 false.
   - hostKeyFingerprint null은 direction client-initiated에서만 허용, hub-initiated에서 null이면 LinkStoreError (003 K3).
-  - 파일 내용에 `ocx_data_` 문자열이 없다(키 비저장 확인용으로 레코드는 apiKeyId만).
+  - 파일 내용에 `ocx_data_` 문자열이 없다(레코드는 apiKeyId만 가짐).
 - link-boundary.test.ts
-  - `src/link/*.ts`의 정적 import가 `../server`, `../router`, `../cli`, `../client`, `../gui`로 가지 않는다(소스 텍스트 스캔, `import type` 제외).
+  - `src/link/*.ts`에서 시작해 상대 import(`import type` 제외)를 재귀로 따라가, 도달한 모든 파일이 `src/server/`, `src/router`, `src/cli/`, `src/client/`, `gui/` 밖에 있음을 확인한다. 실패하면 경로 사슬을 출력한다.
 
 ## structure/remote-link.md (NEW, 현재형)
 
@@ -580,7 +656,7 @@ export function hasLinks(path: string): boolean {
 
 `src/link/` owns the building blocks for linking OpenCodex machines over SSH. In this release it contains pure modules only: importing them starts no process, opens no socket and schedules no timer.
 
-`src/link/ssh-argv.ts` builds every OpenSSH argument vector. All commands run with BatchMode, trust only the link known_hosts file keyed by `HostKeyAlias=<alias>` with the global file disabled, and bind forwards to 127.0.0.1 on both ends. Tunnel and exec commands use `StrictHostKeyChecking=yes`; only the probe uses `accept-new`, against an empty temporary file, so an offered key can be shown before it is trusted. Aliases that could be parsed as options are refused.
+`src/link/ssh-argv.ts` builds every OpenSSH argument vector. All commands run with BatchMode, trust only the link known_hosts file keyed by `HostKeyAlias=<alias>` with the global file disabled (`GlobalKnownHostsFile=none`), and bind forwards to 127.0.0.1 on both ends. Tunnel and exec commands use `StrictHostKeyChecking=yes`; only the probe uses `accept-new`, against an empty temporary file, so an offered key can be shown before it is trusted. Aliases that could be parsed as options are refused.
 
 `src/link/ssh-config.ts` lists host candidates from `~/.ssh/config` and its includes. Pattern hosts and `Match` blocks produce no candidates. A candidate is an offer, not trust.
 
@@ -605,3 +681,39 @@ Regression coverage lives in `tests/clients/link-ssh-argv.test.ts`, `tests/clien
 ## PR
 
 제목 `feat(link): add pure SSH link building blocks`, base `dev`. 설명에 스택 지도(L1-L6)와 "이 레이어는 서버 경로에 연결되지 않음"을 적는다. GUI 변경 없음.
+
+## wp1 P 재검증 (아키텍트 Sartre, gpt-6-sol high, 2026-09-25)
+
+| ID | 제안 | 처분 |
+|---|---|---|
+| W1-1 | 참조 API 모두 존재, 서명 호환 | 유지 |
+| W1-2 | Bun.Glob.scanSync 옵션 지원 | 유지 |
+| W1-3 | layout.json `explicit`에 5개, test-layout-expected.json은 평면 맵 최상위 키 5개 | 수용 |
+| W1-4 | manifest `docs` 항목(path, tier, title, scope, documents)을 remote-workspace.md 다음에 삽입, 스테이징 후 structure:index → structure:check | 수용 |
+| W1-5 | 새 파일은 2000줄 미만이면 기준선 항목 불필요, 작성 후 ratchet 실행 | 수용 |
+| W1-6 | store.ts → atomic-write 경로가 Windows ACL 모듈을 끌어온다. atomicWriteFile이 파일을 이미 강화하므로 명시적 hardenSecretPath는 중복 | 수정 수용: 파일에 대한 명시적 `hardenSecretPath` 호출과 import를 제거하고 디렉터리 `hardenSecretDir`만 남긴다. POSIX chmod 0600은 유지. import 비용은 서버가 이미 atomic-write를 쓰므로 추가 비용 없음 |
+
+- 반영 확인(Sartre): W1-1..W1-5 ALIGNED. W1-6은 부분 일치 → 위험으로 기록: `store.ts`를 단독 import하면 atomic-write 경유로 약 11개 모듈(4,117줄, Windows ACL 포함)이 따라온다(src/config/atomic-write.ts:17-23). 서버·CLI 경로는 이미 이 그래프를 불러오므로 wp1에서 추가 비용은 없고, writer 분리는 후속 과제로 남긴다.
+
+## 감사 반영 (Wegener FAIL r1)
+
+위 코드 절은 아래 수정을 반영해 다시 생성했다. 초안은 임시로 작업 트리에 넣어 `bun run typecheck` exit 0을 확인했다(2026-09-25).
+
+- 차단 1: 공통 옵션에 `KnownHostsCommand=none`, `VerifyHostKeyDNS=no`, `CheckHostIP=no` 추가. `optionPath`는 `%`, `$`, 앞자리 `~`, 큰따옴표, 제어 문자를 거부. 테스트: 세 옵션이 tunnel/exec/probe 모두에 있음, `/tmp/%h/known_hosts`·`/tmp/${HOME}/k`·`~/k` 거부.
+- 차단 2: `splitSshArgs`가 OpenSSH argv_split 규칙(작은·큰따옴표, 역슬래시 이스케이프, 인자 시작의 비인용 `#`는 주석)을 따른다. 닫히지 않은 따옴표 줄은 무시. `Include`는 최상위 블록에서만 따라간다(Host/Match 안의 Include는 조건부라서 후보를 만들지 않음). 테스트: Host 블록 안 Include 미추적, Match 블록 안 Include 미추적, `Host "alpha beta"`는 공백 포함 인자로 보고 별칭 검증 단계에서 걸러짐(후보에는 들어가되 assertSshAlias 실패는 wp4에서 처리하므로 여기서는 토큰화만 검사), `Host alpha\ one` 토큰화, `Host alpha # comment`, `Host "a#b"`.
+- 차단 3: tick은 inFlight와 상관없이 since 기준 5분이 지나면 failed{timeout}. 테스트: reconnecting → spawn(inFlight) → since+5분 tick → failed{timeout}. 오래된 이벤트: failed 상태에서 ready·exit는 상태 불변, idle에서 exit 불변.
+- 차단 4: links.json 최상위와 레코드에 허용 필드 목록 강제(모르는 필드 → LinkStoreError), apiKeyId는 `^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$`(실제 키 id는 randomUUID, src/server/management/oauth-account-routes.ts:963). 테스트: 모르는 필드, 제어 문자 apiKeyId.
+- 비차단: 명시적 hardenSecretPath 제거 반영(W1-6). 경계 테스트는 `src/link`에서 시작해 상대 import를 재귀로 따라가며 `src/server`, `src/router`, `src/cli`, `src/client`, `gui`에 닿지 않는지 확인하는 전이 검사로 바꾼다. Windows ACL 경로는 이 레이어 테스트에서 검증하지 않으며(POSIX 전용 권한 테스트), CI Windows 샤드는 쓰기·읽기 왕복만 확인한다.
+
+## 감사 반영 (Wegener FAIL r2)
+
+- 차단 1: splitSshArgs를 OpenSSH misc.c argv_split과 같은 규칙으로 다시 썼다(역슬래시 규칙은 따옴표 안에도 적용, 따옴표 밖에서만 공백 이스케이프, 탭은 이스케이프 대상 아님, 인식 못 한 역슬래시와 끝 역슬래시는 유지). 7개 사례의 실행 결과를 테스트 기대값으로 고정.
+- 차단 2: optionPath는 절대 경로만 받는다(`none`, 상대 경로 거부).
+- 차단 3: connecting도 since 기준 5분 tick에서 failed{timeout}.
+- 차단 4: 테스트 사례 절을 다시 써서 새 보안 사례를 모두 명시했다.
+- 초안을 임시로 작업 트리에 넣어 `bun run typecheck` exit 0 확인(2026-09-25).
+
+## 감사 반영 (Wegener FAIL r3)
+
+- 차단 1: `GlobalKnownHostsFile=/dev/null` → `GlobalKnownHostsFile=none`(OpenSSH 회귀 테스트와 같은 값, Windows OpenSSH 호환). argv 테스트 기대값도 `none`.
+- 비차단: 후보 파서가 `isSshAlias`를 통과한 별칭만 낸다. Include 확장 범위(`~/`, 절대·상대 경로, glob만, `~user`·환경 변수·`%` 토큰은 미확장)를 loadHostCandidates 주석에 명시.
