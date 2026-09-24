@@ -730,6 +730,15 @@ const commandRunners: Record<string, CommandRunner> = {
     await refreshVersionCache(channel);
     return 0;
   },
+  "__update-badge": async deps => {
+    if (deps.args.length !== 1) {
+      console.error("Usage: ocx __update-badge");
+      return 64;
+    }
+    const { readUpdateBadge } = await import("../update/badge");
+    console.log(JSON.stringify(readUpdateBadge()));
+    return 0;
+  },
   "__tray-start": async deps => {
     return (await deps.handleTrayProxyStart()) ? 0 : 1;
   },

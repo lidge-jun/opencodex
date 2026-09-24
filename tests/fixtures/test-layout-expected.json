@@ -281,6 +281,7 @@
   "cli-stop-json.test.ts": "cli",
   "cli-storage-inspect.test.ts": "cli",
   "cli-transport-honesty.test.ts": "cli",
+  "cli-update-badge.test.ts": "cli",
   "cli-usage-hub.test.ts": "cli",
   "cli-usage-report.test.ts": "cli",
   "cli-version-skew.test.ts": "cli",

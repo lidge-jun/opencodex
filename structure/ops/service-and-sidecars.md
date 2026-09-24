@@ -26,6 +26,10 @@ existing task. Explicit `ocx service install` remains the operator-owned registr
 
 > Decision record: [ADR-0028](../decisions/ADR-0028-background-service-command-selection.md)
 
+## Windows npm tray update badge
+
+The npm Windows tray owns six installed ICOs: online, warning, and offline base safety glyphs plus one blue-dot variant of each. Its hidden `ocx __update-badge` child reads the package cache without refreshing or writing it. The tray samples no more often than every 60 seconds, caps stdout and stderr at 16 KiB each, requests termination after 12 seconds or a pipe overflow, and reaps the child on later Windows Forms ticks before allowing another launch. A successful badge observation expires after 180 seconds; failed reads do not extend it. The **Update available** item opens the dashboard and never installs a package. Shutdown requests child termination, waits at most 500 ms, and disposes the probe before tray UI disposal.
+
 ## Windows startup ownership listing reuse
 
 One proxy startup asks service-home ownership twice before listen: once before cache invalidation and
