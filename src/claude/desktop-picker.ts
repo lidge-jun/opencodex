@@ -116,6 +116,10 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
   const removeProfile = deps.removeProfile ?? removeDesktopPickerProfile;
   const inspectProfile = deps.inspectProfile ?? inspectDesktopPickerProfile;
   let pending = 0;
+  // When this process last changed Desktop's egress profile. Desktop reads that profile only at
+  // launch, so a restart is needed only until it has fetched a bootstrap since that change; a plain
+  // opencodex restart changes nothing Desktop reads and never asks for one.
+  let profileChangedAt: number | null = null;
   let tail = Promise.resolve();
 
   function inspect(): DesktopPickerProfileInspection {
@@ -136,7 +140,9 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
     else if (trust !== "trusted") reason = "trust_pending";
     else if (!profileCurrent) reason = "profile_failed";
     else if (!runtime.listenerReady || !runtime.effective) reason = "restart_required";
-    else reason = runtime.lastBootstrapAt === null ? "restart_required" : "active";
+    else reason = profileChangedAt !== null && (runtime.lastBootstrapAt === null || runtime.lastBootstrapAt < profileChangedAt)
+      ? "restart_required"
+      : "active";
     return {
       desired: runtime.desired,
       supported: runtime.supported,
@@ -250,6 +256,7 @@ export function createDesktopPickerController(deps: DesktopPickerControllerDeps)
         const compensationFailed = (trustedByAttempt || options.callerAddedTrust === true) && !(await compensateTrust(true));
         return withTrustFailure({ ...runtimeStatus(trust), reason: "profile_failed", residual: ["profile"] }, compensationFailed);
       }
+      if (applied.changed) profileChangedAt = Date.now();
       await deps.runtime.rearm();
       const result = runtimeStatus();
       if (result.reason === "active") return result;

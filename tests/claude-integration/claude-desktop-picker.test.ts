@@ -271,3 +271,21 @@ test("offline cleanup reports residual work", async () => {
   const result = await removeDesktopPickerArtifacts({ configDir: root, platform: "linux", security: async () => ({ code: 1, stdout: "", stderr: "" }) });
   expect(result.ok).toBe(true);
 });
+
+test("a restart is asked for only after this process changed the profile, never after a plain opencodex restart", async () => {
+  const events: string[] = [];
+  const profile = profileFake(events);
+  const runtimeParts = fakeRuntime(events);
+  // The profile already points at this proxy, as after an opencodex restart.
+  profile.apply({ proxyPort: 10201 });
+  const unchanged = { ...profile, apply: () => ({ ok: true as const, changed: false, path: "picker.json" }) };
+  const controller = controllerFor({ events, security: pickerSecurity({ trusted: true }).run, profile: unchanged, runtime: runtimeParts.runtime });
+  expect((await controller.enable({ persist: false, context: "server" })).reason).toBe("active");
+
+  const fresh = profileFake(events);
+  const second = fakeRuntime(events);
+  const changed = controllerFor({ events, security: pickerSecurity({ trusted: true }).run, profile: fresh, runtime: second.runtime });
+  expect((await changed.enable({ persist: false, context: "server" })).reason).toBe("restart_required");
+  second.state.lastBootstrapAt = Date.now() + 1;
+  expect((await changed.status()).reason).toBe("active");
+});
