@@ -50,7 +50,10 @@ function runIsolatedSettingsRequest(options: {
     timeout: 10_000,
   });
   if (child.status !== 0) {
-    throw new Error(`isolated settings request failed: ${child.stderr || child.stdout}`);
+    // A timeout or spawn failure leaves no output; surface status/signal/error
+    // so the diagnostic still names the cause instead of a bare colon.
+    const cause = child.error ? ` (${child.error.name}: ${child.error.message})` : "";
+    throw new Error(`isolated settings request failed (status=${child.status} signal=${child.signal})${cause}: ${child.stderr || child.stdout}`);
   }
   const line = child.stdout.trim().split("\n").filter(Boolean).at(-1);
   expect(line).toBeDefined();
