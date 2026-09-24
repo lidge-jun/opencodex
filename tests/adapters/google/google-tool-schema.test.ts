@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { sanitizeGeminiToolParameters } from "../../../src/adapters/google-tool-schema";
+import {
+  sanitizeGeminiToolParameters,
+  sanitizeGeminiToolParametersWithReport,
+} from "../../../src/adapters/google-tool-schema";
 
 function countSchemaNodes(value: unknown): number {
   if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
@@ -482,5 +485,80 @@ describe("sanitizeGeminiToolParameters", () => {
   test("falls back to an object schema for non-object input", () => {
     expect(sanitizeGeminiToolParameters(undefined)).toEqual({ type: "object", properties: {} });
     expect(sanitizeGeminiToolParameters("nope")).toEqual({ type: "object", properties: {} });
+  });
+
+  test("materializes items on an array left without them (issue #5689)", () => {
+    const result = sanitizeGeminiToolParametersWithReport({
+      type: "object",
+      required: ["values"],
+      properties: { values: { type: "array" } },
+    }, { endpointClass: "ai-studio" });
+    const values = (result.parameters.properties as Record<string, Record<string, unknown>>).values;
+    expect(values.items).toEqual({ type: "string" });
+    expect(values).toEqual({ type: "array", items: { type: "string" } });
+    // Gemini needs the item type present; adding it widens nothing, so `lossy` stays false.
+    expect(result.lossReport.lossy).toBe(false);
+    expect(result.lossReport.categories).toEqual({});
+  });
+
+  test("materializes items for an array nested in array items", () => {
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: { grid: { type: "array", items: { type: "array" } } },
+    });
+    const grid = (out.properties as Record<string, Record<string, unknown>>).grid;
+    expect(grid).toEqual({ type: "array", items: { type: "array", items: { type: "string" } } });
+  });
+
+  test("materializes items when a tuple's prefix list is dropped", () => {
+    const result = sanitizeGeminiToolParametersWithReport({
+      type: "object",
+      properties: { pair: { type: "array", items: [{ type: "string" }, { type: "number" }] } },
+    }, { endpointClass: "ai-studio" });
+    const pair = (result.parameters.properties as Record<string, Record<string, unknown>>).pair;
+    expect(pair).toEqual({ type: "array", items: { type: "string" } });
+    expect(result.lossReport.categories).toEqual({ "tuple-prefix-dropped": 1 });
+  });
+
+  test("materializes items for an array collapsed from a nullable anyOf", () => {
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: { ids: { anyOf: [{ type: "array" }, { type: "null" }] } },
+    });
+    expect((out.properties as Record<string, Record<string, unknown>>).ids).toEqual({
+      type: "array",
+      items: { type: "string" },
+      nullable: true,
+    });
+  });
+
+  test("leaves valid array items unchanged", () => {
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: {
+        list: { type: "array", items: { type: "integer", description: "kept" }, minItems: 1 },
+        enumList: { type: "array", items: { enum: ["a", "b"] } },
+      },
+    });
+    const props = out.properties as Record<string, Record<string, unknown>>;
+    expect(props.list).toEqual({ type: "array", items: { type: "integer", description: "kept" } });
+    expect(props.enumList).toEqual({ type: "array", items: { enum: ["a", "b"] } });
+  });
+
+  test("does not add items to a non-array property", () => {
+    const out = sanitizeGeminiToolParameters({
+      type: "object",
+      properties: {
+        text: { type: "string" },
+        widened: {},
+        nested: { type: "object", properties: { inner: { type: "array" } } },
+      },
+    });
+    const props = out.properties as Record<string, Record<string, unknown>>;
+    expect(Object.hasOwn(props.text, "items")).toBe(false);
+    expect(Object.hasOwn(props.widened, "items")).toBe(false);
+    expect(Object.hasOwn(props.nested, "items")).toBe(false);
+    const inner = (props.nested.properties as Record<string, Record<string, unknown>>).inner;
+    expect(inner.items).toEqual({ type: "string" });
   });
 });
