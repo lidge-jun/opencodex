@@ -151,15 +151,17 @@ follows is: an own `input` with a string value streams progressively, because co
 it precedence over everything else in the object whatever its position; an `input` with a
 non-string value, a text that is not an object, and an object `JSON.parse` can no longer accept
 all publish their own bytes, because that is what completion returns for them; every other
-object HOLDS until it parses, because a key that has not arrived yet can still change the
-answer. Fallback fields fall out of that last rule rather than being recognized separately:
-they only unwrap as the single string field, so no prefix decides them. Classification is
+object HOLDS until it closes, because a key that has not arrived yet can still change the
+answer. Fallback fields decide at that close rather than from a parse: they only unwrap as the
+single string field, so the scan keeps a last-wins table of the members it already walked and
+consults it once — one string fallback field releases its value as `input`, anything else
+streams the raw text byte-exact through whatever trailing whitespace follows. Classification is
 bounded to `MAX_FREEFORM_WRAPPER_SCAN_CHARS`, which keeps the work per delta from growing with
 the arguments. Past the bound nothing is previewed at all: the authoritative parse still
-unwraps the wrapper at completion, so the bound costs preview and never agreement. The parse
-that releases a held object therefore runs only where the scan SAW the object close, which is
-what keeps a buffer whose deltas happen to end on a brace from being re-read on every one of
-them.
+unwraps the wrapper at completion, so the bound costs preview and never agreement. Because the
+close resolves from the member table instead of `JSON.parse`, fragmented trailing whitespace
+and deltas that happen to end on a brace can never reparse a growing provider-controlled
+buffer.
 
 What that policy costs is worth stating plainly, because it is a real narrowing. A body that IS
 a parseable JSON object but not a wrapper — `{"code":1}` or `{"code":"a","script":"b"}` — now
