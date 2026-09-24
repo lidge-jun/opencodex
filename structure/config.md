@@ -346,13 +346,11 @@ returns true.
 
 ## Desktop compatibility switches report three things, not one
 
-`codexDesktopAuthless` and `codexClientCompaction` only mean anything through the injected
-`config.toml`, so persisting them is not applying them. `PUT /api/settings` used to persist
-and then converge the catalog, and a comment there claimed the injector rewrote the form;
-`convergeCodexCatalog` rejects any scope but `catalog` and never reaches `injectCodexConfig`,
-so the injected shape stayed as it was until a separate `ocx sync`.
+`codexDesktopAuthless` and `codexClientCompaction` take effect through injected `config.toml`;
+persisting them is not applying them. `convergeCodexCatalog` accepts only the `catalog` scope
+and does not call `injectCodexConfig`.
 
-The route now runs the real injection after catalog convergence and after the config mutation
+`PUT /api/settings` runs the real injection after catalog convergence and after the config mutation
 lock has closed — coordinated Codex writes take the Codex write lock before the config mutation
 lock, so awaiting the injector inside that transaction would invert the order — and reports
 three separate facts per switch: the **stored** value in `config.json`, the **effective** value
@@ -427,9 +425,6 @@ from the key that wins that same merged lookup, not from an independent source s
 Provider seed/enrichment and request routing consume the same field-level resolver. Persisted config
 still stores operator intent rather than the frozen result; registry-only policy is applied at
 capture/route time and explicit false or empty declarations retain their field-specific meaning.
-
-
-
 
 ## Provider validation ownership
 
