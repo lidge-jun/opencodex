@@ -363,6 +363,14 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "POST", path: "/api/storage/codex-logs/protect", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/repair", module: "server/management/storage-log-guard-routes", mutates: true },
   { method: "POST", path: "/api/storage/codex-logs/unprotect", module: "server/management/storage-log-guard-routes", mutates: true },
+  // server/management/link-routes
+  { method: "GET", path: "/api/link/status", module: "server/management/link-routes", mutates: false },
+  { method: "GET", path: "/api/link/candidates", module: "server/management/link-routes", mutates: false, exempt: { reason: "session-only", why: "SSH candidates are a dashboard pairing surface and are withheld from admin-token and Tailscale identity sessions." } },
+  { method: "POST", path: "/api/link/probe", module: "server/management/link-routes", mutates: true, exempt: { reason: "session-only", why: "SSH probing and host-key presentation are part of the interactive pairing consent flow." } },
+  { method: "POST", path: "/api/link/confirm-host", module: "server/management/link-routes", mutates: true, exempt: { reason: "session-only", why: "Persisting a host key requires the paired dashboard session that saw the fingerprint." } },
+  { method: "POST", path: "/api/link/apply", module: "server/management/link-routes", mutates: true, exempt: { reason: "session-only", why: "Applying a link issues a data key and starts a remote tunnel, so it requires the paired dashboard session." } },
+  { method: "DELETE", path: "/api/link/{id}", module: "server/management/link-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/link/issue", module: "server/management/link-routes", mutates: true },
   // server/management/remote-workspace-routes
   { method: "GET", path: "/api/remote-workspace", module: "server/management/remote-workspace-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The first Remote Workspace slice exposes Hub status through the authenticated dashboard; a distinct CLI Hub-status verb is still owed and must not be confused with the Executor-local status command.", owner: "remote-workspace-cli-followup", ownerDoc: "docs-site/src/content/docs/reference/management-api.md" } },
   { method: "GET", path: "/api/remote-workspace/runtimes", module: "server/management/remote-workspace-routes", mutates: false, exempt: { reason: "deferred-verb", why: "The first Remote Workspace slice exposes Hub runtime availability through the authenticated dashboard; a distinct CLI Hub-status verb is still owed.", owner: "remote-workspace-cli-followup", ownerDoc: "docs-site/src/content/docs/reference/management-api.md" } },

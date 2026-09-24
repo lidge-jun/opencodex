@@ -31,6 +31,7 @@ export type LinkTunnelStatus =
 export interface LinkSupervisor {
   start(): void;
   ensureStarted(): Promise<void>;
+  reload(): Promise<void>;
   stopLink(linkId: string): Promise<void>;
   status(): readonly LinkTunnelStatus[];
   stop(): Promise<void>;
@@ -121,13 +122,24 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   let store: LinkStore = emptyLinkStore();
   let started = false;
   let stopping = false;
-  let startFlight: Promise<void> | undefined;
+  let lifecycleFlight: Promise<void> | undefined;
   let timer: ReturnType<typeof setInterval> | undefined;
   const states = new Map<string, TunnelState>();
   const children = new Map<string, { child: SshChild; argv: readonly string[] }>();
   const orphanUnverified = new Set<string>();
+  const recordInstances = new Map<string, string>();
 
   const pidfilePath = (linkId: string): string => join(storeDir, `${linkId}.pid`);
+
+  const recordInstance = (record: LinkRecord): string => JSON.stringify([
+    record.id,
+    record.alias,
+    record.direction,
+    record.hostKeyFingerprint,
+    record.tunnelPort,
+    record.apiKeyId,
+    record.createdAt,
+  ]);
 
   const conditionalRemovePidfile = (linkId: string, pid: number): void => {
     const path = pidfilePath(linkId);
@@ -161,6 +173,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
 
   const spawnFor = (record: LinkRecord): void => {
     if (stopping || record.direction !== "hub-initiated" || children.has(record.id)) return;
+    if (states.get(record.id)?.kind === "failed") return;
     if (store.listenerPort === null) {
       states.set(record.id, { kind: "failed", since: now(), reason: "forward" });
       return;
@@ -216,41 +229,93 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     }
   };
 
+  const syncTimer = (): void => {
+    const hasHubLinks = store.links.some(record => record.direction === "hub-initiated");
+    if (hasHubLinks && timer === undefined && !stopping) timer = setTimer(tick, TIMER_MS);
+    if (!hasHubLinks && timer !== undefined) {
+      clearTimer(timer);
+      timer = undefined;
+    }
+  };
+
   const begin = (): void => {
-    if (started) return;
+    if (started || stopping) return;
     store = readStore();
     reapOrphans();
     started = true;
+    for (const record of store.links) recordInstances.set(record.id, recordInstance(record));
     for (const record of store.links) {
       if (record.direction === "hub-initiated") spawnFor(record);
     }
-    if (store.links.some(record => record.direction === "hub-initiated")) timer = setTimer(tick, TIMER_MS);
+    syncTimer();
+  };
+
+  const runLifecycle = (operation: () => void | Promise<void>): Promise<void> => {
+    if (!lifecycleFlight) {
+      lifecycleFlight = Promise.resolve().then(operation).finally(() => {
+        lifecycleFlight = undefined;
+      });
+    }
+    return lifecycleFlight;
+  };
+
+  const stopLink = async (linkId: string): Promise<void> => {
+    const current = children.get(linkId);
+    if (!current) {
+      states.set(linkId, IDLE);
+      return;
+    }
+    children.delete(linkId);
+    current.child.kill("SIGTERM");
+    await current.child.exited;
+    conditionalRemovePidfile(linkId, current.child.pid);
+    states.set(linkId, IDLE);
   };
 
   return {
     start() {
+      if (lifecycleFlight) return;
       begin();
     },
     ensureStarted() {
-      if (!startFlight) {
-        startFlight = Promise.resolve().then(begin).finally(() => {
-          startFlight = undefined;
-        });
-      }
-      return startFlight;
+      return runLifecycle(begin);
     },
-    async stopLink(linkId) {
-      const current = children.get(linkId);
-      if (!current) {
-        states.set(linkId, IDLE);
-        return;
-      }
-      children.delete(linkId);
-      current.child.kill("SIGTERM");
-      await current.child.exited;
-      conditionalRemovePidfile(linkId, current.child.pid);
-      states.set(linkId, IDLE);
+    async reload() {
+      await runLifecycle(async () => {
+        if (stopping) return;
+        if (!started) {
+          begin();
+          return;
+        }
+        const nextStore = readStore();
+        const nextInstances = new Map(nextStore.links.map(record => [record.id, recordInstance(record)]));
+        store = nextStore;
+        for (const [linkId] of [...children]) {
+          if (nextInstances.has(linkId)) continue;
+          await stopLink(linkId);
+          states.delete(linkId);
+          orphanUnverified.delete(linkId);
+          recordInstances.delete(linkId);
+          if (stopping) return;
+        }
+        for (const record of nextStore.links) {
+          const previous = recordInstances.get(record.id);
+          const current = nextInstances.get(record.id);
+          if (previous !== undefined && previous !== current) {
+            states.delete(record.id);
+            orphanUnverified.delete(record.id);
+          }
+        }
+        recordInstances.clear();
+        for (const [linkId, instance] of nextInstances) recordInstances.set(linkId, instance);
+        for (const record of nextStore.links) {
+          if (stopping || record.direction !== "hub-initiated" || children.has(record.id)) continue;
+          spawnFor(record);
+        }
+        syncTimer();
+      });
     },
+    stopLink,
     status() {
       return store.links.map(record => {
         if (record.direction === "client-initiated") {
@@ -285,6 +350,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       for (const record of store.links) {
         if (record.direction === "hub-initiated") states.set(record.id, IDLE);
       }
+      if (lifecycleFlight) await lifecycleFlight;
     },
   };
 }

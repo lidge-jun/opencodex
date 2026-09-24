@@ -34,6 +34,8 @@ export interface LinkListenerLifecycle<T> {
   start(ctx: LinkListenerStartContext<T>): void;
   ensureStarted(): Promise<void>;
   linkAdmissionKeyIds(): ReadonlySet<string>;
+  onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
+  notifyAuthenticatedCatalog(apiKeyId: string): void;
   status(): LinkListenerStatus;
   close(): Promise<void>;
   stop(): Promise<void>;
@@ -56,6 +58,7 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
   let ensureFlight: Promise<void> | undefined;
   let closeFlight: Promise<void> | undefined;
   let stopped = false;
+  const authenticatedCatalogListeners = new Set<(apiKeyId: string) => void>();
   let lifecycleStatus: LinkListenerStatus = { state: "off", port: null, reason: null };
 
   const setStatus = (state: LinkListenerStatus["state"], port: number | null, reason: string | null): void => {
@@ -170,6 +173,13 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
     ensureStarted,
     linkAdmissionKeyIds() {
       return new Set(readStoreForAdmission().links.map(link => link.apiKeyId));
+    },
+    onAuthenticatedCatalog(listener) {
+      authenticatedCatalogListeners.add(listener);
+      return () => { authenticatedCatalogListeners.delete(listener); };
+    },
+    notifyAuthenticatedCatalog(apiKeyId) {
+      for (const listener of authenticatedCatalogListeners) listener(apiKeyId);
     },
     status() {
       return { ...lifecycleStatus };

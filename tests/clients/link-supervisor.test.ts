@@ -123,3 +123,52 @@ test("reaps a pidfile only after an exact Linux argv match", () => {
   fake.children[0]!.resolve(143);
   return supervisor.stop();
 });
+
+test("reload spawns a newly added hub link with the reverse forward argv", async () => {
+  const fake = fakeRunner();
+  let store = baseStore();
+  const supervisor = createLinkSupervisor({ readStore: () => store, runner: fake.runner, pidfileDir: "/tmp/opencodex-link-supervisor-test" });
+  supervisor.start();
+  store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  await supervisor.reload();
+  expect(fake.children).toHaveLength(1);
+  expect(fake.children[0]!.child.argv).toContain("-R");
+  expect(fake.children[0]!.child.argv).toContain("127.0.0.1:19002:127.0.0.1:19001");
+  fake.children[0]!.resolve(143);
+  await supervisor.stop();
+});
+
+test("reload stops a child whose link record was removed", async () => {
+  const fake = fakeRunner();
+  let store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({ readStore: () => store, runner: fake.runner, pidfileDir: "/tmp/opencodex-link-supervisor-test" });
+  supervisor.start();
+  store = baseStore();
+  await supervisor.reload();
+  await expect(fake.children[0]!.child.exited).resolves.toBe(143);
+  expect(supervisor.status()).toEqual([]);
+  await supervisor.stop();
+});
+
+test("reload after stop is a no-op", async () => {
+  const fake = fakeRunner();
+  let store = baseStore();
+  const supervisor = createLinkSupervisor({ readStore: () => store, runner: fake.runner, pidfileDir: "/tmp/opencodex-link-supervisor-test" });
+  supervisor.start();
+  await supervisor.stop();
+  store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  await supervisor.reload();
+  expect(fake.children).toHaveLength(0);
+});
+
+test("concurrent reload calls spawn a newly added link once", async () => {
+  const fake = fakeRunner();
+  let store = baseStore();
+  const supervisor = createLinkSupervisor({ readStore: () => store, runner: fake.runner, pidfileDir: "/tmp/opencodex-link-supervisor-test" });
+  supervisor.start();
+  store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  await Promise.all([supervisor.reload(), supervisor.reload()]);
+  expect(fake.children).toHaveLength(1);
+  fake.children[0]!.resolve(143);
+  await supervisor.stop();
+});

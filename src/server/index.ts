@@ -641,7 +641,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   const managementApiDeps: ManagementApiDeps = {
     ...deps.managementApi,
     remoteWorkspaceStopping: () => remoteWorkspaceStopping,
-    onRemoteWorkspaceShutdown: shutdown => { remoteWorkspaceShutdown = shutdown; },
+    onRemoteWorkspaceShutdown: shutdown => { remoteWorkspaceShutdown = shutdown; }, linkSupervisor: () => optionalListeners.linkSupervisor(), linkListener: () => optionalListeners,
   };
   let workspaceRuntimeFlight: Promise<typeof import("../remote-control/workspace-runtime")> | undefined;
   const loadRemoteWorkspaceRuntime = () => {
@@ -668,7 +668,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       ingressForServer,
       loopbackRouteAllowed,
       managementIngressRouteAllowed,
-      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy,
+      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy, onAuthenticatedCatalog: optionalListeners.notifyAuthenticatedCatalog,
       packageTreeChangedResponse,
       serverBusyResponse,
       runAdmittedHttpTurn,

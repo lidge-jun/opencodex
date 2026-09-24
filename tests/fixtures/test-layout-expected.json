@@ -1645,5 +1645,6 @@
   "link-status-projection.test.ts": "clients",
   "link-admission-wait.test.ts": "clients",
   "link-fingerprint.test.ts": "clients",
-  "cli-link.test.ts": "cli"
+  "cli-link.test.ts": "cli",
+  "link-management-routes.test.ts": "server"
 }

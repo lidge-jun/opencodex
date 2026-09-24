@@ -11,6 +11,7 @@ import {
   type LinkListenerLifecycle,
   type LinkListenerStatus,
 } from "./link-listener";
+import { createLinkSupervisor, type LinkSupervisor } from "../../link/supervisor";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
 
@@ -26,7 +27,11 @@ export interface OptionalListenerSet<T> {
   ingressOf(server: Server<T>): ServerIngress | undefined;
   linkRouteAllowed(url: URL, req: Request): boolean;
   linkAdmissionKeyIds(): ReadonlySet<string>;
+  onAuthenticatedCatalog(listener: (apiKeyId: string) => void): () => void;
+  notifyAuthenticatedCatalog(apiKeyId: string): void;
+  status(): LinkListenerStatus;
   linkStatus(): LinkListenerStatus;
+  linkSupervisor(): LinkSupervisor;
   start(ctx: OptionalListenerStartContext<T>): void;
   ensureStarted(): Promise<void>;
   close(): Promise<void>;
@@ -37,6 +42,7 @@ export interface OptionalListenerSet<T> {
 export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): OptionalListenerSet<T> {
   const claudeIntercept: ClaudeInterceptLifecycle<T> = createClaudeInterceptLifecycle<T>();
   const linkListener: LinkListenerLifecycle<T> = createLinkListenerLifecycle<T>(linkDeps);
+  const supervisor = createLinkSupervisor();
   let supervisorStop: (() => Promise<void>) | undefined;
 
   return {
@@ -47,9 +53,15 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     },
     linkRouteAllowed,
     linkAdmissionKeyIds: () => linkListener.linkAdmissionKeyIds(),
+    onAuthenticatedCatalog: listener => linkListener.onAuthenticatedCatalog(listener),
+    notifyAuthenticatedCatalog: apiKeyId => linkListener.notifyAuthenticatedCatalog(apiKeyId),
+    status: () => linkListener.status(),
     linkStatus: () => linkListener.status(),
+    linkSupervisor: () => supervisor,
     start(ctx) {
       linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize });
+      supervisor.start();
+      supervisorStop = () => supervisor.stop();
       claudeIntercept.start({
         config: ctx.config,
         publicPort: ctx.publicPort,
