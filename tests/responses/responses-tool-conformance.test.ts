@@ -495,9 +495,17 @@ describe("declared tool enforcement at the bridge", () => {
       expect(frames.some(frame => frame.event === "response.output_item.added"), label).toBe(!refused);
       expect(json.status, label).toBe(refused ? "failed" : "completed");
       if (refused) {
-        expect(JSON.stringify(json.error), label).toContain("undeclared client tool");
+        const expectedError = {
+          type: "upstream_error",
+          message: expect.stringContaining("undeclared client tool"),
+        };
+        expect(json.error, label).toMatchObject(expectedError);
         const failed = frames.find(frame => frame.event === "response.failed");
-        expect(JSON.stringify(failed), label).toContain("undeclared client tool");
+        expect(failed?.data, label).toMatchObject({ response: { error: {
+          type: "server_error",
+          code: "upstream_server_error",
+          message: expectedError.message,
+        } } });
       } else expect(json.error, label).toBeUndefined();
       expect((json.output as unknown[]).length, label).toBe(refused ? 0 : 1);
     }
