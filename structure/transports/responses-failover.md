@@ -413,6 +413,8 @@ output actually share. When the caller declared `max_output_tokens`,
 `checkComboTargetInputAdmission` requires both `estimated input <= ceiling` and
 `estimated input + min(declared output, target output ceiling) <= window`, so the output reserve
 is counted once rather than charged twice against an already-tightened input budget.
+Both direct and combo estimates omit replayed assistant thinking for `openai-chat` models outside
+`preserveReasoningContentModels`, matching the adapter's wire omission; other targets still count it.
 
 The refusal is local: HTTP 413 `input_admission_refused` before any upstream bytes are sent, which
 existing combo policy already treats as a safe hop. That ordering is the whole point. A target whose

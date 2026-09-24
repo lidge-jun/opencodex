@@ -68,6 +68,11 @@ HTTP 경계는 `server/index/serve-options.ts`가 맡고, Responses 데이터 �
 7. `bridge/sse.ts` / `bridge/response-json.ts`가 Responses SSE 또는 JSON을 만듭니다. `server/request-log.ts`와 `usage/`는 응답을
    건드리지 않은 채 종료 상태, 지연 시간, 프로바이더/모델, 최선 추정 토큰 사용량을 기록합니다.
 
+요청 전 입력량 추정은 라우팅된 어댑터의 전송 방식에 맞춥니다. `openai-chat` 모델이
+`preserveReasoningContentModels`에 없으면 전송하지 않는 이전 assistant thinking은 계산에서
+제외합니다. reasoning을 보존하는 모델은 계속 계산하므로, 실제로 전송하지 않는 기록 때문에
+로컬 컨텍스트 한도에서 잘못 거부되지 않습니다.
+
 ## 파서
 
 `responses/parser.ts`는 들어오는 요청을 `responses/schema.ts`(Zod)로 검증한 다음

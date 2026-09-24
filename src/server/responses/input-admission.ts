@@ -20,7 +20,7 @@ import { getModelMetadata } from "../../generated/model-metadata";
 import { estimateTokens } from "../../lib/token-estimate";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { modelRecordValue } from "../../reasoning-effort";
-import type { OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../../types";
+import { modelInList, type OcxContentPart, type OcxParsedRequest, type OcxProviderConfig } from "../../types";
 
 /**
  * Multiplier applied to the ceiling before refusing.
@@ -112,10 +112,12 @@ function contentTokens(content: string | readonly OcxContentPart[], modelId: str
  * their content as `OcxAssistantContentPart[]` — text, thinking blocks, and tool calls whose
  * JSON arguments are frequently the largest single item in an agent conversation. A walk
  * that counted only `{type:"text"}` would undercount exactly the turns that trigger this
- * gate.
+ * gate. The routed provider determines whether replayed thinking reaches the wire.
  */
-export function estimateInputTokens(parsed: OcxParsedRequest, modelId: string): number {
+export function estimateInputTokens(parsed: OcxParsedRequest, modelId: string, provider?: OcxProviderConfig): number {
   const { context } = parsed;
+  const countThinking = provider?.adapter !== "openai-chat"
+    || modelInList(provider.preserveReasoningContentModels, parsed.modelId);
   let total = 0;
 
   for (const prompt of context.systemPrompt ?? []) total += estimateTokens(prompt, modelId);
@@ -124,7 +126,9 @@ export function estimateInputTokens(parsed: OcxParsedRequest, modelId: string): 
     if (message.role === "assistant") {
       for (const part of message.content) {
         if (part.type === "text") total += estimateTokens(part.text, modelId);
-        else if (part.type === "thinking") total += estimateTokens(part.thinking, modelId);
+        else if (part.type === "thinking") {
+          if (countThinking) total += estimateTokens(part.thinking, modelId);
+        }
         else total += estimateTokens(part.name, modelId) + estimateTokens(JSON.stringify(part.arguments), modelId);
       }
       // Opaque provider blob replayed verbatim upstream, so it costs real input tokens.
@@ -296,7 +300,7 @@ export function checkComboTargetInputAdmission(
   const requiredOutputHeadroom = targetOutput === null
     ? requestedOutput
     : Math.min(requestedOutput, targetOutput);
-  const estimatedTokens = estimateInputTokens(parsed, modelId);
+  const estimatedTokens = estimateInputTokens(parsed, modelId, provider);
   return {
     admitted: estimatedTokens <= ceiling && estimatedTokens + requiredOutputHeadroom <= window,
     estimatedTokens,
@@ -319,6 +323,6 @@ export function checkInputAdmission(
 ): InputAdmissionResult {
   const ceiling = resolveInputCeiling(provider, providerName, modelId, nativeContextCap);
   if (ceiling === null) return { admitted: true, estimatedTokens: 0, ceiling: null };
-  const estimatedTokens = estimateInputTokens(parsed, modelId);
+  const estimatedTokens = estimateInputTokens(parsed, modelId, provider);
   return { admitted: estimatedTokens <= ceiling * ADMISSION_TOLERANCE, estimatedTokens, ceiling };
 }
