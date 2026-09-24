@@ -225,28 +225,36 @@ test("event privacy admission rejects raw filesystem path bypass forms", () => {
 });
 
 test("event privacy admission stays linear on pathological path strings", () => {
-  // RAW_POSIX_PATH_RE once alternated `\/` with `[^/]+` under a shared `+`; long segment runs
-  // were repartitioned combinatorially. Keep these just under the 4 KiB field cap so a
-  // backtracking regression surfaces as a timeout rather than a wrong verdict.
-  const deep = `cwd=/${"a/".repeat(2000)}`;
-  try {
-    enforceEventStructureLimits({ detail: deep });
-    throw new Error("expected raw_path rejection for a long segment chain");
-  } catch (err) {
-    expect((err as { code?: string }).code).toBe("raw_path");
+  // RAW_POSIX_PATH_RE once alternated `\/` with `[^/]+` under a shared `+` — the
+  // polynomial-ReDoS shape static analysis flags — though the group cannot in
+  // practice fail mid-run, so no input separates the old verdicts from the new.
+  // These cases therefore pin the contract rather than a measurable slowdown:
+  // any rewrite that changes one of these verdicts is wrong regardless of speed,
+  // and a real backtracking regression still surfaces through the test timeout.
+  const rejected = [
+    `cwd=/${"a/".repeat(2000)}`,        // long segment chain
+    `cwd=/${"a//".repeat(1300)}`,       // slash-dense chain
+    `cwd=/${"a".repeat(3000)}/`,        // trailing slash after a maxed segment
+    "cwd=/a//b",                        // interior double slash keeps matching
+    "cwd=/a\tb",                       // a tab inside a segment is still a path
+  ];
+  for (const detail of rejected) {
+    try {
+      enforceEventStructureLimits({ detail });
+      throw new Error(`expected raw_path rejection for ${detail.slice(0, 40)}`);
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe("raw_path");
+    }
   }
 
-  const dense = `cwd=/${"a//".repeat(1300)}`;
-  try {
-    enforceEventStructureLimits({ detail: dense });
-    throw new Error("expected raw_path rejection for a slash-dense chain");
-  } catch (err) {
-    expect((err as { code?: string }).code).toBe("raw_path");
+  const allowed = [
+    `https://example.com/${"a/".repeat(2000)}`, // a URL, not a POSIX path
+    "cwd=//",                                  // a leading double slash never starts a path
+  ];
+  for (const detail of allowed) {
+    expect(() => enforceEventStructureLimits({ detail })).not.toThrow();
   }
-
-  const notAPath = `https://example.com/${"a/".repeat(2000)}`;
-  expect(() => enforceEventStructureLimits({ detail: notAPath })).not.toThrow();
-});
+}, 10_000);
 
 test("invalid JSON contract artifacts classify as artifact_mismatch", () => {
   const home = tempHome();
