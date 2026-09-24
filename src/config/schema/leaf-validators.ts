@@ -852,6 +852,11 @@ export const remoteGuiConfigSchema = z.object({
 
 const connectedClientIdSchema = z.enum(["codex", "claude"]);
 const clientTimestampSchema = z.string().datetime({ offset: true });
+const clientTransportSchema = z.enum(["hub", "link"]);
+const linkTransportSchema = z.object({
+  tunnelPort: z.number().int().min(1024).max(65535),
+  linkId: z.string().regex(/^lnk_[0-9a-f]{16}$/),
+}).strict();
 const clientOriginSchema = z.string().transform((value, ctx) => {
   const origin = canonicalHttpOrigin(value);
   if (!origin) {
@@ -864,6 +869,8 @@ export const clientConnectionSchema = z.object({
   serverUrl: clientOriginSchema,
   managementUrl: clientOriginSchema,
   managementTransport: z.enum(["direct", "relay"]),
+  transport: clientTransportSchema.optional(),
+  link: linkTransportSchema.optional(),
   selectedClients: z.array(connectedClientIdSchema).min(1).max(2).superRefine((clients, ctx) => {
     if (new Set(clients).size !== clients.length) {
       ctx.addIssue({ code: "custom", message: "must contain unique client ids" });
@@ -890,7 +897,34 @@ export const clientConnectionSchema = z.object({
       ctx.addIssue({ code: "custom", path: ["oldKeyBackupPath"], message: `must equal ${expected}` });
     }
   }).optional(),
-}).strict();
+}).strict().superRefine((connection, ctx) => {
+  const transport = connection.transport ?? "hub";
+  if (transport === "hub" && connection.link !== undefined) {
+    ctx.addIssue({ code: "custom", path: ["link"], message: "link is allowed only when transport is link" });
+    return;
+  }
+  if (transport !== "link") return;
+  if (!connection.link) {
+    ctx.addIssue({ code: "custom", path: ["link"], message: "link is required when transport is link" });
+    return;
+  }
+  if (connection.managementTransport !== "direct") {
+    ctx.addIssue({ code: "custom", path: ["managementTransport"], message: "link transport requires direct management transport" });
+  }
+  if (connection.serverUrl !== connection.managementUrl) {
+    ctx.addIssue({ code: "custom", path: ["managementUrl"], message: "link transport requires serverUrl and managementUrl to match" });
+  }
+  let origin: URL;
+  try {
+    origin = new URL(connection.serverUrl);
+  } catch {
+    return;
+  }
+  if (origin.protocol !== "http:" || origin.hostname !== "127.0.0.1"
+    || origin.port !== String(connection.link.tunnelPort)) {
+    ctx.addIssue({ code: "custom", path: ["serverUrl"], message: "link transport requires http://127.0.0.1:<tunnelPort>" });
+  }
+});
 
 /**
  * Codex pool selection policy section.

@@ -5,9 +5,9 @@ import { removePid, removeRuntimePort, writePid, writeRuntimePort } from "../con
 import { installCrashGuards } from "../lib/crash-guard";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
-import { findAvailablePort } from "../server/ports";
+import { findAvailablePort, PortUnavailableError } from "../server/ports";
 import { startMachineListener } from "./machine-listener";
-import { readClientConnectionState } from "./state";
+import { isLinkConnection, readClientConnectionState } from "./state";
 
 let activeServer: Server<unknown> | null = null;
 let activePort: number | null = null;
@@ -85,12 +85,24 @@ export async function startClientRuntime(
   const state = readClientConnectionState();
   if (state.kind !== "connected") throw new Error(`client runtime refused: client state is ${state.kind}`);
   const config = loadConfig();
-  const preferred = options.port ?? config.port ?? 10100;
-  const port = await findAvailablePort(preferred, "127.0.0.1", {
-    preferRetryMs: options.port === undefined ? 750 : 5_000,
-    preferRetryIntervalMs: 50,
-    allowEphemeralFallback: options.port === undefined,
-  });
+  const linkMode = isLinkConnection(state.value);
+  if (linkMode && (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535)) {
+    throw new Error("link mode requires a valid local config port");
+  }
+  const preferred = linkMode ? config.port : options.port ?? config.port ?? 10100;
+  let port: number;
+  try {
+    port = await findAvailablePort(preferred, "127.0.0.1", {
+      preferRetryMs: options.port === undefined ? 750 : 5_000,
+      preferRetryIntervalMs: 50,
+      allowEphemeralFallback: linkMode ? false : options.port === undefined,
+    });
+  } catch (error) {
+    if (linkMode && error instanceof PortUnavailableError) {
+      throw new Error(`link mode needs port ${config.port}; free it or change port`, { cause: error });
+    }
+    throw error;
+  }
   const server = startMachineListener(port, { state: state.value });
   const boundPort = server.port ?? port;
   activeServer = server;
