@@ -605,6 +605,10 @@ code-mode `exec` has the call converted into the matching `tools.<helper>(...)` 
 `exec`. A catalog that genuinely declares the bare goal tool keeps it, and a catalog that declares
 neither the tool nor `exec` still rejects the call as undeclared.
 
+For routed Responses turns, an explicit tool-enforcement policy also rejects client tool calls if
+the request's declared-tool catalog is unavailable. An empty declared catalog rejects every client
+tool call; Chat and Anthropic clients retain their own tool-validation responsibility.
+
 Routed code-mode turns are also told the host's rules for the nested helpers before the first
 call: `tools.apply_patch` takes one string that opens and closes with the bare patch marker lines,
 the isolate has no `import`, and long-running commands are polled through `write_stdin`. When a
