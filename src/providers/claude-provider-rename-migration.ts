@@ -14,7 +14,7 @@
  *
  * Posture: the projection refuses and warns when `claude-agent-sdk` already exists, because two
  * rows can describe two different sign-in setups and choosing a survivor is not this migration's
- * call. `DEPRECATED_PROVIDER_ALIASES` in `./registry` keeps the retired id resolvable meanwhile,
+ * call. `DEPRECATED_PROVIDER_ALIASES` in `./deprecated-provider-aliases` keeps the retired id resolvable meanwhile,
  * so a refused row stays reachable instead of dangling.
  */
 import { rewriteProviderReferences } from "./provider-id-rewrite";

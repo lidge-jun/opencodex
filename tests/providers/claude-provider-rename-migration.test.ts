@@ -4,7 +4,8 @@ import {
   CLAUDE_CLI_PROVIDER_ID,
   projectClaudeProviderRename,
 } from "../../src/providers/claude-provider-rename-migration";
-import { getProviderRegistryEntry, resolveDeprecatedProviderId } from "../../src/providers/registry";
+import { resolveDeprecatedProviderId } from "../../src/providers/deprecated-provider-aliases";
+import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { projectStartupConfigRepairs } from "../../src/providers/model-rename-startup";
 import type { OcxConfig } from "../../src/types";
 

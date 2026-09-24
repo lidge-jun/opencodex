@@ -7,6 +7,7 @@ import type {
 } from "./registry/types";
 import { PROVIDER_REGISTRY_CORE } from "./registry/entries-core";
 import { PROVIDER_REGISTRY_EXTENDED } from "./registry/entries-extended";
+import { resolveDeprecatedProviderId } from "./deprecated-provider-aliases";
 
 export type {
   ProviderAuthKind,
@@ -43,33 +44,13 @@ export function getProviderRegistryEntry(id: string): ProviderRegistryEntry | un
 }
 
 /**
- * Provider ids that were renamed and still have to resolve.
- *
- * `claude-cli` shipped in 2.65.0 and became `claude-agent-sdk` on 2026-09-24, when the row moved
- * from a hand-built `claude -p` turn onto Anthropic's Claude Agent SDK. Saved rows and references
- * are rewritten by `claude-provider-rename-migration`, but three paths read an id before or
- * outside that pass: a config read that happens first, `ocx provider test claude-cli` typed by
- * hand, and any row the projection refused to move because the destination was taken. Same shape
- * as `DEPRECATED_OAUTH_PROVIDER_ALIASES` in src/oauth/index.ts, and deliberately not a second
- * registry row: one row per mechanism is what the registry means.
- */
-export const DEPRECATED_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
-  "claude-cli": "claude-agent-sdk",
-};
-
-export function resolveDeprecatedProviderId(id: string): string {
-  return DEPRECATED_PROVIDER_ALIASES[id] ?? id;
-}
-
-/**
  * Merge a registry row's `staticHeaders` beneath a provider's own headers.
  *
- * The field is documented as "merged into every upstream request for this provider", but that
- * was only ever true for a freshly seeded config: `providerConfigSeed` copies the block once
+ * The field is documented as "merged into every upstream request for this provider", but that was
+ * only ever true for a freshly seeded config: `providerConfigSeed` copies the block once
  * (`derive.ts`), `enrichProviderFromCatalog` fills it only when the whole block is absent, and
- * nothing merged it at request time. So an install that predates a header — or that saved any
- * header of its own — never received the new one, which is exactly what #2067 would have
- * shipped for every existing opencode-free user.
+ * nothing merged it at request time. So an install that predates a header — or that saved any of
+ * its own — never received the new one. That is exactly what #2067 would have shipped to them.
  *
  * The comparison is case-insensitive on purpose. HTTP header names are case-insensitive, but a
  * plain object spread is not: merging a registry `User-Agent` over a user's `user-agent`
