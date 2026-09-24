@@ -89,13 +89,16 @@ function ConvertTo-NativeArgument([string]$Value) {
   return '"' + $Value + '"'
 }
 
-# A CODEX_HOME that does not exist yet (fresh profile) is rejected by the CLI, so
-# let children fall back to their default home resolution instead.
+# A fresh profile may not have created the default %USERPROFILE%.codex yet, and the
+# CLI rejects a CODEX_HOME that does not exist. Only that default home is dropped so
+# children resolve it themselves; any other home is passed through unchanged.
 function Set-OcxChildEnvironment([System.Diagnostics.ProcessStartInfo]$StartInfo) {
-  if ([System.IO.Directory]::Exists($CodexHome)) {
-    $StartInfo.EnvironmentVariables["CODEX_HOME"] = $CodexHome
-  } else {
+  $defaultHome = Normalize-HomePath (Join-Path $env:USERPROFILE ".codex")
+  $isDefaultHome = [string]::Equals($CodexHome, $defaultHome, [System.StringComparison]::OrdinalIgnoreCase)
+  if ($isDefaultHome -and -not [System.IO.Directory]::Exists($CodexHome)) {
     $StartInfo.EnvironmentVariables.Remove("CODEX_HOME")
+  } else {
+    $StartInfo.EnvironmentVariables["CODEX_HOME"] = $CodexHome
   }
   $StartInfo.EnvironmentVariables["OPENCODEX_HOME"] = $OpenCodexHome
 }

@@ -452,6 +452,44 @@ describe("Windows tray packaging and command safety", () => {
     expect(source).toContain("startup-health probe launch cleanup failed");
   });
 
+  test("drops CODEX_HOME for tray children only when the default home is still missing", () => {
+    if (process.platform !== "win32") return;
+    const directory = mkdtempSync(join(tmpdir(), "ocx-tray-env-"));
+    mkdirSync(join(directory, "custom-existing"), { recursive: true });
+    const driver = join(directory, "driver.ps1");
+    writeFileSync(driver, [
+      "param([string]$TrayScriptPath)",
+      "$ErrorActionPreference = 'Stop'",
+      "$ast = [System.Management.Automation.Language.Parser]::ParseFile($TrayScriptPath, [ref]$null, [ref]$null)",
+      "foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)) {",
+      "  if (@('Normalize-HomePath', 'Set-OcxChildEnvironment') -contains $fn.Name) { . ([ScriptBlock]::Create($fn.Extent.Text)) }",
+      "}",
+      "$OpenCodexHome = Join-Path $env:USERPROFILE '.opencodex'",
+      "$result = [ordered]@{}",
+      "foreach ($case in @(",
+      "  @{ Name = 'defaultMissing'; Home = (Join-Path $env:USERPROFILE '.codex') },",
+      "  @{ Name = 'customMissing'; Home = (Join-Path $env:USERPROFILE 'custom-missing') },",
+      "  @{ Name = 'customExisting'; Home = (Join-Path $env:USERPROFILE 'custom-existing') }",
+      ")) {",
+      "  $CodexHome = Normalize-HomePath $case.Home",
+      "  $psi = New-Object System.Diagnostics.ProcessStartInfo",
+      "  $psi.EnvironmentVariables['CODEX_HOME'] = 'inherited'",
+      "  Set-OcxChildEnvironment $psi",
+      "  $result[$case.Name] = if ($psi.EnvironmentVariables.ContainsKey('CODEX_HOME')) { $psi.EnvironmentVariables['CODEX_HOME'] } else { $null }",
+      "}",
+      "$result | ConvertTo-Json -Compress",
+    ].join("\r\n"));
+    const run = Bun.spawnSync([
+      windowsPowerShellPath(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+      "-File", driver, "-TrayScriptPath", repoPath("src", "tray", "windows-tray.ps1"),
+    ], { env: { ...process.env, USERPROFILE: directory }, stdout: "pipe", stderr: "pipe" });
+    expect(run.exitCode, run.stderr.toString()).toBe(0);
+    const result = JSON.parse(run.stdout.toString().trim()) as Record<string, string | null>;
+    expect(result.defaultMissing).toBeNull();
+    expect(result.customMissing?.endsWith("\\custom-missing")).toBe(true);
+    expect(result.customExisting?.endsWith("\\custom-existing")).toBe(true);
+  });
+
   // Behavioral proof for the probe lifecycle: the driver loads the REAL probe
   // functions out of windows-tray.ps1 (via the PowerShell AST, so comment and
   // whitespace edits cannot fake it), stages a REAL hung child through the
