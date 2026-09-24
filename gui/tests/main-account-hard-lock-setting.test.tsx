@@ -275,7 +275,7 @@ function MainCard({ state }: { state: MainAccountHardLockStatus["state"] }) {
     autoSwitchDisabled={false} switchingId={null} onOpenReset={() => {}} />;
 }
 test.each([
-  ["blocked", "Blocked by 99% protection", false],
+  ["blocked", "Blocked by 98% protection", false],
   ["unknown", "Protection on · usage unknown", true],
   ["ready", "Protection on · monitoring", true],
 ] as const)("main card uses server %s state, not rounded weekly usage", async (state, label, canSwitch) => {
