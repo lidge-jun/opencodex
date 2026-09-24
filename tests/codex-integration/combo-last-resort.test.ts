@@ -176,6 +176,63 @@ describe("the policy never causes an outage", () => {
     }
   });
 
+  test("a deferral wait and the ordinary wait share one budget", async () => {
+    // Reported on #5736. `waitForCooldownMs` is a cap per *selection attempt*, so the two
+    // waits inside one call must not each spend it. Here the normal target's cooldown ends
+    // at 3s but it re-cools immediately, and the last resort frees at 9s: waiting 3s and
+    // then a further 9s spends 12s against a 10s budget.
+    const cfg = config();
+    const targets = cfg.combos!.free!.targets;
+    coolComboTarget("free", targets[0]!, { now: NOW, cooldownMs: 3_000 });
+    coolComboTarget("free", targets[1]!, { now: NOW, cooldownMs: 600_000 });
+    coolComboTarget("free", targets[2]!, { now: NOW, cooldownMs: 9_000 });
+
+    const sleeps: number[] = [];
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await pickComboTargetWithWait(cfg, "free", {
+        waitForCooldownMs: 10_000, now: NOW,
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+          // The normal target re-cools the moment its first cooldown lapses, which is what
+          // sends the call on to the ordinary wait with budget already spent.
+          coolComboTarget("free", targets[0]!, { now: NOW + 3_000, cooldownMs: 600_000 });
+        },
+      });
+      const total = sleeps.reduce((sum, ms) => sum + ms, 0);
+      expect(total).toBeLessThanOrEqual(10_000);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("the ordinary wait measures from after the deferral slept, not before it", async () => {
+    // Sharing the budget is not enough on its own: the clock has to move too. The normal
+    // target frees at 3s (and immediately re-cools); the last resort frees at 3.5s. After
+    // sleeping 3s the remaining wait is 500ms, not the 3,500ms it would be if the fall-through
+    // still measured from the original `now`.
+    const cfg = config();
+    const targets = cfg.combos!.free!.targets;
+    coolComboTarget("free", targets[0]!, { now: NOW, cooldownMs: 3_000 });
+    coolComboTarget("free", targets[1]!, { now: NOW, cooldownMs: 600_000 });
+    coolComboTarget("free", targets[2]!, { now: NOW, cooldownMs: 3_500 });
+
+    const sleeps: number[] = [];
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await pickComboTargetWithWait(cfg, "free", {
+        waitForCooldownMs: 10_000, now: NOW,
+        sleep: async (ms: number) => {
+          sleeps.push(ms);
+          coolComboTarget("free", targets[0]!, { now: NOW + 3_000, cooldownMs: 600_000 });
+        },
+      });
+      expect(sleeps).toEqual([3_000, 500]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("a zero wait budget still releases the last resort rather than failing", async () => {
     const cfg = config({ waitForCooldownMs: 0 });
     const targets = cfg.combos!.free!.targets;

@@ -236,10 +236,12 @@ ocx combo remove <id> --yes
 | --- | --- | --- | --- |
 | `targets` |はい | — |構成された `{ provider, model, weight? }` ターゲットの空でない順序付けされた配列。重複するプロバイダーとモデルのペアは拒否されます。 |
 | `targets[].weight` |いいえ | `1` | 1 ～ 10,000 の整数。`round-robin` と `random` で使用され、`failover`、`least-used`、`reset-window` では無視されます。 |
+| `targets[].lastResort` | いいえ | `false` | 緊急時専用のターゲットを示します。`cooldownWaitPolicy` を設定しない限り無効です。ターゲットを恒久的に除外することはありません。通常のターゲットに到達できない場合は通常どおりディスパッチされます。 |
 | `strategy` |いいえ | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、`"reset-window"`。 |
 | `stickyLimit` |いいえ | `1` | `round-robin` の 1 回の選択あたり、成功したリクエスト数を指定する 1 ～ 100 の整数。`round-robin` にのみ適用されます。 |
 | `cooldownMs` |いいえ | 未設定 → アップストリーム フォールバック（リクエストレート 429 コード `1302`/`1305` では 5 秒、それ以外では 60 秒） | 1 ～ 600000 の整数。設定時は、使用可能なアップストリーム `Retry-After` または Codex リセットシグナルがない場合に、リクエストレート 429 を含むターゲットごとのクールダウンとして適用されます。未設定時はアップストリーム フォールバックを使用します。 |
 | `waitForCooldownMs` |いいえ | `0` | 0 ～ 600000 の整数。最も早く利用可能になる冷却中のターゲットを待ってから `combo_unavailable` を返すまでの最大待機時間。中止すると待機はキャンセルされます。 |
+| `cooldownWaitPolicy` | いいえ | 未設定 | `"before-last-resort"` は、通常のターゲットがクールダウン中で、その残り時間が `waitForCooldownMs` に収まる間、`lastResort` を付けたターゲットを後回しにします。この文字列のみが有効です。後回しの待機と通常の待機は、1 回の選択につき同じ `waitForCooldownMs` の予算を共有します。 |
 | `defaultEffort` |いいえ | `null` | `low`、`medium`、`high`、`xhigh`、`max`、または `ultra`;呼び出し元が努力を省略し、ターゲットがサポートをアドバタイズした場合にのみ適用されます。 |
 | `reasoningEffortMode` | いいえ | `"strict"` | `strict` または `adaptive`。混在する capability の共通部分と対象別の制御正規化を選択します。 |
 | `alias` |いいえ |なし |オプションのトリミングされたパブリック モデル ID。上記のエイリアス ルールを使用します。空の値はエイリアスなしで保存されます。 |

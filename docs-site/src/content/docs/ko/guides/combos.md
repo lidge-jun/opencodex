@@ -244,10 +244,12 @@ ocx combo remove <id> --yes
 | --- | --- | --- | --- |
 | `targets` | 예 | — | 설정된 `{ provider, model, weight? }` 대상의 비어 있지 않은 순서가 있는 배열이어야 합니다. 중복된 provider/model 쌍은 거부됩니다. |
 | `targets[].weight` | 아니요 | `1` | 1에서 10,000 사이의 정수입니다. `round-robin`과 `random`에서 사용되며, `failover`, `least-used`, `reset-window`에서는 무시됩니다. |
+| `targets[].lastResort` | 아니요 | `false` | 비상용 대상임을 표시합니다. `cooldownWaitPolicy`를 설정하지 않으면 아무 효과가 없습니다. 대상을 영구히 제외하지는 않습니다. 일반 대상에 도달할 수 없으면 평소대로 디스패치됩니다. |
 | `strategy` | 아니요 | `"failover"` | 허용되는 값은 `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`입니다. |
 | `stickyLimit` | 아니요 | `1` | 한 번의 `round-robin` 선택에 유지되는 성공 요청 수로, 1에서 100 사이의 정수입니다. `round-robin`에만 적용됩니다. |
 | `cooldownMs` | 아니요 | 미설정 → 업스트림 폴백(요청 속도 제한 429 코드 `1302`/`1305`는 5초, 그 외는 60초) | 1에서 600000 사이의 정수입니다. 설정하면 사용 가능한 업스트림 `Retry-After` 또는 Codex 재설정 신호가 없을 때 요청 속도 제한 429를 포함한 대상별 쿨다운으로 적용됩니다. 설정하지 않으면 업스트림 폴백을 사용합니다. |
 | `waitForCooldownMs` | 아니요 | `0` | 0에서 600000 사이의 정수입니다. `combo_unavailable`을 반환하기 전에 가장 먼저 적합해지는 쿨다운 중인 대상을 기다리는 최대 시간입니다. 중단하면 대기가 취소됩니다. |
+| `cooldownWaitPolicy` | 아니요 | 미설정 | `"before-last-resort"`는 일반 대상이 쿨다운 중이고 그 잔여 시간이 `waitForCooldownMs` 안에 들어올 때 `lastResort` 대상을 뒤로 미룹니다. 이 문자열만 적용됩니다. 미루는 대기와 일반 대기는 선택 시도마다 같은 `waitForCooldownMs` 한도를 함께 씁니다. |
 | `defaultEffort` | 아니요 | `null` | `low`, `medium`, `high`, `xhigh`, `max`, 또는 `ultra`입니다. 호출자가 effort를 생략하고 대상이 지원을 광고할 때만 적용됩니다. |
 | `reasoningEffortMode` | 아니요 | `"strict"` | `strict` 또는 `adaptive`; 혼합 capability의 교집합과 대상별 제어 정규화를 선택합니다. |
 | `alias` | 아니요 | 없음 | 선택적으로 앞뒤 공백을 제거한 공개 모델 ID입니다. 위의 alias 규칙을 따릅니다. 빈 값은 alias 없음으로 저장됩니다. |

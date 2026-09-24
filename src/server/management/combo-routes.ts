@@ -180,6 +180,24 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       ...(!Object.hasOwn(requestedCombo, "waitForCooldownMs") && previous?.waitForCooldownMs !== undefined
         ? { waitForCooldownMs: previous.waitForCooldownMs }
         : {}),
+      // Same reason as defaultEffortMode below: the dashboard does not expose the
+      // last-resort policy, so a GUI round-trip that omits it must not delete it (#5736).
+      ...(!Object.hasOwn(requestedCombo, "cooldownWaitPolicy") && previous?.cooldownWaitPolicy !== undefined
+        ? { cooldownWaitPolicy: previous.cooldownWaitPolicy }
+        : {}),
+      // `lastResort` rides on each target, so a GUI that re-sends the target list without the
+      // flag would strip it. Carry it over per target, matched on provider+model.
+      ...(Array.isArray(requestedCombo.targets) && Array.isArray(previous?.targets)
+        ? {
+            targets: (requestedCombo.targets as Array<Record<string, unknown>>).map(target => {
+              if (Object.hasOwn(target, "lastResort")) return target;
+              const before = previous.targets.find(
+                candidate => candidate.provider === target.provider && candidate.model === target.model,
+              );
+              return before?.lastResort ? { ...target, lastResort: true } : target;
+            }),
+          }
+        : {}),
       // The dashboard does not expose this advanced CLI/API policy. Preserve it when
       // a GUI round-trip omits the field instead of silently downgrading to fallback.
       ...(!Object.hasOwn(requestedCombo, "defaultEffortMode") && previous?.defaultEffortMode !== undefined
@@ -204,6 +222,13 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
     } = sparseComboConfig(normalized);
     const stored: OcxComboConfig = {
       ...normalizedBase,
+      // The normalizer gives every target an explicit `lastResort: false`; persisting that
+      // would add a noise key to every target of every combo, including ones that never use
+      // the policy (#5736). Only the opt-in value is stored, matching how the combo-level
+      // policy is handled in sparseComboConfig.
+      targets: normalizedBase.targets.map(({ lastResort, ...target }) =>
+        lastResort ? { ...target, lastResort: true } : target,
+      ),
       ...(normalizedAlias ? { alias: normalizedAlias } : {}),
       ...(normalizedNativeAlias ? { nativeAlias: true } : {}),
       ...(normalizedDisplayName ? { displayName: normalizedDisplayName } : {}),

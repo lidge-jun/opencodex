@@ -1609,6 +1609,17 @@ describe("combo validation and normalization", () => {
     expect(normalizeComboConfig({
       targets: [{ provider: "a", model: "m1", lastResort: "yes" as never }],
     }).targets[0]!.lastResort).toBe(false);
+    // #5736: the normalizer's explicit `false` must not reach stored config. Targets that
+    // never opt in keep exactly the keys they had, so enabling this feature does not add a
+    // noise key to every target of every combo in the file.
+    const sparseTargets = normalizeComboConfig({
+      targets: [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2", lastResort: true },
+      ],
+    }).targets.map(({ lastResort, ...target }) => (lastResort ? { ...target, lastResort: true } : target));
+    expect(Object.hasOwn(sparseTargets[0]!, "lastResort")).toBe(false);
+    expect(sparseTargets[1]).toMatchObject({ lastResort: true });
     // Anything that is not the literal "adaptive" normalizes to today's behavior, so a
     // malformed or absent value can never silently opt a user in.
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).reasoningEffortMode).toBe("strict");
