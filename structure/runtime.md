@@ -219,21 +219,21 @@ TTL or lock-file deletion participates in recovery.
 An explicit Codex integration OFF skips startup cache invalidation before the user-scoped catalog
 serialization lock is resolved. Explicit `sync` and `sync-cache` retain their catalog-only override.
 
-`startServer` composes up to three sockets in one synchronous startup transaction: the public data
-listener, the optional unauthenticated data-loopback listener, and the optional hub-management
-listener.
-
+`startServer` composes up to four sockets in one synchronous startup transaction: the public data listener, optional unauthenticated data-loopback and hub-management listeners, and the optional `hub-link` listener, which opens only for a recorded link and persists its concrete `127.0.0.1:<listenerPort>`.
 The data-loopback socket serves a fixed data-plane allowlist: Responses and its compact sibling,
 the native search relay, the standalone Images POSTs, keyed file/stream transcription, `GET /v1/models`, the realtime voice shapes,
 and the Anthropic and OpenAI chat wires the host's own local clients speak — `POST /v1/messages`,
 `POST /v1/messages/count_tokens`, and `POST /v1/chat/completions`. It never serves `/api/*`,
 `/healthz`, `/readyz`, or GUI routes, so local management discovery has to use an authenticated
 surface with a management credential.
-
 The hub-management socket is enabled only by `runtimeRole: "hub"` plus
 `hub.managementIngress.enabled`, always binds `127.0.0.1`, and default-denies everything except
 GUI, session bootstrap/exchange, and `/api/*`.
-
+The `hub-link` socket is HTTP-only and default-denies all but the fixed data routes, catalog, hub-state,
+usage, and `GET /readyz`; every `Upgrade` header, management, GUI, session, health, and unknown
+`/v1/*` route is rejected before dispatch. Its `opencodex-link.invalid` policy admits only configured
+key ids recorded by `links.json`, never the environment token. `ensureStarted()` is single-flight,
+final deletion closes the listener, and `src/server/index/optional-listeners.ts` runs supervisor teardown before closing this listener and the Claude intercept pair.
 ### Claude intercept pair
 
 At the end of the startup transaction, `startServer` also starts the optional Claude intercept pair
@@ -257,10 +257,10 @@ stable port to derive from, so the pair stays off unless `claudeCode.intercept.p
 
 Auxiliary listener bind failures carry the listener key and effective address through `AuxiliaryListenerBindError` in `src/server/ports.ts`. `src/cli/index.ts` reports them without retrying the public port. Startup still rolls back every earlier socket synchronously.
 
-A failed optional bind initiates rollback of every earlier socket; normal stop joins all bound
-sockets before lifecycle release. The existing launchd/systemd installer remains the service owner
-and continues loading the data token from `service-api-token`; hub mode adds no service-manager
-fork and no token-bearing unit/plist field.
+A failed public, loopback, or management bind rolls back earlier sockets; a failed hub-link bind warns
+and records `failed{bind}` while existing sockets remain available. Normal stop joins sockets before
+release. The existing launchd/systemd installer remains the service owner and loads the data token
+from `service-api-token`; hub mode adds no service-manager fork or token-bearing unit/plist field.
 
 > Decision record: [ADR-0002](decisions/ADR-0002-lifecycle.md)
 
