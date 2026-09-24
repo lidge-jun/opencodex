@@ -383,6 +383,44 @@ test("the secret's own controls are wired separately from the lifecycle actions"
   expect(labels).toEqual(["Copy", "Close"]);
 });
 
+test("a failed clipboard fallback says so instead of implying the secret copied", async () => {
+  const rotationSecret = { id: "k1", key: "ocx_data_shown_once", rotationId: "rotation-1" };
+  const container = await mount({
+    keys: [{
+      id: "k1",
+      name: "alpha",
+      prefix: "ocx_data_aaaaaaaa...",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      pendingRotation: {
+        id: "rotation-1",
+        createdAt: "2026-08-28T00:00:00.000Z",
+        expiresAt: "2026-08-28T00:10:00.000Z",
+      },
+      usage: { requests7d: 0, totalRequests: 0 },
+    }],
+    rotationSecret,
+    onRotationCommit: async () => true,
+  });
+  await openKey(container);
+  const reveal = container.querySelector<HTMLElement>(".api-key-reveal")!;
+  const copyButton = () => [...reveal.querySelectorAll("button")].find(b => b.textContent?.trim() === "Copy")!;
+
+  // A rejected write must not leave the one-time secret looking copied.
+  Object.defineProperty(testWindow.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: () => Promise.reject(new Error("denied")) },
+  });
+  await act(async () => { copyButton().click(); await Promise.resolve(); });
+  const alert = reveal.querySelector('[role="alert"]')!;
+  expect(alert.textContent).toContain("Could not copy the key");
+  expect(reveal.textContent).not.toContain("Copied");
+
+  // A missing Clipboard API fails the same way: visible error, no copied badge.
+  Object.defineProperty(testWindow.navigator, "clipboard", { configurable: true, value: undefined });
+  await act(async () => { copyButton().click(); await Promise.resolve(); });
+  expect(reveal.querySelector('[role="alert"]')!.textContent).toContain("Could not copy the key");
+});
+
 test("a pending key renders only the rotation actions that have handlers", async () => {
   const pendingKey = {
     id: "k1",

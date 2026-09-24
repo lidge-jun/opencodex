@@ -142,6 +142,7 @@ export default function ApiKeysWorkspace({
   const [deleteFailed, setDeleteFailed] = useState(false);
   const [rotationPending, setRotationPending] = useState(false);
   const [rotationFailed, setRotationFailed] = useState(false);
+  const [rotationCopyFailed, setRotationCopyFailed] = useState(false);
   // Fallback "copied" badge for when the host shows the one-time secret without
   // wiring onCopyRotationSecret — records the copied rotation's id so a fresh
   // secret does not inherit the badge.
@@ -161,16 +162,23 @@ export default function ApiKeysWorkspace({
 
   // When the host did not wire a copy handler, the one-time secret still needs
   // a way off the screen — a disabled button would strand it. Falls back to a
-  // direct clipboard write; a missing clipboard API makes the click a no-op.
+  // direct clipboard write; the secret is shown once, so a failed write must
+  // say so instead of leaving the button to imply it copied.
   const copyRotationSecretFallback = () => {
     const secret = rotationSecret;
     if (!secret) return;
     const write = navigator.clipboard?.writeText?.(secret.key);
-    if (!write) return;
+    if (!write) {
+      setRotationCopyFailed(true);
+      return;
+    }
     void write.then(() => {
+      setRotationCopyFailed(false);
       setRotationCopyFallbackId(secret.rotationId);
       window.setTimeout(() => setRotationCopyFallbackId(null), 2000);
-    }).catch(() => {});
+    }).catch(() => {
+      setRotationCopyFailed(true);
+    });
   };
 
   const runRotation = async (operation: "start" | "commit" | "abort") => {
@@ -409,6 +417,7 @@ export default function ApiKeysWorkspace({
                               <button type="button" className="btn btn-ghost btn-sm" onClick={onDismissRotationSecret}>{t("common.close")}</button>
                             )}
                           </span>
+                          {rotationCopyFailed && <p className="awi-delete-error" role="alert">{t("api.key.copyFailed")}</p>}
                         </div>
                       )}
                       {(onRotationCommit || onRotationAbort) && (
