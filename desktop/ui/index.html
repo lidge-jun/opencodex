@@ -5,52 +5,109 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OpenCodex</title>
     <style>
-      :root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
-      body { display: grid; min-height: 100vh; place-items: center; margin: 0; background: #f5f5f7; color: #202124; }
-      main { width: min(38rem, calc(100vw - 3rem)); padding: 2rem; border-radius: 1rem; background: white; box-shadow: 0 8px 30px #0001; }
-      h1 { margin-top: 0; font-size: 1.4rem; }
-      #headline { margin: 0 0 .25rem; font-weight: 600; }
-      #detail { margin: 0; min-height: 1.4rem; color: #666; font-size: .9rem; }
-      #phases { margin: 1.25rem 0 0; padding: 0; list-style: none; display: grid; gap: .4rem; }
-      #phases li { display: flex; gap: .6rem; align-items: baseline; color: #8a8a8e; }
-      #phases li .mark { width: 1rem; text-align: center; }
-      #phases li[data-state="active"] { color: #202124; font-weight: 600; }
-      #phases li[data-state="done"] { color: #4b8b3b; }
-      #phases li[data-state="failed"] { color: #b3261e; font-weight: 600; }
-      #failure { margin-top: 1.25rem; display: grid; gap: .75rem; }
+      :root {
+        color-scheme: light dark;
+        --bg: light-dark(#ffffff, #212121);
+        --surface: light-dark(#ffffff, #262626);
+        --raised: light-dark(#f4f4f4, #303030);
+        --border: light-dark(#e6e6e6, #3d3d3d);
+        --text: light-dark(#0d0d0d, #ececec);
+        --muted: light-dark(#6e6e6e, #a6a6a6);
+        --faint: light-dark(#a3a3a3, #6e6e6e);
+        --accent: light-dark(#0d0d0d, #ececec);
+        --accent-hover: light-dark(#3d3d3d, #ffffff);
+        --accent-ink: light-dark(#ffffff, #0d0d0d);
+        --track: light-dark(rgba(13, 13, 13, 0.08), rgba(255, 255, 255, 0.10));
+        --green: light-dark(#0a7d5c, #4ecb9d);
+        --red: light-dark(#b91c1c, #f87171);
+        --red-soft: light-dark(rgba(185, 28, 28, 0.09), rgba(248, 113, 113, 0.13));
+        --font-ui: "OpenAI Sans", "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+        --font-code: ui-monospace, "SFMono-Regular", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+        font: 14px/1.5 var(--font-ui);
+        -webkit-font-smoothing: antialiased;
+      }
+      * { box-sizing: border-box; }
+      body { display: grid; min-height: 100vh; place-items: center; margin: 0; padding: 32px 16px; background: var(--bg); color: var(--text); }
+      main { width: min(26rem, 100%); display: grid; justify-items: center; text-align: center; animation: rise .4s cubic-bezier(.2, .8, .2, 1) both; }
+      .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 40px; }
+      .brand-logo { width: 28px; height: 28px; background: var(--text); -webkit-mask: url(logo.png) center / contain no-repeat; mask: url(logo.png) center / contain no-repeat; }
+      .brand-name { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -0.01em; }
+      .indicator { position: relative; width: 40px; height: 40px; margin-bottom: 24px; }
+      .spinner { position: absolute; inset: 0; border-radius: 50%; border: 2.5px solid var(--track); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+      .status-mark { position: absolute; inset: 0; display: none; place-items: center; border-radius: 50%; font-size: 18px; font-weight: 600; }
+      main[data-state="failed"] .spinner, main[data-state="consent"] .spinner, main[data-state="idle"] .indicator { display: none; }
+      main[data-state="failed"] .status-mark { display: grid; color: var(--red); background: var(--red-soft); }
+      main[data-state="consent"] .status-mark { display: grid; color: var(--text); background: var(--raised); }
+      #headline { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -0.005em; min-height: 1.5em; }
+      #detail { margin: 6px 0 0; min-height: 1.4em; max-width: 22rem; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+      .progress { width: 160px; height: 3px; margin-top: 22px; border-radius: 999px; background: var(--track); overflow: hidden; }
+      .progress-bar { height: 100%; width: 0; border-radius: inherit; background: var(--accent); transition: width .35s cubic-bezier(.2, .8, .2, 1); }
+      #stepCount { margin: 8px 0 0; min-height: 1.3em; color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+      main:not([data-state="running"]) .progress, main:not([data-state="running"]) #stepCount { display: none; }
+      #steps { width: 100%; margin-top: 20px; text-align: left; }
+      #steps summary { width: max-content; margin: 0 auto; padding: 2px 8px; border-radius: 999px; color: var(--muted); font-size: 12px; cursor: pointer; list-style: none; user-select: none; }
+      #steps summary::-webkit-details-marker { display: none; }
+      #steps summary:hover { color: var(--text); background: var(--raised); }
+      #steps summary::after { content: " \25BE"; }
+      #steps[open] summary::after { content: " \25B4"; }
+      #phases { margin: 12px 0 0; padding: 12px 16px; list-style: none; display: grid; gap: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+      #phases li { display: flex; gap: 10px; align-items: center; color: var(--faint); font-size: 13px; }
+      #phases li .mark { flex: none; width: 14px; height: 14px; display: grid; place-items: center; font-size: 11px; }
+      #phases li[data-state="pending"] .mark::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .6; }
+      #phases li[data-state="active"] { color: var(--text); font-weight: 500; }
+      #phases li[data-state="active"] .mark::before { content: ""; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--track); border-top-color: var(--accent); animation: spin .8s linear infinite; }
+      #phases li[data-state="done"] { color: var(--muted); }
+      #phases li[data-state="done"] .mark { color: var(--green); }
+      #phases li[data-state="failed"] { color: var(--red); font-weight: 500; }
+      .card { width: 100%; margin-top: 24px; padding: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); text-align: left; }
+      #failure { display: grid; gap: 12px; }
       #failure[hidden], #consent[hidden] { display: none; }
-      #consent { margin-top: 1.25rem; display: grid; gap: .75rem; }
-      #consent p { margin: 0; }
-      #consentTarget { display: grid; grid-template-columns: max-content 1fr; gap: .25rem .75rem; margin: 0; }
-      #consentTarget dt { color: #666; }
-      #consentTarget dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; }
-      #consentNote { color: #666; font-size: .85rem; }
-      .actions { display: flex; gap: .6rem; align-items: center; }
-      button { border: 0; border-radius: .5rem; padding: .6rem 1rem; background: #2563eb; color: white; cursor: pointer; font: inherit; }
-      button.secondary { background: #e3e3e8; color: #202124; }
+      #consent { display: grid; gap: 12px; }
+      #consent p { margin: 0; font-size: 13px; }
+      #consentLead { font-weight: 600; }
+      #consentTarget { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; padding: 10px 12px; border-radius: 8px; background: var(--raised); font-size: 12px; }
+      #consentTarget dt { color: var(--muted); }
+      #consentTarget dd { margin: 0; font-family: var(--font-code); overflow-wrap: anywhere; }
+      #consentNote { color: var(--muted); font-size: 12px !important; }
+      code { font-family: var(--font-code); font-size: .92em; }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+      button { border: 1px solid transparent; border-radius: 999px; padding: 7px 16px; background: var(--accent); color: var(--accent-ink); cursor: pointer; font: inherit; font-size: 13px; font-weight: 500; transition: background .15s, border-color .15s, opacity .15s; }
+      button:hover:not([disabled]) { background: var(--accent-hover); }
+      button.secondary { background: var(--bg); color: var(--text); border-color: var(--border); }
+      button.secondary:hover:not([disabled]) { background: var(--raised); }
+      button:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
       button[disabled] { opacity: .5; cursor: default; }
-      #copyState { color: #666; font-size: .85rem; }
-      textarea { width: 100%; box-sizing: border-box; min-height: 9rem; resize: vertical; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; border-radius: .5rem; border: 1px solid #0002; padding: .6rem; background: #fafafa; color: inherit; }
-      @media (prefers-color-scheme: dark) {
-        body { background: #1c1c1e; color: #f5f5f7; }
-        main { background: #2c2c2e; }
-        #detail, #copyState { color: #bbb; }
-        #phases li[data-state="active"] { color: #f5f5f7; }
-        #phases li[data-state="done"] { color: #8bd17c; }
-        #phases li[data-state="failed"] { color: #ff8a80; }
-        #consentTarget dt, #consentNote { color: #bbb; }
-        button.secondary { background: #3a3a3c; color: #f5f5f7; }
-        textarea { background: #1c1c1e; border-color: #ffffff22; }
+      #copyState { color: var(--muted); font-size: 12px; }
+      textarea { width: 100%; min-height: 9rem; resize: vertical; font: 11.5px/1.5 var(--font-code); border-radius: 8px; border: 1px solid var(--border); padding: 10px; background: var(--raised); color: inherit; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+      @keyframes breathe { 50% { opacity: .35; } }
+      @media (prefers-reduced-motion: reduce) {
+        main { animation: none; }
+        .spinner, #phases li[data-state="active"] .mark::before { animation: breathe 1.6s ease-in-out infinite; }
+        .progress-bar { transition: none; }
       }
     </style>
   </head>
   <body>
-    <main>
-      <h1>OpenCodex</h1>
-      <p id="headline">Starting OpenCodex…</p>
+    <main data-state="running" aria-busy="true">
+      <div class="brand">
+        <span class="brand-logo" aria-hidden="true"></span>
+        <h1 class="brand-name">OpenCodex</h1>
+      </div>
+      <div class="indicator" aria-hidden="true">
+        <div class="spinner"></div>
+        <div class="status-mark" id="statusMark"></div>
+      </div>
+      <p id="headline" role="status" aria-live="polite">Starting OpenCodex…</p>
       <p id="detail"></p>
-      <ol id="phases"></ol>
-      <div id="consent" hidden>
+      <div class="progress" aria-hidden="true"><div class="progress-bar" id="progressBar"></div></div>
+      <p id="stepCount"></p>
+      <details id="steps">
+        <summary>Details</summary>
+        <ol id="phases"></ol>
+      </details>
+      <div id="consent" class="card" hidden>
         <p id="consentLead">A runtime is already listening. Take it over?</p>
         <dl id="consentTarget">
           <dt>Port</dt><dd id="consentPort"></dd>
@@ -63,7 +120,7 @@
           <button id="stayGuest" class="secondary" type="button">Stay a guest</button>
         </div>
       </div>
-      <div id="failure" hidden>
+      <div id="failure" class="card" hidden>
         <div class="actions">
           <button id="retry" type="button">Retry</button>
           <button id="copy" class="secondary" type="button">Copy diagnostic</button>
@@ -137,10 +194,24 @@ const consentHome = document.querySelector("#consentHome");
 const consentOwner = document.querySelector("#consentOwner");
 const takeOver = document.querySelector("#takeOver");
 const stayGuest = document.querySelector("#stayGuest");
+const surface = document.querySelector("main");
+const statusMark = document.querySelector("#statusMark");
+const progressBar = document.querySelector("#progressBar");
+const stepCount = document.querySelector("#stepCount");
+const steps = document.querySelector("#steps");
 
-const MARKS = { done: "✓", failed: "✕", active: "…", pending: "·" };
+const MARKS = { done: "✓", failed: "✕", active: "", pending: "" };
 
 let phases = [];
+
+// One surface state drives the spinner, the progress bar and the status mark together, so the
+// spinner can never keep turning over a failure or a question the user has to answer.
+function setSurface(state) {
+  surface.dataset.state = state;
+  surface.setAttribute("aria-busy", state === "running" ? "true" : "false");
+  statusMark.textContent = state === "failed" ? "✕" : state === "consent" ? "?" : "";
+  if (state === "failed") steps.open = true;
+}
 
 function render(progress) {
   const completed = new Set((progress && progress.completed) || []);
@@ -166,6 +237,12 @@ function render(progress) {
     row.append(mark, label);
     phaseList.append(row);
   }
+  const total = phases.length;
+  const finished = phases.filter((phase) => completed.has(phase.id)).length;
+  const position = phases.findIndex((phase) => phase.id === current);
+  const step = position >= 0 ? position + 1 : finished;
+  progressBar.style.width = total ? Math.round((Math.max(finished, step - 0.5) / total) * 100) + "%" : "0";
+  stepCount.textContent = total && step > 0 && !failedPhase ? step + " / " + total : "";
 }
 
 function apply(progress) {
@@ -181,6 +258,7 @@ function apply(progress) {
     stayGuest.disabled = false;
   }
   const failed = progress.phase === "failed";
+  setSurface(failed ? "failed" : progress.consent ? "consent" : "running");
   failure.hidden = !failed;
   retry.disabled = !progress.canRetry;
   if (failed) {
@@ -192,6 +270,7 @@ function apply(progress) {
 
 function reportPageFailure(message, error) {
   const cause = error && error.message ? error.message : String(error);
+  setSurface("failed");
   headline.textContent = "OpenCodex could not read its own startup state.";
   detail.textContent = message;
   failure.hidden = false;
@@ -250,6 +329,7 @@ stayGuest.addEventListener("click", () => decide(false));
 
 async function start() {
   if (!invoke || !listen) {
+    setSurface("idle");
     headline.textContent = "This page is the OpenCodex desktop shell's startup surface.";
     detail.textContent = "Open it from the OpenCodex app.";
     return;
