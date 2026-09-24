@@ -77,5 +77,7 @@ merge changes its source. It also removes the unmodified, retired repository
 pre-push hook from Git's resolved hooks directory, including linked worktrees.
 Custom pre-push hooks are preserved. For safety, setup refuses to touch hooks
 when `core.hooksPath` redirects them to a potentially shared directory.
+If an earlier setup already installed these hooks into that shared directory,
+remove them there by hand; the refusal leaves them untouched.
 Validation no longer runs automatically on every push; existing contributors
 should rerun the setup command once to migrate their hooks.
