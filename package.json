@@ -70,7 +70,6 @@
     "prepush": "bun run typecheck && bun run lint:gui:if-changed && bun run test && bun run privacy:scan && bun run doctor:gui:if-changed",
     "lint:gui": "cd gui && bun run lint",
     "lint:gui:if-changed": "bun scripts/lint-gui-if-changed.ts",
-    "postmerge": "bun scripts/build-gui-if-changed.ts",
     "doctor:gui": "cd gui && bun run doctor",
     "doctor:gui:full": "cd gui && bun run doctor:full",
     "doctor:gui:if-changed": "bun scripts/doctor-gui-if-changed.ts",

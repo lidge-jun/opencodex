@@ -42,8 +42,8 @@ lists its required source/registry paths and preview/apply flags.
 
 Local validation follows [the contributor test policy](../../AGENTS.md#commands): run the
 suite by default, with a documented resource exception requiring focused regression tests.
-`scripts/setup-hooks.ts` installs the post-merge hook and retires only an exact match for
-the old managed pre-push shim; custom hooks are preserved. Required current-head CI and
+`scripts/setup-hooks.ts` retires only an exact match for the old managed pre-push and
+post-merge shims; custom hooks are preserved. Required current-head CI and
 security review remain merge requirements.
 
 The gate preserves legacy checklist bodies and asks the author to update the first item,

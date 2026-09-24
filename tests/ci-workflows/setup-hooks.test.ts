@@ -15,6 +15,18 @@ const legacyHook = [
   "exec bun run prepush",
   "",
 ].join("\n");
+// The retired post-merge shim, kept as a fixture so the test does not depend on a file the
+// change removes. It must match the script's retired hash byte-for-byte after normalization.
+const legacyPostMergeHook = [
+  "#!/usr/bin/env sh",
+  '# Post-merge hook shim. The actual command lives in package.json ("postmerge").',
+  "# Installed by: bun run setup:hooks",
+  "#",
+  "# Never fails the merge: the merge already happened by the time this runs, so a",
+  "# non-zero exit here would only print a confusing error after a successful pull.",
+  "bun run postmerge || true",
+  "",
+].join("\n");
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) removeTreeWithRetry(root); });
 
@@ -34,7 +46,7 @@ function fixture(): string {
   roots.push(root);
   git(root, "init", "--quiet");
   mkdirSync(join(root, "scripts"));
-  for (const name of ["setup-hooks.ts", "post-merge.sh"]) {
+  for (const name of ["setup-hooks.ts"]) {
     copyFileSync(repoPath("scripts", name), join(root, "scripts", name));
   }
   return root;
@@ -85,15 +97,14 @@ describe("local hook setup", () => {
     }
   });
 
-  test("fresh setup installs only post-merge and is idempotent", () => {
+  test("fresh setup installs no hooks and is idempotent", () => {
     const root = fixture();
     setup(root);
     const hookDir = hooks(root);
     expect(existsSync(join(hookDir, "pre-push"))).toBe(false);
-    expect(readFileSync(join(hookDir, "post-merge"), "utf8"))
-      .toBe(readFileSync(repoPath("scripts/post-merge.sh"), "utf8"));
+    expect(existsSync(join(hookDir, "post-merge"))).toBe(false);
     setup(root);
-    expect(readdirSync(hookDir).filter(name => name.startsWith("post-merge.backup-"))).toEqual([]);
+    expect(readdirSync(hookDir).filter(name => name.includes(".backup-"))).toEqual([]);
   });
 
   for (const ending of ["\n", "\r\n"]) {
@@ -102,7 +113,16 @@ describe("local hook setup", () => {
       writeFileSync(join(hooks(root), "pre-push"), legacyHook.replace(/\n/g, ending));
       setup(root);
       expect(existsSync(join(hooks(root), "pre-push"))).toBe(false);
-      expect(existsSync(join(hooks(root), "post-merge"))).toBe(true);
+      expect(existsSync(join(hooks(root), "post-merge"))).toBe(false);
+    });
+
+    test(`retires the shipped post-merge shim with ${JSON.stringify(ending)} line endings`, () => {
+      // An installed copy keeps executing pulled code on every merge until it is removed,
+      // so setup must retire the exact shim rather than leave the vector in place.
+      const root = fixture();
+      writeFileSync(join(hooks(root), "post-merge"), legacyPostMergeHook.replace(/\n/g, ending));
+      setup(root);
+      expect(existsSync(join(hooks(root), "post-merge"))).toBe(false);
     });
   }
 
@@ -110,8 +130,11 @@ describe("local hook setup", () => {
     const root = fixture();
     const custom = legacyHook + "echo custom validation\n";
     writeFileSync(join(hooks(root), "pre-push"), custom);
+    const customPostMerge = legacyPostMergeHook + "echo custom rebuild\n";
+    writeFileSync(join(hooks(root), "post-merge"), customPostMerge);
     setup(root);
     expect(readFileSync(join(hooks(root), "pre-push"), "utf8")).toBe(custom);
+    expect(readFileSync(join(hooks(root), "post-merge"), "utf8")).toBe(customPostMerge);
   });
 
   test("uses a configured hooks directory without touching the default one", () => {
@@ -124,7 +147,7 @@ describe("local hook setup", () => {
     git(root, "config", "core.hooksPath", customDir);
     setup(root);
     expect(existsSync(join(customDir, "pre-push"))).toBe(false);
-    expect(existsSync(join(customDir, "post-merge"))).toBe(true);
+    expect(existsSync(join(customDir, "post-merge"))).toBe(false);
     expect(readFileSync(join(original, "pre-push"), "utf8")).toBe(legacyHook);
   });
 
@@ -140,7 +163,7 @@ describe("local hook setup", () => {
     setup(linked);
     expect(hooks(linked)).toBe(shared);
     expect(existsSync(join(shared, "pre-push"))).toBe(false);
-    expect(existsSync(join(shared, "post-merge"))).toBe(true);
+    expect(existsSync(join(shared, "post-merge"))).toBe(false);
   });
 
   test.skipIf(process.platform === "win32")("preserves symlinked pre-push hooks", () => {

@@ -4,14 +4,14 @@
  *
  * - Retires the unmodified repository-managed `pre-push` hook. Validation is
  *   run explicitly; custom hooks are preserved.
- * - `post-merge` runs `bun run postmerge`, which rebuilds the packaged GUI when
- *   a merge or pull brought `gui/` changes. `gui/dist` is generated and
- *   gitignored, so a fast-forward advances the source while the dashboard keeps
- *   serving the previously built bundle.
+ * - Retires the repository-managed `post-merge` shim. A git hook runs on every
+ *   contributor's machine after every merge and executes whatever the pulled
+ *   commits put in `package.json`, so keeping the feature would keep an
+ *   auto-executed-code path that cannot be constrained to trusted content.
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, copyFileSync, mkdirSync, chmodSync, readFileSync, renameSync, lstatSync, unlinkSync } from "node:fs";
+import { readFileSync, lstatSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -30,46 +30,6 @@ try {
   process.exit(1);
 }
 
-if (!existsSync(hooksDir)) {
-  mkdirSync(hooksDir, { recursive: true });
-}
-
-/**
- * Deterministic overwrite policy, per hook: an existing but differing hook is
- * preserved as <hook>.backup-<unix-ts> (timestamped names are unique), then the
- * managed hook is installed. Identical content is a no-op.
- *
- * Each hook installs independently — one already being current must not stop the
- * other from being written, which a single early `process.exit(0)` would do.
- */
-function installHook(name: string, source: string, summary: string): void {
-  const src = join(repoRoot, "scripts", source);
-  const dest = join(hooksDir, name);
-
-  if (existsSync(dest)) {
-    const existing = readFileSync(dest, "utf8");
-    const managed = readFileSync(src, "utf8");
-    if (existing === managed) {
-      console.log(`${name} hook already up to date at ${dest}`);
-      return;
-    }
-    const backup = `${dest}.backup-${Date.now()}`;
-    renameSync(dest, backup);
-    console.log(`existing ${name} hook preserved at ${backup}`);
-  }
-
-  copyFileSync(src, dest);
-
-  // chmod +x -- no-op on Windows but harmless
-  try {
-    chmodSync(dest, 0o755);
-  } catch {
-    // Windows: Git for Windows calls sh.exe directly, executable bit not required.
-  }
-
-  console.log(`${name} hook installed at ${dest}. ${summary}`);
-}
-
 // Match the exact retired shim (normalizing checkout line endings), never a
 // name or a partial marker: a user may have added other work to their hook.
 const retiredPrePushSha256 = "2aa6b5f84ab989954d2ccc1a8680d63ad934034778e0ee99c277f8873fd40508";
@@ -85,10 +45,20 @@ if (prePushStat?.isFile()) {
   }
 }
 
-installHook(
-  "post-merge",
-  "post-merge.sh",
-  "Rebuilds the packaged GUI when a merge or pull brought gui/ changes.",
-);
+// Same exact-match retirement for the repository-managed post-merge shim: an
+// already-installed copy keeps executing pulled code on every merge until it
+// is removed, so setup retires it rather than leaving the vector in place.
+const retiredPostMergeSha256 = "d9f4ae72e531658fb0494ff6d2a62366a5a0c29b7d3a890a68e6626760de0330";
+const postMergePath = join(hooksDir, "post-merge");
+const postMergeStat = lstatSync(postMergePath, { throwIfNoEntry: false });
+if (postMergeStat?.isFile()) {
+  const content = readFileSync(postMergePath, "utf8").replace(/\r\n/g, "\n");
+  if (createHash("sha256").update(content).digest("hex") === retiredPostMergeSha256) {
+    unlinkSync(postMergePath);
+    console.log("Removed the retired repository-managed post-merge hook.");
+  } else {
+    console.log("Preserved custom post-merge hook.");
+  }
+}
 
 console.log("Run validation explicitly before review; see AGENTS.md for test scope.");
