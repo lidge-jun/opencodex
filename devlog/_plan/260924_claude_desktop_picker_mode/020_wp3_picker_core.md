@@ -31,17 +31,29 @@ egress profile; with no profile applied, none of this code sees Desktop traffic.
  const OID = {
 +  nameConstraints: "2.5.29.30",
  …
-+export interface AuthorityOptions { commonName: string; permittedDnsNames?: readonly string[] }
++export interface AuthorityOptions {
++  commonName: string;
++  permittedDnsNames?: readonly string[];
++  excludeAllIpAddresses?: boolean; // default true (#5731)
++}
 +
-+/** RFC 5280 NameConstraints with permittedSubtrees of dNSName bases only. */
-+function nameConstraints(permitted: readonly string[]): Uint8Array {
++/** iPAddress bases (address + mask, all zero) covering every IPv4 and every IPv6 address. */
++export const ALL_IP_ADDRESS_BASES: readonly Uint8Array[] = [new Uint8Array(8), new Uint8Array(32)];
++
++/** RFC 5280 NameConstraints: permittedSubtrees of dNSName bases, excludedSubtrees of every IP. */
++function nameConstraints(permitted: readonly string[], excludeAllIpAddresses: boolean): Uint8Array {
 +  const subtrees = permitted.map(name => sequence(contextTag(2, new TextEncoder().encode(name), false)));
-+  return sequence(contextTag(0, concat(...subtrees)));
++  const excluded = ALL_IP_ADDRESS_BASES.map(base => sequence(contextTag(7, base, false)));
++  return sequence(
++    contextTag(0, concat(...subtrees)),
++    ...(excludeAllIpAddresses ? [contextTag(1, concat(...excluded))] : []),
++  );
 +}
 +
 +export function createCertificateAuthority(options: AuthorityOptions): LocalInterceptCa { …same body as
 +  createLocalInterceptCa, with commonName from options and, when permittedDnsNames is non-empty,
-+  extension(OID.nameConstraints, true, nameConstraints(options.permittedDnsNames)) … }
++  extension(OID.nameConstraints, true, nameConstraints(options.permittedDnsNames,
++    options.excludeAllIpAddresses !== false)) … }
 +export function issueServerLeaf(ca: LocalInterceptCa, issuerCommonName: string, hosts: readonly string[]): PemKeyPair
 -export function createLocalInterceptCa(): LocalInterceptCa { …
 +export function createLocalInterceptCa(): LocalInterceptCa {
@@ -74,7 +86,7 @@ export function issuePickerLeaf(ca: PickerCa, configDir: string): PemKeyPair; //
 Reload validation (audit wp3 r1, High). The shared loader only checks CA status, key pairing and
 self-signature, so `ensurePersistedAuthority` gains `accept?: (cert: X509Certificate) => boolean`,
 and `ensurePickerCa` passes one that requires subject CN `PICKER_CA_COMMON_NAME` and a **critical**
-nameConstraints extension whose permittedSubtrees hold exactly one dNSName, `claude.ai`, and no
+nameConstraints extension whose permittedSubtrees hold exactly one dNSName, `claude.ai`, and
 whose excludedSubtrees hold exactly two iPAddress bases, all-zero IPv4 (8 bytes) and all-zero IPv6
 (32 bytes), so no IP-address leaf chains to it (PR #5731 review: a DNS-only permitted list leaves the
 iPAddress form unconstrained). A persisted CA that fails it (for example a valid, key-matching CA
