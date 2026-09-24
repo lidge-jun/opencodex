@@ -120,10 +120,11 @@ describe("registry model rename migration (#1610)", () => {
 
   test.each([
     ` HTTPS://TOKEN-PLAN.AP-SOUTHEAST-1.MAAS.ALIYUNCS.COM/compatible-mode/v1`,
-    `${INTL_BASE_URL}//`,
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com:443/compatible-mode/v1",
   ])("migrates a row whose saved endpoint is URL-equivalent to the registry's: %s", baseUrl => {
-    // baseUrl is trimmed at parse time and URL schemes/hosts are case-insensitive,
-    // so these rows still point at the registry destination.
+    // The stored baseUrl keeps its whitespace and port — only the endpoint
+    // comparison trims, lowercases the host, and drops default ports, so these
+    // rows still point at the registry destination.
     const config = staleConfig();
     config.providers["alibaba-token-plan-intl"]!.baseUrl = baseUrl;
     const { config: migrated, changed } = projectModelRenames(config, [RENAME]);
