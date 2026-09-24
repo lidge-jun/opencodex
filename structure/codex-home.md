@@ -134,6 +134,13 @@ subsystem from fencing native traffic or creating lock contention. Presence, an 
 or any observation error still takes the locked sweep and fails closed; the fast path is based only
 on proven absence, never on an unreadable path.
 
+Native-main admission is one process-global gate owned by the live startup entry. Releasing the
+last reference to that entry returns the gate to its process-initial `ready` state synchronously,
+before the release awaits anything, so a server stopped in the middle of startup convergence
+cannot leave the process fenced for the servers that follow it; an entry created afterwards for
+the same home arms its own gate, and the retired generation's late convergence writes are ignored.
+`tests/codex-integration/native-profile-startup-release.test.ts` pins that ordering.
+
 The native main slot also accepts one same-identity device reauth (#3898):
 `/api/codex-auth/main/reauth-device` (start/status/cancel) plus
 `ocx account main reauth`. The grant is the OpenAI deviceauth grant already

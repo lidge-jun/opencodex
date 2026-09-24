@@ -201,7 +201,9 @@ function scheduleStageSweep(entry: StartupEntry): void {
 }
 
 function convergeOwnedStartup(entry: StartupEntry): void {
-  if (entry.recoveryStarted) return;
+  // The map entry is the gate's owner of record. A released one has been deleted, and every
+  // write below belongs to a generation nothing is waiting for any more.
+  if (entry.recoveryStarted || startupEntries.get(entry.homeId) !== entry) return;
   entry.recoveryStarted = true;
   const currentEpoch = entry.epoch;
   snapshot = { status: "blocked", homeId: entry.homeId, reason: "recovery-pending" };
@@ -405,6 +407,21 @@ export function startNativeMainStartupLifecycle(
     entry!.sweepTimer = undefined;
     entry!.unsubscribe();
     startupEntries.delete(homeId);
+    // A released owner cannot leave the process fenced. Convergence runs in the background, and
+    // its only guard is this entry, so a server that stops mid-convergence used to keep the
+    // "recovery-pending" snapshot the entry armed: every later native request answered 503 until
+    // the process exited, because a server whose config does not sync Codex installs a no-op
+    // lifecycle that never touches the gate.
+    //
+    // The gate state belonged only to this entry, so reset it to the process-initial state here,
+    // synchronously and before the first await: a NEW entry created for the same home afterwards
+    // re-arms its own gate and cannot be clobbered by this release. The epoch bump retires any
+    // in-flight `initializeNativeMainStartupGate`/convergence write from the released generation.
+    if (snapshot.homeId === homeId && !startupEntries.has(homeId)) {
+      epoch += 1;
+      snapshot = ready(null);
+      settled = Promise.resolve(snapshot);
+    }
     entry!.resolveAcquisition?.(snapshot);
     entry!.resolveAcquisition = undefined;
     // Startup convergence can transition from the exclusive recovery claim
