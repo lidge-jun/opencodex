@@ -328,7 +328,10 @@ pub fn show_installing(app: &AppHandle, version: &str) {
 }
 
 fn refresh_title(app: &AppHandle, tray: &tauri::tray::TrayIcon<Wry>, proxy: &ProxyClient) {
+    #[cfg(target_os = "macos")]
     let app = app.clone();
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
     let proxy = proxy.clone();
     let tray = tray.clone();
     tauri::async_runtime::spawn(async move {
