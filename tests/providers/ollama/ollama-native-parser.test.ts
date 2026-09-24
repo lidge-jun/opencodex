@@ -387,6 +387,25 @@ describe("ollama-native — tool calls", () => {
     expect(oversized.at(-1)).toMatchObject({ type: "error", code: "invalid_ollama_native_payload" });
     expect((oversized.at(-1) as { message?: string }).message).toContain("name exceeded 1024 bytes");
 
+    // The limit counts UTF-8 bytes, not JS code units: 513 multibyte characters exceed it even
+    // though the string is shorter than 1024 code units, while exactly 1024 bytes is accepted.
+    const oversizedUtf8 = await collect(adapter, ndjsonResponse([
+      frame({
+        role: "assistant",
+        tool_calls: [{ index: 0, function: { name: "\u00e9".repeat(513), arguments: {} } }],
+      }, true),
+    ]));
+    expect(oversizedUtf8.at(-1)).toMatchObject({ type: "error", code: "invalid_ollama_native_payload" });
+    expect((oversizedUtf8.at(-1) as { message?: string }).message).toContain("name exceeded 1024 bytes");
+
+    const boundaryUtf8 = await collect(adapter, ndjsonResponse([
+      frame({
+        role: "assistant",
+        tool_calls: [{ index: 0, function: { name: "\u00e9".repeat(512), arguments: {} } }],
+      }, true),
+    ]));
+    expect(boundaryUtf8.filter(e => e.type === "tool_call_start")).toHaveLength(1);
+
     const calls = Array.from({ length: 129 }, (_, index) => ({
       index,
       function: { name: `tool_${index}`, arguments: {} },

@@ -88,6 +88,7 @@ interface NativeStreamToolCall {
   nativeIndex?: number;
   arguments: Record<string, unknown>;
   argumentBytes: number;
+  metadataBytes: number;
 }
 
 interface NativeStreamState {
@@ -638,16 +639,25 @@ function nativeMessageEvents(message: JsonRecord, state: NativeStreamState, budg
           ...(index !== undefined ? { nativeIndex: index } : {}),
           arguments: args,
           argumentBytes: 0,
+          metadataBytes: 0,
         };
         budget.openCall(call.budgetKey);
         try {
-          budget.chargeRetained(nameBytes + NATIVE_TOOL_CALL_BOOKKEEPING_BYTES, {
+          const metadataBytes = nameBytes + NATIVE_TOOL_CALL_BOOKKEEPING_BYTES;
+          // Name and bookkeeping are retained call metadata, not arguments: charging them to the
+          // call's budget key would consume the per-call argument allowance. Keep them on the
+          // shared retained budget and release them when the call closes.
+          budget.chargeRetained(metadataBytes, {
             kind: "tool_args",
-            callId: call.budgetKey,
           });
+          call.metadataBytes = metadataBytes;
           replaceNativeToolArguments(call, args, budget);
           state.toolCalls.set(key, call);
         } catch (error) {
+          if (call.metadataBytes > 0) {
+            budget.releaseRetained(call.metadataBytes, { kind: "tool_args" });
+            call.metadataBytes = 0;
+          }
           budget.closeCall(call.budgetKey);
           throw error;
         }
@@ -702,7 +712,13 @@ function replaceNativeToolArguments(
 }
 
 function releaseNativeStateBuffers(state: NativeStreamState, budget: TranslatorBudget): void {
-  for (const call of state.toolCalls.values()) budget.closeCall(call.budgetKey);
+  for (const call of state.toolCalls.values()) {
+    if (call.metadataBytes > 0) {
+      budget.releaseRetained(call.metadataBytes, { kind: "tool_args" });
+      call.metadataBytes = 0;
+    }
+    budget.closeCall(call.budgetKey);
+  }
 }
 
 function nativeBodyMessage(value: unknown): JsonRecord {
