@@ -1603,5 +1603,10 @@
   "zhipu-bigmodel-responses-quota.test.ts": "providers",
   "zz-ci-api-usage-isolation.test.ts": "ci-workflows",
   "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
-  "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows"
+  "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows",
+  "deepseek-quota-currency.test.ts": "providers",
+  "mimo-token-plan-capacity.test.ts": "providers",
+  "command-code-tool-text-prose-split.test.ts": "providers",
+  "cli-effort-slug.test.ts": "cli",
+  "grok-47-build-fast-metadata.test.ts": "providers/xai"
 }
