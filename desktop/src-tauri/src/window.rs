@@ -157,4 +157,47 @@ mod tests {
             assert!(user_agent.contains("(X11; Linux x86_64)"));
         }
     }
+
+    /// The zoom polyfill runs inside the loopback dashboard, which is a remote origin to Tauri. The
+    /// capability that lets it call `set_webview_zoom` is the only one reaching that origin, so it
+    /// stays pinned to this window, this origin and this one command.
+    #[test]
+    fn the_dashboard_reaches_only_the_zoom_command() {
+        let zoom: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/dashboard-zoom.json"))
+                .expect("dashboard-zoom capability is JSON");
+        assert_eq!(zoom["windows"], serde_json::json!(["main"]));
+        assert_eq!(
+            zoom["remote"]["urls"],
+            serde_json::json!(["http://127.0.0.1:*"])
+        );
+        assert_eq!(
+            zoom["permissions"],
+            serde_json::json!(["core:webview:allow-set-webview-zoom"])
+        );
+
+        // Tauri matches the origin with URLPattern; the dashboard is the loopback endpoint on
+        // whatever port it resolved to, and nothing beside it.
+        let pattern: tauri_utils::acl::RemoteUrlPattern =
+            "http://127.0.0.1:*".parse().expect("a URL pattern");
+        let dashboard = crate::endpoint::ProxyEndpoint {
+            host: "127.0.0.1",
+            port: 10100,
+        }
+        .url("/#/usage");
+        assert!(pattern.test(&url(&dashboard)), "{dashboard}");
+        for value in [
+            "http://localhost:10100/",
+            "https://127.0.0.1:10100/",
+            "http://127.0.0.2:10100/",
+            "http://example.com/",
+        ] {
+            assert!(!pattern.test(&url(value)), "{value}");
+        }
+
+        let default: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("default capability is JSON");
+        assert!(default.get("remote").is_none());
+    }
 }

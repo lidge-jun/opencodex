@@ -19,9 +19,13 @@ that cannot find its own startup state now reports that as a failure the user ca
 It uses no `alert`, `confirm` or `prompt`: the embedded webview implements
 none of the matching WKUIDelegate panel methods on macOS, so a platform dialog is declined without
 drawing anything.
-`withGlobalTauri` is on so that page can invoke without a bundler. Only the local app origin
-carries a capability, so the loopback dashboard reaches no command: `capabilities/default.json`
-declares no `remote` entry, and Tauri checks the ACL for any invoke from a non-local origin.
+`withGlobalTauri` is on so that page can invoke without a bundler. The bootstrap commands are
+granted to the local app origin only: `capabilities/default.json` declares no `remote` entry, and
+Tauri checks the ACL for any invoke from a non-local origin. The one exception is page zoom. The main
+window enables Tauri's zoom hotkeys (Cmd or Ctrl with + / - / 0); WebView2 handles them natively, but
+on macOS and Linux Tauri injects a keydown polyfill that calls `set_webview_zoom` from whatever page
+is loaded, including the loopback dashboard. `capabilities/dashboard-zoom.json` grants that single
+command to the main window for `http://127.0.0.1:*`, and a test in `window.rs` pins its shape.
 
 ## Startup, quit and the tray
 
