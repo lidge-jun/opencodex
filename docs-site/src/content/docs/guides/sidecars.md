@@ -60,6 +60,11 @@ in the post-search answer. The Dashboard overview page exposes this as the **Str
 toggle on the web-search sidecar card (`PUT /api/sidecar-settings` with
 `webSearch.streamRoutedModelOutput`).
 
+This option also applies to adapters that manage their own turns, including Devin and Cursor.
+When search and image/video sidecars are both eligible, search takes priority. Cancelling a request
+stops subsequent searches, and retained search-loop output shares the request's translation-buffer
+limit; exceeding that limit fails the response instead of starting another model iteration.
+
 Kiro commentary is independent of this option: commentary-phase text already streams ahead of the
 terminal event in buffered mode, and that bypass is unchanged — with or without
 `streamRoutedModelOutput`, only search-decision events (tool calls and everything after the first

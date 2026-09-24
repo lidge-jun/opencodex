@@ -1653,5 +1653,7 @@
   "link-fingerprint.test.ts": "clients",
   "cli-link.test.ts": "cli",
   "link-management-routes.test.ts": "server",
-  "link-compensation.test.ts": "clients"
+  "link-compensation.test.ts": "clients",
+  "web-search-run-turn-loop.test.ts": "web-search",
+  "responses-run-turn-web-search.test.ts": "responses"
 }

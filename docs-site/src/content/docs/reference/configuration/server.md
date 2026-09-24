@@ -655,6 +655,8 @@ Images API paths and response shape expected by Codex.
 
 ### `webSearchSidecar` (`OcxWebSearchSidecarConfig`)
 
+RunTurn adapters also use the configured search sidecar. Search turns preserve progress heartbeats and retain search tools during initial OAuth account failover. With `emptyCompletionRetry: true`, an empty answer before the search limit receives one retry using the current conversation and gathered results. The existing tool-free recovery after the search limit remains available independently of that setting. Upstream failures stop the turn instead of triggering another search.
+
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `enabled?` | `boolean` | on when usable | Master switch. When false, OpenCodex stops intercepting `web_search` AND the Codex integration writes `web_search = "disabled"` into `~/.codex/config.toml`. |

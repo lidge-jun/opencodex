@@ -37,6 +37,12 @@ import { runExaWebSearch } from "./exa-executor";
 import { formatWebSearchResults } from "./format-result";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import { redactSecretString } from "../lib/redact";
+import { guardEmptyCompletionEventStream } from "../server/responses/empty-completion-guard";
+import {
+  isTranslatorBudgetExceededError,
+  type TranslatorBudget,
+} from "../lib/translator-budget";
+import { jsonUtf8Bytes } from "../lib/json-byte-size";
 
 export interface RunTurnWebSearchDeps {
   parsed: OcxParsedRequest;
@@ -48,6 +54,17 @@ export interface RunTurnWebSearchDeps {
   exaApiKey?: string;
   abortSignal?: AbortSignal;
   recordSidecarOutcome?: SidecarOutcomeRecorder;
+  /** Preserve the request's opt-in empty-completion retry before the search cap. */
+  emptyCompletionRetry?: boolean;
+  /**
+   * Optional request translator budget. When present the loop charges what it
+   * retains — each iteration's buffered event batch and the replay history it
+   * appends to messages — with its own local byte counters, and releases
+   * exactly those totals when the retention ends. It deliberately does NOT use
+   * the shared event-ownership WeakMap helpers: other owners (queue, bridge,
+   * output collector) may hold independent leases on the same event objects.
+   */
+  translatorBudget?: TranslatorBudget;
   /**
    * Dispatch one more routed-model iteration. Iterations 2+ get a fresh event
    * stream from the runTurn transport with the grown message history.
@@ -187,6 +204,59 @@ export async function* runTurnWebSearchLoop(
   let source = first;
   const loopT0 = Date.now();
 
+  // Translator-budget ownership (deps.translatorBudget): the loop charges only
+  // what it retains, tracks both totals locally, and releases exactly those
+  // amounts — never a shared stage total another owner may also be releasing
+  // from. Iteration event buffers release when the iteration's events are
+  // consumed; the replay history appended to messages stays charged until the
+  // loop exits because every later dispatch rebuilds its request from it.
+  // Event objects are NOT leased through the shared ownership WeakMap: the
+  // queue, the bridge, and the buffered-path output collector may each hold
+  // their own independent accounting on the same objects.
+  let bufferedBytes = 0;
+  let historyBytes = 0;
+  const chargeBuffered = (event: AdapterEvent): void => {
+    if (!deps.translatorBudget) return;
+    // Same per-event convention as retainTranslatedEvent: the first event owns
+    // the array brackets, later events own their separator.
+    const bytes = jsonUtf8Bytes(event) + (bufferedBytes === 0 ? 2 : 1);
+    deps.translatorBudget.chargeRetained(bytes, { kind: "retained_collectors" });
+    bufferedBytes += bytes;
+  };
+  const releaseBuffered = (): void => {
+    if (!deps.translatorBudget || bufferedBytes === 0) return;
+    deps.translatorBudget.releaseRetained(bufferedBytes, { kind: "retained_collectors" });
+    bufferedBytes = 0;
+  };
+  const chargeHistory = (message: OcxMessage): void => {
+    if (!deps.translatorBudget) return;
+    const bytes = jsonUtf8Bytes(message) + 1;
+    deps.translatorBudget.chargeRetained(bytes, { kind: "request_copies" });
+    historyBytes += bytes;
+  };
+  const releaseHistory = (): void => {
+    if (!deps.translatorBudget || historyBytes === 0) return;
+    deps.translatorBudget.releaseRetained(historyBytes, { kind: "request_copies" });
+    historyBytes = 0;
+  };
+  // Shared budget-failure convention (loop.ts): a 502 upstream_error carrying
+  // the translation_buffer_limit code.
+  const budgetErrorEvent = (): AdapterEvent => ({
+    type: "error",
+    status: 502,
+    errorType: "upstream_error",
+    code: "translation_buffer_limit",
+    message: "upstream translation buffer exceeded the safe limit",
+  });
+  const appendMessage = (message: OcxMessage): void => {
+    chargeHistory(message);
+    messages.push(message);
+  };
+  const liveTypes = new Set<AdapterEvent["type"]>([
+    "text_delta", "thinking_delta", "reasoning_raw_delta", "thinking_signature",
+    "redacted_thinking", "kiro_redacted_reasoning",
+  ]);
+
   const executeQuery = async (query: string, signal: AbortSignal | undefined): Promise<SidecarOutcome> => {
     try {
       switch (plan.backend) {
@@ -227,7 +297,15 @@ export async function* runTurnWebSearchLoop(
       results.push({ query: "", outcome: { text: "", sources: [], error: "the model called web_search with an empty query" } });
     }
     for (const query of call.queries) {
+      if (abortSignal?.aborted) {
+        if (beganCell) yield { type: "web_search_call_end", id: call.id, queries: call.queries, status: "failed" };
+        return;
+      }
       yield { type: "heartbeat" };
+      if (abortSignal?.aborted) {
+        if (beganCell) yield { type: "web_search_call_end", id: call.id, queries: call.queries, status: "failed" };
+        return;
+      }
       let outcome: SidecarOutcome;
       if (failedQueries.has(normalizeQuery(query))) {
         outcome = { text: "", sources: [], error: "this query already failed earlier in the turn — do not call web_search again for it; answer from existing context" };
@@ -237,6 +315,10 @@ export async function* runTurnWebSearchLoop(
         if (!beganCell) {
           beganCell = true;
           yield { type: "web_search_call_begin", id: call.id };
+        }
+        if (abortSignal?.aborted) {
+          yield { type: "web_search_call_end", id: call.id, queries: call.queries, status: "failed" };
+          return;
         }
         outcome = await executeQuery(query, abortSignal);
         if (abortSignal?.aborted) {
@@ -255,7 +337,7 @@ export async function* runTurnWebSearchLoop(
     const callArgs: Record<string, unknown> = call.queries.length > 1
       ? { queries: call.queries }
       : { query: call.queries[0] ?? "" };
-    messages.push({
+    appendMessage({
       role: "assistant",
       content: [
         ...precedingContent,
@@ -272,7 +354,7 @@ export async function* runTurnWebSearchLoop(
       timestamp: now,
     });
     const allFailed = results.every(r => !!r.outcome.error);
-    messages.push({
+    appendMessage({
       role: "toolResult", toolCallId: call.id, toolName: WEB_SEARCH_TOOL_NAME,
       content: formatWebSearchResults(results, !!parsed._structuredOutput),
       isError: allFailed, timestamp: now,
@@ -311,113 +393,170 @@ export async function* runTurnWebSearchLoop(
     );
   };
   let emptyAnswerRetries = 0;
+  let ordinaryEmptyRetries = 0;
+  let currentParsed = runTurnWebSearchInitialParsed(parsed);
 
-  for (let i = 0; i < HARD_CAP; i++) {
-    if (abortSignal?.aborted) {
-      yield abortEvent();
-      return;
-    }
-    const events: AdapterEvent[] = [];
-    try {
-      for await (const e of source) {
-        events.push(e);
-        if (abortSignal?.aborted) {
-          yield abortEvent();
-          return;
-        }
+  try {
+    for (let i = 0; i < HARD_CAP; i++) {
+      releaseBuffered();
+      if (abortSignal?.aborted) {
+        yield abortEvent();
+        return;
       }
-    } catch (e) {
-      yield { type: "error", message: e instanceof Error ? e.message : String(e) };
-      return;
-    }
-
-    const split = scanEventsForWebSearch(events);
-    const forceAnswer = searchesExecuted >= plan.maxSearches;
-    // Loop only when the model's actionable output is purely web_search calls:
-    // a real tool call belongs to Codex, and a budget-exhausted turn must
-    // answer from what it already gathered.
-    const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
-    if (!shouldLoop) {
-      // A forced-answer pass that ends `done` must have produced usable output —
-      // never a malformed tool call, and never silence. A truncated/refusal
-      // stop is authoritative and replays as-is; an empty one gets exactly one
-      // recovery pass with all tools removed (same contract as loop.ts #1001).
-      if (forceAnswer) {
-        const terminalEvent = split.passthrough.find(event => event.type === "done");
-        if (terminalEvent?.type === "done" && !split.hasMalformedToolCall
-          && isTruncatedStopReason(terminalEvent.stopReason)) {
-          logDone(i);
-          for (const e of split.passthrough) yield e;
-          return;
-        }
-        if (terminalEvent?.type === "done"
-          && (split.hasMalformedToolCall
-            || (!split.hasRealToolCall && !hasVisibleAssistantText(split.passthrough)))) {
-          console.warn("[web-search-runturn] unusable forced answer", JSON.stringify({
-            model: parsed.modelId,
-            recoveryAttempt: emptyAnswerRetries,
-            searchCalls: split.calls.length,
-            malformed: split.hasMalformedToolCall,
-            stopReason: terminalEvent.stopReason,
-            eventTypes: [...new Set(split.passthrough.map(event => event.type))],
-          }));
-          if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
-            emptyAnswerRetries++;
-            console.warn("[web-search-runturn] empty forced answer — retrying once without tools");
-            yield { type: "heartbeat" };
-            source = deps.dispatch({
-              ...parsed,
-              options: { ...parsed.options, toolChoice: "none" as const },
-              context: {
-                ...parsed.context,
-                messages: [
-                  ...messages,
-                  ...(executedSearchCount > 0 ? [forcedAnswerNudge()] : []),
-                  forcedAnswerRetryNudge(),
-                ],
-                tools: [],
-              },
-            });
+      const events: AdapterEvent[] = [];
+      let liveWindowOpen = plan.streamRoutedModelOutput;
+      let streamedCount = 0;
+      if (deps.emptyCompletionRetry && searchesExecuted < plan.maxSearches) {
+        source = guardEmptyCompletionEventStream({
+          firstEvents: source,
+          maxRetries: 1 - ordinaryEmptyRetries,
+          continuation: () => {
+            ordinaryEmptyRetries++;
+            return deps.dispatch(currentParsed);
+          },
+        });
+      }
+      try {
+        for await (const e of source) {
+          if (abortSignal?.aborted) {
+            yield abortEvent();
+            return;
+          }
+          if (e.type === "error") {
+            yield e;
+            return;
+          }
+          if (e.type === "heartbeat") {
+            yield e;
             continue;
           }
-          yield {
-            type: "error",
-            status: 502,
-            errorType: "upstream_error",
-            message: "forced-answer pass produced no usable assistant output",
-          };
-          return;
+          chargeBuffered(e);
+          events.push(e);
+          if (liveWindowOpen && liveTypes.has(e.type)) {
+            streamedCount++;
+            yield e;
+            continue;
+          }
+          liveWindowOpen = false;
+          // Buffered text/reasoning/tool deltas are upstream activity too. Keep
+          // the bridge alive without exposing the synthetic call to the client.
+          if (e.type !== "done" && e.type !== "incomplete") yield { type: "heartbeat" };
         }
+      } catch (e) {
+        if (isTranslatorBudgetExceededError(e)) throw e;
+        yield { type: "error", message: e instanceof Error ? e.message : String(e) };
+        return;
       }
-      logDone(i);
-      for (const e of split.passthrough) yield e;
-      return;
+
+      const terminals = events.filter(e => e.type === "done" || e.type === "incomplete");
+      if (terminals.length !== 1 || terminals[0] !== events.at(-1)) {
+        yield { type: "error", status: 502, errorType: "upstream_error",
+          message: "web-search runTurn stream must end with exactly one terminal event" };
+        return;
+      }
+      const split = scanEventsForWebSearch(events);
+      const terminal = terminals[0];
+      const replayEvents = split.passthrough.slice(streamedCount);
+      if (terminal.type === "incomplete") {
+        for (const e of replayEvents) yield e;
+        return;
+      }
+      const forceAnswer = searchesExecuted >= plan.maxSearches;
+      // Loop only when the model's actionable output is purely web_search calls:
+      // a real tool call belongs to Codex, and a budget-exhausted turn must
+      // answer from what it already gathered.
+      const shouldLoop = split.calls.length > 0 && !split.hasRealToolCall && !forceAnswer;
+      if (!shouldLoop) {
+        // A forced-answer pass that ends `done` must have produced usable output —
+        // never a malformed tool call, and never silence. A truncated/refusal
+        // stop is authoritative and replays as-is; an empty one gets exactly one
+        // recovery pass with all tools removed (same contract as loop.ts #1001).
+        if (forceAnswer) {
+          const terminalEvent = split.passthrough.find(event => event.type === "done");
+          if (terminalEvent?.type === "done" && !split.hasMalformedToolCall
+            && isTruncatedStopReason(terminalEvent.stopReason)) {
+            logDone(i);
+            for (const e of replayEvents) yield e;
+            return;
+          }
+          if (terminalEvent?.type === "done"
+            && (split.hasMalformedToolCall
+              || (!split.hasRealToolCall && !hasVisibleAssistantText(split.passthrough)))) {
+            console.warn("[web-search-runturn] unusable forced answer", JSON.stringify({
+              model: parsed.modelId,
+              recoveryAttempt: emptyAnswerRetries,
+              searchCalls: split.calls.length,
+              malformed: split.hasMalformedToolCall,
+              stopReason: terminalEvent.stopReason,
+              eventTypes: [...new Set(split.passthrough.map(event => event.type))],
+            }));
+            if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries === 0) {
+              emptyAnswerRetries++;
+              console.warn("[web-search-runturn] empty forced answer — retrying once without tools");
+              yield { type: "heartbeat" };
+              if (abortSignal?.aborted) { yield abortEvent(); return; }
+              source = deps.dispatch({
+                ...parsed,
+                options: { ...parsed.options, toolChoice: "none" as const },
+                context: {
+                  ...parsed.context,
+                  messages: [
+                    ...messages,
+                    ...(executedSearchCount > 0 ? [forcedAnswerNudge()] : []),
+                    forcedAnswerRetryNudge(),
+                  ],
+                  tools: [],
+                },
+              });
+              continue;
+            }
+            yield {
+              type: "error",
+              status: 502,
+              errorType: "upstream_error",
+              message: "forced-answer pass produced no usable assistant output",
+            };
+            return;
+          }
+        }
+        logDone(i);
+        for (const e of replayEvents) yield e;
+        return;
+      }
+
+      const iterationContent = extractIterationContent(split.passthrough);
+      for (const [callIndex, call] of split.calls.entries()) {
+        if (abortSignal?.aborted) { yield abortEvent(); return; }
+        yield* runSearchCall(call, callIndex === 0 ? iterationContent : []);
+      }
+      if (abortSignal?.aborted) {
+        yield abortEvent();
+        return;
+      }
+
+      const nextForceAnswer = searchesExecuted >= plan.maxSearches;
+      const iterParsed: OcxParsedRequest = {
+        ...parsed,
+        context: {
+          ...parsed.context,
+          messages: nextForceAnswer && executedSearchCount > 0
+            ? [...messages, forcedAnswerNudge()]
+            : messages,
+          tools: nextForceAnswer ? toolsNoWebSearch : allTools,
+        },
+      };
+      currentParsed = iterParsed;
+      source = deps.dispatch(iterParsed);
     }
 
-    const iterationContent = extractIterationContent(split.passthrough);
-    for (const [callIndex, call] of split.calls.entries()) {
-      yield* runSearchCall(call, callIndex === 0 ? iterationContent : []);
-    }
-    if (abortSignal?.aborted) {
-      yield abortEvent();
-      return;
-    }
-
-    const nextForceAnswer = searchesExecuted >= plan.maxSearches;
-    const iterParsed: OcxParsedRequest = {
-      ...parsed,
-      context: {
-        ...parsed.context,
-        messages: nextForceAnswer && executedSearchCount > 0
-          ? [...messages, forcedAnswerNudge()]
-          : messages,
-        tools: nextForceAnswer ? toolsNoWebSearch : allTools,
-      },
-    };
-    source = deps.dispatch(iterParsed);
+    // Safety net: the hard cap should be unreachable (forceAnswer ends the loop
+    // first), but never hang a client stream if an adapter misbehaves.
+    yield { type: "error", message: "web-search runTurn loop exceeded its iteration cap" };
+  } catch (error) {
+    if (!isTranslatorBudgetExceededError(error)) throw error;
+    yield budgetErrorEvent();
+  } finally {
+    releaseBuffered();
+    releaseHistory();
   }
-
-  // Safety net: the hard cap should be unreachable (forceAnswer ends the loop
-  // first), but never hang a client stream if an adapter misbehaves.
-  yield { type: "error", message: "web-search runTurn loop exceeded its iteration cap" };
 }

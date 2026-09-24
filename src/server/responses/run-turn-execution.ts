@@ -31,6 +31,8 @@ import {
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { formatErrorResponse, bridgeToResponsesSSE, buildResponseJSON } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
+import { jsonUtf8Bytes } from "../../lib/json-byte-size";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import {
   guardEmptyCompletionEventStream,
   observeEmptyCompletion,
@@ -407,7 +409,7 @@ export async function executeResponsesRunTurn(
           const retryQueue = createAdapterEventQueue({
             onBacklogExceeded: () => runTurnAbort.abort(),
           });
-          void runTurnAttempt(retryQueue, "oauth-account-429");
+          void runTurnAttempt(retryQueue, "oauth-account-429", false, wsFirstParsed);
           source = retryQueue.stream();
         }
       } finally {
@@ -472,6 +474,8 @@ export async function executeResponsesRunTurn(
         eventSource = runTurnWebSearchLoop(eventSource, {
           parsed,
           plan: wsPlan,
+          translatorBudget,
+          emptyCompletionRetry: emptyCompletionGuardEnabled,
           forwardProvider: wsPlan.forwardSidecar?.provider,
           forwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
           ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
@@ -509,7 +513,7 @@ export async function executeResponsesRunTurn(
           translatorBudget,
           replayCacheScope: parsed._reasoningReplayScope,
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
-          stallTimeoutSec: config.stallTimeoutSec,
+          stallTimeoutSec: wsPlan?.stallTimeoutSec ?? config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           declaredToolNames,
           enforceDeclaredToolNames,
@@ -569,79 +573,101 @@ export async function executeResponsesRunTurn(
     } else {
       events = runTurnEvents;
     }
-    // LOCAL PATCH (runturn-websearch): buffered path runs the same interception
-    // loop; iterations dispatch through the same attempt body on fresh queues.
-    if (wsPlan) {
-      const searched: AdapterEvent[] = [];
-      for await (const event of runTurnWebSearchLoop(
-        (async function* () { yield* events; })(),
-        {
-          parsed,
-          plan: wsPlan,
-          forwardProvider: wsPlan.forwardSidecar?.provider,
-          forwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
-          ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
-          recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
-          abortSignal: runTurnAbort.signal,
-          dispatch: dispatchSearchIteration,
-        },
-      )) searched.push(event);
-      events = searched;
-    }
-    if (options.comboAttempt) {
-      const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
-      const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
-      // Same boundary as the streaming preflight: a replay-unsafe heartbeat means the adapter
-      // already ran a local side effect, so an undeclared tool call after it keeps the bridge's
-      // fail-closed refusal instead of becoming a hop that sends the turn to another target.
-      const replayUnsafe = events
-        .slice(0, firstMeaningfulIndex === -1 ? events.length : firstMeaningfulIndex)
-        .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
-      const classifiedError = firstMeaningful && !replayUnsafe
-        ? classifyUndeclaredFirstTool(firstMeaningful)
-        : undefined;
-      if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
-        const message = classifiedError?.message ?? (firstMeaningful?.type === "error"
-          ? firstMeaningful.message
-          : "Adapter ended before producing a response");
-        const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
-        if (replayUnsafe) markResponseNonReplayable(failure);
-        return failure;
+    // This collector outlives each search iteration, including live-output
+    // events that the loop no longer owns. Keep its lease until JSON is built.
+    let searchOutputBytes = 0;
+    try {
+      // LOCAL PATCH (runturn-websearch): buffered path runs the same interception
+      // loop; iterations dispatch through the same attempt body on fresh queues.
+      if (wsPlan) {
+        const searched: AdapterEvent[] = [];
+        for await (const event of runTurnWebSearchLoop(
+          (async function* () { yield* events; })(),
+          {
+            parsed,
+            plan: wsPlan,
+            translatorBudget,
+            emptyCompletionRetry: emptyCompletionGuardEnabled,
+            forwardProvider: wsPlan.forwardSidecar?.provider,
+            forwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
+            ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
+            recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
+            abortSignal: runTurnAbort.signal,
+            dispatch: dispatchSearchIteration,
+          },
+        )) {
+          if (event.type === "heartbeat") continue;
+          if (event.type === "error" && event.code === "translation_buffer_limit") runTurnAbort.abort();
+          const bytes = jsonUtf8Bytes(event) + 1;
+          translatorBudget.chargeRetained(bytes, { kind: "retained_collectors" });
+          searchOutputBytes += bytes;
+          searched.push(event);
+        }
+        events = searched;
       }
+      if (options.comboAttempt) {
+        const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
+        const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
+        // Same boundary as the streaming preflight: a replay-unsafe heartbeat means the adapter
+        // already ran a local side effect, so an undeclared tool call after it keeps the bridge's
+        // fail-closed refusal instead of becoming a hop that sends the turn to another target.
+        const replayUnsafe = events
+          .slice(0, firstMeaningfulIndex === -1 ? events.length : firstMeaningfulIndex)
+          .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
+        const classifiedError = firstMeaningful && !replayUnsafe
+          ? classifyUndeclaredFirstTool(firstMeaningful)
+          : undefined;
+        if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
+          const message = classifiedError?.message ?? (firstMeaningful?.type === "error"
+            ? firstMeaningful.message
+            : "Adapter ended before producing a response");
+          const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          if (replayUnsafe) markResponseNonReplayable(failure);
+          return failure;
+        }
+      }
+      let providerState: OcxProviderContinuationState | undefined;
+      const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
+        translatorBudget,
+        replayCacheScope: parsed._reasoningReplayScope,
+        hideThinkingSummary: parsed.options.hideThinkingSummary,
+        toolNsMap,
+        declaredToolNames,
+        enforceDeclaredToolNames,
+        toolParameterSchemas,
+        freeformToolNames,
+        toolSearchToolNames,
+        ...(routedCompaction ? { compaction: true } : {}),
+        onProviderState: state => { providerState = state; },
+        onUsage: usage => {
+          transportState.bindKeyUsageFromBridge(usage);
+        },
+      });
+      if (!routedCompaction) {
+        rememberKiroDeliveredFinalAnswer(transportState.adapter.name, json);
+        rememberResponseState(
+          parsed._rawBody,
+          json,
+          continuationStateForResponse(providerState),
+          responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
+        );
+      }
+      // #1926 gap 2: the buffered path queued its signature persists inside
+      // buildResponseJSON; bound the durability window before the JSON becomes
+      // externally visible.
+      await awaitThoughtSignatureDurability();
+      if (adapterResponseReachedServingTerminal(events, json)) {
+        commitReasoningReplayServingRoute();
+      }
+      notifyResponseComplete(json);
+      return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
+    } catch (error) {
+      if (!isTranslatorBudgetExceededError(error)) throw error;
+      runTurnAbort.abort();
+      return formatErrorResponse(502, "upstream_error", "upstream translation buffer exceeded the safe limit", {
+        code: "translation_buffer_limit",
+      });
+    } finally {
+      translatorBudget.releaseRetained(searchOutputBytes, { kind: "retained_collectors" });
     }
-    let providerState: OcxProviderContinuationState | undefined;
-    const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
-      translatorBudget,
-      replayCacheScope: parsed._reasoningReplayScope,
-      hideThinkingSummary: parsed.options.hideThinkingSummary,
-      toolNsMap,
-      declaredToolNames,
-      enforceDeclaredToolNames,
-      toolParameterSchemas,
-      freeformToolNames,
-      toolSearchToolNames,
-      ...(routedCompaction ? { compaction: true } : {}),
-      onProviderState: state => { providerState = state; },
-      onUsage: usage => {
-        transportState.bindKeyUsageFromBridge(usage);
-      },
-    });
-    if (!routedCompaction) {
-      rememberKiroDeliveredFinalAnswer(transportState.adapter.name, json);
-      rememberResponseState(
-        parsed._rawBody,
-        json,
-        continuationStateForResponse(providerState),
-        responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
-      );
-    }
-    // #1926 gap 2: the buffered path queued its signature persists inside
-    // buildResponseJSON; bound the durability window before the JSON becomes
-    // externally visible.
-    await awaitThoughtSignatureDurability();
-    if (adapterResponseReachedServingTerminal(events, json)) {
-      commitReasoningReplayServingRoute();
-    }
-    notifyResponseComplete(json);
-    return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
 }

@@ -394,7 +394,7 @@ Automatic Codex pool selection and account status share the [plan exclusion cont
 
 ### Empty forced search answers
 
-`src/web-search/loop.ts` makes at most one extra answer attempt after a clean forced-answer terminal with no visible output or tool call. The recovery has no tools and reuses gathered search results. Malformed calls fail before refusal/truncation passthrough, and well-formed recognized refusal/truncation terminals pass through unchanged, including empty or partial answers. The extra generation may incur provider usage.
+`src/web-search/loop.ts` makes at most one extra answer attempt after a clean forced-answer terminal with no visible output or tool call. The recovery has no tools and reuses gathered search results. Malformed calls fail before refusal/truncation passthrough, and well-formed recognized refusal/truncation terminals pass through unchanged, including empty or partial answers. The extra generation may incur provider usage. `src/web-search/run-turn-loop.ts` shares this recovery; below the search cap, `emptyCompletionRetry` permits one identical empty-answer retry per request with current tools and results. Errors and invalid terminals never authorize another search.
 
 OpenAI sidecar 429 replays run only when their backoff fits the remaining sidecar deadline; otherwise the original 429 remains the routing-health outcome rather than becoming a timeout. Reset recovery and 429 replays share one three-send budget per search, so the two layers cannot multiply physical sends.
 ## Scoped provider quota for Combo selection
