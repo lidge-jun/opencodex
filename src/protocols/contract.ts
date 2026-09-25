@@ -9,7 +9,7 @@
  */
 
 /** Bumped when a reason code, hop, mode, or feature disposition changes meaning. */
-export const PROTOCOL_CONTRACT_VERSION = "2026-09-25.1";
+export const PROTOCOL_CONTRACT_VERSION = "2026-09-25.2";
 
 export const PROTOCOLS = ["responses", "chat", "messages"] as const;
 /** A public inference API a client can speak to this proxy. */
@@ -74,6 +74,12 @@ export const PROTOCOL_REASON_CODES = [
   "rollout-disabled",
   /** Operator policy that only the bridge applies (pinned effort, skill elision, a sidecar). */
   "bridge-only-policy",
+  /** A pooled Anthropic OAuth account set: the bridge owns rotation and affinity. */
+  "oauth-account-pool",
+  /** Caller `anthropic-beta` values outside the native lane's allowlist were not forwarded. */
+  "anthropic-beta-dropped",
+  /** Thinking signatures or `redacted_thinking` removed for a destination that cannot verify them. */
+  "opaque-state-stripped",
 ] as const;
 export type ProtocolReasonCode = (typeof PROTOCOL_REASON_CODES)[number];
 
