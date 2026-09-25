@@ -168,6 +168,9 @@
     }
   },
   "explicit": {
+    "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",
+    "coding-agent-json-lines-scaling.test.ts": "providers",
+    "usage-snapshot-digest-reuse.test.ts": "usage",
     "release-desktop-scripts.test.ts": "ci-workflows",
     "installed-gate-drivers.test.ts": "ci-workflows",
     "gui-desktop-sidecar-script.test.ts": "gui",

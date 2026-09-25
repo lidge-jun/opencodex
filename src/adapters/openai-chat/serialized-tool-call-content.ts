@@ -193,6 +193,29 @@ function contextAfter(text: string, context: TextContext): TextContext {
 }
 
 /**
+ * A deferred header/fence can itself be long. While its unresolved portion only grows, a
+ * chunk-local check suffices; the first resolving character goes back through the full splitter.
+ * Each unbounded phase is scanned once on entry and once on exit, preserving its Markdown rules.
+ */
+function deferredContinuationBreak(text: string, context: TextContext): RegExp | undefined {
+  if (text.startsWith(OPEN_TAG)) {
+    if (/^<tool_call>\s*$/.test(text)) return /\S/;
+    if (/^<tool_call>\s*<function=[^>\r\n]*$/.test(text)) return /[>\r\n]/;
+  }
+  if (!context.inlineTicks && context.lineStart) {
+    const fence = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/.exec(text);
+    if (fence) {
+      if (!context.fence) return /\n/;
+      // Closing-fence ticks may grow only before its optional whitespace suffix.
+      if (!fence[2]) return fence[1]![0] === "`" ? /[^`]/ : /[^~]/;
+      return /[^ \t\r]/;
+    }
+  }
+  if (/^`+$/.test(text)) return /[^`]/;
+  return undefined;
+}
+
+/**
  * Holds possible duplicate text within the shared translator budget until the dispatch outcome is
  * known. While a block candidate is open, any other event (reasoning) is queued at its position in
  * the held text rather than overtaking it or forcing the block out early, and `drain` restores the
@@ -202,6 +225,11 @@ export class SerializedToolCallContentBuffer {
   private text = "";
   private bytes = 0;
   private hasOpenTag = false;
+  private continuationBreak: RegExp | undefined;
+  private delimiterSuffix = "";
+  private sawCloser = false;
+  private openAfterCloser = false;
+  private trailingProseChars = 0;
   private context: TextContext = { fence: null, lineStart: true };
   private queued: { offset: number; event: AdapterEvent }[] = [];
 
@@ -217,6 +245,12 @@ export class SerializedToolCallContentBuffer {
       this.text = next;
       this.bytes = nextBytes;
       this.hasOpenTag = hasOpenTag;
+      this.continuationBreak = undefined;
+      this.delimiterSuffix = "";
+      this.sawCloser = false;
+      this.openAfterCloser = false;
+      this.trailingProseChars = 0;
+      if (hasOpenTag) this.observeDelimiters(next);
     } catch (error) {
       reservation.release();
       throw error;
@@ -225,21 +259,43 @@ export class SerializedToolCallContentBuffer {
 
   /** Charges only the appended bytes, so holding an open block never needs twice its retained size. */
   private append(delta: string): void {
+    // Bun counts each isolated surrogate as two bytes, so split pairs sum to the same four-byte
+    // charge as the joined scalar. Measuring only the delta therefore preserves exact accounting.
     const deltaBytes = Buffer.byteLength(delta);
     this.budget.reserveTransient(deltaBytes, { kind: "live_transient" }).commitRetained();
+    if (this.hasOpenTag) this.observeDelimiters(delta);
     this.text += delta;
     this.bytes += deltaBytes;
   }
 
+  /** Scan new text plus a fixed overlap, never the retained body (which may be a large rope). */
+  private observeDelimiters(delta: string): void {
+    const scan = this.delimiterSuffix + delta;
+    const closer = scan.lastIndexOf(CLOSE_TAG);
+    const afterCloser = closer + CLOSE_TAG.length;
+    if (closer >= 0) {
+      this.sawCloser = true;
+      this.openAfterCloser = false;
+      this.trailingProseChars = 0;
+    }
+    if (scan.lastIndexOf(OPEN_TAG) >= (closer >= 0 ? afterCloser : 0)) {
+      this.openAfterCloser = true;
+    }
+    const tail = closer >= 0 ? scan.slice(afterCloser) : delta;
+    if (this.sawCloser) this.trailingProseChars += tail.replace(/\s+/g, "").length;
+    this.delimiterSuffix = scan.slice(-(Math.max(OPEN_TAG.length, CLOSE_TAG.length) - 1));
+  }
+
   /** Returns immediately safe text and retains only the suffix that still needs reconciliation. */
   ingest(delta: string): string {
-    if (this.hasOpenTag) {
+    if (this.hasOpenTag || (this.continuationBreak && !this.continuationBreak.test(delta))) {
       this.append(delta);
       return "";
     }
     const split = splitAtPossibleSerializedToolCall(this.text + delta, this.context);
     this.replace(split.defer, split.hasOpenTag);
     this.context = split.context;
+    if (!split.hasOpenTag) this.continuationBreak = deferredContinuationBreak(split.defer, split.context);
     return split.emit;
   }
 
@@ -262,7 +318,7 @@ export class SerializedToolCallContentBuffer {
     }
     const text = this.ingest(delta);
     // Checked after ingest too: one delta can open a block and already carry more than a bound.
-    if (this.hasOpenTag && (this.bytes > MAX_HELD_BYTES || proseAfterClosedBlock(this.text) > MAX_TRAILING_CHARS)) {
+    if (this.hasOpenTag && (this.bytes > MAX_HELD_BYTES || (this.sawCloser && !this.openAfterCloser && this.trailingProseChars > MAX_TRAILING_CHARS))) {
       return [...textEvents(text), ...this.drain([])];
     }
     return textEvents(text);
@@ -334,6 +390,7 @@ export class SerializedToolCallContentBuffer {
     this.text = "";
     this.bytes = 0;
     this.hasOpenTag = false;
+    this.continuationBreak = undefined;
     this.queued = [];
   }
 }
@@ -594,13 +651,4 @@ export function reconcileSerializedToolCallEvents(
 
 function textEvents(text: string): AdapterEvent[] {
   return text.length > 0 ? [{ type: "text_delta", text }] : [];
-}
-
-/** Non-whitespace characters after the last closed block, or 0 while a later block is still open. */
-function proseAfterClosedBlock(text: string): number {
-  const closer = text.lastIndexOf(CLOSE_TAG);
-  if (closer < 0) return 0;
-  const tail = text.slice(closer + CLOSE_TAG.length);
-  if (tail.includes(OPEN_TAG)) return 0;
-  return tail.replace(/\s+/g, "").length;
 }

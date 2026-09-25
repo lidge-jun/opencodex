@@ -346,6 +346,10 @@ batches, so memory stays bounded and unrelated management requests remain servic
 large existing log. The first read is proportional to ledger size; steady-state refresh work is
 proportional to newly appended bytes. The Dashboard polls its 30-day usage summary independently once
 per minute, so usage work cannot delay health/provider/settings state or run every five seconds.
+An unchanged retained snapshot verifies its byte region once and reuses that digest only when the
+returned region has identical start and end bounds. Appends or window trimming still hash the new
+returned region, so digest reuse cannot weaken same-inode rewrite detection. See
+[ADR-0102](decisions/ADR-0102-incremental-stream-accounting.md).
 
 An oversized row is skipped inside the scanner bound without shortening identities. Accumulators keep normal rows plus `usageIncomplete` / `usageIncompleteReason: "oversized_rows"` on caches and rollups; append ORs the flag and a rebuild recalculates it. Invalid-row counts are not sticky, and absence of the flag is not completeness. GUI caches warn on Usage, Dashboard, provider and key views; CLI warns in human output only; most-used order save refuses an incomplete snapshot. Quota surfaces stay separate. Legacy truncation fields keep their meaning; read/mutation failures still fail closed.
 
