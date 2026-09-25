@@ -54,8 +54,11 @@ function directOptions(options: ToolOptions = {}) {
   };
 }
 
+/** Comment-only SSE blocks are keepalive frames: compared like any other frame, never dropped. */
 function normalizeFrames(text: string): unknown[] {
   return text.split("\n\n").filter(block => block.trim().length > 0).map(block => {
+    const lines = block.split("\n");
+    if (lines.every(line => line.startsWith(":"))) return { keepalive: lines.join("\n") };
     const data = block.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("");
     if (data === "[DONE]") return "[DONE]";
     const parsed = JSON.parse(data) as Record<string, unknown>;
@@ -383,5 +386,52 @@ describe("direct Chat encoder stream lifecycle", () => {
 
     expect(directFrames).toEqual(legacyFrames);
     expect(JSON.stringify(directFrames.at(-1))).toContain("upstream_stall_timeout");
+  });
+
+  test("wire-silence heartbeats reach the client as the converter's SSE comments", async () => {
+    // Only the beat timer is driven; relayed/first-output hooks must ignore the keepalives.
+    const ticks: (() => void)[] = [];
+    const timers = {
+      setInterval: (handler: () => void) => { ticks.push(handler); return ticks.length - 1; },
+      clearInterval: () => {},
+    };
+    const run = async (encode: (events: AsyncGenerator<AdapterEvent>) => ReadableStream<Uint8Array>) => {
+      ticks.length = 0;
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      async function* quiet(): AsyncGenerator<AdapterEvent> {
+        yield { type: "text_delta", text: "thinking" };
+        await gate;
+        yield { type: "text_delta", text: " done" };
+        yield { type: "done", usage };
+      }
+      const text = new Response(encode(quiet())).text();
+      await Bun.sleep(5);
+      for (let i = 0; i < 3; i++) for (const tick of ticks) tick();
+      release?.();
+      return normalizeFrames(await text);
+    };
+    const legacy = await run(events => {
+      const translatorBudget = createTestTranslatorBudget();
+      return responsesSseToChatCompletionsSse(
+        bridgeToResponsesSSE(events, "internal/model", undefined, undefined, undefined, undefined, 1_000, {
+          translatorBudget, enforceDeclaredToolNames: false, timers,
+        }),
+        "client-model",
+        { translatorBudget },
+      );
+    });
+    const relayed: unknown[] = [];
+    let firstOutputs = 0;
+    const direct = await run(events => encodeChatCompletionSse(events, {
+      ...directOptions(), heartbeatMs: 1_000, timers,
+      hooks: { onRelayed: observation => { relayed.push(observation); }, onFirstOutput: () => { firstOutputs++; } },
+    }));
+
+    expect(direct).toEqual(legacy);
+    const keepalives = direct.filter(frame => typeof frame === "object" && frame !== null && "keepalive" in frame);
+    expect(keepalives).toEqual([{ keepalive: ": opencodex heartbeat" }, { keepalive: ": opencodex heartbeat" }]);
+    expect(relayed).toHaveLength(direct.length - keepalives.length);
+    expect(firstOutputs).toBe(1);
   });
 });

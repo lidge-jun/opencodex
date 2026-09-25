@@ -307,6 +307,7 @@
   "claude-system-env-auto.test.ts": "claude-integration",
   "cleanup-orphaned-workflows.test.ts": "ci-workflows",
   "clearable-deadline.test.ts": "lib",
+  "cli-account-alias-target.test.ts": "cli",
   "cli-account-cancel-flow.test.ts": "cli",
   "cli-account-orca-import.test.ts": "cli",
   "cli-account-pin-drain.test.ts": "cli",
