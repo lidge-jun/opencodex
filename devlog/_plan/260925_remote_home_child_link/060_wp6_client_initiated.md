@@ -432,3 +432,70 @@ GUI의 `gui/tests/remote-link-client.test.tsx`는 별도 GUI test runner 대상�
 | W6-8 | 키 zeroize 표현 제거(K18) | 수용 |
 | W6-9 | 8개 docs 가이드의 "coming soon" 문장을 실제 자식 시작 흐름으로 교체, 테스트 배치 등록, 줄 수 재측정 | 수용 |
 
+
+## 감사 반영 (Anscombe FAIL r1, wp6 계획 감사) — 이 절이 앞선 모든 내용보다 우선한다
+
+차단 1(join/게이트 부재)과 5(문서 미갱신)는 구현 전 상태를 지적한 것으로, 이 계획이 B에서 만들 산출물이다. 아래 7번 테스트와 8번 문서 목록으로 완료 조건을 고정한다.
+
+1. join 순서(확정, 각 화살표 뒤 실패 시 되돌림 명시):
+   a. 권한: 페어링 대시보드 세션, Tailscale 세션 거부, `runtimeRole`이 standalone이 아니면 409 `standalone_required`.
+   b. probe → confirm-host(허브 호스트 키를 링크 known_hosts에 기록) — 실패 시 아무것도 남기지 않음.
+   c. 로컬 포트 P 선택(공용 할당기, 1024 이상).
+   d. SSH로 허브의 `ocx link issue --alias <this> --tunnel-port P` 실행, stdout JSON `{linkId, apiKeyId, key, listenerPort}` 파싱(키는 로그·오류에 쓰지 않음) — 실패 시 되돌릴 것 없음.
+   e. sidecar `client-link.json` 기록(K11) — 실패 시 원격 revoke.
+   f. 클라이언트 소유 `ssh -N -L 127.0.0.1:P:127.0.0.1:<listenerPort>` 시작 후, 인증된 `GET /readyz`가 `http://127.0.0.1:P`에서 응답할 때까지 최대 15초 대기 — 실패 시 터널 중지 → 원격 revoke → sidecar 삭제.
+   g. in-process `connectClient`(transport link, key는 메모리에서 전달) — 실패 시 터널 중지 → 원격 revoke → sidecar 삭제(connectClient 자체 롤백은 기존대로).
+   h. 성공 시 응답 후 standalone→client 전환 재시작 예약(기존 `acceptSystemRestart`/recycle 경로).
+2. 재시작·해제 경로의 터널 정리:
+   - 클라이언트 런타임(src/client/runtime.ts)은 시작 시 sidecar가 있고 client transport가 link이면 `-L` supervisor를 시작하고, 종료(정상 stop, `scheduleStandaloneRecycle` 경로 포함)에서 supervisor를 리스너보다 먼저 멈춘다(TERM 후 최대 5초 대기, 이어 KILL).
+   - 로컬 `ocx disconnect`(src/client/connect.ts disconnect 경로)는 연결 상태를 지우기 전에 sidecar가 있으면 터널을 멈추고, SSH로 허브에 `ocx link revoke --link-id <id>`를 한 번 시도(실패해도 해제는 진행, 결과를 disconnect 출력과 receipt에 "home revoke failed: run ocx link revoke on the home" 형태로 남김, 키는 쓰지 않음), 그 뒤 sidecar 삭제.
+   - sidecar가 있는데 시작 시 손상·권한 불량이면 fail closed: 터널을 띄우지 않고 status child.state failed, reason `sidecar_invalid`.
+3. 포트 계약: `src/link/ports.ts`(NEW)에 `MIN_LINK_PORT = 1024`, `MAX_LINK_PORT = 65535`, `isLinkPort(n)`. `ocx link port` 할당, `ocx link issue --tunnel-port` 파싱, link-routes issue 본문 검증, sidecar 검증, connect 검증이 모두 이 함수를 쓴다. 테스트: 1023 거부, 1024 허용, 65536 거부(각 경로).
+4. 문서 소유: `structure/remote-link.md`에 클라이언트 시작 흐름·재시작·해제 정리를 현재형으로 추가하고, `structure/runtime.md`(600줄 예산)에는 client 런타임을 서술한 기존 줄 끝에 "A client with a link sidecar owns its SSH tunnel; see [Remote Link](remote-link.md)." 한 문장만 덧붙여 줄 수를 늘리지 않는다.
+5. 비차단: 앞 절의 key zeroize 표현(:146 부근)과 "L4/L5 파일 없음" 서술은 무효. connect.ts 1037줄, runtime.ts 129줄(상한 없음).
+6. GUI: `gui/src/api-targets.ts`에서 `isStandaloneRuntime()` export, Child 역할은 standalone일 때만 선택 가능, "홈 찾기" 흐름은 wp5의 추가 시트를 재사용(후보 → probe → 지문 확인 → join), 진행 중·실패·재시도 상태, 성공 시 "이 컴퓨터가 재시작됩니다" 안내 후 재연결 대기. 새 문구 키 10개 로케일.
+7. 테스트(파일과 등록):
+   - `tests/server/link-join-route.test.ts`: 세션 없음 401/403, Tailscale 403, hub·client 역할 409, 순서 a→h를 가짜 SshRunner·가짜 터널·가짜 connectClient로 검증, 단계 e/f/g 실패마다 revoke 호출과 sidecar 부재.
+   - `tests/clients/client-link-state.test.ts`: sidecar 필드·권한·손상 거부·소유 확인 삭제.
+   - `tests/clients/client-link-tunnel.test.ts`: 런타임 시작 시 -L 시작, 재시작 경로에서 supervisor가 리스너보다 먼저 멈춤, TERM→KILL 한정 대기, 로컬 disconnect가 터널 중지·revoke 시도·sidecar 삭제, revoke 실패 시에도 해제 완료와 안내 문구.
+   - `tests/clients/link-ports.test.ts`: 포트 계약.
+   - gui `tests/remote-link.test.tsx`에 Child 활성 조건·join 흐름·standalone_required 문구.
+   - 모두 layout.json explicit와 test-layout-expected.json에 등록.
+8. 문서: docs-site 8개 로케일 remote-link 가이드의 "coming soon" 문장을 자식 시작 흐름(요구 사항: 자식에서 홈으로 SSH 키 로그인, 홈에 ocx 실행 중)과 재시작·해제 동작으로 교체.
+
+
+## 감사 반영 (Anscombe FAIL r2) — 이 절이 앞선 모든 내용보다 우선한다
+
+1. 해제 오케스트레이션: NEW `src/client/link-teardown.ts`의 `teardownClientLink(deps: { readSidecar, stopTunnel, runner, knownHostsFile, deleteSidecar }): Promise<{ homeRevoke: "revoked" | "failed" | "not_applicable" }>`. 순서: sidecar 읽기(없으면 not_applicable) → `stopTunnel()`(런타임 supervisor의 stop, TERM→최대 5초→KILL) → SSH로 허브의 `ocx link revoke --link-id <id>` 1회(30초 제한) → sidecar 삭제. 호출 지점 두 곳: (a) machine API의 disconnect 처리(src/client/machine-api.ts:131-134 부근)가 `disconnectClient`를 부르기 **전에** 런타임이 주입한 `linkTeardown`을 호출, (b) CLI `ocx disconnect`(src/cli/connect.ts의 disconnect 경로)는 런타임이 떠 있으면 machine API를 쓰고, 아니면 프로세스 안에서 같은 함수를 직접 호출(stopTunnel은 pidfile 기반 정지). 잠금: teardown은 client lifecycle 잠금 밖에서 실행하고, 이어지는 `disconnectClient`가 기존 잠금을 잡는다(teardown이 연결 상태를 건드리지 않으므로 경합 없음). 결과 필드: disconnect의 JSON 출력과 receipt에 `homeRevoke`, 사람용 출력은 failed일 때만 "Home revoke failed; run ocx link revoke --link-id <linkId> on the home." 키는 어디에도 쓰지 않는다.
+2. 준비 확인: join f단계의 확인은 `GET http://127.0.0.1:P/readyz`에 `x-opencodex-api-key: <발급 키>`를 붙여 보내고 HTTP 200을 성공으로 본다(503은 준비 중으로 재시도, 401은 즉시 실패 `admission_failed`). 키는 로그·오류 문자열에 넣지 않는다.
+3. 포트 계약 범위: `isLinkPort`(1024-65535)는 **클라이언트 쪽 터널 포트 P**에만 적용한다: `ocx link port` 할당, `ocx link issue --tunnel-port`, link-routes issue 본문, `LinkRecord.tunnelPort`(src/link/store.ts:77-82의 tunnelPort 검증), `link.tunnelPort` 설정 스키마와 connect, link-relay 목적지(src/client/link-relay.ts:44-48), sidecar의 tunnelPort. **허브 리스너 포트 L**(`LinkStore.listenerPort`, sidecar의 peerListenerPort)은 기존 1-65535 검증을 유지한다(OS가 고른 포트).
+4. 테스트 파일 정본(앞 절의 client-link-join/client-link-supervisor 이름 폐기): `tests/server/link-join-route.test.ts`(server), `tests/clients/client-link-state.test.ts`, `tests/clients/client-link-tunnel.test.ts`, `tests/clients/client-link-teardown.test.ts`, `tests/clients/link-ports.test.ts`(clients) + gui `tests/remote-link.test.tsx`. 검증 명령은 이 다섯 파일과 기존 link·client-link·listener·routes·CLI 스위트를 모두 돌린다.
+5. structure/runtime.md 줄 수(반박): 문장은 **기존 줄의 끝에** 덧붙이므로 파일 줄 수는 600 그대로다. C 단계에서 `wc -l structure/runtime.md`가 600, `bun run structure:check` 통과로 증명한다.
+6. 비차단 반영: docs 8개 경로 = `docs-site/src/content/docs/guides/remote-link.md`, `docs-site/src/content/docs/{fr,ko,zh-cn,zh-tw,ru,ja,tr}/guides/remote-link.md`. join 라우트는 인증·Tailscale·역할 검사를 lifecycle 상태 조회(`stateFor`)보다 먼저 한다(현재 dispatch가 먼저 조회하므로 join은 그 앞에서 분기).
+
+
+## 감사 반영 (Anscombe FAIL r3) — r2 절 1번을 다음으로 대체한다
+
+1. 해제는 CLI `ocx disconnect` 한 경로뿐이다(연결된 machine listener는 변경 요청을 403으로 막으므로 대시보드 해제 경로는 없다, src/client/machine-listener.ts:125). CLI는 프로세스 안에서 `teardownClientLink`를 부른다: sidecar 읽기(없으면 not_applicable) → sidecar의 linkId가 현재 `config.client.link.linkId`와 같은지 확인(다르면 건드리지 않고 not_applicable) → SSH로 허브의 `ocx link revoke --link-id <id>` 1회(30초) → 이어지는 `disconnectClient`가 잠금 아래에서 연결 상태를 지운 뒤, 같은 잠금 안에서 sidecar를 다시 읽어 linkId가 같을 때만 삭제. 터널 프로세스는 CLI가 죽이지 않는다: 소유자인 client 런타임이 해제 뒤 기존 재시작 경로(src/client/runtime.ts:44-79 recycle)에서 supervisor를 리스너보다 먼저 멈춘다(TERM→5초→KILL). 런타임이 떠 있지 않으면 터널도 없다.
+2. `homeRevoke`는 disconnect의 JSON 출력(`--json`)과 사람용 출력에만 싣는다. Desktop receipt 스키마(src/claude/desktop-remote-store-state.ts:113)는 바꾸지 않는다. 사람용 문구는 failed일 때만 "Home revoke failed; run ocx link revoke --link-id <linkId> on the home."
+3. 테스트(client-link-teardown.test.ts): revoke 성공·실패 두 경우 모두 해제 완료, 출력 필드, linkId 불일치 시 sidecar 보존, 잠금 안 재확인. client-link-tunnel.test.ts: recycle 경로에서 supervisor가 리스너보다 먼저 멈춤.
+
+
+## 감사 반영 (Anscombe FAIL r4) — 터널 정지 트리거
+
+- client 런타임의 `-L` supervisor는 기존 주기 타이머(1초)마다 `readClientConnectionState()`와 sidecar를 확인한다. 연결 상태가 connected가 아니거나, transport가 link가 아니거나, `link.linkId`가 sidecar의 linkId와 다르거나, sidecar가 없으면: 자식 ssh를 멈추고(TERM→5초→KILL) 기존 `scheduleStandaloneRecycle`(src/client/runtime.ts:44-79)을 예약한다. 새 인증 경로나 CLI→런타임 신호는 만들지 않는다. 런타임이 없으면 터널도 없다.
+- 결과: CLI `ocx disconnect`는 원격 revoke 시도 → `disconnectClient`(잠금 안 sidecar 재확인·삭제)만 하고, 터널은 최대 한두 주기 안에 소유 런타임이 정리한다.
+- 테스트(client-link-tunnel.test.ts): 실제 런타임 수명주기(가짜 SshRunner 자식, 주입 시계)에서 연결 상태를 disconnected로 바꾸면 2주기 안에 자식 정지와 recycle 예약이 일어남, linkId 불일치도 같음, 연결 유지 중에는 아무 일도 없음.
+
+
+
+## 감사 반영 (Anscombe NEAR-PASS r5) — 고아 터널 잔여
+
+- r4의 "런타임이 없으면 터널도 없다"는 보장이 아니다. 런타임이 SIGKILL로 죽으면 자식 `ssh -N -L`이 남을 수 있다. 계약을 다음으로 좁힌다.
+- supervisor는 자식을 띄울 때 `<OPENCODEX_HOME>/client-link-tunnel.pid`(0600)에 `{ pid, linkId, argv }`를 쓰고, 정상 정지 뒤 지운다.
+- 정리 시점은 두 곳이다. (a) client 런타임 시작 시 supervisor가 자식을 띄우기 전, (b) CLI `ocx disconnect`의 teardown. 두 곳 모두 같은 함수 `reapOrphanTunnel()`을 부른다.
+- 확인 방법: Linux에서만 `/proc/<pid>/cmdline`을 NUL로 나눈 argv가 pidfile의 argv와 **정확히** 같을 때 TERM→최대 5초→KILL 후 pidfile을 지우고 `tunnel: "reaped"`. 다르거나 프로세스가 없으면 pidfile만 지우고 `tunnel: "absent"`. Linux가 아니면(macOS·Windows) 프로세스를 건드리지 않고 pidfile을 남긴 채 `tunnel: "unresolved"`와 pid를 보고한다.
+- CLI 출력: `--json`에 `tunnel` 필드, 사람용 출력은 unresolved일 때만 "A link tunnel (pid <pid>) may still be running; stop it if it is." 한 줄.
+- 남은 위험: macOS의 고아 터널은 자동 정리하지 않는다. 허브 revoke 뒤에는 발급 키가 무효라서 고아 터널로 들어오는 요청은 허브 리스너에서 401로 막힌다.
+- 테스트(client-link-teardown.test.ts): 주입한 플랫폼·procfs 읽기로 Linux 일치(reaped), 불일치(absent, 프로세스 미접촉), 비Linux(unresolved, pidfile 유지) 세 경우.
+
