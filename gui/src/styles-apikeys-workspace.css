@@ -906,3 +906,37 @@
   align-items: center;
   gap: var(--space-2);
 }
+
+/* API surface cards (PF-04): one card per public API. Inherits the endpoint URL styling from
+   .api-endpoints; a closed surface stays visible, dimmed rather than hidden. */
+.api-endpoints.api-surface-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.api-surface-card {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.api-surface-card-off {
+  border-style: dashed;
+}
+.api-surface-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.api-surface-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: var(--weight-semibold);
+}
+.api-surface-invalid {
+  color: var(--red);
+}
+.api-surface-card-link {
+  align-self: flex-start;
+}
+@media (max-width: 960px) {
+  .api-endpoints.api-surface-cards { grid-template-columns: minmax(0, 1fr); }
+}
