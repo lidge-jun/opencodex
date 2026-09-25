@@ -59,7 +59,7 @@ export function ProviderProtocolPanel({
   const [state, setState] = useState<LoadState | null>(null);
 
   useEffect(() => {
-    if (!apiBase) return;
+    if (apiBase === undefined) return;
     const controller = new AbortController();
     fetchProtocolProviderSummary(apiBase, providerName, controller.signal)
       .then(result => {
@@ -73,7 +73,7 @@ export function ProviderProtocolPanel({
   }, [apiBase, providerName, requestKey]);
 
   const current = state?.key === requestKey ? state : null;
-  if (!apiBase || !current || current.kind === "hidden") return null;
+  if (apiBase === undefined || !current || current.kind === "hidden") return null;
 
   const pendingAdapter = draftAdapter && draftAdapter !== savedAdapter ? draftAdapter : null;
   return (

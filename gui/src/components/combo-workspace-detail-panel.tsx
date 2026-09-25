@@ -381,7 +381,7 @@ export function DetailPanel({
             />
           </div>
         )}
-        {!isCreate && apiBase && <ComboProtocolPlan apiBase={apiBase} model={baseline.model} dirty={dirty} />}
+        {!isCreate && apiBase !== undefined && <ComboProtocolPlan apiBase={apiBase} model={baseline.model} dirty={dirty} />}
       </div>
 
       {/*

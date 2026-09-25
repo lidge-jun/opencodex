@@ -30,7 +30,7 @@ const SUMMARY: ProtocolProviderSummaryV1 = {
 function serve(respond: (url: URL) => Response) {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     calls.push(String(input));
-    return respond(new URL(String(input)));
+    return respond(new URL(String(input), "http://localhost"));
   }) as typeof fetch;
 }
 
@@ -82,6 +82,14 @@ test("labels the adapter as the upstream wire and shows who decided it", async (
   expect(text).toContain("wide");
   expect(text).toContain("pinned");
   expect(calls).toEqual(["http://hub/api/protocols?provider=custom"]);
+  await unmount();
+});
+
+test("the dashboard's own same-origin target (an empty base) still loads the panel", async () => {
+  serve(() => info({ provider: SUMMARY }));
+  const { container, unmount } = await renderPanel({ apiBase: "", providerName: "custom", savedAdapter: "openai-chat" });
+  expect(calls).toEqual(["/api/protocols?provider=custom"]);
+  expect(container.textContent ?? "").toContain(DICTS.en["pws.protocol.adapterLabel"]);
   await unmount();
 });
 
