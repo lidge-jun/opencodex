@@ -523,6 +523,54 @@ function anthropicKeyUsesBearer(provider: OcxProviderConfig): boolean {
   return provider.apiKeyTransport === "bearer";
 }
 
+/** The `anthropic-version` every Messages request from this proxy pins. */
+export const ANTHROPIC_API_VERSION = "2023-06-01";
+
+/**
+ * The fixed headers of every Messages request this proxy builds, before credentials. Shared by
+ * the adapter and the managed native lane so both pin the same version and client identity.
+ */
+export function anthropicBaseRequestHeaders(stream: boolean | undefined): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "anthropic-version": ANTHROPIC_API_VERSION,
+    "Accept": stream ? "text/event-stream" : "application/json",
+    "User-Agent": "@anthropic-ai/sdk/0.74.0",
+  };
+}
+
+/** Key-auth credential placement: `x-api-key`, or a bearer when the provider asks for one. */
+export function applyAnthropicKeyAuth(headers: Record<string, string>, provider: OcxProviderConfig): void {
+  if (typeof provider.apiKey !== "string") return;
+  if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
+  else headers["x-api-key"] = provider.apiKey;
+}
+
+/**
+ * OAuth (Claude Pro/Max) credential placement: the bearer, the OAuth beta pair and the Claude
+ * Code client fingerprint. Shared by the adapter and the managed native lane.
+ */
+export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string): void {
+  headers["Authorization"] = `Bearer ${accessToken}`;
+  headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+  // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
+  // header set is a non-first-party signature. (cch billing-header signing is intentionally
+  // out of scope — brittle and version-coupled.)
+  Object.assign(headers, CLAUDE_CODE_HEADERS);
+  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken);
+  headers["x-client-request-id"] = crypto.randomUUID();
+}
+
+/** The provider's Messages endpoint, refusing a base URL with an unresolved `{placeholder}`. */
+export function resolveAnthropicMessagesUrl(provider: Pick<OcxProviderConfig, "baseUrl">): string {
+  const url = anthropicMessagesUrl(provider.baseUrl);
+  const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
+  if (unresolvedPlaceholder) {
+    throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
+  }
+  return url;
+}
+
 /** Map a Responses reasoning effort to an Anthropic extended-thinking budget (tokens, >= 1024). */
 function reasoningBudget(effort: string): number {
   switch (effort) {
@@ -802,6 +850,9 @@ function messagesToAnthropicFormat(
             if (text) preface.push({ type: "text", text });
           } else if (part.type === "thinking") {
             const t = part as OcxThinkingContent;
+            // History minted under another serving identity (or already rejected as opaque) is not
+            // this destination's to verify: drop its opaque blocks, as the Responses passthrough does.
+            if (parsed._stripReasoningEncryptedContent === true) continue;
             // Redacted blocks replay verbatim FIRST (they preceded the visible thinking block
             // in the original stream order preserved by the bridge envelope).
             for (const data of t.redacted ?? []) {
@@ -1129,35 +1180,15 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         body.tool_choice = { ...settledToolChoice, disable_parallel_tool_use: true };
       }
 
-      const url = anthropicMessagesUrl(provider.baseUrl);
-      const unresolvedPlaceholder = url.match(/\{[^}]*\}/)?.[0];
-      if (unresolvedPlaceholder) {
-        throw new Error(`anthropic baseUrl contains unresolved ${unresolvedPlaceholder}`);
-      }
+      const url = resolveAnthropicMessagesUrl(provider);
       // Anthropic fast mode: `speed` is only accepted beside its beta; without it the API
       // answers 400 "speed: Extra inputs are not permitted". The beta is merged below, after
       // any header override, so a request never carries one without the other.
       const fastSpeed = anthropicFastSpeed(parsed, provider);
       if (fastSpeed) body.speed = fastSpeed.value;
-      const headers: Record<string, string> = {
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01",
-        "Accept": parsed.stream ? "text/event-stream" : "application/json",
-        "User-Agent": "@anthropic-ai/sdk/0.74.0",
-      };
-      if (isOAuth) {
-        headers["Authorization"] = `Bearer ${provider.apiKey}`;
-        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
-        // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
-        // header set is a non-first-party signature. (cch billing-header signing is intentionally
-        // out of scope — brittle and version-coupled.)
-        Object.assign(headers, CLAUDE_CODE_HEADERS);
-        headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(provider.apiKey);
-        headers["x-client-request-id"] = crypto.randomUUID();
-      } else {
-        if (anthropicKeyUsesBearer(provider)) headers["Authorization"] = `Bearer ${provider.apiKey}`;
-        else headers["x-api-key"] = provider.apiKey;
-      }
+      const headers = anthropicBaseRequestHeaders(parsed.stream);
+      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey);
+      else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, fastSpeed?.betas ?? []);
 

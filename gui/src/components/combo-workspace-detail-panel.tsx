@@ -17,6 +17,7 @@ import type { ModelOption, ProviderOption } from "./combo-workspace-types";
 import { ComboCapabilities, EffortSelect, StrategySeg, TargetEditor } from "./combo-workspace-controls";
 import { COMBO_STRATEGY_HINT_KEYS, COMBO_TARGETS_HINT_KEYS } from "../combo-workspace-data";
 import { clampedNumberInput } from "./combo-workspace-utils";
+import { ComboProtocolPlan } from "./protocols/ComboProtocolPlan";
 
 type DetailTab = "config" | "about";
 
@@ -31,6 +32,7 @@ const detailTabDomId = (tab: DetailTab) => `cws-detail-tab-${tab}`;
 const detailPanelDomId = (tab: DetailTab) => `cws-detail-panel-${tab}`;
 
 export function DetailPanel({
+  apiBase,
   baseline,
   isCreate = false,
   otherIds,
@@ -45,6 +47,8 @@ export function DetailPanel({
   onSave,
   onDirtyChange,
 }: {
+  /** Management API target; without it the candidate path preview is not offered. */
+  apiBase?: string;
   baseline: ComboItem;
   isCreate?: boolean;
   /** Ids of all OTHER combos — rename collisions validate against these. */
@@ -377,6 +381,7 @@ export function DetailPanel({
             />
           </div>
         )}
+        {!isCreate && apiBase !== undefined && <ComboProtocolPlan apiBase={apiBase} model={baseline.model} dirty={dirty} />}
       </div>
 
       {/*

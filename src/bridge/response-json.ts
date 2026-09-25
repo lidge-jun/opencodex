@@ -49,7 +49,13 @@ import { bridgeToResponsesSSE } from "./sse";
 export function buildResponseJSON(
   events: AdapterEvent[],
   modelId: string,
-  options?: Parameters<typeof buildResponseJSONWithBudget>[2],
+  options?: Parameters<typeof buildResponseJSONWithBudget>[2] & {
+    /**
+     * False when the body is not what the client receives: a direct client encoder counts its
+     * own relayed frames and folds the same events here only for the completion effects.
+     */
+    recordBufferedDelivery?: boolean;
+  },
 ): Record<string, unknown> {
   // Default-budget safety net: a caller that omits the budget gets a bounded
   // default (disposed with the call), never the unbounded append path.
@@ -58,7 +64,9 @@ export function buildResponseJSON(
     // A buffered turn delivers its whole answer as one body, so nothing calls the per-frame
     // recorder on the SSE bridge. Without this the attempt would persist adapter events with
     // zero relayed ones, which is the loss signal -- raised on every non-streaming request.
-    attemptDeliveryRecorder(options.translatorBudget)?.noteBufferedDelivery(body);
+    if (options.recordBufferedDelivery !== false) {
+      attemptDeliveryRecorder(options.translatorBudget)?.noteBufferedDelivery(body);
+    }
     return body;
   }
   const budget = createTranslatorBudget();

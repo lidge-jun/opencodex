@@ -39,6 +39,18 @@ export interface ConsumedComboFailure {
 
 
 
+/**
+ * Direct client encoding for a translated Chat or Messages turn (PF-09). `model` is the model
+ * string the client asked for, which every client frame carries; `inputTokenFloor` is the
+ * Messages prompt estimate `message_start` reports when no usage arrived first (#4857).
+ */
+export interface ClientEncoderOption {
+  protocol: "chat" | "messages";
+  stream: boolean;
+  model: string;
+  inputTokenFloor?: number;
+}
+
 export interface HandleResponsesOptions {
   /** Internal Claude replay identity; consumed only by the final canonical Go transport. */
   claudeGoAffinity?: { sessionLane?: string };
@@ -94,6 +106,8 @@ export interface HandleResponsesOptions {
    * it. Omitted means a genuine Responses inbound.
    */
   inboundWire?: InboundWire;
+  /** PF-07: the Chat source a combo child may send natively; set only by the Chat ingress. */
+  protocolSource?: import("./core-combo-native").ComboProtocolSource;
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
   /**
@@ -147,6 +161,14 @@ export interface HandleResponsesOptions {
    * rebuilds headers and carries the fact through this flag.
    */
   visionDescribeTerminal?: boolean;
+  /**
+   * Set only by the Chat and Messages ingresses when `protocols.rollout.directEncoders` is on and
+   * the settled route is one non-Responses target. Adapter delivery then encodes the adapter
+   * events straight into the client's wire and returns a response marked with `markClientWire`.
+   * Passthrough, run-turn adapters, combo children and compaction turns ignore it and keep
+   * returning a Responses body, which the ingress converts as before.
+   */
+  clientEncoder?: ClientEncoderOption;
 }
 
 /** Values shared by the call, not a bag of mutable pipeline state. */

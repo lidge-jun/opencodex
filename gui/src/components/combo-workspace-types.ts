@@ -17,6 +17,8 @@ export type ModelOption = {
 };
 
 export interface ComboWorkspaceProps {
+  /** Management API target; enables the per-candidate path preview in the detail panel. */
+  apiBase?: string;
   combos: ComboItem[];
   providerQuotaStates: ProviderQuotaStates;
   providers: ProviderOption[];

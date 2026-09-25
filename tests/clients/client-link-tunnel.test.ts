@@ -78,7 +78,7 @@ test("spawns the client tunnel with the exact local forward argv and writes a pr
       argv: fake.children[0]!.child.argv,
       ownerPid: process.pid,
     });
-    expect(statSync(pidfile).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(pidfile).mode & 0o777).toBe(0o600);
     fake.children[0]!.resolve(0);
     await handle.stop();
     expect(existsSync(pidfile)).toBe(false);

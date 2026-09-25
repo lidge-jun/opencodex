@@ -20,6 +20,7 @@ import {
   ResponseBodyInactivityError,
 } from "../../lib/response-body-inactivity";
 import { resolveStallTimeoutSec } from "../../stall-timeout";
+import { clientEncoderForDelivery, deliverClientEncodedResponse } from "../inference/client-encoder-delivery";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -114,6 +115,47 @@ export async function deliverAdapterResponse(
         })
       : eventStream;
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    // One completion owner for both deliveries: the bridge calls it from its terminal, the
+    // direct client encoder from the fold of the same events.
+    const onCompletedResponse = (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
+      commitReasoningReplayServingRoute();
+      rememberKiroDeliveredFinalAnswer(transportState.activeAdapter.name, response);
+      // Compaction turns must NOT enter the continuation cache: _rawBody still holds the full
+      // PRE-compaction history, and a later previous_response_id expansion would rehydrate the
+      // giant stale chain Codex just replaced.
+      if (!routedCompaction) {
+        rememberResponseState(
+          parsed._rawBody,
+          response,
+          continuationStateForResponse(providerState),
+          responseStateOptions(transportState.activeAdapter.name === "kiro"),
+        );
+      }
+      notifyResponseComplete(response);
+    };
+    const clientEncoder = clientEncoderForDelivery(options, logCtx, !!routedCompaction, transportState.activeAdapter.name);
+    if (clientEncoder) {
+      return deliverClientEncodedResponse({
+        encoder: clientEncoder,
+        events: guardedEventStream,
+        logCtx,
+        translatorBudget,
+        responseModelId: parsed._responseModelId ?? parsed.modelId,
+        adapterName: transportState.activeAdapter.name,
+        fold: {
+          replayCacheScope: parsed._reasoningReplayScope,
+          hideThinkingSummary: parsed.options.hideThinkingSummary,
+          toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames,
+        },
+        stallTimeoutSec: config.stallTimeoutSec,
+        turnAdmissionLease: options.turnAdmissionLease,
+        ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
+        stopUpstream: () => { cancelResponseCompletion(); upstream.abort(); },
+        onStreamDone: cleanupUpstreamAbort,
+        onCompletedResponse,
+        bindUsage: usage => transportState.bindKeyUsageFromBridge(usage),
+      });
+    }
     const sseStream = bridgeToResponsesSSE(
       guardedEventStream, parsed._responseModelId ?? parsed.modelId, toolNsMap, freeformToolNames, toolSearchToolNames,
       () => { cancelResponseCompletion(); upstream.abort(); }, 2_000,
@@ -134,22 +176,7 @@ export async function deliverAdapterResponse(
           // Raw adapter usage, pre wire-normalization (see the runTurn branch above).
           transportState.bindKeyUsageFromBridge(usage);
         },
-        onCompletedResponse: (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
-          commitReasoningReplayServingRoute();
-          rememberKiroDeliveredFinalAnswer(transportState.activeAdapter.name, response);
-          // Compaction turns must NOT enter the continuation cache: _rawBody still holds the full
-          // PRE-compaction history, and a later previous_response_id expansion would rehydrate the
-          // giant stale chain Codex just replaced.
-          if (!routedCompaction) {
-            rememberResponseState(
-              parsed._rawBody,
-              response,
-              continuationStateForResponse(providerState),
-              responseStateOptions(transportState.activeAdapter.name === "kiro"),
-            );
-          }
-          notifyResponseComplete(response);
-        },
+        onCompletedResponse,
       },
     );
     const bridgeTurnAc = new AbortController();

@@ -49,6 +49,11 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.modelsEndpoint",
   "api.protocolChatCompletions",
   "api.protocolMessages",
+  // Short wire names on the Logs protocol path, and the IR acronym beside them.
+  "logs.protocol.wire.responses",
+  "logs.protocol.wire.chat",
+  "logs.protocol.wire.messages",
+  "logs.protocol.hop.ir",
   "api.protocolResponses",
   "api.responsesEndpoint",
   // Provider proper nouns (Taiwan keeps the English brand; "火山方舟" is Mainland usage)

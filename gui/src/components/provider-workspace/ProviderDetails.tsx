@@ -50,6 +50,8 @@ export default function ProviderDetails({
   accountLoadState,
   accountsFocusToken = 0,
   accountsFocusProvider = null,
+  settingsFocusToken = 0,
+  settingsFocusProvider = null,
   switchingAccountId,
   keys,
   busyProvider,
@@ -90,6 +92,9 @@ export default function ProviderDetails({
   accountsFocusToken?: number;
   /** Provider that owns the current accountsFocusToken; other providers ignore it. */
   accountsFocusProvider?: string | null;
+  /** When this token increases for settingsFocusProvider, switch to the Settings tab (deep link). */
+  settingsFocusToken?: number;
+  settingsFocusProvider?: string | null;
   switchingAccountId?: string | null;
   keys?: ApiKeyRow[];
   busyProvider?: string | null;
@@ -115,6 +120,7 @@ export default function ProviderDetails({
   // Seed 0 so a mount-time token from revealProviderAccounts stays pending until
   // authSurface exists; seeding with the prop would treat it as already seen.
   const [seenAccountsFocusToken, setSeenAccountsFocusToken] = useState(0);
+  const [seenSettingsFocusToken, setSeenSettingsFocusToken] = useState(0);
   const registerSettingsSave = useCallback((save: (() => Promise<boolean>) | null) => {
     settingsSaveRef.current = save;
   }, []);
@@ -165,6 +171,14 @@ export default function ProviderDetails({
         setTab("accounts");
       }
     }
+  }
+
+  // Same render-time adjustment for a `#providers?provider=<name>` deep link. Leaving Settings
+  // is what needs the unsaved-changes guard, so opening it needs none.
+  const scopedSettingsFocusToken = settingsFocusProvider === item.name ? settingsFocusToken : 0;
+  if (scopedSettingsFocusToken !== seenSettingsFocusToken) {
+    setSeenSettingsFocusToken(scopedSettingsFocusToken);
+    if (scopedSettingsFocusToken) setTab("settings");
   }
 
   const requestDeselect = useCallback(() => {

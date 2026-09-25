@@ -31,7 +31,7 @@ function uuid(): string {
   return crypto.randomUUID().replace(/-/g, "");
 }
 
-function completionId(): string {
+export function completionId(): string {
   return `chatcmpl-${uuid().slice(0, 24)}`;
 }
 
@@ -133,12 +133,12 @@ function streamErrorStatus(message: string): number {
   return 502;
 }
 
-function dataFrame(payload: Rec | "[DONE]"): string {
+export function dataFrame(payload: Rec | "[DONE]"): string {
   if (payload === "[DONE]") return "data: [DONE]\n\n";
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
-function chunkBase(id: string, model: string, created: number): Rec {
+export function chunkBase(id: string, model: string, created: number): Rec {
   return {
     id,
     object: "chat.completion.chunk",
@@ -159,6 +159,90 @@ function appendedUtf8Bytes(previous: string, previousBytes: number, fragment: st
     nextBytes -= 2;
   }
   return nextBytes;
+}
+
+/** Details a streamed Chat failure carries into its error frame. */
+export interface ChatCompletionsStreamFailure {
+  code?: string | null;
+  type?: string;
+  status?: number;
+}
+
+/**
+ * The `data: {error}` payload a streamed Chat failure ends with, and whether it is one of the
+ * fixed, bounded failures that must be delivered even when the translation budget is exhausted.
+ * Provider text is redacted; the two fixed failures carry no provider text at all.
+ */
+export function chatCompletionsStreamErrorPayload(
+  message: string,
+  details?: ChatCompletionsStreamFailure,
+): { payload: Rec; bounded: boolean } {
+  const translatorOverflow = details?.code === "translation_buffer_limit";
+  const safeMessage = translatorOverflow ? "upstream translation buffer exceeded the safe limit"
+    : details?.code === "invalid_refusal" ? "upstream refusal representations are inconsistent"
+    : redactSecretString(message);
+  const statusHint = details?.status ?? streamErrorStatus(safeMessage);
+  const classified = classifyError(statusHint, details?.type ?? "upstream_error", safeMessage);
+  if (translatorOverflow) {
+    classified.code = "translation_buffer_limit";
+    // Provider-controlled overflow is an upstream failure on every path:
+    // streaming frame, collector, and defensive JSON agree on 502.
+    classified.type = "upstream_error";
+  } else if (details?.code === "invalid_refusal") {
+    classified.code = details.code;
+    classified.type = "upstream_error";
+  } else if (isCyberPolicyCode(details?.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
+    classified.code = CYBER_POLICY_ERROR_CODE;
+    classified.type = cyberPolicyErrorType(details?.type);
+  } else if (details?.code !== undefined && details.code !== null && !classified.code) {
+    classified.code = details.code;
+  }
+  return {
+    payload: {
+      error: {
+        message: classified.message,
+        type: classified.type,
+        param: null,
+        code: classified.code,
+      },
+    },
+    bounded: translatorOverflow || details?.code === "invalid_refusal",
+  };
+}
+
+/** How a Responses `response.failed` error object becomes a streamed Chat failure. */
+export function chatCompletionsFailedResponse(error: Rec): { message: string; details: ChatCompletionsStreamFailure } {
+  const message = typeof error.message === "string" ? error.message : "upstream request failed";
+  const code = typeof error.code === "string" ? error.code : null;
+  const type = typeof error.type === "string" ? error.type : undefined;
+  return {
+    message,
+    details: {
+      code,
+      ...(code === "translation_buffer_limit"
+        ? { status: 502, type: "upstream_error" }
+        : { type, ...(code === CYBER_POLICY_ERROR_CODE ? { status: 400 } : {}) }),
+    },
+  };
+}
+
+/**
+ * A Responses incomplete reason as the Chat client sees it: a truthful early finish for an
+ * output cap or a content filter, and a failure for every other reason (stall, adapter EOF,
+ * proxy-synthesized incompletes), which must never look like a clean stop.
+ */
+export function chatCompletionsIncompleteOutcome(
+  reason: unknown,
+  message: unknown,
+): { finishReason: "length" | "content_filter" } | { failMessage: string } {
+  if (reason === "max_output_tokens") return { finishReason: "length" };
+  if (reason === "content_filter") return { finishReason: "content_filter" };
+  const why = typeof reason === "string" ? reason : "unknown";
+  return {
+    failMessage: typeof message === "string" && message.length > 0
+      ? message
+      : `upstream stream ended early (${why})`,
+  };
 }
 
 function refusalTranslationError(): ChatCompletionsStreamError {
@@ -506,38 +590,12 @@ export function responsesSseToChatCompletionsSse(
         // Deliver the error frame then close the stream abnormally (no [DONE]).
         // Do not controller.error() — that can drop already-enqueued bytes from consumers
         // like response.text().
-        const translatorOverflow = details?.code === "translation_buffer_limit";
-        const safeMessage = translatorOverflow ? "upstream translation buffer exceeded the safe limit"
-          : details?.code === "invalid_refusal" ? "upstream refusal representations are inconsistent"
-          : redactSecretString(message);
-        const statusHint = details?.status ?? streamErrorStatus(safeMessage);
-        const classified = classifyError(statusHint, details?.type ?? "upstream_error", safeMessage);
-        if (translatorOverflow) {
-          classified.code = "translation_buffer_limit";
-          // Provider-controlled overflow is an upstream failure on every path:
-          // streaming frame, collector, and defensive JSON agree on 502.
-          classified.type = "upstream_error";
-        } else if (details?.code === "invalid_refusal") {
-          classified.code = details.code;
-          classified.type = "upstream_error";
-        } else if (isCyberPolicyCode(details?.code) || classified.code === CYBER_POLICY_ERROR_CODE) {
-          classified.code = CYBER_POLICY_ERROR_CODE;
-          classified.type = cyberPolicyErrorType(details?.type);
-        } else if (details?.code !== undefined && details.code !== null && !classified.code) {
-          classified.code = details.code;
-        }
+        const { payload, bounded } = chatCompletionsStreamErrorPayload(message, details);
         try {
-          const frame = encoder.encode(dataFrame({
-            error: {
-              message: classified.message,
-              type: classified.type,
-              param: null,
-              code: classified.code,
-            },
-          }));
+          const frame = encoder.encode(dataFrame(payload));
           // These fixed, bounded failures must survive even when decoder-owned input
           // still fills the budget. They contain no provider text or IDs.
-          if (translatorOverflow || details?.code === "invalid_refusal") controller.enqueue(frame);
+          if (bounded) controller.enqueue(frame);
           else enqueueLiveFrame(frame);
           emittedFrames++;
         } catch {
@@ -688,37 +746,23 @@ export function responsesSseToChatCompletionsSse(
           case "response.incomplete": {
             const response = isRec(data.response) ? data.response : {};
             const details = isRec(response.incomplete_details) ? response.incomplete_details : {};
-            const reason = details.reason === "max_output_tokens" ? "length"
-              : details.reason === "content_filter" ? "content_filter"
-              : undefined;
-            if (reason !== undefined) {
+            const outcome = chatCompletionsIncompleteOutcome(details.reason, details.message);
+            if ("finishReason" in outcome) {
               // Truthful OpenAI-compatible finish reasons: the turn ended, just early.
               snapshotRefusals(response);
-              finish(reason, response.usage);
+              finish(outcome.finishReason, response.usage);
             } else {
               // upstream_stall_timeout / adapter_eof / proxy-synthesized incompletes are
               // failures, not early finishes: emit an error frame and close WITHOUT
               // [DONE] instead of a success-looking stop/tool_calls + [DONE].
-              const why = typeof details.reason === "string" ? details.reason : "unknown";
-              const message = typeof details.message === "string" && details.message.length > 0
-                ? details.message
-                : `upstream stream ended early (${why})`;
-              fail(message);
+              fail(outcome.failMessage);
             }
             break;
           }
           case "response.failed": {
             const response = isRec(data.response) ? data.response : {};
-            const error = isRec(response.error) ? response.error : {};
-            const message = typeof error.message === "string" ? error.message : "upstream request failed";
-            const code = typeof error.code === "string" ? error.code : null;
-            const type = typeof error.type === "string" ? error.type : undefined;
-            fail(message, {
-              code,
-              ...(code === "translation_buffer_limit"
-                ? { status: 502, type: "upstream_error" }
-                : { type, ...(code === CYBER_POLICY_ERROR_CODE ? { status: 400 } : {}) }),
-            });
+            const failure = chatCompletionsFailedResponse(isRec(response.error) ? response.error : {});
+            fail(failure.message, failure.details);
             break;
           }
           default:
