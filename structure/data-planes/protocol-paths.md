@@ -124,7 +124,26 @@ always served. The Messages surface uses an explicit `apiSurfaces.messages.enabl
 present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
 `protocols.rollout` switch defaults off; the OAuth native-Messages switch is effective only with
-the key-auth one. No request path reads these settings yet.
+the key-auth one.
+
+`claudeInboundDisabled` in `src/server/claude-messages.ts` is the Messages ingress reader: both
+`/v1/messages` and `/v1/messages/count_tokens` call it, so the two routes cannot disagree, and a
+closed surface answers 403 before the body is read. `buildApiAccessEndpoints`
+(`src/server/management/api-access.ts`) reports the resolved `surfaces` in the keys payload and
+keeps `claudeCodeEnabled` for older dashboards, set from the resolved Messages state rather than
+from `claudeCode.enabled`. No other request path reads these settings yet.
+
+`PATCH /api/protocols/settings` is the one writer. `src/server/management/protocol-settings-patch.ts`
+validates the body strictly and applies it in memory; the route persists through
+`saveConfigPreservingClaudeCode` and restores the pre-patch snapshot when the save throws, so the
+live config never serves a state the file does not hold. Closing Messages writes
+`apiSurfaces.messages.enabled = false` and `claudeCode.enabled = false` in one save, through
+`commitClaudeCodeBlock` (`src/claude/claude-code-block.ts`, shared with the Claude settings routes
+and responsible for the auth-mode migration sentinel); a binary older than `apiSurfaces` reads only
+`claudeCode.enabled`, so a downgrade after a close stays closed. Opening writes only the explicit
+surface value, so after a downgrade the older reader decides, and it errs closed. The resulting
+upgrade/rollback matrix is `tests/claude-integration/messages-surface-matrix.test.ts`; the route
+contract is `tests/server/protocol-settings-route.test.ts`.
 
 `src/config/schema/config-schema.ts` keeps `apiSurfaces` raw on purpose: degrading a mistyped
 `enabled` to absence would turn it into "inherit" and could reopen a surface, so the resolver

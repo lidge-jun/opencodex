@@ -49,6 +49,16 @@ displayed. Tests live in `gui/tests/audio-api-client.test.ts`,
 `gui/tests/audio-api-panel.test.tsx`, `gui/tests/api-auth-memory.test.ts` and
 `tests/server/api-access-endpoints.test.ts`.
 
+The endpoints panel (`gui/src/pages/api-keys-endpoints-panel.tsx`) shows the base URL and models
+endpoint, then one card per public API from `gui/src/pages/api-surface-cards.tsx`: state, endpoint
+and the decision source (always served, explicit, inherited from Claude settings, or invalid and
+closed). The Messages card stays visible while closed, carries the toggle that calls
+`PATCH /api/protocols/settings` on the page's `apiBase` (machine or shared target) before reloading
+the keys payload, and links to `#integrations/claude`. `parseApiSurfaces`
+(`gui/src/pages/api-keys-utils.ts`) validates `surfaces` from the keys payload and the session
+cache; a server without it keeps the flat endpoint list gated on `claudeCodeEnabled`. Tests live in
+`gui/tests/api-surface-cards.test.tsx`.
+
 The API page's request path preview is
 `gui/src/components/protocols/ProtocolPlanPanel.tsx`, placed after the endpoints section. It asks
 `POST /api/protocols/plan` through `gui/src/protocol-api.ts`, which validates the answer with the
