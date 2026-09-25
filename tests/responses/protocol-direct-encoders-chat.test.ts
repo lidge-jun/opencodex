@@ -275,7 +275,8 @@ describe("direct Chat encoder matches bridge + converter (stream)", () => {
     const frames = await expectStreamParity(SCENARIOS["tool call with streamed arguments"]!.events);
     const roles = frames.filter(frame => JSON.stringify(frame).includes("\"role\":\"assistant\""));
     expect(roles).toHaveLength(1);
-    const toolFrames = frames.filter(frame => JSON.stringify(frame).includes("tool_calls"));
+    // Frames carrying a tool-call delta; the finish chunk only names `tool_calls` as its reason.
+    const toolFrames = frames.filter(frame => JSON.stringify(frame).includes("\"tool_calls\":["));
     expect(toolFrames).toHaveLength(1);
     expect(JSON.stringify(toolFrames[0])).toContain("\"arguments\":\"{\\\"q\\\":\\\"weather\\\"}\"");
     const finish = frames.at(-2) as { choices: { finish_reason: string }[]; usage: Record<string, unknown> };
