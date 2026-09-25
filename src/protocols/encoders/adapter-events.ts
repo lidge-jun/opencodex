@@ -95,7 +95,7 @@ export interface ClientFrameSink {
   emitBatch(frames: { text: string; observation?: RelayedEventObservation }[]): void;
   /** A fixed, bounded frame that must reach the client even when the budget is exhausted. */
   emitBounded(text: string): void;
-  /** A transport keepalive; it does not count as wire activity. */
+  /** A transport keepalive; it counts as neither wire activity nor a relayed event. */
   emitKeepalive(text: string): void;
   desiredSize(): number;
 }
@@ -201,7 +201,9 @@ export function encodeAdapterEventStream(
     queuedFrameBytes.push(frame.byteLength);
     emittedFrames++;
     if (activity) wireActivity = true;
-    relayed(observation);
+    // A keepalive is transport liveness, not a relayed event: the bridge enqueues its heartbeat
+    // outside the relay counter, and the converters' keepalives never reach it either.
+    if (activity) relayed(observation);
   };
   const sink: ClientFrameSink = {
     budget,
