@@ -112,7 +112,7 @@ test("names each control and the source grid so the summarizer and the covered s
   }
   await choose("model", "gateway/cheap");
   await choose("sources", "Selected sources only");
-  expect(container.textContent).toContain("Reroute compaction requests from these sources:");
+  expect(container.textContent).toContain("Reroute compaction requests whose source model matches:");
 });
 
 test("the trigger selection round-trips and discloses automatic compaction", async () => {
@@ -204,12 +204,12 @@ test("the disclosure names the selected sources instead of claiming every reques
   expect(container.querySelector('[role="note"]')).toBeNull();
   await act(async () => { sourceCheckbox("gateway/*")!.click(); });
   const note = container.querySelector('[role="note"]')?.textContent ?? "";
-  expect(note).toContain("compaction requests from gateway/*");
+  expect(note).toContain("compaction requests whose source model matches gateway/*");
   expect(note).toContain("to gateway for summarization");
   expect(note).not.toContain("every covered compaction request");
   await choose("model", "combo/compact");
   const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";
-  expect(comboNote).toContain("compaction requests from gateway/*");
+  expect(comboNote).toContain("compaction requests whose source model matches gateway/*");
   expect(comboNote).toContain("combo combo/compact");
 });
 
@@ -220,7 +220,7 @@ test("the disclosure names the provider endpoint host when the provider is known
   // A scoped override keeps the endpoint next to the sources it covers.
   await choose("sources", "Selected sources only");
   await act(async () => { sourceCheckbox("gateway/*")!.click(); });
-  expect(container.querySelector('[role="note"]')?.textContent).toContain("from gateway/* send the full conversation contents to gateway (gw.example.com)");
+  expect(container.querySelector('[role="note"]')?.textContent).toContain("source model matches gateway/* send the full conversation contents to gateway (gw.example.com)");
   // Combo targets carry their own endpoints, so "any of them" is checkable against the list.
   await choose("model", "combo/compact");
   const comboNote = container.querySelector('[role="note"]')?.textContent ?? "";

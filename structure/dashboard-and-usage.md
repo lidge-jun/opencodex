@@ -462,8 +462,10 @@ provides labeled model, trigger, source-scope and effort selectors with an expli
 standing note that the selected model's provider receives the entire conversation, and a warning
 naming that provider once a model is chosen; for a combo selector the warning lists the combo's
 target providers from `GET /api/combos` and states that failover targets receive the conversation
-too. The source scope renders as provider wildcards and individual models under a title naming
-them as the rerouted sources, and saving with an empty selection is refused client-side because
+too. The source-scope picker edits `sourceModels` as individual model selectors and provider-wide
+`provider/*` selectors. It keeps saved selectors missing from the current catalog visible,
+and explains that matching uses each incoming compaction request's source model, not a
+conversation id. Saving a selected scope with no selectors is refused client-side because
 the schema would drop the override. `GET /api/settings` returns
 the override or null; `PUT /api/settings` accepts a complete validated object or null to clear it.
 Save failure restores live settings and deletion provenance; the dashboard retains the draft for retry.

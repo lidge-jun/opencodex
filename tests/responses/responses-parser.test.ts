@@ -1305,4 +1305,22 @@ describe("compaction turns expose reasoning to the summarizer", () => {
       expect.arrayContaining([expect.objectContaining({ type: "thinking", thinking: "应该保留推理" })]),
     );
   });
+
+  test("keeps trailing reasoning when compaction follows without an assistant message", () => {
+    const parsed = parse([userMsg, reasoningItem("最终决策理由"), { type: "compaction_trigger" }]);
+    expect(parsed.context.messages).toMatchObject([
+      { role: "user" },
+      { role: "assistant", content: [{ type: "text", text: expect.stringContaining("最终决策理由") }] },
+    ]);
+  });
+
+  test("keeps reasoning on its assistant turn before the next user message", () => {
+    const followUp = { type: "message", role: "user", content: [{ type: "input_text", text: "继续" }] };
+    const parsed = parse([userMsg, reasoningItem("上一轮的决策理由"), followUp, { type: "compaction_trigger" }]);
+    expect(parsed.context.messages).toMatchObject([
+      { role: "user", content: "调整压缩方案" },
+      { role: "assistant", content: [{ type: "text", text: expect.stringContaining("上一轮的决策理由") }] },
+      { role: "user", content: "继续" },
+    ]);
+  });
 });

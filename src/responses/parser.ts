@@ -154,7 +154,9 @@ export function parseRequest(
   };
   const preservePendingReplay = () => {
     const replay = pendingReasoning.filter(
-      entry => entry.envelopeSigned || (entry.part.type === "thinking" && entry.part.redacted?.length),
+      entry => (compactionRequest && entry.part.type === "text")
+        || entry.envelopeSigned
+        || (entry.part.type === "thinking" && entry.part.redacted?.length),
     );
     if (replay.length > 0) {
       ensureAssistantPlaceholder(messages, data.model, now).content.push(...replay.map(entry => entry.part));
