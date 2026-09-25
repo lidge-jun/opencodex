@@ -176,7 +176,7 @@ describe("managed native Messages over Anthropic OAuth", () => {
     expect(sent).toHaveLength(1);
     const wire = sent[0]!;
     expect(wire.url).toBe("https://api.anthropic.com/v1/messages");
-    expect(wire.headers.get("authorization")).toBe("Bearer synthetic-anthropic-access-0");
+    expect(wire.headers.get("authorization")).toBe(`Bearer ${credential(0).access}`);
     expect(wire.headers.get("x-api-key")).toBeNull();
     expect(wire.headers.get("anthropic-beta")).toBe(`${ANTHROPIC_OAUTH_BETA},${ALLOWED_BETA}`);
     expect((wire.body.system as { text: string }[])[0]!.text).toBe(CLAUDE_CODE_SYSTEM_INSTRUCTION);
@@ -213,7 +213,7 @@ describe("managed native Messages over Anthropic OAuth", () => {
     const { response, row } = await send(fixtureConfig(), { ...BODY, stream: false });
     expect(response.status).toBe(200);
     expect(row.protocolTrace).toMatchObject({ mode: "native" });
-    expect(sent.map(entry => entry.headers.get("authorization"))).toEqual(["Bearer synthetic-anthropic-access-1"]);
+    expect(sent.map(entry => entry.headers.get("authorization"))).toEqual([`Bearer ${credential(1).access}`]);
   });
 
   test("two usable accounts keep the bridge, which owns rotation", async () => {
