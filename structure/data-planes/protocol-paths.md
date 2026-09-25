@@ -226,7 +226,10 @@ the existing collector.
 Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
 complete tool-call chunk when it completes, as the converter always did; Messages streams
 `input_json_delta` fragments; custom and tool-search calls and server-side search activity have
-no Chat representation; a Messages thinking block is buffered until its item closes. The one
+no Chat representation; a Messages thinking block is buffered until its item closes; a
+wire-silence heartbeat reaches Chat as the converter's `: opencodex heartbeat` SSE comment and
+Messages as its `ping`, neither counted as output, first output, usage or a relayed event
+([heartbeat contract](../transports/streaming-health.md#heartbeat-and-stall-deadline)). The one
 behavior that differs is backpressure: the Messages converter read the bridge eagerly, while the
 encoder steps one event per pull.
 
