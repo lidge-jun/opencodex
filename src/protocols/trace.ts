@@ -117,6 +117,20 @@ export function markProtocolBlocked(
 }
 
 /**
+ * Add a reason to the request's entry mark: a combo candidate skipped before any send (PF-07).
+ * No-op without an entry mark, and a blocked mark is never reopened.
+ */
+export function addProtocolEntryReason(logCtx: object, code: ProtocolReasonCode): void {
+  try {
+    const mark = requestMarks.get(logCtx);
+    if (mark?.kind !== "entry") return;
+    mark.reasonCodes = boundedReasons([...mark.reasonCodes, code]);
+  } catch {
+    /* a trace must never fail the request it describes */
+  }
+}
+
+/**
  * Record the path one physical attempt actually took, overriding the lane-derived one. For a
  * send site that knows its path better than the ingress lane does.
  */
