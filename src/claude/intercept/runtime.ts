@@ -8,7 +8,7 @@ import { claudeInterceptCaCertPath, ensureLocalInterceptCaForStartup, issueLocal
 import type { PickerRouteInput } from "./picker-models";
 import { createPickerRuntime, type CreatePickerRuntimeOptions, type PickerRuntime } from "./picker-runtime";
 import type { SecurityRunner } from "./picker-trust";
-import { ensureClaudeInterceptProxyToken } from "./proxy-auth";
+import { ensureClaudeInterceptProxyToken, readClaudeInterceptProxyToken } from "./proxy-auth";
 import { buildClaudeInterceptEnv, migrateClaudeInterceptSettings } from "./settings";
 
 /**
@@ -152,7 +152,9 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   try {
     proxy = await startConnectProxy(claudeInterceptProxyPort(options.config, options.publicPort), {
       interceptPort: listener.port!,
-      authToken,
+      // A real apply may recreate a missing token while this listener remains live.
+      // Read current validated authority per CONNECT; absent/invalid means deny, not mint.
+      authToken: () => readClaudeInterceptProxyToken(configDir),
     });
   } catch (error) {
     await listener.stop(true);

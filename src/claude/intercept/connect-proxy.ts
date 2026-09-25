@@ -29,7 +29,7 @@ export interface ConnectProxyOptions {
    * clients cannot present proxy credentials at all; an unauthenticated CONNECT proxy stays an
    * open loopback relay, so every consumer that can carry the credential must set this.
    */
-  authToken?: string;
+  authToken?: string | (() => string | null);
   /** Hostnames (lowercase) whose 443 tunnels are spliced onto `interceptPort`. */
   interceptHosts?: readonly string[];
   /** Per-connection override, consulted before interceptHosts; null keeps the default. */
@@ -172,9 +172,14 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
       respond(socket, 405, "Method Not Allowed");
       return;
     }
-    if (options.authToken && !proxyAuthorized(requestHead, options.authToken)) {
-      respond(socket, 407, "Proxy Authentication Required");
-      return;
+    if (options.authToken !== undefined) {
+      let token: string | null = null;
+      try { token = typeof options.authToken === "function" ? options.authToken() : options.authToken; }
+      catch { /* unavailable credential must never fall back to an unauthenticated proxy */ }
+      if (!token || !proxyAuthorized(requestHead, token)) {
+        respond(socket, 407, "Proxy Authentication Required");
+        return;
+      }
     }
     if (isLoopbackTarget(target.host)) {
       respond(socket, 403, "Forbidden");

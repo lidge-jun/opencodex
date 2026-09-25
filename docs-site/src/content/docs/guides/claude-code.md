@@ -877,3 +877,11 @@ and the turn never starts, so an unrecorded destination folds. This applies with
 reuse still requires stable session identity and upstream cache availability.
 Changes to earlier instructions or tools, and conversation compaction, can still
 affect cache hits; preserving reminder order alone does not guarantee reuse.
+
+### Intercept token recovery
+
+The running authenticated proxy validates the current token for each new CONNECT request.
+An explicit first-party apply recreates a missing token and refreshes the owned settings without
+requiring a proxy restart; existing tunnels are not revoked. Invalid, linked, oversized or
+non-token files are refused rather than overwritten. Inspect such an entry before removing only
+the confirmed obsolete token file and applying first-party mode again; never delete its link target.

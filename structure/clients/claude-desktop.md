@@ -84,6 +84,15 @@ configuration. Ordinary Chat-tab traffic is out of scope for both modes.
 
 `src/claude/desktop-gateway-state.ts` adopts the exact committed Claude subtree and rebases the live hand-edit guard only after persistence succeeds. Pending disjoint live edits survive; later hand edits remain protected during unrelated whole-config saves. Gateway mode and fingerprint are recorded before cleanup and diagnostic awaits.
 
+### Intercept credential lifetime
+
+`src/claude/intercept/proxy-auth.ts` reads a bounded base64url credential through a checked
+regular-file descriptor, rejects links and foreign POSIX owners, and never replaces invalid
+existing entries. Creation hardens before no-replace publication. The authenticated listener
+reads this current authority for every CONNECT; absence or invalidity denies admission.
+An explicit first-party apply can recreate a missing token and the live listener follows it
+without restart. Established tunnels are not revoked by this new-connection check.
+
 ### First-party model bindings
 
 `src/claude/intercept/model-bindings.ts` owns `claudeCode.intercept.modelMap`. In first-party mode the
