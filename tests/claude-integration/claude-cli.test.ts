@@ -74,6 +74,62 @@ describe("ocx claude proxy liveness", () => {
 });
 
 describe("ocx claude native fallback", () => {
+  test("owned applied and stale proxy settings bypass the intercept", () => {
+    const owned = { HTTPS_PROXY: "http://opencodex:t@127.0.0.1:10200", NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" };
+    for (const kind of ["applied", "stale"] as const) {
+      const env = buildNativeClaudeEnv(cfg(), { HTTPS_PROXY: owned.HTTPS_PROXY,
+        NODE_EXTRA_CA_CERTS: owned.NODE_EXTRA_CA_CERTS }, { ownedInterceptSettings: { kind, env: owned } });
+      expect(env.NO_PROXY).toBe("*");
+      expect(env.no_proxy).toBe("*");
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+      const foreignCa = buildNativeClaudeEnv(cfg(), { HTTPS_PROXY: owned.HTTPS_PROXY,
+        NODE_EXTRA_CA_CERTS: "/tmp/foreign-ca.pem" }, { ownedInterceptSettings: { kind, env: owned } });
+      expect(foreignCa.NODE_EXTRA_CA_CERTS).toBe("/tmp/foreign-ca.pem");
+    }
+    const noInheritedProxy = buildNativeClaudeEnv(cfg(), { ALL_PROXY: "http://corp:3128" },
+      { ownedInterceptSettings: { kind: "applied", env: owned } });
+    expect(noInheritedProxy).toMatchObject({ NO_PROXY: "*", no_proxy: "*", ALL_PROXY: "http://corp:3128" });
+  });
+
+  test("foreign inherited proxy preserves env and warns exactly once", () => {
+    const owned = { HTTPS_PROXY: "http://opencodex:t@127.0.0.1:10200", NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" };
+    for (const name of ["HTTPS_PROXY", "https_proxy"] as const) {
+      const warnings: string[] = [];
+      const base = { [name]: "http://corp:3128", NO_PROXY: "localhost",
+        NODE_EXTRA_CA_CERTS: owned.NODE_EXTRA_CA_CERTS };
+      const env = buildNativeClaudeEnv(cfg(), base, { ownedInterceptSettings: { kind: "applied", env: owned },
+        warn: line => warnings.push(line) });
+      expect(env[name]).toBe("http://corp:3128");
+      expect(env.NO_PROXY).toBe("localhost");
+      expect(env.no_proxy).toBeUndefined();
+      expect(env.NODE_EXTRA_CA_CERTS).toBe(owned.NODE_EXTRA_CA_CERTS);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("Turn Desktop/CLI first-party off");
+    }
+  });
+
+  test("absent, foreign, unreadable and CA-only stale settings leave inherited proxies alone", () => {
+    const states = [{ kind: "absent" }, { kind: "foreign", env: { HTTPS_PROXY: "http://corp:3128" } },
+      { kind: "unreadable", path: "/settings.json" },
+      { kind: "stale", env: { NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" } }] as const;
+    for (const state of states) {
+      const warnings: string[] = [];
+      const env = buildNativeClaudeEnv(cfg(), { ALL_PROXY: "http://corp:3128",
+        NODE_EXTRA_CA_CERTS: "/tmp/owned-ca.pem" },
+        { ownedInterceptSettings: state, warn: line => warnings.push(line) });
+      expect(env.ALL_PROXY).toBe("http://corp:3128");
+      expect(env.NODE_EXTRA_CA_CERTS).toBe("/tmp/owned-ca.pem");
+      expect(env.NO_PROXY).toBeUndefined();
+      expect(env.no_proxy).toBeUndefined();
+      expect(warnings).toEqual([]);
+    }
+    const noSettings = buildNativeClaudeEnv(cfg(), { HTTPS_PROXY: "http://corp:3128",
+      NODE_EXTRA_CA_CERTS: "/tmp/corp-ca.pem" });
+    expect(noSettings.HTTPS_PROXY).toBe("http://corp:3128");
+    expect(noSettings.NODE_EXTRA_CA_CERTS).toBe("/tmp/corp-ca.pem");
+    expect(noSettings.NO_PROXY).toBeUndefined();
+  });
   test("routes unless configured or live Claude routing is explicitly disabled", () => {
     expect(claudeLaunchPlan(true, true)).toEqual({ kind: "routed" });
     expect(claudeLaunchPlan(true, undefined)).toEqual({ kind: "routed" });

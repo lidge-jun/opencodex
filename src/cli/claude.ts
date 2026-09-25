@@ -32,6 +32,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { aliasForNative, aliasForRoute, legacyAliasForNative, legacyAliasForRoute } from "../claude/alias";
 import { desktop3pAlias } from "../claude/desktop-3p";
+import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
+import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
 
 export interface ClaudeLaunchEnv {
   [key: string]: string | undefined;
@@ -52,6 +54,8 @@ export type ClaudeEnvDeps = {
   preBunAnthropicSlots?: readonly AnthropicParentEnvSlot[] | null;
   /** Explicit unsafe opt-in from a root `--dangerously-skip-permissions` launch. */
   allowRootSkipPermissions?: boolean;
+  ownedInterceptSettings?: ClaudeInterceptSettingsState;
+  warn?: (line: string) => void;
 };
 
 function deleteUntrustedAnthropicSlots(env: ClaudeLaunchEnv, deps: ClaudeEnvDeps): void {
@@ -613,6 +617,23 @@ export function buildNativeClaudeEnv(
   deps: ClaudeEnvDeps = {},
 ): ClaudeLaunchEnv {
   const env: ClaudeLaunchEnv = { ...base };
+  const owned = deps.ownedInterceptSettings;
+  // A CA-only stale entry does not override an inherited proxy.
+  if ((owned?.kind === "applied" || owned?.kind === "stale") && isClaudeInterceptProxyUrl(owned.env.HTTPS_PROXY)) {
+    const expected = owned.env.HTTPS_PROXY;
+    const foreignInheritedProxy = [env.HTTPS_PROXY, env.https_proxy].some(value =>
+      value !== undefined && value !== "" && value !== expected);
+    if (foreignInheritedProxy) {
+      deps.warn?.("⚠ Claude settings-owned intercept proxy still applies. Turn Desktop/CLI first-party off or unset the foreign HTTPS_PROXY/https_proxy to use native Claude.");
+    } else {
+      env.NO_PROXY = "*";
+      env.no_proxy = "*";
+      if (env.HTTPS_PROXY === expected) delete env.HTTPS_PROXY;
+      if (env.https_proxy === expected) delete env.https_proxy;
+      if (owned.env.NODE_EXTRA_CA_CERTS !== undefined && env.NODE_EXTRA_CA_CERTS === owned.env.NODE_EXTRA_CA_CERTS)
+        delete env.NODE_EXTRA_CA_CERTS;
+    }
+  }
   deleteUntrustedAnthropicSlots(env, deps);
 
   const admissionSlots = ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
@@ -822,7 +843,10 @@ async function launchNativeClaude(config: OcxConfig, args: string[], notice: str
   );
   if (override.warning) console.error(override.warning);
   const allowRootSkipPermissions = shouldAllowRootSkipPermissions(args);
-  const env = buildNativeClaudeEnv(config, process.env, { allowRootSkipPermissions });
+  const env = buildNativeClaudeEnv(config, process.env, {
+    allowRootSkipPermissions, ownedInterceptSettings: inspectDesktopFirstParty(config).settings,
+    warn: line => console.error(line),
+  });
   if (allowRootSkipPermissions) console.error(rootSkipPermissionsNotice(env));
   return spawnClaude([...(override.flag ?? []), ...args], env);
 }

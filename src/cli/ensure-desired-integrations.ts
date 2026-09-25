@@ -9,6 +9,8 @@
  * each external-file mutation, and use that current config for sync inputs.
  */
 import { loadConfig } from "../config";
+import { cliFirstPartyDesired, firstPartyDesired, reconcileClaudeFirstPartySettings } from "../claude/first-party-settings";
+import { claudeInterceptEnabled } from "../claude/intercept/runtime";
 import { removeDesktopPickerArtifacts } from "../claude/desktop-picker";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { runtimeRequest } from "./runtime-api";
@@ -49,6 +51,7 @@ export interface EnsureDesiredIntegrationsDeps {
   applyDesktopFirstParty?: typeof applyDesktopFirstParty;
   inspectDesktopFirstParty?: typeof inspectDesktopFirstParty;
   observeClaudeDesktopMode?: typeof observeClaudeDesktopMode;
+  reconcileClaudeFirstPartySettings?: typeof reconcileClaudeFirstPartySettings;
   inspectDesktop3pConfigLibrary?: typeof inspectDesktop3pConfigLibrary;
   findLiveProxyImpl?: typeof findLiveProxy;
   runtimeRequestImpl?: typeof runtimeRequest;
@@ -143,6 +146,15 @@ export async function ensureClaudeDesktopMatchesDesired(
 ): Promise<void> {
   const config = deps.loadConfig();
   const { log, error } = io(deps);
+  if (cliFirstPartyDesired(config)) {
+    const seen = (deps.inspectDesktopFirstParty ?? inspectDesktopFirstParty)(config);
+    if (seen.settings.kind === "absent" || seen.stale || !claudeInterceptEnabled(config)) {
+      const result = (deps.reconcileClaudeFirstPartySettings ?? reconcileClaudeFirstPartySettings)(config,
+        firstPartyDesired(config, (deps.observeClaudeDesktopMode ?? observeClaudeDesktopMode)(config)));
+      if (result.ok && result.changed) log(`   + Claude CLI first-party env refreshed (${result.path})`);
+      else if (!result.ok) error(`⚠️  Claude CLI first-party env refresh skipped: ${result.reason}.`);
+    }
+  }
   if (claudeDesktopIntegrationEnabled(config)) {
     if (resolveClaudeDesktopMode(config, (deps.observeClaudeDesktopMode ?? observeClaudeDesktopMode)(config)) !== "first-party") return;
     const library = (deps.inspectDesktop3pConfigLibrary ?? inspectDesktop3pConfigLibrary)({

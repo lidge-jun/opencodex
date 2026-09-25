@@ -82,6 +82,7 @@ only when `claudeCode.cliFirstParty` is not set; otherwise the env stays for the
 first-party ON, `ocx ensure` re-applies a stale env; the proxy port follows the public port.
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
+`ocx claude config set --first-party on|off` and the Claude Code page switch control the CLI intent; `ocx ensure` refreshes a stale or absent env while it is on.
 `POST /api/claude-desktop/apply` with `mode` ∈ `first-party|gateway|static|hybrid|discovery` and
 `GET /api/claude-desktop/status` (`mode`, `riskWarning`, `firstParty.{applied,stale,interceptEnabled,interceptRunning,proxyPort,caCertPath}`)
 in `src/server/management/agent-settings-routes.ts`; the native toggle in

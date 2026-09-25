@@ -44,6 +44,10 @@ export interface ManagementRequestIngress {
 }
 
 export interface ManagementApiDeps {
+  /** Bound Claude intercept state, injectable for isolated management-route tests. */
+  getClaudeInterceptState?: typeof import("../../claude/intercept/runtime").getClaudeInterceptState;
+  /** Reconciliation seam for field-scoped rollback tests. */
+  reconcileClaudeFirstPartySettings?: typeof import("../../claude/first-party-settings").reconcileClaudeFirstPartySettings;
   /** Read-only process-local aggregate metrics; absent keeps the scrape route unavailable. */
   requestMetrics?: RequestMetricsSnapshotter;
   checkPackageUpdate?: (channel: Channel) => Promise<UpdateCheckResult>;
