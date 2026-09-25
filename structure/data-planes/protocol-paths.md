@@ -140,7 +140,8 @@ Only when `resolveProtocolSettings(config).unrepresentable === "reject"` do the 
 ingresses build an envelope and run the guard, after the route and its wire settle and before the
 request is sent: Chat on the native path when the native lane was chosen, otherwise on the
 bridge path to the settled adapter's wire; Messages on the bridge path. Combo and policy routes
-and an unroutable model are not judged at ingress. A refusal answers 400 in the ingress's own
+and an unroutable model are not judged at ingress; with `nativeChatCombos` on, a Chat combo's
+candidates are judged one by one inside the combo loop (below). A refusal answers 400 in the ingress's own
 error shape (Chat `invalid_request_error` / `unsupported_feature`; Anthropic
 `invalid_request_error`) naming feature keys only, marks the trace blocked, and writes the
 final log row with no upstream send. Under the default `legacy` policy nothing is built and the
@@ -181,6 +182,21 @@ attempt is traced with `markAttemptProtocolPath`: the request path is still the 
 side still decodes through the Responses projection, and the response path is
 `[upstream, "ir", inbound]`.
 
+## Native Chat candidates in combos
+
+With `protocols.rollout.nativeChatCombos` on, the Chat ingress hands a combo route its source
+envelope, and `src/server/responses/core-combo-native.ts` sends each candidate that passes
+`isNativeChatRouteEligible` on the native Chat lane from its own `freshBody()` copy, marking that
+attempt `native` with `markAttemptProtocolPath`; other candidates keep the bridge and its
+lane-derived path. The request's entry mark still says `bridge` with `combo-or-policy-route`,
+because that is the lane the ingress chose; the final mode and paths follow the last attempt.
+Under `reject` a candidate whose path cannot carry a requested feature is skipped before any send
+and `feature-unrepresentable` is added to the entry mark; if every enabled candidate is skipped the
+combo returns the ingress refusal and a blocked trace. With the switch off, combos are not judged
+per candidate. Policy routes select a single candidate in the router and stay on the bridge. The
+transport side (send budget, failover, logging) is in
+[Responses transport](../transports/responses.md#native-chat-candidates-in-combos).
+
 ## Settings
 
 `resolveApiSurfaceSettings` and `resolveProtocolSettings` in `src/protocols/settings.ts` are the
@@ -190,8 +206,8 @@ present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
 `protocols.rollout` switch defaults off; the OAuth native-Messages switch is effective only with
 the key-auth one. The Chat and Messages ingresses read the unrepresentable policy (above), and
-`directEncodersApply` reads `directEncoders` on both; no request path reads the other rollout
-switches yet.
+`directEncodersApply` reads `directEncoders` on both, and the Chat ingress reads `nativeChatCombos` for
+combo routes (above); no request path reads the other rollout switches yet.
 
 `claudeInboundDisabled` in `src/server/claude-messages.ts` is the Messages ingress reader: both
 `/v1/messages` and `/v1/messages/count_tokens` call it, so the two routes cannot disagree, and a
