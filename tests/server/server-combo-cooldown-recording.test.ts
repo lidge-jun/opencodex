@@ -27,7 +27,7 @@ function removalContext(): GenerationContext {
 }
 function config(baseUrl = "http://127.0.0.1:1/v1"): OcxConfig {
   return { port: 0, defaultProvider: "a",
-    providers: { a: { adapter: "openai-chat", baseUrl, apiKey: "synthetic-key" } },
+    providers: { a: { adapter: "openai-chat", baseUrl, apiKey: "synthetic-key", allowPrivateNetwork: true } },
     combos: { free: { strategy: "failover", targets: [target], cooldownMs: 100, waitForCooldownMs: 1000 } } };
 }
 beforeEach(() => {
