@@ -79,6 +79,7 @@ import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
 import { requestPathForLane } from "../protocols/path";
 import { resolveProtocolSettings } from "../protocols/settings";
 import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
+import { recordProtocolShadowPlan } from "../protocols/shadow-plan";
 import { jsonCompletionSse } from "./chat-native-sse";
 import { parseRequestEffortRowId } from "./effort-row";
 import { parseSyntheticRowId } from "./fast-row";
@@ -278,6 +279,7 @@ async function handleChatCompletionsWithBudget(
     reasonCodes: !chatNativeRoute && nativeDecline ? [nativeDecline] : [],
     features: envelope ? () => envelope.features() : () => featuresFromChatBody(chatBody),
   });
+  recordProtocolShadowPlan(logCtx, config, { inbound: "chat", model: requestedModel });
   if (chatNativeRoute) {
     return handleNativeChatCompletions({
       req,

@@ -73,6 +73,7 @@ import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
 import { requestPathForLane } from "../protocols/path";
 import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
 import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
+import { recordProtocolShadowPlan } from "../protocols/shadow-plan";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
 import {
   isApiAuthRequired,
@@ -833,6 +834,7 @@ async function handleClaudeMessagesWithBudget(
       : () => (scannedFeatures ??= featuresFromMessagesBody(messagesBody));
     if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
       markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
+      recordProtocolShadowPlan(logCtx, config, { inbound: "messages", model: requestedModel });
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
     // Capture source semantics before effort rewriting or translation drops fields.
@@ -869,6 +871,7 @@ async function handleClaudeMessagesWithBudget(
       reasonCodes: effortRow ? ["effort-row"] : fastRow ? ["fast-row"] : [],
       features: messagesFeatures,
     });
+    recordProtocolShadowPlan(logCtx, config, { inbound: "messages", model: requestedModel });
     if (isRec(anthropicBody) && effortOverride) {
       anthropicBody.output_config = {
         ...(isRec(anthropicBody.output_config) ? anthropicBody.output_config : {}),
