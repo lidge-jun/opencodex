@@ -3437,4 +3437,6 @@ export const ja: Record<TKey, string> = {
   "compatProtocol.unverified": "{pair} の Lab エビデンスはまだありません。この組は未検証であり、失敗ではありません。",
   "compatProtocol.unresolved": "{count} 件のサブジェクトはプロトコルの組を読み取れず、このフィルターから除外しています。",
   "compatProtocol.axisNote": "これは Lab の判定のみです。リクエストの配送方法（ネイティブまたは変換）は API ページのリクエスト経路プレビューに表示されます。",
+  "protocolLinks.labEvidence": "この組の Lab エビデンス",
+  "protocolLinks.providerSettings": "プロバイダー設定",
 };

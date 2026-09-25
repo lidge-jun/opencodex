@@ -3438,4 +3438,6 @@ export const ru: Record<TKey, string> = {
   "compatProtocol.unverified": "Для {pair} пока нет данных Lab. Пара не проверена, а не провалена.",
   "compatProtocol.unresolved": "Не удалось прочитать пару протоколов для {count} субъектов; они не учитываются в этом фильтре.",
   "compatProtocol.axisNote": "Здесь только вердикты Lab. Способ доставки запроса (нативно или с переводом) показывает предпросмотр пути запроса на странице API.",
+  "protocolLinks.labEvidence": "Данные Lab для этой пары",
+  "protocolLinks.providerSettings": "Настройки провайдера",
 };

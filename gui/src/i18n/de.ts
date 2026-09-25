@@ -3415,4 +3415,6 @@ export const de: Record<TKey, string> = {
   "compatProtocol.unverified": "Noch keine Lab-Nachweise für {pair}. Das Paar ist ungeprüft, nicht fehlgeschlagen.",
   "compatProtocol.unresolved": "Das Protokollpaar von {count} Subjekten konnte nicht gelesen werden; sie sind in diesem Filter nicht enthalten.",
   "compatProtocol.axisNote": "Dies sind nur Lab-Urteile. Wie eine Anfrage zugestellt wird (nativ oder übersetzt), zeigt die Anfragepfad-Vorschau auf der API-Seite.",
+  "protocolLinks.labEvidence": "Lab-Nachweise für dieses Paar",
+  "protocolLinks.providerSettings": "Anbietereinstellungen",
 };
