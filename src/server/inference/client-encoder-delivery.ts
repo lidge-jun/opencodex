@@ -13,7 +13,7 @@
  * - the stream is tracked for turn lifetime and stops the upstream the same way;
  * - the request log receives the facts its Responses SSE tap used to read (client-wire.ts).
  */
-import type { AdapterEvent, OcxProviderContinuationState, OcxReasoningReplayScopeRef, OcxUsage } from "../../types";
+import type { AdapterEvent, OcxConfig, OcxProviderContinuationState, OcxReasoningReplayScopeRef, OcxUsage } from "../../types";
 import type { AdmissionLease } from "../../lib/admission";
 import {
   releaseTranslatedEvent,
@@ -28,6 +28,7 @@ import { encodeChatCompletionSse, collectChatCompletionResponse } from "../../pr
 import { encodeAnthropicMessageSse, collectAnthropicMessageResponse } from "../../protocols/encoders/messages";
 import type { ClientEncodeHooks, EncodedTerminal } from "../../protocols/encoders/adapter-events";
 import { upstreamWireForAdapter } from "../../protocols/contract";
+import { resolveProtocolSettings } from "../../protocols/settings";
 import { trackStreamLifetime } from "../lifecycle";
 import type { RequestLogContext } from "../request-log";
 import type { ClientEncoderOption, HandleResponsesOptions } from "../responses/core-options";
@@ -40,17 +41,35 @@ const CLIENT_SSE_HEADERS = {
 } as const;
 
 /**
- * The encoder this delivery may use, or undefined to keep the Responses body. A combo child's
- * body is read by the combo's commit logic as Responses SSE, a compaction turn must emit its
- * synthetic item, and a Responses-wire upstream is the passthrough case this work leaves alone.
+ * Whether a Chat or Messages ingress asks for direct encoding on the route it settled: the
+ * rollout switch is on and the route is one concrete non-Responses target. Combo and policy
+ * routes read or retry the Responses body after delivery, and a Responses-wire route is the
+ * passthrough case this work leaves alone.
+ */
+export function directEncodersApply(
+  config: Pick<OcxConfig, "protocols">,
+  route: { combo?: unknown; routeKind?: string; provider: { adapter: string } } | null | undefined,
+): boolean {
+  if (!route || !resolveProtocolSettings(config).rollout.directEncoders) return false;
+  if (route.combo !== undefined || route.routeKind === "policy") return false;
+  return upstreamWireForAdapter(route.provider.adapter) !== "responses";
+}
+
+/**
+ * The encoder this delivery may use, or undefined to keep the Responses body. The final route
+ * is re-checked because core can still change it after the ingress decided: a combo child's
+ * body is read by the combo's commit logic, a policy route may hop on an error body, a
+ * compaction turn must emit its synthetic item, and a Responses-wire upstream stays as it is.
  */
 export function clientEncoderForDelivery(
   options: Pick<HandleResponsesOptions, "clientEncoder" | "comboAttempt">,
+  logCtx: Pick<RequestLogContext, "routeDecision">,
   routedCompaction: boolean,
   adapterName: string,
 ): ClientEncoderOption | undefined {
   const encoder = options.clientEncoder;
   if (!encoder || options.comboAttempt || routedCompaction) return undefined;
+  if (logCtx.routeDecision?.routeKind === "policy" || logCtx.routeDecision?.routeKind === "combo") return undefined;
   if (upstreamWireForAdapter(adapterName) === "responses") return undefined;
   return encoder;
 }

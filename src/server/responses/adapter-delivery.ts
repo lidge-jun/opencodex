@@ -133,7 +133,7 @@ export async function deliverAdapterResponse(
       }
       notifyResponseComplete(response);
     };
-    const clientEncoder = clientEncoderForDelivery(options, !!routedCompaction, transportState.activeAdapter.name);
+    const clientEncoder = clientEncoderForDelivery(options, logCtx, !!routedCompaction, transportState.activeAdapter.name);
     if (clientEncoder) {
       return deliverClientEncodedResponse({
         encoder: clientEncoder,

@@ -60,6 +60,9 @@ import {
   sessionLaneIdFromRequest,
 } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
+import { clientWireOf } from "./inference/client-wire";
+import { directEncodersApply } from "./inference/client-encoder-delivery";
+import type { ClientEncoderOption } from "./responses/core-options";
 import { handleResponses } from "./responses";
 import { upstreamWireForAdapter } from "../protocols/contract";
 import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
@@ -911,6 +914,7 @@ async function handleClaudeMessagesWithBudget(
   // the translated Anthropic SSE into a message JSON for non-streaming clients.
   internalBody.stream = true;
 
+  let clientEncoder: ClientEncoderOption | undefined;
   // Native ChatGPT passthrough (openai-responses forward) accepts only Codex-shaped
   // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
@@ -932,6 +936,9 @@ async function handleClaudeMessagesWithBudget(
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy);
     logCtx.routeDecision = route.routeDecision;
     settledRoute = route;
+    if (directEncodersApply(config, route)) {
+      clientEncoder = { protocol: "messages", stream, model: requestedModel, inputTokenFloor: claudeRequestTokenFloor() };
+    }
     if (route.provider.adapter === "openai-responses") {
       delete internalBody.max_output_tokens;
       delete internalBody.temperature;
@@ -1083,8 +1090,11 @@ async function handleClaudeMessagesWithBudget(
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
+    ...(clientEncoder ? { clientEncoder } : {}),
   });
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
+  // Already in the Messages wire (direct encoder): no conversion.
+  if (clientWireOf(upstream) === "messages") return response;
 
   if (!response.ok) {
     // Read the shared provenance verdict before consuming and re-wrapping the body. A refusal

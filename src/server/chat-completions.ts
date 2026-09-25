@@ -49,6 +49,8 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import { createFinalRequestLog } from "./inference/final-log";
+import { clientWireOf } from "./inference/client-wire";
+import { directEncodersApply } from "./inference/client-encoder-delivery";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 import { providerConsumesCallerAuthorization } from "../providers/caller-authorization";
@@ -434,7 +436,14 @@ async function handleChatCompletionsWithBudget(
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
+    ...(directEncodersApply(config, settledRoute)
+      ? { clientEncoder: { protocol: "chat" as const, stream, model: requestedModel } }
+      : {}),
   });
+  // Already in the Chat wire (direct encoder): no conversion, still the deferred request log.
+  if (clientWireOf(upstream) === "chat") {
+    return logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
+  }
 
   // Rewrite non-2xx before deferred logging so /api/logs records the client-facing status
   // (e.g. cyber_policy remapped from a passthrough 5xx to HTTP 400).
