@@ -98,8 +98,8 @@ function PlanResult({ plan }: { plan: ProtocolPlanV1 }) {
         <p className="muted small">{t("api.plan.noCandidates")}</p>
       ) : (
         <ol className="protocol-plan-candidates">
-          {plan.candidates.map((candidate, index) => (
-            <li key={`${candidate.provider}/${candidate.model}/${index}`} className="protocol-plan-candidate">
+          {plan.candidates.map(candidate => (
+            <li key={`${candidate.provider}/${candidate.model}`} className="protocol-plan-candidate">
               <div className="protocol-plan-candidate-head">
                 <code>{candidate.provider}/{candidate.model}</code>
                 <span className={`badge ${MODE_TONES[candidate.mode]}`}>{t(MODE_KEYS[candidate.mode])}</span>
