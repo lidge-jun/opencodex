@@ -468,6 +468,9 @@ and removes only normalized manifest entries. Manifest-owned directory links are
 traversing their targets. Unknown files remain in place and make the command report a partial
 uninstall with their exact paths.
 
+Per-catalog hashed backups follow the [catalog ownership rules](catalog.md#shared-catalog):
+only new writes are registered; existing unrecorded files remain for manual review.
+
 The newly created OAuth downgrade copy is registered after copying, so owned uninstall
 includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the
 no-follow writer variant that leaves the owner manifest untouched, so a copy an earlier install

@@ -75,6 +75,15 @@ provider-wide fallback. Exact model output limits precede the provider default o
   native rows from the output without rewriting the pristine backup or unrelated snapshots;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.
 
+Per-catalog hashed backups are recorded only after a new backup is successfully written by
+`src/codex/catalog/parsing.ts` or published by `src/codex/internal/catalog-writer.ts`.
+Preserving an existing file does not register it, even if its deterministic name or bytes match.
+Previously recorded paths keep their ownership; unrecorded pre-ledger backups remain residuals.
+After stopping OpenCodex and completing any needed restore, review and archive those exact residual
+paths before manually removing only confirmed obsolete backups. Never infer ownership from a glob.
+The legacy fixed-name entries already present in ownership manifests are not migrated by this rule.
+Uninstall retains the [manifest validation and residual reporting contract](config.md#restore).
+
 Cache invalidation reports an unchanged derived cache separately from a failed rewrite. `ocx sync-cache` treats identical bytes as a successful no-op, preserving the cache mtime and avoiding a needless app-server restart; malformed catalogs and write failures remain errors.
 
 `src/codex/catalog/model-visibility.ts` also excludes models owned by disabled providers, including custom rows. `src/codex/catalog/routed-gather.ts` does not inherit provider configuration into custom rows while that provider is disabled.

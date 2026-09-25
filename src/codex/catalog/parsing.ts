@@ -970,14 +970,8 @@ export function catalogHasRoutedEntries(catalog: RawCatalog | null): boolean {
 }
 
 export function writePristineCatalogBackup(backupPath: string, catalogPath: string, catalog: RawCatalog): void {
-  if (existsSync(backupPath)) {
-    // A backup written by an earlier run predates the ownership ledger: adopt it so
-    // uninstall can still remove the file we produced. Both call sites pass our own
-    // deterministic names — the hashed backup, or the legacy name already claimed by
-    // INITIAL_OWNED_PATHS.
-    recordOwnedConfigPath(getConfigDir(), backupPath);
-    return;
-  }
+  // An existing name is not evidence of ownership; keep pre-ledger/user backups unclaimed.
+  if (existsSync(backupPath)) return;
   const onDisk = readCatalog(catalogPath);
   if (onDisk && !catalogHasRoutedEntries(onDisk)) {
     copyFileSync(catalogPath, backupPath);

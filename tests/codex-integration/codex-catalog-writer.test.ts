@@ -305,29 +305,72 @@ for (const [name, publish] of [
   });
 }
 
-test("hashed backup publication records a backup it writes itself", () => {
-  const path = join(openCodexHome, "catalog-backup-0123456789abcdef.json");
+test("new hashed publication is recorded and remains owned when preserved later", () => {
+  const name = "catalog-backup-0123456789abcdef.json";
+  const path = join(openCodexHome, name);
   expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
-
   const result = withLivePermit((permit) =>
     publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })
   );
-
   expect(result).toBe("written");
-  expect(manifestPaths(openCodexHome)).toContain("catalog-backup-0123456789abcdef.json");
+  const before = manifestPaths(openCodexHome);
+  expect(before).toContain(name);
+  expect(withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "later\n" })
+  )).toBe("preserved");
+  expect(manifestPaths(openCodexHome)).toEqual(before);
+  expect(readFileSync(path, "utf8")).toBe("pristine\n");
+  expect(removeOwnedConfigState(openCodexHome).status).toBe("removed");
+  expect(existsSync(path)).toBe(false);
 });
 
-test("hashed backup publication records a backup that already exists", () => {
-  const path = join(openCodexHome, "catalog-backup-0123456789abcdef.json");
+for (const existing of ["user-owned\n", "pristine\n"]) {
+  test(`hashed publication does not adopt an existing regular backup: ${existing.trim()}`, () => {
+    const name = "catalog-backup-0123456789abcdef.json";
+    const path = join(openCodexHome, name);
+    expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
+    writeFileSync(path, existing, { mode: 0o600 });
+    const before = manifestPaths(openCodexHome);
+    const result = withLivePermit((permit) =>
+      publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })
+    );
+    expect(result).toBe("preserved");
+    expect(manifestPaths(openCodexHome)).toEqual(before);
+    expect(manifestPaths(openCodexHome)).not.toContain(name);
+    const removal = removeOwnedConfigState(openCodexHome);
+    expect(removal.status).toBe("partial");
+    expect(removal.residualPaths).toEqual([path]);
+    expect(readFileSync(path, "utf8")).toBe(existing);
+  });
+}
+
+test("hashed publication does not adopt an existing backup directory", () => {
+  const name = "catalog-backup-0123456789abcdef.json";
+  const path = join(openCodexHome, name);
   expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
-  writeFileSync(path, "earlier run\n", { mode: 0o600 });
+  mkdirSync(path);
+  const nested = join(path, "mine.txt");
+  writeFileSync(nested, "keep me\n");
+  const before = manifestPaths(openCodexHome);
+  expect(withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })
+  )).toBe("preserved");
+  expect(manifestPaths(openCodexHome)).toEqual(before);
+  const removal = removeOwnedConfigState(openCodexHome);
+  expect(removal.status).toBe("partial");
+  expect(removal.residualPaths).toEqual([path]);
+  expect(readFileSync(nested, "utf8")).toBe("keep me\n");
+});
 
-  const result = withLivePermit((permit) =>
-    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "late contender\n" })
-  );
-
-  expect(result).toBe("preserved");
-  expect(readFileSync(path, "utf8")).toBe("earlier run\n");
-  expect(manifestPaths(openCodexHome)).toContain("catalog-backup-0123456789abcdef.json");
-  expect(removeOwnedConfigState(openCodexHome).status).toBe("removed");
+test("failed hashed publication does not record an unwritten backup", () => {
+  expect(recordOwnedConfigPath(openCodexHome, join(openCodexHome, "config.json"))).toBe(true);
+  const blocked = join(openCodexHome, "blocked-parent");
+  writeFileSync(blocked, "not a directory\n");
+  const path = join(blocked, "catalog-backup-0123456789abcdef.json");
+  const before = manifestPaths(openCodexHome);
+  expect(() => withLivePermit((permit) =>
+    publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })
+  )).toThrow();
+  expect(existsSync(path)).toBe(false);
+  expect(manifestPaths(openCodexHome)).toEqual(before);
 });

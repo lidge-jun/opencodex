@@ -214,9 +214,9 @@ export function publishHashedCodexCatalogBackup(
 ): CatalogBackupPublication {
   assertCatalogWritePermit(permit, owningCodexHome);
   const publication = publishCatalogBackup(prepared, io);
-  // Record both outcomes: "written" is ours by construction, and "preserved" means the
-  // hashed backup already on disk came from an earlier run that predates the ledger.
-  if (!io) recordOwnedConfigPath(getConfigDir(), prepared.path);
+  // Only a new publication proves creation; preserving an existing name proves no provenance.
+  // Existing ownership entries remain valid without re-adopting a preserved file.
+  if (!io && publication === "written") recordOwnedConfigPath(getConfigDir(), prepared.path);
   return publication;
 }
 
