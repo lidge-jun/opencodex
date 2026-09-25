@@ -65,7 +65,7 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
-import { beginInferenceAttempt } from "./inference/attempt";
+import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
@@ -159,7 +159,7 @@ function chatCompletionJson(value: unknown): Rec | null {
   return value;
 }
 
-interface HandleNativeChatOptions {
+export interface HandleNativeChatOptions {
   req: Request;
   config: OcxConfig;
   logCtx: RequestLogContext;
@@ -171,8 +171,23 @@ interface HandleNativeChatOptions {
   translatorBudget: TranslatorBudget;
 }
 
+/** Records the outcome on whichever final row owns this attempt; the first call wins. */
+export type NativeChatFinishLog = (
+  status: number,
+  message?: string,
+  closeReason?: "non_stream" | "terminal" | "client_cancel",
+) => void;
+
+export interface NativeChatExecution extends HandleNativeChatOptions {
+  finishLog: NativeChatFinishLog;
+}
+
+/**
+ * The native Chat ingress: opens the attempt on the request's log context and owns the
+ * request's final log row, then runs the attempt.
+ */
 export async function handleNativeChatCompletions(options: HandleNativeChatOptions): Promise<Response> {
-  const { req, config, logCtx, logIds, route, requestedModel, requestedStream, translatorBudget } = options;
+  const { logCtx, logIds, route } = options;
   logCtx.inboundProtocol = "chat";
   const attemptHandle = beginInferenceAttempt(logCtx, {
     provider: route.providerName,
@@ -180,24 +195,37 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     adapter: "openai-chat",
   });
   attemptHandle.seal(logCtx.accountLogLabel);
-  const { attempt } = attemptHandle;
 
   const finalLog = createFinalRequestLog(logIds, logCtx);
-  const finishLog = (status: number, message?: string, closeReason: "non_stream" | "terminal" | "client_cancel" = "non_stream") => {
+  const finishLog: NativeChatFinishLog = (status, message, closeReason = "non_stream") => {
     if (finalLog.finished()) return;
     // The failure text lands on the context before the row is written, and only once.
     if (message) logCtx.upstreamError = redactSecretString(message).slice(0, 500);
     finalLog.finish(status, { closeReason });
   };
+  return runNativeChatAttempt({ ...options, finishLog }, attemptHandle);
+}
+
+/**
+ * One native Chat attempt on an already-open attempt row: effort normalization, the send
+ * loop with key failover and 429 replay, relay and usage. Every outcome is reported through
+ * `execution.finishLog`, so the caller decides which final row it lands on.
+ */
+export async function runNativeChatAttempt(
+  execution: NativeChatExecution,
+  attemptHandle: InferenceAttempt,
+): Promise<Response> {
+  const { req, config, logCtx, logIds, route, requestedModel, requestedStream, translatorBudget, finishLog } = execution;
+  const { attempt } = attemptHandle;
   const fail = (status: number, message: string, type?: string, code?: string | null): Response => {
     const safeMessage = redactSecretString(message);
     finishLog(status, safeMessage);
     return chatCompletionsErrorResponse(status, safeMessage, type, code);
   };
 
-  normalizePinnedChatEffort(options);
-  logCtx.requestedServiceTier = typeof options.chatBody.service_tier === "string"
-    ? options.chatBody.service_tier
+  normalizePinnedChatEffort(execution);
+  logCtx.requestedServiceTier = typeof execution.chatBody.service_tier === "string"
+    ? execution.chatBody.service_tier
     : undefined;
 
   const upstream = new AbortController();
@@ -246,7 +274,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, activeAdapter.name);
     return buildOpenAIChatPassthroughRequest(
       activeProvider,
-      options.chatBody,
+      execution.chatBody,
       route.modelId,
       requestedStream,
       fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
@@ -302,7 +330,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
               dispatchOverride: async (_input, init, execute) => {
                 if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
                   const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
-                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, options.chatBody, config)) {
+                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, execution.chatBody, config)) {
                     throw new Error("Provider key selection is no longer available for native Chat");
                   }
                   activeProvider = current;
@@ -392,7 +420,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
         now: Date.now(),
         attemptedKey: activeProvider.apiKey,
         attemptedSelection: activeProvider._apiKeyAttempt,
-        promptCacheKey: typeof options.chatBody.prompt_cache_key === "string" ? options.chatBody.prompt_cache_key : undefined,
+        promptCacheKey: typeof execution.chatBody.prompt_cache_key === "string" ? execution.chatBody.prompt_cache_key : undefined,
       });
       if (!rotated) break;
       // Rotation also records the failed key's cooldown and persists the next healthy key.
