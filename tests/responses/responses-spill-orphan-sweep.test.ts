@@ -17,9 +17,11 @@ import {
   sweepOrphanedResponseSpills,
 } from "../../src/responses/state";
 import {
+  PERIODIC_SPILL_SWEEP_OPTS,
   RESPONSE_SPILL_DIR_NAME,
   responseSpillDirectory,
   setSpillIoForTest,
+  sweepOrphanedResponseSpillsPeriodically,
   writeResponseSpillDurably,
 } from "../../src/responses/spill-store";
 import {
@@ -189,5 +191,25 @@ describe("Periodic orphan response-spill sweep", () => {
       await flushPendingResponseSpillsForTests();
     }
     expect(existsSync(join(responseSpillDirectory(home), destination))).toBe(true);
+  });
+
+  test("resumes past a full window of owned files on the next tick", () => {
+    const dir = responseSpillDirectory(home);
+    const owned = new Set<string>();
+    const orphans: string[] = [];
+    const total = PERIODIC_SPILL_SWEEP_OPTS.scanMax + 64;
+    for (let i = 0; i < total; i += 1) {
+      const ref = writeResponseSpillDurably(`resp_window_${i}`, { createdAt: Date.now(), items: [i] });
+      agePastGrace(join(dir, ref.fileName));
+      if (i % 20 === 0) orphans.push(ref.fileName);
+      else owned.add(ref.fileName);
+    }
+
+    let removed = 0;
+    for (let tick = 0; tick < 3; tick += 1) removed += sweepOrphanedResponseSpillsPeriodically(owned, dir).removed;
+
+    expect(removed).toBe(orphans.length);
+    expect(orphans.filter(name => existsSync(join(dir, name)))).toEqual([]);
+    expect(spillFileNames(home)).toHaveLength(owned.size);
   });
 });

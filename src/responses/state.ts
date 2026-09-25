@@ -8,16 +8,18 @@ import {
   deleteResponseSpill,
   inspectResponseSpillDir,
   noteStubSwapForTest,
-  PERIODIC_SPILL_SWEEP_OPTS,
   readResponseSpill,
   recoverOrphanedResponseSpills,
+  resetPeriodicSpillSweepCursorForTests,
   responseSpillDirectory,
   responseSpillPayloadCap,
+  sweepOrphanedResponseSpillsPeriodically,
   type ResponseSpillDirInspection,
   type ResponseSpillRef,
   writeResponseSpillDurably,
 } from "./spill-store";
 import { collectReferencedSpillFileNames, snapshotReferencedSpillFileNames } from "./state/spill-inspect";
+import { selectSnapshotEntries } from "./state/snapshot-select";
 import { clientCarriedPrefixLength, providerIssuedIdentity } from "./state/replay-fingerprint";
 export type { ResponseStateTempRecoveryResult, ResponseStateTempRecoveryOptions } from "./state/temp-recovery";
 export type { ResponseSpillDirInspection } from "./spill-store";
@@ -686,11 +688,7 @@ function ownedSpillFileNames(): Set<string> {
 export function sweepOrphanedResponseSpills(): number {
   if (!loaded) return 0;
   try {
-    return recoverOrphanedResponseSpills(
-      ownedSpillFileNames(),
-      responseSpillDirectory(),
-      PERIODIC_SPILL_SWEEP_OPTS,
-    ).removed;
+    return sweepOrphanedResponseSpillsPeriodically(ownedSpillFileNames()).removed;
   } catch {
     return 0;
   }
@@ -707,43 +705,7 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
   try {
     for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const revision = stateRevision;
-      // Bounded stubs and tombstones are selected before residents: they are
-      // the only durable references a spill file has, and demotion is
-      // oldest-first, so a single newest-first pass would let resident payloads
-      // consume the whole budget ahead of them.
-      const ordered = [...states].reverse();
-      const persisted = new Map<string, [string, unknown]>();
-      let total = 0;
-      for (const [id, state] of ordered) {
-        if (state.kind === "resident") continue;
-        const { sizeBytes: _sizeBytes, ...smallState } = state;
-        const persistEntry: [string, unknown] = [id, smallState];
-        // UTF-8 bytes, not UTF-16 code units: multibyte items otherwise slip
-        // past both snapshot caps at up to 2x the intended size.
-        const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
-        if (total + size > snapshotTotalBytes()) continue;
-        total += size;
-        persisted.set(id, persistEntry);
-      }
-      // Residents fill what remains, newest-first so the most recent chains
-      // survive both legacy snapshot caps.
-      for (const [id, state] of ordered) {
-        if (state.kind !== "resident") continue;
-        const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = state;
-        const persistEntry: [string, unknown] = [id, resident];
-        const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
-        if (size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
-        if (total + size > snapshotTotalBytes()) break;
-        total += size;
-        persisted.set(id, persistEntry);
-      }
-      // Emit in map order so reload and count eviction keep the same relative
-      // order as `states`.
-      const entries: Array<[string, unknown]> = [];
-      for (const [id] of states) {
-        const kept = persisted.get(id);
-        if (kept) entries.push(kept);
-      }
+      const entries = selectSnapshotEntries(states, snapshotTotalBytes(), SNAPSHOT_ENTRY_MAX_BYTES);
       const payload = JSON.stringify({ version: 2, states: entries });
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const payloadDigest = Bun.hash(payload).toString(36);
@@ -1275,15 +1237,9 @@ export function responseStateMetrics(): ResponseStateMetrics {
 }
 
 /**
- * Read-only spill directory report shared by `ocx doctor` and /api/system/memory.
- *
- * "Owned" means still claimed by something durable: the live "spill" stubs,
- * superseded generations queued in pendingSpillUnlinks, and every name the
- * persisted snapshot still references. The snapshot half is what a separate
- * process (doctor) can see, and it stays correct in-process too — a restart
- * reloads the snapshot and re-owns those files. Shares the orphan predicate
- * with recoverOrphanedResponseSpills, so this report and a later reclaim
- * cannot disagree; it never unlinks.
+ * Read-only spill report for `ocx doctor` and /api/system/memory. Owned = live
+ * stubs, deferred unlinks, queued publications, and snapshot references (what a
+ * restart re-owns). Shares the reclaim's orphan predicate; never unlinks.
  */
 export function inspectResponseSpillStorage(): ResponseSpillDirInspection {
   const referenced = ownedSpillFileNames();
@@ -1374,6 +1330,7 @@ export function clearResponseStateMemoryForTests(): void {
   }
   pendingPersistPath = null;
   resetSpillQueueForTests();
+  resetPeriodicSpillSweepCursorForTests();
   states.clear();
   storedResponseBytes = 0;
   residentResponseBytes = 0;

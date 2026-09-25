@@ -43,6 +43,9 @@ export const PERIODIC_SPILL_SWEEP_OPTS = {
   deadlineMs: 25,
 } as const;
 
+/** Directory position the next liveness-tick sweep resumes from; 0 after a full pass. */
+let periodicSweepOffset = 0;
+
 const RESPONSE_SPILL_PUBLISH_RETRIES = 64;
 const OWNED_SPILL_NAME = /^([A-Za-z0-9._-]{1,80})\.([0-9a-f]{12})\.([0-9a-f]{24})\.(\d+)\.(\d+)\.spill\.json$/;
 const OWNED_SPILL_TEMP_NAME = /^\.response-spill\.[0-9]+\.[0-9a-f]{16}\.tmp$/;
@@ -103,6 +106,8 @@ export interface ResponseSpillCleanupResult {
   removed: number;
   failed: number;
   bytesRemoved: number;
+  /** The scan reached the end of the directory. */
+  exhausted?: boolean;
 }
 
 export interface ResponseSpillIoForTest {
@@ -858,7 +863,7 @@ export function inspectResponseSpillDir(
 export function recoverOrphanedResponseSpills(
   referencedFileNames: ReadonlySet<string>,
   dir = responseSpillDirectory(),
-  opts?: { graceMs?: number; scanMax?: number; cleanupMax?: number; deadlineMs?: number },
+  opts?: { graceMs?: number; scanMax?: number; cleanupMax?: number; deadlineMs?: number; skip?: number },
 ): ResponseSpillCleanupResult {
   const result: ResponseSpillCleanupResult = { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
   const graceMs = opts?.graceMs ?? RESPONSE_SPILL_ORPHAN_GRACE_MS;
@@ -868,9 +873,12 @@ export function recoverOrphanedResponseSpills(
   const scan = openSpillDirScan(dir);
   if (!scan) return result;
   try {
+    for (let skipped = 0; skipped < (opts?.skip ?? 0); skipped += 1) {
+      if (scan.nextName() === null) { result.exhausted = true; return result; }
+    }
     while (result.scanned < scanMax && Date.now() < deadline) {
       const name = scan.nextName();
-      if (name === null) break;
+      if (name === null) { result.exhausted = true; break; }
       result.scanned += 1;
       if (result.removed + result.failed >= cleanupMax) break;
       const orphanKind = orphanSpillNameKind(name, referencedFileNames);
@@ -898,4 +906,25 @@ export function recoverOrphanedResponseSpills(
 
 export function responseSpillExistsForTests(ref: ResponseSpillRef): boolean {
   return validSpillRef(ref) && existsSync(join(responseSpillDirectory(), ref.fileName));
+}
+
+/**
+ * Bounded liveness-tick reclaim that resumes where the previous tick stopped,
+ * so orphans behind the first `scanMax` owned entries are still reached.
+ */
+export function sweepOrphanedResponseSpillsPeriodically(
+  referencedFileNames: ReadonlySet<string>,
+  dir = responseSpillDirectory(),
+): ResponseSpillCleanupResult {
+  const result = recoverOrphanedResponseSpills(referencedFileNames, dir, {
+    ...PERIODIC_SPILL_SWEEP_OPTS,
+    skip: periodicSweepOffset,
+  });
+  // Removed entries leave the listing, so the next pass starts that much earlier.
+  periodicSweepOffset = result.exhausted ? 0 : periodicSweepOffset + result.scanned - result.removed;
+  return result;
+}
+
+export function resetPeriodicSpillSweepCursorForTests(): void {
+  periodicSweepOffset = 0;
 }
