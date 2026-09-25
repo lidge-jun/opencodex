@@ -299,6 +299,46 @@ describe("claude inbound translation", () => {
     expect(parseRequest(body).options.textFormat?.strict).toBe(false);
   });
 
+  test("an open object drops the strict claim even when every property is required", () => {
+    // `isAnthropicOutputSchema` normalizes a CLONE, so an object that never stated
+    // `additionalProperties: false` is forwarded verbatim and refused by strict mode however
+    // complete its `required` is.
+    const open = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+    };
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+      output_config: { format: { type: "json_schema", schema: open } },
+    });
+
+    expect(body.text).toEqual({ format: { type: "json_schema", name: "response", schema: open, strict: false } });
+    expect(parseRequest(body).options.textFormat?.strict).toBe(false);
+  });
+
+  test("allOf drops the strict claim; strict Structured Outputs does not support it", () => {
+    const composed = {
+      type: "object",
+      properties: {
+        answer: { allOf: [{ type: "string" }, { type: "string", minLength: 1 }] },
+      },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+      output_config: { format: { type: "json_schema", schema: composed } },
+    });
+
+    expect(body.text).toEqual({ format: { type: "json_schema", name: "response", schema: composed, strict: false } });
+    expect(parseRequest(body).options.textFormat?.strict).toBe(false);
+  });
+
   test("structured output rejects unsupported schemas and preserves root references", () => {
     const base = {
       model: "claude-sonnet-5",

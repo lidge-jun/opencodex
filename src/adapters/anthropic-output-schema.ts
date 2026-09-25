@@ -152,8 +152,15 @@ export function satisfiesOpenAiStrictSchema(value: unknown): boolean {
   if (Array.isArray(value)) return value.every(satisfiesOpenAiStrictSchema);
   if (!value || typeof value !== "object") return true;
   const node = value as Record<string, unknown>;
+  // `allOf` is not supported under strict Structured Outputs at all, wherever it appears.
+  if ("allOf" in node) return false;
   const properties = node.properties;
   if (isRecord(properties)) {
+    // An object node must list every property in `required` AND close itself to extras. The
+    // caller's schema is forwarded verbatim -- `isAnthropicOutputSchema` normalizes a CLONE for
+    // its own acceptance check -- so an object that never said `additionalProperties: false`
+    // reaches the wire without it and is refused, however complete its `required` is.
+    if (node.additionalProperties !== false) return false;
     const keys = Object.keys(properties);
     const required = Array.isArray(node.required) ? node.required : [];
     if (keys.some(key => !required.includes(key))) return false;
