@@ -632,7 +632,7 @@ export function encodeAdapterEventStream(
             const itemId = `${toolSearch ? "tsc" : freeform ? "ctc" : "fc"}_${uuid()}`;
             const call: ClientToolCall = { itemId, callId: event.id, name, kind };
             writer.toolStart(call);
-            currentToolCall = { ...call, args: "", argsBytes: 0, ...(mapped?.namespace ? { namespace: mapped.namespace } : {}) };
+            currentToolCall = { ...call, args: "", argsBytes: 0, ...(mapped ? { namespace: mapped.namespace } : {}) };
             budget.openCall(event.id);
             break;
           }
