@@ -26,7 +26,7 @@ reason codes, the first rule that keeps a Chat request off the native Chat lane;
 or trace reports cannot disagree.
 
 `contract.ts`, `src/protocols/features.ts`, `src/protocols/baseline.ts`,
-`src/protocols/path.ts` and `src/protocols/dto.ts` are leaf modules: the dashboard imports them directly, so they import
+`src/protocols/path.ts`, `src/protocols/dto.ts` and `src/protocols/plan.ts` are leaf modules: the dashboard imports them directly, so they import
 nothing but each other and the type-only compatibility vocabulary in
 `src/compatibility/manifest.ts`. `tests/responses/protocol-contract.test.ts` reads their import
 specifiers and fails on anything else.
@@ -92,6 +92,29 @@ an unknown value matches nothing. The dashboard renders it with
 `gui/src/components/protocols/` (a row badge and a detail-dialog section) and filters by mode
 client-side in `gui/src/pages/logs-filter.ts`. `tests/responses/protocol-trace.test.ts` and
 `tests/usage/request-log-protocol-trace.test.ts` pin derivation, persistence and the filter.
+
+## Planner and preview
+
+`planProtocol` in `src/protocols/plan.ts` is pure: given a snapshot of the settled route (inbound,
+selector, route kind, candidates with their final adapter and whether the ingress would take its
+native lane, requested features, surfaces, settings, policy revision) it computes each candidate's
+paths through `path.ts`, its feature effects, and whether `reject` would refuse it
+(`feature-unrepresentable`). Features preserved by every eligible candidate are guaranteed; those
+preserved by only some are partial. A disabled surface blocks every candidate with
+`surface-disabled`; an unroutable selector has no candidates and reports `unknown-model`. The
+planner never selects a provider. `tests/responses/protocol-plan.test.ts` covers it.
+
+`buildProtocolPlanSnapshot` in `src/protocols/plan-snapshot.ts` builds that snapshot from config
+without side effects. Combo and policy selectors are expanded from their configured targets through
+`routeConcreteModel` rather than `routeModel`, which would advance round-robin state or run the
+policy evaluator; every other selector goes through `routeModel`'s deterministic branches. Each
+candidate's wire is settled the way the ingress settles it (`captureRouteStaticPolicy` for the
+original inbound, then `resolveWireProtocolOverride`), and a Chat candidate's native lane is judged
+by `nativeChatDeclineReason` against a structural body built from the requested features. Messages
+caller-forward passthrough depends on the caller's own credential, so it is reported as
+`caller-credential-required` and never assumed. The OpenCode Go session-lane transport is not
+modelled. `tests/responses/protocol-plan-snapshot.test.ts` pins the no-side-effect property against
+combo selection state.
 
 ## Settings
 

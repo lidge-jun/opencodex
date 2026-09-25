@@ -509,6 +509,18 @@ outcome fields from an older server do not establish successful recovery.
 Credential list responses are deliberately masked. OAuth access tokens and complete provider API
 keys are not returned to dashboard clients.
 
+### Protocol paths
+
+| Method and path | Purpose | Notable errors |
+| --- | --- | --- |
+| `GET /api/protocols` | Return the protocol contract version, which APIs are served, the protocol settings, the current policy revision, and the request features a preview understands | — |
+| `POST /api/protocols/plan` | Preview the path a request would take: `{ "model": "...", "inbound": "responses" \| "chat" \| "messages", "features": [...] }` returns each route candidate's request and response path, delivery mode, fidelity, feature effects, and reasons | 400 invalid JSON, unknown field, model over 200 characters, unknown inbound, or more than 24 / unknown features |
+
+A preview is computed from configuration alone. It sends nothing to any provider, costs nothing,
+does not advance combo rotation, and is not logged. The API page in the dashboard shows the same
+preview under **Request path preview**. A delivery mode of `native` describes how the request
+travels; it is not a compatibility verification.
+
 ### Providers
 
 | Method and path | Purpose | Notable errors |
