@@ -850,6 +850,9 @@ function messagesToAnthropicFormat(
             if (text) preface.push({ type: "text", text });
           } else if (part.type === "thinking") {
             const t = part as OcxThinkingContent;
+            // History minted under another serving identity (or already rejected as opaque) is not
+            // this destination's to verify: drop its opaque blocks, as the Responses passthrough does.
+            if (parsed._stripReasoningEncryptedContent === true) continue;
             // Redacted blocks replay verbatim FIRST (they preceded the visible thinking block
             // in the original stream order preserved by the bridge envelope).
             for (const data of t.redacted ?? []) {

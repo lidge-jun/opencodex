@@ -241,6 +241,7 @@
     "anthropic-stream-hardening.test.ts": "adapters/anthropic",
     "anthropic-tail-guard.test.ts": "adapters/anthropic",
     "anthropic-thinking-signature.test.ts": "adapters/anthropic",
+    "anthropic-opaque-strip.test.ts": "adapters/anthropic",
     "anthropic-tool-call-id.test.ts": "adapters/anthropic",
     "anthropic-messages-passthrough.test.ts": "adapters/anthropic",
     "anthropic-beta-allowlist.test.ts": "adapters/anthropic",
