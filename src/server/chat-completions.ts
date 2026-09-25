@@ -47,8 +47,8 @@ import {
   httpStatusForRequestLogTerminal,
   recordFirstOutput,
   type RequestLogContext,
-  type RequestLogEntry,
 } from "./request-log";
+import { createFinalRequestLog } from "./inference/final-log";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 import { providerConsumesCallerAuthorization } from "../providers/caller-authorization";
@@ -387,12 +387,7 @@ async function handleChatCompletionsWithBudget(
   });
   linkRequestSessionLane(req, internalReq);
 
-  let nativeLogged = false;
-  const finalizeNativeLog = (status: number, meta: { terminalStatus?: RequestLogEntry["terminalStatus"]; closeReason: "terminal" | "client_cancel" | "non_stream" }) => {
-    if (!logIds || nativeLogged) return;
-    nativeLogged = true;
-    addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
-  };
+  const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, config, logCtx, {
     openAiSidecarAuth,
     allowStoredOpenAiSidecarAuth: !!(callerAuthorizationRoute && settledRoute
