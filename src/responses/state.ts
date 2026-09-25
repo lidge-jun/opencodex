@@ -150,6 +150,7 @@ let residentResponseBytes = 0;
 let oldestResidentId: string | undefined;
 let oldestResidentAt: number | null = null;
 let byteCapOverride: number | null = null;
+let snapshotTotalCapOverride: number | null = null;
 let stateRevision = 0;
 /** Byte length and digest of the last snapshot actually written, for the
  *  identical-payload skip and the size-scaled debounce. The payload itself is not
@@ -219,6 +220,15 @@ function byteCap(): number {
 /** Test-only: lower/restore the in-memory byte cap (null restores the default). */
 export function setResponseStateByteCapForTests(bytes: number | null): void {
   byteCapOverride = bytes;
+}
+
+function snapshotTotalBytes(): number {
+  return snapshotTotalCapOverride ?? SNAPSHOT_TOTAL_MAX_BYTES;
+}
+
+/** Test-only: lower/restore the durable snapshot byte budget (null restores the default). */
+export function setResponseStateSnapshotByteCapForTests(bytes: number | null): void {
+  snapshotTotalCapOverride = bytes;
 }
 
 /** Test-only: current in-memory byte accounting (proves evictions release their bytes). */
@@ -714,7 +724,7 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
         // past both snapshot caps at up to 2x the intended size.
         const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
         if (state.kind === "resident" && size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
-        if (total + size > SNAPSHOT_TOTAL_MAX_BYTES) break;
+        if (total + size > snapshotTotalBytes()) break;
         total += size;
         entries.push(persistEntry);
       }
