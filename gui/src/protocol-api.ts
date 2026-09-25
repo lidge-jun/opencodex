@@ -1,6 +1,6 @@
 /**
- * Client for the protocol routes (`GET /api/protocols`, `POST /api/protocols/plan`,
- * `PATCH /api/protocols/settings`).
+ * Client for the protocol routes (`GET /api/protocols`, `GET /api/protocols?provider=<name>`,
+ * `POST /api/protocols/plan`, `PATCH /api/protocols/settings`).
  *
  * The dashboard never computes a plan itself; it asks the server and validates the answer
  * with the shared leaf validator, so a record from an older or newer server is refused rather
@@ -8,7 +8,12 @@
  * the preview off quietly instead of showing an error.
  */
 import { isProtocol, type Protocol } from "../../src/protocols/contract";
-import { isProtocolPlanV1, type ProtocolPlanV1 } from "../../src/protocols/dto";
+import {
+  isProtocolPlanV1,
+  isProtocolProviderSummaryV1,
+  type ProtocolPlanV1,
+  type ProtocolProviderSummaryV1,
+} from "../../src/protocols/dto";
 import { isProtocolFeature, type ProtocolFeature } from "../../src/protocols/features";
 
 export interface ProtocolPlanQuery {
@@ -146,6 +151,37 @@ export async function patchProtocolSettings(
     }
     const info = parseProtocolInfo(payload);
     return info ? { kind: "ok", info } : { kind: "error" };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    return { kind: "error" };
+  }
+}
+
+export type ProtocolProviderSummaryResult =
+  | { kind: "summary"; summary: ProtocolProviderSummaryV1 }
+  /** The server predates the provider block, or no longer has this provider. */
+  | { kind: "unavailable" }
+  | { kind: "error" };
+
+/**
+ * The upstream wire one provider receives, from `GET /api/protocols?provider=<name>`. A 404
+ * (older server without the routes, or a provider removed meanwhile) and a 200 without a
+ * `provider` block (a server that ignores the parameter) both read as unavailable, so the
+ * panel hides instead of guessing.
+ */
+export async function fetchProtocolProviderSummary(
+  apiBase: string,
+  provider: string,
+  signal?: AbortSignal,
+): Promise<ProtocolProviderSummaryResult> {
+  try {
+    const res = await fetch(`${apiBase}/api/protocols?${new URLSearchParams({ provider }).toString()}`, { signal });
+    if (res.status === 404) return { kind: "unavailable" };
+    if (!res.ok) return { kind: "error" };
+    const payload: unknown = await res.json();
+    if (!isRec(payload) || payload.provider === undefined) return { kind: "unavailable" };
+    if (!isProtocolProviderSummaryV1(payload.provider) || payload.provider.name !== provider) return { kind: "error" };
+    return { kind: "summary", summary: payload.provider };
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     return { kind: "error" };
