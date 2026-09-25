@@ -104,6 +104,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/dsh",
   "integrations/mcode",
   "integrations/zcode",
+  "integrations/commandcode",
   "integrations/prime",
   "integrations/aside",
   "integrations/raycast",

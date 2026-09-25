@@ -99,7 +99,7 @@ describe("the client registries cannot drift apart", () => {
     const guiRouting = await import("../../gui/src/app-routing");
 
     const expected = [...EXPORT_CLIENT_IDS].sort();
-    expect(expected).toHaveLength(15);
+    expect(expected).toHaveLength(16);
 
     expect([...INTEGRATION_CLIENT_IDS].sort()).toEqual(expected);
     expect([...gui.CLIENTS].sort()).toEqual(expected);
@@ -209,9 +209,10 @@ describe("the client registries cannot drift apart", () => {
     expect(INTEGRATION_CLIENTS.dsh.sourcePreservingYaml?.path).toEqual([
       "llm-pi-ai", "providers", "opencodex",
     ]);
-    expect(INTEGRATION_CLIENT_IDS.filter(id => INTEGRATION_CLIENTS[id].writerLock)).toEqual(["dsh", "mcode", "cline"]);
+    expect(INTEGRATION_CLIENT_IDS.filter(id => INTEGRATION_CLIENTS[id].writerLock)).toEqual(["dsh", "mcode", "commandcode", "cline"]);
     expect(INTEGRATION_CLIENTS.dsh.writerLock).toEqual({ suffix: ".lock" });
     expect(INTEGRATION_CLIENTS.mcode.writerLock).toEqual({ suffix: ".lock" });
+    expect(INTEGRATION_CLIENTS.commandcode.writerLock).toEqual({ suffix: ".lock" });
   });
 });
 
@@ -252,6 +253,7 @@ describe("every client survives a full lifecycle", () => {
   /** A pre-existing user document in each client's own format. */
   const SEED: Record<IntegrationClientId, string> = {
     cline: '{"version":1,"modes":{},"providers":{"mine":{"settings":{"provider":"mine"},"updatedAt":"2026-01-01T00:00:00.000Z","tokenSource":"manual"}}}\n',
+    commandcode: '{\n  "provider": {\n    "mine": { "name": "Keep Me", "api": "openai-completions", "baseURL": "http://keep-me/v1", "apiKey": "test-key", "models": {} }\n  }\n}\n',
     opencode: '{\n  "provider": {\n    "mine": { "npm": "keep-me" }\n  }\n}\n',
     pi: '{\n  "providers": {\n    "mine": { "api": "http://keep-me" }\n  }\n}\n',
     omp: "providers:\n  mine:\n    api: http://keep-me\n",

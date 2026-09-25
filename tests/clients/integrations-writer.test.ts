@@ -806,7 +806,7 @@ describe("apply", () => {
   });
 
   test("refuses a loopback-only client on a remote bind without denying manual OMP headers", () => {
-    for (const clientId of ["gajae", "omp", "dsh"] as const) {
+    for (const clientId of ["gajae", "omp", "dsh", "commandcode"] as const) {
       const spec = INTEGRATION_CLIENTS[clientId];
       mkdirSync(spec.detectDir(TEST_ENV, home), { recursive: true });
       const result = applyIntegration(input({
