@@ -27,6 +27,8 @@ export interface NormalizedComboTarget {
   /** Emergency-only target, deferred under `cooldownWaitPolicy` (#5691). */
   lastResort: boolean;
   reasoningEfforts?: OcxComboDefaultEffort[];
+  /** Optional JEV decision description. */
+  modelProfile?: string;
 }
 
 export interface NormalizedComboConfig {
@@ -333,6 +335,15 @@ export function comboConfigIssues(
         message: `targets[${i}].lastResort must be a boolean`,
       });
     }
+    if (target.modelProfile !== undefined
+      && (typeof target.modelProfile !== "string"
+        || target.modelProfile.trim().length === 0
+        || target.modelProfile.trim().length > 512)) {
+      issues.push({
+        path: ["targets", i, "modelProfile"],
+        message: `targets[${i}].modelProfile must be a non-empty string of at most 512 characters`,
+      });
+    }
 
     if (provider && model) {
       const key = targetKey({ provider, model });
@@ -388,6 +399,9 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
       weight: target.weight ?? 1,
       ...(target.reasoningEfforts !== undefined
         ? { reasoningEfforts: [...target.reasoningEfforts] }
+        : {}),
+      ...(typeof target.modelProfile === "string" && target.modelProfile.trim()
+        ? { modelProfile: target.modelProfile.trim() }
         : {}),
       lastResort: target.lastResort === true,
     })),

@@ -244,9 +244,11 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
       // would add a noise key to every target of every combo, including ones that never use
       // the policy (#5736). Only the opt-in value is stored, matching how the combo-level
       // policy is handled in sparseComboConfig.
-      targets: normalizedBase.targets.map(({ lastResort, ...target }) =>
-        lastResort ? { ...target, lastResort: true } : target,
-      ),
+      targets: normalizedBase.targets.map(({ lastResort, modelProfile, ...target }) => ({
+        ...target,
+        ...(lastResort ? { lastResort: true } : {}),
+        ...(modelProfile ? { modelProfile } : {}),
+      })),
       ...(normalizedAlias ? { alias: normalizedAlias } : {}),
       ...(normalizedNativeAlias ? { nativeAlias: true } : {}),
       ...(normalizedDisplayName ? { displayName: normalizedDisplayName } : {}),

@@ -275,6 +275,27 @@ describe("combo management API", () => {
     });
   });
 
+  test("JEV target profiles round-trip through management and reject invalid lengths", async () => {
+    await withTempHome(async () => {
+      const config = baseConfig({ combos: undefined });
+      saveConfig(config);
+      const created = await comboApi(config, "PUT", "/api/combos", {
+        id: "jev-profile",
+        combo: { strategy: "jev", targets: [{ provider: "a", model: "m1", modelProfile: "  Low marginal subscription cost; 1M context.  " }] },
+      });
+      expect(created?.status).toBe(200);
+      expect(config.combos?.["jev-profile"]?.targets[0]?.modelProfile).toBe("Low marginal subscription cost; 1M context.");
+      const listed = await responseJson(await comboApi(config, "GET", "/api/combos"));
+      expect(listed.combos[0].targets[0].modelProfile).toBe("Low marginal subscription cost; 1M context.");
+      const invalid = await comboApi(config, "PUT", "/api/combos", {
+        id: "jev-profile",
+        combo: { strategy: "jev", targets: [{ provider: "a", model: "m1", modelProfile: "x".repeat(513) }] },
+      });
+      expect(invalid?.status).toBe(400);
+      expect(config.combos?.["jev-profile"]?.targets[0]?.modelProfile).toBe("Low marginal subscription cost; 1M context.");
+    });
+  });
+
   test("PUT preserves explicit cooldown knobs and omits sparse defaults", async () => {
     await withTempHome(async () => {
       const config = baseConfig({ combos: undefined });

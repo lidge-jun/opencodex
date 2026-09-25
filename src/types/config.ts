@@ -1219,6 +1219,11 @@ export interface OcxComboTarget {
    */
   reasoningEfforts?: OcxComboDefaultEffort[];
   /**
+   * Operator-authored capability description sent only to the JEV decision
+   * service for this target. Omit it to use the built-in model profile.
+   */
+  modelProfile?: string;
+  /**
    * Marks an emergency-only target. Inert unless the combo sets
    * `cooldownWaitPolicy`, and never makes a target permanently ineligible —
    * see `OcxComboConfig.cooldownWaitPolicy` (#5691).

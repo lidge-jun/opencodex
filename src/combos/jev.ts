@@ -70,6 +70,7 @@ export interface JevCandidate {
   provider: string;
   model: string;
   reasoningEfforts: readonly OcxComboDefaultEffort[];
+  modelProfile?: string | null;
 }
 
 export interface JevDecision {
@@ -429,6 +430,8 @@ function candidatesFitRequestBounds(candidates: readonly JevCandidate[]): boolea
 }
 
 function modelProfile(candidate: JevCandidate): string {
+  const configured = candidate.modelProfile?.trim();
+  if (configured) return configured;
   const model = candidate.model.toLowerCase().split("/").at(-1) ?? "";
   return KNOWN_MODEL_PROFILES[model]
     ?? "Configured target with capability unspecified by JEV; judge it only from the supplied request evidence.";

@@ -194,6 +194,18 @@ describe("JEV route question", () => {
     expect(question.route.instructions.model_profiles["openai/gpt-5.6-luna"]).toContain("cost-optimized");
     expect(question.route.instructions.model_profiles["custom/other-model"]).toContain("unspecified");
   });
+
+  test("uses the operator profile for the exact target without changing the candidate set", () => {
+    const question = buildJevRouteQuestion([
+      { ...candidates[0]!, modelProfile: "  1M context; low marginal subscription cost.  " },
+      { ...candidates[1]!, modelProfile: "Custom provider tier." },
+    ]) as { route: { instructions: { model_profiles: Record<string, string> }; criteria: Record<string, unknown> } };
+    expect(question.route.instructions.model_profiles["openai/gpt-6-astra"])
+      .toBe("1M context; low marginal subscription cost.");
+    expect(question.route.instructions.model_profiles["openai/gpt-5.6-sol"])
+      .toBe("Custom provider tier.");
+    expect(Object.keys(question.route.criteria)).toHaveLength(3);
+  });
 });
 
 describe("JEV decision parser", () => {
