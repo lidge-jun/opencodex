@@ -104,7 +104,7 @@ afterEach(async () => {
   try {
     for (const turn of pendingTurns.splice(0)) {
       if (turn.bodyUsed || !turn.body || turn.body.locked) continue;
-      try { await turn.body.cancel(); } catch {}
+      try { await turn.body.cancel(); } catch { /* a turn the test already drained may refuse cancel; cleanup continues */ }
     }
     await upstream?.stop(true);
     upstream = undefined;
@@ -223,5 +223,4 @@ test("a stale in-flight single-target request does not replay a reconciled-away 
     // refused request must hit exactly once.
     expect(hits).toBe(3);
   });
-
 
