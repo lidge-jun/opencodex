@@ -761,3 +761,22 @@ routes and does not weaken them”을 명시한다. MAINTAINERS.md:11의 securit
 - `role`별 열 개 locale label과 link/listener state별 status dot mapping을 추가했다.
 - 기존 실행 역할(`hub`/`client`) wire 가정과 status의 `hostKeyFingerprint`/`ocxVersion`
   가정을 제거했다. (Pauli r2 반영) probe 응답은 K16대로 `{alias, fingerprint, keyType}`이고 `ocxVersion`은 confirm-host 응답에서만 받는다.
+
+## wp5 P 재검증 (아키텍트 Descartes, gpt-6-sol high, 2026-09-25) — 이 절이 앞선 내용보다 우선한다
+
+| ID | 제안 | 처분 |
+|---|---|---|
+| W5-1 | Remote Link 활성 조건은 `sharedSessionReady`만(standalone은 targets.connected=false, api-targets.ts:117-124) | 수용 |
+| W5-2 | 권한 표: candidates/probe/confirm-host/apply는 페어링 대시보드 세션만, status·DELETE는 세션 또는 신뢰 루프백 관리자 토큰(link-routes.ts:388-434) | 수용. GUI는 세션 경로만 쓴다 |
+| W5-3 | 응답 모양: candidates `{candidates:[...]}`, apply 202 `{linkId}`, DELETE 200 `{linkId}`, `child.state`는 `LinkWireState`(status-projection.ts:19-24) | 수용 |
+| W5-4 | App의 가용성 조회가 RemoteWorkspace 3초 폴링(RemoteWorkspace.tsx:87-97)과 겹침 | 결정: App은 원격 워크스페이스 가용성을 마운트와 경로 변경 시 한 번만 조회한다. 3초 폴링은 RemoteWorkspace 화면이 열려 있을 때만 기존대로. Remote Link 화면은 자기 status를 5초 간격으로, 화면이 보일 때만 폴링 |
+| W5-5 | gui/tests/locale-parity.test.ts:3이 vi를 빠뜨림 | 수용: 목록을 `LOCALES`에서 파생 |
+| W5-6 | 번역된 docs 트리 7개(astro.config.mjs:64-72)에 Remote Workspace 번역본이 있음 | 결정: 영어 원문 + 7개 언어 번역 페이지를 모두 추가하고 사이드바에 등록. 자식 흐름은 wp6 전까지 "준비 중" 문장 |
+| W5-7 | #remote → Remote Link, #remote-workspace 분리 | 유지 |
+| W5-8 | Switch·Notice·확인 대화상자 재사용, 추가 시트는 네이티브 `<dialog>`(Escape, 포커스 가두기·복원, OAuthTosWarningModal.tsx:34-70 관행) | 수용 |
+| W5-9 | 스크린샷 절차 | 결정: `gui/scripts/remote-link-fixture.ts`(Bun 서버: `gui/dist` 정적 제공 + 고정 `/api/link/*`·세션·워크스페이스 응답, 상태별 쿼리 스위치 off/role/home-connected/add-sheet/fingerprint)를 만들고, agbrowse로 1440×900과 390×844를 찍는다. 이미지는 저장소 브랜치에 커밋하지 않고 `pr-assets` 브랜치에 올려 커밋 SHA로 링크(AGENTS.md 규칙). 픽스처 스크립트는 저장소에 남겨 재현 가능하게 한다 |
+
+- 반영 확인(Descartes MISALIGNED 2건):
+  - W5-4 확정: App의 효과는 `useEffect(..., [page, sharedSessionReady, sharedBase])`. `sharedSessionReady`가 false면 조회하지 않고 원격 워크스페이스 내비 항목을 숨긴다. 조회 실패도 숨김(가용성 불명 = 비노출). 페이지 이동마다 한 번, 중복 요청은 진행 중 요청을 재사용.
+  - W5-9 확정: 파일 변경 지도에 NEW `gui/scripts/remote-link-fixture.ts` 추가. 계약: `bun gui/scripts/remote-link-fixture.ts --port <n>`이 `gui/dist`를 제공하고, `GET /opencodex-session`·`/api/remote-workspace/status`·`/api/link/status`·`/api/link/candidates`·`POST /api/link/probe`·`/api/link/confirm-host`·`/api/link/apply`에 고정 JSON을 돌려준다. 상태는 URL 쿼리 `?fixture=off|role|home-connected|add-sheet|fingerprint`로 고른다(서버는 Referer 쿼리 또는 쿠키 `ocx-fixture`로 판별). 재현 명령: `cd gui && bun run build && bun scripts/remote-link-fixture.ts --port 5199` 후 agbrowse로 각 상태를 1440×900, 390×844로 캡처. 검증 표에 이 명령과 `bun run lint:i18n`, `bun test tests`, `bun run lint`, `bun run build`, docs-site 빌드(`cd docs-site && bun run build`)를 추가한다.
+  - 실행 증거는 B/C 단계에서 만든다(계획 단계 문서는 결정 기록).
