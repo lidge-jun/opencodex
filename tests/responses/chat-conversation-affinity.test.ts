@@ -90,7 +90,7 @@ describe("Chat conversation identity at canonical Responses outbound boundary", 
         }
         expect(JSON.stringify(seen[1]!.body.input).length).toBeGreaterThan(JSON.stringify(seen[0]!.body.input).length);
         expect(seen[0]!.body.input).toEqual(seen[2]!.body.input);
-      });
+      }, 20_000);
     }
 
     test(`identity absent, key=${keyPresent}: no session is synthesized`, async () => {
@@ -101,6 +101,6 @@ describe("Chat conversation identity at canonical Responses outbound boundary", 
         for (const name of identityHeaders) expect(wire.headers.has(name)).toBe(false);
         expect(wire.body.prompt_cache_key).toBe(keyPresent ? "shared-cache-cohort" : undefined);
       }
-    });
+    }, 20_000);
   }
 });

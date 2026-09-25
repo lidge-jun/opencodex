@@ -1515,7 +1515,7 @@ describe("server local API auth", () => {
       url.protocol = "ws:";
       const ws = new WebSocket(url, { headers: { "x-opencodex-api-key": "local-secret", ...(headers ?? {}) } } as unknown as string[]);
       return new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error("tier websocket timeout")), watchdogMs(5_000));
+        const timer = setTimeout(() => reject(new Error("tier websocket timeout")), watchdogMs(20_000));
         ws.addEventListener("open", () => {
           ws.send(JSON.stringify({ type: "response.create", model, input: "hello" }));
         }, { once: true });

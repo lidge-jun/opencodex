@@ -386,6 +386,9 @@ export const SERIAL_FULL_SUITE_FILES = [
   "service/service-ownership-state.test.ts",
   "service/service-sqlite-home.test.ts",
   "service/service.test.ts",
+  "service/service-claim.test.ts",
+  "service/service-wsl-home-ownership.test.ts",
+  "codex-integration/native-codex-toggle.test.ts",
   "codex-integration/native-grok-toggle.test.ts",
 ] as const;
 
