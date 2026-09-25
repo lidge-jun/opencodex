@@ -102,6 +102,8 @@ function messagesBodyForFeatures(features: ReadonlySet<ProtocolFeature>): Record
 interface SyntheticRows {
   effortRow: boolean;
   fastRow: boolean;
+  /** The resolved selector the bridge would parse; the effort pin reads it. */
+  routeSelector: string;
 }
 
 function candidateFor(
@@ -139,7 +141,12 @@ function candidateFor(
   } else if (inbound === "messages" && resolveProtocolSettings(config).rollout.managedMessagesNative) {
     // The runtime rule itself. With the switch off nothing is judged, so the default preview
     // is exactly what it was before the managed native lane existed.
-    const reason = nativeMessagesDeclineReason(settled, messagesBodyForFeatures(features), config, rows);
+    // Pinned effort is judged from config and the route; blocked-skill elision and the web-search
+    // sidecar depend on body content no feature describes, so a preview cannot predict them.
+    const reason = nativeMessagesDeclineReason(settled, messagesBodyForFeatures(features), config, {
+      ...rows,
+      claudeCode: config.claudeCode,
+    });
     nativeEligible = reason === undefined;
     if (reason) declineReasons = [reason];
   }
@@ -205,7 +212,7 @@ export function buildProtocolPlanSnapshot(
   return {
     ...base,
     routeKind: settled.routeKind,
-    candidates: settled.routes.map(route => candidateFor(config, request.inbound, route, settled.routeKind, features, { effortRow, fastRow })),
+    candidates: settled.routes.map(route => candidateFor(config, request.inbound, route, settled.routeKind, features, { effortRow, fastRow, routeSelector: routeKey })),
     reasonCodes,
   };
 }
