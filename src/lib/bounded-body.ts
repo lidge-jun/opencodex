@@ -101,7 +101,7 @@ function bodyDeadline(ms: number, onTimeout: () => void): { clear: () => void } 
  * read results (including empty chunks) until the long-lived promise settles.
  */
 function interruptibleRead<T = never>(reader: ReadableStreamDefaultReader<Uint8Array>) {
-	type Outcome = ReadableStreamDefaultReadResult<Uint8Array> | T;
+	type Outcome = Awaited<ReturnType<typeof reader.read>> | T;
 	type Interruption = { value: T } | { error: unknown };
 	let interruption: Interruption | undefined;
 	let pending: { resolve: (value: Outcome) => void; reject: (error: unknown) => void } | undefined;
