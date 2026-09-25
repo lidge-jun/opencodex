@@ -70,6 +70,29 @@ features guaranteed by every eligible candidate, features only some preserve) an
 per physical attempt). Both carry only the closed vocabulary and identifiers the server already
 exposes, within fixed limits, and both validators reject anything that is not exactly version 1.
 
+## Observed trace
+
+`src/protocols/trace.ts` is server side and is not a leaf. The Chat Completions ingress
+(`src/server/chat-completions.ts`) marks the lane it chose, the reason code that declined the
+native lane, and the request's features; the Messages ingress (`src/server/claude-messages.ts`)
+marks caller-forward passthrough as the native lane, the translated path as the bridge, and a
+disabled surface or a compatibility reject as blocked. The Responses ingress needs no mark: its
+path follows the final adapter's wire. Marks live in WeakMaps keyed by the request log context
+and the live attempt objects, and no mark function throws into the request.
+
+`addFinalRequestLog` derives one `ProtocolTraceV1` through `path.ts`: a blocked mark wins with
+empty paths; otherwise each attempt gets the lane-derived path (or an explicit attempt mark),
+the final attempt sets the row's mode and paths, a reason implied by the path is appended to the
+entry's reasons, and feature effects come from `featureEffectsForPath`. No attempt and no native
+or blocked mark yields no trace; nothing is guessed. The usage row persists the trace and every
+read re-validates it with `parseProtocolTraceV1`, so an older or corrupt row hydrates without
+one. `/api/logs` spreads the entry and accepts `protocolMode`
+(`native | translated | legacy-bridge | blocked | none`) in `src/server/request-log-filter.ts`;
+an unknown value matches nothing. The dashboard renders it with
+`gui/src/components/protocols/` (a row badge and a detail-dialog section) and filters by mode
+client-side in `gui/src/pages/logs-filter.ts`. `tests/responses/protocol-trace.test.ts` and
+`tests/usage/request-log-protocol-trace.test.ts` pin derivation, persistence and the filter.
+
 ## Settings
 
 `resolveApiSurfaceSettings` and `resolveProtocolSettings` in `src/protocols/settings.ts` are the
