@@ -104,6 +104,36 @@ export interface ProtocolTraceV1 {
   contractVersion: string;
 }
 
+/** Who decided the wire a provider (or one of its models) receives. */
+export const PROTOCOL_ADAPTER_SOURCES = ["hard-pin", "operator", "registry", "provider-default"] as const;
+export type ProtocolAdapterSource = (typeof PROTOCOL_ADAPTER_SOURCES)[number];
+
+/** Upper bound on the per-model overrides one provider summary lists. */
+export const PROTOCOL_PROVIDER_OVERRIDE_LIMIT = 64;
+
+/** One model whose upstream wire differs from, or was decided apart from, the provider's. */
+export interface ProtocolProviderModelOverrideV1 {
+  model: string;
+  adapter: string;
+  source: ProtocolAdapterSource;
+}
+
+/**
+ * The `provider` block of `GET /api/protocols?provider=<name>`: the upstream wire a provider
+ * receives and who decided it. Static config only; no credential, base URL or header.
+ */
+export interface ProtocolProviderSummaryV1 {
+  name: string;
+  adapter: string;
+  adapterSource: ProtocolAdapterSource;
+  /** Resolved auth mode (`key`, `oauth`, `forward`, `local`), or null when none resolves. */
+  authMode: string | null;
+  upstream: UpstreamWire;
+  modelOverrides: ProtocolProviderModelOverrideV1[];
+  /** Set when more overrides exist than `PROTOCOL_PROVIDER_OVERRIDE_LIMIT` allows to list. */
+  modelOverridesTruncated?: true;
+}
+
 type Rec = Record<string, unknown>;
 function isRec(value: unknown): value is Rec {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -214,4 +244,24 @@ export function parseProtocolTraceV1(value: unknown): ProtocolTraceV1 | undefine
     ...(value.planMismatch ? { planMismatch: true as const } : {}),
     contractVersion: value.contractVersion,
   };
+}
+
+const ADAPTER_SOURCES = new Set<string>(PROTOCOL_ADAPTER_SOURCES);
+function isAdapterSource(value: unknown): value is ProtocolAdapterSource {
+  return typeof value === "string" && ADAPTER_SOURCES.has(value);
+}
+
+function isModelOverride(value: unknown): value is ProtocolProviderModelOverrideV1 {
+  return isRec(value) && isIdentifier(value.model) && isIdentifier(value.adapter) && isAdapterSource(value.source);
+}
+
+export function isProtocolProviderSummaryV1(value: unknown): value is ProtocolProviderSummaryV1 {
+  return isRec(value)
+    && isIdentifier(value.name)
+    && isIdentifier(value.adapter)
+    && isAdapterSource(value.adapterSource)
+    && (value.authMode === null || isIdentifier(value.authMode))
+    && isUpstreamWire(value.upstream)
+    && boundedArray(value.modelOverrides, PROTOCOL_PROVIDER_OVERRIDE_LIMIT, isModelOverride)
+    && (value.modelOverridesTruncated === undefined || value.modelOverridesTruncated === true);
 }
