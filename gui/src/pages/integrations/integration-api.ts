@@ -12,6 +12,7 @@ export const FILE_INTEGRATION_CLIENTS = [
   "dsh",
   "mcode",
   "zcode",
+  "commandcode",
   "prime",
   "aside",
   "raycast",

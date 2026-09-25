@@ -54,6 +54,8 @@ import {
   zcodeStoreSchemaEstablished,
   type BuildContribution,
   type ConfigFormat,
+  commandCodeConfigPath,
+  commandCodeHomeDir,
   kiloConfigPath,
   kiloHomeDir,
   kiloCandidatePath,
@@ -319,6 +321,12 @@ export const INTEGRATION_CLIENTS: Record<IntegrationClientId, IntegrationClientS
       establishes: zcodeStoreSchemaEstablished,
       buildContribution: buildZcodeStoreContribution,
     },
+  },
+  commandcode: {
+    id: "commandcode",
+    configPath: (env = process.env, home = homedir()) => commandCodeConfigPath(env, home),
+    detectDir: (env = process.env, home = homedir()) => commandCodeHomeDir(env, home),
+    writerLock: { suffix: ".lock" },
   },
   prime: {
     id: "prime",
