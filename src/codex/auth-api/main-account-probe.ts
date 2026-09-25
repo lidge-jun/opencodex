@@ -296,7 +296,9 @@ export async function fetchMainAccountInfoWhileOwned(
       }
       // Check after body/retry awaits and before any cache, credits, policy or
       // Reserve publication. Returning cached state supplies no fresh recovery proof.
-      if (!isQuotaDispatchCurrent(dispatchSequence)) {
+      if (!isQuotaDispatchCurrent(dispatchSequence) || (mainQuotaWriter
+        && (mainQuotaCredentialGeneration !== getMainQuotaCredentialGeneration()
+          || !matchesMainQuotaCredential(tokens.access_token, tokens.account_id)))) {
         return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
           credentialChecked: true, hasCredential: true };
       }
