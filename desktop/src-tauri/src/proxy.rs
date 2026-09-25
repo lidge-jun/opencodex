@@ -207,7 +207,8 @@ impl ProxyClient {
     async fn request(&self, method: Method, path: &str) -> Result<Value, ProxyError> {
         let response = self.send(&method, path, None).await?;
         if response.status() == StatusCode::UNAUTHORIZED {
-            let headers = self.authorised_capability(&method, path)?;
+            let signed = signed_target(&self.endpoint.url(path)).ok_or(ProxyError::Unauthorized)?;
+            let headers = self.authorised_capability(&method, &signed)?;
             let response = self.send(&method, path, Some(headers)).await?;
             return decode(response).await;
         }
@@ -347,6 +348,17 @@ fn map_request_error(error: reqwest::Error) -> ProxyError {
     }
 }
 
+/// The request target the capability signs, derived from the parsed URL rather than the raw path
+/// string. The server verifies `pathname + url.search`, which drops a bare `?` and keeps the
+/// percent-encoding reqwest applies on send; signing the raw path would mismatch on both.
+fn signed_target(url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(url).ok()?;
+    match url.query().filter(|query| !query.is_empty()) {
+        Some(query) => Some(format!("{}?{query}", url.path())),
+        None => Some(url.path().to_owned()),
+    }
+}
+
 async fn decode(response: reqwest::Response) -> Result<Value, ProxyError> {
     if response.status() == StatusCode::UNAUTHORIZED {
         return Err(ProxyError::Unauthorized);
@@ -359,7 +371,7 @@ async fn decode(response: reqwest::Response) -> Result<Value, ProxyError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{capability_mac, identity_from, CapabilityHeaders, RuntimeIdentity};
+    use super::{capability_mac, identity_from, signed_target, CapabilityHeaders, RuntimeIdentity};
     use crate::auth::RecordedRuntime;
     use reqwest::Method;
     use serde_json::json;
@@ -440,5 +452,24 @@ mod tests {
     fn a_body_missing_the_instance_facts_identifies_nothing() {
         assert!(identity_from(&json!({ "service": "opencodex", "port": 10100 }), 10100).is_none());
         assert!(identity_from(&json!({ "service": "opencodex", "pid": 42 }), 10100).is_none());
+    }
+
+    #[test]
+    fn the_signed_target_matches_what_the_server_reconstructs() {
+        // A bare `?` has an empty search on the server, so it must not be signed.
+        assert_eq!(
+            signed_target("http://127.0.0.1:10100/api/usage/timeline?").as_deref(),
+            Some("/api/usage/timeline")
+        );
+        // A populated query is signed verbatim, including percent-encoding reqwest applies.
+        assert_eq!(
+            signed_target("http://127.0.0.1:10100/api/usage/timeline?range=7d").as_deref(),
+            Some("/api/usage/timeline?range=7d")
+        );
+        assert_eq!(
+            signed_target("http://127.0.0.1:10100/api/usage/timeline?model=a b").as_deref(),
+            Some("/api/usage/timeline?model=a%20b")
+        );
+        assert_eq!(signed_target("not a url"), None);
     }
 }
