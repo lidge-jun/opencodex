@@ -59,6 +59,8 @@ import {
 } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
+import { featuresFromMessagesBody } from "../protocols/features";
+import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
 import {
   isApiAuthRequired,
   isDataPlaneAdmissionSecret,
@@ -718,6 +720,7 @@ async function handleClaudeMessagesWithBudget(
   logCtx.surface = "claude";
   const disabled = claudeInboundDisabled(config);
   if (disabled) {
+    markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: ["surface-disabled"] });
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
     return disabled;
   }
@@ -797,7 +800,10 @@ async function handleClaudeMessagesWithBudget(
     // caller's body with the caller's credential and never runs the Anthropic adapter, so the
     // proxy-owned `speed` + beta (anthropic-speed wire) and its usage.speed observation would be
     // silently skipped. Translation reaches the adapter, which owns both.
+    const messagesBody = anthropicBody;
+    const messagesFeatures = () => featuresFromMessagesBody(messagesBody);
     if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
+      markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
     // Capture source semantics before effort rewriting or translation drops fields.
@@ -814,6 +820,7 @@ async function handleClaudeMessagesWithBudget(
         anthropicBeta: req.headers.get("anthropic-beta") ?? undefined,
       });
       if (compatibility.decision === "reject") {
+        markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: ["compatibility-reject"], features: messagesFeatures });
         logCtx.errorCode = "claude_compatibility_unsupported";
         if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
         return anthropicErrorResponse(400, compatibility.reason!, "invalid_request_error");
@@ -826,6 +833,13 @@ async function handleClaudeMessagesWithBudget(
         };
       }
     }
+    // Features are read here, before an effort override rewrites the thinking settings.
+    markProtocolEntry(logCtx, {
+      inbound: "messages",
+      lane: "bridge",
+      reasonCodes: effortRow ? ["effort-row"] : fastRow ? ["fast-row"] : [],
+      features: messagesFeatures,
+    });
     if (isRec(anthropicBody) && effortOverride) {
       anthropicBody.output_config = {
         ...(isRec(anthropicBody.output_config) ? anthropicBody.output_config : {}),
