@@ -1379,4 +1379,38 @@ describe("agent task recovery transient retry (#3661)", () => {
     expect(await pending).toEqual({ recovered: false, reason: "caller_cancelled" });
     expect(fetches).toBe(1);
   });
+
+  test("a Retry-After past the recovery deadline ends with the failure instead of resending early", async () => {
+    let fetches = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      return new Response("private failure", { status: 503, headers: { "retry-after": "30" } });
+    }) as typeof fetch;
+    const started = Date.now();
+    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 2, timeoutMs: 5_000 }, routedConfig()))
+      .toEqual({ recovered: false, reason: "recovery_http_rejected" });
+    // Before the fix the 30 s instruction was clamped to the 2 s backoff cap and resent.
+    expect(fetches).toBe(1);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  test("a Retry-After inside the deadline is honoured as a floor, not capped", async () => {
+    let fetches = 0;
+    let firstAt = 0;
+    let secondAt = 0;
+    globalThis.fetch = (async () => {
+      fetches += 1;
+      if (fetches === 1) {
+        firstAt = Date.now();
+        return new Response("private failure", { status: 503, headers: { "retry-after": "2.5" } });
+      }
+      secondAt = Date.now();
+      return new Response(recoverySse("Recovered after outage."));
+    }) as typeof fetch;
+    expect(await recoverEncryptedAgentTaskWithResult(req(), encryptedInput(), { retries: 1 }, routedConfig()))
+      .toEqual({ recovered: true });
+    expect(fetches).toBe(2);
+    // 2.5 s exceeds RECOVERY_RETRY_MAX_DELAY_MS (2 s), so a capped wait would resend sooner.
+    expect(secondAt - firstAt).toBeGreaterThanOrEqual(2_400);
+  }, 10_000);
 });

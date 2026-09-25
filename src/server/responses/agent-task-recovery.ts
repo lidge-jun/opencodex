@@ -527,9 +527,11 @@ async function requestRecovery(
   abortSignal?: AbortSignal,
 ): Promise<AgentTaskRecoveryResolution> {
   const controller = new AbortController();
+  const timeoutMs = options.timeoutMs ?? 45_000;
+  const deadline = Date.now() + timeoutMs;
   const timeout = setTimeout(
     () => controller.abort(new DOMException("Agent task recovery timed out", "TimeoutError")),
-    options.timeoutMs ?? 45_000,
+    timeoutMs,
   );
   const signal = abortSignal
     ? AbortSignal.any([abortSignal, controller.signal])
@@ -545,12 +547,18 @@ async function requestRecovery(
         admission, envelope, options, signal, abortSignal, controller.signal,
       );
       if (resolution.recovered || !retryable || attempt >= retries) return resolution;
+      // Retry-After is the provider's floor, not something our backoff cap may shorten.
+      // If honouring it would outlive the shared deadline, end with this failure rather
+      // than resend early into a refusal.
+      const delayMs = retryBackoffDelayMs(attempt, {
+        baseDelayMs: RECOVERY_RETRY_BASE_DELAY_MS,
+        maxDelayMs: RECOVERY_RETRY_MAX_DELAY_MS,
+        headers: retryHeaders,
+        retryAfterIsLowerBound: true,
+      });
+      if (delayMs >= deadline - Date.now()) return resolution;
       try {
-        await sleepWithAbort(retryBackoffDelayMs(attempt, {
-          baseDelayMs: RECOVERY_RETRY_BASE_DELAY_MS,
-          maxDelayMs: RECOVERY_RETRY_MAX_DELAY_MS,
-          headers: retryHeaders,
-        }), signal);
+        await sleepWithAbort(delayMs, signal);
       } catch {
         return abortSignal?.aborted
           ? { recovered: false, reason: "recovery_aborted" }
