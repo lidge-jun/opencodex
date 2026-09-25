@@ -127,3 +127,6 @@ string, even if the publish crosses midnight KST.
    `main` through this release's promotion.
 3. Commands for dispatch, `expected-sha` (the branch's merge commit, full 40 chars) and
    preview-before-stable ordering confirmed as written.
+   Round 2 (NEAR-PASS) residuals folded: this manual procedure supersedes the section 2
+   `gh workflow run dev-version-bump.yml` command for this round, and `git fetch --force --tags origin`
+   runs before `release-version-line.test.ts` (the test returns early without tags).
