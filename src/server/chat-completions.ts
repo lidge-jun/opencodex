@@ -69,7 +69,10 @@ import {
   isTranslatorBudgetExceededError,
   type TranslatorBudget,
 } from "../lib/translator-budget";
-import { handleNativeChatCompletions, isNativeChatRouteEligible } from "./chat-native";
+import { handleNativeChatCompletions, nativeChatDeclineReason } from "./chat-native";
+import type { ProtocolReasonCode } from "../protocols/contract";
+import { featuresFromChatBody } from "../protocols/features";
+import { markProtocolEntry } from "../protocols/trace";
 import { jsonCompletionSse } from "./chat-native-sse";
 import { parseRequestEffortRowId } from "./effort-row";
 import { parseSyntheticRowId } from "./fast-row";
@@ -163,6 +166,8 @@ async function handleChatCompletionsWithBudget(
   let routeMayChangeCredentialDomain = false;
   let settledRoute: ReturnType<typeof routeModel> | null = null;
   let chatNativeRoute: ReturnType<typeof routeModel> | null = null;
+  // Why the native Chat lane was not taken; stays `unknown-model` when routing threw.
+  let nativeDecline: ProtocolReasonCode | undefined = "unknown-model";
   try {
     const route = routeModel(config, chatBody.model as string, evidenceFromBody(chatBody));
     // The native Chat lane sends without re-entering the Responses path, so it
@@ -199,7 +204,10 @@ async function handleChatCompletionsWithBudget(
     }
     // Combos must enter the Responses routing path so child selection, forced default
     // effort, failover, and per-attempt telemetry run before any native Chat send.
-    if (!route.combo && !effortRow && isNativeChatRouteEligible(route, chatBody, config)) {
+    nativeDecline = route.combo ? "combo-or-policy-route"
+      : effortRow ? "effort-row"
+      : nativeChatDeclineReason(route, chatBody, config);
+    if (nativeDecline === undefined) {
       chatNativeRoute = route;
       // Reserve an input estimate for spend without recording it as usage: native Chat attempts
       // keep the provider-reported counts, as they did before the reservation existed.
@@ -232,6 +240,12 @@ async function handleChatCompletionsWithBudget(
     /* unknown model: let handleResponses shape the 404 */
   }
 
+  markProtocolEntry(logCtx, {
+    inbound: "chat",
+    lane: chatNativeRoute ? "native" : "bridge",
+    reasonCodes: !chatNativeRoute && nativeDecline ? [nativeDecline] : [],
+    features: () => featuresFromChatBody(chatBody),
+  });
   if (chatNativeRoute) {
     return handleNativeChatCompletions({
       req,
