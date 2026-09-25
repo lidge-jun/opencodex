@@ -81,7 +81,7 @@ export function registryModelServiceTierCapabilityApplies(
   return guard === undefined || guard(provider.baseUrl);
 }
 
-function normalizedProviderEndpoint(value: string): string {
+export function normalizedProviderEndpoint(value: string): string {
   const trimmed = value.trim();
   try {
     const parsed = new URL(trimmed);

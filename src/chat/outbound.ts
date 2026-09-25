@@ -552,8 +552,16 @@ export function responsesSseToChatCompletionsSse(
         }
         switch (eventName) {
           case "response.created":
+            ensureRole();
+            break;
           case "response.heartbeat":
             ensureRole();
+            // A typed Responses heartbeat carries transport liveness, not Chat content. Preserve
+            // that signal as an SSE comment so idle-sensitive Chat clients receive bytes without
+            // inventing a semantic chunk that parsers, usage counters, or progress watchdogs could
+            // mistake for model output.
+            enqueueLiveFrame(encoder.encode(": opencodex heartbeat\n\n"));
+            emittedFrames++;
             break;
           case "response.output_text.delta": {
             if (typeof data.delta === "string") emitContent(data.delta);

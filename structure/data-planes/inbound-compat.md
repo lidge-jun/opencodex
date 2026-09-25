@@ -112,6 +112,10 @@ attempt telemetry only.
 
 Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
 or storage semantics retain the existing Chat -> Responses -> Chat bridge.
+On its streaming return path, typed `response.heartbeat` events become SSE comment-line
+keepalives. They preserve connection liveness without adding a Chat completion chunk, changing
+usage, or claiming semantic progress; see the
+[heartbeat contract](../transports/streaming-health.md#heartbeat-and-stall-deadline).
 Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
 aliasing as native Responses; see [`responses.md`](../transports/responses.md).
 

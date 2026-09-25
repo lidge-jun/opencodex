@@ -1,4 +1,4 @@
-import { unwrapFreeformToolInput } from "./apply-patch-envelope";
+import { freeformFallbackKeys } from "./apply-patch-envelope";
 import { JSON_ESCAPES, scanFreeformWrapper } from "./freeform-wrapper-scan";
 
 /**
@@ -92,11 +92,12 @@ function decodeJsonStringPrefix(body: string): string | null {
  * damage is what is available without giving up progressive streaming, and the args are
  * unusable in that case whichever representation wins.
  *
- * A fallback key is not decidable. It only unwraps when it is the SINGLE string field, and a
- * second key can still arrive — so a value emitted early would have to be taken back. That is
- * the rewind this holds instead: stream nothing until the object closes, then publish the one
- * repaired body. The routed passthrough in `responses-custom-tool-repair.ts` already holds
- * any object prefix for the same reason (#5047).
+ * A fallback key decides only at the object's close. It unwraps as the SINGLE string field,
+ * and a second key can still arrive while the object is open — so a value emitted early would
+ * have to be taken back. The scan therefore keeps a member table and consults it at the
+ * close, publishing the wrapped value (or the raw text) without ever reparsing the buffer.
+ * The routed passthrough in `responses-custom-tool-repair.ts` already holds any object prefix
+ * for the same reason (#5047).
  *
  * An object that has not reached a canonical key YET is in exactly that position, and used to
  * be treated as raw because it did not match the literal `{"input":"`. It holds now: `input`
@@ -106,7 +107,7 @@ function decodeJsonStringPrefix(body: string): string | null {
  * not holding was publishing bytes the completed item removes.
  */
 export function progressiveFreeformInput(args: string, toolName: string): string | null {
-  const scan = scanFreeformWrapper(args);
+  const scan = scanFreeformWrapper(args, freeformFallbackKeys(toolName));
   if (scan.kind === "input") {
     const decoded = decodeJsonStringPrefix(args.slice(scan.valueStart));
     if (decoded === null) return null;
@@ -114,17 +115,10 @@ export function progressiveFreeformInput(args: string, toolName: string): string
   }
   if (scan.kind === "raw") return mayBecomeFencedBody(args, toolName) ? null : args;
 
-  // Undecided: some wrapper may still apply, and only the completed object says which one.
-  // The parse runs exactly where the scan SAW the object close, so it reads a buffer the scan
-  // already walked and its cost is bounded by the same clamp. A hold from either limit stays
-  // held: an incomplete object has nothing to parse, and re-reading a budget-exhausted buffer
-  // on every delta is quadratic work for a delta that would arrive in the same instant as the
-  // authoritative completion behind it.
-  if (!scan.parse) return null;
-  try {
-    JSON.parse(args);
-  } catch {
-    return null;
-  }
-  return unwrapFreeformToolInput(args, toolName);
+  // Undecided: an incomplete object, or a close whose tail is clamped out of view. Both stay
+  // held — the first is provably incomplete, and re-walking a budget-exhausted buffer on every
+  // delta is work for a preview that arrives in the same instant as the authoritative
+  // completion behind it. A closed object the scan could see whole never reaches here: its
+  // member table already resolved it to `input` or `raw`.
+  return null;
 }

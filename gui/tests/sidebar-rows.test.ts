@@ -31,7 +31,7 @@ test("every row maps one-to-one onto a page", () => {
   // another, and Routing folding into Models is precisely that kind of change.
   expect(ids).toEqual([
     "dashboard", "codex-set", "providers", "models", "subagents",
-    "logs", "usage", "storage", "remote", "integrations",
+    "logs", "usage", "storage", "remote", "remote-workspace", "integrations",
   ]);
   // No two rows share a page id, which is what made the correction helper necessary.
   expect(new Set(ids).size).toBe(ids.length);

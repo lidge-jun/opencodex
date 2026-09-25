@@ -131,6 +131,18 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "link",
+    usage: "ocx link <port|issue|status|revoke>",
+    summary: "Allocate and manage a loopback remote home link.",
+    details: [
+      "Port: ocx link port [--json]",
+      "Issue: ocx link issue --alias <alias> --tunnel-port <port> [--json]",
+      "Status: ocx link status [--json]",
+      "Revoke: ocx link revoke --link-id <id> [--json]",
+      "Issue, status, and revoke use the running proxy's loopback management API and admin token.",
+    ],
+  },
+  {
     name: "remote-workspace",
     usage: "ocx remote-workspace <pair|agent|status>",
     summary: "Pair this OCX-only computer with a hub and run its remote workspace executor.",

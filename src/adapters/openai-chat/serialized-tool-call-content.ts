@@ -28,10 +28,24 @@ export interface SerializedToolCall {
   end: number;
 }
 
+/** A freeform tool's declared identity. Echoes are matched against it, never against the wire alias. */
+export interface FreeformToolIdentity {
+  name: string;
+  namespace?: string;
+}
+
+/** The request's freeform tools keyed by the wire name the provider sees for each of them. */
+export function freeformToolsByWireName<T extends FreeformToolIdentity & { freeform?: boolean }>(
+  tools: readonly T[] | undefined,
+  wireName: (tool: T) => string,
+): Map<string, FreeformToolIdentity> {
+  return new Map(tools?.filter(tool => tool.freeform).map(tool => [wireName(tool), { name: tool.name, namespace: tool.namespace }] as const) ?? []);
+}
+
 export interface StructuredToolCallReference {
   names: ReadonlySet<string>;
   argumentsText: string;
-  freeformTool?: { name: string; namespace?: string };
+  freeformTool?: FreeformToolIdentity;
 }
 
 const BLOCK_HEADER = /<tool_call>\s*<function=([^>\r\n]+)>/y;
@@ -327,7 +341,7 @@ export class SerializedToolCallContentBuffer {
 /** Reads a wrapped input or raw arguments from a declared freeform tool; neither path rewrites them. */
 function inputFromArguments(
   argumentsText: string,
-  freeformTool?: { name: string; namespace?: string },
+  freeformTool?: FreeformToolIdentity,
 ): string | undefined {
   try {
     const parsed = JSON.parse(argumentsText) as unknown;
@@ -481,7 +495,7 @@ export interface StructuredToolCallInput {
   wireName: string;
   restoredName: string;
   argumentsText: string;
-  freeformTool?: { name: string; namespace?: string };
+  freeformTool?: FreeformToolIdentity;
 }
 
 /**

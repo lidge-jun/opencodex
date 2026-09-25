@@ -539,6 +539,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleConnectCommand } = await import("./connect");
     return await handleConnectCommand(deps.args.slice(1));
   },
+  link: async deps => {
+    const { runLinkCommand } = await import("./link");
+    return await runLinkCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
+  },
   "remote-workspace": async deps => {
     const { runRemoteWorkspaceCommand } = await import("./remote-workspace");
     return await runRemoteWorkspaceCommand(deps.args.slice(1));

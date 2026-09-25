@@ -28,6 +28,32 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 Safe to run at any time; none of these change state.
 
+### `ocx link port`
+
+Allocate a free loopback port for a remote home link.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the selected port as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx link status`
+
+Read link listener and tunnel status.
+
+| Method | Route |
+|---|---|
+| GET | `/api/link/status` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the K16 status payload as JSON. |
+
+JSON mode: `payload`.
+
 ### `ocx remote-workspace status`
 
 Read local executor enrollment and available capabilities without printing credentials.
@@ -452,6 +478,41 @@ JSON mode: `none`.
 ## State-changing capabilities
 
 Each of these writes. Check the flags column before running one unattended.
+
+### `ocx link issue`
+
+Issue one link credential and record its tunnel metadata.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/issue` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--alias` | string | SSH host alias for the linked machine. |
+| `--tunnel-port` | number | Remote loopback port for the reverse tunnel. |
+| `--json` | boolean | Emit the issue result as JSON. |
+
+JSON mode: `payload`.
+
+- Requires the running proxy's admin token on loopback; the one-time data key is printed only on stdout.
+
+### `ocx link revoke`
+
+Revoke a link credential and remove its link record.
+
+| Method | Route |
+|---|---|
+| DELETE | `/api/link/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Link id to revoke. |
+| `--json` | boolean | Emit the revoked link id as JSON. |
+
+JSON mode: `payload`.
+
+- Requires the running proxy's admin token on loopback.
 
 ### `ocx remote-workspace pair`
 
@@ -1005,6 +1066,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 56
-- of those, state-changing: 30
+- declared capabilities: 60
+- of those, state-changing: 32
 - head-resolved invocations: 2

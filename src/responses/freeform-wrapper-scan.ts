@@ -19,7 +19,8 @@
 //   `raw`    no wrapper can apply, because the text is not an object or because it is one that
 //            `JSON.parse` will reject. Completion returns the buffer, so streaming it agrees.
 //   `hold`   undecided. A key that has not arrived yet can still change the answer, so nothing
-//            is published until the object parses and completion's own rule decides.
+//            is published until the object closes — where the scan itself already holds the
+//            member table completion's own rule consults, so no parse of the buffer is needed.
 //
 // The bound matters as much as the classification. A scan that walks the whole buffer on every
 // delta is quadratic in the argument size, so classification gives up after
@@ -53,7 +54,7 @@ const HOLD = -1;
 const NEVER = -2;
 
 export type FreeformWrapperScan =
-  | { kind: "hold"; parse: boolean }
+  | { kind: "hold" }
   | { kind: "raw" }
   | { kind: "input"; valueStart: number };
 
@@ -192,38 +193,36 @@ function scanValue(text: string, from: number): number {
 /**
  * Which wrapper the completed text will unwrap to, as far as this prefix can say.
  *
- * Fallback keys are deliberately not recognized here. They only unwrap when exactly one of them
- * carries a string, and a second one can still arrive, so no prefix decides them — which makes
- * them indistinguishable from any other undecided object and lets one HOLD cover both.
+ * `fallbackKeys` is the tool's alternate-field vocabulary — `freeformFallbackKeys`, the same
+ * list `unwrapFreeformToolInput` filters against. No open prefix can decide a fallback key,
+ * because it unwraps only as the SINGLE string field and a second one can still arrive; so the
+ * scan keeps a table of the members it has already walked and consults it once, at the close.
  */
-export function scanFreeformWrapper(text: string): FreeformWrapperScan {
+export function scanFreeformWrapper(text: string, fallbackKeys: readonly string[]): FreeformWrapperScan {
   // One clamp rather than a budget threaded through every helper. Every helper already holds
   // when it runs off the end of what it can see, so a buffer whose classification needs more
   // than this holds for exactly the right reason, and no scan can cost more than this many
   // characters however large the arguments grow. Indices into the clamp are indices into the
   // full text, because the clamp is a prefix of it.
-  const bounded = text.length > MAX_FREEFORM_WRAPPER_SCAN_CHARS
-    ? text.slice(0, MAX_FREEFORM_WRAPPER_SCAN_CHARS)
-    : text;
-  // `parse` is true only where this scan actually SAW the object close. Every other hold ran
-  // out of buffer or out of budget, and in both cases asking `JSON.parse` is work with no
-  // possible payoff: the first is provably incomplete, and the second would re-read a growing
-  // buffer on every delta that happens to end in a brace — repeated braces inside a long
-  // unterminated string are enough to make that quadratic. Holding a budget-exhausted prefix
-  // costs nothing that matters, because the value it would release arrives in the same instant
-  // as the authoritative completion that follows it.
-  const hold = (): FreeformWrapperScan => ({ kind: "hold", parse: false });
+  const wholeText = text.length <= MAX_FREEFORM_WRAPPER_SCAN_CHARS;
+  const bounded = wholeText ? text : text.slice(0, MAX_FREEFORM_WRAPPER_SCAN_CHARS);
+  const hold = (): FreeformWrapperScan => ({ kind: "hold" });
   const open = skipWhitespace(bounded, 0);
   if (open === HOLD) return hold();
   // Not an object, so no wrapper rule reaches it: arrays, scalars and ordinary bodies all
   // complete as themselves.
   if (bounded[open] !== "{") return { kind: "raw" };
 
+  // Every top-level member is recorded as the scan passes it, last occurrence winning — the
+  // keep-last rule `JSON.parse` applies to duplicate keys. When the object closes, this table
+  // answers the only question completion asks of it — which members carried strings — so the
+  // closed object classifies directly instead of reparsing a buffer the scan just walked.
+  const members = new Map<string, { stringValue: boolean; valueStart: number }>();
   let i = open + 1;
   for (;;) {
     const at = skipWhitespace(bounded, i);
     if (at === HOLD) return hold();
-    if (bounded[at] === "}") return afterTopLevelClose(bounded, at + 1);
+    if (bounded[at] === "}") return afterTopLevelClose(bounded, at + 1, members, fallbackKeys, wholeText);
     if (bounded[at] !== '"') return { kind: "raw" };
 
     const nameEnd = scanString(bounded, at);
@@ -254,6 +253,7 @@ export function scanFreeformWrapper(text: string): FreeformWrapperScan {
         : { kind: "raw" };
     }
 
+    members.set(name, { stringValue: bounded[valueAt] === '"', valueStart: valueAt + 1 });
     const valueEnd = scanValue(bounded, valueAt);
     if (valueEnd === HOLD) return hold();
     if (valueEnd === NEVER) return { kind: "raw" };
@@ -261,19 +261,46 @@ export function scanFreeformWrapper(text: string): FreeformWrapperScan {
     const next = skipWhitespace(bounded, valueEnd);
     if (next === HOLD) return hold();
     if (bounded[next] === ",") {
-      i = next + 1;
+      // A comma promises another member, so the next non-whitespace character must open a
+      // member name. `{"code":"cmd",}` is not a completed object — `JSON.parse` rejects the
+      // trailing comma — and treating its `}` as the close would unwrap a preview completion
+      // hands back unchanged. Nested members already reject this through `scanMemberKey`;
+      // the top level has to ask the same question itself.
+      const member = skipWhitespace(bounded, next + 1);
+      if (member === HOLD) return hold();
+      if (bounded[member] !== '"') return { kind: "raw" };
+      i = member;
       continue;
     }
-    if (bounded[next] === "}") return afterTopLevelClose(bounded, next + 1);
+    if (bounded[next] === "}") return afterTopLevelClose(bounded, next + 1, members, fallbackKeys, wholeText);
     return { kind: "raw" };
   }
 }
 
 /**
  * The object closed without a canonical key. Only whitespace may follow one that parses, so
- * anything else makes the text raw; otherwise the completed parse decides between a fallback
- * wrapper and no wrapper at all.
+ * anything else makes the text raw. Whitespace to the end IS legal, but the member table
+ * already says which way completion goes on it: exactly one string-valued fallback field is
+ * the wrapper's value, and any other member shape streams the raw text — byte-exact through
+ * whatever trailing whitespace arrived, where a reparsed growing buffer was quadratic work on
+ * every whitespace delta and a held one swallowed the whitespace bytes entirely.
  */
-function afterTopLevelClose(text: string, from: number): FreeformWrapperScan {
-  return skipWhitespace(text, from) === HOLD ? { kind: "hold", parse: true } : { kind: "raw" };
+function afterTopLevelClose(
+  text: string,
+  from: number,
+  members: ReadonlyMap<string, { stringValue: boolean; valueStart: number }>,
+  fallbackKeys: readonly string[],
+  wholeText: boolean,
+): FreeformWrapperScan {
+  const trailing = skipWhitespace(text, from);
+  if (trailing !== HOLD) return { kind: "raw" };
+  // A clamped prefix ends inside this whitespace, so what follows is unseen: hold rather than
+  // guess at a tail that could still invalidate the close. When the whole text fit, the object
+  // plus its trailing whitespace is complete — and its members decide it without a parse.
+  if (!wholeText) return { kind: "hold" };
+  const candidates = fallbackKeys.filter(key => members.get(key)?.stringValue === true);
+  if (candidates.length === 1) {
+    return { kind: "input", valueStart: members.get(candidates[0]!)!.valueStart };
+  }
+  return { kind: "raw" };
 }

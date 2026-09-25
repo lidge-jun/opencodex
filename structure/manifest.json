@@ -480,6 +480,15 @@
       ]
     },
     {
+      "path": "remote-link.md",
+      "tier": 3,
+      "title": "Remote Link",
+      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer and the private link store.",
+      "documents": [
+        "src/link/"
+      ]
+    },
+    {
       "path": "companion.md",
       "tier": 5,
       "title": "Companion usage",

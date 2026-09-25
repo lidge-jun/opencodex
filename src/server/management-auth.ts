@@ -261,6 +261,17 @@ export function issueGuiSession(
   return issueGuiSessionFromState(req, config, state, context);
 }
 
+/** Returns the recorded issuance for the session that authorized this request. */
+export function managementSessionIssuance(
+  req: Request,
+  state: ManagementAuthState,
+): import("./gui-session").GuiSessionIssuance | null {
+  if (!state.available) return null;
+  const credential = requestManagementCredential(req);
+  if (!credential || equalSecret(credential, state.token)) return null;
+  return state.sessions.get(credential)?.issuance ?? null;
+}
+
 export interface ManagementSessionControl {
   revokeCurrent(req: Request): boolean;
   /** Revalidate a long-lived request against current authority, without cached admission or renewal. */

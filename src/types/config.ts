@@ -397,10 +397,17 @@ export interface OcxPrivacyConfig {
   maskEmails?: boolean;
 }
 
+export interface OcxLinkTransportConfig {
+  tunnelPort: number;
+  linkId: string;
+}
+
 export interface OcxClientConnectionConfig {
   serverUrl: string;
   managementUrl: string;
   managementTransport: "direct" | "relay";
+  transport?: "hub" | "link";
+  link?: OcxLinkTransportConfig;
   selectedClients: OcxConnectedClientId[];
   tokenEnv: "OPENCODEX_API_AUTH_TOKEN";
   apiKeyId: string;
