@@ -110,9 +110,10 @@ export function isLoopbackTarget(host: string): boolean {
   return /^(0x[0-9a-f]+|\d+)(\.(0x[0-9a-f]+|\d+))*$/.test(host);
 }
 
-function respond(socket: Socket, status: number, reason: string): void {
+function respond(socket: Socket, status: number, reason: string, headers: Readonly<Record<string, string>> = {}): void {
   if (socket.destroyed) return;
-  socket.end(`HTTP/1.1 ${status} ${reason}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+  const extra = Object.entries(headers).map(([name, value]) => `${name}: ${value}\r\n`).join("");
+  socket.end(`HTTP/1.1 ${status} ${reason}\r\n${extra}Connection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
 function splice(client: Socket, upstream: Socket, pending: Uint8Array): void {
@@ -177,7 +178,7 @@ function handleConnection(socket: Socket, options: ResolvedConnectProxyOptions):
       try { token = typeof options.authToken === "function" ? options.authToken() : options.authToken; }
       catch { /* unavailable credential must never fall back to an unauthenticated proxy */ }
       if (!token || !proxyAuthorized(requestHead, token)) {
-        respond(socket, 407, "Proxy Authentication Required");
+        respond(socket, 407, "Proxy Authentication Required", { "Proxy-Authenticate": 'Basic realm="OpenCodex"' });
         return;
       }
     }

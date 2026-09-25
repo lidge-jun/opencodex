@@ -145,16 +145,22 @@ export function ensureClaudeInterceptProxyToken(configDir: string): string {
     }
     return readPinnedToken(configDir, true);
   } finally {
-    closeSync(fd);
+    // Cleanup cannot turn a committed credential into a failed apply or hide the
+    // original publication error. Do not retry close: its fd may already be reused.
+    let cleanupFailed = false;
+    try { closeSync(fd); } catch { cleanupFailed = true; }
+    let removed = false;
     try {
       assertSameNode(temp, created);
       unlinkSync(temp);
-      forgetEphemeralSecretPath(temp);
+      removed = true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw new Error("Claude intercept credential temporary cleanup failed");
-      }
-      forgetEphemeralSecretPath(temp);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") removed = true;
+      else cleanupFailed = true;
+    }
+    if (removed) forgetEphemeralSecretPath(temp);
+    if (cleanupFailed) {
+      console.warn("[claude] Credential temporary cleanup incomplete; review retained temporary state.");
     }
   }
 }

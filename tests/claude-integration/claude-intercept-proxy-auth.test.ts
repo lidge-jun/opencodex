@@ -1,5 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import * as filesystem from "node:fs";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -156,3 +157,71 @@ test("a live intercept adopts an explicitly recreated token without restarting",
     else process.env.CLAUDE_CONFIG_DIR = previous;
   }
 }, 30000);
+
+test("published token stays usable when removal of its own temporary entry fails", () => {
+  const root = dir();
+  const original = filesystem.unlinkSync;
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  const removal = spyOn(filesystem, "unlinkSync").mockImplementation(path => {
+    if (String(path).includes(".proxy-token.") && String(path).endsWith(".tmp")) {
+      throw Object.assign(new Error("private detail must not escape"), { code: "EACCES" });
+    }
+    return original(path);
+  });
+  try {
+    const token = ensureClaudeInterceptProxyToken(root);
+    expect(readClaudeInterceptProxyToken(root)).toBe(token);
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("private detail");
+    const temps = readdirSync(join(root, "claude-intercept")).filter(name => name.endsWith(".tmp"));
+    expect(temps).toHaveLength(1);
+  } finally { removal.mockRestore(); warning.mockRestore(); }
+});
+test("cleanup errors preserve the original credential creation error", () => {
+  const root = dir();
+  const originalWrite = filesystem.writeFileSync;
+  const originalUnlink = filesystem.unlinkSync;
+  const failure = new Error("expected creation failure");
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  const write = spyOn(filesystem, "writeFileSync").mockImplementation((path, data, options) => {
+    if (typeof path === "number") throw failure;
+    return originalWrite(path, data, options);
+  });
+  const removal = spyOn(filesystem, "unlinkSync").mockImplementation(path => {
+    if (String(path).includes(".proxy-token.") && String(path).endsWith(".tmp")) {
+      throw Object.assign(new Error("secondary removal error"), { code: "EACCES" });
+    }
+    return originalUnlink(path);
+  });
+  try {
+    let caught: unknown;
+    try { ensureClaudeInterceptProxyToken(root); } catch (error) { caught = error; }
+    expect(caught).toBe(failure);
+    expect(readClaudeInterceptProxyToken(root)).toBeNull();
+    expect(warning).toHaveBeenCalledTimes(1);
+  } finally { removal.mockRestore(); write.mockRestore(); warning.mockRestore(); }
+});
+test("a temporary close error does not replace the published credential result", () => {
+  const root = dir();
+  const originalWrite = filesystem.writeFileSync;
+  const originalClose = filesystem.closeSync;
+  let tempFd = -1;
+  const warning = spyOn(console, "warn").mockImplementation(() => {});
+  const write = spyOn(filesystem, "writeFileSync").mockImplementation((path, data, options) => {
+    if (typeof path === "number") tempFd = path;
+    return originalWrite(path, data, options);
+  });
+  const close = spyOn(filesystem, "closeSync").mockImplementation(fd => {
+    originalClose(fd);
+    if (fd === tempFd) {
+      tempFd = -1;
+      throw new Error("injected post-close error");
+    }
+  });
+  try {
+    const token = ensureClaudeInterceptProxyToken(root);
+    expect(readClaudeInterceptProxyToken(root)).toBe(token);
+    expect(warning).toHaveBeenCalledTimes(1);
+    expect(readdirSync(join(root, "claude-intercept"))).toEqual(["proxy-token"]);
+  } finally { close.mockRestore(); write.mockRestore(); warning.mockRestore(); }
+});

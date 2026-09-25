@@ -289,3 +289,22 @@ test("rewriteInterceptedRequest moves the request onto the loopback origin and k
   expect(rewritten.headers.get("anthropic-version")).toBe("2023-06-01");
   expect(rewritten.method).toBe("POST");
 });
+
+test("every authentication rejection includes a Basic proxy challenge before any dial", async () => {
+  for (const authToken of [AUTH_TOKEN, () => null, () => { throw new Error("unavailable"); }]) {
+    let dials = 0;
+    const proxy = await startConnectProxy(0, {
+      interceptPort: 1, authToken,
+      dialUpstream: () => { dials += 1; throw new Error("unexpected dial"); },
+    });
+    try {
+      for (const header of ["", "Proxy-Authorization: Basic invalid\r\n"]) {
+        const response = await rawRequest(proxy.port,
+          `CONNECT telemetry.example:443 HTTP/1.1\r\nHost: telemetry.example:443\r\n${header}\r\n`);
+        expect(response).toMatch(/^HTTP\/1\.1 407 /);
+        expect(response).toContain('\r\nProxy-Authenticate: Basic realm="OpenCodex"\r\n');
+        expect(dials).toBe(0);
+      }
+    } finally { await proxy.close(); }
+  }
+});
