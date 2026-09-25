@@ -3329,4 +3329,6 @@ export const ko: Record<TKey, string> = {
   "compatProtocol.unverified": "{pair}에 대한 Lab 근거가 아직 없습니다. 이 조합은 실패가 아니라 미검증 상태입니다.",
   "compatProtocol.unresolved": "{count}개 대상의 프로토콜 쌍을 읽지 못해 이 필터에서 제외했습니다.",
   "compatProtocol.axisNote": "Lab 판정만 표시합니다. 요청이 어떻게 전달되는지(네이티브 또는 변환)는 API 페이지의 요청 경로 미리보기에 나옵니다.",
+  "protocolLinks.labEvidence": "이 조합의 Lab 근거",
+  "protocolLinks.providerSettings": "프로바이더 설정",
 };

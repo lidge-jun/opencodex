@@ -3299,4 +3299,6 @@ export const vi: Record<TKey, string> = {
   "compatProtocol.unverified": "Chưa có bằng chứng Lab cho {pair}. Cặp này chưa được xác minh, không phải thất bại.",
   "compatProtocol.unresolved": "Không đọc được cặp giao thức của {count} đối tượng; chúng bị loại khỏi bộ lọc này.",
   "compatProtocol.axisNote": "Đây chỉ là kết luận của Lab. Cách một request được chuyển đi (native hay được dịch) hiển thị trong phần xem trước đường đi request trên trang API.",
+  "protocolLinks.labEvidence": "Bằng chứng Lab cho cặp này",
+  "protocolLinks.providerSettings": "Cài đặt nhà cung cấp",
 };

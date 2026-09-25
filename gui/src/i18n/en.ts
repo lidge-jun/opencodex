@@ -3341,6 +3341,8 @@ export const en = {
   "compatProtocol.unverified": "No Lab evidence for {pair} yet. The pair is unverified, not failed.",
   "compatProtocol.unresolved": "The protocol pair of {count} subjects could not be read; they are left out of this filter.",
   "compatProtocol.axisNote": "These are Lab verdicts only. How a request is delivered (native or translated) is shown by the request path preview on the API page.",
+  "protocolLinks.labEvidence": "Lab evidence for this pair",
+  "protocolLinks.providerSettings": "Provider settings",
 } as const;
 
 export type TKey = keyof typeof en;

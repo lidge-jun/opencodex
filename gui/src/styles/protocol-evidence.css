@@ -33,3 +33,7 @@
   padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius-xs);
   color: var(--text); font-size: var(--text-label);
 }
+
+/* ── Deep links between protocol views ────────────────────── */
+.protocol-deep-link { align-self: flex-start; margin-top: 6px; }
+.protocol-plan-links { display: flex; flex-wrap: wrap; gap: 6px; }

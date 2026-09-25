@@ -3330,4 +3330,6 @@ export const tr: Record<TKey, string> = {
   "compatProtocol.unverified": "{pair} için henüz Lab kanıtı yok. Bu çift başarısız değil, doğrulanmamış.",
   "compatProtocol.unresolved": "{count} öznenin protokol çifti okunamadı; bu filtrenin dışında bırakıldılar.",
   "compatProtocol.axisNote": "Bunlar yalnızca Lab kararlarıdır. Bir isteğin nasıl iletildiği (yerel ya da çevrilmiş) API sayfasındaki istek yolu önizlemesinde gösterilir.",
+  "protocolLinks.labEvidence": "Bu çift için Lab kanıtı",
+  "protocolLinks.providerSettings": "Sağlayıcı ayarları",
 };
