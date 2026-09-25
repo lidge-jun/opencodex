@@ -22,6 +22,8 @@ import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { AttemptTierOutcome, OcxProviderConfig, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
+import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
+import { protocolTraceForRequest } from "../protocols/trace";
 import type { AdapterRequest } from "../adapters/base";
 import type { RequestSpendSettlement } from "./responses/request-spend";
 import type { AdapterTierMetadata } from "../providers/fastwire";
@@ -359,6 +361,8 @@ export interface RequestLogEntry {
    */
   failureStage?: RequestFailureStage;
   failureCause?: RequestFailureCause;
+  /** Observed protocol path (PF-02, `src/protocols/trace.ts`); absent when nothing was observed. */
+  protocolTrace?: ProtocolTraceV1;
 }
 
 const requestLog: RequestLogEntry[] = [];
@@ -429,6 +433,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
   const routeDecision = normalizeRouteDecisionTraceForLog(entry.routeDecision);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const spend = normalizeRequestSpend(entry.spend);
+  const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
   return {
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
@@ -484,6 +489,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
       ? { conversationStateScrub: "account-change" }
       : {}),
     ...normalizeRequestFailureAttribution(entry),
+    ...(protocolTrace ? { protocolTrace } : {}),
   };
 }
 
@@ -662,6 +668,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...normalizeRequestFailureAttribution(entry),
       ...(entry.routeDecision ? { routeDecision: entry.routeDecision } : {}),
       ...(entry.claudeCompatibility ? { claudeCompatibility: entry.claudeCompatibility } : {}),
+      ...(entry.protocolTrace ? { protocolTrace: entry.protocolTrace } : {}),
       ...(entry.conversationStateScrub === "account-change"
         ? { conversationStateScrub: "account-change" }
         : {}),
@@ -1504,6 +1511,8 @@ export function addFinalRequestLog(
   // the in-memory /api/logs row matches what usage.jsonl already stores.
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(logCtx.shadowCallRewrittenFrom);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(logCtx.claudeCompatibility);
+  // Keyed by the live attempt objects, not the detached copies above.
+  const protocolTrace = protocolTraceForRequest(logCtx, logCtx.attempts);
   addLog({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),
@@ -1564,6 +1573,7 @@ export function addFinalRequestLog(
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...(protocolTrace ? { protocolTrace } : {}),
     ...attribution,
   });
   // Formatted from the finalized snapshot, so the ring shows exactly what the ledger holds.
