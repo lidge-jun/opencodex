@@ -785,11 +785,11 @@ describe("fetchProviderQuotaReports", () => {
   });
 
   test("routing quota scope keeps a key-bound display-only report out of model selection", async () => {
-    // MiniMax publishes its Token Plan countdown through the display-only path. The provider
+    // MiniMax publishes its Token Plan windows through the display-only path. The provider
     // is single-key `key` auth, so ownership alone would resolve a routing binding; without
     // an inference projection the exhausted row must still not rank or veto the target.
     globalThis.fetch = (async () => Response.json({
-      success: true, data: { remains_time: 0, total_time: 1_000_000_000 },
+      base_resp: { status_code: 0 }, model_remains: [{ model_name: "general", current_interval_remaining_percent: 0 }],
     })) as typeof fetch;
     const config = quotaCombo(keyQuotaConfig("minimax", "https://api.minimax.io/v1"));
     const reports = await fetchProviderQuotaReports(config, true);
@@ -1669,61 +1669,6 @@ describe("fetchProviderQuotaReports", () => {
       weeklyPercent: 0,
     });
     expect(result.reports[0]?.quota.monthlyPercent).toBeUndefined();
-  });
-
-  test("MiniMax quota drops the row when the API omits the plan total after having it", async () => {
-    // A valid row (with total) exists; a later valid response omitting the
-    // total is a DELIBERATE contract change — the stale row must be dropped
-    // (terminal), not preserved as a transient last-good.
-    let withTotal = true;
-    const seen: Array<{ url: string; authorization?: string; redirect?: RequestRedirect }> = [];
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const headers = init?.headers as Record<string, string> | undefined;
-      seen.push({ url, authorization: headers?.Authorization, redirect: init?.redirect });
-      return new Response(JSON.stringify(withTotal
-        ? { success: true, data: { remains_time: 750_000_000, total_time: 1_000_000_000 } }
-        : { success: true, data: { remains_time: 1_000_000_000 } }), { status: 200 });
-    }) as typeof fetch;
-    const config = keyQuotaConfig("minimax", "https://api.minimax.io/v1");
-
-    const valid = await fetchProviderQuotaReports(config, true);
-    withTotal = false;
-    const noTotal = await fetchProviderQuotaReports(config, true);
-
-    expect(valid.reports).toHaveLength(1);
-    expect(noTotal.reports).toEqual([]);
-    expect(seen[0]?.url).toBe("https://www.minimax.io/v1/token_plan/remains");
-    expect(seen[0]?.authorization).toBe("Bearer minimax-secret");
-    expect(seen[0]?.redirect).toBe("error");
-  });
-
-  test("MiniMax quota derives a consumed share when the API reports the plan total", async () => {
-    globalThis.fetch = (async () => new Response(JSON.stringify({
-      success: true,
-      data: { remains_time: 750_000_000, total_time: 1_000_000_000 },
-    }), { status: 200 })) as typeof fetch;
-
-    const result = await fetchProviderQuotaReports(keyQuotaConfig("minimax", "https://api.minimax.io/v1"), true);
-
-    expect(result.reports).toHaveLength(1);
-    expect(result.reports[0]?.quota.customWindows?.[0]?.percent).toBe(25);
-  });
-
-  test("MiniMax CN quota probes the minimaxi.com host", async () => {
-    const seen: string[] = [];
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
-      seen.push(String(input));
-      return new Response(JSON.stringify({
-        success: true,
-        data: { remains_time: 750_000_000, total_time: 1_000_000_000 },
-      }), { status: 200 });
-    }) as typeof fetch;
-
-    const result = await fetchProviderQuotaReports(keyQuotaConfig("minimax-cn", "https://api.minimaxi.com/v1"), true);
-
-    expect(result.reports).toHaveLength(1);
-    expect(seen[0]).toBe("https://api.minimaxi.com/v1/token_plan/remains");
   });
 
   test("MiniMax quota never sends the key to a non-canonical base URL", async () => {

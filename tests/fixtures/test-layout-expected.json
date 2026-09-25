@@ -1001,6 +1001,7 @@
   "mimo-token-plan-provider.test.ts": "providers",
   "mimo-v26-catalog.test.ts": "providers",
   "minimax-clients.test.ts": "providers",
+  "minimax-quota.test.ts": "providers",
   "minimax-reasoning-split.test.ts": "providers",
   "model-cache-generation-tombstone.test.ts": "codex-integration",
   "model-cache.test.ts": "codex-integration",
