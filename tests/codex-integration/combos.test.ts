@@ -1906,3 +1906,59 @@ test("combo identifiers leaf preserves public export identity without facade imp
   expect(source.split(/\r?\n/).some(line => /from\s+["']\.\/(types|index)["']/.test(line)))
     .toBe(false);
 });
+
+describe("per-model provider quota windows", () => {
+  const now = 100_000;
+  const resetAt = now + 60_000;
+  const quotaConfig = (targets: { provider: string; model: string }[]): OcxConfig =>
+    baseConfig({ combos: { scoped: { strategy: "failover", targets } } });
+
+  beforeEach(() => { clearCachedProviderQuotas(); });
+  afterEach(() => { clearCachedProviderQuotas(); });
+
+  test("a spent model-scoped window gates only its own family", () => {
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Opus", scope: "model", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    const config = quotaConfig([
+      { provider: "a", model: "claude-opus-4-5" },
+      { provider: "a", model: "claude-sonnet-4-5" },
+    ]);
+    expect(pickComboTarget(config, "scoped", { now })?.target.model).toBe("claude-sonnet-4-5");
+  });
+
+  test("an unscoped window of the same label still gates every model", () => {
+    // `quota/antigravity.ts` forwards an upstream group display name unchanged, so a
+    // provider-wide group named "Opus" must not be read as per-model: skipping it would
+    // leave a spent window unenforced.
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Opus", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    const config = quotaConfig([{ provider: "a", model: "claude-sonnet-4-5" }]);
+    expect(pickComboTarget(config, "scoped", { now })).toBeNull();
+  });
+
+  test("a model-scoped family this gateway cannot match gates every model", () => {
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Claude Neptune", scope: "model", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    const config = quotaConfig([{ provider: "a", model: "claude-opus-4-5" }]);
+    expect(pickComboTarget(config, "scoped", { now })).toBeNull();
+  });
+
+  test("provider-wide windows and canonical buckets are untouched", () => {
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Prepaid credits", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    setCachedProviderQuotaForTests("b", { weeklyPercent: 100, weeklyResetAt: resetAt, updatedAt: now });
+    const config = quotaConfig([
+      { provider: "a", model: "claude-opus-4-5" },
+      { provider: "b", model: "claude-sonnet-4-5" },
+    ]);
+    expect(pickComboTarget(config, "scoped", { now })).toBeNull();
+  });
+});

@@ -1,6 +1,6 @@
 import type { OcxComboTarget, OcxConfig } from "../types";
 import { getCachedProviderRoutingQuota } from "../providers/quota-routing-cache";
-import type { ProviderQuota } from "../providers/quota-types";
+import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
 import { sleepWithAbort } from "../lib/upstream-retry";
 import {
   coolComboTarget,
@@ -64,7 +64,7 @@ function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget, now: 
   if (!Object.hasOwn(config.providers, target.provider)) return false;
   const provider = config.providers[target.provider];
   if (!provider || provider.disabled === true) return false;
-  return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now);
+  return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now, target.model);
 }
 
 function quotaWindowExhausted(percent: number | undefined, resetAt: number | undefined, now: number): boolean {
@@ -72,15 +72,39 @@ function quotaWindowExhausted(percent: number | undefined, resetAt: number | und
   return typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt > now;
 }
 
+// `customWindows` is a generic carrier. Most labels are provider-wide counters ("Prepaid
+// credits", "Free trial", "burst", "Spark") and must gate every model. Anthropic also rides it
+// for per-model family counters, where a spent Opus week says nothing about a Sonnet request.
+// `routing/quota.ts` already scopes those per model when it ranks accounts
+// (`anthropicFamilyWindow`); this is the same fact applied to combo target selection.
+//
+// The scoping keys on `window.scope`, which the PRODUCER sets only where it proved model scope
+// structurally, NEVER on the label text: `quota/antigravity.ts` forwards an upstream
+// `group.displayName` unchanged, so a provider-wide group named "Opus" read as per-model would
+// leave a spent window unenforced and send a doomed request. Every unproven direction keeps
+// gating everything, which is the behaviour before this change: no scope on the window, no
+// model on the request, or a family this gateway cannot match against a model id. Failing
+// closed there costs at most a diverted target.
+const MODEL_FAMILY_WINDOW_LABELS = new Set(["fable", "opus", "sonnet"]);
+
+function customWindowAppliesToModel(window: ProviderQuotaWindow, model: string | undefined): boolean {
+  if (window.scope !== "model" || model === undefined) return true;
+  const family = window.label.trim().toLowerCase();
+  if (!MODEL_FAMILY_WINDOW_LABELS.has(family)) return true;
+  return model.toLowerCase().includes(family);
+}
+
 export function cachedProviderQuotaIsExhausted(
   quota: ProviderQuota | null,
   now = Date.now(),
+  model?: string,
 ): boolean {
   if (!quota) return false;
   if (quotaWindowExhausted(quota.fiveHourPercent, quota.fiveHourResetAt, now)) return true;
   if (quotaWindowExhausted(quota.weeklyPercent, quota.weeklyResetAt, now)) return true;
   if (quotaWindowExhausted(quota.monthlyPercent, quota.monthlyResetAt, now)) return true;
-  if (quota.customWindows?.some(window => quotaWindowExhausted(window.percent, window.resetAt, now))) return true;
+  if (quota.customWindows?.some(window => customWindowAppliesToModel(window, model)
+    && quotaWindowExhausted(window.percent, window.resetAt, now))) return true;
   if (quota.creditsUsd?.unlimited !== true
       && typeof quota.creditsUsd?.percent === "number"
       && Number.isFinite(quota.creditsUsd.percent)
