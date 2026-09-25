@@ -1217,6 +1217,7 @@
   "request-log-conversation.test.ts": "usage",
   "request-log-estimate-cap.test.ts": "usage",
   "request-log-nonstream.test.ts": "usage",
+  "request-log-protocol-trace.test.ts": "usage",
   "request-log-served-model.test.ts": "usage",
   "request-log.test.ts": "usage",
   "request-outcome-agreement.test.ts": "usage",
