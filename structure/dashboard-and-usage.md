@@ -68,6 +68,40 @@ path, delivery mode, fidelity, reasons and feature effects (`FeatureDispositionL
 features every eligible candidate guarantees apart from those only some keep. Delivery mode is not a
 verification verdict, so the panel shows no Lab badge and does not read `ExternalModelRow.native`.
 Tests live in `gui/tests/protocol-api.test.ts` and `tests/server/protocol-routes.test.ts`.
+
+The same vocabulary appears on three more screens, each answering one question and each hiding
+quietly when the server predates its route:
+
+- Provider settings: `gui/src/components/provider-workspace/ProviderProtocolPanel.tsx` sits under
+  the adapter field and reads `GET /api/protocols?provider=<name>` on the settings `apiBase`
+  (`fetchProtocolProviderSummary`; a 404 or a body without `provider` hides it). It names the
+  adapter as the upstream wire the provider receives, the decision source and the per-model
+  overrides, and has no control of its own: the adapter field above it still saves through
+  `onUpdateProvider` → `PATCH /api/providers`, and the panel only says what an unsaved choice would
+  send. It is not an API exposure switch; those are the API page's cards.
+- Compatibility matrix: inbound and upstream protocol filters
+  (`gui/src/pages/compatibility-protocol-filter.tsx`). The Lab subject list has no protocol, so
+  while a filter is active `gui/src/pages/compatibility-protocol-pairs.ts` reads the listed
+  subjects' details (at most 200, six at a time, cached per target) and maps their Lab identities
+  with `protocolFromLabProtocol`. A subject whose pair is unknown is left out; a pair with no
+  matching row reads "unverified, not failed", never failed or unsupported. The matrix shows Lab
+  verdicts only; delivery mode stays on the path preview, so the two never share a badge.
+- Combo detail: `gui/src/components/protocols/ComboProtocolPlan.tsx` in the saved combo's config
+  tab runs `POST /api/protocols/plan` on an explicit click for every feature the chosen client API
+  can express, and renders the shared `PlanResult`: each target's path and feature effects, and the
+  guaranteed/partial split. It reads the saved combo, and says so while edits are unsaved.
+
+Deep links (`gui/src/protocol-deep-links.ts`) carry their target in the hash query, which
+`resolveAppHashChange` keeps only on `#providers` and `#models/compatibility` (`QUERY_HASH_PATHS`)
+and drops elsewhere. Each plan candidate links to `#providers?provider=<name>`
+(`gui/src/pages/providers-deep-link.ts` selects that provider and opens its Settings tab, and drops
+the query once another provider is chosen) and to `#models/compatibility?inbound=…&upstream=…`; a
+traced Logs row links to the compatibility pair it took. Links push history, the matrix replaces
+the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
+so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
+`gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`,
+`gui/tests/providers-deep-link.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`.
+
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
 existing reading line. The section strip stays one row at every width.
