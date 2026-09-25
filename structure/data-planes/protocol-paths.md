@@ -28,7 +28,8 @@ or trace reports cannot disagree. `nativeMessagesDeclineReason` in
 (below).
 
 `contract.ts`, `src/protocols/features.ts`, `src/protocols/baseline.ts`,
-`src/protocols/path.ts`, `src/protocols/dto.ts`, `src/protocols/plan.ts` and `src/protocols/guard.ts` are leaf modules: the dashboard imports them directly, so they import
+`src/protocols/path.ts`, `src/protocols/dto.ts`, `src/protocols/plan.ts`, `src/protocols/guard.ts` and
+`src/protocols/shadow.ts` are leaf modules: the dashboard imports them directly, so they import
 nothing but each other and the type-only compatibility vocabulary in
 `src/compatibility/manifest.ts`. `tests/responses/protocol-contract.test.ts` reads their import
 specifiers and fails on anything else.
@@ -123,6 +124,31 @@ caller-forward passthrough depends on the caller's own credential, so it is repo
 `caller-credential-required` and never assumed. The OpenCode Go session-lane transport is not
 modelled. `tests/responses/protocol-plan-snapshot.test.ts` pins the no-side-effect property against
 combo selection state.
+
+## Shadow plan
+
+Behind `protocols.rollout.shadowPlan` (default off). The Chat and Messages ingresses call
+`recordProtocolShadowPlan` (`src/protocols/shadow-plan.ts`, server side) right after their entry
+mark: Chat after its one mark, Messages after the caller-forward passthrough mark and after the
+bridge mark every other request reaches. With the switch off it returns after reading the setting.
+With it on it calls `buildProtocolPlanSnapshot` with basis `dispatch`, the selector the client sent
+and the features the entry mark already collected (`protocolMarkFeatures`), and stores the result
+with `markProtocolShadowPlanInput` in a WeakMap beside the marks. The snapshot is the preview's own
+side-effect-free builder, so recording sends nothing, fetches nothing and advances no combo state;
+the stored input is fixed vocabulary plus provider and model names.
+
+At finalize `protocolTraceForRequest` derives the observed trace first, then, only when an input
+was recorded, runs `planProtocol` on it and `shadowPlanMismatch` (`src/protocols/shadow.ts`, leaf,
+pure) on the plan and the trace. The compared candidate is the one matching the context's final
+`provider` and `model`, else the first eligible one; mode, upstream wire and request path must
+match. The response path is not compared, because `directEncoders` changes it and the planner does
+not model that switch. A blocked trace agrees with a blocked plan; a compatibility reject and a
+caller-forward Messages passthrough (the plan reports `caller-credential-required`) are not
+compared. A disagreement adds `planMismatch: true`, which `isProtocolTraceV1` accepts only as
+`true`, so rows without it stay valid. Any throw in recording or comparison is swallowed and the
+observed trace is returned unchanged. The Responses ingress records no input and is not compared,
+and the dashboard does not render the field. `tests/responses/protocol-shadow-plan.test.ts` pins
+match, mismatch, switch-off and throw safety.
 
 ## Provider wire summary
 
@@ -337,7 +363,8 @@ the key-auth one. The Chat and Messages ingresses read the unrepresentable polic
 `directEncodersApply` reads `directEncoders` on both; the Chat ingress reads `nativeChatCombos`
 for combo routes (above); `managedMessagesNative` and `managedMessagesNativeOAuth` are read
 through `nativeMessagesDeclineReason` by the Messages ingress, `count_tokens` and the planner
-(above). No request path reads the other rollout switches yet.
+(above); `shadowPlan` is read by `recordProtocolShadowPlan` ([Shadow plan](#shadow-plan)). Every
+rollout switch now has a reader.
 
 `claudeInboundDisabled` in `src/server/claude-messages.ts` is the Messages ingress reader: both
 `/v1/messages` and `/v1/messages/count_tokens` call it, so the two routes cannot disagree, and a
@@ -363,3 +390,18 @@ contract is `tests/server/protocol-settings-route.test.ts`.
 fails closed instead. `protocols` is a strict optional object that degrades to absence when
 malformed, which is safe because each of its defaults is the conservative one.
 `tests/config/protocol-settings.test.ts` covers both.
+
+## CLI
+
+`src/cli/api-protocols.ts` is the CLI client of the three protocol routes, through the shared
+`runtimeRequest` in `src/cli/runtime-api.ts`: `ocx api protocols [--provider <name>]` reads
+`GET /api/protocols`, `ocx api explain --model --inbound [--feature ...]` posts
+`POST /api/protocols/plan`, and `ocx api policy` reads the same GET when given no setting flag and
+sends one `PATCH /api/protocols/settings` built from `--messages`, `--unrepresentable` and repeated
+`--rollout <switch>=<on|off>` otherwise. The CLI rejects only malformed argv (exit 2, nothing sent)
+and checks feature names and the inbound against the leaf vocabulary; switch names and the OAuth
+dependency are validated by the route, so the two cannot drift. Nothing invokes `ocx api policy`
+implicitly. The three are declared as `api` capabilities in `src/cli/capabilities.ts`, so the
+routes carry no exemption in `src/server/management/route-registry.ts`; the capability mutation
+check reads the registry's `mutates`, so the read-only plan POST is not a write. `tests/cli/cli-api-protocols.test.ts` pins the requests, the usage errors and that every
+protocol route is verbed.
