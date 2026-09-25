@@ -99,6 +99,7 @@ function stage(overrides: Partial<CodexWsFailureStage> = {}): CodexWsFailureStag
     controlFrames: 0,
     relayedEvents: 0,
     firstFrameMs: null,
+    firstResponseMs: null,
     elapsedMs: 90_003,
     pings: 0,
     pongs: 0,
@@ -199,13 +200,13 @@ describe("codex WS failure classification", () => {
   });
 
   test("renders every field, with n/a for the durations that do not exist yet", () => {
-    expect(codexWsFailureDetail(stage({ upstreamFrames: 2, controlFrames: 2, firstFrameMs: 41 }))).toBe(
+    expect(codexWsFailureDetail(stage({ upstreamFrames: 2, controlFrames: 2, firstFrameMs: 41, firstResponseMs: 57 }))).toBe(
       " [cause=no-response-event request=812B sent=yes frames=2 control=2 relayed=0"
-      + " first-frame=41ms elapsed=90003ms pings=0 pongs=0]",
+      + " first-frame=41ms first-response=57ms elapsed=90003ms pings=0 pongs=0]",
     );
     expect(codexWsFailureDetail(stage({ sent: false, elapsedMs: null }))).toBe(
       " [cause=before-send request=812B sent=no frames=0 control=0 relayed=0"
-      + " first-frame=n/a elapsed=n/a pings=0 pongs=0]",
+      + " first-frame=n/a first-response=n/a elapsed=n/a pings=0 pongs=0]",
     );
     // A peer that answered pings but never started a response is named as such.
     expect(codexWsFailureDetail(stage({ upstreamFrames: 0, pings: 6, pongs: 6 }))).toContain(" pings=6 pongs=6]");
@@ -371,6 +372,7 @@ describe("codex ws stage record marker (#4191)", () => {
     controlFrames: 1,
     relayedEvents: 2,
     firstFrameMs: 42,
+    firstResponseMs: 57,
     elapsedMs: 900,
     pings: 1,
     pongs: 1,
@@ -433,6 +435,7 @@ describe("codex ws stage record marker (#4191)", () => {
     expect(adopted?.sent).toBe(true);
     expect(adopted?.upstreamFrames).toBe(3);
     expect(adopted?.relayedEvents).toBe(3);
+    expect(typeof adopted?.firstResponseMs).toBe("number");
   });
 
   test("a body failure finalizes the stage reference adopted before the socket closes", async () => {

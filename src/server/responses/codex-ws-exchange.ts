@@ -114,6 +114,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
     let pongs = 0;
     let sentAt: number | null = null;
     let firstFrameAt: number | null = null;
+    let firstResponseAt: number | null = null;
     // Numeric close code for the durable stage record; the reason string stays
     // out of it on purpose (#4191 content-free contract).
     let closeCode: number | null = null;
@@ -170,6 +171,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       controlFrames,
       relayedEvents,
       firstFrameMs: sentAt !== null && firstFrameAt !== null ? Math.max(0, firstFrameAt - sentAt) : null,
+      firstResponseMs: sentAt !== null && firstResponseAt !== null ? Math.max(0, firstResponseAt - sentAt) : null,
       elapsedMs: sentAt !== null ? Math.max(0, Date.now() - sentAt) : null,
       pings,
       pongs,
@@ -188,6 +190,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       controlFrames,
       relayedEvents,
       firstFrameMs: sentAt !== null && firstFrameAt !== null ? Math.max(0, firstFrameAt - sentAt) : null,
+      firstResponseMs: sentAt !== null && firstResponseAt !== null ? Math.max(0, firstResponseAt - sentAt) : null,
       elapsedMs: sentAt !== null ? Math.max(0, Date.now() - sentAt) : null,
       pings,
       pongs,
@@ -481,6 +484,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
       if (!controlFrame && !type.startsWith("response.") && type !== "error") return;
       let steeringEnded = false;
       if (!controlFrame) {
+        firstResponseAt ??= Date.now();
         try {
           if (nativeControl) steeringEnded = nativeControl.observe(normalized.payload);
           else correlation?.accept(normalized.payload);

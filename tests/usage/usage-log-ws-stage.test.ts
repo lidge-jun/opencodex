@@ -20,6 +20,7 @@ const validStage: CodexWsStageRecord = {
   controlFrames: 1,
   relayedEvents: 1,
   firstFrameMs: 40,
+  firstResponseMs: 90,
   elapsedMs: 900,
   pings: 0,
   pongs: 0,
