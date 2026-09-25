@@ -52,13 +52,21 @@ describe("a depleted Codex plan window", () => {
     expect(isComboTargetInCooldown(combo, target, now + 60_000)).toBe(false);
   });
 
+  test("a bare 1308 code with no prose still takes the exhaustion hold", () => {
+    coolComboTarget(combo, target, { now, status: 429, code: "1308", message: "" });
+    expect(isComboTargetInCooldown(combo, target, now + 10 * 60_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown(combo, target, now + 10 * 60_000)).toBe(false);
+  });
+
   test("an explicit server Retry-After still outranks the exhaustion default", () => {
     coolComboTarget(combo, target, { now, status: 502, code: "upstream_server_error", message: EXHAUSTED, retryAfter: "30" });
+    expect(isComboTargetInCooldown(combo, target, now + 30_000 - 1)).toBe(true);
     expect(isComboTargetInCooldown(combo, target, now + 30_000)).toBe(false);
   });
 
   test("an operator's configured cooldownMs still outranks the exhaustion default", () => {
     coolComboTarget(combo, target, { now, status: 502, code: "upstream_server_error", message: EXHAUSTED, cooldownMs: 5_000 });
+    expect(isComboTargetInCooldown(combo, target, now + 5_000 - 1)).toBe(true);
     expect(isComboTargetInCooldown(combo, target, now + 5_000)).toBe(false);
   });
 });

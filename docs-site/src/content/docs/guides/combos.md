@@ -325,14 +325,18 @@ If the shared request send budget refuses the first target, the combo returns a 
 the combo returns the last real upstream failure without sending to that target.
 
 When `cooldownMs` is unset, a hopped target uses an upstream fallback: 5 seconds for request-rate
-429s with upstream code `1302` or `1305`, and 60 seconds otherwise. When it is set, `cooldownMs`
+429s with upstream code `1302` or `1305`, 10 minutes for a spent account usage window, and 60
+seconds otherwise. A usage window is recognised by upstream code (`usage_limit_exceeded`,
+`usage_limit_reached`, `1308`) or by the prose `usage limit reached`, independent of HTTP status —
+the ChatGPT Codex backend reports a spent window as a 502 rather than the documented 429. When it is set, `cooldownMs`
 applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including those
 request-rate 429s. Numeric `Retry-After` seconds and HTTP-date values are accepted. Explicit
 server delays are capped at 24 hours; reset-derived, configured, and fallback cooldowns are capped
 at 10 minutes. The precedence is, from strongest to weakest, explicit
 `Retry-After` → Codex reset headers (`x-codex-primary-reset-at`, `x-codex-secondary-reset-at`, or
 `x-codex-tertiary-reset-at`) → the combo's `cooldownMs` (when set) → the 5-second request-rate
-fallback for upstream rate-limit codes `1302`/`1305` → the 60-second default. A valid immediate
+fallback for upstream rate-limit codes `1302`/`1305` → the 10-minute hold for a spent usage window
+→ the 60-second default. A valid immediate
 `Retry-After: 0` remains an immediate upstream directive rather than being replaced by a configured
 cooldown.
 

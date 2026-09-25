@@ -317,7 +317,11 @@ function normalizedFailureCode(code?: string | null): string {
  * what to black out, so `isProviderScopedQuotaCap` and the scope/decision paths stay untouched
  * and a Codex 502 still resolves `target` scope and `hop` through `status >= 500`.
  */
-const ACCOUNT_EXHAUSTION_CODES = new Set(["usage_limit_exceeded", "usage_limit_reached"]);
+// `1308` is the vendor code for a spent five-hour window and carries no prose of its own when the
+// upstream reports it bare, so it belongs here too. The rest of QUOTA_LIMIT_CODES stays out: those
+// are quota-limit codes whose window length this gateway has no evidence for, and guessing long on
+// them would hold a target that may clear sooner.
+const ACCOUNT_EXHAUSTION_CODES = new Set(["usage_limit_exceeded", "usage_limit_reached", "1308"]);
 const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached/;
 
 function isAccountWindowExhausted(message: string, code?: string | null): boolean {
