@@ -17,6 +17,8 @@
 .remote-link-role-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .remote-link-role-card { min-height: 132px; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); color: var(--text); text-align: left; cursor: pointer; }
 .remote-link-role-card:hover { background: var(--raised-hover); }
+.remote-link-role-card[aria-disabled="true"] { color: var(--muted); cursor: not-allowed; opacity: .72; }
+.remote-link-role-card[aria-disabled="true"]:hover { background: var(--raised); }
 .remote-link-role-card[aria-checked="true"] { border-color: var(--text); box-shadow: 0 0 0 1px var(--text); }
 .remote-link-role-card strong, .remote-link-role-card span { display: block; }
 .remote-link-role-card span { margin-top: var(--space-2); color: var(--muted); font-size: var(--text-label); }
@@ -34,6 +36,8 @@
 .remote-link-row .btn { min-height: var(--control-touch); }
 .remote-link-error { color: var(--red); }
 .remote-link-info { color: var(--muted); font-size: var(--text-label); }
+.remote-link-restart { display: grid; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--raised); }
+.remote-link-restart p { margin: 0; color: var(--muted); }
 .remote-link-fingerprint { margin: 0; padding: var(--space-3); overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); font-family: var(--font-code); font-size: var(--text-label); }
 .remote-link-workspace-card { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
 .remote-link-workspace-card p { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-label); }

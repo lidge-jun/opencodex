@@ -1,5 +1,6 @@
 export const LINK_ERROR_CODES = [
   "admission_timeout",
+  "admission_failed",
   "compensation_failed",
   "fingerprint_failed",
   "forbidden",
@@ -9,6 +10,11 @@ export const LINK_ERROR_CODES = [
   "invalid_alias",
   "invalid_body",
   "invalid_link_id",
+  "join_connect_failed",
+  "join_in_progress",
+  "join_issue_failed",
+  "join_port_failed",
+  "join_tunnel_failed",
   "key_issue_failed",
   "key_revoke_failed",
   "link_apply_failed",
@@ -21,6 +27,7 @@ export const LINK_ERROR_CODES = [
   "remote_connect_failed",
   "remote_disconnect_failed",
   "remote_port_failed",
+  "standalone_required",
   "tailscale_session_refused",
   "version_probe_failed",
 ] as const;

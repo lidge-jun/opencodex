@@ -6,10 +6,12 @@ const portFlag = Bun.argv.indexOf("--port");
 const port = portFlag >= 0 ? Number(Bun.argv[portFlag + 1]) : 5199;
 const root = join(import.meta.dir, "..", "dist");
 const json = (value: unknown, init: ResponseInit = {}) => Response.json(value, { headers: { "cache-control": "no-store", ...init.headers }, ...init });
+const standaloneFixtures = new Set(["standalone", "standalone-find-home", "standalone-joining", "standalone-join-failure", "standalone-restart-waiting"]);
 const status = (fixture: string) => {
   if (fixture === "home-connected") return { role: "home", listener: { state: "listening", port: 44123 }, links: [{ id: "fixture-link-1", alias: "child-workstation", direction: "hub-initiated", state: "connected", since: "2026-09-25T00:00:00.000Z", reason: null, tunnelPort: 43110 }], child: null };
   if (fixture === "fingerprint") return { role: "home", listener: { state: "listening", port: 44123 }, links: [], child: null };
   if (fixture === "add-sheet") return { role: "home", listener: { state: "listening", port: 44123 }, links: [], child: null };
+  if (fixture === "standalone-restart-waiting") return { role: "standalone", listener: { state: "off", port: null }, links: [], child: null };
   return { role: "standalone", listener: { state: "off", port: null }, links: [], child: null };
 };
 
@@ -38,7 +40,9 @@ async function staticFile(pathname: string): Promise<Response> {
 async function appDocument(request: Request): Promise<Response> {
   const body = await readFile(join(root, "index.html"), "utf8");
   const origin = new URL(request.url).origin;
-  const tags = `<meta name="opencodex-runtime-role" content="hub"><meta name="opencodex-session-token" content="ocx_session_fixture"><meta name="opencodex-session-csrf" content="fixture-csrf"><meta name="opencodex-session-origin" content="${origin}"><meta name="opencodex-session-server-origin" content="${origin}">`;
+  const fixture = fixtureFor(request, new URL(request.url));
+  const runtimeRole = standaloneFixtures.has(fixture) ? "standalone" : "hub";
+  const tags = `<meta name="opencodex-runtime-role" content="${runtimeRole}"><meta name="opencodex-remote-link-fixture" content="${fixture}"><meta name="opencodex-session-token" content="ocx_session_fixture"><meta name="opencodex-session-csrf" content="fixture-csrf"><meta name="opencodex-session-origin" content="${origin}"><meta name="opencodex-session-server-origin" content="${origin}">`;
   return new Response(body.replace("</head>", `${tags}</head>`), { headers: { "content-type": "text/html" } });
 }
 
@@ -54,6 +58,11 @@ const server = Bun.serve({
     if (url.pathname === "/api/link/probe" && request.method === "POST") return json({ alias: "child-workstation", fingerprint: "SHA256:fixture-host-key", keyType: "ED25519" });
     if (url.pathname === "/api/link/confirm-host" && request.method === "POST") return json({ alias: "child-workstation", fingerprint: "SHA256:fixture-host-key", ocxVersion: "0.0.0-fixture" });
     if (url.pathname === "/api/link/apply" && request.method === "POST") return json({ linkId: "fixture-link-1" }, { status: 202 });
+    if (url.pathname === "/api/link/join" && request.method === "POST") {
+      if (fixture === "standalone-join-failure") return json({ error: { code: "join_tunnel_failed" } }, { status: 502 });
+      if (fixture === "standalone-joining") await Bun.sleep(60_000);
+      return json({ linkId: "fixture-child-link", alias: "child-workstation", restarting: true }, { status: 202 });
+    }
     if (url.pathname.startsWith("/api/link/") && request.method === "DELETE") return json({ linkId: url.pathname.slice("/api/link/".length) });
     if (url.pathname === "/" || url.pathname === "/index.html") return appDocument(request);
     return staticFile(url.pathname);
