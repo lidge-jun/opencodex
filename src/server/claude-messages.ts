@@ -71,7 +71,7 @@ import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
 import { requestPathForLane } from "../protocols/path";
 import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
 import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
-import { isNativeMessagesRouteEligible } from "./messages-native-eligibility";
+import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
 import {
   isApiAuthRequired,
   isDataPlaneAdmissionSecret,
@@ -824,9 +824,11 @@ async function handleClaudeMessagesWithBudget(
     const sourceEnvelope = envelope;
     // The bridge entry mark below reads these before an effort override rewrites `thinking`,
     // which also fixes the envelope's cached features on the caller's own settings.
+    // Scanned once, like the envelope's cache, so a later mark reports the same features.
+    let scannedFeatures: ReadonlySet<ProtocolFeature> | undefined;
     messagesFeatures = sourceEnvelope
       ? () => sourceEnvelope.features()
-      : () => featuresFromMessagesBody(messagesBody);
+      : () => (scannedFeatures ??= featuresFromMessagesBody(messagesBody));
     if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
       markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
@@ -986,10 +988,13 @@ async function handleClaudeMessagesWithBudget(
 
   // PF-08: a managed-key Anthropic route sends its Messages body natively. The caller-forward
   // passthrough above was decided on the caller's own credential and never reaches this point.
-  const nativeMessagesRoute = settledRoute && isRec(anthropicBody)
-    && isNativeMessagesRouteEligible(settledRoute, anthropicBody, config, { effortRow: !!effortRow, fastRow: !!fastRow })
-    ? settledRoute
-    : undefined;
+  const nativeSelector: NativeMessagesSelector = {
+    effortRow: !!effortRow, fastRow: !!fastRow, routeSelector: String(internalBody.model ?? ""), claudeCode: cc,
+  };
+  const nativeDecline = settledRoute && isRec(anthropicBody)
+    ? nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector)
+    : "rollout-disabled";
+  const nativeMessagesRoute = settledRoute && nativeDecline === undefined ? settledRoute : undefined;
   // Combo and policy children are judged per candidate (PF-07); an unknown model has no route.
   if (envelope && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
     const verdict = checkRepresentable({
@@ -1019,7 +1024,7 @@ async function handleClaudeMessagesWithBudget(
     const { handleNativeMessages } = await import("./messages-native");
     return await handleNativeMessages({
       req, config, logCtx, ...(logIds ? { logIds } : {}),
-      route: nativeMessagesRoute, body: nativeBody, requestedModel, translatorBudget,
+      route: nativeMessagesRoute, body: nativeBody, requestedModel, translatorBudget, selector: nativeSelector,
     });
   }
 
