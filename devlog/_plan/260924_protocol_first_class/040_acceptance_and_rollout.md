@@ -40,7 +40,10 @@ Kept current by each packet that migrates something.
 |---|---|
 | Chat/Messages request decode | still produces a Responses-shaped body before the IR (`responses-internal`); codecs are named entry points over the existing translators |
 | Chat/Messages response encode (PF-09) | migrated behind `directEncoders` for one concrete non-Responses route in the streaming adapter delivery: `[upstream, ir, client]`. Still through `responses-internal`: combo and policy children, routed compaction, run-turn adapters (Cursor, Devin, coding-agent CLIs, CodeBuddy), sidecar turns, the buffered `parseResponse` branch (unused by these ingresses, which always stream internally), and every route while the switch is off. Responses-wire upstreams keep their existing codec path |
-| Policy-route children | native Chat only if dispatched through the combo child loop (PF-07 records the outcome) |
+| Policy-route children | not migrated (PF-07): `routeModel` evaluates the policy and returns one concrete candidate, so a policy request never reaches the combo child loop and keeps the Chat bridge |
+| Chat combos with `nativeChatCombos` off | bridge for every candidate, and not judged per candidate under `reject` (the ingress guard also skips combos) |
+| Chat combos reached through an effort row | bridge (PF-07): the row's effort lives only on the Responses body, so the native source is not supplied |
+| Native Chat combo child, streamed, zero-output in-band failure | no hop (PF-07): the child's 200 is committed without `preflightComboStreamResponse`, so a failure frame before any output reaches the client instead of the next target; the bridge child would have hopped |
 | Sidecars (web search, vision, image generation) | Responses pipeline only |
 | Responses-only features on Chat/Messages | `previous_response_id`, `store`, `background`, compaction stay on the bridge |
 | Non-public-wire adapters (`other`) | translated through the IR; no feature claims |
