@@ -23,6 +23,7 @@ Make `claudeCode.cliFirstParty` a durable, default-off intent and make the share
 | `tests/claude-integration/claude-first-party-union.test.ts` | NEW | Desire matrix, eight proxy states and rule precedence, read-only inspection, transitions, guards, legacy inference |
 | `scripts/test-layout/layout.json` | MODIFY | Explicit test domain |
 | `tests/fixtures/test-layout-expected.json` | MODIFY | Expected test domain |
+| `structure/runtime.md` | MODIFY | shared settings env ownership and proxy status (wp2 P amendment) |
 
 `src/config/schema/config-schema.ts:292` uses `.passthrough()`: there is no `claudeCode` strict allowlist. `src/server/management/config-routes.ts:619` calls `saveConfigPreservingClaudeCode`; `src/config/live-reconcile.ts:425` rebases the subtree. Neither has a per-field allowlist, so no edit there. `src/config/salvage.ts:32` only names `desktopProfile`; `cliFirstParty` invalid data is normalized in `load-degrade.ts` before schema parse. The field-scoped GET/PUT allowlist in `agent-settings-routes.ts:1508` is intentionally wp4, not a wp2 creation path.
 
@@ -668,3 +669,18 @@ Earlier RP and E notes are superseded by Replan F below.
 - F1: Added `local` attribution for tokenless loopback with foreign CA; classified unusable ineligible pairs as `broken` and reserved `disabled` for usable pairs.
 - F2: Reordered selector precedence, added all eight statuses × four intent pairs, and specified source-level exhaustiveness and normalization including `null`.
 - F3: Updated read-only and route regression expectations, structure/field-chain text, and GUI `unknown`/`local` copy for all ten locales.
+
+
+## wp2 P amendment (architect stale-check): structure/runtime.md belongs to wp2 too
+
+`structure/INDEX.md:115` maps `src/claude/` and `src/config/` to `structure/runtime.md` as well, so wp2 adds this paragraph
+after the "Claude intercept pair" paragraph ending "...first-party model bindings (`claudeCode.intercept.modelMap`); see
+[Claude Desktop](clients/claude-desktop.md#first-party-model-bindings)." (`structure/runtime.md:237-256`). File map row:
+`structure/runtime.md | MODIFY | shared settings env ownership and proxy status`.
+
+> Two independent intents can want that settings env: Desktop first-party mode and `claudeCode.cliFirstParty` for the
+> standalone CLI. `src/claude/first-party-settings.ts` owns the union: `reconcileClaudeFirstPartySettings` writes the
+> owned pair while either intent is on, keeps the file untouched while an intent is on but the intercept cannot run, and
+> removes the owned pair only when neither intent remains. `firstPartyProxyStatus` classifies what the settings file
+> currently points at against the bound listener (`none`, `live`, `stopped`, `disabled`, `broken`, `foreign`, `local`,
+> `unknown`); it reads the proxy token and never mints it.
