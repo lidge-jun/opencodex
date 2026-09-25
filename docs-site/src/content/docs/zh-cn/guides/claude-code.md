@@ -26,7 +26,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（可选） |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 启用 `alwaysEnableEffort` 时设为 `1`（条件注入） |
 | `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入，默认关闭） |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
 你自行导出的变量始终优先。额外参数会直接透传：`ocx claude -p "hello"`。
 
 ### Claude 路由关闭时的原生回退
@@ -86,8 +86,57 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 解析后返回的模型保持不变；并且在非回环绑定上，专用代理准入请求头有效。这也意味着使用 `ocx claude` 时不再出现
 “claude.ai connectors are disabled”警告。
 
+请求体中唯一会改动的是工具调用 ID。Anthropic 会拒绝的 `tool_use.id` 或 `tool_result.tool_use_id`（含 `a-zA-Z0-9_-` 以外的字符或超过 64 个字符，例如会话早先由路由模型生成的 ID）会被改写为合规 ID，并保持调用与结果的配对。合规 ID 原样发送，空 ID 会在本地直接返回 400。
+
 可以设置 `claudeCode.nativePassthrough: false` 来禁用；也可以通过
 `claudeCode.anthropicBaseUrl` 指向其他位置。
+
+## Claude Desktop 模式：网关（默认）与第一方
+
+在控制台的 **Claude → Desktop → 连接模式** 中，或使用
+`ocx claude desktop apply --first-party|--gateway` 选择互斥的模式。
+
+### 网关（默认）
+
+新安装默认应用网关配置档案：包括聊天标签页在内的整个应用都通过 OpenCodex。
+仅限 claude.ai 的功能此时不可用。旧版 `--static`、`--hybrid` 和 `--discovery-only`
+选项也会选择网关。
+
+### 第一方（主动选择）
+
+:::caution[账户风险]
+第一方模式会让你的 Claude 订阅流量经过本地拦截代理。
+Anthropic 可能认为这违反其条款并暂停你的账户。默认模式是网关；
+只有接受这一风险时才选择第一方模式。
+:::
+
+Desktop 保持登录 claude.ai，聊天、连接器和远程控制仍可使用。OpenCodex 只在
+`~/.claude/settings.json`（支持 `CLAUDE_CONFIG_DIR`）的 `env` 中写入 `HTTPS_PROXY`
+和 `NODE_EXTRA_CA_CERTS`。Code 标签页启动的 Claude Code、子代理及独立的 `claude` CLI
+经过本地代理；其他 `api.anthropic.com` 路径会转发给 Anthropic。CA 不会安装到操作系统
+信任存储中，只有读取 `NODE_EXTRA_CA_CERTS` 的 Node 进程会信任它。
+
+模式保存在 `claudeCode.desktopMode`。此前明确应用第一方模式或在本版本之前应用过
+第一方模式的安装会保留该模式；现有网关安装也保持不变。没有明确设置时，依次检查
+OpenCodex 拥有的已选网关条目、保存的网关指纹、`settings.json` 中属于 OpenCodex 的
+第一方设置；都没有时使用网关。目录同步和模型列表更新绝不会在已解析为第一方模式的
+安装上写入网关配置档案。若 `claudeCode.intercept.enabled: false`，现有第一方安装的
+应用操作会以 `intercept_disabled` 拒绝，新安装则应用网关。不会覆盖其他代理的设置。
+切换模式后请完全退出并重新打开 Desktop。
+
+### Picker 模式：在第一方 Code 标签页中显示 opencodex 模型
+
+Picker 模式是第一方模式的一部分。在 macOS 上选择第一方时默认开启；设置
+`claudeCode.intercept.picker: false` 后会保持关闭。它会修改第一方 Desktop 的 Code 标签页模型选择器，
+按名称列出可用的 opencodex 模型。首次开启时，macOS 可能会要求你在登录钥匙串中信任本地证书颁发机构。
+该颁发机构限制为 `claude.ai` 及其子域名；这个提示是对该本地 CA 的一次性信任步骤。
+
+Picker 模式开启期间，Claude Desktop 通过 OpenCodex 访问网络。如果 OpenCodex 停止，Desktop 会处于离线状态，
+直到你完全重启 Desktop 或关闭 Picker 模式。使用 `ocx claude desktop picker status` 查看状态，使用
+`ocx claude desktop picker trust` 重复信任步骤，或使用 `ocx claude desktop picker off` 关闭。
+控制台 **Claude → Desktop** 中也有同样的开关。选择 Picker 配置档案后，请完全退出并重新打开 Claude Desktop。
+
+Picker 模式属于第一方模式，因此[第一方账户风险](#第一方主动选择)同样适用。
 
 ## 连接远程 hub 的 Claude Desktop
 
@@ -107,6 +156,33 @@ Desktop 配置、模型家族分组及默认值由 hub 管理。在 hub 上修�
 本次别名修改不解决 [#3719](https://github.com/lidge-jun/opencodex/issues/3719) 中独立的 `thinking` / `redacted_thinking` 重放与提示缓存请求。
 只有代理接入凭证不会启用原生 Anthropic 透传，但经过转换的 Anthropic 路由仍可使用提示缓存。
 重放保真和缓存命中率对比仍是独立工作。
+
+### 在 Desktop Code 标签页使用 opencodex 模型（第一方绑定）
+
+在第一方模式下，Code 标签页的模型选择器属于 claude.ai：其中的条目（Opus 5.5、Sonnet 5、
+Haiku 4.5 以及 **More models** 下的旧模型）来自你的账户，任何本地设置都无法添加 opencodex
+条目。OpenCodex 在每个请求中收到的是选择器里的 Anthropic 模型 ID，因此改为把选择器条目绑定到
+opencodex 路由：
+
+```bash
+ocx claude desktop bind claude-sonnet-4-6 xai/grok-4.7
+ocx claude desktop bind claude-opus-4-6 native/gpt-6-sol
+ocx claude desktop unbind claude-opus-4-6
+```
+
+也可以在仪表板中通过 **Claude → Desktop → Code 标签页模型绑定** 完成同样操作。绑定之后，在
+Code 标签页选择 **Sonnet 4.6** 时会由 `xai/grok-4.7` 响应。选择器仍显示 Anthropic 名称，且
+Claude Code 的系统提示仍会把模型介绍为那个 Claude 模型，所以建议选择平时不用的条目
+（**More models** 中的条目是不错的候选）。绑定在下一个请求即生效，无需重启 Desktop。
+
+- 路由使用 Desktop 路由记法：`provider/model`，原生 OpenAI 池使用 `native/<slug>`。路由必须
+  是仪表板中列为可用的路由。
+- 带日期的选择器 ID（`claude-haiku-4-5-20251001`）会匹配无日期的绑定（`claude-haiku-4-5`），
+  `[1m]` 和快速模式选择也遵循同一绑定。
+- 绑定保存在 `claudeCode.intercept.modelMap` 中，仅适用于经由本地拦截代理的 Claude Code 流量：
+  第一方模式下的 Desktop Code 标签页和独立的 `claude` CLI。`ocx claude` 会话和公开的
+  `/v1/messages` 端点会忽略绑定；全局 `claudeCode.modelMap` 仍然处处生效，同一 ID 时绑定优先。
+- `ocx claude desktop status --json` 在 `firstParty.modelBindings` 中报告当前生效的绑定。
 
 ### 密钥轮换、恢复与断开连接
 
@@ -139,19 +215,23 @@ apply、轮换/恢复或直接 disconnect 均可处理，无需新参数或事�
 每个条目带有诚实的显示名（如 `gemini-3-pro (gemini)`），并以官方 ModelInfo 形态附带模型能力
 信息（推理强度梯度、thinking 类型），使 Claude Desktop 的第三方网关模式能够启用推理强度选择
 UI。真实 Anthropic 模型保留其原始 id。合成的 2026 日期是内部槽位，不是发布日期。旧版哈希
-别名和 `claude-ocx-<provider>--<model>` 别名仍可解析。拥有 1M 上下文的模型会多出一行 `…[1m]`：
+别名和 `claude-ocx-<provider>--<model>` 别名仍可解析，转义的 `claude-ocx2-<provider>--<model>` 也同样可解析。
+已保存的旧 id 仍会路由，但 Claude Code 对它仍按 200k 计算。把已保存的 `claude-ocx-` 重新选一次对应的
+`ocx-claude-`，转义的 `claude-ocx2-` 重新选一次 `ocx-claude2-`，即可同时用上真实上下文窗口和 compact。
+拥有 1M 上下文的模型会多出一行 `…[1m]`：
 选中后 Claude Code 会按 1M 计算该模型的上下文（自动压缩保留，代理在路由前去掉该标记）。
 选中后会保存到 Claude Code 的 `settings.json` `model` 字段；入站请求会将别名解析回路由
 模型。旧版 Claude Code 中选择器保持原生 — 通过 `ANTHROPIC_MODEL` 设置槽位，或直接在 `/model`
 中输入任意路由 id（Claude Code 会原样传递字符串）。
 
 Claude Code 2.1.129+ 通过 `GET /v1/models?limit=1000` 发现网关模型，并在原生 `/model`
-选择器中以“From gateway”标签列出。由于选择器只接受以 `claude` 或 `anthropic` 开头的 ID，
-opencodex 会将已路由模型公开为稳定且可逆的别名：
+选择器中列出。没有 `description` 的行显示为“From gateway”；opencodex 会为 Claude Code CLI 的每一行发送
+`description`（`Routed by OpenCodex to <provider>/<model>`；原生行为 `Routed by OpenCodex to native <model>`，Fast 行末尾加 ` · Fast`，1M 行沿用基础描述），Claude Code 2.1.257+ 会改为显示它。
+Claude Code 2.1.278 接受包含 `claude` 或 `anthropic` 的 ID。以 `claude-` 开头的未知 ID 在不关闭 compact 时按 200k 计算，因此 opencodex 会将已路由模型公开为包含 `claude`、但不以 `claude-` 开头的稳定且可逆别名：
 
 | 界面 | 格式 | 示例 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>`（plain）或 `claude-ocx2-…`（escaped） | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>`（plain）或 `ocx-claude2-…`（escaped） | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>`（3 字符 base36 哈希） | `claude-opus-4-8-ncb` |
 
 代理会按请求选择别名族：`?ids=cli` 或 `?ids=desktop` 优先；否则，`claude-code/*`
@@ -169,9 +249,9 @@ Claude Desktop 1.46388.4 时，无论通过底部选择器还是 `/model` 更改
 而是根据每个请求携带的模型 ID 进行路由。请在 **Logs → requestedModel** 中确认客户端实际发送的内容。
 
 **别名语法规则：**provider 不得包含 `/` 或 `--`，也不得等于 `native`。
-不含 `/` 或 `~` 的普通 model ID 继续使用 v1 前缀 `claude-ocx-…`。包含 `/` 或 `~` 的 model ID
-会使用 v2 前缀 `claude-ocx2-…` 并转义（`/` → `~s`，`~` → `~t`），例如
-`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`。
+不含 `/` 或 `~` 的普通 model ID 继续使用 v1 前缀 `ocx-claude-…`。包含 `/` 或 `~` 的 model ID
+会使用 v2 前缀 `ocx-claude2-…` 并转义（`/` → `~s`，`~` → `~t`），例如
+`openrouter/anthropic/claude-opus-4-8` → `ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`。
 v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` / `~t` 会被保留）；v2 别名会展开转义。
 易读形式无法表达的路由会回退到哈希别名。模型 ID **可以**包含 `--`（解析时只按第一个 `--` 分割）；
 含 `--` 的原生 slug 会回退到哈希形式。
@@ -256,7 +336,8 @@ opencodex 会在**已路由**请求中将该技能内容替换为一个短占位
 1. **工具结果载体：**assistant 的 `Skill(...)` 调用——当转为小写的 JSON 输入包含被屏蔽名称时，
    与之配对的 `tool_result` 正文会被替换为占位说明。
 2. **文本块载体：**以 `Base directory for this skill: ` 开头且不少于 10,000 字符的用户
-   文本块——当目录 basename 等于被屏蔽名称时匹配（不区分大小写）。
+   文本块——当目录 basename 等于被屏蔽名称时匹配（不区分大小写）。目录行最多只检查 4,096 个
+   UTF-16 代码单元；更长的行会原样发送，包括没有结尾换行的情况。
 
 通过 `claudeCode.blockedSkills` 配置（默认 `["claude-api"]`；`[]` 会完全禁用省略）。
 占位说明会保持工具调用/结果的配对关系不变。
@@ -356,6 +437,8 @@ Claude Code 的 `/effort` 设置会完整保留并传递给适配器：
 | `tool_choice` | `auto`→`auto`，`none`→`none`，`any`→`required`，指定函数→`{type:"function",name}`，托管 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
+
+Claude Code 自动模式总是发送 `stop_sequences`。对于路由目标提供方 `noStopModels` 列表中的模型，OpenCodex 在 Chat Completions 和 Responses 两种线路上都会省略 `stop`，因此 grok-4.7、grok-4.6 等 xAI 推理模型不会返回 `400 invalid-argument` 并被标记为暂时不可用。参见 [`noStopModels`](/zh-cn/reference/configuration/providers/)。
 
 在预期的 Anthropic 适配器上，保留未隐藏的签名块（包括空 thinking）和不透明的 redacted 块。`hideThinkingSummary` 策略不变：不会向 Claude 客户端公开本地隐藏的签名文本，尚未证明经过此隐藏边界的无损重放。旧版组合信封在流式文本发出后无法恢复原始块顺序。`claudeCode.compatibility: "enforce"` 仍拒绝 thinking 重放。这不证明真实 Anthropic 接受请求或缓存命中改善；[#3719](https://github.com/lidge-jun/opencodex/issues/3719) 仍未关闭。
 

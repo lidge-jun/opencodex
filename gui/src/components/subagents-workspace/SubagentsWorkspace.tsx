@@ -1,6 +1,6 @@
 /**
  * SubagentsWorkspace — a single stacked column for the Subagents tab: the featured roster
- * (reorder + save), the model picker, then the delegation settings.
+ * (reorder; every edit saves itself), the model picker, then the delegation settings.
  *
  * The previous rail layout listed the featured models twice — once as a rail group, once in
  * the main pane — which read as a rendering bug rather than two views of one thing. There is
@@ -34,10 +34,8 @@ export interface SubagentsWorkspaceProps {
   available: string[];
   fallbackAvailable?: string[];
   chosen: string[];
-  busy?: boolean;
   onToggle: (m: string) => void;
   onMove: (i: number, dir: -1 | 1) => void;
-  onSave: () => void;
   fallback: string[];
   fallbackPollMs: number;
   fallbackBusy: boolean;
@@ -67,10 +65,8 @@ export default function SubagentsWorkspace({
   available,
   fallbackAvailable,
   chosen,
-  busy = false,
   onToggle,
   onMove,
-  onSave,
   fallback, fallbackPollMs, fallbackBusy, onFallbackChange, onFallbackPollMsChange, onFallbackSave,
   delegation,
 }: SubagentsWorkspaceProps) {
@@ -124,7 +120,7 @@ export default function SubagentsWorkspace({
                       type="button"
                       className="btn btn-ghost btn-icon btn-sm"
                       onClick={() => onMove(i, -1)}
-                      disabled={busy || i === 0}
+                      disabled={i === 0}
                       aria-label={t("sub.moveUp", { m })}
                     >
                       <IconArrowUp />
@@ -133,7 +129,7 @@ export default function SubagentsWorkspace({
                       type="button"
                       className="btn btn-ghost btn-icon btn-sm"
                       onClick={() => onMove(i, 1)}
-                      disabled={busy || i === chosen.length - 1}
+                      disabled={i === chosen.length - 1}
                       aria-label={t("sub.moveDown", { m })}
                     >
                       <IconArrowDown />
@@ -142,7 +138,6 @@ export default function SubagentsWorkspace({
                       type="button"
                       className="btn btn-ghost btn-icon btn-sm"
                       onClick={() => onToggle(m)}
-                      disabled={busy}
                       aria-label={t("sub.removeAria", { m })}
                       style={{ color: "var(--red)" }}
                     >
@@ -154,11 +149,6 @@ export default function SubagentsWorkspace({
             </div>
           )}
 
-          <div className="swi-save-row">
-            <button type="button" className="btn btn-primary" onClick={onSave} disabled={busy}>
-              {t("common.save")}
-            </button>
-          </div>
         </section>
 
         <section
@@ -188,7 +178,7 @@ export default function SubagentsWorkspace({
                   const isFeatured = chosenSet.has(m);
                   const priority = isFeatured ? chosen.indexOf(m) + 1 : null;
                   // A featured row can always be removed; only adding is blocked when full.
-                  const blocked = !isFeatured && (full || busy);
+                  const blocked = !isFeatured && full;
                   return (
                     <div
                       key={m}

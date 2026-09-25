@@ -23,6 +23,12 @@ Responses 표현이 이 연결의 중심입니다. 네이티브 호환 경로는
 
 자격 증명을 포함하는 모델·이미지·동영상·검색 요청은 동일 출처를 포함한 HTTP 리다이렉트를 자동으로 따라가지 않습니다. 리다이렉트하는 별칭 대신 최종 업스트림 API URL을 설정하세요. 서버는 리다이렉트 대상으로 자격 증명이나 요청 본문을 다시 보내지 않습니다. 각 응답 처리 경로의 기존 오류·전달 동작은 유지되며, native Responses와 compact 경로는 원래 3xx와 `Location`을 클라이언트에 반환할 수 있습니다. 클라이언트의 리다이렉트 동작은 이 서버 전송 정책과 별개입니다.
 
+## xAI policy refusals
+
+일부 xAI Chat Completions 거부는 HTTP 200과 `finish_reason: content_filter` 대신, HTTP 403과 `I can't help with that request.` 같은 거절 문장만 돌려줍니다. Codex는 403을 전송 실패로 보므로 사용자 턴이 기록되지 않고 같은 요청을 다시 보냅니다.
+
+콤보가 아닌 Responses 요청에서 OpenCodex는 allowlist에 오른 그 403을 HTTP 200 Responses, `status: "incomplete"`, `incomplete_details.reason: "content_filter"`로 바꿉니다. openai-chat 어댑터 경로와 openai-responses passthrough(grok-4.6 / grok-4.5 OAuth) 모두에서 동작합니다. 스트리밍도 같은 incomplete 경계입니다. 빈 본문 403은 오류로 남습니다. 구독, 크레딧, 권한, `not allowed to use this model` 403은 오류로 남습니다. 콤보 페일오버는 원래 HTTP 403을 그대로 봅니다.
+
 ## 엔드포인트 개요
 
 | 클라이언트 표면 | 엔드포인트 | 성공한 비스트리밍 결과 | 성공한 스트리밍 또는 소켓 결과 |
@@ -356,3 +362,21 @@ OpenAI 스타일 `origin_rejected` body가 아니라 403 `permission_error`입�
 opencodex는 읽을 수 없는 바이트를 프로바이더에 보내는 대신 `unreadable_encrypted_agent_task`로
 실패합니다. worker task와 관련된 클라이언트 동작은 [서브에이전트 표면](/guides/sub-agent-surface/)을
 참조하세요.
+
+### 기존 대화에서 프로바이더를 바꿀 때
+
+다시 보내는 추론 항목의 `encrypted_content`는 그것을 만든 프로바이더와 자격 증명만 읽을 수 있습니다.
+대화를 마지막으로 처리한 프로바이더가 달랐다는 사실을 opencodex가 알고 있으면, 보내기 전에 그 blob을
+빼고 항목의 요약은 남깁니다. 그 프로바이더가 엔드포인트나 자격 증명까지 달랐다면 항목의 `rs_…` id도
+뺍니다. 새 대상은 그 id가 가리키는 항목을 찾을 수 없기 때문입니다. 프록시를 다시 시작한 직후처럼
+opencodex가 알 수 없을 때는 새 대상이 blob을 거부합니다. OpenAI와 Azure OpenAI는
+`400 invalid_encrypted_content`로 응답합니다. 그러면 opencodex는 이전 프로바이더의 추론 상태, 즉 blob과
+`rs_…` id를 뺀 요청을 한 번만 다시 보냅니다. id를 남기면 `Item with id 'rs_…' not found`가 나기
+때문입니다.
+
+이 복구는 Responses 프로토콜을 쓰는 모든 어댑터에 적용되므로 `openai-responses`와 `azure-openai`는
+똑같이 동작합니다. 복구에 성공하면 같은 대상에서 이어지는 그 대화의 턴은 이후 5분 동안 첫 전송 전에
+이 상태를 뺍니다. 재전송은 요청의 일반 전송 예산에서 차감됩니다. 일반 400과 429는 이 방식으로 다시
+보내지 않고 5xx도 마찬가지입니다. 예외는 하나뿐입니다. 암호화된 도구 출력이 들어 있는 요청에 대해 본문이
+그 복호화 실패 거부와 정확히 같은 502는 같은 한 번의 재전송을 받습니다. 두 번째 거부는 그대로
+클라이언트에 전달됩니다. 이때는 대상 프로바이더에서 새 대화를 시작하세요.

@@ -15,7 +15,15 @@ import { unprivilegedOwnershipMutationEnvironment } from "../service/ownership-m
 import { withUpdateOwnershipLease, readUpdateRuntimeTarget } from "./ownership-transaction";
 import { npmInvocation } from "./npm-invocation.mjs";
 import { pnpmInvocation, pnpmInvocationForPath, resolvePnpmCommands } from "./pnpm-invocation.mjs";
-import { detectInstallFromPath } from "./install-detection.mjs";
+import {
+  detectInstallFromPath,
+  detectInstallOwnershipFromPath,
+} from "./install-detection.mjs";
+import type {
+  DetectedInstall,
+  InstallOwnership,
+  MiseInstallOwner,
+} from "./install-detection.d.mts";
 import {
   pnpmOwnerInvocation,
   readPnpmGlobalPackage,
@@ -50,20 +58,33 @@ export function historyRestoreIncomplete(configDir = getConfigDir()): boolean {
 export const PKG = "@bitkyc08/opencodex";
 const HERE = dirname(fileURLToPath(import.meta.url)); // .../opencodex/src/update
 
-export type Installer = "bun" | "npm" | "pnpm" | "source";
+export type Installer = DetectedInstall;
 export type Channel = "latest" | "preview";
+export type { InstallOwnership, MiseInstallOwner };
 
 /** Infer how opencodex is installed from the running module's path. */
 export function detectInstall(): Installer {
   return detectInstallFromPath(HERE, { exists: existsSync });
 }
 
+/** Resolve installer ownership and verified mise update guidance for this package. */
+export function detectInstallOwnership(): InstallOwnership {
+  return detectInstallOwnershipFromPath(HERE, { exists: existsSync });
+}
+
+export function miseUpdateCommand(
+  ownership: InstallOwnership = detectInstallOwnership(),
+): string | null {
+  return ownership.installer === "mise" && ownership.owner
+    ? `mise upgrade ${ownership.owner.tool}`
+    : null;
+}
+
 function packageRoot(): string {
   return resolve(HERE, "..", "..");
 }
 
-function runningPnpmShimPath(): string | undefined {
-  const invoked = process.argv[1];
+function runningPnpmShimPath(invoked = process.argv[1]): string | undefined {
   if (!invoked) return undefined;
   const name = invoked.replaceAll("\\", "/").split("/").at(-1)?.toLowerCase();
   if (!new Set(["ocx", "opencodex", "ocx.cmd", "opencodex.cmd", "ocx.ps1", "opencodex.ps1"]).has(name ?? "")) {
@@ -90,12 +111,12 @@ function runPnpmCandidate(
 }
 
 /** Resolve the exact pnpm executable/group/bin that own this package. */
-export function resolveCurrentPnpmGlobalOwner(): PnpmGlobalOwnerResult {
+export function resolveCurrentPnpmGlobalOwner(invoked = process.argv[1]): PnpmGlobalOwnerResult {
   return resolvePnpmGlobalOwner({
     packageName: PKG,
     packagePath: packageRoot(),
     commandPaths: resolvePnpmCommands(),
-    runningShimPath: runningPnpmShimPath(),
+    runningShimPath: runningPnpmShimPath(invoked),
     runPnpm: runPnpmCandidate,
   });
 }
@@ -170,6 +191,8 @@ type SpawnTarget = {
   env?: Record<string, string | undefined>;
 };
 
+export type RegistrySpawnTarget = SpawnTarget;
+
 function npmSpawnTarget(args: readonly string[]): SpawnTarget | null {
   const invocation = npmInvocation(args);
   if (!invocation) return null;
@@ -192,7 +215,7 @@ function pnpmSpawnTarget(args: readonly string[], owner?: PnpmGlobalOwner): Spaw
   return { bin: invocation.file, args: invocation.args, options: invocation.options };
 }
 
-function registrySpawnTarget(
+export function registrySpawnTarget(
   installer: Installer,
   args: readonly string[],
   owner?: PnpmGlobalOwner,
@@ -269,6 +292,9 @@ export function latestVersion(
 
 /** The global-install command opencodex would run to update on this channel. */
 export function updateCommand(installer: Installer, tag: Channel, resolvedVersion?: string | null): { bin: string; args: string[] } {
+  if (installer === "mise") {
+    throw new Error("mise-owned installations must be upgraded through mise");
+  }
   // Immutable target: when the registry resolved a concrete version, install exactly
   // that version — the dist-tag can move between resolution and install (TOCTOU).
   const target = resolvedVersion || tag;
@@ -361,10 +387,24 @@ async function resolvedRuntimeOwnership(): Promise<RuntimeOwnershipObservation> 
  * Bun binary.
  */
 export async function runUpdate(): Promise<void> {
-  const installer = detectInstall();
+  const ownership = detectInstallOwnership();
+  const installer = ownership.installer;
   const current = currentVersion();
   const tag = updateTag(current);
   console.log(`opencodex v${current} (installed via ${installer}, tag ${tag})`);
+
+  if (installer === "mise") {
+    const command = miseUpdateCommand(ownership);
+    if (command) {
+      console.error(`OpenCodex is externally managed by mise. Update it with: ${command}`);
+    } else {
+      console.error(
+        "OpenCodex appears to be managed by mise, but its ownership metadata is unreadable or inconsistent. Repair the mise installation metadata before updating.",
+      );
+    }
+    process.exitCode = 1;
+    return;
+  }
 
   if (installer === "source") {
     console.log("Running from a source checkout — update with:  git pull && bun install");

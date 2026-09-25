@@ -20,6 +20,20 @@ the Rust toolchain, or the app bundle. Those regressions are caught at the promo
 `preview` or `main`, before publication, and on demand by explicit dispatch — a pull request
 that is green is not full-platform proof.
 
+Two paths sit outside the `ci` filter on purpose and get narrow jobs instead of the full matrix.
+A change under `.github/actions/` runs `setup-action` on Linux, Windows and macOS: it runs the
+composite Bun setup and requires the installed runtime to equal the version `package.json`
+declares. A change under `native/remote-workspace-helper/` runs `remote-helper` on the same three
+runners: `cargo fmt` on Linux, then `cargo clippy -D warnings` and `cargo test` everywhere, where
+the live confinement tests compile only on macOS and Windows. Both filters also list `ci.yml`,
+both stay pull-request scope like `docs` and `structure`, their outputs are validated before any
+job reads them, and the aggregate gate expects each job exactly when its filter output is `true`.
+
+`privacy:scan` runs inside `gates`, and `gates` is scoped to the `ci` filter. The `privacy
+gate` job is its exact complement on pull requests — it runs wherever the `ci` filter declines —
+so every pull request scans exactly once and the coverage does not depend on an enumerated path
+list. The aggregate derives the same expectation from its `scoped` result.
+
 No recovery retry can turn a failed workflow green. Linux, Windows, macOS shards and macOS control use
 `scripts/ci/run-bun-test-batches.sh`, but
 each lane owns its measured process shape: Linux keeps the default twelve files and 120 seconds;
@@ -33,6 +47,12 @@ manager guards remain active because the preload installs them before the lock b
 Test teardown follows the [sandbox cleanup contract](test-sandbox-cleanup.md).
 `tests/preload.ts` resolves cleanup dependencies after home/lock admission and before test cases; teardown awaits native-main startup releases and config hardening, then the sandbox's registered ACL child reaps before removing that root. Its synchronous exit fallback leaves an undrained root for ownership-checked stale recovery instead of blocking child cleanup with removal retries. `tests/ci-workflows/test-sandbox-cleanup.test.ts` pins that ordering with a delayed reap.
 `tests/helpers/test-sandbox-cleanup.ts` exposes case-scoped lifecycle ownership: cancellation starts listener stops while owned asynchronous work settles, and repeated close/stop calls share one promise. After teardown starts, only the lifecycle's own abort reason is absorbed; any other error, including a foreign AbortError, still fails its case. Callers settle that lifecycle before draining producers/reaps and restoring or removing a home. The helper does not replace fixture-specific cleanup or claim OS ACL coverage for synthetic tests.
+Shard membership follows recorded duration: `scripts/ci/test-durations.tsv` weighs each file,
+the heaviest file goes to the least-loaded shard, and a file without a row weighs the table's
+median, so an empty table reproduces sorted round-robin exactly. Every shard computes the whole
+assignment and refuses to run unless it covers every selected file once. A batch also closes
+before its predicted duration passes half the process timeout, which only adds process
+boundaries. `scripts/ci/test-durations.ts refresh` regenerates the table from hosted job logs.
 A test failure, a process timeout and a Bun runtime crash each fail their job on the first occurrence; the
 batch runner still sweeps a crashed or timed-out batch one file per process, but only to attribute a
 failure the shard has already taken. The aggregate `ci` gate derives, from the event and the `changes` outputs, which
@@ -67,10 +87,20 @@ ocx help
 The CI intentionally does not build docs, run coverage, or perform remote Ubuntu/RDP smoke tests.
 Those stay outside the default gate until a concrete regression justifies the extra runtime.
 
-The Release workflow remains manual and publish-focused. Before any dry-run or publish step, it
-checks that the exact release commit (`GITHUB_SHA`) already has a successful push-event
-Cross-platform CI run — a pull-request run does not qualify — that `dev` already outranks the
-target, and that the target passes the fresh global tag-ordering gate.
+The Release workflow remains manual and publish-focused. Its `preflight` job runs right after
+dispatch validation and before either packaging job: `scripts/ci/release-preflight.sh` checks the
+channel and dist-tag, every version source, the tag, the GitHub release, npm, the fresh global
+tag ordering and the `dev` pre-move, so a release that can never publish fails in its first minute
+instead of after the packaging matrix. The workflow-level `release` concurrency group is one
+constant slot shared by every ref, which serialises stable and preview runs; the preflight
+therefore sees whatever the previous release run published. The publish job repeats every one of
+those checks immediately before publishing, because tags, releases and registry state can still
+move while a run packages, and additionally requires a successful push-event Cross-platform CI run
+for the exact release commit (`GITHUB_SHA`) — a pull-request run does not qualify.
+After publication the registry smoke records the npm version read-back and the dist-tag as
+separate outputs, and the `release-outcomes` job, which runs after `publish` and `attach-release`
+whatever their result, reports the public GitHub release, the npm version and the npm dist-tag as
+separate summary rows. A row that is not confirmed warns without changing the run's result.
 This keeps release runs short and makes release a deployment of a verified commit after the required
 `dev` pre-move rather than a second CI pipeline.
 

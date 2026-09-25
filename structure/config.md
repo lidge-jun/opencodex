@@ -101,6 +101,7 @@ merge cannot turn them into a valid config while discarding the original bytes.
 | Retained state | `appOwnedMemoryBudgetMb` | Process-wide eviction target for app-owned logs, caches, blobs, and continuation payloads. Default 256 MiB, valid 64..4096; pinned state may temporarily exceed the target, but every pin-capable store has a finite local cap and their documented aggregate stays below `APP_OWNED_WORST_CASE_PINNED_BYTES` (512 MiB). Neither value caps RSS or native runtime memory. |
 | Spend | `spend.root`, `spend.identity`, `spend.pool`, `spend.retentionDays` | Durable token ceilings for the spend-reservation ledger. Absent is the default and means observe-only accounting: spend is still journaled and nothing is refused, so observe-only and enforced servers take the same state-directory writer lease. One live process may write one directory; explicit sibling instances need separate `OPENCODEX_HOME` directories. There is no default figure for any scope — the ledger is on by default, so a shipped ceiling would refuse real traffic on upgrade against a number nobody chose. Strictly validated and positive-integer only, because 0 would read as a budget and refuse everything; a malformed section degrades to no ceiling, which is why the write path rejects it and load diagnostics report it. Resolution and application live in `src/lib/spend-reservation-ledger.ts`; see [`transports/responses.md`](transports/responses.md). |
 | Transport | stream mode, timeouts, proxy settings, `websockets`, `emptyCompletionRetry` | `streamMode` persists in config.json; Windows services need a persisted input, and macOS uses it for explicit eager-relay opt-in. Empty-completion replay is an explicit top-level opt-in because its second upstream request may be billable. |
+| Canonical ChatGPT upstream transport | `providers.openai.upstreamWebsocket` | Omitted uses upstream WebSocket when eligible; explicit `false` selects HTTP/SSE without changing the canonical provider identity. `true` is rejected on the canonical row. This is independent of the client-facing `websockets` setting. |
 | Provider egress | `providers.<name>.proxy`, `providers.<name>.noProxy` | An absent `proxy` inherits global egress; `"direct"` or `null` forces direct egress; HTTP(S) and SOCKS5(H) URLs select a provider-owned proxy. `noProxy` uses NO_PROXY syntax and sends a matching destination direct across either a provider-owned or inherited global proxy. `src/lib/provider-egress.ts` owns parsing and request-local resolution. |
 | Credentials | `apiKeys` | Data-plane only; never admitted to `/api/*`. |
 | Lifecycle | `codexAutoStart`, shim/start behavior, resume-history sync, storage cleanup | Startup safety reads these; see [`gui-and-management-api.md`](gui-and-management-api.md). |
@@ -130,6 +131,20 @@ management API. Retirement does not migrate user-selected model ids or erase usa
 ## Config injection
 
 An explicit desktop restart after injection uses the [runtime process-membership contract](runtime.md#codex-desktop-process-membership); mixed Windows path spelling does not change which installation the restart targets.
+
+One further root key is conditional rather than part of either routing form. While the web-search
+sidecar is switched off (`webSearchSidecar.enabled: false`), the injection also owns Codex's own
+`web_search` mode and writes `web_search = "disabled"` — the only value that removes the native
+hosted tool from the model's tool list, which is what an operator running an MCP search server
+instead needs. Ownership follows the routing keys: the marker-owned pair is removed again once the
+sidecar is back on. It needs one record the routing keys do not, because this is the only root value
+the injection REPLACES rather than only adds: the journal keeps the value it wrote
+(`injectedRootWebSearch`), so a line whose ownership comment a Codex app reserialize dropped is
+still recognized as ours (#1798), and the exact user-owned line it had to remove
+(`replacedRootWebSearch`), which the next pass with the sidecar back on puts back in our pair's
+place. A user-owned root line is therefore replaced only while the switch is off — two root keys of
+the same name are invalid TOML — and is not lost while it is gone. `ocx restore` replays the journal
+snapshot on top of that.
 
 `src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
 keeps its native provider id, which decides whether existing thread history still resolves.
@@ -233,6 +248,13 @@ either file. History Worker job targets use that same canonical-first lookup rat
 `history-provider.ts` remains the strict mutation owner and maps shared validation failures to its
 restore/no-op integrity states. `native-residue.ts` remains a read-only observer and maps the same
 result to clean, residue, or indeterminate before inspecting referenced rollout files.
+One observation reads at most 64 MiB of rollout content across the history database and backup
+manifest together. The budget resets on each observation. A file that would exceed the remaining
+budget produces `indeterminate` before its content is read; exhausting the budget never proves
+that the history is clean. Classification stops at the first indeterminate surface, while a
+residue result still allows later surfaces to report uncertainty. This bounds repeated CLI
+startup checks on large conversation histories without rewriting history or weakening the
+coordinator's existing refusal and compatibility paths.
 
 > Decision record: [ADR-0018](decisions/ADR-0018-config-injection.md)
 

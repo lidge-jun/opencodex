@@ -17,7 +17,6 @@ import {
 import { createLocalAttestationChallenge, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
 import { directLocalHttpFetch } from "../../src/server/direct-local-http";
 import { startServer } from "../../src/server";
-import { stopServerListener } from "../../src/server/lifecycle";
 import { setIntegrationPathTestHooks } from "../../src/server/management/integration-routes";
 import { currentServerFixtureConfig, settleServerAuthFixture } from "../helpers/server-auth-fixture";
 import { serverAuthConfig } from "../helpers/server-auth-config";
@@ -54,7 +53,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  if (server) await stopServerListener(server);
+  if (server) await server.stop(true);
   server = null;
   setIntegrationPathTestHooks(null);
   await settleServerAuthFixture(home, codexHome?.path);
@@ -89,13 +88,19 @@ async function send(path: string, headers: Headers, method = "POST"): Promise<Re
   return fetch(new URL(path, server.url), { method, headers });
 }
 
+async function sendStatus(path: string, headers: Headers, method = "POST"): Promise<number> {
+  const response = await send(path, headers, method);
+  await response.arrayBuffer();
+  return response.status;
+}
+
 test("Aside sync capability admits one exact request and refuses replay or altered bindings", async () => {
   if (!server) throw new Error("listener is not running");
   const headers = signedHeaders();
   const accepted = await send(LOCAL_ASIDE_SYNC_PATH, headers);
   expect(accepted.status).toBe(200);
   expect((await accepted.json()).results).toEqual([]);
-  expect((await send(LOCAL_ASIDE_SYNC_PATH, headers)).status).toBe(401);
+  expect(await sendStatus(LOCAL_ASIDE_SYNC_PATH, headers)).toBe(401);
 
   const wrongPort = server.port === 65_535 ? server.port - 1 : server.port + 1;
   const badHmac = signedHeaders();
@@ -110,7 +115,7 @@ test("Aside sync capability admits one exact request and refuses replay or alter
     [LOCAL_ASIDE_SYNC_PATH, "POST", signedHeaders({ expiresAt: Date.now() - 1 })],
     [LOCAL_ASIDE_SYNC_PATH, "POST", badHmac],
   ] as const) {
-    expect((await send(path, candidate, method)).status).toBe(401);
+    expect(await sendStatus(path, candidate, method)).toBe(401);
   }
 });
 
@@ -155,14 +160,38 @@ test("CLI default Aside sync attests the listener and sends a bodyless POST", as
   expect(posted).toBe(false);
 });
 
+test("CLI Aside sync clears its exchange deadline after a successful call", async () => {
+  if (!server) throw new Error("listener is not running");
+  let active = false;
+  let scheduledMs: number | undefined;
+  await refreshAsideProfilesThroughServer({
+    findLiveProxy: async () => ({ pid: process.pid, port: server!.port, hostname: "127.0.0.1", source: "runtime" }),
+    exchangeDeadlineMs: 12_345,
+    scheduleExchangeDeadline: (_onTimeout, delayMs) => {
+      active = true;
+      scheduledMs = delayMs;
+      return () => { active = false; };
+    },
+  });
+  expect(scheduledMs).toBe(12_345);
+  expect(active).toBe(false);
+});
+
 test("CLI Aside sync applies one absolute deadline across attestation and POST", async () => {
   if (!server) throw new Error("listener is not running");
   const live = { pid: process.pid, port: server.port, hostname: "127.0.0.1", source: "runtime" as const };
   let healthSignal: AbortSignal | undefined;
   let postSignal: AbortSignal | undefined;
+  let fireDeadline: (() => void) | undefined;
+  let deadlineActive = false;
   await expect(refreshAsideProfilesThroughServer({
     findLiveProxy: async () => live,
     exchangeDeadlineMs: 50,
+    scheduleExchangeDeadline: onTimeout => {
+      deadlineActive = true;
+      fireDeadline = onTimeout;
+      return () => { deadlineActive = false; };
+    },
     directLocalFetch: async (input, init = {}) => {
       if (new URL(input instanceof Request ? input.url : String(input)).pathname === "/healthz") {
         healthSignal = init.signal ?? undefined;
@@ -171,9 +200,12 @@ test("CLI Aside sync applies one absolute deadline across attestation and POST",
       postSignal = init.signal ?? undefined;
       return new Promise<Response>((_, reject) => {
         init.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        if (!fireDeadline) throw new Error("Aside sync did not schedule its deadline");
+        fireDeadline();
       });
     },
   })).rejects.toBeDefined();
   expect(healthSignal).toBe(postSignal);
   expect(postSignal?.aborted).toBe(true);
+  expect(deadlineActive).toBe(false);
 });

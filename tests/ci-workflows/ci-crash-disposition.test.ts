@@ -23,7 +23,7 @@
  * path. That is platform evidence matched to the actual runner rather than a local emulation.
  */
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -106,9 +106,9 @@ const DEDICATED_FILE = "api-usage.test.ts";
 const FIRST_BATCH = FIXTURE_FILES.slice(0, 3);
 const SECOND_BATCH = FIXTURE_FILES.slice(3);
 
-// GNU timeout, reduced to what the runner uses: flags, a duration, then the command. In
-// "timeout" mode it reports 124 for a multi-file batch without ever starting Bun, which is
-// exactly what a wedged batch looks like to the runner.
+// GNU timeout, reduced to what the runner uses: flags, a duration, then the command. The runner
+// also probes this shape before using it. In "timeout" mode it reports 124 for a multi-file batch
+// without ever starting Bun, which is exactly what a wedged batch looks like to the runner.
 const FAKE_TIMEOUT = [
   "#!/bin/sh",
   "while [ $# -gt 0 ]; do",
@@ -127,6 +127,15 @@ const FAKE_TIMEOUT = [
   "  exit 124",
   "fi",
   'exec "$@"',
+  "",
+].join("\n");
+
+// A BSD-style timeout that rejects GNU options, as on macOS with a non-GNU timeout on PATH. The
+// runner must fall back to its portable deadline rather than run batches unbounded.
+const FAKE_NON_GNU_TIMEOUT = [
+  "#!/bin/sh",
+  'echo "timeout: illegal option -- -" >&2',
+  "exit 125",
   "",
 ].join("\n");
 
@@ -156,17 +165,43 @@ const FAKE_BUN = [
   '    echo "(fail) fixture > expected true, received false"',
   "    exit 1",
   "    ;;",
+  // A wedged batch whose child ignores TERM: the batch process itself dies at the deadline, the
+  // child survives TERM and holds the output pipe until the group KILL removes it.
+  "  hang)",
+  "    ( trap '' TERM; exec sleep 300 ) &",
+  '    echo "$!" > "$FIXTURE_CHILD_PID"',
+  "    sleep 300",
+  "    exit 0",
+  "    ;;",
+  // A wedged batch that ignores TERM itself, so only KILL ends it.
+  "  hang-ignore-term)",
+  "    trap '' TERM",
+  "    sleep 300",
+  "    exit 0",
+  "    ;;",
   "esac",
   "exit 0",
   "",
 ].join("\n");
 
-type RunnerResult = { status: number | null; output: string; calls: string[] };
+type RunnerResult = { status: number | null; output: string; calls: string[]; childPid?: number };
+
+type RunnerOptions = {
+  isolated?: string[];
+  manifestStatus?: number;
+  shard?: string;
+  parallel?: string;
+  additionalFiles?: string[];
+  batchSize?: string;
+  timeoutTool?: "gnu" | "non-gnu";
+  batchTimeoutSeconds?: string;
+  killGraceSeconds?: string;
+};
 
 function runBatches(
-  mode: "green" | "crash" | "timeout" | "assert" | "isolated-assert",
+  mode: "green" | "crash" | "timeout" | "assert" | "isolated-assert" | "hang" | "hang-ignore-term",
   fileScope: "general" | "all" = "general",
-  options: { isolated?: string[]; manifestStatus?: number; shard?: string; parallel?: string; additionalFiles?: string[]; batchSize?: string } = {},
+  options: RunnerOptions = {},
 ): RunnerResult {
   const directory = mkdtempSync(join(tmpdir(), "ocx-batch-disposition-"));
   try {
@@ -177,10 +212,15 @@ function runBatches(
     for (const file of FIXTURE_FILES) writeFileSync(join(directory, "tests", file), "");
     writeFileSync(join(directory, "tests", DEDICATED_FILE), "");
     for (const file of options.additionalFiles ?? []) writeFileSync(join(directory, "tests", file), "");
-    writeFileSync(join(binDirectory, "timeout"), FAKE_TIMEOUT, { mode: 0o755 });
+    writeFileSync(
+      join(binDirectory, "timeout"),
+      options.timeoutTool === "non-gnu" ? FAKE_NON_GNU_TIMEOUT : FAKE_TIMEOUT,
+      { mode: 0o755 },
+    );
     writeFileSync(join(binDirectory, "bun"), FAKE_BUN, { mode: 0o755 });
     const calls = join(directory, "calls.log");
     writeFileSync(calls, "");
+    const childPidFile = join(directory, "child.pid");
 
     const result = Bun.spawnSync(["bash", RUNNER, options.shard ?? "1/1"], {
       cwd: directory,
@@ -190,6 +230,8 @@ function runBatches(
         TMPDIR: join(directory, "tmp"),
         CI: "true",
         BUN_TEST_BATCH_SIZE: options.batchSize ?? "3",
+        ...(options.batchTimeoutSeconds === undefined ? {} : { BUN_TEST_BATCH_TIMEOUT_SECONDS: options.batchTimeoutSeconds }),
+        ...(options.killGraceSeconds === undefined ? {} : { BUN_TEST_BATCH_KILL_GRACE_SECONDS: options.killGraceSeconds }),
         BUN_TEST_FILE_SCOPE: fileScope,
         ...(options.parallel === undefined ? {} : { BUN_TEST_PARALLEL: options.parallel }),
         OCX_TEST_NO_QUEUE: "1",
@@ -198,6 +240,7 @@ function runBatches(
         FIXTURE_CALLS: calls,
         FIXTURE_ISOLATED: (options.isolated ?? [DEDICATED_FILE]).join("\n"),
         FIXTURE_MANIFEST_STATUS: String(options.manifestStatus ?? 0),
+        FIXTURE_CHILD_PID: childPidFile,
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -207,10 +250,22 @@ function runBatches(
       status: result.exitCode,
       output: `${decode(result.stdout)}${decode(result.stderr)}`,
       calls: readFileSync(calls, "utf8").split("\n").filter(Boolean),
+      ...(existsSync(childPidFile) ? { childPid: Number(readFileSync(childPidFile, "utf8").trim()) } : {}),
     };
   } finally {
     removeTreeWithRetry(directory);
   }
+}
+
+/** True once the process is gone, or only a zombie waiting for its new parent to reap it. */
+function processGone(pid: number): boolean {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const state = decode(Bun.spawnSync(["ps", "-o", "stat=", "-p", String(pid)]).stdout).trim();
+    if (state === "" || state.startsWith("Z")) return true;
+    Bun.sleepSync(100);
+  }
+  return false;
 }
 
 const batchCalls = (result: RunnerResult): string[] =>
@@ -351,5 +406,36 @@ describe.skipIf(process.platform === "win32")("the hosted batch runner, executed
     // minutes to a shard that has already failed.
     expect(singletonCalls(run)).toEqual([]);
     expect(run.output).toContain("not retrying assertion/test failures");
+  }, SPAWN_BUDGET_MS);
+
+  // macOS ships no GNU timeout. The fallback must keep the same per-batch ceiling and the same
+  // statuses GNU reports, or a wedged batch there runs until the job's wall clock.
+  test("without GNU timeout a clean run is green under the portable deadline", () => {
+    const run = runBatches("green", "general", { timeoutTool: "non-gnu" });
+    expect(`status:${run.status}`, run.output).toBe("status:0");
+    expect(batchCalls(run)).toHaveLength(2);
+    expect(singletonCalls(run)).toEqual([]);
+    expect(run.output).toContain("GNU timeout is unavailable");
+  }, SPAWN_BUDGET_MS);
+
+  test("without GNU timeout a hung batch stops at its deadline with 124 and its children are killed", () => {
+    const run = runBatches("hang", "general", { timeoutTool: "non-gnu", batchTimeoutSeconds: "1", killGraceSeconds: "1" });
+    // The batch process died on TERM, which GNU timeout reports as 124.
+    expect(`status:${run.status}`, run.output).toBe("status:124");
+    expect(run.output).toContain("timed out after 1s");
+    expect(singletonCalls(run)).toHaveLength(FIRST_BATCH.length);
+    // Its child ignored TERM; the group KILL after the grace period removed it anyway, which is
+    // also why this run returned at all: the child held the output pipe open.
+    expect(run.childPid).toBeGreaterThan(0);
+    expect(processGone(run.childPid!)).toBe(true);
+  }, SPAWN_BUDGET_MS);
+
+  test("without GNU timeout a batch that ignores TERM is killed and reports 137, as GNU does", () => {
+    const run = runBatches("hang-ignore-term", "general", { timeoutTool: "non-gnu", batchTimeoutSeconds: "1", killGraceSeconds: "1" });
+    // GNU timeout signals its own process group, so a KILL after the grace period ends it with
+    // 137; the disposition reads that as a runtime crash and still sweeps the batch.
+    expect(`status:${run.status}`, run.output).toBe("status:137");
+    expect(run.output).toContain("Bun runtime crash");
+    expect(singletonCalls(run)).toHaveLength(FIRST_BATCH.length);
   }, SPAWN_BUDGET_MS);
 });

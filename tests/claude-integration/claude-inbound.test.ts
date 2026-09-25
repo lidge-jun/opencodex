@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { AnthropicRequestError as LeafAnthropicRequestError } from "../../src/claude/inbound-records";
 import { repoPath } from "../helpers/repo-root";
@@ -519,6 +520,31 @@ describe("prompt cache key provenance (devlog 130 B3)", () => {
     expect(body.prompt_cache_key).toMatch(/^[0-9a-f]{32}$/);
   });
 
+  test("metadata.user_id longer than 64 chars is hashed into user (OpenAI/Azure limit)", () => {
+    const userId = JSON.stringify({ device_id: "d".repeat(64), account_uuid: "", session_id: "s".repeat(36) });
+    const { body } = anthropicToResponsesTranslation({
+      model: "m", max_tokens: 1, messages,
+      metadata: { user_id: userId },
+    });
+    expect(body.user).toBe(createHash("sha256").update(userId).digest("hex"));
+    expect(body.prompt_cache_key).toBe(createHash("sha256").update(userId).digest("hex").slice(0, 32));
+  });
+
+  test("metadata.user_id boundary: exactly 64 chars forwarded, 65 chars hashed", () => {
+    const atLimit = "u".repeat(64);
+    const overLimit = "u".repeat(65);
+    const { body: forwarded } = anthropicToResponsesTranslation({
+      model: "m", max_tokens: 1, messages,
+      metadata: { user_id: atLimit },
+    });
+    expect(forwarded.user).toBe(atLimit);
+    const { body: hashed } = anthropicToResponsesTranslation({
+      model: "m", max_tokens: 1, messages,
+      metadata: { user_id: overLimit },
+    });
+    expect(hashed.user).toBe(createHash("sha256").update(overLimit).digest("hex"));
+  });
+
   test("no metadata + system present: fallback key from system hash, source=system", () => {
     const a = anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, system: "be nice" });
     const b = anthropicToResponsesTranslation({ model: "m", max_tokens: 1, messages, system: "be nice" });
@@ -680,6 +706,34 @@ describe("bundled-skill elision for routed models (devlog 260712 060)", () => {
     const oversizedDir = `/${"/".repeat(10_000)}claude-api`;
     const texts = userTexts(requestWithSkillTextBlock("claude-api", 20_000, undefined, oversizedDir));
     expect(texts.some(t => t.startsWith(`Base directory for this skill: ${oversizedDir}`))).toBe(true);
+  });
+
+  for (const [prefix, separator] of [["/", "/"], ["C:\\", "\\"]] as const) {
+    for (const pathLength of [4_096, 4_097]) {
+      test(`text-block carrier: ${prefix} marker path at ${pathLength} characters`, () => {
+        const suffix = `${separator}claude-api${separator}`;
+        const dir = prefix + "a".repeat(pathLength - prefix.length - suffix.length) + suffix;
+        const texts = userTexts(requestWithSkillTextBlock("claude-api", 20_000, undefined, dir));
+        const bundle = `Base directory for this skill: ${dir}\n\n` + "DOCS ".repeat(4_000);
+        expect(dir.length).toBe(pathLength);
+        if (pathLength === 4_096) {
+          expect(texts.some(text => text.includes("'claude-api'") && text.includes("elided"))).toBe(true);
+          expect(texts.every(text => text.length < 10_000)).toBe(true);
+        } else {
+          expect(texts).toContain(bundle);
+        }
+      });
+    }
+  }
+
+  test("text-block carrier: an oversized first line without a newline stays byte-for-byte intact", () => {
+    const text = "Base directory for this skill: /" + "a/".repeat(10_000) + "claude-api";
+    const body = anthropicToResponsesTranslation({
+      model: "gemini/gemini-3-pro",
+      max_tokens: 100,
+      messages: [{ role: "user", content: [{ type: "text", text }] }],
+    }).body;
+    expect(userTexts(body)).toContain(text);
   });
 });
 

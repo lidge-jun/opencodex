@@ -54,7 +54,9 @@ fractional. Hidden quota reports are excluded before minimum selection or visibl
 The Tauri title reads `usage_today()`, matching the widget and retained Swift client. Every refresh
 applies the resulting optional title so icon-only clears an old counter. A nonblank custom template
 takes precedence over icon-only; unavailable measurements render as an em dash, not as a request
-to clear the title. The native window/transport boundary remains in [Desktop shell](desktop-shell.md).
+to clear the title. The update dot is independent of companion usage and title filtering. A title refresh asks the macOS status-button overlay to redraw against the current image rectangle; update availability still comes only from the Tauri updater state in desktop/src-tauri/src/updater.rs.
+
+The native window/transport boundary remains in [Desktop shell](desktop-shell.md).
 
 Behavior coverage lives in `tests/usage/usage-timeline.test.ts`,
 `tests/server/companion-settings.test.ts`, the GUI companion utility/data tests, Rust inline tests,

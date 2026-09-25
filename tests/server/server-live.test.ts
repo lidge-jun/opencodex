@@ -41,6 +41,10 @@ const previousOpencodexHome = process.env.OPENCODEX_HOME;
 const originalFetch = globalThis.fetch;
 const TEST_DIR = join(import.meta.dir, ".tmp-server-live-test");
 let isolatedCodexHome: IsolatedCodexHome | null = null;
+// A case that starts a server against TEST_DIR hands its teardown here: the afterEach below must
+// stop those servers before it removes TEST_DIR (Bun runs afterEach before a case's
+// `onTestFinished` hooks, and Windows refuses to remove a directory holding open files).
+let caseTeardown: (() => Promise<void>) | undefined;
 const DIRECT_CHATGPT_TOKEN = fakeChatGptJwt({ chatgpt_account_id: "acct-123" });
 
 beforeEach(() => {
@@ -56,19 +60,33 @@ beforeEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-  if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-  else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
-  if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousOpencodexHome;
-  isolatedCodexHome?.restore();
-  isolatedCodexHome = null;
-  clearCodexUpstreamHealth();
-  clearThreadAccountMap();
-  clearAccountNeedsReauth("pool-a");
-  clearAccountQuota();
-  if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+afterEach(async () => {
+  // First, so a case's servers are stopped before the removal below takes TEST_DIR apart under them.
+  const teardown = caseTeardown;
+  caseTeardown = undefined;
+  let teardownFailure: unknown;
+  try {
+    await teardown?.();
+  } catch (err) {
+    teardownFailure = err;
+  }
+  try {
+    globalThis.fetch = originalFetch;
+    if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+    else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
+    if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousOpencodexHome;
+    isolatedCodexHome?.restore();
+    isolatedCodexHome = null;
+    clearCodexUpstreamHealth();
+    clearThreadAccountMap();
+    clearAccountNeedsReauth("pool-a");
+    clearAccountQuota();
+    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
+  } finally {
+    // Reported after the rest ran: a failed shutdown must not also cost this file its cleanup.
+    if (teardownFailure) throw teardownFailure;
+  }
 });
 
 interface CapturedRequest {
@@ -609,83 +627,30 @@ test("call-create and its sideband join bind to the same pool account (openai/co
 }, { timeout: 20_000 });
 
 test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectionally", async () => {
-  // The peer is a helper so it can report what it saw: this case's only symptom on failure is
-  // its own deadline, which names neither the slow leg nor whether the reply was ever sent.
+  // The peer is a helper so it can report what it saw: this case's failure arrives as a timeout,
+  // which names neither the slow leg nor whether the reply was ever sent.
   const { server: upstream, seenPaths, seenUpgradeHeaders, probe } = sidebandRelayUpstream(MAX_WS_FRAME_BYTES);
 
-  // Created inside the try: a startServer throw used to leak the peer and the socket override.
+  // No inner deadline: the 50MiB transfer is the thing the assertions are about, so a wall clock
+  // over it would fail the contract for being the runner rather than the relay. The harness budget
+  // below is the only bound left, and a case it kills emits no failure message of its own, so
+  // cleanup is handed to the file's afterEach through `caseTeardown`, which runs however this case
+  // ends -- including when the budget ends it -- and reports the stall. That hook owns it because
+  // the servers below hold files inside TEST_DIR, and the afterEach removes TEST_DIR.
   let restoreWebSocket: (() => void) | undefined;
   let live: ReturnType<typeof startServer> | undefined;
-  try {
-    saveConfig(forwardConfig());
-    // Redirect ChatGPT sideband targets to the local mock; the config stays canonical. A sibling
-    // helper because this case is at its size cap and the repo answer is not to compress.
-    const { OriginalWebSocket, restore } = redirectSidebandWebSocket(upstream.port);
-    restoreWebSocket = restore;
-    const server = live = startServer(0);
-    const client = openSidebandClient(OriginalWebSocket, server.url, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
-    // The try opens here, one statement after the client exists, so the timer and the phase
-    // recorder are both created inside the block that closes them.
-    let phase: ReturnType<typeof phaseTimer> | undefined;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      // Each leg is its own segment and the timer's ticks read the peer's event count, so a
-      // segment that reaches no further milestone is visible as such. That is weaker than proof
-      // of a stall: a tick without movement says no milestone was reached, not that nothing moved.
-      phase = phaseTimer("sideband 50MiB exact frame ceiling", probe.progress);
-      const leg = phase;
-      await new Promise<void>((resolve, reject) => {
-        const fail = (reason: string): void => reject(new Error(`${reason}; peer: ${probe.summary()}`));
-        timer = setTimeout(() => fail("sideband timeout"), 15_000);
-        let stage: "echo-roundtrip" | "await-ceiling-echo" | "done" = "echo-roundtrip";
-        leg.split("upgrade");
-        client.addEventListener("open", () => {
-          probe.noteClient("open");
-          leg.split("echo-roundtrip");
-          client.send("ping-sideband");
-        });
-        client.addEventListener("close", event => {
-          probe.noteClient("close=" + event.code);
-          // ANY close before this case settles is its own outcome, not a deadline. Keying that
-          // on the first echo left the harder half unreported: a close after the ping and
-          // before the ceiling echo -- the disconnect a 50MiB frame is most likely to cause --
-          // fell through to the 15s timeout and read as a slow peer.
-          if (stage !== "done") fail(`sideband closed during ${stage}`);
-        });
-        client.addEventListener("message", (event) => {
-          try {
-            probe.noteClient("message");
-            if (stage === "echo-roundtrip") {
-              expect(String(event.data)).toBe("echo:ping-sideband");
-              leg.split("allocate-ceiling-frame");
-              const frame = Buffer.alloc(MAX_WS_FRAME_BYTES);
-              // The send is synchronous, so allocating the frame, handing it to the socket and
-              // waiting for the acknowledgement are three separate costs. Timing them as one
-              // segment reported allocation time as wait time.
-              leg.split("send-ceiling-frame");
-              client.send(frame);
-              stage = "await-ceiling-echo";
-              leg.split("await-ceiling-echo");
-              return;
-            }
-            expect(String(event.data)).toBe(`bytes:${MAX_WS_FRAME_BYTES}`);
-            expectSidebandUpgrade({ seenPaths, seenUpgradeHeaders }, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
-            stage = "done";
-            resolve();
-          } catch (err) {
-            reject(err);
-          }
-        });
-        client.addEventListener("error", () => fail("client websocket error"));
-      });
-    } finally {
-      // The case owns both: leaving them for the runner to collect is a resource leak whatever
-      // it did or did not contribute to any particular deadline.
-      phase?.end();
-      clearTimeout(timer);
-      client.close();
-    }
-  } finally {
+  let client: WebSocket | undefined;
+  let phase: ReturnType<typeof phaseTimer> | undefined;
+  // Read by the hook, so it outlives the promise whose handlers advance it.
+  let stage: "echo-roundtrip" | "await-ceiling-echo" | "done" = "echo-roundtrip";
+  let cleanedUp = false;
+  const cleanup = async (): Promise<void> => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    // What a timed-out case cannot otherwise print: the stage it stalled in and what the peer saw.
+    if (stage !== "done") console.info(`[sideband ceiling] ended during ${stage}; peer: ${probe.summary()}`);
+    phase?.end();
+    client?.close();
     restoreWebSocket?.();
     // Nested so the peer is stopped even when stopping the proxy throws: one failed shutdown
     // must not leave the other listener running for every case after this one.
@@ -694,7 +659,69 @@ test("sideband GET /v1/live/{callId} relays the exact frame ceiling bidirectiona
     } finally {
       await upstream.stop(true);
     }
-  }
+  };
+  caseTeardown = cleanup;
+
+  saveConfig(forwardConfig());
+  // Redirect ChatGPT sideband targets to the local mock; the config stays canonical. A sibling
+  // helper because this case is at its size cap and the repo answer is not to compress.
+  const { OriginalWebSocket, restore } = redirectSidebandWebSocket(upstream.port);
+  restoreWebSocket = restore;
+  const server = live = startServer(0);
+  const ws = openSidebandClient(OriginalWebSocket, server.url, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
+  client = ws;
+  // Each leg is its own segment and the timer's ticks read the peer's event count, so a
+  // segment that reaches no further milestone is visible as such. That is weaker than proof
+  // of a stall: a tick without movement says no milestone was reached, not that nothing moved.
+  phase = phaseTimer("sideband 50MiB exact frame ceiling", probe.progress);
+  const leg = phase;
+  // Settles on events only: the two messages, a close before `done`, a client error, or a throw.
+  await new Promise<void>((resolve, reject) => {
+    // Silent once the hook owns teardown: a later rejection would be unhandled, not a result.
+    const fail = (reason: string): void => {
+      if (cleanedUp) return;
+      reject(new Error(`${reason}; peer: ${probe.summary()}`));
+    };
+    leg.split("upgrade");
+    ws.addEventListener("open", () => {
+      probe.noteClient("open");
+      leg.split("echo-roundtrip");
+      ws.send("ping-sideband");
+    });
+    ws.addEventListener("close", event => {
+      probe.noteClient("close=" + event.code);
+      // ANY close before this case settles is its own outcome, not a deadline. Keying that
+      // on the first echo left the harder half unreported: a close after the ping and
+      // before the ceiling echo -- the disconnect a 50MiB frame is most likely to cause --
+      // reached no message of its own and waited out the harness budget.
+      if (stage !== "done") fail(`sideband closed during ${stage}`);
+    });
+    ws.addEventListener("message", (event) => {
+      try {
+        probe.noteClient("message");
+        if (stage === "echo-roundtrip") {
+          expect(String(event.data)).toBe("echo:ping-sideband");
+          leg.split("allocate-ceiling-frame");
+          const frame = Buffer.alloc(MAX_WS_FRAME_BYTES);
+          // The send is synchronous, so allocating the frame, handing it to the socket and
+          // waiting for the acknowledgement are three separate costs. Timing them as one
+          // segment reported allocation time as wait time.
+          leg.split("send-ceiling-frame");
+          ws.send(frame);
+          stage = "await-ceiling-echo";
+          leg.split("await-ceiling-echo");
+          return;
+        }
+        expect(String(event.data)).toBe(`bytes:${MAX_WS_FRAME_BYTES}`);
+        expectSidebandUpgrade({ seenPaths, seenUpgradeHeaders }, "/v1/live/rtc_sideband", DIRECT_CHATGPT_TOKEN);
+        stage = "done";
+        resolve();
+      } catch (err) {
+        if (!cleanedUp) reject(err);
+      }
+    });
+    ws.addEventListener("error", () => fail("client websocket error"));
+  });
 }, { timeout: 20_000 });
 
 test("standalone GET /v1/realtime?intent=quicksilver&model= upgrades and relays bidirectionally", async () => {

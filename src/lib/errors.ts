@@ -156,6 +156,93 @@ function isSubscriptionGateMessage(text: string): boolean {
   );
 }
 
+/**
+ * xAI (and similar Chat Completions gateways) sometimes refuse a turn with HTTP 403
+ * and a model-refusal sentence instead of 200 + finish_reason=content_filter.
+ * Codex treats that 403 as a transport failure, so the user message is never
+ * recorded as a completed turn and retries loop. Keep this allowlist narrow:
+ * entitlement / plan / model-access 403s must stay errors.
+ */
+const POLICY_REFUSAL_PHRASES = [
+  "i can't help with that request",
+  "i cannot help with that request",
+  "i'm unable to help with that request",
+  "i am unable to help with that request",
+] as const;
+
+function hasModelAccessCue(text: string): boolean {
+  return (
+    text.includes("not allowed to use this model")
+    || text.includes("not allowed to use this operation")
+  );
+}
+
+/**
+ * xAI plan and credit 403 wording. Checked only by the refusal matcher below: adding these to
+ * the global subscription classifier would also change status and error-code inference for
+ * every message-only error that happens to mention credits.
+ */
+function hasEntitlementCue(text: string): boolean {
+  return (
+    isSubscriptionGateMessage(text)
+    || text.includes("need a grok subscription")
+    || text.includes("run out of credits")
+  );
+}
+
+/** Lowercase, collapse whitespace, and strip trailing .!? so an exact phrase match is stable. */
+function normalizePolicyRefusalSentence(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.!?]+$/g, "")
+    .trim();
+}
+
+/**
+ * True only when the extracted error sentence is exactly a known model-refusal
+ * phrase. JSON / "Provider error 403:" wrappers are unwrapped first. Extra
+ * plan, credit, entitlement, or model-access wording keeps the error path.
+ */
+export function isUpstreamPolicyRefusalMessage(text: string): boolean {
+  const extracted = extractPolicyRefusalText(text);
+  const originalLower = text.toLowerCase();
+  const extractedLower = extracted.toLowerCase();
+  if (hasEntitlementCue(originalLower) || hasEntitlementCue(extractedLower)) return false;
+  if (hasModelAccessCue(originalLower) || hasModelAccessCue(extractedLower)) return false;
+  const normalized = normalizePolicyRefusalSentence(extracted);
+  return (POLICY_REFUSAL_PHRASES as readonly string[]).includes(normalized);
+}
+
+/** HTTP 403 plus {@link isUpstreamPolicyRefusalMessage}; other statuses never rewrite. */
+export function isUpstreamPolicyRefusal(status: number, text: string): boolean {
+  return status === 403 && isUpstreamPolicyRefusalMessage(text);
+}
+
+/** Pull the human-readable refusal sentence out of a JSON or prefixed error body. */
+export function extractPolicyRefusalText(raw: string): string {
+  const trimmed = raw.trim();
+  try {
+    const parsed = JSON.parse(trimmed) as { error?: unknown; message?: unknown };
+    const nested = parsed.error;
+    if (typeof nested === "string" && nested.trim()) return nested.trim();
+    if (nested && typeof nested === "object") {
+      const msg = (nested as { message?: unknown; error?: unknown }).message
+        ?? (nested as { error?: unknown }).error;
+      if (typeof msg === "string" && msg.trim()) return msg.trim();
+    }
+    if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message.trim();
+  } catch {
+    /* not JSON */
+  }
+  // The proxy's own error text wraps the upstream JSON (`Provider error 403: {"error": ...}`),
+  // so the remainder after the prefix gets the same unwrapping.
+  const prefixed = trimmed.match(/^Provider error 403:\s*([\s\S]+)$/i);
+  if (prefixed?.[1]?.trim()) return extractPolicyRefusalText(prefixed[1]);
+  return trimmed;
+}
+
 function isLocalAclHardeningMessage(text: string): boolean {
   const secretPathHardening = text.includes("secret path") && (
     text.includes("acl") ||

@@ -416,6 +416,9 @@ test("public injection excludes custom gateways, forwarded auth and an unopted A
   expect(nativeResponseControlEligible({ ...provider, upstreamWebsocket: false }, channel)).toBe(false);
   expect(nativeResponseControlEligible({ ...provider, authMode: "forward" }, channel)).toBe(false);
   expect(nativeResponseControlEligible(provider)).toBe(false);
+  const canonical = injectionConfig().providers.openai;
+  expect(nativeResponseControlEligible(canonical, channel)).toBe(true);
+  expect(nativeResponseControlEligible({ ...canonical, upstreamWebsocket: false }, channel)).toBe(false);
 });
 
 test("injection mode refuses simultaneous steering instead of fabricating protocol equivalence", () => {

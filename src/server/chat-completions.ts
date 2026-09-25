@@ -328,7 +328,9 @@ async function handleChatCompletionsWithBudget(
     // This enrichment is optional for routed/non-main providers. If native main
     // is fenced, omit it and let auth-context reject only a final physical-main
     // selection while healthy pool/provider routes continue.
-    if (tryClaimNativeMainProfileForTurn(logIds?.turnAdmissionLease)) {
+    const isCanonicalPool = settledRoute && isCanonicalOpenAiForwardProvider(settledRoute.provider)
+      && settledRoute.codexAccountMode === "pool";
+    if (!isCanonicalPool && tryClaimNativeMainProfileForTurn(logIds?.turnAdmissionLease)) {
       try {
         const { getMainAccountToken } = await import("../codex/main-account");
         const token = getMainAccountToken();

@@ -33,6 +33,78 @@ private final class NativeTrayPopover: NSObject {
 
 }
 
+@MainActor
+private final class UpdateDotView: NSView {
+    weak var statusButton: NSStatusBarButton?
+
+    init(button: NSStatusBarButton) {
+        statusButton = button
+        super.init(frame: button.bounds)
+        autoresizingMask = [.width, .height]
+        // AppKit keeps the template image and its highlighted tint. This view draws only
+        // the independent accent, without making the status button layer-backed.
+        wantsLayer = false
+    }
+
+    required init?(coder: NSCoder) { nil }
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let button = statusButton else { return }
+        let imageRect = button.cell?.imageRect(forBounds: button.bounds) ?? button.bounds
+        let image = imageRect.isEmpty ? button.bounds : imageRect
+        let diameter: CGFloat = 7
+        let dot = NSRect(x: min(bounds.maxX - diameter, image.maxX - 4),
+                         y: max(bounds.minY, image.minY + 1),
+                         width: diameter, height: diameter)
+        NSColor.windowBackgroundColor.setFill()
+        NSBezierPath(ovalIn: dot.insetBy(dx: -1.25, dy: -1.25)).fill()
+        NSColor(calibratedRed: 0.18, green: 0.48, blue: 0.97, alpha: 1).setFill()
+        NSBezierPath(ovalIn: dot).fill()
+    }
+}
+
+@MainActor
+private enum UpdateDot {
+    static weak var button: NSStatusBarButton?
+    static var view: UpdateDotView?
+
+    static func set(_ item: NSStatusItem, visible: Bool) {
+        guard let next = item.button else { return }
+        if button !== next {
+            view?.removeFromSuperview()
+            view = nil
+            button = next
+        }
+        guard visible else {
+            view?.removeFromSuperview()
+            view = nil
+            return
+        }
+        if view == nil {
+            let overlay = UpdateDotView(button: next)
+            next.addSubview(overlay)
+            view = overlay
+        }
+        view?.frame = next.bounds
+        view?.needsDisplay = true
+    }
+}
+
+@_cdecl("ocx_native_tray_update_dot")
+@MainActor
+public func nativeTrayUpdateDot(_ item: UnsafeMutableRawPointer?, _ show: Int32) {
+    guard Thread.isMainThread, let item else { return }
+    let statusItem = Unmanaged<NSStatusItem>.fromOpaque(item).takeUnretainedValue()
+    UpdateDot.set(statusItem, visible: show != 0)
+}
+
 @_cdecl("ocx_native_tray_show")
 @MainActor
 public func nativeTrayShow(_ item: UnsafeMutableRawPointer?, _ toggle: Int32, _ callback: @escaping @convention(c) (Int32) -> Void) {

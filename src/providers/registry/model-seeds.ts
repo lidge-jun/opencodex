@@ -271,6 +271,8 @@ export const THINKING_TOGGLE_MAP: Record<string, string> = {
 };
 export const OPENCODE_GO_THINKING_TOGGLE_MODELS = [
   "mimo-v2.5", "mimo-v2.5-pro", "glm-5", "glm-5.1",
+  // V2.6 keeps the vendor's thinking toggle; listed ahead of a Go probe (preemptive, 2026-09-23).
+  "mimo-v2.6-pro", "mimo-v2.6-flash",
 ];
 /**
  * Zhipu's domestic BigModel platform. Text families first, then the vision member: modalities are
@@ -381,6 +383,19 @@ export const COMMAND_CODE_IMAGE_MODELS = [
  * the user-message and tool-result paths (see the note at that entry). The
  * mechanism stays for the next route that measures text-only.
  */
+/**
+ * Command Code MiMo context windows from the live /provider/v1/models catalog (2026-09-23 fixture,
+ * tests/fixtures/commandcode-models.json). Model-keyed registry facts double as the router's native
+ * decode ids, so a cold start or failed discovery still turns `command-code/xiaomi-mimo-v2.6-pro`
+ * into `xiaomi/mimo-v2.6-pro` instead of sending the flattened slug upstream. They are not a roster.
+ */
+export const COMMAND_CODE_MIMO_CONTEXT_WINDOWS: Record<string, number> = {
+  "xiaomi/mimo-v2.6-pro": 1_048_576,
+  "xiaomi/mimo-v2.6-pro-ultraspeed": 1_048_576,
+  "xiaomi/mimo-v2.6-flash": 1_048_576,
+  "xiaomi/mimo-v2.5-pro": 1_000_000,
+  "xiaomi/mimo-v2.5": 1_000_000,
+};
 export const COMMAND_CODE_TEXT_ONLY_MODELS = [] as const;
 export const COMMAND_CODE_MODEL_INPUT_MODALITIES: Record<string, ["text"] | ["text", "image"]> = {
   ...Object.fromEntries(COMMAND_CODE_IMAGE_MODELS.map(id => [id, ["text", "image"] as ["text", "image"]])),
@@ -949,6 +964,8 @@ export const CLINE_PASS_MODELS = [
   "cline-pass/kimi-k2.7-code",
   "cline-pass/kimi-k2.6",
   "cline-pass/deepseek-v4-flash",
+  "cline-pass/mimo-v2.6-pro",
+  "cline-pass/mimo-v2.6-flash",
   "cline-pass/mimo-v2.5",
   "cline-pass/mimo-v2.5-pro",
   "cline-pass/minimax-m3",
@@ -997,6 +1014,8 @@ export const CLINE_PASS_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "cline-pass/kimi-k2.7-code": 262_144,
   "cline-pass/kimi-k2.6": 262_144,
   "cline-pass/deepseek-v4-flash": 1_048_576,
+  "cline-pass/mimo-v2.6-pro": 1_048_576,
+  "cline-pass/mimo-v2.6-flash": 1_048_576,
   "cline-pass/mimo-v2.5": 1_050_000,
   "cline-pass/mimo-v2.5-pro": 1_050_000,
   "cline-pass/minimax-m3": 1_048_576,

@@ -106,7 +106,7 @@ gösteriyorsa `ocx sync` çalıştırıp o Codex arayüzünü yeniden başlatın
 1. **ChatGPT'yi v1'de tutun.** v2 içindeki `keepNativeChatGptOnV1` anahtarı, Sol ve Terra'yı v1 arayüzünde bırakır; böylece Grok veya Claude oluşturabilirler. Yönlendirilen ebeveynler ise v2 alır. İkisini birlikte kullanmaya en yakın yol budur.
 2. **Tek sağlayıcı içinde görev devredin.** Yönlendirilen ebeveynden yönlendirilen çocuğa görev v2'de düz metindir ve normal çalışır.
 3. **Doğrudan anahtar kimlik doğrulamalı Responses geçidine güvenin.** `allowEncryptedV2AgentTasks: true` ile açıkça işaretlediğiniz sağlayıcı, 400 yerine opak yükü alır. Bunu yalnızca yükü tüketebildiğini bildiğiniz hedef için yapın.
-4. **`agentTaskRecovery` etkinleştirin.** Deneyseldir ve varsayılan olarak kapalıdır. Kota, gecikme ve belgelenmemiş davranışa bağımlılık pahasına çoğu yeni spawn'ı ChatGPT arka ucundan kurtarır; ileti türü takipleri ve çok parçalı zarfları yine kaybeder.
+4. **`agentTaskRecovery` etkinleştirin.** Deneyseldir ve varsayılan olarak kapalıdır. ChatGPT arka ucu üzerinden okunamayan şifreli `NEW_TASK`, `MESSAGE`, `FOLLOWUP_TASK` ve `FINAL_ANSWER` öğelerini kurtarır. Bunun bedeli kota, gecikme ve belgelenmemiş davranışa bağımlılıktır; kombo kurtarma yalnızca spawn edilmiş çocuk turlarıyla sınırlı kalır ve bölünmüş belirteç parçaları hâlâ desteklenmez.
 
 Her birinin ayrıntıları için [Alt Ajan Arayüzü](/tr/guides/sub-agent-surface/),
 ayarlar için [Ajan yapılandırması](/tr/reference/configuration/agents/) sayfasına

@@ -437,6 +437,18 @@ JSON mode: `payload`.
 
 - Distinct from `claude desktop show`, which reports what this machine WOULD write; this reports what is actually in effect, which only the running proxy knows.
 
+### `ocx claude desktop picker status`
+
+First-party picker mode: whether Claude Desktop's Code tab lists opencodex models, and what is missing if not.
+
+| Method | Route |
+|---|---|
+| GET | `/api/claude-desktop/picker` |
+
+JSON mode: `none`.
+
+- Reports desired, effective, keychain trust, the Desktop egress profile, the model count and a reason with the next command to run.
+
 ## State-changing capabilities
 
 Each of these writes. Check the flags column before running one unattended.
@@ -834,14 +846,77 @@ Restart the Codex desktop app and app-servers.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--yes` | boolean | Required: fully quits and relaunches the operator's Codex desktop app and restarts its app-servers. |
+| `--yes` | boolean | Required: fully quits and relaunches the operator's Codex desktop app, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts; also restarts its app-servers. |
 | `--json` | boolean | Emit the restart result as JSON. |
 
 JSON mode: `payload`.
 
 - `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.
 - Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.
-- --yes is mandatory because this interrupts a running editor session, which must never happen because an agent guessed a subcommand.
+- --yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.
+
+### `ocx claude desktop bind`
+
+First-party: serve a Claude Desktop Code tab picker model with an opencodex route.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/first-party-bindings` |
+
+JSON mode: `none`.
+
+- Takes a picker model id (claude-sonnet-4-6) and a route in the Desktop route vocabulary (provider/model or native/<slug>); the route must be one the Desktop profile can offer.
+- Only Claude Code traffic that reaches the proxy through the first-party intercept (Desktop's Code tab, the claude CLI) honours it; ocx claude and the public Messages endpoint are unaffected.
+- The Desktop picker keeps Anthropic's label; the binding changes which model answers, starting with the next request.
+
+### `ocx claude desktop unbind`
+
+Remove a first-party Claude Desktop Code tab picker binding.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/first-party-bindings` |
+
+JSON mode: `none`.
+
+- Removing an id that is not bound is a no-op; the remaining bindings are printed.
+
+### `ocx claude desktop picker on`
+
+Turn first-party picker mode on and remember the choice.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/picker` |
+
+JSON mode: `none`.
+
+- Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.
+- Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards.
+
+### `ocx claude desktop picker off`
+
+Turn first-party picker mode off, remove its Desktop egress profile and certificate trust, and remember the choice.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/picker` |
+
+JSON mode: `none`.
+
+- Works without a running proxy: the preference is saved and the picker profile and trust are removed locally.
+
+### `ocx claude desktop picker trust`
+
+Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/picker` |
+
+JSON mode: `none`.
+
+- The server removes trust this command added if the enable is refused; if the request is lost, trust is left alone and picker status tells what happened.
 
 ### `ocx integration native`
 
@@ -930,6 +1005,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 50
-- of those, state-changing: 25
+- declared capabilities: 56
+- of those, state-changing: 30
 - head-resolved invocations: 2

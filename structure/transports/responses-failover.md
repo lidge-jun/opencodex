@@ -41,11 +41,12 @@ abort/sleep helpers from this module.
 
 ## Ambiguous-resend gate
 
-A model POST that fails with the caller having observed nothing is one question asked at two
-points: before any response head, and after a head whose SSE body carried only control events.
-`src/lib/request-resend-gate.ts` is the single answer. It derives stage, cause, permission and
-send class from `src/lib/request-failure-model.ts` and adds exactly one thing the table names
-but does not implement — the narrowly scoped operator override for `refused-ambiguous`.
+A model POST that fails with the caller having observed nothing is one question asked at three
+points. Two are HTTP: before any response head, and after a head whose SSE body carried only
+control events. The third is a Codex WebSocket that closes or errors under its create frame before
+any Responses event (#4191). `src/lib/request-resend-gate.ts` is the single answer. It derives
+stage, cause, permission and send class from `src/lib/request-failure-model.ts` and adds exactly
+one thing the table names but does not implement — the narrowly scoped operator override for `refused-ambiguous`.
 
 The override is bounded on three axes at once. The provider opts in with
 `providers.<name>.retryOnReset`; the request must be one
@@ -71,6 +72,17 @@ A committed or futile failure refuses without touching the grant, so a turn that
 output cannot drain the replacement a later ambiguous reset would have been entitled to. The
 cause is derived from the `AttemptRecoveryKind` the send will be recorded as, which is what
 keeps the reason in the log and the reason the gate weighed from being two different values.
+
+The WebSocket row is asked once, at the end of the passthrough recovery loop, after every leg has
+let the settled 502 through. The exchange marks only a socket that closed or errored
+(`markCodexWsSocketDeath`) and records the stage it reached: `pre-header` when nothing came back,
+`protocol-prelude` when frames arrived but none was a Responses event. Silence keeps its 504, and a native steering or
+injection exchange is never marked, because its channel may already have sent continuation frames
+on that socket. The send budget is asked before the gate, so a replacement the request cannot fund
+leaves the grant unspent. The replacement is one HTTP send, never a second socket, and its answer
+is sorted exactly like the pre-header row's (see
+[ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary)) before
+it goes round the recovery loop again.
 
 ## Console upload rejection recovery
 
@@ -142,6 +154,17 @@ The buffered bytes are replayed unchanged before the reader continues. Native pa
 relay identity markers are restored on the wrapped response so Windows/Bun stream paths and deferred
 logging retain their existing owners. A failed child keeps its physical attempt receipt and usage,
 while the successful child remains the logical request result.
+
+A `runTurn` adapter has the equivalent boundary in `preflightAdapterEvents`
+(`src/adapters/run-turn-queue.ts`), streaming and non-streaming alike: when its first meaningful
+event is a tool call the current request did not declare, and no earlier replay-unsafe heartbeat
+recorded a side effect, `src/server/responses/run-turn-execution.ts` projects the fail-closed
+undeclared-tool refusal as a pre-commit 502 so the combo can hop with the unchanged catalog. After
+any output or a replay-unsafe heartbeat the refusal stays with that child. Chat Completions and
+Anthropic Messages inbound requests do not use this classification.
+The same heartbeat also decides an ordinary pre-output adapter error or an empty end: after a
+replay-unsafe heartbeat the child's 502 is marked non-replayable, so the combo stops on it instead
+of sending the turn to the next target.
 
 HTTP 410 remains terminal by default. It advances and cools only the exact combo target when the
 structured code or message explicitly identifies a model lifecycle event (end-of-life, retired,
@@ -256,7 +279,8 @@ this same refusal. Nothing on that path hands the client a status that invites t
 to be sent again. See [ambiguous-resend gate](#ambiguous-resend-gate).
 
 That includes what the replacement send itself answers. Once the grant is spent, the first send
-may already have run the turn, so `fetchWithResetRetry` sorts the replacement's answer:
+may already have run the turn, so `settleOperatorReplacement` sorts the replacement's answer, for
+the pre-header row in `fetchWithResetRetry` and the WebSocket row alike:
 
 | Replacement answer | Result |
 | --- | --- |
@@ -276,12 +300,28 @@ response, so `consumeComboFailure` records `nonReplayable` and the combo stops r
 on, say, a context overflow. The cost is that a real 401, 402 or 429 on a replacement send is not
 recorded against its credential on that request.
 
+A 2xx replacement carries no marker, and its stream can still fail before any output. A marker
+cannot carry that case, because the combo preflight rebuilds the failure as a fresh Response, so
+the request execution budget's `ambiguousResendSpent` is what stops the combo, for all three
+replacement rows (pre-header, SSE and WebSocket): a status the client would resend becomes the
+refusal, and anything else keeps its status and the non-replayable marker. The direct path skips
+the streamed opaque-blob rebuild and settles the preflight's projected failure by the same rule.
+Policy fallback does not hop on a marked answer.
+A scope derived from a budget this factory did not build (the shape-tested bridge in
+`src/lib/request-execution-budget.ts`) remembers a grant it claimed through the bridge, keyed by
+the bridged parent, so every sibling scope reports it spent even when that parent predates the
+`ambiguousResendSpent` flag.
+
 **An upstream reset observed mid-stream or after a terminal keeps its existing behaviour.**
 The passthrough read path still settles a genuine upstream reset as a synthetic 502, and the
 Codex WebSocket transport still settles `upstream_closed_before_response` (socket closed
 after the create frame) and `upstream_no_response` (origin never produced an event) as 502
-and 504. Those describe something the upstream did after our send, they are the contract the
-public server reference already documents, and this release does not move them.
+and 504. Those describe something the upstream did after our send, and they are the contract
+the public server reference already documents. The 504 and a drop after the response started
+are never replaced. Only the 502 of a socket that closed or errored before any Responses event
+may be replaced over HTTP, when the provider opted into `retryOnReset` (#4191). That replacement
+claims from the request's one allowance; if it resets before its head, that is the pre-header row
+again and may use a configured second replacement, otherwise it settles as the refusal.
 
 This reclassification is the recorded behaviour change: before it, the pre-header refusal
 borrowed `upstream_closed_before_response` and its 502, which multiplied the duplicate send
@@ -356,6 +396,8 @@ that shows the same client resending.
 
 The existing provider HTTP-status policy and the shared physical-send budget remain
 independent: zero refuses dispatch, invalid counts fail, and a stopped send is counted once.
+A denied first combo target returns a local typed 429 `request_send_budget_exhausted` without
+dispatch; a denied later hop returns the last real upstream failure without contacting that target.
 `src/bridge/errors.ts` retains only the allowlisted non-replayable transport codes,
 reapplies the in-process marker, attaches no `Retry-After`, and restates 429 for the refusal
 code alone so a combo or adapter formatter holding an upstream-shaped 502 cannot hand the
@@ -379,6 +421,8 @@ output actually share. When the caller declared `max_output_tokens`,
 `checkComboTargetInputAdmission` requires both `estimated input <= ceiling` and
 `estimated input + min(declared output, target output ceiling) <= window`, so the output reserve
 is counted once rather than charged twice against an already-tightened input budget.
+Both direct and combo estimates omit replayed assistant thinking for `openai-chat` models outside
+`preserveReasoningContentModels`, matching the adapter's wire omission; other targets still count it.
 
 The refusal is local: HTTP 413 `input_admission_refused` before any upstream bytes are sent, which
 existing combo policy already treats as a safe hop. That ordering is the whole point. A target whose

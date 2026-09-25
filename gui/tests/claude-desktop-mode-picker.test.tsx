@@ -153,8 +153,9 @@ test("a failed /status unlocks the picker on the default without claiming a curr
   await act(async () => { await new Promise(r => setTimeout(r, 200)); });
 
   expect((container.querySelector(".claude-mode-picker") as HTMLFieldSetElement).disabled).toBe(false);
-  expect(radio("first-party").checked).toBe(true);
-  expect(radio("gateway").checked).toBe(false);
+  expect(radio("gateway").checked).toBe(true);
+  expect(radio("first-party").checked).toBe(false);
+  expect(radio("gateway").closest("label")?.querySelector(".claude-mode-default")).not.toBeNull();
   expect(container.querySelector(".claude-mode-current")).toBeNull();
   expect(container.querySelector(".claude-status-bar")?.textContent ?? "").toContain("Failed to load");
 });
@@ -164,9 +165,11 @@ test("the picker follows the effective mode reported by /status and shows the pr
   expect(radio("first-party").checked).toBe(true);
   expect(radio("gateway").checked).toBe(false);
   const firstPartyOption = radio("first-party").closest("label")!;
-  expect(firstPartyOption.querySelector(".claude-mode-default")).not.toBeNull();
+  expect(firstPartyOption.querySelector(".claude-mode-default")).toBeNull();
+  expect(radio("gateway").closest("label")?.querySelector(".claude-mode-default")).not.toBeNull();
   expect(firstPartyOption.querySelector(".claude-mode-current")).not.toBeNull();
   expect(container.querySelector(".claude-mode-switch-note")).toBeNull();
+  expect(container.querySelector(".claude-mode-picker .claude-mode-risk")?.textContent).toContain("suspend the account");
 
   const bar = container.querySelector(".claude-status-bar")!;
   expect(bar.className).toContain("applied");
@@ -181,6 +184,16 @@ test("a stopped intercept proxy is surfaced in first-party mode", async () => {
   }));
   await mount();
   expect(container.querySelector(".claude-status-bar")?.textContent ?? "").toContain("is not running");
+});
+
+test("an applied first-party warning stays visible below status while gateway is selected", async () => {
+  installFetch(statusPayload({ riskWarning: { code: "first_party_account_suspension_risk", message: "risk" } }));
+  await mount();
+  await act(async () => { radio("gateway").click(); });
+  expect(container.querySelector(".claude-mode-picker .claude-mode-risk")).toBeNull();
+  const bar = container.querySelector(".claude-status-bar")!;
+  expect(bar.nextElementSibling?.classList.contains("claude-mode-risk")).toBe(true);
+  expect(bar.nextElementSibling?.textContent).toContain("suspend the account");
 });
 
 test("selecting the other mode flips the apply label and sends that mode in the POST body", async () => {
@@ -227,7 +240,7 @@ test("activeProfile=false only demotes the status bar in gateway mode", async ()
 });
 
 test("no radio is checked and the picker is disabled until /status answers", async () => {
-  // A gateway install must never see the first-party default flash while /status is in flight.
+  // The picker must not claim a gateway selection before /status answers.
   let releaseStatus: () => void = () => {};
   const gate = new Promise<void>(resolve => { releaseStatus = resolve; });
   const gatewayStatus = statusPayload({ mode: "gateway", activeProfile: true, firstParty: undefined });

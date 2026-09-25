@@ -102,7 +102,7 @@ import {
   clearCodexModelDenialEvidence,
   recordCodexModelDenialEvidence,
 } from "../../codex/model-entitlements";
-import { isCodexWsUpstreamResponse, readCodexWsStage } from "./codex-ws-wire";
+import { codexWsSocketDeathStage, isCodexWsUpstreamResponse, readCodexWsStage } from "./codex-ws-wire";
 import { linkAbortSignal } from "./core-lifetime";
 import type { CodexAuthContext } from "../../codex/auth-context";
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
@@ -112,7 +112,10 @@ import {
   fetchWithTransientRetry,
   applyUpstreamRecoveryInit,
   isNonReplayableResponse,
+  isConnectionResetError,
+  settleOperatorReplacement,
   refetchAfterProtocolSafeReset,
+  replayRefusalResponse,
   prepareSameTarget429Wait,
   sleepWithAbort,
 } from "../../lib/upstream-retry";
@@ -212,6 +215,7 @@ export async function preparePassthroughExchange(
     | "recoveryClassFor"
     | "sendBudgetExhausted"
     | "claimAmbiguousResend"
+    | "ambiguousResendSpent"
     | "reserveCredentialHop"
     | "pendingHopPermit"
     | "workflowRootId"
@@ -751,6 +755,57 @@ export async function preparePassthroughExchange(
      */
     const claimPreHeaderResend = (): boolean =>
       authorizeResendForRecovery("pre-header", "connection-reset", ambiguousResend()).allowed;
+    /**
+     * The one replacement send the ambiguous rows at the end of the recovery loop may buy: an SSE
+     * body that died before any output, and a Codex WebSocket that died under its create frame
+     * (#4191).
+     *
+     * HTTP-only for both. A replacement HTTP body must not open a fresh WebSocket exchange: the SSE
+     * row replaces an HTTP stream, which a WS create frame is not, and the WebSocket row replaces
+     * the transport that just failed.
+     */
+    const sendAmbiguousReplacement = (
+      signal: AbortSignal = upstream.signal,
+    ): Promise<Response> => fetchWithHeaderTimeout(
+      request.url,
+      applyUpstreamRecoveryInit({
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+      }, "connection-reset"),
+      signal,
+      connectMs,
+      true,
+      providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+        httpOnly: true,
+        providerName: route.providerName,
+        modelId: route.modelId,
+        dispatchOverride: oauthDispatch(request),
+        beforeDispatch: headers => {
+          if (signal.aborted) throw signal.reason;
+          if (!transportState.selectionIsCurrent(transportState.requestBindings.get(request))) {
+            throw new Error("Credential selection changed before pre-output stream recovery");
+          }
+          if (isCanonicalOpenAiForwardProvider(route.provider)) {
+            createCodexReserveDispatchGuard(
+              admissionState.authCtx,
+              options.codexAuthPolicy ?? config,
+              route.modelId,
+              options.admission,
+              options.visionDescribeTerminal === true,
+            )?.(headers);
+          }
+          // Recorded with the kind the gate derived its cause from, at the moment the
+          // send actually leaves. One authorisation, one recorded reason, one send.
+          transportState.noteRoutedAttemptSend(passthroughEstimate, "connection-reset");
+          // Charged to the SAME request counter every other send goes through. The
+          // replacement is bought here rather than by a nested retry helper, so there is
+          // one charge for one send and no per-layer counter to reconcile.
+          noteTransientSends(1);
+        },
+      }),
+      route.provider.authMode === "forward",
+    );
     /**
      * Refuse a built body that exceeds the operator's configured ceiling, before it is sent.
      *
@@ -1554,7 +1609,8 @@ export async function preparePassthroughExchange(
       if (options.abortSignal?.aborted) return transportFailureResponse(options.abortSignal.reason);
       upstreamResponse = preflight.response;
       if (preflight.kind === "failed") {
-        if (!configuredTransientSendBudgetExhausted()) {
+        // A zero-output failure does not undo an ambiguous replacement already sent.
+        if (!configuredTransientSendBudgetExhausted() && !sendBudgetState.ambiguousResendSpent) {
           const streamedOpaqueRecovery = await attemptOpaqueBlobRecovery({
             response: upstreamResponse,
             outboundBody: request.body,
@@ -1574,6 +1630,8 @@ export async function preparePassthroughExchange(
         logCtx.terminalHttpStatus = preflightLog.terminalHttpStatus;
         logCtx.terminalErrorCode = preflightLog.terminalErrorCode;
         logCtx.terminalIncompleteReason = preflightLog.terminalIncompleteReason;
+        // The projected failure must not invite another send after the replacement was spent.
+        if (sendBudgetState.ambiguousResendSpent) upstreamResponse = settleOperatorReplacement(upstreamResponse);
       }
     }
     // Console Go (opencode-zen / opencode-go) intermittently rejects a body it accepts seconds
@@ -1637,6 +1695,47 @@ export async function preparePassthroughExchange(
       }
     }
 
+    // The WebSocket row of the same table (#4191). A Codex socket that closed or failed under its
+    // create frame, before any Responses event, settled as a non-replayable 502 and every leg above
+    // let it through. Whether the turn ran upstream is as unknown as after a reset before the head,
+    // so the same grant decides, asked with the stage the exchange reached. The replacement's answer
+    // then goes round the loop like any other, and once the grant is spent nothing may send the
+    // turn a third time.
+    const socketDeathStage = codexWsSocketDeathStage(upstreamResponse);
+    if (
+      socketDeathStage
+      && !upstream.signal.aborted
+      // Asked before the gate, which claims last: a replacement the budget cannot fund must not
+      // spend the request's one grant.
+      && remainingTransientSendBudget(transientSendAttempts()) > 0
+      && authorizeResendForRecovery(socketDeathStage, "connection-reset", ambiguousResend()).allowed
+    ) {
+      try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
+      console.warn(`[upstream-retry] codex websocket died before any Responses event (${safeHostLabel(request.url)}); `
+        + "using one replacement over HTTP");
+      let replacement: Response | undefined;
+      while (!replacement) {
+        try {
+          replacement = await sendAmbiguousReplacement().then(adoptObservedResponse);
+        } catch (err) {
+          if (upstream.signal.aborted) return transportFailureResponse(err);
+          // A replacement that reset before its head is the pre-header row again: a configured
+          // second grant (and a send the budget can still fund) may buy one more send. The gate
+          // claims from the request's finite allowance, so this loop is bounded by it.
+          if (
+            isConnectionResetError(err)
+            && remainingTransientSendBudget(transientSendAttempts()) > 0
+            && claimPreHeaderResend()
+          ) continue;
+          break;
+        }
+      }
+      // The first send may already have run the turn, so a replacement that failed settles as
+      // the refusal rather than as a transport error the client would retry.
+      upstreamResponse = replacement ? settleOperatorReplacement(replacement) : replayRefusalResponse();
+      continue passthroughRecovery;
+    }
+
     // The post-header row of the same table. A native SSE body can die after the head with the
     // caller having observed nothing, which is the identical question the pre-header helper
     // answers -- and the identical grant, because both claim from this request's one allowance.
@@ -1660,48 +1759,7 @@ export async function preparePassthroughExchange(
         upstreamResponse,
         { model: logCtx.model, provider: logCtx.provider },
         (error, stage) => refetchAfterProtocolSafeReset(
-          (signal = upstream.signal) => fetchWithHeaderTimeout(
-            request.url,
-            applyUpstreamRecoveryInit({
-              method: request.method,
-              headers: request.headers,
-              body: request.body,
-            }, "connection-reset"),
-            signal,
-            connectMs,
-            true,
-            providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              // A replacement HTTP body must not open a fresh WebSocket exchange: the turn it
-              // replaces was an HTTP stream, and a WS create frame is a different send.
-              httpOnly: true,
-              providerName: route.providerName,
-              modelId: route.modelId,
-              dispatchOverride: oauthDispatch(request),
-              beforeDispatch: headers => {
-                if (signal.aborted) throw signal.reason;
-                if (!transportState.selectionIsCurrent(transportState.requestBindings.get(request))) {
-                  throw new Error("Credential selection changed before pre-output stream recovery");
-                }
-                if (isCanonicalOpenAiForwardProvider(route.provider)) {
-                  createCodexReserveDispatchGuard(
-                    admissionState.authCtx,
-                    options.codexAuthPolicy ?? config,
-                    route.modelId,
-                    options.admission,
-                    options.visionDescribeTerminal === true,
-                  )?.(headers);
-                }
-                // Recorded with the kind the gate derived its cause from, at the moment the
-                // send actually leaves. One authorisation, one recorded reason, one send.
-                transportState.noteRoutedAttemptSend(passthroughEstimate, "connection-reset");
-                // Charged to the SAME request counter every other send goes through. The
-                // replacement is bought here rather than by a nested retry helper, so there is
-                // one charge for one send and no per-layer counter to reconcile.
-                noteTransientSends(1);
-              },
-            }),
-            route.provider.authMode === "forward",
-          ).then(adoptObservedResponse),
+          (signal = upstream.signal) => sendAmbiguousReplacement(signal).then(adoptObservedResponse),
           error,
           {
             abortSignal: upstream.signal,

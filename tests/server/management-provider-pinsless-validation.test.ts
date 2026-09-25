@@ -6,7 +6,7 @@
  * ever moves downward, so a case added after it was set fails the ratchet for every
  * later pull request. The case is unchanged apart from its own temp directory.
  */
-import { describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
 import { config } from "../helpers/management-relative-send-paths";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
@@ -21,6 +21,7 @@ import type { OcxConfig } from "../../src/types";
 setDefaultTimeout(60_000);
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-management-provider-pinsless-"));
+const previousHome = process.env.OPENCODEX_HOME;
 
 const canonicalDirect = {
   adapter: "openai-responses",
@@ -34,6 +35,11 @@ function poolProviders(): OcxConfig["providers"] {
     openai: { ...canonicalDirect, codexAccountMode: "pool" },
   };
 }
+
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+});
 
 describe("provider management validation", () => {
   test("provider POST validates a pins-less candidate before live adoption", async () => {

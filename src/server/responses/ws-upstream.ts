@@ -85,10 +85,11 @@ export function shouldUseCodexWsUpstream(
   url: string,
   init?: RequestInit,
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
-  upstreamWebsocketConfigured = false,
+  upstreamWebsocketConfigured?: boolean,
 ): boolean {
   if (!bunSupportsBoundedCodexWsRelay(runtime)) return false;
   if (socks5ProxyFromEnv()) return false;
+  if (url === CODEX_RESPONSES_HTTP_URL && upstreamWebsocketConfigured === false) return false;
   // Bun's client WebSocket API delivers only fully assembled messages and has
   // no enforceable inbound payload limit. Keep arbitrary provider endpoints on
   // bounded HTTP/SSE until the client can reject fragmented text and binary

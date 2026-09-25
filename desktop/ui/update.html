@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenCodex update</title>
+    <style>
+      :root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
+      body { display: grid; min-height: 100vh; place-items: center; margin: 0; background: #f5f5f7; color: #202124; }
+      main { width: min(38rem, calc(100vw - 3rem)); box-sizing: border-box; padding: 2rem; border-radius: 1rem; background: white; box-shadow: 0 8px 30px #0001; }
+      h1 { margin-top: 0; font-size: 1.4rem; }
+      p { line-height: 1.5; }
+      #state { min-height: 1.5rem; }
+      #error { color: #b3261e; }
+      #error[hidden] { display: none; }
+      .actions { display: flex; flex-wrap: wrap; gap: .6rem; }
+      button { border: 0; border-radius: .5rem; padding: .6rem 1rem; background: #2563eb; color: white; cursor: pointer; font: inherit; }
+      button.secondary { background: #e3e3e8; color: #202124; }
+      button[disabled] { opacity: .5; cursor: default; }
+      button:focus-visible { outline: 3px solid #65a3ff; outline-offset: 2px; }
+      @media (prefers-color-scheme: dark) {
+        body { background: #1c1c1e; color: #f5f5f7; }
+        main { background: #2c2c2e; }
+        #error { color: #ff8a80; }
+        button.secondary { background: #3a3a3c; color: #f5f5f7; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>OpenCodex update</h1>
+      <p id="state" role="status" aria-live="polite">Reading update status…</p>
+      <p id="error" role="alert" hidden></p>
+      <div class="actions">
+        <button id="check" type="button">Check again</button>
+        <button id="install" type="button" disabled>Install update</button>
+        <button id="back" type="button" class="secondary">Back to dashboard</button>
+      </div>
+    </main>
+    <script nonce="__TAURI_SCRIPT_NONCE__">
+const invoke = window.__TAURI__?.core?.invoke;
+const state = document.querySelector("#state");
+const error = document.querySelector("#error");
+const check = document.querySelector("#check");
+const install = document.querySelector("#install");
+const back = document.querySelector("#back");
+const DEADLINE_MS = 5000;
+const CHECK_DEADLINE_MS = 60000;
+const INSTALL_DEADLINE_MS = 10 * 60 * 1000;
+let busy = false;
+let latest = null;
+let statusPoll = null;
+
+function bounded(work, name, deadlineMs) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(name + " did not answer within " + deadlineMs + " ms")), deadlineMs);
+    Promise.resolve(work).then(
+      value => { clearTimeout(timer); resolve(value); },
+      cause => { clearTimeout(timer); reject(cause); },
+    );
+  });
+}
+function showError(cause) {
+  error.textContent = cause instanceof Error ? cause.message : String(cause);
+  error.hidden = false;
+}
+function render(snapshot) {
+  latest = snapshot;
+  if (snapshot.installing) state.textContent = "Installing update…";
+  else if (snapshot.checking) state.textContent = "Checking for updates…";
+  else if (snapshot.available && snapshot.latestVersion) state.textContent = "Update v" + snapshot.latestVersion + " is available. Installed version: " + snapshot.currentVersion + ".";
+  else state.textContent = "OpenCodex v" + snapshot.currentVersion + " is up to date or has no pending update.";
+  check.disabled = busy || snapshot.installing;
+  install.disabled = busy || snapshot.installing || !snapshot.available;
+  if (statusPoll !== null) { clearTimeout(statusPoll); statusPoll = null; }
+  if (snapshot.checking && !snapshot.installing) {
+    statusPoll = setTimeout(() => {
+      statusPoll = null;
+      if (busy) { render(latest); return; }
+      void refresh("update_status");
+    }, 1000);
+  }
+}
+async function call(name) {
+  if (!invoke) throw new Error("Open this page from the OpenCodex desktop app.");
+  const deadlineMs = name === "update_install" ? INSTALL_DEADLINE_MS
+    : name === "update_check" ? CHECK_DEADLINE_MS : DEADLINE_MS;
+  return await bounded(invoke(name), name, deadlineMs);
+}
+async function refresh(name) {
+  if (busy) return;
+  busy = true;
+  check.disabled = true;
+  install.disabled = true;
+  error.hidden = true;
+  state.textContent = name === "update_check" ? "Checking for updates…" : "Reading update status…";
+  try { render(await call(name)); }
+  catch (cause) { showError(cause); if (latest) render(latest); }
+  finally { busy = false; if (latest) render(latest); else check.disabled = false; }
+}
+check.addEventListener("click", () => { void refresh("update_check"); });
+install.addEventListener("click", async () => {
+  if (busy || !latest?.available) return;
+  busy = true;
+  check.disabled = true;
+  install.disabled = true;
+  error.hidden = true;
+  state.textContent = "Installing update…";
+  try { render(await call("update_install")); }
+  catch (cause) { showError(cause); try { render(await call("update_status")); } catch (readError) { showError(readError); } }
+  finally { busy = false; if (latest) render(latest); else check.disabled = false; }
+});
+back.addEventListener("click", async () => {
+  back.disabled = true;
+  error.hidden = true;
+  try { await call("return_to_dashboard"); }
+  catch (cause) { showError(cause); back.disabled = false; }
+});
+if (!invoke) { state.textContent = "Open this page from the OpenCodex desktop app."; check.disabled = true; install.disabled = true; back.disabled = true; }
+else void refresh("update_status");
+    </script>
+  </body>
+</html>

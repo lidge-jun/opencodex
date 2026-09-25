@@ -83,7 +83,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | 上流の使用量、請求、レート制限表示とは別の、クライアント側の送信開始間隔調整です。プロバイダー制限は全モデルに適用され、`models` は上流の正確なモデル ID に一致し、遅延を増やす場合のみ有効です。キュー待機は応答ヘッダーのタイムアウトを消費しません。HTTP、Responses WebSocket、明示的なアダプターの `fetchResponse`/`runTurn` 送信を対象にします。 |
 | `responsesPath?` | `string` |キー認証 `openai-responses` リクエストの相対リソース パス。 `/` で始まり、スキーム、クエリ、またはフラグメントが含まれていない必要があります。 |
 | `chatCompletionsPath?` | `string` | `openai-chat` リクエストの相対リソース パス。 `responsesPath` の対となる設定で、同じ形式ルールが適用されます。1つのアップストリームが Chat Completions と Responses を異なるプレフィックスで提供する場合に必要です。モデルごとの wire override はアダプターのみを変更し `baseUrl` は変更しないため、この設定がないと有効化された Chat リクエストが Responses ベースへ送信されます。同梱例は Z.AI です。 |
-| `upstreamWebsocket?` | `boolean` | `openai-responses` リクエストで使用するアップストリーム Responses WebSocket トランスポート（既定値は無効）。アップストリームがこのプロトコルに対応している場合、ストリーミング POST は設定済みの Responses パス（既定値 `/v1/responses`）へ HTTPS の WSS で接続し、通常の処理向けに SSE へ再エンコードされます。forward プロバイダーは `{baseUrl}/responses`、キー認証プロバイダーは `responsesPath`（未設定時は従来の `/v1/responses`）を使用します。HTTP のベース URL は SSE のままとなり、Responses 以外のパスと `openai-chat` リクエストは HTTP を使用します。 |
+| `upstreamWebsocket?` | `boolean` | `openai-responses` リクエストで使用するアップストリーム Responses WebSocket トランスポート（既定値は無効）。ファーストパーティの `https://api.openai.com/v1` アップストリームでのみ有効です。カスタムプロバイダーのエンドポイントは常に制限付き HTTP/SSE を使用します。Bun はメッセージ全体を確保する前に受信 WebSocket メッセージのサイズ上限を適用できないためです。正規の ChatGPT `openai` プロバイダーでは、省略すると対象となるターンでアップストリーム WebSocket を使用し、`false` はストリーミングのターンを HTTP/SSE で送信し、`true` は拒否されます。`false` の間はネイティブのターン途中のステアリングとインジェクションを利用できません。このフィールドはクライアント側の `websockets` 設定とは独立しており、エンドポイントと認証情報のどちらも変更しません。HTTP のベース URL は SSE のままとなり、Responses 以外のパスと `openai-chat` リクエストは HTTP を使用します。 |
 | `supportsServiceTier?` | `boolean` | `service_tier` ケイパビリティの 3 状態です。`true`: fast モードが注入でき、呼び出し元の値も保持されます。`false`: フィールドは削除され、注入もされません (非対応と文書化されたアップストリームには送りません)。未設定: 未分類 — 呼び出し元の値はそのまま保持され、fast モードは注入しません。レジストリは正規 OpenAI (`true`)、DeepSeek、Volcengine Ark (`false`) を分類します。実際にティアをサポートするカスタム ゲートウェイにのみ明示的に設定してください。 |
 | `preserveResponsesReasoningContent?` | `boolean` | リプレイされる Responses reasoning アイテムの平文 reasoning コンテンツを消去せずに保持します (消去は ChatGPT バックエンドのルールです)。DeepSeek のように reasoning リプレイを受け入れるアップストリームで有効にしてください。プロキシ生成の `ocxr1` エンベロープは常に削除されます。 |
 | `disabled?` | `boolean` |プロバイダーをディスク上に保持しますが、ルーティングおよびモデル/カタログのリストからは除外します。 |
@@ -125,7 +125,8 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `noReasoningModels?` | `string[]` |推論/思考パラメーターを拒否するモデル。 |
 | `noTemperatureModels?` | `string[]` |発信者指定の`temperature`を拒否するモデル。 |
 | `noTopPModels?` | `string[]` |発信者指定の`top_p`を拒否するモデル。 |
-| `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 |
+| `noStopModels?` | `string[]` |発信者指定の`stop`を拒否するモデル。`openai-chat`アダプター、Chatパススルー、Responsesパススルーはこれらのモデルに対してこのフィールドを送りません。組み込みの`xai`プリセットは、xAIがこれを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。`grok-4.20-0309-non-reasoning`, `grok-composer-2.5-fast`は呼び出し元の`stop`をそのまま受け取ります。 |
+| `noPenaltyModels?` | `string[]` |存在/周波数ペナルティを拒否するモデル。 組み込みの`xai`プリセットは、xAIがこれらを拒否すると文書化している推論モデル(`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`, `grok-4.20-0309-reasoning`, `grok-build-0.1`)をここに登録します。非推論モデルは呼び出し元のペナルティをそのまま受け取ります。 |
 | `noStructuredOutputModels?` | `string[]` | `openai-chat` エンドポイントが `response_format` を拒否する正確なモデル ID。要求モデルが項目と完全一致する場合だけフィールドを省略し、その他の `openai-chat` モデルでは structured-output 変換を維持します。 |
 | `noJsonSchemaModels?` | `string[]` | `openai-chat` エンドポイントが `json_schema` 形式は拒否しつつ `json_object` は受け入れる正確なモデル ID。この要求はフィールドを削除せず `json_object` に降格して送るため、JSON を求めた呼び出し側は散文ではなく JSON を受け取れます。両方の一覧に載るモデルでは `noStructuredOutputModels` が優先します。`opencode go` / `opencode zen` / `opencode free` プリセットが DeepSeek 経路に既定で載せます。 |
 | `foldDeveloperRoleToSystem?` | `boolean` | `openai-chat` の宛先が `developer` ロールを受け付けるかを記録します。`foldDeveloperRoleToSystem` が未設定なら `system`、`true` なら `system`、`false` なら `developer` として送ります。未設定はこの宛先について何も記録されていないことを意味し、`true` は上流がロールを拒否する記録、`false` は受け付ける記録です。いずれの場合もメッセージは会話内の位置を保ち、変わるのはロールだけです。ロールを拒否する宛先は `400 role 'developer' is not allowed` を返してターンが始まらないため、未記録の既定は畳む側にしてあります。 |
@@ -134,11 +135,11 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `responsesSnapshotRepair?` | `boolean` | デフォルトで無効のクライアント向け修復です。SSE と JSON の Responses ライフサイクルで欠落した status、output、ツールメタデータを補完し、raw 検査と永続化は変更しません。 |
 | `retryOn429?` | `{ enabled?: boolean; attempts?: number; intervalMs?: number; maxIntervalMs?: number; respectRetryAfter?: boolean }` | API-key プロバイダーのみ(`authMode: "key"`)。オプトインの同一ターゲット 429 リトライ: `retryOn429` が無ければ無効で、オブジェクトがあれば `enabled: false` でない限り有効になります。429 時に待機(上流の `Retry-After` または固定間隔)してから、キー フェイルオーバーの前に同一キーで同一リクエストを再送します — メインのテキストターン回復ループ、Responses passthrough、画像/動画ブリッジ、web-search サイドカー、ターミナル継続要求をすべてカバーします。再送の対象はプリストリームの HTTP 429 応答のみで、カスタム `runTurn` トランスポートは HTTP リトライループの対象外です。`attempts` は最初の 429 以降の同一キー再送回数(合計送信数 = `attempts` + 1)で、メインの回復ループ・ターミナルガード継続・ブリッジ再試行で共有されるリクエスト単位の予算です。`attempts` を使い切っても同一キーでの再送が止まるだけで、通常のキー フェイルオーバーまたは最終エラー処理が利用可能なターゲットに応じて続きます — キー認証の passthrough ワイヤにはフェイルオーバーがないため、使い切った 429 はそのまま返ります。Codex 自体は 429 をリトライしないため、単一キーのプロバイダーでは唯一の防御です。デフォルト: `enabled: true`、`attempts: 3`、`intervalMs: 5000`、`maxIntervalMs: 60000`(1回の待機は `maxIntervalMs` で上限、その上限は 600000)、`respectRetryAfter: true`。 |
 | `transientRetryOn5xx?` | `{ enabled?: boolean; attempts?: number }` | キー認証の `openai-chat` および `openai-responses` プロバイダーのみ。`authMode: "forward"` のプロバイダー（ChatGPT アカウントプール）はこのオプションを読まず、既定の再試行段数を維持します。ストリーム開始前に上流から返される一時的なステータス（500、502、503、504、520、521、522）に対するオプトインの再試行です。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。最初の Responses リクエスト、ターミナルガード継続、ネイティブの `/v1/chat/completions`、および 429／アカウント回復時の再取得が対象です。`attempts` は最初の送信を含め、1 回のリクエストで許可される上流への送信総数です（1～10、デフォルトは 3）。接続リセット回復と共有するリクエスト単位の単一予算であるため、`3` を指定した場合、プロバイダーに到達する実リクエストは最大 3 回です。待機には 400 ms を基準とする固定式の指数バックオフを使用し、上限は 5 秒で、`Retry-After` に従います。レート制限を扱う `retryOn429` とは別の機能であり、ストリーム開始後の失敗は再送されません。 |
-| `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | ネイティブ `openai-responses` プロバイダー専用で、`authMode: "forward"` も含みます。呼び出し側が何も観測しないまま失敗した送信を、オプトインで置き換えます。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。レスポンスヘッダーが届く前に接続が切れた場合と、ヘッダー後に SSE 本文が制御イベントだけを運んだまま切れた場合の両方が対象です。置き換えるのは自己完結したリクエストだけで、`store: false`、完全な `input`、`previous_response_id` / `conversation` / `stream_id` がないこと、クライアントが実行するツールのみ、が条件です。`replacements` は、すべてのレッグとすべてのコンボ子リクエストを合わせて 1 つの論理リクエストが行える置き換え送信の回数です（1..2、デフォルトは 1）。レッグ単位の再試行回数でも送信予算でもないため、置き換え送信もそのレッグがすでに持つ送信許容量に収まる必要があります。すでに出力やツール呼び出しを送ったリクエストは、この値に関わらず置き換えません。元の送信がすでに開始されていた場合は置き換えた推論も課金される可能性があるため、既定では無効です。 |
+| `retryOnReset?` | `{ enabled?: boolean; replacements?: number }` | ネイティブ `openai-responses` プロバイダー専用で、`authMode: "forward"` も含みます。呼び出し側が何も観測しないまま失敗した送信を、オプトインで置き換えます。設定がなければ無効で、オブジェクトを指定すると `enabled: false` でない限り有効になります。レスポンスヘッダーが届く前に接続が切れた場合と、ヘッダー後に SSE 本文が制御イベントだけを運んだまま切れた場合の両方が対象です。canonical ChatGPT upstream WebSocket で create フレームの送信後、Responses イベントが届く前にソケットが閉じたかエラーになった場合も同じく対象で、その置き換えは HTTP で送信します。置き換えるのは自己完結したリクエストだけで、`store: false`、完全な `input`、`previous_response_id` / `conversation` / `stream_id` がないこと、クライアントが実行するツールのみ、が条件です。`replacements` は、すべてのレッグとすべてのコンボ子リクエストを合わせて 1 つの論理リクエストが行える置き換え送信の回数です（1..2、デフォルトは 1）。レッグ単位の再試行回数でも送信予算でもないため、置き換え送信もそのレッグがすでに持つ送信許容量に収まる必要があります。すでに出力やツール呼び出しを送ったリクエストは、この値に関わらず置き換えません。元の送信がすでに開始されていた場合は置き換えた推論も課金される可能性があるため、既定では無効です。 |
 | `autoToolChoiceOnlyModels?` | `string[]` | `tool_choice` が `auto` または `none` のみを受け入れるモデル。強制的な選択は格下げされます。 |
-| `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。 |
+| `preserveReasoningContentModels?` | `string[]` |チャット履歴に以前のアシスタント `reasoning_content` が必要なモデル。ダッシュボードから保存しても、保存済みのリスト（`[]` を含む）は保持されます。`PATCH /api/providers?name=<provider>` は配列、または消去するための `null` を受け付けます。 アダプター、ベース URL、または認証モードを変えて別の宛先に移す保存では保持されません（下の節を参照）。 |
 | `reasoningDetailsModels?` | `string[]` | thinking を構造化された `reasoning_details` 配列で返すモデル（`reasoning_split` 使用の MiniMax M シリーズ）。ストリーム差分は累積スナップショットとして prefix-diff され、保持された reasoning は `reasoning_content` 文字列ではなく `reasoning_details` 配列としてリプレイされます。 |
-| `requiresReasoningPlaceholderModels?` | `string[]` | `reasoning_content` を欠いた tool_call 継続を上流が拒否するモデル（DeepSeek thinking モード）。リプレイキャッシュが外れた場合に最小プレースホルダーを注入。未設定時は `preserveReasoningContentModels` を引き継ぎ、`[]` で明示的に無効化。 |
+| `requiresReasoningPlaceholderModels?` | `string[]` | `reasoning_content` を欠いた tool_call 継続を上流が拒否するモデル（DeepSeek thinking モード）。リプレイキャッシュが外れた場合に最小プレースホルダーを注入。未設定時は `preserveReasoningContentModels` を引き継ぎ、`[]` で明示的に無効化。ダッシュボードから保存しても、保存済みのリスト（`[]` を含む）は保持されます。`PATCH /api/providers?name=<provider>` は配列、または消去するための `null` を受け付けます。 アダプター、ベース URL、または認証モードを変えて別の宛先に移す保存では保持されません（下の節を参照）。 |
 | `thinkingToggleModels?` | `string[]` |エフォート ラダーではなく `thinking.enabled` を使用してモデルをチャットします。 |
 | `thinkingBudgetModels?` | `string[]` |整数 `thinking_budget` を使用したチャット モデル。労力は予算の一部にマッピングされます。 |
 | `noVisionModels?` | `string[]` |ビジョン サイドカーを通じて送信されるテキストのみのモデル。マッチングでは、Ollama `:size` タグが許容されます。 |
@@ -156,6 +157,20 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 プロバイダーの登録・置換（`POST /api/providers`）では、メモリやファイルの設定を変更する前に `responsesPath` と `chatCompletionsPath` を検証します。`PATCH /api/providers?name=<provider>` はリクエスト本文を保存済みのプロバイダーにマージします。`disabled` 以外のフィールドを変更する更新（`requestPacing` のみの更新を除く）では、保存前にマージ後のプロバイダーのパスを同じ方法で検証し、保持されているパスが無効な場合は `400` を返して設定を変更しません。設定ファイルの読み込みにも同じ経路の規則が適用されます。
 
 API キープロバイダーは、リテラルキーまたは環境参照を保持する場合があります。 OAuth プロバイダーは、`ocx login` によって設定された資格情報ストアを使用します。サブスクリプションに基づくクロード コードの起動動作は、[`claudeCode.authMode`](/ja/reference/configuration/server/#claude-code-claudecode) で構成されます。
+
+### プロバイダーの保存で保持されるもの
+
+既存のプロバイダー名で `POST /api/providers` を送ると、保存済みの行はリクエストから組み立てた行で置き換えられます。ダッシュボードの追加・編集フォームはすべてのフィールドを送れないため、リクエストが省略した保存済みフィールドの一部は保存時に引き継がれます。そのうち次の 5 つは、特定のアップストリームの挙動を記録するものです：`preserveReasoningContentModels`, `requiresReasoningPlaceholderModels`, `foldDeveloperRoleToSystem`, `reasoningWireFormat`, `omitReasoningEffortWithToolsModels`。
+
+| 保存 | 5 つの設定 | 保存済みの `apiKeyPool` |
+| --- | --- | --- |
+| 同じ宛先、フィールド省略 | 保存済みの値を保持（明示的な `[]` や `false` を含む） | 保持 |
+| 新しい宛先、フィールド省略 | 保持しない。新しい宛先のレジストリ既定値が適用されることがあります | 保持しない |
+| リクエストでフィールドを送信 | リクエストの値 | リクエストの値 |
+
+宛先とは、アダプター、ベース URL（スキームとホストは大文字小文字を区別せず、末尾のスラッシュは無視）、そしてリクエストが指定した場合は認証モードです。別の宛先へ移すと、以前のアップストリームを表す 5 つの設定と、そのために発行されたキーのプールは引き継がれません。保存時に古い行の残りを新しい行へマージすることはありません。
+
+`PATCH /api/providers?name=<provider>` は指定したフィールドだけを変更し、宛先に関係なくほかの保存済みフィールドはすべて保持します。5 つの設定をすべて受け付け、`null` で消去します。2 つの推論リストでは、空の配列は削除されず明示的なオプトアウトとして保存されます。
 
 ## プロバイダーによるアウトバウンドの安全性診断
 

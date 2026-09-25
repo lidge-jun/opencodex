@@ -610,7 +610,7 @@ describe("Cursor live transport context estimate wiring (#373)", () => {
     const capture = await captureOpen({ ...request, modelId });
     expect(capture.encoded).toBeInstanceOf(Uint8Array);
     const action = capture.run?.action?.action;
-    if (modelId === "composer-2.5") {
+    if (modelId !== "auto") {
       if (action?.case !== "userMessageAction") throw new Error("expected Composer continuation");
       expect(action.value.userMessage?.text).toBe(CURSOR_EXTERNAL_TOOL_CONTINUATION_TEXT);
       expect(action.value.userMessage?.selectedContext?.selectedImages).toEqual([]);

@@ -32,6 +32,7 @@ import Combos from "./Combos";
 import RoutingProfiles from "./RoutingProfiles";
 import CompatibilityMatrix from "./CompatibilityMatrix";
 import { ModelsTabStrip } from "./models-tab-strip";
+import { ProviderFastRow } from "./models-fast-row";
 import {
   modelsPanelDomId,
   modelsTabDomId,
@@ -1677,6 +1678,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                 </div>
               </div>
             )}
+            {!nativeProviderGroup && <ProviderFastRow summary={providers.find(p => p.name === provider)} apiBase={apiBase}
+              onSaved={(saved, message) => { publishFeedback(saved, message); if (saved) void load(true); }} />}
             {rows.length === 0 && (
               <EmptyProviderHint liveModels={liveModels} discovery={discovery} showFailureBadge={false} />
             )}

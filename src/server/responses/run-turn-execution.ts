@@ -18,9 +18,9 @@ import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { providerFetch } from "./fetch-helpers";
 import { normalizeLogConversationId } from "../request-log-conversation";
-import type { AdapterEvent, OcxProviderContinuationState } from "../../types";
+import { normalizeDeclaredToolName, type AdapterEvent, type OcxProviderContinuationState } from "../../types";
 import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
-import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { SendBudgetExhaustedError, markResponseNonReplayable } from "../../lib/upstream-retry";
 import {
   GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   hasEligibleGenericOAuthFailoverTarget,
@@ -39,6 +39,7 @@ import {
 import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
+import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesRunTurn(
@@ -366,6 +367,20 @@ export async function executeResponsesRunTurn(
     };
 
     const { toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames } = toolBridgeMaps;
+    const enforceDeclaredToolNames = inboundWire !== "chat" && inboundWire !== "anthropic";
+    const classifyUndeclaredFirstTool = (
+      event: AdapterEvent,
+    ): Extract<AdapterEvent, { type: "error" }> | undefined => {
+      if (!enforceDeclaredToolNames || event.type !== "tool_call_start") return undefined;
+      const effectiveName = normalizeDeclaredToolName(event.name, declaredToolNames);
+      if (declaredToolNames.has(effectiveName)) return undefined;
+      return {
+        type: "error",
+        status: 502,
+        errorType: "upstream_error",
+        message: undeclaredToolCallMessage(effectiveName),
+      };
+    };
     if (parsed.stream) {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
@@ -375,12 +390,16 @@ export async function executeResponsesRunTurn(
         eventSource = await preflightRunTurnFailover(eventSource);
       }
       if (options.comboAttempt) {
-        const preflight = await preflightAdapterEvents(eventSource);
+        const preflight = await preflightAdapterEvents(eventSource, classifyUndeclaredFirstTool);
         if (preflight.error || preflight.empty) {
           runTurnAbort.abort();
           queue.close();
           const message = preflight.error?.message ?? "Adapter ended before producing a response";
-          return formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
+          // combo must not send this turn to another target: the failure stays with this child.
+          if (preflight.replayUnsafe) markResponseNonReplayable(failure);
+          return failure;
         }
         eventSource = preflight.stream;
       }
@@ -412,7 +431,7 @@ export async function executeResponsesRunTurn(
           stallTimeoutSec: config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           declaredToolNames,
-          enforceDeclaredToolNames: inboundWire !== "chat" && inboundWire !== "anthropic",
+          enforceDeclaredToolNames,
           toolParameterSchemas,
           ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
           ...(routedCompaction ? { compaction: true } : {}),
@@ -468,12 +487,24 @@ export async function executeResponsesRunTurn(
       events = runTurnEvents;
     }
     if (options.comboAttempt) {
-      const firstMeaningful = events.find(event => event.type !== "heartbeat");
-      if (!firstMeaningful || firstMeaningful.type === "error") {
-        const message = firstMeaningful?.type === "error"
+      const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
+      const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
+      // Same boundary as the streaming preflight: a replay-unsafe heartbeat means the adapter
+      // already ran a local side effect, so an undeclared tool call after it keeps the bridge's
+      // fail-closed refusal instead of becoming a hop that sends the turn to another target.
+      const replayUnsafe = events
+        .slice(0, firstMeaningfulIndex === -1 ? events.length : firstMeaningfulIndex)
+        .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
+      const classifiedError = firstMeaningful && !replayUnsafe
+        ? classifyUndeclaredFirstTool(firstMeaningful)
+        : undefined;
+      if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
+        const message = classifiedError?.message ?? (firstMeaningful?.type === "error"
           ? firstMeaningful.message
-          : "Adapter ended before producing a response";
-        return formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          : "Adapter ended before producing a response");
+        const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
+        if (replayUnsafe) markResponseNonReplayable(failure);
+        return failure;
       }
     }
     let providerState: OcxProviderContinuationState | undefined;
@@ -483,7 +514,7 @@ export async function executeResponsesRunTurn(
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       toolNsMap,
       declaredToolNames,
-      enforceDeclaredToolNames: inboundWire !== "chat" && inboundWire !== "anthropic",
+      enforceDeclaredToolNames,
       toolParameterSchemas,
       freeformToolNames,
       toolSearchToolNames,

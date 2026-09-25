@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { formatErrorResponse } from "../../src/bridge";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
-import { fetchWithTransientRetry, isNonReplayableResponse } from "../../src/lib/upstream-retry";
+import { fetchWithTransientRetry, isNonReplayableResponse, markResponseNonReplayable } from "../../src/lib/upstream-retry";
 import { shouldRetryCodexPoolAccountQuota } from "../../src/server/responses/core-codex-account";
 import type { OcxConfig } from "../../src/types";
 import { beginRequestAttempt, type RequestLogContext } from "../../src/server/request-log";
@@ -52,6 +52,27 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  test("a marked context overflow never tries another policy route", async () => {
+    const failure = Response.json({ error: {
+      type: "invalid_request_error", code: "context_length_exceeded", message: "Context window exceeded",
+    } }, { status: 400 });
+    markResponseNonReplayable(failure);
+    let coreCalls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, {} as RequestLogContext, {}, {
+      runCore: async (req, _config, context, options) => {
+        coreCalls += 1;
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = policyTrace();
+        return coreCalls === 1 ? failure : Response.json({ status: "completed" });
+      },
+    });
+
+    expect(coreCalls).toBe(1);
+    expect(response).toBe(failure);
+    expect(response.status).toBe(400);
+    expect(isNonReplayableResponse(response)).toBe(true);
+  });
+
   test.each([false, true])("reset refusal stays terminal across policy and account recovery (replacement=%s)", async replacement => {
     let sends = 0;
     let coreCalls = 0;

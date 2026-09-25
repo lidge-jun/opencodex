@@ -441,7 +441,7 @@ export function pickUnboundStrategyAccount(
     }
     picked = pickRoundRobinAccount(poolKey, eligible, limit);
     if (!picked) return null;
-    if (commitSharedActive) {
+    if (commitSharedActive && sharesActiveSelection(picked, selectionOptions)) {
       if (!isIndependentCodexQuotaScope(quotaScope)
         && !manualPreferenceBlocks(codexPoolKeyForScope(quotaScope), picked)) {
         rememberActiveCodexAccount(config, picked);
@@ -457,7 +457,7 @@ export function pickUnboundStrategyAccount(
       ? pickResetFirstCodexAccount(config, listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions), now, selectionOptions)
       : pickFillFirstCodexAccount(config, now, quotaScope, selectionOptions);
     if (!picked) return null;
-    if (commitSharedActive) {
+    if (commitSharedActive && sharesActiveSelection(picked, selectionOptions)) {
       if (!isIndependentCodexQuotaScope(quotaScope)
         && !manualPreferenceBlocks(codexPoolKeyForScope(quotaScope), picked)) {
         rememberActiveCodexAccount(config, picked);
@@ -476,13 +476,21 @@ export function getPoolAccountPlan(config: OcxConfig, accountId: string): string
     .find(account => isSelectableCodexPoolAccount(account) && account.id === accountId)?.plan;
 }
 
-/** Selection-only main routing must not lazily read the fenced native credential for its plan. */
+/**
+ * Selection-only main routing must not lazily read the fenced native credential for its plan, and
+ * neither may a request whose main candidacy comes from its own bearer (#5019): that request is
+ * forbidden to read the physical main credential, so main is ranked without a plan.
+ */
 export function getPoolAccountPlanForSelection(
   config: OcxConfig,
   accountId: string,
   selectionOptions?: CodexAccountUsabilityOptions,
 ): string | undefined {
-  if (accountId === MAIN_CODEX_ACCOUNT_ID && selectionOptions?.nativeMainSelectionOnly === true) {
+  if (
+    accountId === MAIN_CODEX_ACCOUNT_ID
+    && (selectionOptions?.nativeMainSelectionOnly === true
+      || selectionOptions?.requestOwnedMainCredential === true)
+  ) {
     return undefined;
   }
   return getPoolAccountPlan(config, accountId);
@@ -504,6 +512,18 @@ export function sharedStateSelectionOptions(
       ? { isMainAccountTokenLive: selectionOptions.isMainAccountTokenLive }
       : {}),
   };
+}
+
+/**
+ * A main that is live only through this request's own credential serves this request alone.
+ * Recording it as the shared active account would route later requests through a credential
+ * they do not carry (see CodexAccountUsabilityOptions.requestOwnedMainCredential).
+ */
+export function sharesActiveSelection(
+  accountId: string,
+  selectionOptions?: CodexAccountUsabilityOptions,
+): boolean {
+  return !(accountId === MAIN_CODEX_ACCOUNT_ID && selectionOptions?.requestOwnedMainCredential === true);
 }
 
 export function pickLowerUsageAccount(
@@ -736,7 +756,8 @@ export function applyQuotaAutoSwitch(
   if (activeUsage < threshold) return active;
   const best = pickLowerUsageAccount(config, active, activeUsage, now, quotaScope, selectionOptions);
   if (best !== active) {
-    if (commitSharedSelection && !isIndependentCodexQuotaScope(quotaScope)) {
+    if (commitSharedSelection && !isIndependentCodexQuotaScope(quotaScope)
+      && sharesActiveSelection(best, selectionOptions)) {
       setActiveCodexAccount(config, best);
     }
     return best;
@@ -808,7 +829,8 @@ export function applyFailureFailover(
     // the moment of the failure; the streak outlives the soft avoid, so a later
     // scoped resolve reaches here with the streak still tripped and would otherwise
     // move the shared cursor after all.
-    if (commitSharedSelection && !isIndependentCodexQuotaScope(quotaScope)) {
+    if (commitSharedSelection && !isIndependentCodexQuotaScope(quotaScope)
+      && sharesActiveSelection(best, selectionOptions)) {
       promoteActiveCodexAccount(config, best);
     }
     return best;

@@ -274,10 +274,10 @@ This stops partial weekly/Spark or credits-only refreshes from renewing obsolete
 5h rows through the cache-wide `updatedAt` timestamp. Plan labels do not suppress real windows.
 
 The separately retained main-policy snapshot preserves omitted blocking short evidence even after
-its reset clock passes. Credits-only, weekly-only, and metadata-only updates cannot remove an
+its reset clock passes. Credits-only, partial weekly-only, and metadata-only updates cannot remove an
 existing blocking short usage reading or release its hard lock; a fresh short reading can replace
-it. Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking
-weekly reading.
+it. A validated long-primary WHAM snapshot can also retire the short tuple as described below.
+Expired non-blocking short evidence is dropped, so it cannot take priority over a fresh blocking weekly reading.
 
 The Codex writer explicitly asks `src/quota/reset-observer.ts` to retain an absent short window
 in `src/quota/reset-seen-store.ts`, with its original observation time. Detection compares only
@@ -288,18 +288,51 @@ Regression coverage lives in `tests/codex-integration/codex-quota-parser-parity.
 `tests/codex-integration/main-account-hard-lock-policy.test.ts`,
 `tests/usage/quota-reset-observation.test.ts`, and `tests/usage/quota-reset-seen-store.test.ts`.
 
-`codexMainAccountHardLock` is a separate opt-in local admission policy, off by default.
-It blocks newly admitted identity-matched main-account requests at 99% of the 5h/short window
-when present, otherwise the weekly window (monthly for monthly-only accounts). It does not take
-the maximum across those windows. Pool alternatives remain eligible; explicit main selection and stored Direct
-substitution do not override it. It neither pauses the account nor clears upstream cooldown/reauth
-state, and management quota refresh remains available. Only a fresh valid reading below 99%, including
-0%, releases a measured block; passing a reset timestamp alone does not. While blocked, the existing
-once-per-minute background sweep refreshes owned main usage, with bounded/coalesced reads and no
-inference or reset-credit consumption. Failed, missing, non-finite or out-of-range readings do not
-release the block. Policy validation precedes legacy clamping. Supplementary monthly data cannot
-become the fallback governing window without a monthly-only plan or explicit primary-monthly evidence.
-Previously unobserved usage is unknown, not fabricated headroom.
+`codexMainAccountHardLock` is a local admission policy that is **on by default** since #5694, at
+`MAIN_ACCOUNT_HARD_LOCK_PERCENT` = 98% of the 5h/short window when present, otherwise the weekly
+window (monthly for monthly-only accounts). It does not take the maximum across those windows.
+It blocks newly admitted identity-matched main-account requests. Pool alternatives remain eligible;
+explicit main selection and stored Direct substitution do not override it. It neither pauses the
+account nor clears upstream cooldown/reauth state, and management quota refresh remains available.
+Only a fresh valid reading below 98%, including 0%, releases a measured block; passing a reset
+timestamp alone does not. While blocked, the existing once-per-minute background sweep refreshes
+owned main usage, with bounded/coalesced reads and no inference or reset-credit consumption. Failed,
+missing, non-finite or out-of-range readings do not release the block. Policy validation precedes
+legacy clamping. Supplementary monthly data cannot become the fallback governing window without a
+monthly-only plan or explicit primary-monthly evidence. Previously unobserved usage is unknown, not
+fabricated headroom.
+
+`isMainAccountHardLockEnabled` is the single resolver: an absent key and `true` both enable the
+policy, and only an explicit `false` opts out. The settings PUT stores that `false` rather than
+deleting the key, and writing `true` deletes it, so the stored shape cannot disagree with the
+projection the dashboard renders. Two consequences are deliberate: an opt-out written before #5694
+deleted the key and therefore now reads as on, and `src/config/schema/config-schema.ts` degrades a
+malformed value to `undefined`, which is also on, so a hand-edit typo cannot silently disable the
+policy.
+
+The trade-off is admission, not accounting. The main account's Luna Reserve needs an exhausted
+ordinary window to activate, so while the lock is blocking Reserve cannot engage; an operator who
+wants Reserve turns the setting off rather than deleting the key. This is not a reservation of the
+last 2%: already-admitted, parallel, unmatched-keyring, or direct upstream traffic can still reach
+exhaustion. Settings and the main-account DTO report enabled state separately from the current
+`off`, `unknown`, `ready`, or `blocked` status. Status semantics stay in
+`tests/codex-integration/main-account-hard-lock-policy.test.ts`; the default-on resolver, the 98%
+boundary, the admission consequence, and the settings opt-out round trip are covered by the
+hard-lock tests registered in `scripts/test-layout/layout.json`, including
+`tests/config/settings-main-account-hard-lock.test.ts`.
+
+A single fresh valid WHAM response with an explicitly long primary window can replace an obsolete
+short-window tuple when secondary and tertiary windows are explicitly null or also explicitly long with a valid usage reading.
+Long means **at least 24 hours**, matching the parser's short/long discriminator; a one-day primary
+qualifies, not only a seven-day or monthly window. The policy trusts that one reported topology;
+it does not require repeated observations or independently confirm upstream window completeness.
+Omitted secondary/tertiary fields, a long auxiliary window without a usage reading, an unknown primary duration, partial headers, or invalid usage cannot prove that the
+short window disappeared. Replacement proof belongs only to that observation and is never persisted;
+the resulting weekly/monthly window still blocks at 98%. This prevents old short-window exhaustion
+from surviving indefinitely on a now weekly/monthly account. Coverage lives in
+`tests/codex-integration/main-quota-evidence-validation.test.ts`,
+`tests/codex-integration/main-quota-provenance.test.ts`, and
+`tests/codex-integration/main-account-hard-lock-recovery.test.ts`.
 
 The policy reads a separately retained identity-tagged quota snapshot, so the legacy rotation
 cache's six-hour expiry does not silently release a known block. A confirmed account transition
@@ -308,22 +341,18 @@ workspace already observed under native ownership; an unrelated or unmatched key
 is not attributed to stored main and introduces no physical-main read. Credential equality tags
 remain process-local and never enter disk, logs, or management DTOs.
 
-When protection is enabled, owned startup rebuilds this binding from its pinned auth path under
-the native owner and exclusive claim, after journal recovery and stage cleanup, before publishing
-ready. Caller-owned Direct, exact-main, fallback, and main-pin admission stays temporarily fenced
-during that initialization; stored Pool alternatives remain eligible. Foreign/unknown service-home
-paths neither initialize the binding nor trigger an ownership reprobe from caller-owned admission.
-A new listener with protection enabled rearms the same guarded path on an existing ready lifecycle,
-including when the physical credential was replaced after the earlier listener started.
-Failed initialization creates no new binding. A previously verified same-process binding and its
-safety state remain until a valid replacement observation or confirmed account transition; malformed
-or conflicting input alone is not replacement evidence.
-
-This is not a reservation of the last 1%: already-admitted, parallel, unmatched-keyring, or direct
-upstream traffic can still reach exhaustion. While blocked, main cannot use Luna reserve either.
-Keeping ordinary usage below exhaustion may prevent Reserve activation; the policy never changes
-OpenAI's Reserve grants or `ordinary_usage_allowed` response. Settings and the main-account DTO
-report enabled state separately from current `off`, `unknown`, `ready`, or `blocked` status.
+Owned startup rebuilds this binding from its pinned auth path under the native owner and exclusive
+claim, after journal recovery and stage cleanup, before publishing ready. That work now runs for
+every owned startup instead of only for an explicit opt-in, because the policy is on by default.
+Caller-owned Direct, exact-main, fallback, and main-pin admission stays temporarily fenced during
+that initialization; stored Pool alternatives remain eligible. Foreign/unknown service-home paths
+neither initialize the binding nor trigger an ownership reprobe from caller-owned admission. A new
+listener, and a completed manual recovery, rearms the same guarded path on an existing ready
+lifecycle, including when the physical credential was replaced after the earlier listener started.
+Failed initialization creates no new binding and does not withhold readiness: an absent, malformed,
+or identity-conflicting pinned credential leaves the gate ready with no policy binding. A previously
+verified same-process binding and its safety state remain until a valid replacement observation or
+confirmed account transition; malformed or conflicting input alone is not replacement evidence.
 
 `codexAccountPriorities` is a persisted Pool *ordering* boundary and never an eligibility one. It maps
 an account id to an integer from -100 to 100, higher used earlier, with absence meaning 0. Selection
@@ -392,6 +421,25 @@ ordinary added-account binding and shared selection beyond the proactive-switch 
 exhaustion; pause, cooldown, reauthentication, quota refusal, and failover evidence still retire shared
 state normally. A paused or quota-drained main skips the request-owned credential exception and follows
 the ordinary Pool promotion path.
+
+Without a pin, that same bearer makes main an ordinary candidate rather than a last-resort fallback.
+A forwardable request-owned bearer IS main's live credential for that request — it is what would be
+sent if selection named main — so `requestOwnedMainCredentialIsLive` answers the pool-liveness
+question yes, and main is compared against the stored accounts on the operator's own usage, priority
+and reset ordering. Selecting main then serves it from the caller's credential without claiming,
+reading, reconciling or priming the stored profile, and without owning affinity or health state.
+A main that wins only through that bearer is also never recorded as the shared active account: the
+request resolves to main, while the persisted and runtime shared active account remain unchanged.
+Answering that question with the pin predicate instead scored main `main_credential_unavailable` on
+every unpinned request, so a pool with one stored sibling degraded to "stored account until it cannot
+serve, then main" whatever the usage numbers, the strategy or `codexAccountPriorities` said (#5019).
+
+Two things stay out of it. An account-gated model is still excluded, because main's roster is
+discovered from the stored credential this request may not read, so candidacy alone cannot produce a
+gated-model grant. Retained startup recovery and a draining profile still make main ineligible, since
+those fence the identity rather than the credential. Request preview answers this from the same shared
+expression: a preview that scored main differently would hand subagent fallback a different account
+than the one that serves, which is the divergence #4850 closed.
 
 > Decision record: [ADR-0086](../decisions/ADR-0086-public-provider-contract.md)
 

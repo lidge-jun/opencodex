@@ -22,6 +22,7 @@ import { startServer } from "../../src/server";
 import { MAX_HUB_STATE_BYTES, parseHubStateBody } from "../../src/remote/hub-state";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SUBAGENT_MODELS_VERSION } from "../../src/config/subagent-models";
 
 const DATA_KEY = "ocx_data_hubstatereader";
 // Deliberately NOT an `sk-…` shape: the privacy scan refuses one in a tracked file, and the
@@ -56,7 +57,7 @@ function hubConfig(overrides: Partial<OcxConfig> = {}): OcxConfig {
     subagentModels: ["xai/grok-4.6", "gpt-5.6-sol"],
     // Pinned so the one-time roster migration does not prepend the native default and make the
     // roster assertion below about migration rather than about what the hub reports.
-    subagentModelsVersion: 1,
+    subagentModelsVersion: SUBAGENT_MODELS_VERSION,
     apiKeys: [{ id: "client-one", name: "laptop", key: DATA_KEY, createdAt: "2026-09-01T00:00:00.000Z" }],
     ...overrides,
   } as OcxConfig;

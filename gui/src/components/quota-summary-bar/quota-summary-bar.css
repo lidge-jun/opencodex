@@ -1,0 +1,242 @@
+.quota-summary-bar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  padding: 4px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  font-size: var(--text-label);
+}
+
+.quota-summary-list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.quota-summary-item {
+  position: relative;
+}
+
+.quota-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.quota-summary-chip:hover,
+.quota-summary-chip[aria-expanded="true"] {
+  border-color: var(--border);
+}
+
+.quota-summary-chip:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
+}
+
+.quota-summary-name {
+  color: var(--muted);
+}
+
+.quota-summary-pct {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.quota-summary-flag {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: var(--bg);
+  font-size: var(--text-micro);
+  font-weight: 700;
+}
+
+.quota-summary-item--warn .quota-summary-chip {
+  background: var(--amber-soft);
+}
+
+.quota-summary-item--warn .quota-summary-pct {
+  color: var(--amber);
+}
+
+.quota-summary-item--warn .quota-summary-flag {
+  background: var(--amber);
+}
+
+.quota-summary-item--critical .quota-summary-chip {
+  border-color: var(--red);
+  background: var(--red-soft);
+}
+
+.quota-summary-item--critical .quota-summary-pct {
+  color: var(--red);
+}
+
+.quota-summary-item--critical .quota-summary-flag {
+  background: var(--red);
+}
+
+.quota-summary-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: var(--z-popover);
+  min-width: 260px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+
+.quota-summary-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.quota-summary-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: var(--text-caption);
+}
+
+.quota-summary-badge--warn {
+  color: var(--amber);
+  background: var(--amber-soft);
+}
+
+.quota-summary-badge--critical {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.quota-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.quota-summary-table th,
+.quota-summary-table td {
+  padding: 3px 0;
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.quota-summary-table td.quota-summary-row-pct {
+  padding: 3px 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.quota-summary-row-reset {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/*
+  Window labels are provider-named and arrive verbatim, so they can be longer than
+  the popover is wide. `nowrap` on the label cell pushed the percent and reset cells
+  out of a narrow mobile popover; let the label wrap and keep the numbers intact, so
+  the row stays readable instead of losing its figures off the right edge.
+*/
+.quota-summary-table th[scope="row"] {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.quota-summary-row--warn .quota-summary-row-pct {
+  color: var(--amber);
+}
+
+.quota-summary-row--critical .quota-summary-row-pct {
+  color: var(--red);
+}
+
+.quota-summary-popover-foot {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: var(--text-caption);
+}
+
+.quota-summary-updated {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-size: var(--text-caption);
+  white-space: nowrap;
+}
+
+.quota-summary-updated--stale {
+  color: var(--amber);
+}
+
+/*
+  The combos workspace is a fixed 100dvh shell. With the bar above it, let the shell take
+  the remaining height instead of pushing the page 1 bar-height past the viewport.
+*/
+.main:has(> .quota-summary-bar):has(> .main-inner--combos .combos-workspace-shell) {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+
+.main:has(> .quota-summary-bar) > .main-inner.main-inner--combos:has(.combos-workspace-shell) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
+/* The mobile top bar is already sticky at top: 0; scroll the summary with the page there. */
+@media (max-width: 760px) {
+  .quota-summary-bar {
+    position: static;
+    padding: 4px 10px;
+  }
+
+  .quota-summary-popover {
+    position: fixed;
+    top: auto;
+    left: 8px;
+    right: 8px;
+    min-width: 0;
+    margin-top: 4px;
+  }
+
+  /*
+    The mobile app grid already reserves an `auto` row for `.mobile-topbar` above a
+    `1fr` main row (see the narrow-screen block in styles.css). A `100dvh` main row
+    therefore measures a full viewport *below* the bar: the document becomes bar
+    height + viewport, the page scrolls by exactly the bar, and the combos shell is
+    clipped at the fold. Fill the row the grid reserved, mirroring how
+    `.main-inner--combos` itself drops to `height: 100%` on mobile.
+  */
+  .main:has(> .quota-summary-bar):has(> .main-inner--combos .combos-workspace-shell) {
+    height: 100%;
+    min-height: 0;
+  }
+}

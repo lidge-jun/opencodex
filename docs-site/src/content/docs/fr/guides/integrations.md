@@ -134,6 +134,8 @@ Kimi Code, gjc, MiniMax Code et Raycast — documents YAML, JSON5 et TOML rééc
 d'opencodex ont été modifiées, le commutateur se verrouille et la désactivation est refusée plutôt que de
 deviner quelles modifications vous appartiennent.
 
+Exception pour Hermes : l'ajout de `session_affinity_header: session-id` seul dans un bloc déjà géré peut être adopté via **Apply** ; toute autre modification d'un champ géré reste un conflit. Jusqu'à cette application, l'actualisation automatique de la liste des modèles est également suspendue. Le réglage concerne tous les modèles du provider et nécessite une version de Hermes qui le prend en charge ; il ne garantit aucun taux de succès du cache. Voir le [guide de mise à niveau en anglais](/guides/integrations/#hermes-session-affinity).
+
 ## Prévisualiser et confirmer les modifications
 
 Appliquer, Remplacer, Désactiver et Restaurer commencent désormais par un aperçu. La boîte de dialogue

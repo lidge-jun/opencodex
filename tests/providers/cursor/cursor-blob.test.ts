@@ -941,7 +941,7 @@ describe("Cursor blob handshake", () => {
 
   test("keeps ResumeAction for native-model tool-result continuations", () => {
     const bytes = encodeCursorRunRequest({
-      modelId: "composer-2.5-fast",
+      modelId: "composer-1",
       conversationId: "c1",
       system: ["You are helpful."],
       messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: read_file\nis_error: false\noutput:\ncontents" }],
@@ -949,7 +949,7 @@ describe("Cursor blob handshake", () => {
         { role: "user", content: "read a file", timestamp: 1 },
         {
           role: "assistant",
-          model: "cursor/composer-2.5-fast",
+          model: "cursor/composer-1",
           timestamp: 2,
           content: [{ type: "toolCall", id: "call_1", name: "read_file", arguments: { path: "a.txt" } }],
         },

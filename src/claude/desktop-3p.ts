@@ -146,7 +146,7 @@ export function legacyDesktop3pAlias(provider: string, modelId: string): string 
   return `claude-opus-4-${deriveDesktop3pCode(`${provider}/${modelId}`)}`;
 }
 
-function displayModelId(modelId: string): string {
+export function displayModelId(modelId: string): string {
   return modelId
     // Capability markers like [1m] are not name text: strip the brackets so the label
     // reads "K3 1M", never "K3[1m]".

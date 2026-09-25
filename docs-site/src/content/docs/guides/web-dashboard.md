@@ -76,6 +76,22 @@ one column and model/effort controls share another. On narrower screens, control
 labels in the same reading order. Long version labels are shortened visually; hover the version
 badge or the version value to read the full value.
 
+### Quota summary bar
+
+A one-line summary at the top of every page except the Startup page shows each provider's current
+quota usage, for example `OpenAI 31% | Claude 54% | xAI 12% | Google 8%`. It reads the same provider
+quota reports as the Providers workspace (`GET /api/provider-quotas`, every 60 seconds while the tab
+is visible) and never forces an upstream refresh.
+
+- Each chip shows the preferred reported window: weekly first, then monthly, then 5-hour, then a
+  provider-named window or prepaid credits.
+- A chip turns amber at 70% used and red at 90% used.
+- Hover or click a chip to see every reported window with its reset time and the time the reading
+  was taken. Press Escape or click elsewhere to close a pinned chip.
+- Providers that report no quota window are left out. The bar is hidden when no provider reports one.
+- The right edge shows when the dashboard last read the reports. It turns amber when the latest
+  read failed and the previous reading is still shown.
+
 ## What you can do
 
 | Area | What it does |
@@ -83,7 +99,7 @@ badge or the version value to read the full value.
 | **Dashboard summary** | Multi-agent mode, online state, version, uptime, provider count, 30-day token total, active providers, and available native/routed models. |
 | **Sub-agent delegation** | Choose a native or routed model and optional reasoning effort shared by OpenCodex delegation guidance and the separate native-default opt-in. This is not a proxy-side per-spawn router; see below. |
 | **Sidecars** | Choose the web-search model and effort plus the vision-description model. Changes apply on the next request. |
-| **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. |
+| **Maintenance** | Resync the Codex model catalog, inspect project-local config bypass warnings, check the latest or preview release, and run an update with optional proxy restart. In the desktop shell, its update entry opens the native app update page instead of running the package updater. |
 | **Startup safety** | Show whether injected Codex routing survives a restart, with separate service and launcher-shim health plus exact repair commands. |
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |

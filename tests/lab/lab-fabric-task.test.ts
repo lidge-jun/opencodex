@@ -112,6 +112,7 @@ const FAST_FABRIC_ISOLATION = Object.freeze({
 });
 
 const HOMES: string[] = [];
+const previousHome = process.env.OPENCODEX_HOME;
 
 function tempHome(): string {
   const dir = join(tmpdir(), `ocx-cl07-${process.pid}-${Math.random().toString(16).slice(2)}`);
@@ -314,7 +315,8 @@ afterEach(() => {
       /* ignore */
     }
   }
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
 });
 
 function routeSubject(overrides: Partial<RouteSubjectV1> = {}): RouteSubjectV1 {

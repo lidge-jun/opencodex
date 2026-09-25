@@ -167,8 +167,8 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `GET, POST /api/windows-tray` | 读取 Windows 托盘状态，或安装、启动、停止、卸载它 | 400 不支持的平台/动作；500 操作失败 |
 | `GET /api/diagnostics/project-config` | 读取缓存的项目配置警告 | — |
 | `POST /api/sync` | 将当前模型目录同步到 Codex | 500 同步失败 |
-| `GET /api/update/check` | 检查 `latest` 或 `preview` 更新通道 | 400 无效标签 |
-| `POST /api/update/run` | 启动更新任务，可选随后重启 | 400 无效请求体；任务特定的冲突/错误状态 |
+| `GET /api/update/check` | 异步检查 `latest` 或 `preview` 软件包通道，并在成功时刷新缓存 | 400 无效标签 |
+| `POST /api/update/run` | 异步检查新的软件包版本，然后启动更新任务，并可选择重启 | 400 无效请求体；任务特定的冲突/错误状态 |
 | `GET /api/update/status` | 按 id 轮询更新任务 | 404 未知任务 |
 | `GET, PUT /api/sidecar-settings` | 读取或更新 web 搜索和 vision sidecar 的模型/后端设置 | 400 结构、后端或限制无效 |
 | `GET, PUT /api/shadow-call-settings` | 读取或更新 shadow-call 拦截设置 | 400 结构或值无效 |
@@ -274,7 +274,12 @@ OpenAI 也遵循此规则：开关不会选择特殊的 922k 模式。有效上�
 | --- | --- | --- |
 | `GET /api/github/star` | 通过用户的 `gh` 会话读取仓库星标状态 | 与状态相关的固定结果代码 |
 | `POST /api/github/star` | 仅允许来自经过身份验证的人类操作来给仓库加星 | 对缺少仪表板会话证据的 agent 驱动调用返回 403 `agent_consent_required` |
-| `GET /api/update/badge` | 读取便宜的侧边栏更新徽标状态 | — |
+| `GET /api/update/badge` | 直接读取缓存的包更新徽标，不查询注册表；缓存缺失、通道不匹配或已达 40 小时时返回 `unknown: true`。`surface=desktop&session=<id>` 只读取该桌面应用会话。 | 400 无效 surface；桌面会话缺失或过期时返回 `unknown: true` |
+| `POST /api/update/desktop-snapshot` | 桌面 shell 通过已绑定的代理客户端发布 Tauri 更新器的显示状态 | 存在 `Origin` 标头或不是原始 `admin-token` principal 时返回 403；字段无效时返回 400；超过 1 KiB 时返回 413 |
+
+桌面 snapshot 是临时显示状态，不是安装请求。代理最多在内存中保存 32 个会话，并在最后一次 heartbeat 后 180 秒使会话过期。未指定 surface=desktop 的普通浏览器仍读取包更新徽标。
+
+对于符合条件的软件包安装，代理在启动后发现缓存缺失或超过 20 小时时会检查更新，之后每小时检查缓存是否过期。`OCX_DISABLE_UPDATE_CHECK=1` 仅禁用自动检查；显式检查和运行请求仍可使用。
 
 :::caution
 管理身份验证只能证明对代理的访问权限；它不能证明用户同意消耗自己的身份。agent 不得绕过 `agent_consent_required`。是否给仓库加星，应由用户自行决定。

@@ -377,6 +377,13 @@ export interface OcxProviderConfig {
    * An explicit config value always wins over the registry default.
    */
   supportsServiceTier?: boolean;
+  /**
+   * Operator switch for the provider's Fast lane. `false` turns Fast off (no Fast toggle, no
+   * `--fast` row, no fast wire field) and overrides `supportsServiceTier`; `true` enables a lane the
+   * registry marks opt-in (Anthropic fast mode, which draws usage credits at 2x price). Absent keeps
+   * the registry default: off for opt-in entries, unchanged elsewhere.
+   */
+  fastEnabled?: boolean;
   /** Exact upstream model ids that override the provider-level service-tier capability. */
   modelSupportsServiceTier?: Record<string, boolean>;
   /**
@@ -461,11 +468,14 @@ export interface OcxProviderConfig {
    * streaming POST turns use the configured Responses path (default `/v1/responses`): forward
    * providers use `{baseUrl}/responses`, while key-auth providers use `responsesPath` or the
    * legacy `/v1/responses` fallback. HTTPS providers use wss and are re-encoded to SSE; HTTP
-   * providers continue using SSE, and `openai-chat` requests stay on HTTP. This mirrors the
-   * canonical ChatGPT backend optimization for any OpenAI-compatible gateway that speaks the
-   * Responses WebSocket protocol (for example an aggregator like sub2api whose WS ingress is
-   * measurably faster than its SSE queue). Default false. Canonical ChatGPT backend WS selection
-   * is independent of this flag.
+   * providers continue using SSE, and `openai-chat` requests stay on HTTP. On a custom provider this
+   * opt-in is honored only for the first-party `https://api.openai.com/v1` upstream; every other
+   * endpoint stays on bounded HTTP/SSE. On the canonical ChatGPT `openai` provider the field
+   * selects the transport instead of opting in: omitted keeps the upstream WebSocket for eligible
+   * turns, an explicit `false` sends streaming turns over HTTP/SSE, and provider management rejects `true`. Either
+   * way it is independent of the client-facing `websockets` setting and changes neither the
+   * endpoint nor the credential; with `false`, native mid-turn steering and injection are
+   * unavailable.
    */
   upstreamWebsocket?: boolean;
   /**
@@ -810,6 +820,13 @@ export interface OcxProviderConfig {
   noTemperatureModels?: string[];
   /** Model ids that reject caller-specified top_p. */
   noTopPModels?: string[];
+  /**
+   * Model ids that reject caller-specified stop sequences. The openai-chat adapter
+   * drops `stop` for these (xAI grok-4.6 answers 400 invalid-argument
+   * "Model grok-4.6 does not support parameter stop.", which makes Claude Code's
+   * auto-mode safety classifier report the model as temporarily unavailable).
+   */
+  noStopModels?: string[];
   /** Model ids that reject caller-specified presence/frequency penalty values. */
   noPenaltyModels?: string[];
   /**

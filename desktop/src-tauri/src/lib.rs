@@ -25,6 +25,12 @@ mod popup;
 #[cfg(target_os = "macos")]
 #[path = "native_tray.rs"]
 mod popup;
+// The macOS build selects native_tray.rs as the popup module; compile the portable popup
+// module's tests on macOS too so its navigation rules run on the maintainers' platform.
+#[cfg(all(test, target_os = "macos"))]
+#[allow(dead_code)]
+#[path = "popup.rs"]
+mod popup_portable_test;
 mod proxy;
 mod resolve;
 mod runtime_stop;
@@ -135,9 +141,7 @@ impl Default for AppState {
 #[tauri::command]
 fn show_dashboard(app: tauri::AppHandle) {
     popup::hide(&app);
-    if let Some(window) = app.get_webview_window("main") {
-        window::show(&window);
-    }
+    startup::open_dashboard(&app);
 }
 
 #[tauri::command]
@@ -188,13 +192,49 @@ fn decide_takeover(app: tauri::AppHandle, approved: bool) {
     }
 }
 
+#[tauri::command]
+async fn update_status(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<updater::PageUpdateStatus, String> {
+    window::require_update_page(&window)?;
+    Ok(updater::page_status(&app))
+}
+
+#[tauri::command]
+async fn update_check(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<updater::PageUpdateStatus, String> {
+    window::require_update_page(&window)?;
+    let check_result = updater::check_and_show(&app).await;
+    check_result.map_err(|_| "the update check failed; try again".to_owned())?;
+    Ok(updater::page_status(&app))
+}
+
+#[tauri::command]
+async fn update_install(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<updater::PageUpdateStatus, String> {
+    window::require_update_page(&window)?;
+    updater::install_pending(&app).await.map_err(|error| {
+        logging::log_once("updater install failed", &error);
+        "the update could not be installed; try again".to_owned()
+    })
+}
+
+#[tauri::command]
+fn return_to_dashboard(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
+    window::require_update_page(&window)?;
+    startup::return_to_dashboard(&app)
+}
+
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                popup::hide(app);
-                window::show(&window);
-            }
+            popup::hide(app);
+            startup::open_dashboard(app);
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
@@ -222,11 +262,21 @@ pub fn run() {
             startup_snapshot,
             startup_phases,
             retry_startup,
-            decide_takeover
+            decide_takeover,
+            update_status,
+            update_check,
+            update_install,
+            return_to_dashboard
         ])
         .setup(|app| {
             app.manage(AppState::new());
             app.manage(updater::PendingUpdate(Mutex::new(None)));
+            app.manage(updater::DesktopUpdateState::new(
+                app.package_info().version.to_string(),
+            ));
+            app.manage(updater::CheckGeneration::default());
+            updater::start_ui_projection_worker(app.handle().clone());
+            updater::start_snapshot_publisher(app.handle().clone());
             app.manage(tray::TrayState::default());
             app.manage(exit::ExitCoordinator::new());
             app.manage(startup::Startup::new());
@@ -241,7 +291,24 @@ pub fn run() {
                     .inner_size(1100.0, 720.0)
                     .visible(false)
                     .user_agent(&window::webview_user_agent())
+                    // Cmd on macOS, Ctrl elsewhere, with + / - / 0. WebView2 zooms natively; on
+                    // macOS and Linux Tauri injects a keydown polyfill whose one IPC call is granted
+                    // to the loopback dashboard by `capabilities/dashboard-zoom.json`.
+                    .zoom_hotkeys_enabled(true)
                     .on_navigation(window::navigation_allowed(app.handle().clone()))
+                    // A hidden window still loads pages: wry builds this one with WebView2
+                    // IsVisible=false, and the bootstrap page navigates to the dashboard URL
+                    // afterwards, so the eval that a later show or hide would rely on has nowhere
+                    // to land during a reload. Re-sending the current state here is what keeps the
+                    // GUI's answer correct across navigation.
+                    .on_page_load(|window, payload| {
+                        if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                            window::report_visibility(
+                                &window,
+                                window.is_visible().unwrap_or(false),
+                            );
+                        }
+                    })
                     .build()?;
             window::configure(&window);
             if startup::LaunchOrigin::detect() == startup::LaunchOrigin::User {
@@ -260,6 +327,11 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building OpenCodex desktop shell")
         .run(|app, event| {
+            // Dock/Finder reopening an existing macOS app does not launch a second instance.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                show_dashboard(app.clone());
+            }
             // Window close and the platform quit gesture arrive here as an exit request, and until
             // this handler existed they went straight through to a SIGKILL of the runtime. D2 makes
             // them hide; only the tray's Quit, and an update's coordinated restart, get past.

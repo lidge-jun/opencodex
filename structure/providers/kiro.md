@@ -8,6 +8,18 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 The shared hosted-tool policy has no Codex Spark-specific branch. Kiro continues to use its
 provider capabilities below; see [Responses compatibility](../transports/responses.md#responses-httpsse).
 
+## Kiro CLI executable resolution
+
+Forced and add-account login spawn the local CLI, so `resolveKiroCliExecutable` in
+`src/oauth/kiro-credentials.ts` decides which file runs with credential-flow arguments. The
+canonical `kiro-cli` name is tried on `PATH` and then in the platform install locations. Only
+after every canonical candidate misses, and only on Windows, does the short `kiro.exe` name count,
+and only inside the two dedicated `Kiro-Cli` folders (`%LOCALAPPDATA%` and `Program Files`) when
+their base is a fully qualified drive path. A short name is never resolved from `PATH` or from the
+shared POSIX bin directories (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`), where an
+unrelated `kiro` such as the Kiro IDE launcher can live. Coverage:
+`tests/providers/kiro/kiro-windows-cli-executable-path.test.ts`.
+
 ## Kiro client parallel-tool hint
 
 Kiro's wire remains serialized even when an OpenAI Responses client sends

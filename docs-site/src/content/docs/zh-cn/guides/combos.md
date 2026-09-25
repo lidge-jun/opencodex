@@ -152,14 +152,16 @@ combo 失败分为 **跳转** 失败和 **终止** 失败。
 | 被分类为认证、订阅、配额、速率限制、过载或上游服务器错误 | 即使仅凭状态码不足以判断，也会使该目标进入冷却并跳转。 |
 | 客户端取消（499）、`origin_rejected`、cyber-policy 拒绝、上下文溢出，或其他无效请求 | 停止并返回错误；换其他目标也无法让请求变得有效。 |
 | 结构化 HTTP 400，明确拒绝 `user`、对 `reasoning.effort`/`reasoning_effort` 返回不支持值，或返回模型特定图像输入拒绝（`param: input`） | 在输出开始前跳转到下一个符合条件的目标，且不记录冷却时间；参见下方可选参数兼容性。 |
+| 由进程内适配器（`runTurn`）执行的 Responses 回合中，当前请求未声明的第一个工具调用（在任何输出和不可重放的副作用之前） | 让该目标进入冷却，并以相同的工具目录跳转到下一个目标。出现可见输出或不可重放的副作用之后，拒绝即为最终结果。Chat Completions 和 Anthropic Messages 请求不受影响。 |
 | 任何其他未分类错误 | 停止并返回错误。 |
 
-未设置 `cooldownMs` 时，发生跳转的目标使用上游回退值：对于上游代码为 `1302` 或 `1305` 的请求速率限制 429，等待 5 秒；其他情况等待 60 秒。设置后，只要不存在可用的上游 `Retry-After` 或 Codex 重置信号，就会应用 `cooldownMs`，包括这些请求速率限制 429。接受数字形式的 `Retry-After` 秒数和 HTTP-date 值，每次冷却最多封顶 10 分钟。优先级从强到弱依次为：显式 `Retry-After` → Codex 重置标头（`x-codex-primary-reset-at`、`x-codex-secondary-reset-at` 或 `x-codex-tertiary-reset-at`）→ combo 的 `cooldownMs`（已设置时）→ 上游速率限制代码 `1302`/`1305` 的 5 秒请求速率限制回退值 → 60 秒默认值。有效的即时指令 `Retry-After: 0` 会保留为上游即时指令，不会被配置的冷却替换。
+未设置 `cooldownMs` 时，发生跳转的目标使用上游回退值：对于上游代码为 `1302` 或 `1305` 的请求速率限制 429，等待 5 秒；其他情况等待 60 秒。设置后，只要不存在可用的上游 `Retry-After` 或 Codex 重置信号，就会应用 `cooldownMs`，包括这些请求速率限制 429。接受数字形式的 `Retry-After` 秒数和 HTTP-date 值，显式上游 `Retry-After` 最多 24 小时；重置推导、配置和回退冷却最多 10 分钟。优先级从强到弱依次为：显式 `Retry-After` → Codex 重置标头（`x-codex-primary-reset-at`、`x-codex-secondary-reset-at` 或 `x-codex-tertiary-reset-at`）→ combo 的 `cooldownMs`（已设置时）→ 上游速率限制代码 `1302`/`1305` 的 5 秒请求速率限制回退值 → 60 秒默认值。有效的即时指令 `Retry-After: 0` 会保留为上游即时指令，不会被配置的冷却替换。
 
 当前请求不会再次重试同一个已经尝试过的目标。后续请求会跳过它，直到冷却结束。已过去的 HTTP-date `Retry-After` 同样会像 `Retry-After: 0` 一样保留为上游即时指令。设置 `waitForCooldownMs` 后，后续请求可以等待最早恢复资格的目标的冷却，单次选择尝试最多等待该上限，然后重新选择一次。因此，多次故障切换跳转的请求总共最多等待 `hops × waitForCooldownMs`。默认值为 `0`；当所有合格目标都处于冷却中时，请求会立即失败并返回 HTTP 503；该 `combo_unavailable` 503 会带有 `Retry-After` 标头，其值等于剩余冷却时间最短的目标，向上取整为整秒，最小值为 1 秒。等待不加入抖动，因此可能同时唤醒。请求中止会取消这次等待并返回正常的 `client_cancelled` 响应；取消后不会调度备用目标。combo 目标冷却是进程本地、按 combo 区分的状态，与原生账户路由使用的账户级 Codex 配额冷却彼此独立。
 
 :::note
 故障切换是有边界的。它有助于处理特定目标的可用性、认证、配额和过载失败；它不会掩盖调用方错误或策略拒绝。
+在非 combo 的 Responses 请求上，allowlist 中的 xAI 策略 403 会在 Codex 将其当作传输失败重试之前被改写为 HTTP 200 `incomplete/content_filter`；见 [xAI policy refusals](/reference/proxy-formats/#xai-policy-refusals)。combo 跳转仍把原始 HTTP 403 分类为跳转。
 :::
 
 对于流式请求，上游 HTTP 状态并不是最终决定。OpenCodex 只会缓冲所选子目标在开始输出前的一段有上限的 Responses SSE。若在任何文本、推理、工具调用或其他输出事件开始之前收到可重试的 `response.failed` 终止事件，该次尝试会被记为失败，combo 可以继续尝试下一个合格目标。一旦输出开始或预输出缓冲区达到上限，当前目标就会被提交；之后的流错误不会在其他提供商上重放，从而避免重复文本和重复执行工具。
@@ -234,7 +236,7 @@ ocx combo remove <id> --yes
 
 ### Management API
 
-无头客户端会对 `/api/combos` 使用 `GET`、`PUT` 和 `DELETE`。`GET` 会列出规范化后的 combo 定义，`PUT` 会创建或替换一个定义（也可以重命名一个），`DELETE` 则使用 id 查询参数。认证以及请求/响应细节请见 [Management API 参考](/reference/management-api/)。如果 `PUT` 请求体省略 `cooldownMs` 或 `waitForCooldownMs`，API 会保留该 combo 已存储的值；要更改它，请显式发送一个值。显式设置的 `cooldownMs`（即使是 `60000`）会按原值持久化，因为它会覆盖请求速率限制回退值。已存储的 `cooldownMs` 只能通过编辑配置文件删除；如果 `PUT` 显式发送 `0`，`waitForCooldownMs` 会恢复为默认值，因为稀疏序列化器会省略这个默认值。省略字段会保留对应值，dashboard 目前还不能设置这两个参数。
+无头客户端会对 `/api/combos` 使用 `GET`、`PUT` 和 `DELETE`。`GET` 会列出规范化后的 combo 定义，`PUT` 会创建或替换一个定义（也可以重命名一个），`DELETE` 则使用 id 查询参数。认证以及请求/响应细节请见 [Management API 参考](/reference/management-api/)。如果 `PUT` 请求体省略 `cooldownMs` 或 `waitForCooldownMs`，API 会保留该 combo 已存储的值；要更改它，请显式发送一个值。显式设置的 `cooldownMs`（即使是 `60000`）会按原值持久化，因为它会覆盖请求速率限制回退值。已存储的 `cooldownMs` 只能通过编辑配置文件删除；如果 `PUT` 显式发送 `0`，`waitForCooldownMs` 会恢复为默认值，因为稀疏序列化器会省略这个默认值。省略字段会保留对应值，dashboard 目前还不能设置这两个参数。省略 `defaultEffortMode`、`reasoningEffortMode`、`imageInput` 或 `cooldownWaitPolicy` 同样会保留已存储的值，重新提交的目标如果不带 `lastResort`，也会保留该目标的标记（按 provider 和模型匹配）。dashboard 始终发送 `imageInput` 和 `reasoningEffortMode`，因此在 dashboard 中将其切回 `auto` 或 `strict` 仍会替换已存储的值。
 
 如需查看完整的持久化配置，请参见 [配置](/reference/configuration/)。
 
@@ -263,10 +265,12 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | --- | --- | --- | --- |
 | `targets` | 是 | — | 非空、有顺序的数组，元素为已配置的 `{ provider, model, weight? }` 目标。重复的 provider/model 对会被拒绝。 |
 | `targets[].weight` | 否 | `1` | 1 到 10,000 的整数。`round-robin` 和 `random` 会使用它；`failover`、`least-used` 和 `reset-window` 会忽略它。 |
+| `targets[].lastResort` | 否 | `false` | 标记为仅在紧急情况下使用的目标。未设置 `cooldownWaitPolicy` 时不生效。它不会永久排除该目标：当没有普通目标可用时，仍会照常派发。 |
 | `strategy` | 否 | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"` 或 `"reset-window"`。 |
 | `stickyLimit` | 否 | `1` | 每次 `round-robin` 选择可连续处理 1 到 100 个成功请求。仅适用于 `round-robin`。 |
 | `cooldownMs` | 否 | 未设置 → 上游回退值（请求速率限制代码为 `1302`/`1305` 的 429 为 5 秒，否则为 60 秒） | 1 到 600000 的整数。设置后，只要没有可用的上游 `Retry-After` 或 Codex 重置信号，就会作为每个目标的冷却时间应用，包括请求速率限制 429；未设置时使用上游回退值。 |
 | `waitForCooldownMs` | 否 | `0` | 0 到 600000 的整数。在返回 `combo_unavailable` 前等待最早恢复资格的冷却中目标的最长时间；请求中止会取消等待。 |
+| `cooldownWaitPolicy` | 否 | 未设置 | `"before-last-resort"` 会在普通目标处于冷却中、且其剩余时间在 `waitForCooldownMs` 之内时，推迟使用标记为 `lastResort` 的目标。标记为 `lastResort` 的目标只有在没有普通目标可用时才会使用。仅此字符串生效。推迟等待与普通等待在每次选择中共用同一个 `waitForCooldownMs` 预算。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；仅当调用方省略 effort 且目标声明支持时才会应用。 |
 | `reasoningEffortMode` | 否 | `"strict"` | `strict` 或 `adaptive`；选择混合能力交集和目标级控制归一化。 |
 | `imageInput` | 否 | `"auto"` | `"auto"` 或 `"disabled"`。`"auto"` 仅在每个目标都支持图片时发布图片能力；`"disabled"` 强制仅文本（从对外能力中去掉图片，并在分发前拒绝带图请求）。 |
@@ -282,7 +286,7 @@ combo id 不存在。响应是 HTTP 404，类型为 `invalid_request_error`。�
 
 ### 为什么会收到 `combo_unavailable`？
 
-当前每个目标都不可用：例如，它的 provider 被禁用、它正在冷却、它已经在这次请求中被尝试过，或者加密的 v2 任务把它排除了。检查目标的 provider 状态和最近的上游错误。对于冷却，请先遵循响应中的 `Retry-After` 值。Codex 重置标头的优先级也高于 `cooldownMs`；只有在两个上游信号都不可用时，才应用已配置的 `cooldownMs`，未配置时应用上游回退值（请求速率限制代码 `1302`/`1305` 为 5 秒，否则为 60 秒），且所有冷却最多封顶 10 分钟。
+当前每个目标都不可用：例如，它的 provider 被禁用、它正在冷却、它已经在这次请求中被尝试过，或者加密的 v2 任务把它排除了。检查目标的 provider 状态和最近的上游错误。对于冷却，请先遵循响应中的 `Retry-After` 值。Codex 重置标头的优先级也高于 `cooldownMs`；只有在两个上游信号都不可用时，才应用已配置的 `cooldownMs`，未配置时应用上游回退值（请求速率限制代码 `1302`/`1305` 为 5 秒，否则为 60 秒），显式 `Retry-After` 最多 24 小时，其他冷却最多 10 分钟。
 
 ### 为什么我的别名被拒绝了？
 

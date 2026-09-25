@@ -369,4 +369,13 @@ describe("capability/route parity is bidirectional", () => {
     });
     expect(stale).toEqual([]);
   });
+
+  test("desktop snapshot has an explicit internal exemption, not an operator CLI verb", async () => {
+    // Only the Tauri shell holds signed-updater state; a CLI verb could only forge it.
+    const { MANAGEMENT_ROUTES } = await import("../../src/server/management/route-registry");
+    const row = MANAGEMENT_ROUTES.find(r => r.method === "POST"
+      && r.path === "/api/update/desktop-snapshot");
+    expect(row?.exempt?.reason).toBe("desktop-internal");
+    expect(capabilityRouteKeys().has("POST /api/update/desktop-snapshot")).toBe(false);
+  });
 });

@@ -26,7 +26,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (任意) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定はオフ) |
-| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` / `DISABLE_COMPACT` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
 直接 export した変数が常に優先します。追加引数はそのまま渡されます: `ocx claude -p "hello"`。
 
 ### Claude ルーティングが無効なときのネイティブフォールバック
@@ -92,31 +92,91 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 では専用プロキシ admission ヘッダーも有効であること。そのため `ocx claude` を
 使うとき "claude.ai connectors are disabled" 警告ももう表示されません。
 
+本文で変更するのはツール呼び出し ID だけです。Anthropic が拒否する `tool_use.id` や `tool_result.tool_use_id`(`a-zA-Z0-9_-` 以外の文字を含むもの、または 64 文字を超えるもの。セッション中にルーティングモデルが作った ID など)は、呼び出しと結果の対応を保ったまま適合する ID に書き換えます。適合する ID はそのまま送り、空の ID にはローカルで 400 を返します。
+
 `claudeCode.nativePassthrough: false` でオフにでき、`claudeCode.anthropicBaseUrl` で別のアドレスを
 指定できます。
 
-## Claude Desktop のモード: 1P（デフォルト）とゲートウェイ
+## Claude Desktop のモード: ゲートウェイ（デフォルト）と 1P
 
-Claude Desktop は排他的な 2 つのモードのどちらかで OpenCodex を使います。ダッシュボードの
-**Claude → Desktop → 接続モード**、または `ocx claude desktop apply --first-party|--gateway` で選びます。
+ダッシュボードの **Claude → Desktop → 接続モード**、または
+`ocx claude desktop apply --first-party|--gateway` で排他的なモードを選びます。
 
-- **1P（ファーストパーティ、デフォルト）**: Desktop 本体は変更しません。claude.ai のログイン、
-  チャットタブ、コネクタ、リモート操作はそのまま動きます。OpenCodex は `~/.claude/settings.json` の
-  `env` に `HTTPS_PROXY=http://127.0.0.1:<公開ポート+100>` と
-  `NODE_EXTRA_CA_CERTS=~/.opencodex/claude-intercept/ca.pem` の 2 つだけを書きます。Desktop が
-  Code タブ用に起動する Claude Code（サブエージェント含む）とターミナルの `claude` CLI だけがこれを読み、
-  ローカルのインターセプトプロキシを通ります。`POST /v1/messages` と `count_tokens` のみ OpenCodex が
-  処理し、他の `api.anthropic.com` パスはそのまま Anthropic に中継されます。CA は OS の信頼ストアには
-  インストールされません。
-- **ゲートウェイ（3P）**: 従来の方式で、下記のプロファイルによりアプリ全体が OpenCodex を
-  ゲートウェイとして使います。`--gateway`（または従来の `--static`/`--hybrid`/`--discovery-only`）で
-  明示的に選びます。
+### ゲートウェイ（デフォルト）
 
-モードは `claudeCode.desktopMode` に保存されます。すでにゲートウェイプロファイルを適用済みの環境は
-更新後もゲートウェイのままで、新規インストールだけが 1P になります。切り替えると他方のモードの設定
-（OpenCodex が書いた値のみ）が削除され、社内プロキシなど外部の `HTTPS_PROXY`/`NODE_EXTRA_CA_CERTS`
-は上書きせず適用を拒否します。切り替え後は Desktop を完全に終了して再起動してください。詳細と
-Claude Code CLI 互換性は英語版ドキュメントを参照してください。
+新規インストールではゲートウェイプロファイルが適用され、Chat タブを含むアプリ全体が
+OpenCodex を使います。claude.ai 専用の機能は利用できません。従来の `--static`、`--hybrid`、
+`--discovery-only` もゲートウェイを選びます。
+
+### 1P（オプトイン）
+
+:::caution[アカウントのリスク]
+1P モードでは Claude サブスクリプションの通信がローカルのインターセプトプロキシを通ります。
+Anthropic がこれを利用規約違反とみなし、アカウントを停止する可能性があります。デフォルトは
+ゲートウェイです。このリスクを受け入れる場合にのみ 1P を選んでください。
+:::
+
+Desktop 本体は claude.ai に接続したままで、Chat、コネクタ、リモート操作も使えます。
+OpenCodex が書くのは `~/.claude/settings.json`（`CLAUDE_CONFIG_DIR` に対応）の `env` にある
+`HTTPS_PROXY` と `NODE_EXTRA_CA_CERTS` だけです。Code タブが起動する Claude Code、
+サブエージェント、ターミナルの `claude` CLI がローカルプロキシを通ります。その他の
+`api.anthropic.com` パスは Anthropic に中継されます。CA は OS の信頼ストアに入れず、
+`NODE_EXTRA_CA_CERTS` を読む Node プロセスだけが信頼します。
+
+モードは `claudeCode.desktopMode` に保存されます。明示的に、またはこの更新以前に 1P を
+適用した環境は 1P を維持し、既存のゲートウェイも維持します。明示設定がない場合は、
+OpenCodex 所有の選択済みゲートウェイ行、保存済みのゲートウェイ指紋、所有する
+`settings.json` の 1P 設定の順に判定し、証拠がなければゲートウェイです。
+カタログ同期やモデル一覧の更新が 1P 環境にゲートウェイプロファイルを書くことはありません。
+`claudeCode.intercept.enabled: false` なら既存の 1P 環境での適用は
+`intercept_disabled` で拒否され、新規環境はゲートウェイを適用します。外部の企業プロキシ
+設定は上書きしません。モード変更後は Desktop を完全に終了して開き直してください。
+
+### Picker モード: 1P の Code タブで opencodex モデルを表示する
+
+Picker モードは 1P モードの一部です。macOS で 1P を選ぶとデフォルトで有効になりますが、
+`claudeCode.intercept.picker: false` を設定した場合は無効です。1P の Desktop の Code タブにある
+モデルピッカーを書き換え、利用できる opencodex モデルを名前付きで表示します。初回の有効化時は、
+macOS がログインキーチェーン内のローカル証明書認証局を信頼するよう求めることがあります。この認証局の
+制約は `claude.ai` とそのサブドメインに限られ、このダイアログはこのローカル CA に対する一度だけの
+信頼操作です。
+
+Picker モードが有効な間、Claude Desktop のネットワークは OpenCodex を経由します。OpenCodex が停止
+すると、Picker モードをオフにするか Desktop を完全に再起動するまで Desktop はオフラインになります。
+状態は `ocx claude desktop picker status`、信頼操作は `ocx claude desktop picker trust` で確認・実行できます。
+`ocx claude desktop picker off` またはダッシュボードの **Claude → Desktop** の切り替えでオフにできます。
+Picker プロファイルを選択した後は、Claude Desktop を完全に終了して開き直してください。
+
+Picker モードは 1P の一部なので、[1P のアカウントリスク](#1pオプトイン)も同じように適用されます。
+
+### Code タブで opencodex モデルを使う（1P バインディング）
+
+1P モードでは、Code タブのモデルピッカーは claude.ai が提供します。各行（Opus 5.5、Sonnet 5、
+Haiku 4.5、**More models** 以下の旧モデル）はアカウントから来るもので、ローカル設定で
+opencodex の行を追加することはできません。OpenCodex に届くのは、リクエストごとのピッカーの
+Anthropic モデル ID なので、代わりにピッカーの行を opencodex のルートにバインドします。
+
+```bash
+ocx claude desktop bind claude-sonnet-4-6 xai/grok-4.7
+ocx claude desktop bind claude-opus-4-6 native/gpt-6-sol
+ocx claude desktop unbind claude-opus-4-6
+```
+
+ダッシュボードの **Claude → Desktop → Code タブのモデルバインディング** からも同じ操作ができます。
+こうすると Code タブで **Sonnet 4.6** を選んだとき `xai/grok-4.7` が応答します。ピッカーには
+Anthropic の名前がそのまま表示され、Claude Code のシステムプロンプトもモデルにその Claude モデルだと
+伝えるため、普段使わない行（**More models** の項目が候補）を選ぶのがおすすめです。バインディングは
+次のリクエストから有効になり、Desktop の再起動は不要です。
+
+- ルートは Desktop のルート表記を使います: `provider/model`、ネイティブ OpenAI プールは
+  `native/<slug>`。ダッシュボードで利用可能と表示されているルートのみ指定できます。
+- 日付付きのピッカー ID（`claude-haiku-4-5-20251001`）は日付なしのバインディング
+  （`claude-haiku-4-5`）にマッチし、`[1m]` とファストモードの選択も同じバインディングに従います。
+- バインディングは `claudeCode.intercept.modelMap` に保存され、ローカルのインターセプトプロキシを
+  通る Claude Code トラフィック（1P モードの Desktop Code タブとターミナルの `claude` CLI）にのみ
+  適用されます。`ocx claude` セッションと公開 `/v1/messages` エンドポイントはこれを無視します。
+  グローバルな `claudeCode.modelMap` は引き続き全体に適用され、同じ ID ではバインディングが優先します。
+- 有効なバインディングは `ocx claude desktop status --json` の `firstParty.modelBindings` で確認できます。
 
 ## リモートハブに接続した Claude Desktop
 
@@ -174,18 +234,22 @@ Claude Code CLI 互換性は英語版ドキュメントを参照してくださ�
 ## /model ピッカー("From gateway")
 
 Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイモデルを探し、デフォルトの `/model`
-ピッカーの "From gateway" 項目に表示します。ピッカーは `claude` または `anthropic` で始まる ID のみ
-受け付けるため、opencodex はルーティングモデルを安定で元に戻せるエイリアスとして公開します。
+ピッカーに表示します。`description` のない行は "From gateway" と表示されます。opencodex は Claude Code CLI
+向けの各行に `description`（`Routed by OpenCodex to <provider>/<model>`、ネイティブ行は `Routed by OpenCodex to native <model>`、Fast 行は末尾に ` · Fast`、1M 行は元の説明のまま）を送り、Claude Code 2.1.257 以降は
+その内容を代わりに表示します。Claude Code 2.1.278 のピッカーは `claude` または `anthropic` を含む ID を受け付けます。`claude-` で始まる未知の ID は compact を無効にしない限り 200k として計算されるため、opencodex はルーティングモデルを `claude` を含みつつ `claude-` で始まらない安定した可逆エイリアスとして公開します。
 
 | 画面 | 形式 | 例 |
 | --- | --- | --- |
-| Claude Code CLI | `claude-ocx-<provider>--<model>` (plain) または `claude-ocx2-…` (escaped) | `claude-ocx-native--gpt-5.6-sol` |
+| Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) または `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
 | Claude Desktop 3P | `claude-opus-4-8-<code>` (3 桁の base36 ハッシュ) | `claude-opus-4-8-ncb` |
 
 プロキシはリクエストごとに系列を選びます。`?ids=cli` または `?ids=desktop` が優先し、指定しないと
 `claude-code/*` user-agent には読みやすい CLI 形式を、他のクライアントには Desktop ハッシュを
 提供します。両系列は継続してデコードできるため、どちらの形式でも `settings.json` に保存したモデルは
-引き続き動作します。
+引き続き動作します。古い設定の `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` も
+引き続き解決されますが、保存済みの旧 ID はルーティングされても Claude Code 側では 200k として計算されます。
+保存済みの `claude-ocx-` は `ocx-claude-` に、エスケープ付きの `claude-ocx2-` は `ocx-claude2-` に一度選び直すと、
+実際のコンテキストウィンドウと compact が両方とも適用されます。
 
 Claude Desktop のフッターピッカーで実行中の 3P 会話のモデルが切り替わらない場合は、
 `/model <id>` を試せますが、影響を受ける Desktop ビルドではこの回避策も失敗することがあります。
@@ -201,9 +265,9 @@ OpenCodex の Claude Desktop プロファイルで希望するデフォルトモ
 **Logs → requestedModel** で確認してください。
 
 **エイリアス構文ルール:** provider には `/` や `--` を含められず `native` と同じでもいけません。
-`/` も `~` も含まない plain な model ID は v1 接頭辞 `claude-ocx-…` のままです。`/` または `~` を含む
-model ID は v2 接頭辞 `claude-ocx2-…` で発行し、エスケープします(`/` → `~s`、`~` → `~t`)。例:
-`openrouter/anthropic/claude-opus-4-8` → `claude-ocx2-openrouter--anthropic~sclaude-opus-4-8`。
+`/` も `~` も含まない plain な model ID は v1 接頭辞 `ocx-claude-…` のままです。`/` または `~` を含む
+model ID は v2 接頭辞 `ocx-claude2-…` で発行し、エスケープします(`/` → `~s`、`~` → `~t`)。例:
+`openrouter/anthropic/claude-opus-4-8` → `ocx-claude2-openrouter--anthropic~sclaude-opus-4-8`。
 v1 エイリアスはリテラルにデコードします(歴史的に model ID に含まれていた 2 文字列 `~s` / `~t` も保持)。
 v2 エイリアスはエスケープを展開します。読みやすい形式で表現できないルートはハッシュエイリアスに
 置き換えます。モデル ID には `--` を含め**られます**(解析時は最初の `--` だけを基準に分割します)。
@@ -294,6 +358,7 @@ Anthropic パススルーはそのまま維持します。
    含まれる場合、対になる `tool_result` 本体をスタブに差し替えます。
 2. **テキストブロック配信:** `Base directory for this skill: ` で始まる 10,000 文字以上のユーザー
    テキストブロックでディレクトリ basename がブロック名と一致するか確認します(大文字小文字区別なし)。
+   ディレクトリ行は UTF-16 コード単位で 4,096 までしか調べません。それより長い行は、末尾に改行がない場合も含めてそのまま送られます。
 
 `claudeCode.blockedSkills` で設定できます(デフォルト `["claude-api"]`、`[]` で省略機能を完全に
 オフ)。スタブはツール呼び出しと結果の対を維持します。
@@ -406,6 +471,8 @@ Claude Code の `/effort` 設定はアダプターでも維持されます。
 | `tool_choice` | `auto`→`auto`、`none`→`none`、`any`→`required`、名前指定関数→`{type:"function",name}`、ホスト型 WebSearch/web_search→`{type:"web_search"}` |
 | `max_tokens` | `max_output_tokens` |
 | `stop_sequences` | `stop` |
+
+Claude Codeの自動モードは常に`stop_sequences`を送ります。ルーティング先プロバイダーの`noStopModels`リストにあるモデルでは、OpenCodexはChat CompletionsとResponsesの両方のワイヤーで`stop`を省きます。そのため、grok-4.7やgrok-4.6などのxAI推論モデルが`400 invalid-argument`を返したり、一時的に利用不可と判定されたりしません。[`noStopModels`](/ja/reference/configuration/providers/)を参照してください。
 
 意図した Anthropic アダプターでは、非表示でない署名付きブロック（空の thinking を含む）と不透明な redacted ブロックを保持します。`hideThinkingSummary` は変更しません。ローカルで隠した署名付きテキストは Claude クライアントに公開せず、この非表示境界での無損失再生は未確認です。旧形式の結合エンベロープは、テキスト送信後に元のブロック順を復元できません。`claudeCode.compatibility: "enforce"` は引き続き thinking 再生を拒否します。実際の Anthropic 受理やキャッシュ改善の証明ではなく、[#3719](https://github.com/lidge-jun/opencodex/issues/3719) は未解決です。
 

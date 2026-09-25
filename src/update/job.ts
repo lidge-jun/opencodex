@@ -34,23 +34,27 @@ import {
 import { isServiceInstalled, isServiceViable, readServiceBackend, stopWindows } from "../service";
 import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from "./restart-ownership";
 import {
-  type Channel,
-  type Installer,
+  type Channel, type Installer,
   PKG,
   checkUpdatePackageIntegrity,
   currentVersion,
   defaultUpdateTag,
   detectInstall,
+  detectInstallOwnership,
   latestVersion,
+  miseUpdateCommand,
   updateCommand,
   updateCommandStr,
   resolveCurrentPnpmGlobalOwner,
   resolvePnpmActiveLauncher,
 } from "./index";
+import type { UpdateCheckDeps } from "./check-types";
+export type { UpdateCheckDeps } from "./check-types";
 import type { PnpmGlobalOwner } from "./pnpm-global-install.mjs";
 import { isNewer } from "./notify";
 import { isRealBunBinary } from "../lib/bun-binary-validator.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
+import { GUI_UPDATE_FAILURE_NEXT_STEP } from "./update-failure-guidance.mjs";
 import {
   npmCachePreflightFailureMessage,
   runNpmCachePreflight,
@@ -113,12 +117,6 @@ export class UpdateJobError extends Error {
   }
 }
 
-export interface UpdateCheckDeps {
-  currentVersion: () => string;
-  detectInstall: () => Installer;
-  latestVersion: (tag: Channel) => string | null;
-}
-
 interface UpdateWorkerProcess {
   pid?: number;
   unref(): void;
@@ -135,7 +133,9 @@ export interface StartUpdateJobDeps {
 const defaultCheckDeps: UpdateCheckDeps = {
   currentVersion,
   detectInstall,
+  detectInstallOwnership,
   latestVersion,
+  miseUpdateCommand,
 };
 
 function nodeBin(): string {
@@ -488,16 +488,22 @@ export function checkForUpdate(
   deps: UpdateCheckDeps = defaultCheckDeps,
 ): UpdateCheckResult {
   const current = deps.currentVersion();
-  const installer = deps.detectInstall();
+  const ownership = deps.detectInstallOwnership?.();
+  const installer = ownership?.installer ?? deps.detectInstall();
   const channel = requestedChannel ?? normalizeUpdateChannel(null, current);
   const latest = installer === "source" ? null : deps.latestVersion(channel);
   const updateAvailable = !!latest && isNewer(latest, current, channel);
   let reason: string | undefined;
-  let command = installer === "source" ? manualSourceCommand() : updateExecutionCommand(installer, channel).display;
+  let command = installer === "source"
+    ? manualSourceCommand()
+    : installer === "mise"
+      ? (ownership && deps.miseUpdateCommand?.(ownership)) ?? ""
+      : updateExecutionCommand(installer, channel).display;
 
   if (installer === "source") {
     reason = "source_checkout";
-    command = manualSourceCommand();
+  } else if (installer === "mise") {
+    reason = command ? "externally_managed" : "external_ownership_invalid";
   } else if (!latest) {
     reason = "latest_unavailable";
   } else if (!updateAvailable) {
@@ -510,7 +516,7 @@ export function checkForUpdate(
     channel,
     installer,
     updateAvailable,
-    canUpdate: installer !== "source" && updateAvailable,
+    canUpdate: installer !== "source" && installer !== "mise" && updateAvailable,
     command,
     releaseNotesUrl: RELEASE_NOTES_URL,
     ...(reason ? { reason } : {}),
@@ -1942,7 +1948,7 @@ export async function runGuiUpdateWorker(
         status: "failed",
         exitCode: result.status,
         signal: result.signal,
-        error: `update command failed (${result.status ?? "?"})`,
+        error: `update command failed (${result.status ?? "?"}). ${GUI_UPDATE_FAILURE_NEXT_STEP}`,
       });
       return;
     }

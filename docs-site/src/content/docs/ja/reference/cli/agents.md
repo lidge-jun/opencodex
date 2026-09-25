@@ -13,7 +13,16 @@ description: マルチエージェント、コンボ、可観測性、アクセ�
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off` はダッシュボードの **オフ (Off)** 行と同じスイッチです。OpenCodex はサイドカーを
+実行しなくなり、Codex 統合は `~/.codex/config.toml` に
+`web_search = "disabled"` を書き込むため、MCP 検索サーバーだけを検索経路にできます。
+`--enabled on` はその行を再び削除します。保存でスイッチが実際に切り替わったとき、コマンドは
+Codex 側の書き込み（`--json` では `codexWebSearch`、それ以外では末尾の
+`Codex config:` 行）を報告し、書き込みできなかった場合は `ocx sync` を案内します。
+このフラグは `vision` でも機能します。
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
 

@@ -442,13 +442,16 @@ function translateAnthropicRequest(
   if (outputConfigFormat) body.text = { format: outputConfigFormat };
   let cacheKeySource: ClaudeCacheKeySource = null;
   if (isRec(raw.metadata) && typeof raw.metadata.user_id === "string") {
-    body.user = raw.metadata.user_id;
+    const userIdHash = createHash("sha256").update(raw.metadata.user_id).digest("hex");
+    // OpenAI and Azure reject `user` longer than 64 chars, and Claude Code's metadata.user_id
+    // is a JSON blob well past that; send its 64-char hash instead of the raw value.
+    body.user = raw.metadata.user_id.length <= 64 ? raw.metadata.user_id : userIdHash;
     // OpenAI-side prompt caching is routed by prompt_cache_key (Codex clients send
     // their session id; without it consecutive /v1/messages turns reported
     // cached_tokens: 0 on the ChatGPT backend — devlog 090). Claude Code's
     // metadata.user_id embeds the session uuid, so hashing it yields a stable
     // per-session key with a bounded length/charset.
-    body.prompt_cache_key = createHash("sha256").update(raw.metadata.user_id).digest("hex").slice(0, 32);
+    body.prompt_cache_key = userIdHash.slice(0, 32);
     cacheKeySource = "metadata";
   } else if (systemParts.length > 0) {
     // Claude Desktop sends no metadata.user_id (H1, devlog 130): without any key the

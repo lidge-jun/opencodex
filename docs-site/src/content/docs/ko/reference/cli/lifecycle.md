@@ -392,6 +392,7 @@ Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로�
 `--no-start`는 `install`에 적용되며, 트레이를 바로 실행하지 않고 설치합니다.
 지원 중단 예정: OpenCodex 데스크톱 앱이 Windows, macOS, Linux에서 트레이를 제공합니다.
 `ocx tray`는 데스크톱 앱이 없는 설치를 위해 계속 사용할 수 있습니다.
+새 패키지 버전이 확인되면 트레이는 온라인, 경고, 오프라인 아이콘에 파란 점을 표시하고 **Update available**을 보여 줍니다. 로컬 캐시 배지를 약 1분마다 확인하며, 오래되었거나 사용할 수 없는 결과가 되면 점을 제거합니다. 이 메뉴 항목은 대시보드를 열고 그곳에서 패키지 업데이트를 시작할 수 있게 합니다. 자동으로 설치하지는 않습니다.
 
 ## 대시보드
 
@@ -405,6 +406,8 @@ Windows 상태 트레이 아이콘을 설치하고 제어합니다. Windows 로�
 `ocx update`는 OpenCodex 자체를 업데이트하며 Codex CLI를 업데이트하지 않습니다. [system 검사 명령](/ko/reference/cli/agents/)의 `ocx system codex-cli-update check`로 설정된 Codex CLI 후보의 provenance를 제한된 읽기 전용 방식으로 확인할 수 있습니다. 이 명령은 package registry를 조회하거나 업데이트를 설치하지 않습니다.
 
 ### `ocx update [--tag latest|preview]`
+
+OpenCodex가 mise를 통해 설치된 경우 이 명령은 프록시를 중지하거나 패키지 파일을 변경하기 전에 실패하며 검증된 로컬 mise 별칭을 사용한 `mise upgrade <tool>`을 표시합니다. 업데이트 확인은 계속 사용할 수 있고 외부 관리 설치로 보고합니다. mise 소유권 메타데이터를 읽을 수 없거나 일관되지 않아도 도구 이름을 추측하지 않고 변경을 거부하며, `--tag preview`는 mise에 구성된 선택을 변경하지 않습니다.
 
 npm에서 opencodex를 자체 업데이트합니다. 안정판 설치는 `@latest`를 사용하고, 미리보기 설치는
 `--tag latest|preview`를 주지 않으면 `@preview`를 유지합니다. 소스 체크아웃을 감지하면 대신

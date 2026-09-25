@@ -24,7 +24,8 @@ ocx export --client pi
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
       "compat": {
-        "sendSessionAffinityHeaders": true
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false
       },
       "models": [
         {
@@ -41,6 +42,8 @@ ocx export --client pi
 ```
 
 產生的 Pi 供應商設定會啟用 `compat.sendSessionAffinityHeaders`。合併或手動編輯供應商時請保留此設定：Pi 提供穩定的工作階段識別碼，OpenCodex 據此為標準 OpenCode Go 目標產生工作階段親和識別碼。當 `cacheRetention` 為 `none` 時，Pi 可能不傳送識別碼。
+
+產生的 Pi 供應商設定也會把 `compat.supportsDeveloperRole` 設為 `false`，讓 Pi 以 `system` 而非 `developer` 角色傳送系統提示詞。OpenCodex 會照原樣轉送 Chat Completions 角色，而部分 OpenAI 相容上游會以 400 拒絕 `developer`；所有上游都接受 `system`。
 
 模型 id 是代理的規範選擇器，因此路由模型顯示為 `provider/model`（`anthropic/claude-opus-5`），而原生 OpenAI slug 保持無前綴（`gpt-5.6-sol`）。`name` 後綴 — `(anthropic)`、`(native)`、`(routed)` — 正是讓來自不同上游的兩個同名模型在 Pi 的 picker 中可區分的關鍵。
 

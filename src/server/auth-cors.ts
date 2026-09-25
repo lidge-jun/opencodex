@@ -744,6 +744,12 @@ export function providerManagementConfigError(
     // validation and then rejected by the seed comparison, so canonical OpenAI could never
     // set OR clear it — the value was admitted and then refused in the same request.
     delete canonicalCandidate.annotateEmptyToolOutputs;
+    // Canonical ChatGPT keeps WebSocket as the default, but an operator may
+    // select the existing HTTP/SSE path without changing its auth or endpoint.
+    if (raw.upstreamWebsocket !== undefined) {
+      if (raw.upstreamWebsocket !== false) return "provider openai upstreamWebsocket must be false or omitted";
+      delete canonicalCandidate.upstreamWebsocket;
+    }
     const canonical = seed && (options?.allowOperatorOverlays
       ? matchesCanonicalProviderSeed(canonicalCandidate, seed)
       : sameCanonicalProviderSeed(canonicalCandidate, seed));
@@ -950,6 +956,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   mcpMaxResultBytes: "editor",
   modelAdapters: "editor",
   fastWire: "editor",
+  fastEnabled: "editor",
   baseUrl: "editor",
   responsesPath: "editor",
   chatCompletionsPath: "editor",
@@ -1042,6 +1049,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   noReasoningModels: "editor",
   noTemperatureModels: "editor",
   noTopPModels: "editor",
+  noStopModels: "editor",
   noPenaltyModels: "editor",
   noStructuredOutputModels: "editor",
   noJsonSchemaModels: "editor",

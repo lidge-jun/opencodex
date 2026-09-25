@@ -490,6 +490,7 @@ describe("combo request cloning", () => {
 describe("combo target cooldowns", () => {
   const target = { provider: "a", model: "m1" };
 
+  /** Verify numeric and HTTP-date delays obey the selected local or server ceiling. */
   test("parses numeric and date Retry-After values with exact bounds", () => {
     const now = Date.parse("2026-07-18T00:00:00.000Z");
     expect(parseRetryAfterMs("0.001", now)).toBe(1);
@@ -498,6 +499,29 @@ describe("combo target cooldowns", () => {
     expect(parseRetryAfterMs(new Date(now + 90_000).toUTCString(), now)).toBe(90_000);
     expect(parseRetryAfterMs(new Date(now + 90_000).toUTCString().toLowerCase(), now)).toBe(90_000);
     expect(parseRetryAfterMs(new Date(now + 900_000).toUTCString(), now)).toBe(600_000);
+    const serverDelay = { preserveServerDelay: true };
+    expect(parseRetryAfterMs("14400", now, serverDelay)).toBe(14_400_000);
+    expect(parseRetryAfterMs("86400", now, serverDelay)).toBe(86_400_000);
+    expect(parseRetryAfterMs("999999", now, serverDelay)).toBe(86_400_000);
+    expect(parseRetryAfterMs(new Date(now + 4 * 60 * 60_000).toUTCString(), now, serverDelay)).toBe(14_400_000);
+    expect(parseRetryAfterMs(new Date(now + 2 * 86_400_000).toUTCString(), now, serverDelay)).toBe(86_400_000);
+  });
+
+  /** Verify recorded cooldowns expire at their own ceiling without truncating valid delays. */
+  test("caps only explicit server cooldowns at one day", () => {
+    const now = Date.parse("2026-07-18T00:00:00.000Z");
+    coolComboTarget("numeric-retry", target, { now, retryAfter: "999999" });
+    coolComboTarget("date-retry", target, { now, retryAfter: new Date(now + 2 * 86_400_000).toUTCString() });
+    coolComboTarget("multi-hour-retry", target, { now, retryAfter: "14400" });
+    coolComboTarget("local-fallback", target, { now, cooldownMs: 999_999_999 });
+    for (const comboId of ["numeric-retry", "date-retry"]) {
+      expect(isComboTargetInCooldown(comboId, target, now + 86_400_000 - 1)).toBe(true);
+      expect(isComboTargetInCooldown(comboId, target, now + 86_400_000)).toBe(false);
+    }
+    expect(isComboTargetInCooldown("multi-hour-retry", target, now + 14_400_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("multi-hour-retry", target, now + 14_400_000)).toBe(false);
+    expect(isComboTargetInCooldown("local-fallback", target, now + 600_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("local-fallback", target, now + 600_000)).toBe(false);
   });
 
   test("rejects missing malformed zero and expired Retry-After values", () => {
@@ -1547,6 +1571,9 @@ describe("combo validation and normalization", () => {
       stickyLimit: 1,
       cooldownMs: undefined,
       waitForCooldownMs: 0,
+      // #5691: null unless explicitly configured, so an absent or malformed
+      // value can never silently opt a combo into deferring its last resort.
+      cooldownWaitPolicy: null,
       defaultEffort: "high",
       defaultEffortMode: "fallback",
       reasoningEffortMode: "strict",
@@ -1554,9 +1581,45 @@ describe("combo validation and normalization", () => {
       alias: null,
       nativeAlias: false,
       displayName: null,
-      targets: [{ provider: "a", model: "m1", weight: 2 }],
+      targets: [{ provider: "a", model: "m1", weight: 2, lastResort: false }],
     });
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
+    // #5691: both new fields default to the inert value, and only the exact
+    // literal opts in — the same rule reasoningEffortMode follows below.
+    expect(normalizeComboConfig({
+      cooldownWaitPolicy: "eventually" as never,
+      targets: [{ provider: "a", model: "m1" }],
+    }).cooldownWaitPolicy).toBeNull();
+    expect(normalizeComboConfig({
+      cooldownWaitPolicy: "before-last-resort",
+      targets: [{ provider: "a", model: "m1", lastResort: true }],
+    })).toMatchObject({
+      cooldownWaitPolicy: "before-last-resort",
+      targets: [{ provider: "a", model: "m1", lastResort: true }],
+    });
+    expect(comboConfigIssues("free", {
+      cooldownWaitPolicy: "eventually" as never,
+      targets: [{ provider: "a", model: "m1" }],
+    }, baseConfig().providers).some(issue => issue.path[0] === "cooldownWaitPolicy")).toBe(true);
+    expect(comboConfigIssues("free", {
+      targets: [{ provider: "a", model: "m1", lastResort: "yes" as never }],
+    }, baseConfig().providers).some(issue => issue.path[2] === "lastResort")).toBe(true);
+    // …and a truthy non-boolean normalizes to false rather than opting in, so a
+    // config that fails validation cannot still change routing if it is loaded.
+    expect(normalizeComboConfig({
+      targets: [{ provider: "a", model: "m1", lastResort: "yes" as never }],
+    }).targets[0]!.lastResort).toBe(false);
+    // #5736: the normalizer's explicit `false` must not reach stored config. Targets that
+    // never opt in keep exactly the keys they had, so enabling this feature does not add a
+    // noise key to every target of every combo in the file.
+    const sparseTargets = normalizeComboConfig({
+      targets: [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2", lastResort: true },
+      ],
+    }).targets.map(({ lastResort, ...target }) => (lastResort ? { ...target, lastResort: true } : target));
+    expect(Object.hasOwn(sparseTargets[0]!, "lastResort")).toBe(false);
+    expect(sparseTargets[1]).toMatchObject({ lastResort: true });
     // Anything that is not the literal "adaptive" normalizes to today's behavior, so a
     // malformed or absent value can never silently opt a user in.
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).reasoningEffortMode).toBe("strict");

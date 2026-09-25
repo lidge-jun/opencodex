@@ -4,7 +4,7 @@ import type { ProviderAdapter } from "./base";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { cursorExecDeniedMessage, cursorRequestDeclaresFullAccess } from "./cursor/exec-policy";
 import { isCursorBenignCancelError, isCursorIncompleteToolCallMessage, isCursorInvalidArgumentError, isCursorOverflowRemintCandidate, isCursorRootEnvelopeError, safeCursorErrorMessage, type CursorSizeContext } from "./cursor/cursor-errors";
-import { cursorCheckpointModelAffinityId, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
+import { cursorCheckpointModelAffinityId, cursorNeedsExternalToolContinuation, inferCursorContextWindow, isCursorExternalWireModel } from "./cursor/discovery";
 import { createCursorKvStore, type CursorKvStore } from "./cursor/kv-store";
 import { mapCursorServerMessage } from "./cursor/message-mapper";
 import {
@@ -31,6 +31,7 @@ import { debugProviderDiagnostic } from "../lib/debug";
 import { isDebugEnabled } from "../lib/debug-settings";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { estimateTokens } from "../lib/token-estimate";
+import { ToolEnvelopeEchoFilter } from "../lib/tool-envelope-echo-filter";
 import {
   clearCursorIncompleteToolRemint,
   cursorIncompleteToolRemintScopeKey,
@@ -41,6 +42,7 @@ import {
   recordCursorIncompleteToolRemint,
   recordCursorEnvelopeEchoRemint,
   recordCursorOverflowRemint,
+  rememberCursorConversationRewrite,
   rememberCursorThreadConversation,
   shouldSkipCursorOverflowRemint,
   shouldSurfaceCursorOverflowFirst,
@@ -299,13 +301,18 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           // Armed for ANY external turn whose replayed history contains a tool result — echo
           // priming was observed live on user-action rounds too (the envelope lives in the
           // flattened history regardless of which role ends the input).
-          const armEchoSniffer =
-            isCursorExternalWireModel(activeRequest.modelId)
-            && (_parsed.context.messages ?? []).some(message => message.role === "toolResult");
+          const replaysToolResult = (_parsed.context.messages ?? []).some(message => message.role === "toolResult");
+          const armEchoSniffer = isCursorExternalWireModel(activeRequest.modelId) && replaysToolResult;
           const echoSniffer = armEchoSniffer ? new CursorEnvelopeEchoSniffer() : undefined;
           // Mid-stream observer (devlog 260828 F1/F2): diagnostic-only; armed with the
           // prefix sniffer because both fire on flattened tool-result replay priming.
-          const midstreamObserver = armEchoSniffer ? new CursorMidstreamEchoObserver() : undefined;
+          // The composer-2.5 builds are native-wire but also replay the tool result as root text
+          // (cursorNeedsExternalToolContinuation), so the client-visible strip and the next-turn
+          // remint follow that predicate. The prefix retry above stays external-only: its
+          // corrective continuation text is encoded for external wire models alone.
+          const armMidstreamEcho = cursorNeedsExternalToolContinuation(activeRequest.modelId) && replaysToolResult;
+          const midstreamObserver = armMidstreamEcho ? new CursorMidstreamEchoObserver() : undefined;
+          const midstreamFilter = armMidstreamEcho ? new ToolEnvelopeEchoFilter() : undefined;
           const armRoutingCommentarySniffer =
             isCursorExternalWireModel(activeRequest.modelId)
             && (
@@ -321,8 +328,11 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           // Exactly-once observation: every client-bound text delta passes through here
           // exactly once — held deltas only on release, ordinary deltas at emit time.
           const emitTextObserved = (event: AdapterEvent): void => {
-            if (event.type === "text_delta") midstreamObserver?.feed(event.text);
-            emit(event);
+            if (event.type !== "text_delta") { emit(event); return; }
+            midstreamObserver?.feed(event.text);
+            const text = midstreamFilter?.feed(event.text) ?? event.text;
+            if (midstreamFilter?.matched) sawMidstreamEnvelopeEcho = true;
+            if (text) emit({ ...event, text });
           };
           const releaseGuardHeld = () => {
             for (const held of guardHeld) {
@@ -453,8 +463,13 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
                 }
                 if (event.type !== "heartbeat") emittedOutput = true;
                 if (event.type === "done") {
+                  const suffix = midstreamFilter?.finish();
+                  // A fenced marker released by hold overflow is unproven code: remint to be safe.
+                  if (midstreamFilter?.matched || midstreamFilter?.unverifiedMarker) sawMidstreamEnvelopeEcho = true;
+                  if (suffix) emit({ type: "text_delta", text: suffix });
+                  // The observer is diagnostic only: the fence-aware filter's verdict decides the
+                  // remint, so a quoted marker in a closed code block does not rotate the thread.
                   const midstreamFindings = midstreamObserver?.findings() ?? [];
-                  if (midstreamFindings.length > 0) sawMidstreamEnvelopeEcho = true;
                   for (const finding of midstreamFindings) {
                     debugProviderDiagnostic("cursor", "midstream-envelope-echo", {
                       wireModel: activeRequest.modelId,
@@ -507,6 +522,9 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
           // the next turn does not recompute the stale deterministic thread hash. Isolated helper /
           // compaction turns must not park their throwaway id under the parent or Desktop owner.
           const threadOwner = cursorClientThreadOwner(_parsed);
+          if (_parsed._cursorIsolateConversation !== true) {
+            rememberCursorConversationRewrite(failedConversationId, next.conversationId, _parsed._cursorIdentityScope);
+          }
           if (threadOwner && _parsed._cursorIsolateConversation !== true) {
             rememberCursorThreadConversation(
               threadOwner,
@@ -629,11 +647,8 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
         } else if (!sawIncompleteToolCall && completedNormally && incompleteToolRemintScopeKey) {
           clearCursorIncompleteToolRemint(incompleteToolRemintScopeKey);
         }
-        // A mid-stream envelope echo has ALREADY reached the client — the prefix sniffer only
-        // watches the first bytes of a turn, and grok-4.6 writes a real sentence before pasting
-        // the envelope. It cannot be quarantined, so the recovery is the same as the
-        // incomplete-tool case: leave this turn alone and rotate the next turn's id, otherwise
-        // the stored echo is replayed and primes the model to echo again.
+        // Strip a split mid-stream marker before it reaches the client, then rotate the next
+        // conversation because the upstream checkpoint may still contain the echoed envelope.
         //
         // Its own budget, not the incomplete-tool one: echoing is cheap and repeatable while an
         // incomplete client-tool stream is rare and structural, so a shared counter would let a
@@ -645,6 +660,7 @@ export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAda
             ? cursorEnvelopeEchoRemintScopeKey(
                 cursorClientThreadOwner(_parsed),
                 _parsed._cursorIdentityScope,
+                request.conversationId,
               )
             : null;
         if (sawMidstreamEnvelopeEcho && !sawIncompleteToolCall && envelopeEchoRemintScopeKey) {

@@ -61,6 +61,7 @@ function responseError(status: number, type: string, message: string): OcxErrorP
 
 export type ResponsesTerminalStatus = "completed" | "failed" | "incomplete";
 
+/** Stream adapter events as Responses frames, applying tool authorization before relaying calls. */
 export function bridgeToResponsesSSE(
   events: AsyncIterable<AdapterEvent>,
   modelId: string,
@@ -92,13 +93,14 @@ export function bridgeToResponsesSSE(
      * from this callback instead of re-parsing the bridged SSE.
      */
     onUsage?: (usage: OcxUsage | undefined) => void;
-    /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
+    /** Request-visible tool names. Required for client calls when enforcement is explicitly enabled. */
     declaredToolNames?: ReadonlySet<string>;
     /**
      * Whether `declaredToolNames` is an authorization boundary this proxy enforces, or only the
      * catalog used to normalize provider-invented names back to declared ones.
      *
-     * Defaults to enforcing. The chat and Anthropic inbound wires set it false: those specs make
+     * Defaults to enforcing when a catalog is supplied. Explicit true also fails closed when the
+     * catalog is absent. The chat and Anthropic inbound wires set it false: those specs make
      * the server relay a tool call and leave execution or refusal to the client's own runner, and
      * harnesses on them legitimately defer part of their catalog (#4735).
      *
@@ -1010,9 +1012,9 @@ export function bridgeToResponsesSSE(
               const mapped = toolNsMap?.get(effectiveName);
               const realName = mapped?.name ?? effectiveName;
               if (
-                options?.declaredToolNames
-                && options.enforceDeclaredToolNames !== false
-                && !options.declaredToolNames.has(effectiveName)
+                (options?.enforceDeclaredToolNames === true || options?.declaredToolNames != null)
+                && options?.enforceDeclaredToolNames !== false
+                && !options?.declaredToolNames?.has(effectiveName)
               ) {
                 const failure = responseError(
                   502,

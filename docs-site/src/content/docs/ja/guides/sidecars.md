@@ -137,5 +137,14 @@ OpenAI 実行経路、ダッシュボード、管理 API は `gpt-5.6-luna` を�
 
 `PUT /api/sidecar-settings` は同じフィールドを受け付けます。部分更新では省略したキーをそのまま残します。`timeoutMs` はランタイムの整数範囲（1–2147483647 ms）を使います。
 
+Web 検索サイドカーのカードも同じ構成です。モデルピッカーの先頭行が **オフ (Off)** です。オフにすると
+OpenCodex は `web_search` への介入をやめ、Codex 統合は `~/.codex/config.toml` に
+`web_search = "disabled"` を書き込みます。Codex は自身のモードがそうなるまでネイティブの
+ホスト型 `web_search` ツールを広告し続けるためで、MCP 検索サーバーだけを検索経路にしたい
+場合に必要です。再びオンにするとこの行は削除され、Codex ジャーナルに記録されたオペレーター自身の
+ルート `web_search` 行が復元されます。この書き込みには管理対象の
+`~/.codex/config.toml`（`ocx sync`）が必要で、書き込みが行われなかった場合は
+ダッシュボードのカードが警告し、`ocx agent sidecar web --enabled off` が結果を報告します。
+
 ファイルを直接編集したい場合は、これまでどおり `config.json` で `enabled` を `false` にできます。Anthropic OAuth 検索と画像説明は既存の Claude Code OAuth fingerprint 先例に従いますが、実際のアカウントと作業量で十分 soak test するのが無難です。全
 フィールドは[設定リファレンス](/ja/reference/configuration/server/#サイドカー)を参照してください。

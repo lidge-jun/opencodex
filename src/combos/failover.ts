@@ -15,6 +15,7 @@ interface TargetCooldown {
 
 const DEFAULT_COOLDOWN_MS = 60_000;
 const MAX_COOLDOWN_MS = 10 * 60_000;
+const MAX_SERVER_DELAY_MS = 24 * 60 * 60_000;
 /** Short cooldown for request-rate 429s (for example provider code 1302) that omit Retry-After. */
 export const COMBO_REQUEST_RATE_COOLDOWN_MS = 5_000;
 
@@ -115,6 +116,7 @@ function parseHttpDate(value: string, now: number): number | undefined {
   );
 }
 
+/** Parse a Retry-After delay, optionally retaining an upstream delay up to one day. */
 export function parseRetryAfterMs(
   value: string | null | undefined,
   now = Date.now(),
@@ -122,11 +124,10 @@ export function parseRetryAfterMs(
 ): number | undefined {
   const text = value?.trim();
   if (!text) return undefined;
-  // A local wait ceiling must not make an explicit upstream reset expire early.
-  // Keep legacy bounded parsing for other callers. The opt-in stores a timestamp;
-  // the combo picker still independently limits how long a live request waits.
+  // Keep legacy bounded parsing for other callers. Combo cooldowns preserve
+  // multi-hour upstream delays, but never quarantine a target beyond one day.
   const maximum = options?.preserveServerDelay === true
-    ? Number.MAX_SAFE_INTEGER - Math.max(0, now)
+    ? MAX_SERVER_DELAY_MS
     : MAX_COOLDOWN_MS;
   if (/^\d+(?:\.\d+)?$/.test(text)) {
     const seconds = Number(text);
@@ -200,6 +201,7 @@ export function comboCooldownRetryAfterSeconds(comboId: string, now = Date.now()
   return String(Math.max(1, Math.ceil(remainingMs / 1000)));
 }
 
+/** Record a combo target cooldown, preferring bounded upstream retry evidence. */
 export function coolComboTarget(
   comboId: string,
   target: Pick<OcxComboTarget, "provider" | "model">,
@@ -234,8 +236,7 @@ export function coolComboTarget(
       message: options?.message,
     }) ? COMBO_REQUEST_RATE_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
   targetCooldowns.set(cooldownMapKey(comboId, target), {
-    // Only the locally chosen fallback is capped at ten minutes. An explicit
-    // server lower bound (including one hour) remains authoritative.
+    // Local fallbacks are capped at ten minutes; explicit server delays at one day.
     cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
   });
   sweepExpiredOnWrite(now);

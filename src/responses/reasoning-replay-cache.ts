@@ -192,6 +192,32 @@ export function reasoningReplayServingIdentityChanged(
   return previous !== undefined && previous.identity !== current.identity;
 }
 
+/**
+ * Whether the conversation's last serving route kept its items in a store this route cannot
+ * read: a different durable destination or credential.
+ *
+ * A replayed reasoning item's `rs_*` id names an item in that store. Once the store differs, a
+ * stateful Responses destination resolves the id against its own store and fails the turn with
+ * `Item with id … not found` (#5583), so the id is as foreign as the blob beside it. A change of
+ * provider label, adapter or model on the same destination and credential keeps the same store,
+ * and there the id remains resolvable. Unknown, expired, or evicted provenance is not a change.
+ */
+export function reasoningReplayItemStoreChanged(
+  scope: OcxReasoningReplayScopeRef | undefined,
+): boolean {
+  const current = servingIdentityFor(scope);
+  if (!current) return false;
+  const at = now();
+  sweepExpiredServingIdentities(at);
+  const previous = servingIdentities.get(current.threadId);
+  if (previous === undefined || previous.identity === current.identity) return false;
+  const storeOwner = (identity: string): string => {
+    const [, destination, , , credential] = JSON.parse(identity) as ReasoningReplayIdentityTuple;
+    return JSON.stringify([destination, credential]);
+  };
+  return storeOwner(previous.identity) !== storeOwner(current.identity);
+}
+
 /** Record the route only after it has successfully served the conversation. */
 export function commitReasoningReplayServingIdentity(
   scope: OcxReasoningReplayScopeRef | undefined,

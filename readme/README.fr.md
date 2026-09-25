@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex — proxy universel de fournisseurs pour Codex, Claude Code, Claude Desktop et Grok Build" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>Proxy universel de fournisseurs pour OpenAI Codex, Claude Code, Claude Desktop &amp; Grok Build</b><br>
 Deux commandes suffisent pour que chacun d'eux exécute le LLM de votre choix.</p>
@@ -13,6 +17,13 @@ Deux commandes suffisent pour que chacun d'eux exécute le LLM de votre choix.</
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="Télécharger pour macOS (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Télécharger pour Windows (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Télécharger pour Linux (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Télécharger pour Linux (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -79,7 +90,7 @@ tandis que les fils existants restent associés au compte qui les a démarrés.
 
 ## Démarrage rapide
 
-### Installation personnelle
+### Installation personnelle (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+ ; le runtime Bun est inclus automatiquement
@@ -94,30 +105,29 @@ choisissez les modèles, gérez les comptes. `ocx gui`
 rouvre le tableau de bord à tout moment.
 
 <details>
-<summary><b>Application de bureau et widget macOS — bêta</b></summary>
+<summary><b>Application de bureau (bêta)</b></summary>
 
-Une application native qui reprend le même tableau de bord, accompagnée d’une extension WidgetKit qui
-affiche l’état du proxy, l’utilisation du jour et les quotas des fournisseurs sans ouvrir de
-navigateur. Le proxy ne change pas : l’application détecte une instance en cours d’exécution ou
-démarre le sidecar `ocx` inclus, tandis que le tableau de bord reste accessible sur le port du proxy
-(**http://localhost:10100** sauf si vous en avez configuré un autre).
+L'application de bureau reprend le même proxy et le même tableau de bord dans une fenêtre native, avec une icône dans la barre d'état et le binaire `ocx` inclus.
+Elle se rattache à un proxy déjà en cours d'exécution ou démarre celui qui est fourni, et le tableau de bord reste
+sur le port du proxy (**http://localhost:10100** sauf si vous en avez configuré un autre). Choisissez le fichier
+correspondant à votre plateforme sur la page de la [dernière version publiée](https://github.com/lidge-jun/opencodex/releases/latest) :
 
-Cette version est en bêta. Les versions publiées de l’application macOS sont signées avec un identifiant
-Developer ID et notariées (les compilations locales sont signées ad hoc) ; le programme d’installation
-Windows n’est pas encore signé, et SmartScreen affiche donc un avertissement au premier lancement.
-Le widget nécessite macOS 14 ou une version ultérieure ; le modèle de données des instantanés qu’il
-affiche se trouve dans [`app/`](../app) (`MenuBarCore`).
+| Plateforme | Fichier | Remarques |
+|---|---|---|
+| macOS 13+ (Apple Silicon et Intel) | `OpenCodex-<version>-macos.dmg` | Compilation universelle, signée avec un identifiant Developer ID et notariée |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Pas encore signée numériquement : SmartScreen demande une confirmation, choisissez **Informations complémentaires → Exécuter quand même** |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` ou `-linux-amd64.deb` | La barre d'état nécessite un environnement de bureau compatible AppIndicator |
 
-Téléchargez l’application depuis la [dernière version publiée](https://github.com/lidge-jun/opencodex/releases),
-ou compilez-la localement : exécutez `bun install && bun run build:gui` à la racine du dépôt, puis
-`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` dans
-`desktop/`.
-
-Les emplacements d’installation, les fichiers de service et tous les autres éléments écrits sur le
-disque sont répertoriés dans [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed).
-Le [guide de l’application de bureau](https://opencodex.me/fr/guides/desktop-app/) et le
-[guide de l’application macOS dans la barre des menus](https://opencodex.me/fr/guides/macos-menu-bar/)
-détaillent l’installation sur chaque plateforme et le premier lancement.
+Chaque fichier est accompagné d'un `.sha256` sur la page de la version. Sous macOS 14+, l'application embarque
+également une extension WidgetKit qui affiche l'état du proxy, l'utilisation du jour et les quotas des
+fournisseurs ; le modèle de données des instantanés qu'elle affiche se trouve dans [`app/`](../app)
+(`MenuBarCore`). Pour compiler l'application vous-même, exécutez
+`bun install && bun run build:gui` à la racine du dépôt, puis, dans `desktop/`,
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` sous macOS,
+ou `bun install && bun run prepare-sidecar && bun run build:local` sous Windows et Linux (l'étape du widget
+exige macOS). Le [guide de l'application de bureau](https://opencodex.me/fr/guides/desktop-app/) et le
+[guide de l'application macOS dans la barre des menus](https://opencodex.me/fr/guides/macos-menu-bar/) détaillent le premier lancement, et
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) répertorie tout ce qui est écrit sur le disque.
 
 </details>
 
@@ -260,13 +270,13 @@ s'il est inaccessible). `ocx status` / `ocx doctor` / `ocx health` indiquent l'�
 
 ## Plateformes prises en charge
 
-| Système d'exploitation | État | Gestionnaire de services |
-|---|---|---|
-| macOS (arm64 / x64) | Entièrement pris en charge | launchd |
-| Linux (x64 / arm64) | Entièrement pris en charge | systemd (unité utilisateur) |
-| Windows (x64) | Entièrement pris en charge | Planificateur de tâches (masqué) / service natif en option (`--native`, WinSW) |
+| Système d'exploitation | État | Gestionnaire de services | Application de bureau (bêta) |
+|---|---|---|---|
+| macOS (arm64 / x64) | Entièrement pris en charge | launchd | `.dmg` universel |
+| Linux (x64 / arm64) | Entièrement pris en charge | systemd (unité utilisateur) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | Entièrement pris en charge | Planificateur de tâches (masqué) / service natif en option (`--native`, WinSW) | x64 `.msi` |
 
-Nécessite [Node](https://nodejs.org) 18+. L'environnement d'exécution Bun est inclus lors de `npm install` — aucune installation
+L'installation de la CLI nécessite [Node](https://nodejs.org) 18+ ; l'application de bureau n'a besoin ni de Node ni de Bun. L'environnement d'exécution Bun est inclus lors de `npm install` — aucune installation
 séparée de Bun n'est nécessaire, ni WSL sous Windows. Si npm a bloqué les scripts d'installation de l'environnement inclus,
 consultez la [documentation d'installation](https://opencodex.me/fr/getting-started/installation/).
 
@@ -303,14 +313,15 @@ consultez la [documentation d'installation](https://opencodex.me/fr/getting-star
 <details>
 <summary>Détails de la gestion de la mémoire</summary>
 
-OpenCodex suit 36 catégories d'état conservé par le processus. Chacune possède une limite documentée :
+OpenCodex suit l'état conservé par le processus dans les catégories ci-dessous. Chacune possède une limite documentée :
 
-- **12 stockages conservés** (journal des requêtes, tampons circulaires de débogage, cache d'images, cache de
+- **14 stockages conservés** (journal des requêtes, tampons circulaires de débogage, cache d'images, cache de
   modèles, descriptions visuelles, blobs de curseurs, continuation des réponses, etc.) sont comptabilisés en octets et
-  évincés selon le budget mémoire géré par l'application (256 Mio par défaut).
+  évincés selon le budget mémoire géré par l'application (256 Mio par défaut), sauf le stockage de
+  rejeu des contrôles natifs, épinglé et jamais évincé.
 - **4 tampons observés** (accumulateurs de traduction, segments finaux d'images/OAuth/Grok) sont
   surveillés pour détecter la pression des octets en cours de traitement, sans éviction.
-- **24 enregistrements de stockages d'état** gèrent les balayages d'expiration (intervalle de 60 s) et la
+- **28 enregistrements de stockages d'état** gèrent les balayages d'expiration (intervalle de 60 s) et la
   réconciliation des générations de configuration afin de supprimer les clés obsolètes des fournisseurs et des comptes.
 - **Les mémos de chemins et d'empreintes** (métadonnées de l'espace de travail, identités renforcées, sels
   d'installation, capacités indiquées par le mode) utilisent des limites LRU selon l'ordre d'insertion (8 à 128 entrées).

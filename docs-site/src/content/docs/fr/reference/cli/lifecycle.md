@@ -304,6 +304,7 @@ Utilisez `ocx service` pour maintenir un proxy d’arrière-plan toujours actif,
 
 Installe et contrôle l’icône OpenCodex dans la zone de notification Windows. Elle démarre à l’ouverture de session et fournit des commandes du proxy accessibles en un clic. `start` et `stop` contrôlent uniquement l’icône ; utilisez son menu pour contrôler le proxy. `--no-start` s’applique à `install` et installe l’icône sans la lancer immédiatement.
 Obsolète : l’application OpenCodex fournit la zone de notification sous Windows, macOS et Linux ; `ocx tray` reste disponible pour les installations sans l’application de bureau.
+Lorsqu'une version plus récente du paquet est connue, la zone de notification ajoute un point bleu à l'icône en ligne, d'avertissement ou hors ligne et affiche **Update available**. Elle vérifie le badge mis en cache localement environ une fois par minute ; les résultats obsolètes ou indisponibles retirent le point. L'élément ouvre le tableau de bord, où vous pouvez lancer la mise à jour du paquet. L'installation automatique est désactivée.
 
 ## Tableau de bord
 
@@ -316,6 +317,8 @@ Ouvre le [tableau de bord Web](/fr/guides/web-dashboard/) à l’adresse `http:/
 `ocx update` met à jour OpenCodex lui-même, et non la CLI Codex. Utilisez `ocx system codex-cli-update check` parmi les [commandes d’inspection système](/fr/reference/cli/agents/) pour vérifier, de façon bornée et en lecture seule, la provenance du candidat Codex CLI configuré. Cette commande n’interroge aucun registre de paquets et n’installe aucune mise à jour.
 
 ### `ocx update [--tag latest|preview]`
+
+Lorsque OpenCodex est installé avec mise, cette commande échoue avant d'arrêter le proxy ou de modifier les fichiers du paquet et affiche `mise upgrade <outil>` avec l'alias mise local vérifié. La vérification des mises à jour reste disponible et signale une gestion externe. Des métadonnées de propriété mise illisibles ou incohérentes bloquent aussi toute modification sans deviner le nom de l'outil, et `--tag preview` ne change jamais la sélection configurée dans mise.
 
 Met à jour opencodex depuis npm. Les installations stables utilisent `@latest` ; les préversions restent sur `@preview`, sauf si vous indiquez `--tag latest|preview`. La commande détecte un dépôt de sources et vous invite alors à exécuter `git pull && bun install`. Elle ne fait rien si la version la plus récente correspondant à cette balise est déjà installée.
 

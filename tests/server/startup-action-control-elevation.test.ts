@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import * as childProcess from "node:child_process";
 import { WINDOWS_SCHTASKS_CREATE_ACCESS_DENIED_MARKER } from "../../src/lib/windows-elevation";
 
@@ -13,10 +13,18 @@ const execFileMock = mock((
 
 const finalizeMock = mock(async () => ({ kind: "done" as const }));
 
+// `mock.module` outlives this file: Bun keeps the override below for every file that runs after
+// this one in the same process. This is a spread snapshot of the real module, taken before it.
+const realChildProcess = { ...(await import("node:child_process")) };
+
 mock.module("node:child_process", () => ({
   ...childProcess,
   execFile: execFileMock,
 }));
+
+afterAll(() => {  // Put the real module back for every later file in the same process.
+  mock.module("node:child_process", () => realChildProcess);
+});
 
 const {
   classifyCliInstallFailure,

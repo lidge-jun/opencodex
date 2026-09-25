@@ -123,6 +123,43 @@ describe("desktop release scripts", () => {
     }
   });
 
+  test("collects Linux formats from an explicitly staged isolated bundle root", () => {
+    const root = temporaryDirectory();
+    try {
+      const bundleRoot = join(root, "isolated-linux-bundles");
+      mkdirSync(join(bundleRoot, "appimage"), { recursive: true });
+      mkdirSync(join(bundleRoot, "deb"), { recursive: true });
+      writeFileSync(join(bundleRoot, "appimage", "OpenCodex.AppImage"), "appimage");
+      writeFileSync(join(bundleRoot, "deb", "OpenCodex.deb"), "deb");
+
+      const files = collectReleaseAssets({
+        version: "2.61.0",
+        target: "x86_64-unknown-linux-gnu",
+        out: join(root, "release"),
+        repoRoot: root,
+        bundleRoot,
+      });
+
+      expect(files.map(path => basename(path))).toEqual([
+        "OpenCodex-2.61.0-linux-x86_64.AppImage",
+        "OpenCodex-2.61.0-linux-x86_64.AppImage.sha256",
+        "OpenCodex-2.61.0-linux-amd64.deb",
+        "OpenCodex-2.61.0-linux-amd64.deb.sha256",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("the Linux sidecar verifier takes the staged AppImage directory and keeps the local default", () => {
+    const verifier = readFileSync(repoPath("desktop", "scripts", "verify-linux-sidecar.sh"), "utf8");
+    expect(verifier).toContain('bundle="${1:-$root/desktop/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage}"');
+    const wrapper = readFileSync(repoPath("desktop", "scripts", "appimage-patchelf.py"), "utf8");
+    expect(wrapper).toContain('os.environ.get("CARGO_TARGET_DIR"');
+    expect(wrapper).toContain("APPDIR_SIDECAR_TAIL");
+    expect(wrapper).not.toContain('desktop/src-tauri/target" / triple');
+  });
+
   test("rejects ambiguous bundle matches", () => {
     const root = temporaryDirectory();
     try {
@@ -408,6 +445,31 @@ describe("the desktop build toolchain carries the bundle-type marker", () => {
         || (major === minimumCliWithBundlePatch.major && minor! >= minimumCliWithBundlePatch.minor),
     ).toBe(true);
   });
+
+  test("the release workflow gives AppImage and deb independent Cargo targets", () => {
+    const workflow = Bun.YAML.parse(
+      readFileSync(repoPath(".github", "workflows", "release.yml"), "utf8"),
+    ) as {
+      jobs?: Record<string, {
+        steps?: Array<{ name?: string; if?: string; run?: string; env?: Record<string, string> }>;
+      }>;
+    };
+    const steps = workflow.jobs?.["package-desktop"]?.steps ?? [];
+    const appImage = steps.find(step => step.name === "Build Linux AppImage bundle");
+    const deb = steps.find(step => step.name === "Build Linux deb bundle");
+    expect(appImage?.env?.CARGO_TARGET_DIR).toContain("opencodex-appimage-target");
+    expect(deb?.env?.CARGO_TARGET_DIR).toContain("opencodex-deb-target");
+    expect(appImage?.env?.CARGO_TARGET_DIR).not.toBe(deb?.env?.CARGO_TARGET_DIR);
+    expect(appImage?.run).toContain("--bundles appimage");
+    expect(deb?.run).toContain("--bundles deb");
+
+    const stage = steps.find(step => step.name === "Stage isolated Linux release bundles");
+    expect(stage?.run).toContain("$APPIMAGE_TARGET/$DESKTOP_TARGET/release/bundle/appimage/.");
+    expect(stage?.run).toContain("$DEB_TARGET/$DESKTOP_TARGET/release/bundle/deb/.");
+    expect(stage?.run).toContain('chmod -R a-w "$bundle_root"');
+    const collect = steps.find(step => step.run?.includes("collect-release-assets.ts"));
+    expect(collect?.run).toContain('--bundle-root "$DESKTOP_BUNDLE_ROOT"');
+  });
 });
 
 describe("widget extension signing", () => {
@@ -454,10 +516,14 @@ describe("widget extension signing", () => {
     expect(preserve?.if).toBe("runner.os == 'Linux'");
     expect(preserve?.run).toContain("PATCHELF=$GITHUB_WORKSPACE/desktop/scripts/appimage-patchelf.py");
     expect(verify?.if).toBe("runner.os == 'Linux'");
-    expect(verify?.run).toBe("bash desktop/scripts/verify-linux-sidecar.sh");
-    expect(indexOfStep(preserve!.name!)).toBeLessThan(indexOfStep("Build desktop bundles"));
-    expect(indexOfStep(verify!.name!)).toBeGreaterThan(indexOfStep("Build desktop bundles"));
+    // The Linux AppImage is built in its own Cargo target and staged read-only; the verifier runs
+    // after that staging, against the staged copy, and before any asset is collected.
+    expect(verify?.run).toBe('bash desktop/scripts/verify-linux-sidecar.sh "$DESKTOP_BUNDLE_ROOT/appimage"');
+    expect(indexOfStep(preserve!.name!)).toBeLessThan(indexOfStep("Build Linux AppImage bundle"));
+    expect(indexOfStep(verify!.name!)).toBeGreaterThan(indexOfStep("Build Linux AppImage bundle"));
+    expect(indexOfStep(verify!.name!)).toBeGreaterThan(indexOfStep("Stage isolated Linux release bundles"));
     expect(indexOfStep(verify!.name!)).toBeLessThan(indexOfStep("Rename release assets"));
+    expect(steps.find(step => step.name === "Build desktop bundles")?.if).toBe("runner.os != 'Linux'");
   });
 
   test("the release build hands the widget a signing identity and forbids an ad-hoc fallback", () => {

@@ -43,10 +43,31 @@ describe("gateway apply explains the first-party alternative", () => {
     })).toEqual([]);
   });
 
-  test("a fresh machine that fell back to gateway is not told to switch to something unavailable", () => {
-    expect(gatewayModeExplanation({
+  test("a fresh machine names gateway as the default and pairs the first-party command with the account risk", () => {
+    const text = gatewayModeExplanation({
       requestedExplicitly: false,
       config: {},
+      connection: disconnected,
+    }).join("\n");
+
+    expect(text).toContain("gateway is the default");
+    expect(text).toContain("ocx claude desktop apply --first-party");
+    expect(text).toContain("Account risk:");
+    expect(text).toContain("suspend the account");
+  });
+
+  test("every explanation that offers first-party also carries the account risk", () => {
+    for (const config of [{}, { claudeCode: { desktopMode: "gateway" as const } }, { claudeCode: { desktopProfile: { appliedFingerprint: "abc123" } } }]) {
+      const text = gatewayModeExplanation({ requestedExplicitly: false, config, connection: disconnected }).join("\n");
+      expect(text).toContain("--first-party");
+      expect(text).toContain("Account risk:");
+    }
+  });
+
+  test("a disabled intercept says nothing, because first-party cannot run there", () => {
+    expect(gatewayModeExplanation({
+      requestedExplicitly: false,
+      config: { claudeCode: { intercept: { enabled: false } } },
       connection: disconnected,
     })).toEqual([]);
   });

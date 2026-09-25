@@ -21,6 +21,7 @@ import {
   durableReplayDestinationIdentity,
   bindReasoningReplayScope,
   reasoningReplayServingIdentityChanged,
+  reasoningReplayItemStoreChanged,
   reasoningReplayOpaqueBlobRejectionMemoized,
 } from "../../responses/reasoning-replay-cache";
 import type { OAuthAccessSnapshot } from "../../oauth";
@@ -137,9 +138,15 @@ export function bindRouteReasoningReplayScope(args: {
   // after the first mismatch, but it cannot make history minted by the prior route decodable.
   if (reasoningReplayServingIdentityChanged(parsed._reasoningReplayScope)) {
     parsed._stripReasoningEncryptedContent = true;
+    // Only a different destination or credential makes the replayed item ids unresolvable; a
+    // model change on the same store keeps them.
+    if (reasoningReplayItemStoreChanged(parsed._reasoningReplayScope)) {
+      parsed._dropForeignReasoningItemIds = true;
+    }
   }
   if (reasoningReplayOpaqueBlobRejectionMemoized(parsed._reasoningReplayScope)) {
     parsed._stripReasoningEncryptedContent = true;
+    parsed._dropForeignReasoningItemIds = true;
   }
   bindProviderContinuationForRoute(parsed, continuationOwner);
 }

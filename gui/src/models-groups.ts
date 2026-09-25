@@ -30,6 +30,8 @@ export interface ConfiguredProviderSummary {
   modelContextWindows?: Record<string, number>;
   discovery?: ProviderDiscoverySummary;
   entitlement?: ProviderEntitlementSummary;
+  /** Present only for providers whose Fast lane is opt-in (Anthropic fast mode). */
+  fastOptIn?: { enabled: boolean };
 }
 
 export interface ProviderModelGroup<Row> {

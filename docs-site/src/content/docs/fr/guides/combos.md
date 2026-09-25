@@ -202,11 +202,12 @@ Les échecs d’un combo se répartissent entre ceux qui entraînent un **bascul
 | Erreur classée comme erreur d’authentification, d’abonnement, de quota, de limitation de débit, de surcharge ou de serveur en amont | Place la cible en période de refroidissement et bascule, même si le statut seul ne suffit pas. |
 | Annulation client (499), `origin_rejected`, refus de cyber-politique, débordement de contexte ou autre demande invalide | Arrêtez et renvoyez l'erreur ; une autre cible ne rendrait pas la demande valide. |
 | Rejet structuré de `user`, valeur non prise en charge pour `reasoning.effort`/`reasoning_effort`, ou rejet d'entrée d'image propre à un modèle (`param: input`) | Bascule vers la cible admissible suivante avant le début de la sortie, sans délai de refroidissement ; voir Compatibilité des paramètres facultatifs ci-dessous. |
+| Premier appel d'outil d'un tour Responses exécuté par un adaptateur interne (`runTurn`) que la requête courante n'a pas déclaré, avant toute sortie et tout effet de bord non rejouable | Met la cible en refroidissement et bascule avec le même catalogue d'outils. Après une sortie visible ou un effet de bord non rejouable, le refus est définitif. Les requêtes Chat Completions et Anthropic Messages ne changent pas. |
 | Toute autre erreur non classifiée | Arrêtez et renvoyez l'erreur. |
 
 Une cible sautée entre en temps de recharge pendant 60 secondes par défaut. Si la réponse en amont inclut un
 valeur `Retry-After` valide, opencodex l’utilise à la place. Les secondes numériques et les valeurs de date HTTP sont
-accepté, et chaque temps de recharge est limité à 10 minutes.
+accepté, et un délai explicite `Retry-After` est plafonné à 24 heures ; les autres temps de recharge restent plafonnés à 10 minutes.
 
 La requête actuelle ne réessaye jamais la même cible tentée. Les demandes ultérieures l'ignorent jusqu'à ce qu'il soit
 le temps de recharge expire. S’il ne reste aucune cible éligible, le proxy renvoie HTTP 503 avec
@@ -215,6 +216,7 @@ le temps de recharge expire. S’il ne reste aucune cible éligible, le proxy re
 :::note
 Le basculement est intentionnellement limité. Il facilite la disponibilité, l'authentification et l'authentification spécifiques à la cible.
 échecs de quota et de surcharge ; il ne cache pas les erreurs des appelants ni les refus de politique.
+Sur une requête Responses hors combo, un 403 de politique xAI de la liste autorisée est réécrit en HTTP 200 `incomplete/content_filter` avant que Codex ne le relance comme un échec de transport ; voir [xAI policy refusals](/fr/reference/proxy-formats/#xai-policy-refusals). Les sauts de combo classent toujours le HTTP 403 d'origine comme un saut.
 :::
 
 ## Effort de raisonnement par défaut
@@ -353,7 +355,7 @@ exécution d'une instance opencodex qui reçoit des requêtes de modèle.
 Chaque cible est actuellement inéligible : par exemple, son fournisseur est désactivé, il est en phase de refroidissement,
 elle a déjà été tentée pour cette requête, ou une tâche v2 chiffrée l'exclut. Vérifier la cible
 état du fournisseur et erreurs récentes en amont. Pour les temps de recharge, attendez la valeur par défaut de 60 secondes ou la
-délai indiqué par `Retry-After` en amont (jamais plus de 10 minutes), puis réessayez.
+délai indiqué par `Retry-After` en amont (au maximum 24 heures pour un `Retry-After` explicite, contre 10 minutes pour les autres), puis réessayez.
 
 ### Pourquoi mon alias a-t-il été rejeté ?
 

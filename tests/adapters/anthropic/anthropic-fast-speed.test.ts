@@ -16,6 +16,8 @@ function provider(authMode: "key" | "oauth" = "key", overrides: Partial<OcxProvi
     baseUrl: "https://api.anthropic.com",
     apiKey: "test-token",
     authMode,
+    // Anthropic Fast is opt-in (anthropic-fast-opt-in.test.ts); these cases exercise the enabled lane.
+    fastEnabled: true,
     ...overrides,
   };
   enrichProviderFromRegistry(authMode === "oauth" ? "anthropic" : "anthropic-apikey", result);

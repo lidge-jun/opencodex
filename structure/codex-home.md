@@ -32,9 +32,16 @@ issuing deferred inference warmups. Already dispatched requests retain their cap
 ## Codex home
 
 `src/codex/paths.ts` resolves Codex state from `CODEX_HOME` when set and valid, otherwise from
-`~/.codex`. An unset `CODEX_HOME` falls back to `~/.codex`, including WSL discovery. An explicitly
+`~/.codex`. An unset `CODEX_HOME` falls back to `~/.codex`, including WSL discovery. On WSL,
+discovery of a Windows Desktop home applies when the Linux `~/.codex` is absent, is not a directory,
+or is a directory holding no Codex state (none of `config.toml`, `auth.json`, `sessions`,
+`history.jsonl`; `defaultCodexHome` in `src/codex/home.ts`). A fresh local home Codex is already using
+stays the home before `config.toml` exists (issue 5441), a bare directory does not move an existing
+user off a Windows home they were running against, and a stat failure other than absence keeps the
+local home rather than switching to a different one. Codex runtime discovery (src/codex/runtime.ts) also reads this home on Linux: after an explicit runtime, PATH, and the ordinary install locations, it enumerates the direct children of <effective CODEX_HOME>/bin/wsl/<version-hash>/codex newest first, probes each through the isolated --version seam, and re-enumerates on every resolve so a Desktop update that replaces the hash directory is picked up (issue 5635). An explicitly
 set path that is unreadable or not a directory is an error, not a fallback: silently using a
-different home than the operator named would write provider state where nobody is looking for it.
+different home than the operator named would write provider state where nobody is looking for it. A fresh install can have that directory but no `config.toml` yet; applying the integration then creates an empty `config.toml` there (never overwriting an existing file) and continues, while a missing home directory is refused with instructions to start Codex once or set `CODEX_HOME` (issue 5422).
+`src/codex/home.ts` imports path expansion directly from `src/config/paths.ts`, so a fresh WSL process can resolve its Codex home without re-entering the config facade before the resolver initializes.
 The managed files are:
 
 ```text
@@ -48,6 +55,14 @@ $CODEX_HOME/.opencodex-native-main-profiles/
 
 Never assume macOS-only paths. Windows, service installs, and app-launched Codex can all depend on
 the resolved `CODEX_HOME`.
+
+Log Guard reclaim in `src/codex/log-guard/maintenance.ts` refuses a non-regular or redirected
+database path. It compares canonical path and full-width filesystem device and file identity
+from path observations before and immediately after SQLite opens the database, before maintenance
+statements. Reclaim is unavailable where the filesystem does not report a usable stable file
+identity: missing or zero inode values return `unsafe_path`. File size and timestamps are
+measurements, not identity evidence. These path observations do not attest SQLite's opened handle
+or continuous file identity between the observations.
 
 Observed catalog/cache rows and restore output follow the [retired-native policy](catalog.md#shared-catalog).
 Restore filters retired bare and trusted account-qualified native rows from its output with or
@@ -118,6 +133,13 @@ stage registry and this instance's staging tree are proven absent. This keeps an
 subsystem from fencing native traffic or creating lock contention. Presence, an unsafe entry type,
 or any observation error still takes the locked sweep and fails closed; the fast path is based only
 on proven absence, never on an unreadable path.
+
+Native-main admission is one process-global gate owned by the live startup entry. Releasing the
+last reference to that entry returns the gate to its process-initial `ready` state synchronously,
+before the release awaits anything, so a server stopped in the middle of startup convergence
+cannot leave the process fenced for the servers that follow it; an entry created afterwards for
+the same home arms its own gate, and the retired generation's late convergence writes are ignored.
+`tests/codex-integration/native-profile-startup-release.test.ts` pins that ordering.
 
 The native main slot also accepts one same-identity device reauth (#3898):
 `/api/codex-auth/main/reauth-device` (start/status/cancel) plus

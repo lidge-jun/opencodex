@@ -48,33 +48,41 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
-describe("main-account 99 percent setting", () => {
-  test("GET reports off without an implicit opt-in", async () => {
+describe("main-account 98 percent setting", () => {
+  test("GET reports the default-on lock without a stored key", async () => {
     const response = await request(config());
     expect(await response!.json()).toMatchObject({
-      codexMainAccountHardLock: false,
-      mainAccountHardLock: { enabled: false, state: "off" },
+      codexMainAccountHardLock: true,
+      // The observation state depends on quota this file never seeds; the enabling decision
+      // is the projection under test.
+      mainAccountHardLock: { enabled: true },
     });
   });
 
-  test("PUT acknowledges the stored boolean and survives reload", async () => {
+  test("PUT true removes the stored key and the default survives reload", async () => {
     const cfg = config();
+    cfg.codexMainAccountHardLock = false;
     saveConfig(cfg);
     const response = await request(cfg, { codexMainAccountHardLock: true });
     expect(response!.status).toBe(200);
     expect(await response!.json()).toMatchObject({ ok: true, codexMainAccountHardLock: true });
-    expect(loadConfig().codexMainAccountHardLock).toBe(true);
+    expect(Object.hasOwn(cfg, "codexMainAccountHardLock")).toBe(false);
+    expect(Object.hasOwn(JSON.parse(readFileSync(getConfigPath(), "utf8")), "codexMainAccountHardLock")).toBe(false);
+    // The projection cannot distinguish an absent key from an explicit true: both are on.
+    expect(loadConfig().codexMainAccountHardLock).toBeUndefined();
     expect(cfg.providers.example.baseUrl).toBe("https://example.test/v1");
   });
 
-  test("disabling deletes only this key and preserves other account controls", async () => {
+  test("opting out persists false and preserves other account controls", async () => {
     const cfg = { ...config(), codexMainAccountHardLock: true, pausedCodexAccountIds: ["__main__"], autoSwitchThreshold: 73 };
     saveConfig(cfg);
     const response = await request(cfg, { codexMainAccountHardLock: false });
     expect(await response!.json()).toMatchObject({ ok: true, codexMainAccountHardLock: false });
-    expect(Object.hasOwn(cfg, "codexMainAccountHardLock")).toBe(false);
+    // Off is the decision, so it is written rather than deleted: a deleted key reads as on.
+    expect(cfg.codexMainAccountHardLock).toBe(false);
     const disk = JSON.parse(readFileSync(getConfigPath(), "utf8"));
-    expect(Object.hasOwn(disk, "codexMainAccountHardLock")).toBe(false);
+    expect(disk.codexMainAccountHardLock).toBe(false);
+    expect(loadConfig().codexMainAccountHardLock).toBe(false);
     expect(cfg.pausedCodexAccountIds).toEqual(["__main__"]);
     expect(cfg.autoSwitchThreshold).toBe(73);
   });
@@ -98,11 +106,14 @@ describe("main-account 99 percent setting", () => {
     }
   });
 
-  test("malformed hand edits remain off", () => {
+  test("malformed hand edits fall back to the default on", async () => {
     saveConfig(config());
     const path = getConfigPath();
     const disk = JSON.parse(readFileSync(path, "utf8"));
     writeFileSync(path, JSON.stringify({ ...disk, codexMainAccountHardLock: "yes" }));
-    expect(loadConfig().codexMainAccountHardLock).toBe(false);
+    const loaded = loadConfig();
+    expect(loaded.codexMainAccountHardLock).toBeUndefined();
+    const response = await request(loaded);
+    expect(await response!.json()).toMatchObject({ codexMainAccountHardLock: true });
   });
 });

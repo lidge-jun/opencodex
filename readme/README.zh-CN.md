@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex —— 面向 Codex、Claude Code、Claude Desktop 和 Grok Build 的通用提供商代理" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>面向 OpenAI Codex、Claude Code、Claude Desktop 和 Grok Build 的通用提供商代理</b><br>
 两条命令，它们就都能跑你指定的任意 LLM。</p>
@@ -13,6 +17,13 @@
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="下载 macOS 版 (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="下载 Windows 版 (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="下载 Linux 版 (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="下载 Linux 版 (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -77,7 +88,7 @@ Codex 认证管理一个 **ChatGPT 账户池**：添加账户，在仪表板中�
 
 ## 快速开始
 
-### 个人安装
+### 个人安装（CLI）
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+；Bun 运行时会自动捆绑
@@ -91,28 +102,27 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 可重新打开仪表板。
 
 <details>
-<summary><b>桌面应用与 macOS 小组件 —— 测试版</b></summary>
+<summary><b>桌面应用（测试版）</b></summary>
 
-它是同一套仪表板的原生外壳，另带 WidgetKit 扩展，无需打开浏览器即可查看代理状态、
-今日用量和提供商配额。代理本身没有变化：应用会连接已在运行的代理；若未发现，
-则启动内置的 `ocx` sidecar。仪表板仍使用代理的端口（未另行配置时为
-**http://localhost:10100**）。
+桌面应用把同一个代理和仪表板装进原生窗口，附带系统托盘和内置的 `ocx`。
+它会连接已在运行的代理，或启动自带的代理；仪表板仍使用代理端口
+（未另行配置时为 **http://localhost:10100**）。从
+[最新发布版本](https://github.com/lidge-jun/opencodex/releases/latest)中选择适合你平台的文件：
 
-桌面应用目前仍处于测试阶段。macOS 应用的发布构建已使用 Developer ID 签名并完成公证
-（本地构建采用 ad-hoc 签名）；Windows 安装程序尚未进行代码签名，因此首次运行时
-SmartScreen 会发出警告。
-小组件需要 macOS 14 或更高版本；它所呈现的快照模型位于 [`app/`](../app)
-（`MenuBarCore`）。
+| 平台 | 文件 | 说明 |
+|---|---|---|
+| macOS 13+（Apple Silicon 和 Intel） | `OpenCodex-<version>-macos.dmg` | 通用构建，使用 Developer ID 签名并完成公证 |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | 尚未进行代码签名：SmartScreen 会询问一次，选择 **更多信息 → 仍要运行** |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` 或 `-linux-amd64.deb` | 托盘需要支持 AppIndicator 的桌面环境 |
 
-请从[最新发布版本](https://github.com/lidge-jun/opencodex/releases)下载，或在本地构建：
-先在仓库根目录运行 `bun install && bun run build:gui`，再进入 `desktop/` 运行
-`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`。
-
-安装位置、服务文件以及写入磁盘的其他内容均列在
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) 中。
+每个文件在发布页面上都带有对应的 `.sha256`。在 macOS 14+ 上，应用还附带一个
+WidgetKit 扩展，可显示代理状态、今日用量和提供商配额；它所呈现的快照模型位于
+[`app/`](../app)（`MenuBarCore`）。如需自行构建应用，先在仓库根目录运行
+`bun install && bun run build:gui`，然后在
+`desktop/` 中运行：macOS 上用 `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`，Windows 和 Linux 上用 `bun install && bun run prepare-sidecar && bun run build:local`（小组件步骤只能在 macOS 上执行）。
 [桌面应用指南](https://opencodex.me/zh-cn/guides/desktop-app/)和
-[macOS 菜单栏应用指南](https://opencodex.me/zh-cn/guides/macos-menu-bar/)
-介绍了各平台的安装方式和首次启动步骤。
+[macOS 菜单栏应用指南](https://opencodex.me/zh-cn/guides/macos-menu-bar/)介绍了首次启动，
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed)列出了写入磁盘的所有内容。
 
 </details>
 
@@ -247,13 +257,13 @@ ocx init      # 交互式设置：写入 ~/.opencodex/config.json 并接入 Code
 
 ## 支持平台
 
-| 操作系统 | 状态 | 服务管理器 |
-|---|---|---|
-| macOS (arm64 / x64) | 完整支持 | launchd |
-| Linux (x64 / arm64) | 完整支持 | systemd（用户单元） |
-| Windows (x64) | 完整支持 | 任务计划程序（隐藏） / 可选原生服务 (`--native`，WinSW) |
+| 操作系统 | 状态 | 服务管理器 | 桌面应用（测试版） |
+|---|---|---|---|
+| macOS (arm64 / x64) | 完整支持 | launchd | 通用 `.dmg` |
+| Linux (x64 / arm64) | 完整支持 | systemd（用户单元） | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | 完整支持 | 任务计划程序（隐藏） / 可选原生服务 (`--native`，WinSW) | x64 `.msi` |
 
-需要 [Node](https://nodejs.org) 18+。Bun 运行时在 `npm install` 时捆绑 —— 无需单独安装
+CLI 安装需要 [Node](https://nodejs.org) 18+；桌面应用既不需要 Node 也不需要 Bun。Bun 运行时在 `npm install` 时捆绑 —— 无需单独安装
 Bun，Windows 也不需要 WSL。如果 npm 拦截了捆绑运行时的安装脚本，见
 [安装文档](https://opencodex.me/zh-cn/getting-started/installation/)。
 
@@ -288,14 +298,15 @@ Bun，Windows 也不需要 WSL。如果 npm 拦截了捆绑运行时的安装脚
 <details>
 <summary>内存所有权详情</summary>
 
-OpenCodex 跟踪 36 类进程保留状态。每一类都有文档化的边界：
+OpenCodex 在下列类别中跟踪进程保留状态。每一类都有文档化的边界：
 
-- **12 个保留存储**（请求日志、调试环、图片缓存、模型缓存、视觉
+- **14 个保留存储**（请求日志、调试环、图片缓存、模型缓存、视觉
   描述、光标 blob、responses 续写等）按字节记账，并由应用自有的内存预算
-  （默认 256 MiB）逐出。
+  （默认 256 MiB）逐出；其中 native control replay 存储是固定的，
+  不会被逐出。
 - **4 个观测缓冲区**（翻译累加器、图片/OAuth/Grok 尾部）会监测飞行中的字节压力，
   但不做逐出。
-- **24 个状态存储注册** 负责过期扫描（60 秒间隔）和配置世代对账，从而移除过期的
+- **28 个状态存储注册** 负责过期扫描（60 秒间隔）和配置世代对账，从而移除过期的
   提供商/账户键。
 - **路径与指纹备忘**（工作区元数据、加固身份、安装盐、模式提示能力）使用按插入顺序的
   LRU 上限（8–128 条）。

@@ -96,6 +96,7 @@ export function buildOpenAIChatPassthroughRequest(
 
   if (modelInList(provider.noTemperatureModels, modelId)) delete body.temperature;
   if (modelInList(provider.noTopPModels, modelId)) delete body.top_p;
+  if (modelInList(provider.noStopModels, modelId)) delete body.stop;
   if (modelInList(provider.noPenaltyModels, modelId)) {
     delete body.presence_penalty;
     delete body.frequency_penalty;

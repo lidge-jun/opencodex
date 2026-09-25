@@ -506,7 +506,10 @@ enabling it takes effect without a restart.
 
 `src/server/request-log.ts` preserves upstream `servedModel` independently of route-derived
 `resolvedModel`; `src/usage/log.ts` persists it with `wireModel`. The Logs model column and detail view
-compare `servedModel` with `wireModel ?? model`. An absent upstream model stays absent; the tooltip
+compare `servedModel` with `wireModel ?? model`. `recordObservedServedModel` in `src/usage/log.ts` refuses
+the client's own selector echoed in `response.model` (Anthropic routes keep `anthropic/<model>` there), and
+`modelIdentityLogFields` drops the same echo from older rows on read, so neither draws a false reroute.
+An absent upstream model stays absent; the tooltip
 retains all available model identities. Historical Codex `openai`, `chatgpt` and `openai-multi` main
 labels collapse for reporting; configured provider names ending in `-main` remain separate.
 
@@ -531,3 +534,8 @@ Anthropic Fast pricing applies a 2x list-price multiplier only when the response
 `tests/usage/usage-anthropic-fast-pricing.test.ts` pins that distinction. The request-metrics recovery
 label `anthropic-fast-downgrade` projects to `fast_downgrade`, separate from reasoning-effort
 `effort_downgrade`.
+
+Cursor Claude Fast pricing applies the published Fast tuples to Opus 4.8, Opus 5 and Opus 5.5.
+Explicit `-fast` model IDs use the Fast tuple directly; a Cursor variant tier outcome applies
+the same 2x multiplier to a base model estimate. Opus 4.7 remains standard-priced because its
+upstream Fast mode is unavailable. Configured model prices retain precedence over compiled rows.

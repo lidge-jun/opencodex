@@ -451,6 +451,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "  ocx claude desktop [apply]                         Save and apply the four-family profile",
       "  ocx claude desktop show [--json]                   Show routes, families, and defaults",
       "  ocx claude desktop status [--json]                 Show applied state, drift, and health",
+      "  ocx claude desktop bind <picker-id> <route>        First-party: serve a Code tab picker model with a route",
+      "  ocx claude desktop unbind <picker-id>              Remove a first-party binding",
       "  ocx claude desktop move <route> <family> [--default]",
       "  ocx claude desktop default <family> <route|none>",
       "  ocx claude desktop export <path|->                 Export versioned JSON (`-` = stdout)",
@@ -590,6 +592,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     hidden: true,
     usage: "ocx __refresh-version [preview|latest]",
     summary: "Hidden detached helper: refresh the cached latest version.",
+  },
+  {
+    name: "__update-badge",
+    hidden: true,
+    usage: "ocx __update-badge",
+    summary: "Hidden internal: print cached package update badge JSON.",
   },
   {
     name: "__tray-start",

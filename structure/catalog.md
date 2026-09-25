@@ -75,6 +75,8 @@ provider-wide fallback. Exact model output limits precede the provider default o
   native rows from the output without rewriting the pristine backup or unrelated snapshots;
 - invalidates `$CODEX_HOME/models_cache.json` when model visibility changes.
 
+Cache invalidation reports an unchanged derived cache separately from a failed rewrite. `ocx sync-cache` treats identical bytes as a successful no-op, preserving the cache mtime and avoiding a needless app-server restart; malformed catalogs and write failures remain errors.
+
 `src/codex/catalog/model-visibility.ts` also excludes models owned by disabled providers, including custom rows. `src/codex/catalog/routed-gather.ts` does not inherit provider configuration into custom rows while that provider is disabled.
 
 On the default `opencodex-catalog.json` path, sync deliberately uses two catalog sources: Codex's
@@ -127,6 +129,20 @@ are emitted only as selector-qualified rows whose account provenance matches. Th
 the bare native or API-key model list. This keeps account-scoped upstream ids such as
 `gpt-daybreak-blue-latest` callable without treating them as a static release allowlist.
 
+Configured natives are the operator's way to widen that bare list without a release. A bare
+`gpt-*` id under `providers.openai.models` on the canonical Codex forward provider joins
+`NATIVE_OPENAI_MODELS` / `SUPPORTED_NATIVE_OPENAI_SLUGS` in place (`src/codex/catalog/native-models.ts`),
+and `metadata.ts` keeps its pinned-capability, upstream-entry and context tables in step through
+a subscription. Each borrows the pinned `gpt-6-sol` row under a name generated from its slug, takes
+the GPT-6 272,000 / 872,000 context pair (`NATIVE_GPT6_CONTEXT`, also used by the built-in GPT-6
+rows), and is never account-gated. Built-in, retired and reserve ids never register. The filter
+lives in `src/config/derived-registries.ts`, whose `refreshConfigDerivedRegistries` runs on every
+load, persist and reconcile path, so every process that loads config sees the same set; removing
+the id unregisters it and the next canonical write drops the row. Configured natives are not in
+`ENTITLEMENT_PREFERRED_NATIVE_OPENAI_MODELS` or `NATIVE_MAIN_DRAIN_SENTINEL_MODELS` (they behave
+like `gpt-5.5` there), and a combo `nativeAlias` cannot target one because schema validation runs
+before registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
+
 Retirement is a catalog/evidence policy, not a universal request denylist. Manually supplied
 model ids still follow generic routing. User-selected config and historical usage remain stored.
 
@@ -175,7 +191,11 @@ deliberately does not, because a disabled provider is already excluded from the 
 instead. Codex's own `models_cache.json` is a different cache, invalidated by catalog refresh.
 Account-scoped discovery transports remain bound to the credential snapshot that supplied the
 token. Devin discovery uses the allowlisted tenant API base URL from that same snapshot rather
-than pairing a durable account key with the provider registry's default host. If the stored
+than pairing a durable account key with the provider registry's default host. The same holds for
+the provider connection test and for refreshing catalog gathers of every OAuth row: the token and
+its origin come from one snapshot, so a Copilot account switch or a refresh that moves the
+account's API host cannot pair one account's token with another origin, and a key row never
+borrows a stored OAuth account's origin. When the snapshot carries no API host (a legacy credential), the destination comes only from static configuration validated against the vendor allowlist, or the vendor default, and never from the live credential store. If the stored
 destination is invalid, registered Devin discovery and routing use the registry's fixed base URL
 instead of a stale configured override. For Devin, the irreversible roster fingerprint covers
 both credential and validated destination, so switching either observes neither fresh nor stale

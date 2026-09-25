@@ -16,8 +16,9 @@ import { isValidProviderName } from "./provider-name";
 import { MODEL_ALIAS_PATTERN } from "../providers/default-aliases";
 import { MODEL_DISCOVERY_MAX_MODELS } from "../providers/model-discovery-limits";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport, registryModelServiceTierCapabilityApplies } from "../providers/registry";
+import { providerFastSwitchOff } from "../providers/fast-opt-in";
 import { isCodexReasoningEffort } from "../reasoning-effort";
-import { refreshUserCostOverlays } from "../usage/user-cost-overlays";
+import { refreshConfigDerivedRegistries } from "./derived-registries";
 import { type OcxClaudeCodeConfig, type OcxConfig } from "../types";
 import {
   agentTaskRecoverySchema,
@@ -835,6 +836,7 @@ export function inheritedFastWireConflictProviderNames(
   const conflicts: string[] = [];
   for (const [name, provider] of Object.entries(config.providers)) {
     if (provider.fastWire !== null || provider.supportsServiceTier === false) continue;
+    if (providerFastSwitchOff(name, provider)) continue;
     const registry = providerMatchesRegistryTransport(name, provider)
       ? getProviderRegistryEntry(name)
       : undefined;
@@ -941,6 +943,6 @@ export function sanitizeModelDisplayNamesForLoad(raw: unknown): void {
 
 /** Refresh the user cost-overlay registry from `config` and return it unchanged. */
 export function withRefreshedCostOverlays(config: OcxConfig): OcxConfig {
-  refreshUserCostOverlays(config);
+  refreshConfigDerivedRegistries(config);
   return config;
 }

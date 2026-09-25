@@ -105,7 +105,7 @@ import type {
 import type { CapturedProviderGather, CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcome, ModelsAuthResolution, ModelsAuthResolver } from "./gather-capture";
 import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
-import { captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
+import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
 
 export interface ProviderModelsResult {
   readonly models: CatalogModel[];
@@ -151,7 +151,7 @@ export async function fetchProviderModelsWithAuth(
   contextCap: number | undefined,
   resolveAuth: ModelsAuthResolver,
 ): Promise<ProviderModelsResult> {
-  const { name, provider: prov, discovery, request, metadataModelIdCaseFold } = captured;
+  const { name, provider: prov, discovery, metadataModelIdCaseFold } = captured;
   const observed = (
     models: CatalogModel[],
     state: CatalogGatherProviderModelOutcome["state"],
@@ -217,10 +217,7 @@ export async function fetchProviderModelsWithAuth(
     return observed(configured, "authoritative");
   }
   const auth: ModelsAuthResolution = captured.observedAuth ?? (resolveAuth.kind === "refreshing"
-    ? prov.authMode === "oauth" && (
-      effectiveGoogleMode(name, prov) === "cloud-code-assist"
-      || prov.adapter === "devin"
-    )
+    ? prov.authMode === "oauth"
       ? await getValidAccessTokenSnapshot(name)
         .then(snapshot => ({
           apiKey: snapshot.accessToken,
@@ -475,6 +472,11 @@ export async function fetchProviderModelsWithAuth(
       "degraded",
     );
   }
+  // The captured request predates any refresh, so a refreshing gather rebuilds it
+  // from the auth it resolved: the token and its origin, together.
+  const request = resolveAuth.kind === "refreshing"
+    ? captureModelsRequest(name, prov, auth.oauthApiBaseUrl)
+    : captured.request;
   const url = request.url;
   let headers = materializeCapturedHeaders(request, apiKey);
   // One Ollama authority contract: for canonical ollama-cloud/ollama-native rows, discovery

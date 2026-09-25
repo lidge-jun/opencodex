@@ -178,6 +178,8 @@ describe("native Anthropic image input reaches client documents", () => {
           baseUrl: "https://api.anthropic.com",
           authMode: provider === "anthropic" ? "oauth" : "key",
           liveModels: false,
+          // Anthropic Fast is opt-in; enable it so the export roster includes the --fast selectors.
+          fastEnabled: true,
         },
       },
     } as unknown as OcxConfig;

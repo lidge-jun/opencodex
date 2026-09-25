@@ -30,6 +30,20 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   The inherited contract includes Meta Muse's host-gated 64-character tool-name alias when the
   constructed send URL is `api.meta.ai` (`src/responses/muse-tool-name-alias.ts`).
 - `mimo-free` inherits the `openai-chat` contract.
+- `claude-cli` inherits the `codebuddy` contract. Claude Code speaks the same stream-json
+  protocol this repository already parses for CodeBuddy and Qoder, so the wire is inherited and the
+  family module (`src/adapters/claude-cli/`) supplies only its own arguments and child environment.
+  That profile is the first credentialless one: it omits `tokenEnv`, the CLI reads the operator's
+  own Claude Code sign-in, and the turn neither requires nor injects an API key. The proxy-safety
+  controls are set per invocation, through CLI arguments and the child environment, and
+  `tests/providers/claude-cli-adapter.test.ts` pins them: `--tools ""`, `--strict-mcp-config`,
+  `--setting-sources ""`, `--no-session-persistence`, no permission bypass, a folded prompt staged
+  in a 0600 per-turn file and passed as `--system-prompt-file` rather than as a world-readable
+  argument, and a child environment that carries no inherited `ANTHROPIC_*` value.
+  Its registry row is `authKind: "key"` with `keyOptional: true`, NOT `local`: the turn leaves the
+  machine for `api.anthropic.com`, and `local` (Ollama, vLLM, LM Studio) is the classification for
+  traffic that never does. `keyOptional` is the existing exemption from key enforcement, and key
+  rows are what `deriveProviderPresets` lists, so the entry needs no `dashboardPreset` flag either.
 - `cursor` stays direct because its `runTurn` transport and gated native-file fallback are distinct.
 - `devin` is direct for a related reason. It streams Cognition's
   `ApiServerService/GetChatMessage` over Connect-RPC from `runTurn` with hand-written protobuf
@@ -97,10 +111,16 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   with no evidence the adapter hint is omitted and the encoder still serializes
   its own 128000 fallback for field #3. Connect trailer diagnostics expose only an
   allowlisted error code, hexadecimal trace id and typed `retryAfterSeconds`, optionally rendered as
-  generated `retry after ~Ns` wording; raw text stays internal because it can reflect credentials. Investigation and limits:
+  generated `retry after ~Ns` wording; the shared retry-delay parser accepts that generated
+  approximation marker and preserves the same lower-bound delay when the diagnostic returns as an
+  outer error message. Each bounded replay evaluates its own typed delay or compatible message, so
+  a later refusal may change between the raw reset sentence and the generated diagnostic without
+  losing the next wait. Raw text stays internal because it can reflect credentials. Investigation and limits:
   `devlog/_plan/260917_devin_input_ceiling/000_review.md`.
 
 The registry records those relationships with `contractParent`. A parent relationship does **not** mean the registry recursively constructs a parent adapter and injects it into the child. Azure and MiMo keep owning their existing internal composition. This avoids making production constructors depend on test/conformance needs and keeps this authority refactor behavior-neutral.
+
+Behavior that belongs to a wire asks the registry for the adapter's resolved wire (`effectiveAdapterContract()`, or `resolvedAdapterWire()` in `src/responses/continuation-ownership.ts`) instead of comparing adapter names, so a wrapper inherits it by declaring its parent. Responses opaque-blob recovery is one such consumer: Azure recovers from another provider's reasoning state because `azure-openai` declares `contractParent: "openai-responses"` (#5583).
 
 Codex Spark retirement removes model-specific exceptions from the Responses adapter, without
 changing contract inheritance or generic Responses Lite handling; see

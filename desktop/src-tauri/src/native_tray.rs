@@ -19,6 +19,7 @@ extern "C" {
     fn ocx_native_tray_hide();
     fn ocx_native_tray_visible() -> i32;
     fn ocx_native_tray_update(bytes: *const u8, count: isize);
+    fn ocx_native_tray_update_dot(item: *mut c_void, show: i32);
 }
 
 static HOST: OnceLock<AppHandle> = OnceLock::new();
@@ -75,6 +76,27 @@ fn present(app: &AppHandle, toggle: bool) -> tauri::Result<()> {
     })
 }
 
+pub fn set_update_dot(app: &AppHandle, _show: bool) {
+    let app = app.clone();
+    let target = app.clone();
+    let _ = target.run_on_main_thread(move || {
+        let Some(tray) = app.tray_by_id("main") else {
+            return;
+        };
+        let pending = app
+            .try_state::<crate::tray::TrayState>()
+            .is_some_and(|state| state.update_pending.load(Ordering::Acquire));
+        let _ = tray.with_inner_tray_icon(move |inner| {
+            if let Some(item) = inner.ns_status_item() {
+                let pointer = (&*item as *const _ as *mut c_void).cast();
+                unsafe {
+                    ocx_native_tray_update_dot(pointer, i32::from(pending));
+                }
+            }
+        });
+    });
+}
+
 pub fn hide(app: &AppHandle) {
     stop_refresh(app);
     let _ = app.run_on_main_thread(|| unsafe { ocx_native_tray_hide() });
@@ -93,12 +115,16 @@ extern "C" fn native_event(event: i32) {
                 return;
             };
             if let Some(main) = app.get_webview_window("main") {
+                let session = app
+                    .state::<crate::updater::DesktopUpdateState>()
+                    .session_id()
+                    .to_string();
                 let path = if event == 4 {
-                    "/?desktop=open#/usage/companion"
+                    format!("/?desktop=open&desktop_session={session}#/usage/companion")
                 } else {
-                    "/?desktop=open#/usage"
+                    format!("/?desktop=open&desktop_session={session}#/usage")
                 };
-                if let Ok(url) = proxy.endpoint().url(path).parse() {
+                if let Ok(url) = proxy.endpoint().url(&path).parse() {
                     let _ = main.navigate(url);
                     window::show(&main);
                 }

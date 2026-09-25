@@ -14,6 +14,13 @@ const MAX_DECODED_BYTES_PER_RESPONSE = 100 * 1024 * 1024;
 export const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024; // 50 MiB
 /** Idle timeout for pinned HTTPS connect/headers/body when no AbortSignal is provided. */
 export const DOWNLOAD_IDLE_TIMEOUT_MS = 60_000;
+/**
+ * Connect deadline for pinned HTTPS downloads: a TCP/TLS setup that never
+ * completes fails with connect_timeout after 10 s instead of holding the
+ * download until the 60 s first-byte timer fires. Callers can still override
+ * per call.
+ */
+export const DOWNLOAD_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
  * Upper bound on the raw base64 string length before it is decoded. Base64
@@ -271,6 +278,7 @@ export function pinnedHttpsGet(
   options?: {
     maxBytes?: number;
     idleTimeoutMs?: number;
+    connectTimeoutMs?: number;
     rejectUnauthorized?: boolean;
   },
 ): Promise<Response> {
@@ -280,9 +288,11 @@ export function pinnedHttpsGet(
   }
   const maxBytes = options?.maxBytes ?? MAX_DOWNLOAD_BYTES;
   const idleTimeoutMs = options?.idleTimeoutMs ?? DOWNLOAD_IDLE_TIMEOUT_MS;
+  const connectTimeoutMs = options?.connectTimeoutMs ?? DOWNLOAD_CONNECT_TIMEOUT_MS;
   return pinnedHttpGet(url, pinned, signal, {
     maxBytes,
     idleTimeoutMs,
+    connectTimeoutMs,
     rejectUnauthorized: options?.rejectUnauthorized,
     context: "image download",
   }).then(response => {
@@ -325,6 +335,10 @@ async function connectPublicHttps(
       // cap entirely instead of inheriting a default. Keep the 50 MiB ceiling when a
       // caller omits a limit, and honour an explicit tighter one.
       maxBytes: options.maxBytes ?? MAX_DOWNLOAD_BYTES,
+      // Bound the TCP/TLS setup phase on its own: without this, a peer that never
+      // completes the handshake holds the download until the 60 s first-byte timer
+      // fires. Covers image and video downloads (both go through here).
+      connectTimeoutMs: DOWNLOAD_CONNECT_TIMEOUT_MS,
       context: `${options.context} download`,
     }));
   return download(url, pinned, options.signal);

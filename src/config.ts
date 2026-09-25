@@ -8,7 +8,7 @@ import {
   adoptCustomModelCatalogMigration,
   projectCustomModelCatalogMigration,
 } from "./codex/custom-model-catalog-migration";
-import { refreshUserCostOverlays } from "./usage/user-cost-overlays";
+import { refreshConfigDerivedRegistries } from "./config/derived-registries";
 import {
   clearPendingConfigDeletions,
   projectConfigRebaseProvenance,
@@ -355,7 +355,7 @@ export function initializePersistedConfigIfMissing(
     if (persisted.configRebaseProvenance === undefined) delete config.configRebaseProvenance;
     else config.configRebaseProvenance = structuredClone(persisted.configRebaseProvenance);
     clearPendingConfigDeletions(config);
-    refreshUserCostOverlays(persisted);
+    refreshConfigDerivedRegistries(persisted);
     return "created";
   } catch (cause) {
     if (published) throw new InitialConfigPublicationError("published", false, false, { cause });

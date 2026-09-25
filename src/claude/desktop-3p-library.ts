@@ -42,6 +42,8 @@ export interface Desktop3pMetadata {
   [key: string]: unknown;
 }
 
+export const DESKTOP_PICKER_ENTRY_NAME = "opencodex-picker";
+
 export function parseMetadata(path: string): Desktop3pMetadata {
   if (!existsSync(path)) return { entries: [] };
   const parsed = JSON.parse(readFileSync(path, "utf8")) as Partial<Desktop3pMetadata>;
@@ -56,7 +58,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isOwnedDesktopEntry(entry: Desktop3pMetadataEntry | undefined): boolean {
-  return entry?.name === "opencodex" || entry?.name === "opencodex-standard";
+  return entry?.name === "opencodex" || entry?.name === "opencodex-standard" || entry?.name === DESKTOP_PICKER_ENTRY_NAME;
 }
 
 /** A gateway row is removable; the selected standard row must always remain. */
@@ -86,4 +88,3 @@ export function readDesktopProfileForeignKeys(path: string): Record<string, unkn
     Object.entries(parsed).filter(([key]) => !OPENCODEX_DESKTOP_PROFILE_KEYS.has(key)),
   );
 }
-

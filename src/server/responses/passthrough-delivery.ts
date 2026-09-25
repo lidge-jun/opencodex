@@ -35,6 +35,7 @@ import { consumeComboFailure } from "./core-combo-failure";
 import { readDisplaySafeErrorText } from "./core-errors";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
+import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 import {
   resolvePassthroughWebSearchBridgeAuth,
   planPassthroughWebSearchBridge,
@@ -84,6 +85,12 @@ import {
   createGrokResponsesTimestampBlockRewrite,
 } from "../grok-responses-control-frame";
 import { createGrokResponsesSparseTerminalBlockRewrite } from "../grok-responses-snapshot-repair";
+import { isXaiResponsesDestination } from "../../providers/xai-transport";
+import {
+  createGrokUpstreamEnvelopeEchoBlockRewrite,
+  responsesRequestMayReplayToolOutput,
+  stripGrokUpstreamEnvelopeEchoFromResponsesJson,
+} from "../grok-upstream-envelope-echo";
 import {
   createPlaintextV2AgentMessageCallRestoreRewrite,
   restorePlaintextV2AgentMessageCallsInJsonResult,
@@ -121,11 +128,144 @@ import { linkAbortSignal, UPSTREAM_JSON_BODY_READ_OPTIONS } from "./core-lifetim
 import { registerTurn, unregisterTurn, trackStreamLifetime } from "../lifecycle";
 import { relaySseEagerBounded } from "../relay-eager";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { idleDeadline } from "../../lib/abort";
+import { resolveStallTimeoutSec } from "../../stall-timeout";
 import { formatErrorResponse } from "../../bridge";
 import { inspectResponseLogJson } from "../request-log";
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
 import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
 import { responsesJsonToSseStream } from "../responses-json-events";
+
+const PLAINTEXT_V2_SSE_PREFIX_LIMIT = 4096;
+
+/** Prefix-probe budget: bounds one silent gap and the whole probe alike. */
+interface PlaintextV2SseProbeOptions {
+  timeoutMs: number;
+  signal?: AbortSignal;
+}
+
+function classifyPlaintextV2SsePrefix(prefix: string): "sse" | "unknown" | "more" {
+  const lastLineEnd = prefix.lastIndexOf("\n");
+  if (lastLineEnd < 0) return "more";
+  for (const rawLine of prefix.slice(0, lastLineEnd + 1).split("\n")) {
+    const line = rawLine.replace(/\r$/, "").trim();
+    if (!line || line.startsWith(":")) continue;
+    if (/^(id|retry):/.test(line)) continue;
+    if (line.startsWith("event:")) {
+      return /^event:\s*(?:response\.[\w.-]+|error)$/.test(line) ? "sse" : "unknown";
+    }
+    if (line.startsWith("data:")) {
+      try {
+        const value = JSON.parse(line.slice(5).trim()) as { type?: unknown };
+        return typeof value.type === "string" && /^(?:response\.[\w.-]+|error)$/.test(value.type)
+          ? "sse" : "unknown";
+      } catch {
+        return "unknown";
+      }
+    }
+    return "unknown";
+  }
+  return "more";
+}
+
+/**
+ * Confirm an unlabeled successful body is Responses SSE before alias restoration.
+ *
+ * The probe waits at most `timeoutMs` for a first recognized event, then hands the body to the
+ * client with no deadline of its own: a stall in the prefix is a probe failure, and a stall after
+ * it belongs to the delivered stream.
+ */
+async function classifyPlaintextV2SseResponse(
+  response: Response,
+  probe: PlaintextV2SseProbeOptions,
+): Promise<Response> {
+  if (!response.body) return response;
+  const reader = response.body.getReader();
+  // A non-conforming stream can throw synchronously from cancel(); neither that nor a
+  // rejected cancel may escape past the probe's own deadline.
+  const cancelReader = (reason?: unknown): void => {
+    try {
+      void reader.cancel(reason).catch(() => undefined);
+    } catch {
+      // Some stream implementations throw synchronously from cancel().
+    }
+  };
+  const unrecognized = (): Response => new Response(null, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+  const { timeoutMs, signal } = probe;
+  const stalled = new DOMException("Plaintext V2 SSE prefix probe stalled", "TimeoutError");
+  let rejectProbe: ((reason: unknown) => void) | undefined;
+  const failed = new Promise<never>((_resolve, reject) => { rejectProbe = reject; });
+  // The race below always observes this rejection; this covers a deadline that fires after the
+  // race already settled with a chunk, which would otherwise be an unhandled rejection.
+  void failed.catch(() => undefined);
+  const inactivity = idleDeadline(timeoutMs, () => rejectProbe?.(stalled));
+  // A drip-fed body can restart the inactivity window forever, so the probe also carries one
+  // total budget that starts when the probe begins.
+  const totalTimer = timeoutMs > 0 ? setTimeout(() => rejectProbe?.(stalled), timeoutMs) : undefined;
+  const onAbort = (): void => rejectProbe?.(signal?.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  if (signal?.aborted) onAbort();
+  const decoder = new TextDecoder();
+  const buffered: Uint8Array[] = [];
+  let prefix = "";
+  let inspectedBytes = 0;
+  try {
+    while (inspectedBytes < PLAINTEXT_V2_SSE_PREFIX_LIMIT) {
+      if (signal?.aborted) throw signal.reason;
+      // Armed for every read, so a chunk that arrives restarts the window at the next iteration.
+      inactivity.reset();
+      const read = reader.read();
+      // Observe a late read rejection when the deadline or the client wins the race.
+      void read.catch(() => undefined);
+      const next = await Promise.race([read, failed]);
+      if (signal?.aborted) throw signal.reason;
+      if (next.done) break;
+      buffered.push(next.value);
+      const inspected = next.value.subarray(0, PLAINTEXT_V2_SSE_PREFIX_LIMIT - inspectedBytes);
+      inspectedBytes += inspected.byteLength;
+      prefix += decoder.decode(inspected, { stream: true });
+      const kind = classifyPlaintextV2SsePrefix(prefix);
+      if (kind === "sse") {
+        let bufferedIndex = 0;
+        const body = new ReadableStream<Uint8Array>({
+          async pull(controller) {
+            if (bufferedIndex < buffered.length) {
+              controller.enqueue(buffered[bufferedIndex++]!);
+              return;
+            }
+            try {
+              const result = await reader.read();
+              if (result.done) controller.close();
+              else controller.enqueue(result.value);
+            } catch (error) {
+              controller.error(error);
+            }
+          },
+          cancel(reason) { return reader.cancel(reason); },
+        });
+        const headers = new Headers(response.headers);
+        headers.set("content-type", "text/event-stream");
+        return new Response(body, { status: response.status, statusText: response.statusText, headers });
+      }
+      if (kind === "unknown") break;
+    }
+  } catch (error) {
+    // Timeout, client abort, or a failed read fails closed through the unrecognized-body exit,
+    // which the caller already answers as the unsupported-content-type 502.
+    cancelReader(error);
+    return unrecognized();
+  } finally {
+    inactivity.cancel();
+    if (totalTimer !== undefined) clearTimeout(totalTimer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+  cancelReader();
+  return unrecognized();
+}
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverPassthroughResponse(
@@ -180,7 +320,6 @@ export async function deliverPassthroughResponse(
 ): Promise<Response> {
   const { logCtx, config, options, req } = requestContext;
   const {
-    upstreamResponse,
     codexSafetyBufferingOptions,
     upstream,
     connectMs,
@@ -205,18 +344,29 @@ export async function deliverPassthroughResponse(
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
 
+  let upstreamResponse = nativeExchange.upstreamResponse;
+  const originalContentType = upstreamResponse.headers.get("content-type");
+  if (isUsageDebugEnabled() && originalContentType) logCtx.usageDebugContentType = originalContentType;
+  if (responseEffects.plaintextV2AgentMessageToolNames.size > 0
+    && upstreamResponse.ok && upstreamResponse.body && parsed.stream
+    && !originalContentType?.toLowerCase().includes("text/event-stream")
+    && !originalContentType?.toLowerCase().includes("application/json")
+    && !isCodexWsUpstreamResponse(upstreamResponse)
+    && !(options.nativeControl && isNativeControlResponse(upstreamResponse))) {
+    upstreamResponse = await classifyPlaintextV2SseResponse(upstreamResponse, {
+      timeoutMs: resolveStallTimeoutSec(config.stallTimeoutSec) * 1000,
+      signal: options.abortSignal ?? req.signal,
+    });
+  }
+
     const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel) {
       logCtx.servedModel = resolvedModel;
       if (!logCtx.preserveResolvedModelFromRoute) logCtx.resolvedModel = resolvedModel;
     }
-    if (isUsageDebugEnabled()) {
-      const upstreamContentType = upstreamResponse.headers.get("content-type");
-      if (upstreamContentType) logCtx.usageDebugContentType = upstreamContentType;
-    }
-    // The chatgpt backend may omit Content-Type on SSE responses. Fall back to
-    // treating a successful body as SSE when the caller requested streaming.
+    // ChatGPT may omit Content-Type on SSE responses. Plaintext V2 responses
+    // reach this fallback only after their first Responses event is confirmed.
     const passthroughCt = headers.get("content-type")?.toLowerCase();
     const isEventStream = passthroughCt?.includes("text/event-stream")
       || (responseEffects.plaintextV2AgentMessageToolNames.size === 0 && upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);
@@ -326,6 +476,16 @@ export async function deliverPassthroughResponse(
           ? streamingContextOverflowResponse(parsed._responseModelId ?? parsed.modelId, translatorBudget)
           : jsonContextOverflowResponse();
       }
+      const policyRefusal = rewriteUpstreamPolicyRefusal({
+        status: upstreamResponse.status,
+        errorText,
+        stream: clientRequestedStream,
+        modelId: parsed._responseModelId ?? parsed.modelId,
+        destinationIsXai: isXaiResponsesDestination(route.provider),
+        translatorBudget,
+        turnAdmissionLease: options.turnAdmissionLease,
+      });
+      if (policyRefusal) return policyRefusal;
       return formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
@@ -356,6 +516,8 @@ export async function deliverPassthroughResponse(
     // (src/server/relay-eager.ts; policy:
     // devlog/_fin/260731_macos_rss_retention/100_darwin_eager_optin.md).
     // The bundled known-bad runtime remains on tee by default on both platforms.
+    const grokUpstreamEchoEnabled = isXaiResponsesDestination(route.provider)
+      && responsesRequestMayReplayToolOutput(parsed._rawBody);
     if (isEventStream && upstreamResponse.body) {
       // For streamed passthrough, a successful terminal response means non-error upstream status
       // before relay starts. Waiting for SSE completion would retain request state across the whole
@@ -500,7 +662,7 @@ export async function deliverPassthroughResponse(
       // are not the Responses wire shapes the snapshot must mirror.
       // Only validated client blocks may publish plaintext continuation state.
       // Raw inspection precedes rewriting on eager relays, so it cannot own this write.
-      const plaintextInspector = responseEffects.plaintextV2AgentMessageToolNames.size > 0
+      const plaintextInspector = !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size > 0
         ? createSseInspector({ onCompletedResponse: rememberPassthroughResponseChecked })
         : undefined;
       const plaintextEncoder = plaintextInspector ? new TextEncoder() : undefined;
@@ -571,6 +733,11 @@ export async function deliverPassthroughResponse(
             declaredBareWireToolNames,
           )
           : undefined,
+        grokUpstreamEchoEnabled
+          ? createGrokUpstreamEnvelopeEchoBlockRewrite(
+            rememberPassthroughResponse ? rememberPassthroughResponseChecked : undefined,
+          )
+          : undefined,
         rememberPlaintextBlock,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
       const clientBlockRewrite = blockRewrites.length > 0
@@ -620,7 +787,7 @@ export async function deliverPassthroughResponse(
         const inspector = createSseInspector({
           onTerminal: reportNativeTerminal,
           logCtx,
-          onCompletedResponse: rememberPassthroughResponse && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
+          onCompletedResponse: rememberPassthroughResponse && !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
           onParsedPayload: noteInspectedPayload,
           onFirstOutput: options.onFirstOutput,
           pinCompletedResponseIdToFirstSeen: githubCopilotRepairEnabled,
@@ -722,7 +889,7 @@ export async function deliverPassthroughResponse(
             responseEffects.responseCompletionCancelled = true;
             options.onNativePassthroughCancel?.();
           },
-          rememberPassthroughResponse && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
+          rememberPassthroughResponse && !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
           options.onFirstOutput,
           inspectionConsumerOptions,
         );
@@ -732,7 +899,7 @@ export async function deliverPassthroughResponse(
           logCtx,
           turnAc.signal,
           () => unregisterTurn(turnAc),
-          rememberPassthroughResponse && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
+          rememberPassthroughResponse && !grokUpstreamEchoEnabled && responseEffects.plaintextV2AgentMessageToolNames.size === 0 ? rememberPassthroughResponseChecked : undefined,
           options.onFirstOutput,
           inspectionConsumerOptions,
         );
@@ -814,6 +981,9 @@ export async function deliverPassthroughResponse(
       if (plaintextV2RestoreFailed) {
         return formatErrorResponse(502, "upstream_error", PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
       }
+      if (grokUpstreamEchoEnabled) {
+        clientJson = stripGrokUpstreamEnvelopeEchoFromResponsesJson(clientJson);
+      }
       // #1700: same fail-closed policy as the SSE relay above. Both the plain JSON answer and
       // the reframed-SSE branch below are built from this body, so one check covers them. This
       // runs BEFORE the continuation cache write below: a refused turn must not become state a
@@ -844,7 +1014,7 @@ export async function deliverPassthroughResponse(
       commitReasoningReplayServingRoute(nativeExchange.request.headers);
       try {
         rememberPassthroughResponseChecked(
-          JSON.parse(text) as { id?: unknown; output?: unknown; status?: unknown; model?: unknown },
+          JSON.parse(grokUpstreamEchoEnabled ? clientJson : text) as { id?: unknown; output?: unknown; status?: unknown; model?: unknown },
         );
       } catch { /* non-JSON despite content-type; recording is best-effort */ }
       // #875: the transport-neutral reliability policy forced a bounded JSON

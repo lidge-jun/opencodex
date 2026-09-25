@@ -79,13 +79,20 @@ export function baseScopedEnv(): Record<string, string> {
   return env;
 }
 
-/** Redact the profile's credential and common secret shapes before surfacing diagnostics. */
-export function redactSecrets(text: string, tokenEnv: string, credential?: string): string {
-  const escaped = tokenEnv.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Redact the profile's credential and common secret shapes before surfacing diagnostics.
+ *
+ * `tokenEnv` is absent for a credentialless profile (the CLI owns its sign-in), which only drops
+ * the `NAME=value` rule; the generic secret shapes are redacted either way.
+ */
+export function redactSecrets(text: string, tokenEnv: string | undefined, credential?: string): string {
   let redacted = text;
   if (credential) redacted = redacted.split(credential).join("[redacted]");
+  if (tokenEnv) {
+    const escaped = tokenEnv.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    redacted = redacted.replace(new RegExp(`(${escaped}\\s*[:=]\\s*)\\S+`, "gi"), "$1[redacted]");
+  }
   return redacted
-    .replace(new RegExp(`(${escaped}\\s*[:=]\\s*)\\S+`, "gi"), "$1[redacted]")
     .replace(/(authorization\s*[:=]\s*)\S+/gi, "$1[redacted]")
     .replace(/\b(sk-[A-Za-z0-9_-]{6,})\b/g, "[redacted]");
 }
@@ -173,8 +180,11 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     });
     return;
   }
-  const apiKey = provider.apiKey;
-  if (!apiKey) {
+  const apiKey = provider.apiKey ?? "";
+  // A profile WITHOUT a tokenEnv owns no credential to pre-flight: the CLI reads the operator's
+  // own sign-in (Claude Code), so an unauthenticated session is reported by the CLI itself as a
+  // terminal result frame and surfaces through the family's error mapping (§二十六).
+  if (profile.tokenEnv && !apiKey) {
     emit({
       type: "error",
       message: `${profile.label} credential missing — add an API key for this provider (${profile.tokenEnv}).`,

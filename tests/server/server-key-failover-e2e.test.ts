@@ -37,7 +37,22 @@ let previousHome: string | undefined;
 let isolatedCodexHome: IsolatedCodexHome | null = null;
 let upstream: ReturnType<typeof Bun.serve> | null = null;
 
+// A test that hangs until Bun's per-test timeout never runs its own `finally`, so a server
+// started here would outlive the test still holding the process-wide spend-ledger lease — every
+// later file in the same process then fails to start its own server. Track them for the sweep.
+const trackedServers = new Set<ReturnType<typeof startServer>>();
+// Same reason for fetch: several cases stub it and restore it only in their own `finally`.
+const REAL_FETCH = globalThis.fetch;
+
+function startTrackedServer(port = 0): ReturnType<typeof startServer> {
+  const server = startServer(port);
+  trackedServers.add(server);
+  return server;
+}
+
 beforeEach(() => {
+  // Do not inherit a pacing runtime swapped in by an earlier file or an earlier timed-out test.
+  resetProviderRequestPacingForTest();
   previousHome = process.env.OPENCODEX_HOME;
   isolatedCodexHome = installIsolatedCodexHome("ocx-keyfail-e2e-codex-");
   testDir = mkdtempSync(join(tmpdir(), "ocx-keyfail-e2e-"));
@@ -48,6 +63,16 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // Reap before anything else: a server that survives this file keeps the spend-ledger lease.
+  // Every stop is attempted even when an earlier one rejects, and the failure is raised only
+  // after the rest of this cleanup has run. Re-stopping a server a test already stopped is safe.
+  const stopFailures: unknown[] = [];
+  for (const server of trackedServers) {
+    trackedServers.delete(server);
+    try { await server.stop(true); } catch (error) { stopFailures.push(error); }
+  }
+  resetProviderRequestPacingForTest();
+  globalThis.fetch = REAL_FETCH;
   await upstream?.stop(true);
   upstream = null;
   await flushNativeMainStartupReleases();
@@ -63,6 +88,7 @@ afterEach(async () => {
   clearKeyCooldowns();
   clearReasoningReplayCacheForTests();
   clearBridgeSearchReplayCacheForTests();
+  if (stopFailures.length > 0) throw new AggregateError(stopFailures, "tracked server stop failed in afterEach");
 });
 
 describe("server 429 key failover (end-to-end)", () => {
@@ -133,7 +159,7 @@ describe("server 429 key failover (end-to-end)", () => {
       requestPacing: { enabled: true, minIntervalMs: 100 },
     } } } as OcxConfig;
     saveConfig(config);
-    const server = startServer(0);
+    const server = startTrackedServer();
     const abort = new AbortController();
     try {
       await waitForProviderRequestSlot("paced", config.providers.paced);
@@ -185,7 +211,7 @@ describe("server 429 key failover (end-to-end)", () => {
         { id: "first", key: "${OCX_SELECTION_E2E_KEY}" }, { id: "second", key: "synthetic-second" },
       ],
     } } } as OcxConfig);
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const response = await fetch(new URL(`/v1/${inbound}`, server.url), {
         method: "POST", headers: { "content-type": "application/json" },
@@ -249,7 +275,7 @@ describe("server 429 key failover (end-to-end)", () => {
         },
       } as OcxConfig;
       saveConfig(config);
-      server = startServer(0);
+      server = startTrackedServer();
       const res = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -336,7 +362,7 @@ describe("server 429 key failover (end-to-end)", () => {
         },
       } as OcxConfig;
       saveConfig(config);
-      server = startServer(0);
+      server = startTrackedServer();
       const res = await originalFetch(new URL("/v1/responses", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -412,7 +438,7 @@ describe("server 429 key failover (end-to-end)", () => {
       },
     } as OcxConfig;
     saveConfig(config);
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const res = await fetch(new URL(surface === "chat" ? "/v1/chat/completions" : "/v1/responses", server.url), {
         method: "POST",
@@ -466,7 +492,7 @@ describe("server 429 key failover (end-to-end)", () => {
         baseUrl: `http://127.0.0.1:${upstream.port}/v1`, allowPrivateNetwork: true,
         apiKey: "synthetic-first", apiKeyPool: [{ id: "first", key: "synthetic-first" }, { id: "second", key: "synthetic-second" }] } },
     } as OcxConfig);
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const response = await fetch(new URL("/v1/responses", server.url), { method: "POST",
         headers: { "content-type": "application/json" },
@@ -502,7 +528,7 @@ describe("server 429 key failover (end-to-end)", () => {
       metered: { adapter, authMode: "key", apiKey: "synthetic-key", allowPrivateNetwork: true,
         baseUrl: `http://127.0.0.1:${upstream.port}` },
     } } as OcxConfig);
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const response = await fetch(new URL("/v1/responses", server.url), { method: "POST",
         headers: { "content-type": "application/json" },
@@ -558,7 +584,7 @@ describe("server 429 key failover (end-to-end)", () => {
       },
     } as OcxConfig;
     saveConfig(config);
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const res = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
@@ -707,7 +733,7 @@ describe("server 429 key failover (end-to-end)", () => {
       },
     } as OcxConfig;
     saveConfig(config);
-    const server = startServer(0);
+    const server = startTrackedServer();
     const headers = {
       "content-type": "application/json",
       "x-codex-parent-thread-id": "thread-key-rotation",
@@ -790,7 +816,7 @@ describe("server 429 key failover (end-to-end)", () => {
       },
     } as OcxConfig;
     saveConfig(config);
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const res = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
@@ -836,7 +862,7 @@ describe("server 429 key failover (end-to-end)", () => {
       },
     } as OcxConfig;
     saveConfig(config);
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const res = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
@@ -901,7 +927,7 @@ describe("server 429 key failover (end-to-end)", () => {
       },
     } as OcxConfig;
     saveConfig(config);
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const res = await fetch(new URL("/v1/responses", server.url), {
         method: "POST",
@@ -951,7 +977,7 @@ describe("server 429 key failover (end-to-end)", () => {
 
   test("a cooled committed key is replaced before the first attempt", async () => {
     const seen = await cooledCommittedKeySetup("round-robin");
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const response = await fetch(new URL("/v1/chat/completions", server.url), {
         method: "POST", headers: { "content-type": "application/json" },
@@ -969,7 +995,7 @@ describe("server 429 key failover (end-to-end)", () => {
 
   test("without a configured strategy the cooled key is still used", async () => {
     const seen = await cooledCommittedKeySetup();
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const response = await fetch(new URL("/v1/chat/completions", server.url), {
         method: "POST", headers: { "content-type": "application/json" },
@@ -1027,7 +1053,7 @@ describe("server 429 key failover (end-to-end)", () => {
     const restored = loadConfig();
     restored.providers["env-pooled"]!.apiKey = "\${OCX_KEYFAIL_COOLED}";
     saveConfig(restored);
-    const server = startServer(0);
+    const server = startTrackedServer();
     try {
       const response = await fetch(new URL("/v1/responses", server.url), {
         method: "POST", headers: { "content-type": "application/json" },
@@ -1086,7 +1112,7 @@ test.each([false, true])("chat-native attributes same-key 429 usage then the rot
     apiKeyPool: [{ id: "one", key: "key-one" }, { id: "two", key: "key-two" }],
     retryOn429: { attempts: 1, intervalMs: 100, maxIntervalMs: 100, respectRetryAfter: false },
   } } } as OcxConfig);
-  const server = startServer(0);
+  const server = startTrackedServer();
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
       method: "POST",
@@ -1139,7 +1165,7 @@ test("chat-native preserves same-key retry, key rotation, usage, and request log
     apiKeyPool: [{ id: "one", key: "key-one" }, { id: "two", key: "key-two" }],
     retryOn429: { attempts: 1, intervalMs: 100, maxIntervalMs: 100, respectRetryAfter: false },
   } } } as OcxConfig);
-  const server = startServer(0);
+  const server = startTrackedServer();
   try {
     const response = await fetch(new URL("/v1/chat/completions", server.url), {
       method: "POST",
@@ -1188,7 +1214,7 @@ test.each([false, true])("key refetch retains transient recovery metadata (strea
     apiKey: "synthetic-refetch-a", apiKeyPool: [{ id: "a", key: "synthetic-refetch-a" }, { id: "b", key: "synthetic-refetch-b" }],
     transientRetryOn5xx: { attempts: 3 }, retryOn429: { attempts: 0 },
   } } } as OcxConfig);
-  const server = startServer(0);
+  const server = startTrackedServer();
   try {
     const response = await fetch(new URL("/v1/responses", server.url), { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "refetch/test", input: "hello", stream }) });
@@ -1307,7 +1333,7 @@ test("a keyed caller's bridged search is restored on its next turn", async () =>
   const config = bridgedReplayConfig(baseUrl, false);
   saveConfig(config);
   seedBridgedSearch(baseUrl, bridgeCallerPrincipal(config));
-  const server = startServer(0);
+  const server = startTrackedServer();
   try {
     const response = await fetch(new URL("/v1/responses", server.url), bridgedReplayRequest(BRIDGE_CALLER_KEY));
     expect(response.status).toBe(200);
@@ -1329,7 +1355,7 @@ test("a keyless loopback caller neither restores nor shares a bridged search", a
   saveConfig(config);
   seedBridgedSearch(baseUrl, bridgeCallerPrincipal(config));
   seedBridgedSearch(baseUrl, "loopback");
-  const server = startServer(0);
+  const server = startTrackedServer();
   try {
     const response = await fetch(new URL("/v1/responses", server.url), bridgedReplayRequest(undefined));
     expect(response.status).toBe(200);
@@ -1370,7 +1396,7 @@ test("a dispatch-time key switch rebuilds the bridged-search restore under the n
   // the request below carries, but the credential whose selection is about to lapse.
   seedBridgedSearch(baseUrl, bridgeCallerPrincipal(config));
 
-  const server = startServer(0);
+  const server = startTrackedServer();
   const abort = new AbortController();
   try {
     await waitForProviderRequestSlot("pooled", config.providers.pooled);

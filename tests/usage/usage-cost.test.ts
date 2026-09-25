@@ -192,14 +192,18 @@ describe("resolveMatchedPrice", () => {
       jawcodeProvider: "anthropic",
       status: "verified-derived",
     });
-    // Cursor publishes the same list rate; every variant spelling collapses onto one row.
-    for (const spelling of ["claude-opus-5-5", "claude-opus-5-5-thinking-high", "claude-opus-5-5-thinking-high-fast"]) {
-      expect(resolveMatchedPrice("cursor", spelling), spelling).toMatchObject({
-        cost4: COST4,
-        source: "expected",
-        status: "verified",
-      });
-    }
+    // Cursor publishes the standard row and a separate Fast row; the old thinking IDs were
+    // removed when the live Cursor roster proved Opus 5.5 uses flat effort IDs.
+    expect(resolveMatchedPrice("cursor", "claude-opus-5-5")).toMatchObject({
+      cost4: COST4,
+      source: "expected",
+      status: "verified",
+    });
+    expect(resolveMatchedPrice("cursor", "claude-opus-5-5-high-fast")).toMatchObject({
+      cost4: { input: 8, output: 40, cacheRead: 0.4, cacheWrite: 10 },
+      source: "expected",
+      status: "verified",
+    });
     for (const provider of ["devin", "devin-cli"]) {
       expect(resolveMatchedPrice(provider, "claude-opus-5-5"), provider).toMatchObject({
         cost4: COST4,
@@ -414,8 +418,8 @@ describe("resolveMatchedPrice", () => {
     }
   });
 
-  test("16. shipped overlay membership: 142 keys, including canonical Fable 5.1, Opus 5, Opus 5.5, OpenCode Go and compatibility prices", () => {
-    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(142);
+  test("16. shipped overlay membership: 143 keys, including canonical Fable 5.1, Opus 5, Opus 5.5, OpenCode Go and compatibility prices", () => {
+    expect(EXPECTED_PRICE_OVERLAYS.length).toBe(143);
     expect(EXPECTED_PRICE_OVERLAYS.some(row => row.status === "unverified")).toBe(false);
     const keys = new Set(EXPECTED_PRICE_OVERLAYS.map(row => `${row.provider}/${row.modelId}`));
     for (const expected of [

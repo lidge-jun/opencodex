@@ -89,6 +89,40 @@ function liveCommentResponse(intervalMs: number): { response: Response; stop: ()
   };
 }
 
+/**
+ * A silent upstream that only sends `ping` records, then one normal completion turn.
+ * Deliberately carries NO SSE comment lines, so a bridge that ignored `ping` would still see
+ * a stale upstream and time out (#5707).
+ */
+function livePingResponse(intervalMs: number, durationMs: number): { response: Response } {
+  const encoder = new TextEncoder();
+  const pingFrame = 'event: ping\ndata: {"type":"ping"}\n\n';
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let finished = false;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const finish = (close: boolean) => {
+        if (finished) return;
+        finished = true;
+        if (timer) clearInterval(timer);
+        try {
+          if (close) controller.enqueue(encoder.encode(`${kimiCompatibleSse}\n\n`));
+          controller.close();
+        } catch { /* already closed */ }
+      };
+      timer = setInterval(() => {
+        try { controller.enqueue(encoder.encode(pingFrame)); } catch { finish(false); }
+      }, intervalMs);
+      setTimeout(() => finish(true), durationMs);
+    },
+    cancel() {
+      finished = true;
+      if (timer) clearInterval(timer);
+    },
+  });
+  return { response: new Response(body, { headers: { "content-type": "text/event-stream" } }) };
+}
+
 describe("Anthropic-compatible reasoning stream termination (#312)", () => {
   test("comment-only stream records become adapter heartbeat events", async () => {
     const events = await collectAdapterEvents(new Response(
@@ -128,6 +162,38 @@ describe("Anthropic-compatible reasoning stream termination (#312)", () => {
     upstream.stop();
     expect(text).not.toContain("upstream_stall_timeout");
     expect(text).not.toContain("response.incomplete");
+  });
+
+  test("ping records become adapter heartbeat events (#5707)", async () => {
+    // Named (`event: ping`) and data-only (`{"type":"ping"}`) records are both liveness, per
+    // "Event streams may also include any number of ping events".
+    const events = await collectAdapterEvents(arbitrarilyChunkedResponse([
+      'event: ping\ndata: {"type":"ping"}',
+      'data: {"type":"ping"}',
+      kimiCompatibleSse,
+    ].join("\n\n")));
+
+    expect(events.slice(0, 2)).toEqual([{ type: "heartbeat" }, { type: "heartbeat" }]);
+    expect(events).toContainEqual({ type: "text_delta", text: "visible" });
+    expect(events.at(-1)).toEqual({ type: "done", usage: undefined });
+  });
+
+  test("ping-only live upstream does not trip the bridge stall watchdog", async () => {
+    const stream = bridgeToResponsesSSE(
+      createAnthropicAdapter(provider).parseStream(livePingResponse(25, 1_300).response),
+      "kimi/k3",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      50,
+      { stallTimeoutSec: 1 },
+    );
+    const text = await new Response(stream).text();
+
+    expect(text).not.toContain("upstream_stall_timeout");
+    expect(text).toContain("response.completed");
+    expect(text).toContain("visible");
   });
 
   test("preserves reasoning and visible text, then emits done from final message_stop", async () => {

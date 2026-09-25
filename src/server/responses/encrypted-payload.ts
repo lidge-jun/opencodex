@@ -198,21 +198,21 @@ function textWithoutFernetRuns(payload: string, runs: readonly FernetTokenRun[])
 /**
  * The routing header codex-rs writes above a delegated agent payload.
  *
- * `MESSAGE` is matched as well as `NEW_TASK`, and only for the unreadability CHECK --
- * recovery stays NEW_TASK-only. #3021 reported a subagent `MESSAGE` arriving in the
- * parent conversation as raw `gAAAA...` ciphertext after an `adapter_eof`. The detector
- * decides "unreadable" by stripping the envelope and asking whether any plaintext
- * survives, so an envelope shape it does not recognise counts as surviving text: a
- * `MESSAGE` whose entire body is one Fernet token measured as READABLE and was forwarded
- * verbatim.
+ * All four codex-rs message types are recognised: NEW_TASK, MESSAGE, FOLLOWUP_TASK,
+ * and FINAL_ANSWER, whose Task name line is optional. #3021 reported a subagent
+ * `MESSAGE` arriving in the parent conversation as raw `gAAAA...` ciphertext after an
+ * `adapter_eof`. The detector decides "unreadable" by stripping the envelope and asking
+ * whether any plaintext survives, so an envelope shape it does not recognise counts as
+ * surviving text: an unrecognised type whose entire body is one Fernet token measured as
+ * READABLE and would be forwarded verbatim.
  *
- * Widening the strip is not the same as widening recovery. Recovery decrypts, and
- * decrypting a `MESSAGE` on the parent's behalf would build a plaintext oracle out of a
- * payload the parent's session may have no right to read. This only lets the proxy
- * NOTICE that what it is about to forward is unreadable ciphertext, which is what the
- * report asks for: fail closed with a structured error rather than paste the token.
+ * This strip must therefore stay in step with the message types the opt-in recovery
+ * recognises (see agent-task-recovery.ts). The strip itself is still only detection: it
+ * lets the proxy notice that what it is about to forward is unreadable ciphertext and
+ * fail closed with a structured error rather than paste the token. Recovery admission,
+ * not the strip, is the trust boundary for decryption.
  */
-export const AGENT_MESSAGE_ROUTING_ENVELOPE = /(?:^|\n)Message Type\s*:\s*(?:NEW_TASK|MESSAGE)[^\n]*\nTask name\s*:[^\n]*\nSender\s*:[^\n]*\nPayload\s*:\s*(?:\n|$)/gi;
+export const AGENT_MESSAGE_ROUTING_ENVELOPE = /(?:^|\n)Message Type\s*:\s*(?:NEW_TASK|MESSAGE|FOLLOWUP_TASK)[^\n]*\n\s*Task name\s*:[^\n]*\n\s*Sender\s*:[^\n]*\n\s*Payload\s*:\s*(?:\n|$)|(?:^|\n)Message Type\s*:\s*FINAL_ANSWER[^\n]*\n\s*(?:Task name\s*:[^\n]*\n\s*)?Sender\s*:[^\n]*\n\s*Payload\s*:\s*(?:\n|$)/gi;
 
 // CXC is the compatibility-hook control namespace. Strip only the tagged paragraph:
 // later untagged paragraphs may be genuine task text. Repeated CXC paragraphs are
@@ -262,7 +262,8 @@ function splitFernetParts(content: unknown[]): Set<object> {
 export function hasUnreadableEncryptedAgentTask(input: unknown): boolean {
   if (!Array.isArray(input)) return false;
 
-  // codex-rs appends one NEW_TASK agent_message at the current input tail. Historical
+  // codex-rs appends one agent_message (any of the four codex-rs message types) at the
+  // current input tail. Historical
   // agent messages may be adjacent in full-history bodies; they must not poison the
   // later task. compaction_trigger/additional_tools are trailing metadata rather than
   // a newer user turn.

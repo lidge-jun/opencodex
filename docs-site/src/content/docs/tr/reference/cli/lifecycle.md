@@ -472,6 +472,7 @@ simgeyi kontrol eder; proxy'yi kontrol etmek için menüsünü kullanın.
 `--no-start`, `install` için geçerlidir ve tepsiyi hemen başlatmadan kurar.
 Kullanımdan kaldırıldı: OpenCodex masaüstü uygulaması Windows, macOS ve Linux'ta tepsi sağlar;
 `ocx tray`, masaüstü uygulaması olmayan kurulumlar için kullanılmaya devam eder.
+Yeni bir paket sürümü bilindiğinde tepsi, çevrimiçi, uyarı veya çevrimdışı simgesine mavi bir nokta ekler ve **Update available** gösterir. Yerel önbellekteki rozeti yaklaşık dakikada bir denetler; eski veya kullanılamayan sonuçlar noktayı kaldırır. Menü öğesi panoyu açar ve paket güncellemesini oradan başlatabilirsiniz. Otomatik yükleme yapmaz.
 
 ## Kontrol Paneli
 
@@ -485,6 +486,8 @@ adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yö
 `ocx update`, Codex CLI'yi değil OpenCodex'in kendisini günceller. Yapılandırılmış Codex CLI adayının provenance bilgisini sınırlı ve salt okunur biçimde denetlemek için [sistem denetim komutları](/tr/reference/cli/agents/) arasındaki `ocx system codex-cli-update check` komutunu kullanın. Komut package registry'ye istek göndermez ve güncelleme kurmaz.
 
 ### `ocx update [--tag latest|preview]`
+
+OpenCodex mise üzerinden kurulduğunda bu komut proxy'yi durdurmadan veya paket dosyalarını değiştirmeden önce başarısız olur ve doğrulanmış yerel mise diğer adını kullanarak `mise upgrade <tool>` komutunu gösterir. Güncelleme denetimi kullanılabilir kalır ve kurulumun harici olarak yönetildiğini bildirir. Okunamayan veya tutarsız mise sahiplik meta verileri de araç adını tahmin etmeden değişikliği reddeder; `--tag preview` mise içinde yapılandırılmış seçimi değiştirmez.
 
 opencodex'i npm'den kendi kendine güncelleyin. Kararlı kurulumlar `@latest`
 kullanır; önizleme kurulumları `--tag latest|preview` iletmediğiniz sürece

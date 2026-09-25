@@ -12,8 +12,9 @@ import type { StartServerDeps } from "./startup-warnings";
 // same default the inline construction used to build.
 export function createPackageTreeIntegrityGuardForServer(
   deps: StartServerDeps,
-  serviceHomeOwned: () => boolean = () => inspectNativeCodexOwnership().ownership === "owned",
-  isServiceChild: () => boolean = () => process.env.OCX_SERVICE === "1",
+  serviceHomeOwned: () => boolean = deps.packageTreeServiceHomeOwned
+    ?? (() => inspectNativeCodexOwnership().ownership === "owned"),
+  isServiceChild: () => boolean = deps.packageTreeServiceChild ?? (() => process.env.OCX_SERVICE === "1"),
 ): PackageTreeIntegrityGuard {
   if (deps.packageTreeIntegrity) {
     return deps.packageTreeIntegrity;
@@ -42,6 +43,7 @@ export function createPackageTreeIntegrityGuardForServer(
   );
   return {
     status: () => guard.status(),
+    installedVersion: () => guard.installedVersion?.(),
     dispose: () => {
       guard.dispose();
       vetoAcceptedRestart?.();

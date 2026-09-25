@@ -26,7 +26,7 @@ import {
   isCursorExecutionPathTool,
   isCursorWaitTool,
 } from "./tool-definitions";
-import { lookupCursorThreadConversation } from "./thread-continuity";
+import { lookupCursorThreadConversation, resolveCursorConversationRewrite } from "./thread-continuity";
 import {
   getCursorCheckpoint,
   getCursorCheckpointForPrefix,
@@ -367,11 +367,16 @@ export function resolveCursorConversationId(
   // the override check has to exclude it explicitly rather than rely on that flag.
   if (threadId && parsed._compactionRequest !== true) {
     const recovered = lookupCursorThreadConversation(threadId, parsed._cursorIdentityScope);
-    if (recovered) return recovered;
+    if (recovered) return resolveCursorConversationRewrite(recovered, parsed._cursorIdentityScope);
   }
-  if (parsed._cursorConversationId) return parsed._cursorConversationId;
+  if (parsed._cursorConversationId) {
+    return resolveCursorConversationRewrite(parsed._cursorConversationId, parsed._cursorIdentityScope);
+  }
   if (threadId) {
-    return cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope);
+    return resolveCursorConversationRewrite(
+      cursorConversationIdFromClientThread(`thread:${threadId}`, parsed._cursorIdentityScope),
+      parsed._cursorIdentityScope,
+    );
   }
   return generatedCursorConversationId();
 }

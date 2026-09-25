@@ -58,7 +58,7 @@ describe("Grok fence lifecycle wiring", () => {
     const helper = sliceFn(
       ENSURE_SOURCE,
       "export async function ensureGrokFenceMatchesDesired(",
-      "export function ensureClaudeDesktopMatchesDesired(",
+      "export async function ensureClaudeDesktopMatchesDesired(",
     );
     const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
 
@@ -76,14 +76,14 @@ describe("Grok fence lifecycle wiring", () => {
   test("ensure clears Claude Desktop residue when the durable switch is OFF", () => {
     const helper = sliceFn(
       ENSURE_SOURCE,
-      "export function ensureClaudeDesktopMatchesDesired(",
+      "export async function ensureClaudeDesktopMatchesDesired(",
       "Claude Desktop cleanup failed",
     );
     const ensureFn = sliceFn(CLI_SOURCE, "async function handleEnsure(", "async function handleTrayProxyStart(");
     expect(helper).toContain("claudeDesktopIntegrationEnabled(config)");
     expect(helper).toContain("deps.removeDesktop3pStandardPivot(");
     expect(helper.indexOf("deps.loadConfig()")).toBeLessThan(helper.indexOf("claudeDesktopIntegrationEnabled(config)"));
-    expect(ENSURE_SOURCE).toContain("ensureClaudeDesktopMatchesDesired(deps)");
+    expect(ENSURE_SOURCE).toContain("await ensureClaudeDesktopMatchesDesired(deps)");
   });
 
   test("both ensure branches re-read persisted config after the in-flight await window", () => {

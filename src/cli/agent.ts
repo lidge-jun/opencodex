@@ -1,6 +1,7 @@
 import {
   CliUsageError,
   csv,
+  desktopSwitchApplyReason,
   printData,
   rejectArgs,
   runCliAction,
@@ -29,7 +30,7 @@ const USAGE = `Usage:
   ocx agent fallback <status|set|clear> [model,model...] [--poll-ms <5000-600000>] [--json]
   ocx agent sidecar <status|web|vision> [--list] [--model <id|->]
       [--backend web:<openai|anthropic|xai|gemini|exa|-> vision:<openai|anthropic|routed|->]
-      [--reasoning <level>] [--max-descriptions <n>] [--json]
+      [--reasoning <level>] [--max-descriptions <n>] [--enabled <on|off>] [--json]
   ocx agent request-user-input [on|off] [--json]`;
 
 function clearable(value: string | undefined): string | null | undefined {
@@ -188,12 +189,14 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const backend = takeOption(args, "--backend");
   const reasoning = takeOption(args, "--reasoning");
   const maxDescriptionsPerTurn = takeIntegerOption(args, "--max-descriptions", { min: 1 });
+  const enabled = takeBooleanOption(args, "--enabled");
   rejectArgs(args, USAGE);
   const settings: Record<string, unknown> = {};
   if (model !== undefined) settings.model = model === "-" ? "" : model;
   if (backend !== undefined) settings.backend = backend === "-" ? null : backend;
   if (reasoning !== undefined) settings.reasoning = reasoning;
   if (maxDescriptionsPerTurn !== undefined) settings.maxDescriptionsPerTurn = maxDescriptionsPerTurn;
+  if (enabled !== undefined) settings.enabled = enabled;
   if (Object.keys(settings).length === 0) throw new CliUsageError("at least one sidecar option is required", USAGE);
   if (section === "web" && model !== undefined && model !== "-") {
     const offered = await runtimeRequest("/api/sidecar-settings", {}, deps) as {
@@ -210,7 +213,18 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
   const body = section === "web" ? { webSearch: settings } : { vision: settings };
   const result = await runtimeRequest("/api/sidecar-settings", { method: "PUT", body: JSON.stringify(body) }, deps);
-  printData(result, wantsJson, [`${section} sidecar settings updated.`]);
+  const lines = [`${section} sidecar settings updated.`];
+  // Only a switch that MOVED owes a Codex-side write, and only the server can say whether that
+  // write happened — silence here would read as "the native tool is off now" either way. The
+  // wording is the Desktop switches' one vocabulary for the same report.
+  const apply = (result as { codexWebSearch?: { applied?: boolean; reason?: string; detail?: string } } | null)?.codexWebSearch;
+  if (apply && apply.reason !== "not_requested") {
+    const detail = typeof apply.detail === "string" && apply.detail.length > 0 ? ` Details: ${apply.detail}` : "";
+    lines.push(apply.applied === true
+      ? "Codex config: ~/.codex/config.toml was rewritten."
+      : `Codex config: ~/.codex/config.toml was not rewritten because ${desktopSwitchApplyReason(apply.reason)}.${detail} Run 'ocx sync' to apply the stored settings.`);
+  }
+  printData(result, wantsJson, lines);
 }
 
 export async function handleAgentCommand(argv: string[], deps: RuntimeApiDeps = {}): Promise<number> {

@@ -1,6 +1,7 @@
 import { NativeProfileManager } from "./native-profile-manager";
 import { loadConfig } from "../config";
 import { initializeMainAccountPolicyBinding } from "./account-lifecycle";
+import { isMainAccountHardLockEnabled } from "./main-account-hard-lock";
 import { clearAccountNeedsReauth } from "./account-runtime-state";
 import { MAIN_CODEX_ACCOUNT_ID } from "./main-account";
 import {
@@ -188,7 +189,7 @@ function scheduleStageSweep(entry: StartupEntry): void {
         || entry.epoch !== sweepEpoch || entry.policyBindingPending) return;
       if (!safe) snapshot = { status: "blocked", homeId: entry.homeId, reason: "stage-cleanup-required" };
       else if (snapshot.homeId === entry.homeId && snapshot.status === "blocked" && snapshot.reason === "stage-cleanup-required") {
-        if (loadConfig().codexMainAccountHardLock === true) rearmOwnedMainPolicyBinding(entry);
+        if (isMainAccountHardLockEnabled(loadConfig())) rearmOwnedMainPolicyBinding(entry);
         else snapshot = ready(entry.homeId);
       }
     })().finally(() => {
@@ -200,7 +201,9 @@ function scheduleStageSweep(entry: StartupEntry): void {
 }
 
 function convergeOwnedStartup(entry: StartupEntry): void {
-  if (entry.recoveryStarted) return;
+  // The map entry is the gate's owner of record. A released one has been deleted, and every
+  // write below belongs to a generation nothing is waiting for any more.
+  if (entry.recoveryStarted || startupEntries.get(entry.homeId) !== entry) return;
   entry.recoveryStarted = true;
   const currentEpoch = entry.epoch;
   snapshot = { status: "blocked", homeId: entry.homeId, reason: "recovery-pending" };
@@ -225,7 +228,7 @@ function convergeOwnedStartup(entry: StartupEntry): void {
       ));
       const stageSweepSafe = recoveryState === "none" ? await runOwnedStageSweep(entry) : false;
       if (startupEntries.get(entry.homeId) === entry && entry.epoch === currentEpoch && recoveryState === "none" && stageSweepSafe) {
-        if (loadConfig().codexMainAccountHardLock === true) {
+        if (isMainAccountHardLockEnabled(loadConfig())) {
           await withNativeMainOwnerOperation(entry.manager.context, () => withNativeMainExclusiveClaim(
             entry.manager.context,
             async () => {
@@ -236,7 +239,7 @@ function convergeOwnedStartup(entry: StartupEntry): void {
               }
               // The HMAC is deliberately not persisted. Bind only the pinned owned home,
               // after recovery/cleanup, and before caller-owned admission can observe ready.
-              if (loadConfig().codexMainAccountHardLock === true) {
+              if (isMainAccountHardLockEnabled(loadConfig())) {
                 initializeMainAccountPolicyBinding(entry.manager.context.authPath);
               }
               clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
@@ -386,7 +389,7 @@ export function startNativeMainStartupLifecycle(
     entry.unsubscribe = owner.subscribe(ownerState => observeOwner(entry!, ownerState));
   } else if (!entry.policyBindingPending
     && snapshot.status === "ready" && snapshot.homeId === homeId
-    && loadConfig().codexMainAccountHardLock === true) {
+    && isMainAccountHardLockEnabled(loadConfig())) {
     // A new same-process listener can enable protection or follow a credential replacement.
     // Re-read its pinned home through the held owner before admitting caller-owned main.
     rearmOwnedMainPolicyBinding(entry);
@@ -404,6 +407,21 @@ export function startNativeMainStartupLifecycle(
     entry!.sweepTimer = undefined;
     entry!.unsubscribe();
     startupEntries.delete(homeId);
+    // A released owner cannot leave the process fenced. Convergence runs in the background, and
+    // its only guard is this entry, so a server that stops mid-convergence used to keep the
+    // "recovery-pending" snapshot the entry armed: every later native request answered 503 until
+    // the process exited, because a server whose config does not sync Codex installs a no-op
+    // lifecycle that never touches the gate.
+    //
+    // The gate state belonged only to this entry, so reset it to the process-initial state here,
+    // synchronously and before the first await: a NEW entry created for the same home afterwards
+    // re-arms its own gate and cannot be clobbered by this release. The epoch bump retires any
+    // in-flight `initializeNativeMainStartupGate`/convergence write from the released generation.
+    if (snapshot.homeId === homeId && !startupEntries.has(homeId)) {
+      epoch += 1;
+      snapshot = ready(null);
+      settled = Promise.resolve(snapshot);
+    }
     entry!.resolveAcquisition?.(snapshot);
     entry!.resolveAcquisition = undefined;
     // Startup convergence can transition from the exclusive recovery claim
@@ -705,7 +723,7 @@ export function blockNativeMainRecovery(
 export function completeNativeMainRecovery(homeId: string): boolean {
   if (snapshot.status !== "blocked" || snapshot.homeId !== homeId) return false;
   const entry = startupEntries.get(homeId);
-  if (entry && loadConfig().codexMainAccountHardLock === true) return rearmOwnedMainPolicyBinding(entry);
+  if (entry && isMainAccountHardLockEnabled(loadConfig())) return rearmOwnedMainPolicyBinding(entry);
   epoch += 1;
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   snapshot = ready(homeId);

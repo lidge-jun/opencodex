@@ -27,6 +27,7 @@ import {
   type OwnershipRecord,
 } from "./ownership";
 import {
+  isHermesAffinityUpgrade,
   protectedContributionFingerprint,
   refreshablePathsOf,
   semanticProtectedContributionFingerprint,
@@ -340,6 +341,14 @@ function applyOrRefreshIntegration(
   }
   if (classified.state === "current") {
     return { ok: true, changed: false, state: "current", clientId, message: "already applied" };
+  }
+  // Catalog refresh must not opt an existing Hermes integration into affinity.
+  // Explicit Apply (or Replace) records the new contract before refresh resumes.
+  if (!allowAbsent && record && isHermesAffinityUpgrade(parsed, record, contribution)) {
+    return {
+      ok: true, changed: false, state: "stale", clientId,
+      message: "Hermes session affinity requires Apply in Integrations; refresh left the configuration unchanged",
+    };
   }
 
   // A stale refresh drops what the PREVIOUS record owned before merging: a

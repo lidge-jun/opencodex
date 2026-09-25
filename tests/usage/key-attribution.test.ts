@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   addFinalRequestLog, beginRequestAttempt, finishRequestAttempt, noteProviderAttemptSend,
-  recordKeyAttemptFailure, recordKeyAttemptUsage, applyResponseLogMetadata,
+  recordKeyAttemptFailure, recordKeyAttemptUsage, applyResponseLogMetadata, sealRequestAttemptIdentity,
   inspectResponseLogSsePayload, type RequestLogContext, type RequestLogEntry,
 } from "../../src/server/request-log";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 import { normalizeUsageEntryForTest } from "../../src/usage/log";
+import { formatAnthropicProviderForLog } from "../../src/oauth/anthropic-routing";
 
 describe("key attempt accounting", () => {
   test("a combo parent copied before streaming rotation cannot overwrite the final key's usage", () => {
@@ -105,6 +106,95 @@ describe("key attempt accounting", () => {
     expect(roundTrip.attempts?.[2].usage).toMatchObject({ inputTokens: 300, outputTokens: 40 });
     expect(roundTrip.usage).toMatchObject({ inputTokens: 400, outputTokens: 60 });
     expect(JSON.stringify(roundTrip)).not.toContain("test-key-");
+  });
+  test.each([
+    ["generic OAuth", "o111111", "o222222"],
+    ["Codex pool", "paaaaa1", "pbbbbb2"],
+  ])("a %s account rotation opens its own attempt row", (_kind, first, second) => {
+    const oauth = { adapter: "openai-responses" as const, authMode: "oauth" as const, baseUrl: "https://example.test" };
+    const active = beginRequestAttempt(1, "xai", "model", "openai-responses");
+    const ctx: RequestLogContext = { provider: "xai", model: "model", activeAttempt: active,
+      activeAttemptStartedAt: Date.now(), attempts: [active], accountLogLabel: first };
+    noteProviderAttemptSend(ctx, "xai", oauth, undefined);
+    recordKeyAttemptUsage(ctx, { inputTokens: 100, outputTokens: 10 });
+    ctx.accountLogLabel = second;
+    noteProviderAttemptSend(ctx, "xai", oauth, undefined, "rate-limit-429");
+    expect(ctx.activeAttempt).toBe(active);
+    expect(ctx.attempts).toHaveLength(2);
+    expect(ctx.attempts?.[0]).toMatchObject({ ordinal: 1, accountLogLabel: first, sendCount: 1,
+      usage: { inputTokens: 100, outputTokens: 10 } });
+    // The second account's tokens land on their own row rather than on the first account's.
+    expect(active).toMatchObject({ ordinal: 2, accountLogLabel: second, sendCount: 1 });
+    expect(active.usage).toBeUndefined();
+  });
+  test.each([
+    ["generic OAuth", "o111111", "o222222"],
+    ["Codex pool", "paaaaa1", "pbbbbb2"],
+  ])("a post-send seal preserves the old %s row before the next send", (_kind, first, second) => {
+    const oauth = { adapter: "openai-responses" as const, authMode: "oauth" as const,
+      baseUrl: "https://example.test" };
+    const active = beginRequestAttempt(1, "xai", "model", "openai-responses");
+    const ctx: RequestLogContext = { provider: "xai", model: "model", activeAttempt: active,
+      activeAttemptStartedAt: Date.now(), attempts: [active], accountLogLabel: first };
+
+    noteProviderAttemptSend(ctx, "xai", oauth, undefined);
+    recordKeyAttemptUsage(ctx, { inputTokens: 100, outputTokens: 10 });
+
+    ctx.accountLogLabel = second;
+    sealRequestAttemptIdentity(active, "xai", "openai-responses", second);
+    noteProviderAttemptSend(ctx, "xai", oauth, undefined, "rate-limit-429");
+    recordKeyAttemptUsage(ctx, { inputTokens: 50, outputTokens: 5 });
+
+    expect(ctx.attempts).toHaveLength(2);
+    expect(ctx.attempts?.[0]).toMatchObject({
+      ordinal: 1, accountLogLabel: first, sendCount: 1,
+      usage: { inputTokens: 100, outputTokens: 10 },
+    });
+    expect(active).toMatchObject({
+      ordinal: 2, accountLogLabel: second, sendCount: 1,
+      usage: { inputTokens: 50, outputTokens: 5 },
+    });
+  });
+  test("a sent attempt keeps the account-qualified provider it spent its tokens on", () => {
+    // Anthropic pool accounts carry no label at all -- `stampOAuthAccountLabel` skips that base
+    // provider -- so the account lives in the log provider string and the seal used to erase it.
+    const oauth = { adapter: "anthropic-messages", authMode: "oauth" as const, baseUrl: "https://example.test" };
+    const firstProvider = formatAnthropicProviderForLog("anthropic", "account-a");
+    const secondProvider = formatAnthropicProviderForLog("anthropic", "account-b");
+    expect(firstProvider).toMatch(/^anthropic-p[a-f0-9]{6}$/);
+    expect(secondProvider).toMatch(/^anthropic-p[a-f0-9]{6}$/);
+    const active = beginRequestAttempt(1, "anthropic", "model", "anthropic-messages");
+    const ctx: RequestLogContext = { provider: firstProvider, model: "model",
+      activeAttempt: active, activeAttemptStartedAt: Date.now(), attempts: [active] };
+    noteProviderAttemptSend(ctx, "anthropic", oauth, undefined);
+    expect(active).toMatchObject({ provider: firstProvider, sendCount: 1 });
+    ctx.provider = secondProvider;
+    sealRequestAttemptIdentity(active, ctx.provider, "anthropic-messages", ctx.accountLogLabel);
+    expect(active.provider).toBe(firstProvider);
+  });
+  test("an Anthropic account rotation opens its own attempt row", () => {
+    // No label to compare: the account lives in the account-qualified log provider string.
+    const oauth = { adapter: "anthropic-messages", authMode: "oauth" as const, baseUrl: "https://example.test" };
+    const firstProvider = formatAnthropicProviderForLog("anthropic", "account-a");
+    const secondProvider = formatAnthropicProviderForLog("anthropic", "account-b");
+    const active = beginRequestAttempt(1, "anthropic", "model", "anthropic-messages");
+    const ctx: RequestLogContext = { provider: firstProvider, model: "model",
+      activeAttempt: active, activeAttemptStartedAt: Date.now(), attempts: [active] };
+    noteProviderAttemptSend(ctx, "anthropic", oauth, undefined);
+    recordKeyAttemptUsage(ctx, { inputTokens: 100, outputTokens: 10 });
+    ctx.provider = secondProvider;
+    // The dispatch paths re-seal between sends (src/server/responses/request-transport.ts:691).
+    // That re-stamp is what used to launder the rotation before the split below could read it.
+    sealRequestAttemptIdentity(active, ctx.provider, "anthropic-messages", ctx.accountLogLabel);
+    noteProviderAttemptSend(ctx, "anthropic", oauth, undefined, "rate-limit-429");
+    recordKeyAttemptUsage(ctx, { inputTokens: 50, outputTokens: 5 });
+    expect(ctx.activeAttempt).toBe(active);
+    expect(ctx.attempts).toHaveLength(2);
+    // Each account keeps the tokens it actually spent.
+    expect(ctx.attempts?.[0]).toMatchObject({ ordinal: 1, provider: firstProvider,
+      sendCount: 1, usage: { inputTokens: 100, outputTokens: 10 } });
+    expect(active).toMatchObject({ ordinal: 2, provider: secondProvider,
+      sendCount: 1, usage: { inputTokens: 50, outputTokens: 5 } });
   });
   test("wire snapshots replace the current send against a pre-send baseline", () => {
     const active = beginRequestAttempt(1, "test", "model", "openai-chat");

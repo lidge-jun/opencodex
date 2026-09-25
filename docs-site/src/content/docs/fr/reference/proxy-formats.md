@@ -24,6 +24,12 @@ doit choisir parmi plusieurs cibles.
 
 Les requêtes de modèle, d’image, de vidéo et de recherche contenant des identifiants ne suivent pas automatiquement les redirections HTTP, même vers la même origine. Configurez l’URL finale de l’API plutôt qu’un alias qui redirige. Le serveur ne renvoie ni les identifiants ni le corps de la requête à la destination d’une redirection. Chaque chemin conserve sa gestion des erreurs ou son relais existant ; les routes Responses natives et compact peuvent renvoyer le 3xx et le `Location` d’origine au client. Le comportement de redirection du client est distinct de cette politique de transport du serveur.
 
+## xAI policy refusals
+
+Certains refus xAI de Chat Completions arrivent en HTTP 403 avec une phrase de refus exacte, par exemple `I can't help with that request.`, au lieu d'un HTTP 200 avec `finish_reason: content_filter`. Codex traite un 403 comme un échec de transport : le tour utilisateur n'est pas enregistré et la même requête est renvoyée.
+
+Sur une requête Responses hors combo, OpenCodex réécrit ce 403 de la liste autorisée en réponse Responses HTTP 200 avec `status: "incomplete"` et `incomplete_details.reason: "content_filter"`. La réécriture s'applique au chemin de l'adaptateur openai-chat et au passthrough openai-responses (OAuth grok-4.6 / grok-4.5). Le streaming utilise la même limite incomplete. Un corps 403 vide ou fait d'espaces reste une erreur. Les 403 d'abonnement, de crédits, de droits d'accès et `not allowed to use this model` restent des erreurs. Le basculement de combo voit toujours le HTTP 403 d'origine.
+
 ## Présentation du point de terminaison
 
 | Espace client | Point de terminaison | Résultat non-stream réussi | Résultat de flux ou de socket réussi |
@@ -371,3 +377,25 @@ cette réparation, cela devient un message utilisateur normal. Si une tâche v2 
 mais la cible routé sélectionnée ne peut pas lire le texte chiffré natif ChatGPT, opencodex échoue avec
 `unreadable_encrypted_agent_task` au lieu d'envoyer des octets illisibles à ce fournisseur. Voir
 [Surface du sous-agent](/fr/guides/sub-agent-surface/) pour le comportement du client autour des tâches des travailleurs.
+
+### Changer de fournisseur dans une conversation existante
+
+Un élément de raisonnement rejoué transporte un `encrypted_content` que seuls le fournisseur et
+l’identifiant qui l’ont produit peuvent lire. Quand opencodex sait que la conversation a été servie en
+dernier par un autre fournisseur, il retire ce blob avant l’envoi et conserve le résumé de l’élément.
+Si ce fournisseur utilisait aussi un autre point de terminaison ou un autre identifiant, l’identifiant
+`rs_…` de l’élément est retiré également, car il désigne un élément que la nouvelle destination ne peut
+pas retrouver. Quand opencodex ne peut pas le savoir, par exemple après un redémarrage du proxy, la
+nouvelle destination rejette le blob : OpenAI et Azure OpenAI répondent `400 invalid_encrypted_content`.
+opencodex renvoie alors la requête une seule fois sans l’état de raisonnement du fournisseur précédent,
+c’est-à-dire sans le blob ni l’identifiant `rs_…`, qui provoquerait sinon
+`Item with id 'rs_…' not found`.
+
+Cette récupération s’applique à tout adaptateur qui parle le protocole Responses, donc
+`openai-responses` et `azure-openai` se comportent de la même façon. Après une récupération réussie, les
+tours suivants de cette conversation sur la même destination retirent cet état avant le premier envoi
+pendant les cinq minutes suivantes. Le renvoi est compté dans le budget d’envoi normal de la requête. Un
+400 ordinaire et un 429 ne sont jamais renvoyés de cette manière, pas plus qu’un 5xx, à une exception
+près : un 502 dont le corps est exactement le rejet de déchiffrement d’une sortie d’outil chiffrée, pour
+une requête qui en contient une, obtient le même renvoi unique. Un second rejet parvient au client sans
+modification. Dans ce cas, démarrez une nouvelle conversation chez le fournisseur de destination.

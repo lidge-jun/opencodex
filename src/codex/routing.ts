@@ -111,6 +111,7 @@ import {
   pickUnboundStrategyAccount,
   preferModelEntitledAccount,
   sharedStateSelectionOptions,
+  sharesActiveSelection,
   strategySelectionOptionsForModelDetour,
   shouldFailover,
   peekAlternateCodexAccount,
@@ -982,7 +983,7 @@ export function resolveCodexAccountForThreadDetailed(
       // rotation is new-session-only (affinity policy A).
       const cooler = reevaluateAffinityQuota(entry, config, now, quotaScope, selectionOptions);
       if (cooler) {
-        if (!isIndependentCodexQuotaScope(quotaScope)) {
+        if (!isIndependentCodexQuotaScope(quotaScope) && sharesActiveSelection(cooler, selectionOptions)) {
           promoteActiveCodexAccount(config, cooler);
         }
         bindThreadAffinity(threadId, cooler, now, quotaScope); // rebinds + resets clocks
@@ -1028,7 +1029,9 @@ export function resolveCodexAccountForThreadDetailed(
         && !shouldFailover(config, expiredDetour, now)
         && !isCodexAccountSoftAvoided(expiredDetour, now)
       ) {
-        if (!isIndependentCodexQuotaScope(quotaScope)) promoteActiveCodexAccount(config, expiredDetour);
+        if (!isIndependentCodexQuotaScope(quotaScope) && sharesActiveSelection(expiredDetour, selectionOptions)) {
+          promoteActiveCodexAccount(config, expiredDetour);
+        }
         bindThreadAffinity(threadId, expiredDetour, now, quotaScope);
         return {
           status: "selected",
@@ -1122,7 +1125,7 @@ export function resolveCodexAccountForThreadDetailed(
       // process-local cursor to whoever is actually serving and releases the pin; the
       // operator's persisted activeCodexAccountId is left untouched either way, which is
       // the thing the preference exists to protect.
-      promoteActiveCodexAccount(config, strategyPick);
+      if (sharesActiveSelection(strategyPick, selectionOptions)) promoteActiveCodexAccount(config, strategyPick);
     }
     return { status: "selected", accountId: strategyPick, affinity: affinityAfterRelease(threadId, releaseReason) };
   }
@@ -1140,7 +1143,7 @@ export function resolveCodexAccountForThreadDetailed(
       return { status: "none", affinity: affinityOnNoAccount(threadId, releaseReason) };
     }
     if (!isIndependentCodexQuotaScope(quotaScope) && !modelScopedSelection) {
-      setActiveCodexAccount(config, selected);
+      if (sharesActiveSelection(selected, selectionOptions)) setActiveCodexAccount(config, selected);
     }
     active = selected;
   }
@@ -1161,7 +1164,7 @@ export function resolveCodexAccountForThreadDetailed(
         && preserveSharedSelectionForModelDetour
         && activeHealthyForSharedSelection;
       if (!isIndependentCodexQuotaScope(quotaScope) && !modelOnlyMove) {
-        setActiveCodexAccount(config, fallback);
+        if (sharesActiveSelection(fallback, selectionOptions)) setActiveCodexAccount(config, fallback);
       }
       active = fallback;
     } else if (
@@ -1195,6 +1198,7 @@ export function resolveCodexAccountForThreadDetailed(
     if (
       !preserveSharedSelectionForModelDetour
       && !isIndependentCodexQuotaScope(quotaScope)
+      && sharesActiveSelection(preempted, selectionOptions)
     ) {
       // Preemption is an automatic pick competing with the operator, so it yields.
       if (!manualPreferenceBlocks(POOL_KEY_CODEX, preempted)) {

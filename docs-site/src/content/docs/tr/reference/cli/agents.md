@@ -18,7 +18,16 @@ yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off`, kontrol panelindeki **Kapalı (Off)** satırıyla aynı anahtardır: OpenCodex
+sidecar'ı çalıştırmayı bırakır ve Codex entegrasyonu `~/.codex/config.toml` dosyasına
+`web_search = "disabled"` yazar; tek arama yolu olarak bir MCP arama sunucusunun kullanılmasını bu
+sağlar. `--enabled on` bu satırı yeniden kaldırır. Kaydetme anahtarı gerçekten değiştirdiğinde
+komut tetiklediği Codex tarafı yazmayı bildirir (`--json` içinde `codexWebSearch`, aksi
+halde son satırda `Codex config:`) ve yazma yapılamadığında `ocx sync` adresini gösterir.
+Bayrak `vision` için de çalışır.
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
 

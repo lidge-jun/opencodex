@@ -33,6 +33,8 @@ function config(fastMode = true): OcxConfig {
         authMode: "key",
         apiKey: "test-token",
         models: ["claude-opus-5-5"],
+        // Anthropic Fast is opt-in; this suite exercises the enabled lane.
+        fastEnabled: true,
       },
     },
   } as OcxConfig;

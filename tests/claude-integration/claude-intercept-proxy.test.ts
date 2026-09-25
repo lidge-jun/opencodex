@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from "bun:test";
-import { connect, createServer } from "node:net";
+import { connect, createServer, type Socket } from "node:net";
 import { CLAUDE_INTERCEPT_HOSTS, isLoopbackTarget, parseConnectRequestLine, startConnectProxy, type ConnectProxyHandle } from "../../src/claude/intercept/connect-proxy";
 import { startClaudeInterceptListener, rewriteInterceptedRequest } from "../../src/claude/intercept/listener";
 import { createLocalInterceptCa, issueLocalInterceptLeaf } from "../../src/claude/intercept/local-ca";
@@ -141,6 +141,97 @@ test("other CONNECT targets are relayed blind, including pipelined bytes after t
   expect(out).toContain("echo:hello");
 });
 
+function tunnelPayload(port: number, host: string, payload = "hello"): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: "127.0.0.1", port }, () =>
+      socket.write(`CONNECT ${host}:443 HTTP/1.1\r\nHost: ${host}:443\r\n\r\n${payload}`));
+    let out = "";
+    socket.on("data", chunk => {
+      out += chunk.toString("latin1");
+      if (out.includes(`echo:${payload}`)) { socket.end(); resolve(out); }
+    });
+    socket.on("error", reject);
+  });
+}
+
+test("per-connection override chooses its own listener or blind tunnel", async () => {
+  const echo = await startEchoUpstream();
+  cleanups.push(echo.close);
+  const selected: string[] = [];
+  const proxy = await startConnectProxy(0, {
+    interceptPort: 1,
+    selectTunnel: (host, port) => {
+      selected.push(`${host}:${port}`);
+      return host === "claude.ai" ? { kind: "intercept", port: echo.port } : { kind: "blind" };
+    },
+    dialUpstream: () => connect({ host: "127.0.0.1", port: echo.port }),
+  });
+  cleanups.push(proxy.close);
+  expect(await tunnelPayload(proxy.port, "claude.ai")).toContain("echo:hello");
+  expect(await tunnelPayload(proxy.port, "other.example")).toContain("echo:hello");
+  expect(selected).toEqual(["claude.ai:443", "other.example:443"]);
+});
+
+test("pending async choice holds pipelined bytes, then connects; rejection falls back blind", async () => {
+  const echo = await startEchoUpstream();
+  cleanups.push(echo.close);
+  let settle!: (choice: { kind: "intercept"; port: number }) => void;
+  let dialCount = 0;
+  const proxy = await startConnectProxy(0, {
+    interceptPort: 1,
+    selectTunnel: host => host === "claude.ai"
+      ? new Promise(resolve => { settle = resolve; })
+      : Promise.reject(new Error("decision failed")),
+    dialUpstream: () => { dialCount += 1; return connect({ host: "127.0.0.1", port: echo.port }); },
+  });
+  cleanups.push(proxy.close);
+  const delayed = tunnelPayload(proxy.port, "claude.ai", "pending");
+  await Bun.sleep(20);
+  expect(dialCount).toBe(0);
+  settle({ kind: "intercept", port: echo.port });
+  expect(await delayed).toContain("echo:pending");
+  expect(dialCount).toBe(0);
+  expect(await tunnelPayload(proxy.port, "failed.example", "blind")).toContain("echo:blind");
+  expect(dialCount).toBe(1);
+});
+
+test("a closed client during an async decision causes no upstream dial", async () => {
+  let settle!: (choice: { kind: "blind" }) => void;
+  let dialCount = 0;
+  const proxy = await startConnectProxy(0, {
+    interceptPort: 1,
+    selectTunnel: () => new Promise(resolve => { settle = resolve; }),
+    dialUpstream: () => { dialCount += 1; return connect({ host: "127.0.0.1", port: 1 }); },
+  });
+  cleanups.push(proxy.close);
+  const client: Socket = connect({ host: "127.0.0.1", port: proxy.port }, () =>
+    client.write("CONNECT claude.ai:443 HTTP/1.1\r\n\r\n"));
+  await new Promise<void>(resolve => {
+    const check = setInterval(() => {
+      if (!settle) return;
+      clearInterval(check);
+      client.destroy();
+      client.once("close", resolve);
+    }, 1);
+  });
+  await Bun.sleep(20);
+  settle({ kind: "blind" });
+  await Bun.sleep(0);
+  expect(dialCount).toBe(0);
+});
+
+test("invalid request and loopback are refused before consulting tunnel choice", async () => {
+  let consulted = 0;
+  const proxy = await startConnectProxy(0, {
+    interceptPort: 1,
+    selectTunnel: () => { consulted += 1; return { kind: "blind" }; },
+  });
+  cleanups.push(proxy.close);
+  expect(await rawRequest(proxy.port, "GET http://example.com/ HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 405");
+  expect(await rawRequest(proxy.port, "CONNECT localhost:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
+  expect(consulted).toBe(0);
+});
+
 test("plain proxied HTTP, loopback targets and oversized heads are refused", async () => {
   const { proxy } = await startPair();
   expect(await rawRequest(proxy.port, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")).toStartWith("HTTP/1.1 405");
@@ -148,6 +239,8 @@ test("plain proxied HTTP, loopback targets and oversized heads are refused", asy
   expect(await rawRequest(proxy.port, "CONNECT localhost:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
   expect(await rawRequest(proxy.port, "CONNECT [::ffff:127.0.0.1]:22 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
   expect(await rawRequest(proxy.port, `CONNECT a:443 HTTP/1.1\r\nX: ${"y".repeat(9000)}`)).toStartWith("HTTP/1.1 431");
+  // One read that carries a complete but oversized head is refused the same way.
+  expect(await rawRequest(proxy.port, `CONNECT a:443 HTTP/1.1\r\nX: ${"y".repeat(9000)}\r\n\r\n`)).toStartWith("HTTP/1.1 431");
 });
 
 test("isLoopbackTarget covers mapped, unspecified and shorthand loopback literals", () => {

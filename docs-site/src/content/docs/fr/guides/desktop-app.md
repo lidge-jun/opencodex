@@ -40,9 +40,11 @@ L’icône de zone de notification nécessite un environnement de bureau compati
 
 ## Premier lancement
 
-L’application demande à son CLI intégré d’exécuter `ocx resolve --json` et se connecte à un proxy local accessible s’il en existe déjà un. Elle ne démarre son environnement d’exécution intégré que lorsque le CLI établit l’absence de proxy ; un résultat incertain est affiché comme un échec de démarrage. Le tableau de bord s’ouvre alors dans la vue web de l’application, au point de terminaison loopback trouvé.
+L’application demande à son CLI intégré d’exécuter `ocx resolve --json` et se connecte à un proxy local accessible s’il en existe déjà un. Elle ne démarre son environnement d’exécution intégré que lorsque le CLI établit l’absence de proxy ; un résultat incertain est affiché comme un échec de démarrage. Le tableau de bord s’ouvre alors dans la vue web de l’application, au point de terminaison loopback trouvé. Un lancement à l’ouverture de session qui démarre masqué dans la zone de notification conserve plutôt la page de démarrage légère et ne charge le tableau de bord qu’à sa première ouverture depuis la zone de notification ou à un nouveau lancement de l’application.
 
 Utilisez l’action **Open dashboard** ou **Open in browser** de la zone de notification pour passer du tableau de bord intégré à votre navigateur habituel. Le menu permet aussi de rechercher les mises à jour.
+
+Sur macOS, fermer le tableau de bord laisse l’application active dans la barre des menus. Ouvrez à nouveau OpenCodex depuis le Dock ou le Finder pour réafficher le tableau de bord sans redémarrer le proxy.
 
 ## Utilisation dans la zone de notification
 
@@ -58,7 +60,13 @@ Une utilisation indisponible ou explicitement non mesurée est affichée sous la
 
 ## Mises à jour
 
-Choisissez **Check for Updates…** dans le menu pour lancer immédiatement une recherche. Les versions publiées vérifient aussi automatiquement au démarrage, puis toutes les six heures. Les mises à jour sont vérifiées avec la clé publique signée de l’outil de mise à jour du projet avant installation. Sur macOS, les mises à jour intégrées téléchargent `OpenCodex-<version>-macos.app.tar.gz` ; le DMG sert à la première installation. Le manifeste de publication n’est généré que si le secret de la clé de mise à jour est configuré ; les quatre plateformes doivent alors être signées.
+Choisissez **Check for Updates…** dans le menu pour lancer immédiatement une recherche. Les versions publiées vérifient aussi automatiquement au démarrage, puis toutes les six heures.
+
+Quand l’updater Tauri trouve une version plus récente, un point bleu apparaît sur l’icône de la barre de menus macOS ou sur l’icône de la zone de notification Windows/Linux si un hôte de tray est disponible. Le tableau de bord intégré affiche le même signal. Un navigateur ordinaire connecté au même proxy affiche toujours l’état de mise à jour du paquet proxy. Si le shell cesse de signaler son état pendant environ trois minutes, le badge intégré devient unknown jusqu’à la reconnexion. Le point indique la disponibilité ; l’installation reste une action explicite.
+
+Dans l’application de bureau, le bouton de mise à jour du tableau de bord ouvre la page de mise à jour de l’application. Vous pouvez y vérifier à nouveau, installer une mise à jour signée en attente ou revenir au tableau de bord. La même installation est disponible dans le menu de la zone de notification. En cas d’échec, la mise à jour reste disponible pour une nouvelle tentative. Cette page fonctionne aussi sous Linux lorsque le bureau n’a pas d’icône de tray. Un tableau de bord ouvert dans un navigateur gère à la place l’installation du paquet sur ce proxy.
+
+Les mises à jour sont vérifiées avec la clé publique signée de l’outil de mise à jour du projet avant installation. Sur macOS, les mises à jour intégrées téléchargent `OpenCodex-<version>-macos.app.tar.gz` ; le DMG sert à la première installation. Le manifeste de publication n’est généré que si le secret de la clé de mise à jour est configuré ; les quatre plateformes doivent alors être signées.
 
 ## Widget
 

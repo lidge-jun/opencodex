@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { COMPACT_PROMPT, compactionItemToText, decodeCompactionSummary, isCompactionItemType } from "../../responses/compaction";
 import { debugProviderDiagnostic } from "../../lib/debug";
+import { modelInList } from "../../types";
 import { isPlainObject } from "./internal";
 import { activateDeferredTool } from "./tool-schema";
 import { stripOpenAiOnlyWebSearchFields } from "./web-search";
@@ -162,6 +163,30 @@ export function stripCanonicalOnlyTopLevelFields(body: unknown): unknown {
 
   const next = { ...body };
   for (const field of CANONICAL_ONLY_TOP_LEVEL_FIELDS) delete next[field];
+  return next;
+}
+
+/**
+ * Sampling fields a model on the provider's `noStopModels` / `noPenaltyModels` list rejects on
+ * every wire. Claude inbound translates `stop_sequences` into a Responses `stop`
+ * (`src/claude/inbound.ts`), and a direct Responses caller can send penalties. Some listed models
+ * only have the Responses wire (xAI grok-4.20-multi-agent-0309 answers Chat Completions with 400),
+ * so the Chat adapter's omission cannot cover them. Returns the input unchanged when nothing is
+ * removed, so the caller-owned raw body is never mutated.
+ */
+export function stripRejectedSamplingParams(
+  body: unknown,
+  provider: { noStopModels?: string[]; noPenaltyModels?: string[] },
+  modelId: string,
+): unknown {
+  if (!isPlainObject(body)) return body;
+  const dropStop = Object.hasOwn(body, "stop") && modelInList(provider.noStopModels, modelId);
+  const penalties = ["presence_penalty", "frequency_penalty"].filter(field => Object.hasOwn(body, field));
+  const dropPenalties = penalties.length > 0 && modelInList(provider.noPenaltyModels, modelId);
+  if (!dropStop && !dropPenalties) return body;
+  const next = { ...body };
+  if (dropStop) delete next.stop;
+  if (dropPenalties) for (const field of penalties) delete next[field];
   return next;
 }
 

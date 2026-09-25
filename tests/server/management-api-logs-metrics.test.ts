@@ -46,6 +46,9 @@ let testDir = "";
 let previousHome: string | undefined;
 
 beforeEach(() => {
+  // The request log is process-wide: start empty so the first case does not read a row an
+  // earlier file left behind (a one-process tests/server run handed it a Kiro entry).
+  clearRequestLogsForTests();
   // addRequestLog persists to usage.jsonl; without a scratch OPENCODEX_HOME a bare
   // `bun test <file>` run from outside the repo (no bunfig preload) writes these
   // fixture rows into the real ~/.opencodex log and poisons the GUI Usage page.

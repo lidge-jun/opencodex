@@ -40,9 +40,11 @@ Tepsi simgesi, AppIndicator destekleyen bir masaüstü ortamı gerektirir.
 
 ## İlk açılış
 
-Uygulama, paketindeki CLI'dan `ocx resolve --json` çalıştırmasını ister ve zaten çalışan erişilebilir bir yerel proxy varsa ona bağlanır. Paketindeki çalışma zamanını yalnızca CLI yokluğunu kanıtlarsa başlatır; belirsiz sonuç başlangıç hatası olarak gösterilir. Ardından kontrol paneli, uygulamanın web görünümünde çözümlenen geri döngü uç noktasında açılır.
+Uygulama, paketindeki CLI'dan `ocx resolve --json` çalıştırmasını ister ve zaten çalışan erişilebilir bir yerel proxy varsa ona bağlanır. Paketindeki çalışma zamanını yalnızca CLI yokluğunu kanıtlarsa başlatır; belirsiz sonuç başlangıç hatası olarak gösterilir. Ardından kontrol paneli, uygulamanın web görünümünde çözümlenen geri döngü uç noktasında açılır. Oturum açılışında tepside gizli başlayan bir uygulama ise hafif başlangıç sayfasını korur ve kontrol panelini tepsiden ilk açtığınızda ya da uygulamayı yeniden başlattığınızda yükler.
 
 Gömülü kontrol paneli ile normal tarayıcınız arasında geçmek için tepsideki **Open dashboard** veya **Open in browser** eylemini kullanın. Tepsi, güncelleme denetimlerini de sunar.
+
+macOS’te kontrol panelini kapattığınızda uygulama menü çubuğunda çalışmaya devam eder. Proxy’yi yeniden başlatmadan kontrol panelini geri getirmek için OpenCodex’i Dock veya Finder üzerinden yeniden açın.
 
 ## Tepside kullanım
 
@@ -58,7 +60,13 @@ Kullanılamayan veya açıkça ölçülmemiş kullanım, ölçülmüş sıfır y
 
 ## Güncellemeler
 
-Hemen denetlemek için tepsi menüsünden **Check for Updates…** seçeneğini seçin. Sürüm derlemeleri başlangıçtan sonra ve altı saatte bir otomatik denetim de yapar. Güncellemeler kurulmadan önce projenin imzalı güncelleyici açık anahtarıyla doğrulanır. macOS'ta uygulama içi güncellemeler `OpenCodex-<version>-macos.app.tar.gz` dosyasını indirir; DMG ilk kurulum içindir. Sürüm bildirimi yalnızca güncelleyici anahtar sırrı yapılandırıldığında üretilir ve o durumda dört platformun tamamının imzalanmasını gerektirir.
+Hemen denetlemek için tepsi menüsünden **Check for Updates…** seçeneğini seçin. Sürüm derlemeleri başlangıçtan sonra ve altı saatte bir otomatik denetim de yapar.
+
+Tauri güncelleyici yeni bir uygulama sürümü bulduğunda macOS menü çubuğu simgesinde veya bir tray host varsa Windows/Linux tepsi simgesinde mavi nokta görünür. Gömülü pano aynı masaüstü güncelleme sinyalini gösterir. Aynı proxy’ye bağlı normal tarayıcı, proxy paketinin güncelleme durumunu görmeye devam eder. Kabuk yaklaşık üç dakika bildirim yapmazsa gömülü rozet yeniden bağlanana kadar unknown olur. Nokta kullanılabilirliği bildirir; kurulum açık bir kullanıcı eylemi gerektirir.
+
+Masaüstü uygulamasında, kontrol panelindeki güncelleme düğmesi uygulamanın güncelleme sayfasını açar. Buradan yeniden denetleyebilir, bekleyen imzalı güncellemeyi kurabilir veya kontrol paneline dönebilirsiniz. Aynı kurulum işlemi tepsi menüsünde de bulunur. Kurulum başarısız olursa güncelleme yeniden denenmek üzere tutulur. Bu sayfa, masaüstünde tepsi simgesi bulunmayan Linux'ta da çalışır. Normal bir tarayıcı kontrol paneli bunun yerine o proxy'nin paket kurulumunu yönetir.
+
+Güncellemeler kurulmadan önce projenin imzalı güncelleyici açık anahtarıyla doğrulanır. macOS'ta uygulama içi güncellemeler `OpenCodex-<version>-macos.app.tar.gz` dosyasını indirir; DMG ilk kurulum içindir. Sürüm bildirimi yalnızca güncelleyici anahtar sırrı yapılandırıldığında üretilir ve o durumda dört platformun tamamının imzalanmasını gerektirir.
 
 ## Widget
 

@@ -53,6 +53,7 @@ import {
   DEEPSEEK_NATIVE_THINKING_MODELS,
   DEEPSEEK_GATEWAY_THINKING_MODELS,
   DEEPSEEK_VISION_PREVIEW_MODEL,
+  COMMAND_CODE_MIMO_CONTEXT_WINDOWS,
   COMMAND_CODE_MODEL_INPUT_MODALITIES,
   deepseekThinkingEffortsFor,
   deepseekReasoningMapFor,
@@ -266,6 +267,29 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // 260813: grok-4.6 added per docs.x.ai/developers/grok-4-6. Context/vision still match
     // grok-4.5; the reasoning ladder does not — 4.6 adds the documented xhigh rung.
     models: XAI_MODELS,
+    // grok-4.7-build-fast arrives only through OAuth discovery. We read it as the Grok Build id of
+    // what xAI documents as Grok 4.7 Fast: "the same model served on faster infrastructure",
+    // offered in Cursor and Grok Build only, not on the public xAI API (docs.x.ai/developers/grok-4-7,
+    // fetched 2026-09-24). It therefore inherits grok-4.7's documented facts in the lists below.
+    // Its wire pin and service tier stay unclaimed until probed, which is why it is absent from
+    // XAI_MODELS, modelWireDefaults and modelSupportsServiceTier.
+    // Live 2026-09-20: Chat Completions rejects `stop` on grok-4.6
+    // (`400 invalid-argument "Model grok-4.6 does not support parameter stop."`).
+    // xAI documents `stop` as unsupported for reasoning models. Claude Code
+    // auto-mode always sends stop_sequences; forwarding that as `stop` makes
+    // the classifier treat Grok as temporarily unavailable while chat turns
+    // still work. Keep caller stop sequences on non-reasoning ids.
+    // Live 2026-09-23: grok-4.7 answers the same 400.
+    noStopModels: [
+      "grok-4.7",
+      "grok-4.7-build-fast",
+      "grok-4.6",
+      "grok-4.5",
+      "grok-4.3",
+      "grok-4.20-multi-agent-0309",
+      "grok-4.20-0309-reasoning",
+      "grok-build-0.1",
+    ],
     // Measured only on grok-4.6 against cli-chat-proxy.grok.com: even an invalid
     // `text.verbosity` value is accepted and low/high/omitted output length is non-monotonic.
     // Apply the resulting opt-out to the whole xAI lineup because `text.verbosity` is an OpenAI
@@ -277,6 +301,20 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // absent from xAI's documented API, so a model discovered later has no more support for it
     // than the seeded ones do.
     supportsVerbosity: false,
+    // docs.x.ai/docs/guides/reasoning: presencePenalty and frequencyPenalty "cannot be used with
+    // reasoning models. Requests that include them return an error." Live 2026-09-23: grok-4.7
+    // answers 400 invalid-argument "Model grok-4.7 does not support parameter presencePenalty."
+    // Non-reasoning ids keep caller penalties.
+    noPenaltyModels: [
+      "grok-4.7",
+      "grok-4.7-build-fast",
+      "grok-4.6",
+      "grok-4.5",
+      "grok-4.3",
+      "grok-4.20-multi-agent-0309",
+      "grok-4.20-0309-reasoning",
+      "grok-build-0.1",
+    ],
     defaultModel: "grok-4.5",
     // Grok 4.7/4.6/4.5 subscription Responses callers use the native wire with the existing
     // namespace/web-search/replay normalization. Chat remains an explicit modelAdapters
@@ -334,6 +372,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // (they are already listed in noVisionModels below).
     modelInputModalities: {
       "grok-4.7": ["text", "image"],
+      "grok-4.7-build-fast": ["text", "image"],
       "grok-4.6": ["text", "image"],
       "grok-4.5": ["text", "image"],
       "grok-4.3": ["text", "image"],
@@ -346,7 +385,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // reasoning_content as the top cause of prompt-cache misses on multi-turn conversations
     // (docs.x.ai prompt-caching/multi-turn, verified 2026-07-13 — devlog/_plan/260713_grok_caching).
     // Models that never emit reasoning simply have no thinking parts to replay (no-op).
-    preserveReasoningContentModels: ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
+    preserveReasoningContentModels: ["grok-4.7", "grok-4.7-build-fast", "grok-4.6", "grok-4.5", "grok-4.3", "grok-4.20-0309-reasoning"],
     // grok-4.5 reasoning is always-on with low/medium/high (no off tier, no xhigh).
     // grok-4.6 adds xhigh per docs.x.ai/developers/model-capabilities/text/reasoning;
     // multi-agent accepts the same four wire values to select 4 or 16 collaborators. xAI
@@ -355,15 +394,17 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       // 2026-09-23 live probe accepted low..xhigh and rejected max on both wires;
       // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
       "grok-4.7": ["low", "medium", "high", "xhigh"],
+      "grok-4.7-build-fast": ["low", "medium", "high", "xhigh"],
       "grok-4.6": ["low", "medium", "high", "xhigh"],
       "grok-4.5": ["low", "medium", "high"],
       "grok-4.20-multi-agent-0309": ["low", "medium", "high", "xhigh"],
     },
-    modelDefaultReasoningEfforts: { "grok-4.7": "high", "grok-4.6": "high" },
+    modelDefaultReasoningEfforts: { "grok-4.7": "high", "grok-4.7-build-fast": "high", "grok-4.6": "high" },
     modelContextWindows: {
       // 500k confirmed by context_length_exceeded:
       // devlog/_plan/260923_grok47_parity/010_probe-evidence.md.
       "grok-4.7": 500_000,
+      "grok-4.7-build-fast": 500_000,
       "grok-4.6": 500_000,
       "grok-4.5": 500_000,
       "grok-4.3": 1_000_000,
@@ -400,6 +441,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // merge into deepseek-v4-flash later.
     modelContextWindows: {
       [`deepseek/${DEEPSEEK_VISION_PREVIEW_MODEL}`]: 1_048_576,
+      ...COMMAND_CODE_MIMO_CONTEXT_WINDOWS,
     },
     modelInputModalities: COMMAND_CODE_MODEL_INPUT_MODALITIES,
     defaultMaxOutputTokens: 64_000,
@@ -444,9 +486,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // Claude fast mode on the subscription lane (Claude Code `/fast`): the OAuth route accepts
     // `speed` and gates it on account entitlement (usage credits / org enablement), probed live
     // 2026-09-23 (devlog/_plan/260923_anthropic_fast_speed/020_probe-evidence.md).
+    // Off until the operator opts in: fast mode draws usage credits at 2x price.
     fastWire: ANTHROPIC_FAST_WIRE,
     modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
     fastTierDescription: ANTHROPIC_FAST_TIER_DESCRIPTION,
+    fastOptIn: true,
   },
   {
     id: "anthropic-apikey",
@@ -469,6 +513,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     fastWire: ANTHROPIC_FAST_WIRE,
     modelSupportsServiceTier: { ...ANTHROPIC_FAST_MODELS },
     fastTierDescription: ANTHROPIC_FAST_TIER_DESCRIPTION,
+    fastOptIn: true,
   },
   {
     id: "kimi",
@@ -880,6 +925,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       // deepseek-v4-flash stays listed — that route rejects image_url upstream.
       "deepseek-v4-flash",
       "mimo-v2-pro", "mimo-v2.5-pro",
+      // V2.6 is multimodal first-party, but image forwarding on this gateway is unprobed:
+      // the sidecar describes images until a route probe proves native input.
+      "mimo-v2.6-pro", "mimo-v2.6-flash",
       "minimax-m2.5", "minimax-m2.7",
       "qwen3.7-max",
     ],

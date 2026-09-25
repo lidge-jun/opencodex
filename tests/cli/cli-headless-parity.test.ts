@@ -30,6 +30,9 @@ describe("ocx system codex-restart confirmation", () => {
       const warning = errors.mock.calls.flat().join(" ");
       expect(warning).toContain("requires --yes");
       expect(warning).toContain("fully quits and relaunches the Codex desktop app");
+      expect(warning).toContain("unsaved composer drafts");
+      expect(warning).toContain("model-picker selections");
+      expect(warning).toContain("pending approval prompts");
     } finally { errors.mockRestore(); }
   });
 
@@ -48,6 +51,9 @@ describe("ocx system codex-restart confirmation", () => {
       else {
         expect(text).toContain("Codex desktop app");
         expect(text).toContain("restart requested.");
+        expect(text).toContain("Unsaved composer drafts");
+        expect(text).toContain("model-picker selections");
+        expect(text).toContain("pending approval prompts");
         expect(text).not.toContain("restarted");
       }
     } finally { output.mockRestore(); }
@@ -302,6 +308,61 @@ describe("ocx agent sidecar --list (#2188)", () => {
       expect(await handleAgentCommand(["sidecar", "web", "--list"], deps)).toBe(0);
       const webOut = logSpy.mock.calls.map(call => String(call[0])).join("\n");
       expect(webOut).toContain("no runnable web-search sidecar models");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("web --enabled off stores the switch and reports the Codex-side write in the Desktop switches' words", async () => {
+    const { requests, deps } = fakeRuntime((req, body) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
+        expect(body).toEqual({ webSearch: { enabled: false } });
+        return {
+          ok: true,
+          webSearch: { enabled: false },
+          // The route reports the injection it ran; a refusal has to read like every other one.
+          codexWebSearch: {
+            applied: false,
+            reason: "write_lock_busy",
+            retryable: true,
+            detail: "another Codex config writer owns the lock",
+          },
+        };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["sidecar", "web", "--enabled", "off"], deps)).toBe(0);
+      expect(requests).toEqual([
+        { path: "/api/sidecar-settings", method: "PUT", body: { webSearch: { enabled: false } } },
+      ]);
+      const out = logSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(out).toContain("web sidecar settings updated.");
+      expect(out).toContain("Codex config: ~/.codex/config.toml was not rewritten because the Codex config write lock is busy.");
+      expect(out).toContain("Details: another Codex config writer owns the lock");
+      expect(out).toContain("Run 'ocx sync' to apply the stored settings.");
+      // The internal reason code stays out of the human line.
+      expect(out).not.toContain("write_lock_busy");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  test("a report the server did not treat as a switch move adds no Codex line", async () => {
+    const { deps } = fakeRuntime((req) => {
+      const url = new URL(req.url);
+      if (url.pathname === "/api/sidecar-settings" && req.method === "PUT") {
+        return { ok: true, webSearch: { enabled: false }, codexWebSearch: { applied: false, reason: "not_requested", retryable: false } };
+      }
+      return undefined;
+    });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["sidecar", "web", "--enabled", "off"], deps)).toBe(0);
+      const out = logSpy.mock.calls.map(call => String(call[0])).join("\n");
+      expect(out).toBe("web sidecar settings updated.");
     } finally {
       logSpy.mockRestore();
     }

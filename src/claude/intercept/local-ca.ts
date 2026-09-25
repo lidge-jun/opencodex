@@ -91,6 +91,7 @@ const OID = {
   organization: "2.5.4.10",
   ecdsaWithSha256: "1.2.840.10045.4.3.2",
   basicConstraints: "2.5.29.19",
+  nameConstraints: "2.5.29.30",
   keyUsage: "2.5.29.15",
   subjectAltName: "2.5.29.17",
   extendedKeyUsage: "2.5.29.37",
@@ -110,6 +111,23 @@ function extension(oid: string, critical: boolean, value: Uint8Array): Uint8Arra
   return critical
     ? sequence(objectIdentifier(oid), boolean(true), octetString(value))
     : sequence(objectIdentifier(oid), octetString(value));
+}
+
+/** iPAddress bases (address + mask, all zero) that cover every IPv4 and every IPv6 address. */
+export const ALL_IP_ADDRESS_BASES: readonly Uint8Array[] = [new Uint8Array(8), new Uint8Array(32)];
+
+/**
+ * RFC 5280 NameConstraints. permittedSubtrees holds one dNSName base per name. A DNS-only permitted
+ * list leaves other name forms unconstrained, so excludedSubtrees names every IPv4 and IPv6
+ * address unless the caller opts out.
+ */
+function nameConstraints(permitted: readonly string[], excludeAllIpAddresses: boolean): Uint8Array {
+  const subtrees = permitted.map(name => sequence(contextTag(2, new TextEncoder().encode(name), false)));
+  const excluded = ALL_IP_ADDRESS_BASES.map(base => sequence(contextTag(7, base, false)));
+  return sequence(
+    contextTag(0, concat(...subtrees)),
+    ...(excludeAllIpAddresses ? [contextTag(1, concat(...excluded))] : []),
+  );
 }
 
 function subjectPublicKeyInfo(key: KeyObject): Uint8Array {
@@ -173,9 +191,16 @@ export interface LocalInterceptCa extends PemKeyPair {
   privateKey: KeyObject;
 }
 
-export function createLocalInterceptCa(): LocalInterceptCa {
+export interface AuthorityOptions {
+  commonName: string;
+  permittedDnsNames?: readonly string[];
+  /** With permittedDnsNames: also exclude every IP address (default true). */
+  excludeAllIpAddresses?: boolean;
+}
+
+export function createCertificateAuthority(options: AuthorityOptions): LocalInterceptCa {
   const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-  const name = distinguishedName(CLAUDE_INTERCEPT_CA_COMMON_NAME);
+  const name = distinguishedName(options.commonName);
   const der = issueCertificate({
     subject: name,
     issuer: name,
@@ -187,6 +212,9 @@ export function createLocalInterceptCa(): LocalInterceptCa {
       // keyCertSign | cRLSign
       extension(OID.keyUsage, true, bitString(Uint8Array.of(0x06), 1)),
       extension(OID.subjectKeyIdentifier, false, octetString(keyIdentifier(publicKey))),
+      ...(options.permittedDnsNames?.length
+        ? [extension(OID.nameConstraints, true, nameConstraints(options.permittedDnsNames, options.excludeAllIpAddresses !== false))]
+        : []),
     ],
   });
   return {
@@ -197,13 +225,27 @@ export function createLocalInterceptCa(): LocalInterceptCa {
   };
 }
 
-/** Issue a serverAuth leaf for `hosts` (first entry becomes the CN; all become SAN dNSNames). */
-export function issueLocalInterceptLeaf(ca: LocalInterceptCa, hosts: readonly string[]): PemKeyPair {
+export function createLocalInterceptCa(): LocalInterceptCa {
+  return createCertificateAuthority({ commonName: CLAUDE_INTERCEPT_CA_COMMON_NAME });
+}
+
+/** IPv4 literal to its four octets, or null. Only the leaf SAN encoder needs it. */
+function ipv4Octets(host: string): Uint8Array | null {
+  const parts = host.split(".");
+  if (parts.length !== 4 || !parts.every(part => /^\d{1,3}$/.test(part) && Number(part) <= 255)) return null;
+  return Uint8Array.from(parts.map(Number));
+}
+
+/**
+ * Issue a serverAuth leaf for `hosts` (first entry becomes the CN). Names become SAN dNSNames and
+ * IPv4 literals become iPAddress entries.
+ */
+export function issueServerLeaf(ca: LocalInterceptCa, issuerCommonName: string, hosts: readonly string[]): PemKeyPair {
   if (hosts.length === 0) throw new Error("intercept leaf requires at least one host");
   const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const der = issueCertificate({
     subject: distinguishedName(hosts[0]!),
-    issuer: distinguishedName(CLAUDE_INTERCEPT_CA_COMMON_NAME),
+    issuer: distinguishedName(issuerCommonName),
     subjectKey: publicKey,
     signingKey: ca.privateKey,
     validityDays: LEAF_VALIDITY_DAYS,
@@ -213,7 +255,10 @@ export function issueLocalInterceptLeaf(ca: LocalInterceptCa, hosts: readonly st
       extension(OID.keyUsage, true, bitString(Uint8Array.of(0x80), 7)),
       extension(OID.extendedKeyUsage, false, sequence(objectIdentifier(OID.serverAuth))),
       extension(OID.subjectAltName, false, sequence(
-        ...hosts.map(host => contextTag(2, new TextEncoder().encode(host), false)),
+        ...hosts.map(host => {
+          const octets = ipv4Octets(host);
+          return octets ? contextTag(7, octets, false) : contextTag(2, new TextEncoder().encode(host), false);
+        }),
       )),
       extension(OID.authorityKeyIdentifier, false, sequence(contextTag(0, keyIdentifier(ca.publicKey), false))),
     ],
@@ -222,6 +267,10 @@ export function issueLocalInterceptLeaf(ca: LocalInterceptCa, hosts: readonly st
     certPem: toPem("CERTIFICATE", der),
     keyPem: privateKey.export({ type: "pkcs8", format: "pem" }) as string,
   };
+}
+
+export function issueLocalInterceptLeaf(ca: LocalInterceptCa, hosts: readonly string[]): PemKeyPair {
+  return issueServerLeaf(ca, CLAUDE_INTERCEPT_CA_COMMON_NAME, hosts);
 }
 
 // ── Persistence ─────────────────────────────────────────────────────────────────
@@ -246,7 +295,7 @@ function writeFileAtomic(path: string, contents: string, mode: number): void {
   renameSync(tmp, path);
 }
 
-function loadPersistedCa(dir: string): LocalInterceptCa | null {
+function loadPersistedCa(dir: string, accept?: (cert: X509Certificate) => boolean): LocalInterceptCa | null {
   const certPath = join(dir, CLAUDE_INTERCEPT_CA_CERT_FILE);
   const keyPath = join(dir, CA_KEY_FILE);
   if (!existsSync(certPath) || !existsSync(keyPath)) return null;
@@ -256,32 +305,41 @@ function loadPersistedCa(dir: string): LocalInterceptCa | null {
     const privateKey = createPrivateKey(keyPem);
     const publicKey = createPublicKey(keyPem);
     const certificate = new X509Certificate(certPem);
-    if (!certificate.ca || !certificate.checkPrivateKey(privateKey) || !certificate.verify(publicKey)) return null;
+    if (!certificate.ca || !certificate.checkPrivateKey(privateKey) || !certificate.verify(publicKey)
+      || (accept && !accept(certificate))) return null;
     return { certPem, keyPem, publicKey, privateKey };
   } catch { // no-excuse-ok: catch -- an unreadable or corrupt authority is regenerated below.
     return null;
   }
 }
 
-/**
- * Load the persisted authority under `<configDir>/claude-intercept/`, minting one when absent
- * or unreadable. The private key is written 0600; the certificate is world-readable because
- * `NODE_EXTRA_CA_CERTS` only needs the public half.
- */
-export function ensureLocalInterceptCa(configDir: string): LocalInterceptCa {
-  const dir = claudeInterceptStateDir(configDir);
+/** Persist an authority under its own lease, replacing unreadable or rejected pairs. */
+export function ensurePersistedAuthority(
+  dir: string,
+  options: AuthorityOptions,
+  lockName = "ca-publication.sqlite",
+  accept?: (cert: X509Certificate) => boolean,
+): LocalInterceptCa {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   // A separate SQLite namespace binds exclusion to the explicit CA directory.
   // The OS releases it on crash; a contending caller fails before touching either
   // PEM. Readers also take the lease so they cannot observe half a publication.
   return withClientLifecycleSync(() => {
-    const existing = loadPersistedCa(dir);
+    const existing = loadPersistedCa(dir, accept);
     if (existing) return existing;
-    const ca = createLocalInterceptCa();
+    const ca = createCertificateAuthority(options);
     writeFileAtomic(join(dir, CA_KEY_FILE), ca.keyPem, 0o600);
     writeFileAtomic(join(dir, CLAUDE_INTERCEPT_CA_CERT_FILE), ca.certPem, 0o644);
     return ca;
-  }, { lockPath: join(dir, "ca-publication.sqlite") });
+  }, { lockPath: join(dir, lockName) });
+}
+
+/** Preserve the original intercept CA path, name, permissions and extension set. */
+export function ensureLocalInterceptCa(configDir: string): LocalInterceptCa {
+  return ensurePersistedAuthority(
+    claudeInterceptStateDir(configDir),
+    { commonName: CLAUDE_INTERCEPT_CA_COMMON_NAME },
+  );
 }
 
 /** Startup may race a settings apply publishing the same CA. Retry only lease

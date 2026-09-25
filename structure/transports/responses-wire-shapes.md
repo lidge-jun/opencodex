@@ -15,6 +15,16 @@ different custom destination does not inherit its upstream assumptions. Object-f
 also narrow the decision by inbound protocol and authentication mode; an auth-scoped default must
 not leak from a subscription transport into an API-key or forwarded-credential route.
 
+Alibaba Token Plan (Beijing) keeps `openai-chat` provider-wide but defaults `qwen3.8-flash`,
+`qwen3.7-plus` and `glm-5.3` to `openai-responses` for Responses inbound only; Chat and Anthropic
+inbound stay on Chat and its measured prefix-cache behavior. The entry sets
+`preserveResponsesReasoningContent` beside the pins, because the Responses serializer reads that
+flag rather than the Chat-side `preserveReasoningContentModels` list, and this gateway accepted
+replayed plaintext reasoning content live. `qwen3.7-plus` sends effort as a `reasoning.effort`
+string on this wire instead of the numeric `thinking_budget` the Chat wire applies. The intl sibling
+stays unpinned. `tests/providers/alibaba-token-plan-wire-defaults.test.ts` covers the pins and the
+replay flag.
+
 xAI keeps `openai-chat` as its provider-wide compatibility wire, but Grok 4.5/4.6/4.7 subscription
 Responses requests default to native `openai-responses`. Existing namespace, hosted-search and
 reasoning-replay normalization remains in force. The reserved `xai` OAuth transport is name-pinned
@@ -167,9 +177,14 @@ OpenCode Go's exact `union-alpha` model id is hard-pinned to the Anthropic wire 
 surface; sibling models retain their existing Chat or Responses selection. This wire choice and the
 session namespace do not assert upstream availability after the Messages endpoint accepts the
 session header.
-Muse Spark's Responses sanitizer also drops the provider-rejected `search_content_types` and
-`indexed_web_access` fields from plain `web_search` tools while preserving preview tools and
-unrelated models.
+`src/adapters/openai-responses/web-search.ts` also drops the provider-rejected
+`search_content_types` and `indexed_web_access` fields from plain `web_search` tools while
+preserving preview tools. The two OpenCode Zen destinations gate that on a Contributor Muse id
+because they serve nothing else; on the direct Meta destination (`https://api.meta.ai/v1/responses`)
+the destination is the whole predicate, because Meta's refusal is a gateway schema rule for every
+Muse model it serves, its default `muse-spark-1.3` is not a Contributor id, and a missing model id
+still strips. Because the predicate is the host, a custom provider pointed at that exact URL gets the
+same strip.
 
 Direct Meta Muse / Meta Model Responses (`https://api.meta.ai/v1`) also rejects function tool
 names longer than 64 characters or containing characters outside `[a-zA-Z0-9_-]`. After namespace
@@ -210,6 +225,12 @@ The passthrough guard resolves an emitted name through that same `normalizeDecla
 whatever it admits it must also EMIT under the resolved name. The two halves disagreed once:
 `normalizeDefaultNamespaceInItem` implemented only the bare-tool case (#4176), so a
 `default.`-prefixed code-mode helper was admitted as `exec` (#4412) and then relayed verbatim.
+The bounded helper vocabulary includes the goal lifecycle calls that Codex advertises inside its
+unified `exec` description (`create_goal`, `get_goal`, and `update_goal`). Routed providers that
+echo one of those nested names, with or without an invented `default.` prefix, are restored to the
+declared `exec` and compiled back to the matching `tools.<helper>(...)` call. A genuinely declared
+bare goal tool keeps its bare identity, and a catalog declaring neither that tool nor `exec` still
+fails closed.
 `default.view_image` is not a legal Responses tool name, and Codex stores what it receives, so the
 one relayed item was refused by `^[a-zA-Z0-9_-]+$` on every later replay of that conversation and
 the task could not be compacted or continued (#5095). The rewrite now falls back to the resolver
@@ -238,7 +259,8 @@ one in another provider's vocabulary, and a replayed item names a call that alre
 is the worst place to guess.
 
 Membership enforcement is that flag, `enforceDeclaredToolNames`, and only the `responses` inbound
-wire enforces. A routed provider that names a tool the request never declared ends the turn there:
+wire enforces. Explicit enforcement with no declared catalog also refuses client tool calls rather
+than treating the missing set as permission. A routed provider that names a tool the request never declared ends the turn there:
 `src/bridge/sse.ts` emits `response.failed` and `src/bridge/response-json.ts` returns a failed
 response, both carrying `undeclared client tool`. That is the #1700 contract and it stands. Codex
 executes a top-level tool call, so a hallucinated `apply_patch` — which under code mode exists only
@@ -412,15 +434,20 @@ committed. Later quota observations update only the captured serving account;
 they cannot retroactively change HTTP headers already sent to the client.
 Control frames remain bounded, and provider credential/cookie headers are not
 forwarded. Once a WS create may have been sent, a missing prelude, overflow or
-disconnect settles as an errored SSE body rather than a retryable fetch failure,
-so HTTP fallback cannot duplicate that inference. A standalone no-response
+disconnect settles as a non-replayable gateway status before the first Responses
+event, or as an errored SSE body after it, rather than as a retryable fetch
+failure, so HTTP fallback cannot duplicate that inference. The one exception is a
+socket that closed or errored before any Responses event on a provider that opted
+into `retryOnReset`: the passthrough dispatch may spend the request's replacement
+grant on one HTTP send (see [ambiguous-resend gate](responses-failover.md#ambiguous-resend-gate)).
+A standalone no-response
 exchange has a 90-second prelude deadline in addition to the upgrade deadline.
 That prelude deadline is a ceiling, not a floor: the exchange runs under the
 caller's abort signal, so a `connectTimeoutMs` shorter than 90 seconds cancels
 an already-sent create before the prelude timer fires.
 These are transport-fidelity guarantees, not a provider-billing guarantee.
 
-Every exchange also leaves a content-free stage record (`CodexWsStageRecord`, #4191): create-frame bytes (measured on failure only — the committed-success record keeps it null so the happy path never byte-counts a megabyte replay frame), send completion, numeric close code, elapsed and first-frame durations, frame counters, liveness ping/pong counts, pool reuse, and the OCX/Bun versions. The exchange pins the record on the resolved Response (`markCodexWsStage`, the same marker seam as `markCodexWsResponse`); `handleResponses` adopts it onto the serving attempt, and usage.jsonl persists it per attempt behind a drop-guard normalizer, so hand-edited rows cannot inject strings into the DTO. Later snapshots update the same response-local record in place, so an attempt holding the committed reference observes final success or failure counters. Each exchange supplies a complete fresh snapshot; separate responses keep distinct records. On eager-relay cancel-drain expiry, upstream cancellation finalizes the transport snapshot before the cancellation hook writes the usage row; an actual terminal observed within the drain still wins over cancellation. The record never carries conversation text, headers, close-reason text, or account identifiers, and it is not a fallback-eligibility signal: the no-replay-after-send contract stands regardless of what it says.
+Every exchange also leaves a content-free stage record (`CodexWsStageRecord`, #4191): create-frame bytes (measured on failure only — the committed-success record keeps it null so the happy path never byte-counts a megabyte replay frame), send completion, numeric close code, elapsed and first-frame durations, frame counters, liveness ping/pong counts, pool reuse, and the OCX/Bun versions. The exchange pins the record on the resolved Response (`markCodexWsStage`, the same marker seam as `markCodexWsResponse`); `handleResponses` adopts it onto the serving attempt, and usage.jsonl persists it per attempt behind a drop-guard normalizer, so hand-edited rows cannot inject strings into the DTO. Later snapshots update the same response-local record in place, so an attempt holding the committed reference observes final success or failure counters. Each exchange supplies a complete fresh snapshot; separate responses keep distinct records. On eager-relay cancel-drain expiry, upstream cancellation finalizes the transport snapshot before the cancellation hook writes the usage row; an actual terminal observed within the drain still wins over cancellation. The record never carries conversation text, headers, close-reason text, or account identifiers, and it is not a fallback-eligibility signal: nothing it says permits a resend. The one replacement an operator can grant after a socket dies is the resend gate's decision (see [ambiguous-resend gate](responses-failover.md#ambiguous-resend-gate)).
 
 Eligible complete-input creates can retain a canonical upstream socket within
 one selected account, credential, thread and turn. Model/tier and immutable

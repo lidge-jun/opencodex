@@ -8,7 +8,7 @@ opencodex makes Codex route through the proxy by editing two things Codex reads:
 idempotent and reversible.
 
 The **Integrations** overview has a Codex switch for this native integration. Its switch shows
-the desired state from OpenCodex's configuration, while the badge reports whether Codex is
+the latest saved desired state from OpenCodex's configuration, including immediately after a toggle, while the badge reports whether Codex is
 currently observed using the proxy; during cleanup those can briefly differ while the badge
 continues to report the observed state. Disabling names the effective Codex config
 file, removes OpenCodex's generated routing artifacts, and leaves the proxy running for other
@@ -97,6 +97,13 @@ is a `POST` to the canonical Responses URL or a configured WebSocket route, and 
 `stream` to `true` at the root. Everything else stays on SSE over HTTP, and an eligible turn still
 falls back to it when the request cannot be prepared, the `response.create` frame exceeds its size
 limit, or the proxy route cannot carry the socket.
+
+To keep the built-in ChatGPT provider on HTTP/SSE, set `providers.openai.upstreamWebsocket`
+to `false` in `~/.opencodex/config.json` and restart the proxy. Merge this field into the
+existing `openai` provider; preserve its account mode and other settings. Omit the field
+to restore the default upstream WebSocket selection. This setting does not change the
+client-facing `websockets` switch or the ChatGPT account used for the request. Native
+mid-turn steering and injection need upstream WebSocket and are unavailable while it is off.
 
 Local provider pacing can also hold a request before it is dispatched at all. So a slow first
 output has several possible contributors, and upstream queueing is only one of them. `ocx doctor`
@@ -333,10 +340,15 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-On WSL, if `CODEX_HOME` is unset and the Linux `~/.codex/config.toml` is absent, opencodex also
+On WSL, if `CODEX_HOME` is unset and the Linux `~/.codex` directory is absent or holds no Codex state
+(`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex also
 checks for a single Windows Codex Desktop home at `/mnt/c/Users/*/.codex/config.toml`. When exactly
 one candidate exists, it uses that directory so WSL app-server mode and Windows Codex Desktop share
-the same config and auth files. Set `CODEX_HOME` explicitly to override this detection.
+the same config and auth files. Set `CODEX_HOME` explicitly to override this detection. When Windows Codex Desktop runs its app-server inside WSL, it ships the Linux Codex binary under that home as `bin/wsl/<hash>/codex`; opencodex finds it there when the service PATH has no `codex`, after any explicitly configured runtime and PATH.
+
+If the Codex home exists but Codex has not written `config.toml` yet (for example a fresh Desktop install
+that was never signed in to OpenAI), opencodex creates an empty `config.toml` there and continues. If
+the home directory itself does not exist, start Codex once so it creates it, or set `CODEX_HOME`.
 
 Codex can keep SQLite-backed thread state in a separate directory. OpenCodex history operations use
 the same precedence as Codex: root `sqlite_home` in `config.toml`, then `CODEX_SQLITE_HOME`, then the
@@ -593,6 +605,16 @@ and forwards its output through `text(...)`. Shell options are preserved, and Co
 executes and authorizes the command. Valid JavaScript fallback fields, ambiguous objects,
 and unrelated tool namespaces are not converted. This compatibility repair does not bypass
 provider rate limits or change the configured retry policy.
+
+The same repair covers the goal helpers. A routed model that calls `create_goal`, `get_goal`, or
+`update_goal` (or a `default.`-prefixed spelling of one) as a tool while the catalog declares only
+code-mode `exec` has the call converted into the matching `tools.<helper>(...)` call inside
+`exec`. A catalog that genuinely declares the bare goal tool keeps it, and a catalog that declares
+neither the tool nor `exec` still rejects the call as undeclared.
+
+For routed Responses turns, an explicit tool-enforcement policy also rejects client tool calls if
+the request's declared-tool catalog is unavailable. An empty declared catalog rejects every client
+tool call; Chat and Anthropic clients retain their own tool-validation responsibility.
 
 Routed code-mode turns are also told the host's rules for the nested helpers before the first
 call: `tools.apply_patch` takes one string that opens and closes with the bare patch marker lines,

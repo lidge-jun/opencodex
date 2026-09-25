@@ -208,12 +208,15 @@ test("count_tokens passes through with native credentials", async () => {
   }
 });
 
-test("Fable 1M picker alias preserves native passthrough on both Messages endpoints", async () => {
+// The legacy claude-ocx spelling is what a picker saved before the ocx-claude aliases.
+test.each([
+  "ocx-claude-native--claude-fable-5-1",
+  "claude-ocx-native--claude-fable-5-1",
+])("Fable 1M picker alias %s preserves native passthrough on both Messages endpoints", async pickerModel => {
   const captured: Captured[] = [];
   const upstream = mockAnthropicUpstream(captured);
   saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
   const server = startServer(0);
-  const pickerModel = "claude-ocx-native--claude-fable-5-1";
   try {
     const messagesWithoutMarker = await fetch(new URL("/v1/messages", server.url), {
       method: "POST",
@@ -409,7 +412,7 @@ test("alias/mapped models and non-anthropic credentials do NOT pass through", as
     const alias = await fetch(new URL("/v1/messages", server.url), {
       method: "POST",
       headers: OAUTH_HEADERS,
-      body: JSON.stringify({ model: "claude-ocx-mock--test-model", max_tokens: 10, messages: [{ role: "user", content: "x" }] }),
+      body: JSON.stringify({ model: "ocx-claude-mock--test-model", max_tokens: 10, messages: [{ role: "user", content: "x" }] }),
     });
     expect(alias.status).not.toBe(200);
 
@@ -640,3 +643,148 @@ test.each([false, true])("catalog-published native dates retain identity while u
     buildDesktop3pRegistry([], []);
   }
 }, { timeout: SERVER_BUDGET_MS });
+
+// --- tool_use.id wire-contract sanitize on the native branch ---
+// The Anthropic adapter normalizes tool call ids (#1780), but this branch bypasses that
+// adapter, so third-party ids like Devin's `Bash:0#<hex>` would reach api.anthropic.com
+// verbatim and 400 on `^[a-zA-Z0-9_-]+$`. The passthrough sanitizes before serialize.
+
+test("non-conforming tool_use ids are rewritten on the wire, pairing preserved, conforming ids untouched", async () => {
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
+  const server = startServer(0);
+  try {
+    const pollutedA = "Bash:0#abcdef1234567890";
+    const pollutedB = "Read:7#fedcba0987654321";
+    const conforming = "toolu_01KeepMeVerbatim";
+    const body = {
+      model: "claude-fable-5",
+      max_tokens: 1000,
+      messages: [
+        { role: "user", content: "run them" },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: pollutedA, name: "Bash", input: { cmd: "a" } },
+            { type: "server_tool_use", id: pollutedB, name: "web_search", input: { q: "b" } },
+            { type: "tool_use", id: conforming, name: "Read", input: {} },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: pollutedA, content: "ok-a" },
+            { type: "web_search_tool_result", tool_use_id: pollutedB, content: [] },
+            { type: "tool_result", tool_use_id: conforming, content: "ok-c" },
+          ],
+        },
+        { role: "user", content: "go on" },
+      ],
+    };
+    const res = await postNative(String(server.url), "/v1/messages", body);
+    expect(res.status).toBe(200);
+    await res.text();
+
+    const msgs = captured[0].body.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    const callBlocks = msgs[1].content;
+    const resultBlocks = msgs[2].content;
+    const wireA = callBlocks[0].id as string;
+    const wireB = callBlocks[1].id as string;
+    for (const wire of [wireA, wireB]) {
+      expect(wire).toMatch(/^[a-zA-Z0-9_-]+$/);
+      expect(wire.length).toBeLessThanOrEqual(64);
+    }
+    expect(wireA).not.toBe(pollutedA);
+    expect(wireB).not.toBe(pollutedB);
+    expect(wireA).not.toBe(wireB);
+    expect(resultBlocks[0].tool_use_id).toBe(wireA);
+    expect(resultBlocks[1].tool_use_id).toBe(wireB);
+    expect(callBlocks[2].id).toBe(conforming);
+    expect(resultBlocks[2].tool_use_id).toBe(conforming);
+
+    // count_tokens shares the branch; the allocator is deterministic per raw id.
+    const res2 = await postNative(String(server.url), "/v1/messages/count_tokens", body);
+    expect(res2.status).toBe(200);
+    const msgs2 = captured[1].body.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(msgs2[1].content[0].id).toBe(wireA);
+    expect(msgs2[2].content[0].tool_use_id).toBe(wireA);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+function toolRoundTrip(callId: string, extraCallId?: string) {
+  const calls: Array<Record<string, unknown>> = [{ type: "tool_use", id: callId, name: "Bash", input: { cmd: "a" } }];
+  const results: Array<Record<string, unknown>> = [{ type: "tool_result", tool_use_id: callId, content: "ok" }];
+  if (extraCallId !== undefined) {
+    calls.push({ type: "tool_use", id: extraCallId, name: "Read", input: {} });
+    results.push({ type: "tool_result", tool_use_id: extraCallId, content: "ok-2" });
+  }
+  return {
+    model: "claude-fable-5",
+    max_tokens: 1000,
+    messages: [
+      { role: "user", content: "run" },
+      { role: "assistant", content: calls },
+      { role: "user", content: results },
+    ],
+  };
+}
+
+test("an empty tool_use id fails locally with 400 and never reaches the upstream", async () => {
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
+  const server = startServer(0);
+  try {
+    const res = await postNative(String(server.url), "/v1/messages", toolRoundTrip(""));
+    expect(res.status).toBe(400);
+    const payload = await res.json() as { type?: string; error?: { type?: string } };
+    expect(payload.error?.type).toBe("invalid_request_error");
+    expect(captured).toHaveLength(0);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});
+
+test("an overlength id is rewritten within 64 characters and a colliding valid id stays byte-identical", async () => {
+  const captured: Captured[] = [];
+  const upstream = mockAnthropicUpstream(captured);
+  saveConfig(cfg(upstream.url.toString().replace(/\/$/, "")));
+  const server = startServer(0);
+  try {
+    const overlength = "toolu_" + "x".repeat(80);
+    const polluted = "call:a";
+    const res = await postNative(String(server.url), "/v1/messages", toolRoundTrip(overlength));
+    expect(res.status).toBe(200);
+    await res.text();
+    const msgs = captured[0].body.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    const wire = msgs[1].content[0].id as string;
+    expect(wire).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(wire.length).toBeLessThanOrEqual(64);
+    expect(msgs[2].content[0].tool_use_id).toBe(wire);
+
+    // A valid id that equals the polluted id's rewritten form keeps its bytes; the
+    // rewrite moves aside so the two calls never share a wire id.
+    const res2 = await postNative(String(server.url), "/v1/messages", toolRoundTrip(polluted, "placeholder"));
+    await res2.text();
+    const rewritten = (captured[1].body.messages as Array<{ content: Array<Record<string, unknown>> }>)[1].content[0].id as string;
+    const res3 = await postNative(String(server.url), "/v1/messages", toolRoundTrip(polluted, rewritten));
+    expect(res3.status).toBe(200);
+    await res3.text();
+    const msgs3 = captured[2].body.messages as Array<{ content: Array<Record<string, unknown>> }>;
+    expect(msgs3[1].content[1].id).toBe(rewritten);
+    expect(msgs3[2].content[1].tool_use_id).toBe(rewritten);
+    const moved = msgs3[1].content[0].id as string;
+    expect(moved).not.toBe(rewritten);
+    expect(moved).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(moved.length).toBeLessThanOrEqual(64);
+    expect(msgs3[2].content[0].tool_use_id).toBe(moved);
+  } finally {
+    await server.stop(true);
+    upstream.stop(true);
+  }
+});

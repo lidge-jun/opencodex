@@ -170,8 +170,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-WSL üzerinde, `CODEX_HOME` ayarlanmamışsa ve Linux `~/.codex/config.toml` mevcut
-değilse, opencodex `/mnt/c/Users/*/.codex/config.toml` konumunda tek bir Windows
+WSL üzerinde, `CODEX_HOME` ayarlanmamışsa ve Linux `~/.codex` dizini mevcut
+değilse ya da hiçbir Codex durumu (`config.toml`, `auth.json`, `sessions`, `history.jsonl`) içermiyorsa, opencodex `/mnt/c/Users/*/.codex/config.toml` konumunda tek bir Windows
 Codex Desktop evini de kontrol eder. Tam olarak bir aday mevcut olduğunda bu
 dizini kullanır, böylece WSL app-server modu ve Windows Codex Desktop aynı
 yapılandırma ve kimlik doğrulama dosyalarını paylaşır. Bu algılamayı geçersiz

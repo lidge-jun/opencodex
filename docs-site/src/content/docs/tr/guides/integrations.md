@@ -155,6 +155,8 @@ Kimi Code, gjc, MiniMax Code, Raycast — bütün belge olarak yazılan YAML, JS
 kendi girdilerimiz düzenlenmişse, anahtar kilitlenir ve hangi düzenlemelerin
 size ait olduğunu tahmin etmek yerine devre dışı bırakmayı reddeder.
 
+Hermes istisnası: yönetilen bloğa yalnızca `session_affinity_header: session-id` eklenmişse **Apply** ile benimsenebilir; diğer yönetilen alan değişiklikleri çakışma olarak kalır. Uygulanana kadar arka plandaki model listesi güncellemeleri de bekletilir. Ayar provider içindeki tüm modeller için geçerlidir ve bu özelliği destekleyen bir Hermes sürümü gerektirir; önbellek isabet oranı garanti edilmez. [İngilizce yükseltme açıklamasına](/guides/integrations/#hermes-session-affinity) bakın.
+
 ## Değişiklikleri önizleyin ve onaylayın
 
 Uygula, Değiştir, Devre dışı bırak ve Geri yükle işlemleri artık bir önizlemeyle başlar. İletişim

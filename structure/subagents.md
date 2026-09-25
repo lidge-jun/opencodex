@@ -32,6 +32,13 @@ snapshot repair. Malformed, conflicting, unsupported or over-limit responses fai
 retrying the model. Raw stream inspection cannot publish plaintext continuation state: only
 restored client blocks reach its dedicated bounded collector. Foreign namespaces and opaque
 argument/metadata values remain unchanged; the empty encrypted-function-args marker is preserved.
+For a streamed response whose content type is missing or is neither `application/json` nor a
+recognizable event stream, the native passthrough reads at most the first 4 KiB to confirm a
+Responses SSE event before restoring aliases; an `application/json` body takes the bounded JSON
+path instead. That probe is bounded by the request's `stallTimeoutSec`: one total budget for the
+prefix, plus a per-read inactivity window the arrival of a chunk restarts, so a drip-fed or silent
+upstream fails closed instead of holding the turn open. A body that does not match still fails
+closed, and its bytes never reach Codex as a successful response.
 
 Startup warns that task text can remain in Codex history, selected-provider requests and local
 response/debug state. This is application-level plaintext over HTTPS, depends on undocumented
@@ -62,6 +69,13 @@ The override is applied as a final pass in both `buildCatalogEntries` (live `/v1
 `mergeCatalogEntriesForSync` (on-disk sync), AFTER all normalization and visibility processing. This
 ensures `normalizeRoutedCatalogEntry` (which deletes `multi_agent_version` from routed entries) does
 not clobber the forced value.
+
+A forced pass records each row's pre-override value once, in `opencodex_multi_agent_version_origin`
+(a string pin, or null for none); repeated forced passes never replace it. Returning to `"default"`
+consumes the record. Pristine baseline and native pins still win; the record only decides a native
+row the baseline predates, which previously kept the forced stamp because an absent baseline entry
+cannot tell a stale forced value from a genuine pin (issue 5636). Rows written before the record
+existed keep that non-destructive read.
 
 `getDefaultConfig()` (`src/config/proxy-env.ts`) writes `multiAgentMode: "v1"` explicitly, using the version
 constant from `src/config/multi-agent-surface.ts`, so v1 is the install default while a v2
@@ -171,10 +185,16 @@ Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent
 
 `src/server/responses/agent-task-recovery.ts` admits at most 32 consecutive, individually complete
 Fernet-shaped parts with a combined 2 MiB ciphertext limit. Every encrypted slot must belong to
-that run. The existing credential admission precedes cache access; the cache key includes an
-unambiguous ordered sequence. One fixed-endpoint request forwards separate parts, and assignment
+that run. The existing credential admission precedes cache access; the cache key is a JSON-encoded
+fixed-order tuple of every addressing field (scope, parent thread, message type, task name,
+recipient, sender, ciphertexts) rather than a delimiter-joined string, so no field content can shift
+a boundary. One fixed-endpoint request forwards separate parts, and assignment
 replacement compares the complete original item snapshot before splicing the run. Recovery output
 is model-transcribed plaintext, not cryptographic fidelity proof, and no internal outage retry is added.
+Recovery recognises all four codex-rs message types (NEW_TASK, MESSAGE, FOLLOWUP_TASK,
+FINAL_ANSWER); a FINAL_ANSWER envelope may omit the Task name line, in which case the
+structured recipient is not cross-checked because the envelope names no recipient, and
+admission remains the trust boundary.
 
 `src/server/responses/encrypted-payload.ts` uses bounded concatenation only to recognize otherwise
 unreadable split-token shapes. The sanitizer preserves just those fragment objects and continues
@@ -234,7 +254,8 @@ target its own `structuredClone` and its own concrete route, so a sibling's repa
 them and a target resolving to a routed Responses wire would otherwise send what the parent's own
 dispatch no longer does.
 
-Nothing here decrypts, and the tail NEW_TASK envelope keeps `unreadable_encrypted_agent_task` and
+Nothing here decrypts, and the tail agent_message envelope (any of the four codex-rs
+message types) keeps `unreadable_encrypted_agent_task` and
 its opt-in recovery unchanged: an unreadable current task still fails closed rather than reaching a
 child with a marker where its assignment should be. An `agent_message` carrying unknown parts but
 no ciphertext still reaches the wire unchanged and still draws the destination's own 422, which is
@@ -268,11 +289,14 @@ by that retirement. Quota fallback retains independent shared/Reserve evidence.
 
 When account selectors are active, one featured bare native id expands into a complete selector row
 group. Catalog priorities use the selector count as a stride so each group stays together without
-widening Codex's five-row advertisement window. Fresh defaults are Astra, Sol, Terra, Luna, 5.5.
-Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
+widening Codex's five-row advertisement window. Fresh defaults are the GPT-6 trio: Astra, Sol,
+Luna. Startup upgrades unmarked rosters once: prepend `gpt-6-astra`, retain the first four unique
 non-Astra choices, then move retained bare `gpt-5.5` last. The old fifth choice is dropped;
 an unmarked empty list becomes Astra only, and an unset list receives the fresh defaults.
-`subagentModelsVersion: 1` records completion, so later user edits (including an empty list or
+A second one-time step rewrites bare `gpt-5.6-sol`/`gpt-5.6-luna` to their GPT-6 rows in place
+and drops every other bare `gpt-5.5`/`gpt-5.6` id; ids with a `/` are untouched, and a list left
+empty by the cleanup receives the defaults.
+`subagentModelsVersion: 2` records completion, so later user edits (including an empty list or
 removing Astra) persist. The migration rebases on the latest disk config under the existing
 mutation lock; failed persistence degrades to an in-memory roster for that run without a stale
 whole-config overwrite. Existing disabled-model visibility rules remain unchanged.

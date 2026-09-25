@@ -28,7 +28,8 @@ ocx export --client pi
       "api": "openai-completions",
       "apiKey": "$OPENCODEX_API_KEY",
       "compat": {
-        "sendSessionAffinityHeaders": true
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false
       },
       "models": [
         {
@@ -45,6 +46,8 @@ ocx export --client pi
 ```
 
 В создаваемой конфигурации Pi включён `compat.sendSessionAffinityHeaders`. Сохраняйте этот флаг при объединении или ручном редактировании провайдера: Pi передаёт стабильный идентификатор сессии, из которого OpenCodex формирует affinity для канонического OpenCode Go. При `cacheRetention: none` Pi может не передавать идентификатор.
+
+Создаваемая конфигурация Pi также задаёт `compat.supportsDeveloperRole` равным `false`, поэтому Pi отправляет системный промпт с ролью `system`, а не `developer`. OpenCodex передаёт роли Chat Completions без изменений, а часть OpenAI-совместимых провайдеров отклоняет `developer` с ошибкой 400; роль `system` принимают все.
 
 Id моделей — это канонические селекторы прокси, поэтому маршрутизируемые модели появляются как
 `provider/model` (`anthropic/claude-opus-5`), а нативные slug OpenAI остаются без префикса

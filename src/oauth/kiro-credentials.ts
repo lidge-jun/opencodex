@@ -179,6 +179,12 @@ export function resolveKiroCliNativeSessionEntries(
  * Windows: official MSI installs to `C:\Program Files\Kiro-Cli\kiro-cli.exe`, while some local
  * installs keep the binary next to `%LOCALAPPDATA%\Kiro-Cli\data.sqlite3`.
  * macOS/Linux: prefer PATH, then the usual user-local bin directories.
+ *
+ * The canonical `kiro-cli` name is exhausted everywhere first. Only then, and only on Windows, does
+ * the short `kiro.exe` name count, and only inside the two dedicated `Kiro-Cli` install folders
+ * already trusted for `kiro-cli.exe`, resolved from an absolute base. A short name is never looked
+ * up on PATH or in shared POSIX bin directories (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`):
+ * an unrelated `kiro` there, such as the Kiro IDE launcher, must not be run for credential commands.
  */
 export function resolveKiroCliExecutable(
   inputs: KiroCliNativeInputs & {
@@ -212,6 +218,8 @@ export function resolveKiroCliExecutable(
     : pathEntries.map(entry => posix.join(entry, "kiro-cli"));
 
   const installCandidates: string[] = [];
+  // Windows only: kiro.exe inside the dedicated Kiro-Cli folders, tried after every canonical name.
+  const shortInstallCandidates: string[] = [];
   if (inputs.platform === "win32") {
     const localBase = inputs.env.LOCALAPPDATA?.trim()
       || (inputs.env.USERPROFILE?.trim() ? win32.join(inputs.env.USERPROFILE.trim(), "AppData", "Local") : "")
@@ -221,6 +229,11 @@ export function resolveKiroCliExecutable(
       win32.join(localBase, "Kiro-Cli", "kiro-cli.exe"),
       win32.join(programFiles, "Kiro-Cli", "kiro-cli.exe"),
     );
+    // A relative or drive-relative base would make the short-name lookup depend on the process
+    // working directory or current drive, so only a fully qualified drive path qualifies.
+    for (const base of [localBase, programFiles]) {
+      if (/^[A-Za-z]:[\\/]/.test(base)) shortInstallCandidates.push(win32.join(base, "Kiro-Cli", "kiro.exe"));
+    }
   } else if (inputs.platform === "darwin") {
     installCandidates.push(
       posix.join(inputs.home, ".local", "bin", "kiro-cli"),
@@ -234,7 +247,7 @@ export function resolveKiroCliExecutable(
     );
   }
 
-  for (const candidate of [...pathCandidates, ...installCandidates]) {
+  for (const candidate of [...pathCandidates, ...installCandidates, ...shortInstallCandidates]) {
     if (exists(candidate) && isFile(candidate)) return candidate;
   }
   return inputs.platform === "win32" ? "kiro-cli.exe" : "kiro-cli";

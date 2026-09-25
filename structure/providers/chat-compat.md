@@ -185,6 +185,22 @@ switch therefore costs one extra upstream round trip and one turn of degraded re
 wedging the thread; unrelated 4xx responses and requests whose outbound body carries no blob never
 enter this recovery.
 
+Recovery is admitted for every adapter whose registry contract resolves to the Responses wire
+(`adapterSpeaksResponsesWire` in `src/server/responses/core-opaque-recovery.ts`, through
+`resolvedAdapterWire`), not for one adapter name. `openai-responses` qualifies directly and
+`azure`/`azure-openai` through `contractParent`; before #5583 a name check left Azure's wrapper of
+the same passthrough outside recovery. Once the destination itself has rejected foreign opaque
+state, replayed reasoning items also lose their `id`, with or without a blob: the id names an item
+in the refused identity's store,
+and without `store: false` a stateful destination resolves it against its own store and answers
+`Item with id 'rs_…' not found` on the recovered send. `_dropForeignReasoningItemIds` carries that
+signal from `prepareOpaqueBlobRecovery` and from the rejection memo below into
+`sanitizeReasoningInputContent`. A proven route switch sets it only when the durable destination or
+credential changed (`reasoningReplayItemStoreChanged`): that is when the id names another store. A
+model or adapter change on the same destination and credential strips the blob but keeps the id,
+which that store can still resolve.
+`tests/responses/responses-azure-opaque-blob-recovery.test.ts` runs the switch on both adapters.
+
 After a self-identified opaque-blob rejection, the proxy also keeps a five-minute rejection memo.
 The memo key is the resolved conversation identity plus the durable serving identity: provider,
 destination, adapter, model, and credential. It is recorded only when the blobless recovery resend
@@ -300,6 +316,42 @@ equivalent) and the `openai-chat` adapter. Alternate ports, credentials, query s
 lookalike hosts, and custom proxy paths fail validation. A model override replaces rather than
 merges the provider-wide default, keeping precedence deterministic. With no preference configured,
 the request body is byte-for-byte unchanged in this area and OpenRouter retains its default routing.
+
+## Serialized tool-call content
+
+Some Chat gateways expose one model-produced call twice: as a complete
+`<tool_call><function=…>…</function></tool_call>` content block and as a structured `tool_calls`
+entry. `src/adapters/openai-chat/serialized-tool-call-content.ts` recognizes bare blocks at the
+start of a line outside Markdown fences; inline, quoted and indented examples remain unchanged.
+It holds a possible serialized block, resumes ordinary text delivery when the header cannot match,
+and removes the block only when its function name and
+freeform body match a structured call's parsed `input` in the same response.
+A block may close a freeform body with a stray `</parameter>` and may omit `</function>`, and one
+newline after the function header is template layout, so MiMo's echoes of those shapes match too
+(#5724). Blocks are read by delimiter scan in linear time: the first `</tool_call>` preceded by
+`</function>` closes the block, and only when none appears before the next block header at the start
+of a line does the first `</tool_call>` close it, so a body can still carry literal tool-call tags.
+If the gateway also prefixes the structured call's JSON
+arguments with the same freeform body, the adapter keeps the JSON suffix only when the block body,
+prefix, and wrapper's `input` value all agree. Mismatched markup and arguments remain byte-exact.
+Two immediately adjacent identical bare blocks, with optional trailing whitespace after the pair,
+are suppressed only when exactly one structured call matches their function name and carries their
+body as `input`, either as one copy or as two copies joined directly or by one newline. Reducing a
+doubled `input` requires an arguments object with no keys besides `input`; extra keys leave it
+unchanged. Unrelated structured calls do not prevent suppression, and other repeated shapes remain
+unchanged.
+Silent held-content frames emit adapter heartbeats. Terminal errors and transport read failures
+drain all held text, including matching serialized blocks, because pending tools are not dispatched.
+The held bytes use the shared translator budget. The streaming hold is bounded (`ingestStreaming`): once a closed block is followed by more than 8 KiB of prose with no block open after it, or held text plus queued events would pass 4 MiB, everything held is released in order with nothing suppressed, so an unmatched block no longer delays the rest of the answer to the end of the turn. A duplicate is the tail of the content, so its reconciliation is unaffected; past either bound the stream prefers delivery (the pre-#5548 raw markup) over suppression. Buffered responses keep the unbounded `ingest` because their structured calls are already known (`tests/adapters/openai/openai-chat-serialized-tool-call-hold-bound.test.ts`). For a model opted into inline `<think>` splitting,
+reconciliation sees only the answer text the splitter emits. A reasoning event that arrives while
+a block candidate is held waits behind it and is released in its original position, so event order
+never changes and a duplicate is not exposed early; line and fence context carry across the
+answer text on both sides of a think section. Streaming and buffered responses use the same
+matching and repair rules; regression coverage enters through `/v1/responses` in
+`tests/responses/responses-chat-tool-call-content.test.ts`.
+
+> Decision record: [ADR-5548](../decisions/ADR-5548-serialized-tool-call-content.md)
+> Decision record: [ADR-5724](../decisions/ADR-5724-serialized-tool-call-content.md)
 
 ## Kimi Coding Plan prompt-cache affinity
 
@@ -479,6 +531,13 @@ true `parallelToolCalls` is byte-identical to previous behavior.
 The flag constrains the model's output, not execution ordering. Sequential tool use
 is enforced by the caller's own loop returning each `tool_result` before issuing the
 next request; this mapping does not provide that.
+
+Claude Opus 5.5 is an upstream exception to the forced-choice mapping: Anthropic rejects
+`tool_choice: {type:"any"}` and `{type:"tool",name:...}` for that model, with or without
+adaptive thinking. The Anthropic adapter sends `{type:"auto"}` for those choices so the
+request succeeds, but the caller's forced-tool guarantee cannot be preserved; the prompt
+must provide any required tool-use instruction. Other Claude model families retain the
+normal forced-choice mapping unless their own upstream contract says otherwise.
 ## Unmapped modalities are recorded, not dropped
 
 The translated Chat route has no video mapping — this adapter does not implement one.

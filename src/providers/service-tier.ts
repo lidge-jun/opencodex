@@ -15,6 +15,7 @@ import {
   type FastPolicyAuthority,
   type ResolvedFastPolicy,
 } from "./fastwire";
+import { providerFastSwitchOff } from "./fast-opt-in";
 
 /** OpenAI-compatible adapters that can carry the standard `service_tier` field. */
 export const SERVICE_TIER_ADAPTERS = new Set(["openai-chat", "openai-responses"]);
@@ -35,6 +36,7 @@ type ServiceTierCapabilityProvider = Pick<
   | "apiKeyTransport"
   | "chatServiceTier"
   | "fastWire"
+  | "fastEnabled"
 >;
 
 function cloneRegistryWireDefaults(
@@ -83,9 +85,14 @@ function buildFastPolicyAuthority(
     && registryModelServiceTierCapabilityApplies(registry, capabilityProvider)
     ? registry.modelSupportsServiceTier
     : undefined;
-  const providerCapability = capabilityProvider.supportsServiceTier
-    ?? keyAuthDefaults?.supportsServiceTier
-    ?? registry?.supportsServiceTier;
+  const fastSwitchOff = providerFastSwitchOff(providerName, {
+    fastEnabled: capabilityProvider.fastEnabled ?? provider.fastEnabled,
+  });
+  const providerCapability = fastSwitchOff
+    ? false
+    : capabilityProvider.supportsServiceTier
+      ?? keyAuthDefaults?.supportsServiceTier
+      ?? registry?.supportsServiceTier;
   const authority: FastPolicyAuthority = Object.freeze({
     providerAdapter: provider.adapter,
     providerAuthMode: provider.authMode ?? registry?.authKind ?? "key",

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, mock, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,8 +17,40 @@ import {
   flushResponseState,
   responseStatePersistPendingForTests,
 } from "../../src/responses/state";
-import { handleResponses } from "../../src/server/responses";
-import type { OcxConfig } from "../../src/types";
+import type { ProviderAdapter } from "../../src/adapters/base";
+import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
+
+// `mock.module` outlives this file: Bun keeps the override below for every file that runs after
+// this one in the same process. This is a spread snapshot of the real module, taken before it.
+const actualResolver = { ...(await import("../../src/server/adapter-resolve")) };
+const actualResolveAdapter = actualResolver.resolveAdapter;
+let customRunTurn: NonNullable<ProviderAdapter["runTurn"]> | undefined;
+
+mock.module("../../src/server/adapter-resolve", () => ({
+  ...actualResolver,
+  resolveAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long") {
+    if (provider.adapter !== "test-run-turn") {
+      return actualResolveAdapter(provider, cacheRetention);
+    }
+    return {
+      name: "test-run-turn",
+      buildRequest: () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "" }),
+      async *parseStream(): AsyncGenerator<AdapterEvent> {
+        yield { type: "error", message: "test runTurn adapter does not use parseStream" };
+      },
+      async runTurn(parsed, incoming, emit) {
+        if (!customRunTurn) throw new Error("custom runTurn not installed");
+        await customRunTurn(parsed, incoming, emit);
+      },
+    } satisfies ProviderAdapter;
+  },
+}));
+
+afterAll(() => {  // Put the real module back for every later file in the same process.
+  mock.module("../../src/server/adapter-resolve", () => actualResolver);
+});
+
+const { handleResponses } = await import("../../src/server/responses");
 
 /**
  * Zero-output combo failover driven by a bare Responses SSE `error` event.
@@ -29,10 +61,10 @@ import type { OcxConfig } from "../../src/types";
  * lowers a cap, so the way back under it is to hold new cases in a sibling file rather
  * than to raise the number.
  *
- * The harness below is the subset of that file's fixture this case actually uses: real
+ * The harness below is the subset of that file's fixture these cases actually use: real
  * loopback upstreams, an isolated home, and the combo/request-log state that leaks
- * between tests. No module is mocked here, because this case drives the real
- * `openai-responses` adapter.
+ * between tests. The loopback cases drive real adapters; the runTurn case uses the same
+ * narrow resolver seam as the parent file to emit deterministic adapter events.
  */
 
 // The parent file raises this for the same reason: a real loopback server plus combo
@@ -63,6 +95,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  customRunTurn = undefined;
   // Release before home teardown to prevent Windows removal failures and a live unlinked database.
   releaseSpendHome?.();
   releaseSpendHome = undefined;
@@ -185,5 +218,182 @@ describe("combo zero-output bare Responses error failover", () => {
         { ordinal: 2, provider: "b", model: "m2" },
       ],
     });
+  });
+
+  test("undeclared first adapter tool call hops without changing the request catalog", async () => {
+    const requests: Record<string, unknown>[] = [];
+    const upstream = (content: string) => serve(async request => {
+      requests.push(await request.json() as Record<string, unknown>);
+      return new Response([
+        `data: ${JSON.stringify({ choices: [{ delta: JSON.parse(content) }] })}`,
+        "data: [DONE]",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+    });
+    const a = upstream(JSON.stringify({
+      tool_calls: [{ index: 0, id: "call_stale", function: { name: "stale_tool", arguments: "{}" } }],
+    }));
+    const b = upstream(JSON.stringify({ content: "tool-safe backup" }));
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+    const tools = [{ type: "function", name: "current_tool", parameters: { type: "object" } }];
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: true, tools }),
+    }), config, { model: "", provider: "" });
+    const body = await response.text();
+    expect(body).toContain("tool-safe backup");
+    expect(body).not.toContain("stale_tool");
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.tools).toEqual(requests[1]?.tools);
+    expect(JSON.stringify(requests[0]?.tools)).toContain("current_tool");
+  });
+
+  test("non-streaming undeclared adapter tool call hops without changing the request catalog", async () => {
+    const catalogs: unknown[] = [];
+    const hits: string[] = [];
+    customRunTurn = async (parsed, _incoming, emit) => {
+      hits.push(parsed.modelId);
+      catalogs.push(structuredClone((parsed._rawBody as { tools?: unknown }).tools));
+      if (parsed.modelId === "m1") {
+        emit({ type: "tool_call_start", id: "call_stale", name: "stale_tool" });
+        emit({ type: "tool_call_delta", arguments: "{}" });
+        emit({ type: "tool_call_end" });
+        emit({ type: "done" });
+        return;
+      }
+      emit({ type: "text_delta", text: "non-streaming tool-safe backup" });
+      emit({ type: "done" });
+    };
+    const config = comboConfig({
+      a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+      b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+    });
+    const tools = [{ type: "function", name: "current_tool", parameters: { type: "object" } }];
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, tools }),
+    }), config, { model: "", provider: "" });
+    const body = await response.text();
+    expect(response.status).toBe(200);
+    expect(body).toContain("non-streaming tool-safe backup");
+    expect(body).not.toContain("stale_tool");
+    expect(hits).toEqual(["m1", "m2"]);
+    expect(catalogs).toHaveLength(2);
+    expect(catalogs[0]).toEqual(catalogs[1]);
+    expect(JSON.stringify(catalogs[0])).toContain("current_tool");
+  });
+
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} undeclared tool call after a replay-unsafe heartbeat is never dispatched again`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        if (parsed.modelId === "m1") {
+          emit({ type: "heartbeat", replayUnsafe: true });
+          emit({ type: "tool_call_start", id: "call_stale", name: "stale_tool" });
+          emit({ type: "tool_call_delta", arguments: "{}" });
+          emit({ type: "tool_call_end" });
+          emit({ type: "done" });
+          return;
+        }
+        emit({ type: "text_delta", text: "must not run" });
+        emit({ type: "done" });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "combo/free",
+          input: "hello",
+          stream,
+          tools: [{ type: "function", name: "current_tool", parameters: { type: "object" } }],
+        }),
+      }), config, { model: "", provider: "" });
+      const body = await response.text();
+      expect(hits).toEqual(["m1"]);
+      expect(body).not.toContain("must not run");
+      expect(body).not.toContain('"name":"stale_tool"');
+    });
+  }
+
+  for (const stream of [false, true]) {
+    test(`${stream ? "streaming" : "non-streaming"} error after a replay-unsafe heartbeat stays on that child`, async () => {
+      const hits: string[] = [];
+      customRunTurn = async (parsed, _incoming, emit) => {
+        hits.push(parsed.modelId);
+        if (parsed.modelId === "m1") {
+          emit({ type: "heartbeat", replayUnsafe: true });
+          emit({ type: "error", message: "transport lost after a local tool ran" });
+          return;
+        }
+        emit({ type: "text_delta", text: "must not run" });
+        emit({ type: "done" });
+      };
+      const config = comboConfig({
+        a: provider("test-run-turn", "https://a.test/v1", "key-a"),
+        b: provider("test-run-turn", "https://b.test/v1", "key-b"),
+      });
+
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/free", input: "hello", stream }),
+      }), config, { model: "", provider: "" });
+      const body = await response.text();
+      expect(hits).toEqual(["m1"]);
+      expect(body).not.toContain("must not run");
+    });
+  }
+
+  test("undeclared adapter tool call after text never replays on backup", async () => {
+    const hits: string[] = [];
+    const a = serve(() => {
+      hits.push("a");
+      return new Response([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "already visible" } }] })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: {
+          tool_calls: [{ index: 0, id: "call_stale", function: { name: "stale_tool", arguments: "{}" } }],
+        } }] })}`,
+        "data: [DONE]",
+        "",
+      ].join("\n"), { headers: { "content-type": "text/event-stream" } });
+    });
+    const b = serve(() => {
+      hits.push("b");
+      return new Response("data: [DONE]\n\n", {
+        headers: { "content-type": "text/event-stream" },
+      });
+    });
+    const config = comboConfig({
+      a: provider("openai-chat", baseUrl(a), "key-a"),
+      b: provider("openai-chat", baseUrl(b), "key-b"),
+    });
+
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "combo/free",
+        input: "hello",
+        stream: true,
+        tools: [{ type: "function", name: "current_tool", parameters: { type: "object" } }],
+      }),
+    }), config, { model: "", provider: "" });
+    const body = await response.text();
+    expect(body).toContain("already visible");
+    expect(body).toContain("response.failed");
+    expect(hits).toEqual(["a"]);
   });
 });

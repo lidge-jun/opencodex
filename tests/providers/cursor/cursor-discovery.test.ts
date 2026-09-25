@@ -274,8 +274,8 @@ describe("Cursor discovery metadata", () => {
   test("routes composer-2.5 tool continuations through the external userMessageAction path", () => {
     expect(cursorNeedsExternalToolContinuation("composer-2.5")).toBe(true);
     expect(cursorNeedsExternalToolContinuation("cursor/composer-2.5")).toBe(true);
-    expect(cursorNeedsExternalToolContinuation("composer-2.5-fast")).toBe(false);
-    expect(cursorNeedsExternalToolContinuation("cursor/composer-2.5-fast")).toBe(false);
+    expect(cursorNeedsExternalToolContinuation("composer-2.5-fast")).toBe(true);
+    expect(cursorNeedsExternalToolContinuation("cursor/composer-2.5-fast")).toBe(true);
     expect(cursorNeedsExternalToolContinuation("auto")).toBe(false);
     expect(cursorNeedsExternalToolContinuation("gpt-5.6-sol")).toBe(true);
   });

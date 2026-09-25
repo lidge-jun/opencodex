@@ -555,24 +555,24 @@ const commandRunners: Record<string, CommandRunner> = {
     const cacheArgs = deps.args.slice(1);
     const restartScope = readRestartScope(cacheArgs, console);
     const { withCatalogWriteSerialization } = await import("../codex/catalog-write-serialization");
-    const { invalidateCodexModelsCacheWithPermit } = await import("../codex/catalog/sync");
+    const { invalidateCodexModelsCacheWithPermitOutcome } = await import("../codex/catalog/sync");
     const { getCodexHome } = await import("../codex/paths");
-    const { readCodexCatalogPathForHome } = await import("../codex/catalog/parsing");
-    const { existsSync } = await import("node:fs");
     const owningCodexHome = getCodexHome();
     const cacheGateSnapshot = deps.loadConfig();
     const desiredDisabled = !shouldSyncCodexOnStart(cacheGateSnapshot);
     const invalidated = withCatalogWriteSerialization(owningCodexHome, permit =>
-      invalidateCodexModelsCacheWithPermit(permit, owningCodexHome, { allowWhenDesiredDisabled: true }));
+      invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, { allowWhenDesiredDisabled: true }));
     const cacheJson = cacheArgs.includes("--json");
     const jsonSafeLog = cacheJson
       ? { log: (...values: unknown[]) => console.error(...values), error: (...values: unknown[]) => console.error(...values) }
       : console;
     // Only warn/restart when models_cache was actually rewritten from a readable catalog.
-    if (invalidated.kind === "completed" && invalidated.value) {
+    if (invalidated.kind === "completed" && invalidated.value === "written") {
       await handleRestartScopeAfterWrite(restartScope, jsonSafeLog);
-    } else if (desiredDisabled && !cacheJson) {
-      // Worth saying in the human path, because it explains why nothing was written.
+    } else if (!cacheJson && invalidated.kind === "completed" && invalidated.value === "desired_disabled") {
+      // Only when the OFF gate itself stopped the write does OFF explain the outcome. An
+      // explicit sync-cache refreshes regardless of the toggle, so an unchanged cache, a
+      // missing catalog, or a contended writer is reported below on its own terms.
       // Under --json this belongs on the envelope, not as a second stdout line.
       console.log(localClientSkipMessage(
         cacheGateSnapshot,
@@ -580,8 +580,8 @@ const commandRunners: Record<string, CommandRunner> = {
         "No catalog or cache write resulted.",
       ));
     }
-    // `completed` with a falsy value means the cache was NOT rewritten. Previously every
-    // outcome exited 0, so a script could not tell a refreshed cache from a skipped one.
+    // An identical cache is a successful no-op, not a failed refresh. Only a real write
+    // should restart Codex; a missing catalog or contended writer is also a benign skip.
     //
     // Losing the catalog write lock to another process is a skip, not a failure:
     // serialization working as designed is the expected outcome under concurrency, and a
@@ -596,30 +596,25 @@ const commandRunners: Record<string, CommandRunner> = {
     // means the user asked for it regardless of the toggle. Treating OFF as automatic success
     // would report exit 0 and `skipped: true` for a refresh that actually failed.
     //
-    // But `invalidateCodexModelsCacheWithPermit` returns a bare boolean for four different
-    // situations -- wrote it, no catalog file exists, the OFF gate fired, or it threw -- so
-    // `false` alone cannot be read as failure either. `!existsSync(catalogPath)` is a
-    // legitimate nothing-to-do: with no catalog there is no cache to derive, which is the
-    // normal state of a fully native home and the case
-    // `codex-composed-acceptance.test.ts` pins at exit 0. It is checked here rather than by
-    // widening that function's return type, because its boolean is consumed by a dozen
-    // management routes that have no use for the distinction.
-    const wrote = invalidated.kind === "completed" && Boolean(invalidated.value);
+    // The detailed outcome distinguishes an unchanged cache from a failed rewrite while
+    // the boolean wrapper remains available to callers that only care whether bytes changed.
+    const wrote = invalidated.kind === "completed" && invalidated.value === "written";
+    const unchanged = invalidated.kind === "completed" && invalidated.value === "unchanged";
     const contended = invalidated.kind === "unavailable" && invalidated.reason === "busy";
-    const noCatalog = !wrote && !existsSync(readCodexCatalogPathForHome(owningCodexHome));
-    const ok = wrote || contended || noCatalog;
+    const noCatalog = invalidated.kind === "completed" && invalidated.value === "missing_catalog";
+    const ok = wrote || unchanged || contended || noCatalog;
     if (cacheJson) {
       console.log(JSON.stringify({
         schemaVersion: 1,
         ok,
         wrote,
-        skipped: contended || noCatalog,
+        skipped: unchanged || contended || noCatalog,
         outcome: invalidated.kind,
         // `outcome` alone cannot separate a contended lock from a hard serialization
         // failure -- both are `unavailable`. Carry the reason so a caller can.
         reason: invalidated.kind === "unavailable" ? invalidated.reason : undefined,
-        // Which of the two benign skips this was, so `skipped: true` is never opaque.
-        skippedReason: contended ? "contended" : noCatalog ? "no_catalog" : undefined,
+        // Which of the three benign skips this was, so `skipped: true` is never opaque.
+        skippedReason: unchanged ? "unchanged" : contended ? "contended" : noCatalog ? "no_catalog" : undefined,
         desiredDisabled,
         codexHome: owningCodexHome,
       }, null, 2));
@@ -627,6 +622,8 @@ const commandRunners: Record<string, CommandRunner> = {
       console.log("Another process owns the catalog write; cache sync skipped.");
     } else if (noCatalog) {
       console.log("No Codex catalog to derive a cache from; nothing to sync.");
+    } else if (unchanged) {
+      console.log("Codex model cache is already current; nothing to sync.");
     } else if (!ok) {
       console.error(`Cache refresh did not complete (${invalidated.kind}). The Codex model cache was not rewritten.`);
     }
@@ -731,6 +728,15 @@ const commandRunners: Record<string, CommandRunner> = {
     const { refreshVersionCache } = await import("../update/notify");
     const channel = deps.args[1] === "preview" ? "preview" : "latest";
     await refreshVersionCache(channel);
+    return 0;
+  },
+  "__update-badge": async deps => {
+    if (deps.args.length !== 1) {
+      console.error("Usage: ocx __update-badge");
+      return 64;
+    }
+    const { readUpdateBadge } = await import("../update/badge");
+    console.log(JSON.stringify(readUpdateBadge()));
     return 0;
   },
   "__tray-start": async deps => {

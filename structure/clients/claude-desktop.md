@@ -29,29 +29,35 @@ Native OpenAI pool routing also accepts
 [Orca-linked accounts](../codex-home.md#orca-source-owned-account-import), whose source resolution
 belongs to the shared account store. The import CLI adds pool rows independently of Desktop profiles.
 
-## Desktop modes: first-party and gateway
+## Desktop modes: gateway and first-party
 
 `src/claude/desktop-first-party.ts` owns the Desktop mode contract. Two modes exist and are
 mutually exclusive on one machine:
 
-- **first-party** (default): Claude Desktop itself is left on claude.ai — login, Chat tab,
+- **first-party** (opt-in, with account risk): Claude Desktop itself is left on claude.ai — login, Chat tab,
   connectors and remote control are untouched and no config-library profile is written. The apply
   writes only `HTTPS_PROXY=http://127.0.0.1:<port+100>` and `NODE_EXTRA_CA_CERTS=<config>/claude-intercept/ca.pem`
   into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`),
   creating the local authority first. Only the Claude Code process Desktop spawns for the Code tab
   (and its subagents, and any standalone `claude` CLI) reads that env, so only their
   `api.anthropic.com` traffic reaches the [Claude intercept pair](../runtime.md#claude-intercept-pair).
-- **gateway**: the existing third-party profile written by `src/claude/desktop-3p.ts`; the whole
-  app switches to the local gateway. It is selected explicitly (`--gateway`, dashboard, or the
-  legacy `--static|--hybrid|--discovery-only` shape flags, which imply it).
+- **gateway** (default for new installs): the existing third-party profile written by
+  `src/claude/desktop-3p.ts`; the whole app switches to the local gateway. The dashboard,
+  `--gateway`, and legacy `--static|--hybrid|--discovery-only` shape flags also select it.
 
-`resolveClaudeDesktopMode` returns the explicit `claudeCode.desktopMode` when set; otherwise a
-persisted `desktopProfile.appliedFingerprint` (an existing gateway install) keeps `gateway`, and a
-fresh install resolves to `first-party`. Updates therefore never flip a working gateway install
-silently, while new installs land on first-party. `resolveClaudeDesktopApplyMode` narrows an
-*implied* first-party to gateway where the intercept pair cannot run (client role or
-`claudeCode.intercept.enabled: false`); an explicit `first-party` is refused with
-`intercept_disabled` instead of being rewritten.
+`resolveClaudeDesktopMode` uses observations from `observeClaudeDesktopMode` in this order:
+explicit `claudeCode.desktopMode` → selected owned gateway row → persisted
+`desktopProfile.appliedFingerprint` → owned first-party env in `~/.claude/settings.json` →
+gateway. The owned env observation preserves first-party installs applied before mode persistence;
+foreign proxy settings do not count. `resolveClaudeDesktopApplyMode` preserves the resolved mode.
+An apply for a first-party install with `claudeCode.intercept.enabled: false` is refused with
+`intercept_disabled` rather than switched to gateway. New installs apply gateway.
+`src/claude/desktop-risk.ts` owns the account-suspension warning: first-party sends subscription
+traffic through a local interception proxy, which Anthropic may treat as a terms violation.
+`GET /api/claude-desktop/status` exposes it as `riskWarning` when first-party is resolved or its
+owned settings are still observed; otherwise the field is `null`.
+`/api/sync` and roster-update auto-apply never write a gateway profile while the resolved mode is
+first-party; both re-resolve after model discovery before writing.
 
 Mode switches establish the replacement before removing the previous connection. A failed
 first-party apply (disabled intercept, CA failure, unreadable settings or foreign env) preserves
@@ -70,7 +76,7 @@ re-applies a stale env (the proxy port follows the public port).
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
 `POST /api/claude-desktop/apply` with `mode` ∈ `first-party|gateway|static|hybrid|discovery` and
-`GET /api/claude-desktop/status` (`mode`, `firstParty.{applied,stale,interceptEnabled,interceptRunning,proxyPort,caCertPath}`)
+`GET /api/claude-desktop/status` (`mode`, `riskWarning`, `firstParty.{applied,stale,interceptEnabled,interceptRunning,proxyPort,caCertPath}`)
 in `src/server/management/agent-settings-routes.ts`; the native toggle in
 `src/server/management/native-integration-routes.ts` applies the resolved mode on enable. Managed
 Windows policy health only applies in gateway mode, because first-party never touches Desktop's own
@@ -78,11 +84,98 @@ configuration. Ordinary Chat-tab traffic is out of scope for both modes.
 
 `src/claude/desktop-gateway-state.ts` adopts the exact committed Claude subtree and rebases the live hand-edit guard only after persistence succeeds. Pending disjoint live edits survive; later hand edits remain protected during unrelated whole-config saves. Gateway mode and fingerprint are recorded before cleanup and diagnostic awaits.
 
+### First-party model bindings
+
+`src/claude/intercept/model-bindings.ts` owns `claudeCode.intercept.modelMap`. In first-party mode the
+Code tab picker is filled by claude.ai's model selector config, so no local file can add an opencodex
+row; the only lever is the picker's Anthropic id on each request. A binding maps such an id
+(`claude-sonnet-4-6`) to a route in the Desktop route vocabulary (`provider/model` or `native/<slug>`).
+`src/server/index/serve-options.ts` passes `claudeIntercept` to `handleClaudeMessages` and
+`handleClaudeCountTokens` only for the `claude-intercept` ingress; the handlers resolve models against
+`claudeCodeForIngress`, a request-scoped `claudeCode` view whose `modelMap` is the global map with the
+bindings overlaid (binding wins per key, `native/` targets normalized to the bare slug, global values
+left verbatim). The live config object is never copied or persisted with the merged map. Every other
+resolution rule is unchanged, so a bound id is translated rather than natively passed through, dated
+ids reach undated keys, and an `ocx-route` directive still wins. `ocx claude` sessions and the public
+Messages listener never see bindings.
+
+`PUT /api/claude-desktop/first-party-bindings` (`{ set?, remove? }`) validates ids and routes against
+`buildClaudeDesktopState().models` (available routes, native included), commits through
+`mutatePersistedConfig` and adopts the committed `claudeCode` into the live config; `GET
+/api/claude-desktop/status` reports `firstParty.modelBindings` and `firstParty.pickerSuggestions`.
+Surfaces: `ocx claude desktop bind|unbind` (`src/cli/claude-desktop.ts`) and the dashboard card
+`gui/src/components/ClaudeFirstPartyBindings.tsx`. Provider, routing-profile and combo renames rewrite
+binding values alongside `modelMap`; keys are Anthropic ids and are never migrated. Invariant tests:
+`tests/claude-integration/claude-intercept-model-bindings.test.ts` and the intercept-versus-public case
+in `tests/server/claude-intercept-integration.test.ts`.
+
 Production apply and status routes use the asynchronous, read-only policy probe in
 `src/claude/desktop-policy.ts`. Concurrent requests share one in-flight probe, and its
 settled state is cached for 30 seconds. Each registry query is bounded to two seconds;
 timeouts and unreadable results report unknown policy state without blocking the server
 event loop. Injected probes may return a state or a promise, so isolated callers can exercise the same asynchronous boundary.
+
+### Picker mode: the Desktop egress proxy
+
+When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
+wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
+port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
+also hands that proxy to the Claude Code processes it spawns, and the two trust different CAs, so
+the tunnel is chosen per client from the CONNECT head: a tunnel without a browser User-Agent (Claude
+Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and every other target
+blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
+login keychain) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
+blind-tunnels every target except `claude.ai:443`.
+The User-Agent is a routing hint, not a trust boundary: a client that fakes it reaches only what
+any local process already reaches (the `api.anthropic.com` intercept is on the Claude Code proxy
+too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
+because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
+terminated by a `node:https` HTTP/1.1 relay (`picker-listener.ts`) only while the runtime's cached
+decision is armed: macOS, persisted resolved Desktop mode first-party, Desktop intent on,
+`claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
+trusted in the login keychain (`picker-trust.ts`). The picker CA (`picker-ca.ts`, under
+`<OPENCODEX_HOME>/claude-picker/`, 0600 key) carries critical name constraints permitting only
+`claude.ai` and excluding every IPv4 and IPv6 address, and is regenerated on reload when either is
+missing, which gives it a new fingerprint to trust. Trust is added without a policy string: Chromium
+skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
+trust settings carry `kSecTrustSettingsPolicyString` as untrusted and the trust step replaces it; an
+export it cannot read makes trust `unknown`, which never arms. A
+rotated-out picker certificate stays in the login keychain because `untrustPickerCa` removes only the
+current one; its key was overwritten, so it can no longer sign a leaf. The relay verifies the upstream
+certificate, streams every body and upgrade unchanged, and rewrites only the bootstrap response's
+local Code picker surfaces, `ccd` (what the Desktop Code tab reads) and its `code` fallback, never the
+remote `ccr` (`picker-bootstrap.ts`), failing open to the original bytes; the model list
+comes from a persisted snapshot (`picker-models.ts`), so a bootstrap never waits on discovery. A
+CONNECT to claude.ai that arrives before the first refresh waits at most 3 s, then goes blind. A
+picker proxy bind failure only disables picker mode; a picker construction or start failure closes
+every socket the start had bound before rethrowing. Nothing is logged but method, bootstrap or
+other, and status.
+
+`src/claude/desktop-picker.ts` owns every mutation while a server is running. One controller lock
+serializes `enable`, `disable`, and `transition`; the latter wraps a whole Desktop mode change so
+cleanup, mode/profile commit, and the optional picker enable cannot race. `runDesktopTransition` uses
+that controller when one exists. With no controller (intercept disabled, client role, or a failed
+picker-proxy bind), its offline operations remove leftover picker artifacts without creating a
+terminator, and refuse enable with `proxy_unavailable`.
+
+The controller disarms the picker runtime before disable or cleanup. The disarm latch makes new
+`claude.ai` CONNECTs blind immediately and is cleared only by a completed, checked enable. If an
+enable attempt added trust and a later check or profile write fails, it removes that trust again;
+an earlier successful picker profile keeps the trust it needs. The owned profile helpers in
+`src/claude/desktop-picker-profile.ts` use the standard row `opencodex-picker`, whose file contains
+only `egressProxyUrl`. The previous Desktop selection is stored in
+`<configDir>/claude-picker/profile-state.json`, never in Desktop's `_meta.json`.
+
+The local controls are `ocx claude desktop picker on|off|status|trust`. With a live server, `on`,
+`off`, and transition cleanup use the controller; `trust` performs the operator's local keychain
+step and then reports the result to the server. Without a server, `on` is refused and `off` removes
+owned artifacts locally. The management surface accepts `GET /api/claude-desktop/picker` and
+`PUT /api/claude-desktop/picker` with `{ enabled, persist, trustedLocally?, callerAddedTrust? }`;
+unknown keys are rejected, a successful enable/disable or reported refusal returns `200 { ok: true,
+picker }`, and enabling without a controller returns `503 { ok: false, code: "picker_proxy_unavailable",
+picker }`. `GET /api/claude-desktop/status` and `POST /api/claude-desktop/apply` expose the same
+`firstParty.picker` status; first-party apply includes `picker` in its response. Selecting the
+profile requires a full Desktop quit and reopen.
 
 ## Connected Claude Desktop profiles
 
@@ -135,6 +228,10 @@ baseline. Restoration merges into current user fields, preserves unrelated profi
 the previous selection only while the managed profile is still selected. A later valid user
 selection is not changed. A newly created profile with user additions is retained in readable
 standard mode instead of deleting those additions.
+
+During initial enrollment, `src/client/state.ts` records a pending key fingerprint before the token
+is published. Service uninstall retains only the matching key; an unsafe or unreadable marker leaves cleanup unverified. Connect clears its marker on commit or rollback; the marker
+does not claim any Desktop restoration ownership.
 
 A proven legacy current-hub/recognized-key profile without an original baseline can be adopted
 by apply, rotation/recovery or direct disconnect without a new flag or prerequisite reapply.
@@ -263,3 +360,21 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The [compaction routing override](../transports/responses-failover.md#compaction-routing-overrides) is scoped to Codex Responses metadata and original Responses ingress; Claude Messages replay retains its own routing.
+
+## Routed bundled-skill text
+
+`src/claude/inbound.ts` bounds the text-carrier skill-directory probe to 4,096 UTF-16 code units, plus one character to recognize the terminating newline. A longer first line is preserved intact instead of being scanned or stubbed; normal POSIX, Windows, mixed and UNC separators retain their basename matching. The existing 10,000-character payload threshold and `claudeCode.blockedSkills` policy remain: `claude-api` is blocked by default, and an explicit empty list disables elision. Native Anthropic passthrough and tool-call/result pairing are unchanged. `tests/claude-integration/claude-inbound.test.ts` covers the exact 4,096/4,097 boundary and a long newline-free carrier.
+
+## Claude Code picker descriptions
+
+`src/claude/model-info.ts` gives every readable (`idStyle: "readable"`, Claude Code CLI) `/v1/models` row a `description` that Claude Code 2.1.257 and later shows under the picker entry instead of the generic "From gateway": `Routed by OpenCodex to native <slug>` for native rows and `Routed by OpenCodex to <provider>/<model>` for routed rows. The 1M copy keeps the base description and a Fast sibling appends ` · Fast`. Desktop 3P rows keep the ModelInfo shape without a description. `src/claude/gateway-cache.ts` preserves a string `description` when it refreshes and rewrites the gateway-model cache and drops any other type. `tests/claude-integration/claude-model-info.test.ts` and `tests/claude-integration/claude-gateway-cache.test.ts` cover both.
+
+## Claude Code routed aliases and the context window
+
+`src/claude/alias.ts` mints Claude Code CLI aliases as `ocx-claude-<provider>--<model>`, or `ocx-claude2-` with `~s`/`~t` escapes when the model id holds `/` or `~`. The id contains `claude`, which the picker requires, and does not start with `claude-`: Claude Code 2.1.278 accounts an unrecognized `claude-` id at 200k and applies `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to it only with `DISABLE_COMPACT=1`. Saved `claude-ocx-`/`claude-ocx2-` ids still decode, and `src/claude/context-windows.ts` and the connected-client map `readConnectedClaudeContextWindows` in `src/cli/claude.ts` register both spellings at the same window, and `decodeFablePickerAlias` in `src/server/claude-messages.ts` keeps a legacy native Fable picker value on the native passthrough, so a saved selector keeps its window lookup until it is re-picked. `effectiveModelEnv` emits a legacy selector configured in an OpenCodex slot in its current spelling (`currentClaudeAliasSpelling`), so Claude Code applies the window to it; a selection saved by Claude Code's own picker is outside OpenCodex's ownership and keeps 200k accounting until it is re-picked. `isProxyOnlyModelId` in `src/cli/claude.ts` treats all four prefixes as proxy-only for native fallback.
+
+`claudeCode.maxContextTokens` injects only `CLAUDE_CODE_MAX_CONTEXT_TOKENS` on the `ocx claude`, launchd system-env and shell-hook paths; compact stays enabled and neither `DISABLE_COMPACT` nor `CLAUDE_CODE_AUTO_COMPACT_WINDOW` is injected beside it, whatever the value. A `DISABLE_COMPACT` an older release injected and tracked is unset by the system-env produced-key sweep while it still holds the injected `1`; a tracked key the user changed to another value is released from tracking without being deleted, and an untracked user value is never touched. `tests/claude-integration/claude-alias.test.ts`, `claude-context-windows.test.ts`, `claude-cli.test.ts` and `tests/server/system-env.test.ts` cover these.
+
+## Native passthrough tool-call ids
+
+Native Anthropic passthrough in `src/server/claude-messages.ts` forwards the caller's body except for tool-call ids: `sanitizePassthroughToolCallIds` runs the request-scoped allocator from `src/adapters/tool-call-id.ts` over every `*tool_use` id and `*tool_result` `tool_use_id`. Conforming ids are reserved first and stay byte-identical, a non-conforming or overlength id is rewritten to a conforming id of at most 64 characters with call/result pairing kept, and an empty id throws `AnthropicRequestError`, so the request fails with a local 400 before the upstream fetch. `tests/claude-integration/claude-native-passthrough.test.ts` covers rewriting, pairing, the empty id, the overlength id and collision with an existing valid id.

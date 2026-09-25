@@ -18,6 +18,18 @@ answers a replayed tool call whose output never arrived. It is deliberately not 
 The contract for both, and the reason they do not collapse into one, is specified in
 [chat-compat](./chat-compat.md); it is not restated here.
 
+Native xAI Responses delivery strips a line-leading echoed tool-result or tool-call
+envelope across split SSE text deltas. It is armed only when the request can have primed the echo:
+a tool call or tool output in the input (a dangling call gets a synthetic output from the paired
+tool-result repair), or a `previous_response_id` continuation whose history lives upstream
+(`responsesRequestMayReplayToolOutput`); a first turn is delivered untouched. Only a line that is the marker alone
+(`[Tool Result]`, `[Tool Error]`, `[tool_result]`, `[Tool Call]`, trailing whitespace allowed) or a
+`[Tool call:` line counts (`isWholeLineEchoMarker` in `src/lib/tool-envelope-echo-filter.ts`): prose that
+merely starts with a result or error marker, such as `[Tool Result] shows the build passed.`, is an
+answer and reaches the client whole (`tests/adapters/tool-envelope-echo-whole-line.test.ts`). The same filter preserves leading prose and
+normalizes text-done events, completed snapshots, non-streaming JSON, and the stored
+continuation snapshot. It does not rotate an xAI upstream conversation.
+
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
 
@@ -28,6 +40,43 @@ retains xAI provider behavior; see
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Responses request compatibility
+
+### Reasoning-model sampling parameters
+
+xAI documents that `presencePenalty`, `frequencyPenalty` and `stop` "cannot be used with
+reasoning models" and answers them with `400 invalid-argument`. The registry seeds the documented
+reasoning ids (`grok-4.7`, `grok-4.6`, `grok-4.5`, `grok-4.3`, `grok-4.20-multi-agent-0309`,
+`grok-4.20-0309-reasoning`, `grok-build-0.1`) into `noPenaltyModels`, so the openai-chat
+adapter, the Chat passthrough and the Responses passthrough omit `presence_penalty` / `frequency_penalty` for them.
+`grok-4.20-0309-non-reasoning` and `grok-composer-2.5-fast` keep caller penalties.
+Regression coverage: `tests/providers/xai/xai-transport.test.ts`
+("xAI reasoning models reject penalty parameters").
+
+The same ids are seeded into `noStopModels` (provider config, registry, derive fill, resolved
+policy and `routedProviderConfig`, like `noTopPModels`). The openai-chat adapter and the Chat
+passthrough omit `stop`, and the Responses passthrough drops a `stop` that Claude inbound
+translated from `stop_sequences` (`stripRejectedSamplingParams` in
+`src/adapters/openai-responses/request-strips.ts`), because `grok-4.20-multi-agent-0309` has only
+the Responses wire. Claude Code auto-mode always sends `stop_sequences`; forwarding it made its
+classifier mark Grok temporarily unavailable. Regression coverage:
+`tests/providers/xai/xai-no-stop.test.ts`.
+
+`grok-4.7-build-fast` joins these lists, `preserveReasoningContentModels` and the grok-4.7
+context/effort/vision rows, because xAI documents Grok 4.7 Fast as the same model on faster
+infrastructure (Cursor and Grok Build only, not the public xAI API); it stays out of the lineup
+seed, `modelWireDefaults` and `modelSupportsServiceTier` until a live probe. Regression coverage:
+`tests/providers/xai/grok-47-build-fast-metadata.test.ts`.
+
+### Policy-refusal 403
+
+xAI sometimes refuses a turn with HTTP 403 and a bare refusal sentence (`I can't help with that
+request.`) instead of HTTP 200 with `finish_reason: content_filter`. Codex would treat the 403 as a
+transport failure and retry the unrecorded turn. `isUpstreamPolicyRefusalMessage` matches only the
+exact normalized phrases after unwrapping JSON and `Provider error 403:` bodies; plan, credit and
+model-access wording stays an error, and those xAI cues are checked by the refusal matcher alone so
+the global subscription classifier is unchanged. The rewrite itself is owned by
+[policy-refusal.ts](../transports/responses.md#core-module-ownership). Regression coverage:
+`tests/server/errors-adapter-failure.test.ts` ("xAI policy-refusal 403").
 
 `src/adapters/xai-web-search.ts` omits `auto`/`none` tool selection after normalization if no tools
 remain in either the top-level catalog or `additional_tools`. Cached-only search removal follows

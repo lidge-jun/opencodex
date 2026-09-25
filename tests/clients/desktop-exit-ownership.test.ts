@@ -42,6 +42,18 @@ function shellSources(directory: string = SRC): string[] {
 }
 
 describe("desktop exit ownership", () => {
+  test("macOS reopen reaches the existing dashboard entry point", () => {
+    // Wiring guard only; the native close/reopen gesture needs a macOS app session.
+    const lib = code(LIB);
+    const run = lib.slice(lib.indexOf(".run(|app, event|"));
+    expect(run).toMatch(
+      /#\[cfg\(target_os = "macos"\)\]\s*if let tauri::RunEvent::Reopen \{ \.\. \} = event \{\s*show_dashboard\(app\.clone\(\)\);\s*\}/,
+    );
+    const show = lib.slice(lib.indexOf("fn show_dashboard("), lib.indexOf("fn hide_dashboard("));
+    expect(show).toContain("popup::hide(&app)");
+    expect(show).toContain("startup::open_dashboard(&app)");
+  });
+
   test("the event loop intercepts the exit request instead of letting it through", () => {
     const lib = code(LIB);
     expect(lib).toContain("RunEvent::ExitRequested");

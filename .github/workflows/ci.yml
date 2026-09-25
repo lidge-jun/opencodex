@@ -182,6 +182,7 @@ jobs:
       # step. A missing or malformed filter output must fail this job instead
       # of silently making every expensive job skip.
       ci: ${{ steps.scope.outputs.ci }}
+      desktop: ${{ steps.scope.outputs.desktop }}
       native: ${{ steps.matrices.outputs.native }}
       # Matrix include lists for keyring-smoke and npm-global-smoke, built and
       # shape-checked by the same validation step as `native`.
@@ -191,6 +192,11 @@ jobs:
       packaging: ${{ steps.filter.outputs.packaging }}
       docs: ${{ steps.filter.outputs.docs }}
       structure: ${{ steps.filter.outputs.structure }}
+      # Narrow scopes for two paths the ci filter leaves out on purpose. Both are re-emitted by the
+      # validation step below, so a malformed filter output fails this job instead of silently
+      # skipping the check it selects.
+      setup_action: ${{ steps.narrow.outputs.setup_action }}
+      remote_helper: ${{ steps.narrow.outputs.remote_helper }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -260,6 +266,20 @@ jobs:
               - '.github/workflows/ci.yml'
             gui:
               - 'gui/**'
+            # Building both Linux package formats and booting their real payloads is
+            # substantially heavier than the Rust-only desktop-shell check. Keep it
+            # scoped to inputs that can change the packaged shell, dashboard or
+            # standalone sidecar. The workflow names itself so edits to this lane
+            # cannot skip their own E2E.
+            desktop:
+              - 'desktop/**'
+              - 'gui/**'
+              - 'src/**'
+              - 'scripts/build-standalone.ts'
+              - 'scripts/standalone-targets.ts'
+              - 'package.json'
+              - 'bun.lock'
+              - '.github/workflows/ci.yml'
             # The docs site is built by nothing else on a pull request. `ci` above
             # deliberately omits `docs-site/**` -- a prose edit has no business
             # starting the cross-platform suite -- and `deploy-docs.yml` triggers
@@ -298,6 +318,19 @@ jobs:
             structure:
               - 'structure/**'
               - '.github/workflows/ci.yml'
+            # The composite action every Bun job runs. `ci` omits .github/actions/** for the same
+            # reason it omits docs-site/** and structure/**: a change that touches only the action
+            # would otherwise start the full matrix. Without this filter it started nothing, and the
+            # aggregate reported success over skips. The job it feeds runs the action on the three
+            # runner families and checks what it installed. Pull-request scope, like docs and
+            # structure; ci.yml is listed so an edit here verifies itself.
+            setup_action:
+              - '.github/actions/**'
+              - '.github/workflows/ci.yml'
+            # The Rust remote-workspace helper. Nothing else in CI builds it, and its sandbox is
+            # real only on macOS and Windows, so its job lints and tests the crate on all three.
+            remote_helper:
+              - 'native/remote-workspace-helper/**'
             # Everything that ends up inside `npm pack`, or that decides what
             # does. `src/**` belongs here because package.json ships `src` and
             # bin/ocx.mjs executes it: without that entry an ordinary source PR
@@ -324,6 +357,7 @@ jobs:
         shell: bash
         env:
           CI_SCOPE: ${{ steps.filter.outputs.ci }}
+          DESKTOP_SCOPE: ${{ steps.filter.outputs.desktop }}
         run: |
           set -euo pipefail
           case "$CI_SCOPE" in
@@ -332,6 +366,15 @@ jobs:
               ;;
             *)
               printf '::error::changes.outputs.ci was %q, expected true or false\n' "$CI_SCOPE"
+              exit 1
+              ;;
+          esac
+          case "$DESKTOP_SCOPE" in
+            true|false)
+              printf 'desktop=%s\n' "$DESKTOP_SCOPE" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              printf '::error::changes.outputs.desktop was %q, expected true or false\n' "$DESKTOP_SCOPE"
               exit 1
               ;;
           esac
@@ -384,11 +427,32 @@ jobs:
           printf 'keyring_matrix=%s\n' "$keyring_matrix" >> "$GITHUB_OUTPUT"
           printf 'npm_global_matrix=%s\n' "$npm_global_matrix" >> "$GITHUB_OUTPUT"
 
+      - name: Assert the narrow scope outputs are usable
+        id: narrow
+        shell: bash
+        env:
+          SETUP_ACTION: ${{ steps.filter.outputs.setup_action }}
+          REMOTE_HELPER: ${{ steps.filter.outputs.remote_helper }}
+        run: |
+          set -euo pipefail
+          for pair in "setup_action=$SETUP_ACTION" "remote_helper=$REMOTE_HELPER"; do
+            case "${pair#*=}" in
+              true|false)
+                printf '%s\n' "$pair" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                printf '::error::changes.outputs.%s was %q, expected true or false\n' "${pair%%=*}" "${pair#*=}"
+                exit 1
+                ;;
+            esac
+          done
+
   # The suite, split by file across four Linux runners.
   #
-  # `scripts/ci/run-bun-test-batches.sh` mirrors Bun's sorted round-robin shard
-  # assignment, then runs each shard in small batches so every batch gets a fresh
-  # Bun process. The helper prints the exact files before each batch and retries
+  # `scripts/ci/run-bun-test-batches.sh` assigns files to shards by the per-file
+  # durations recorded in `scripts/ci/test-durations.tsv` (sorted round-robin when
+  # nothing is recorded), then runs each shard in small batches so every batch gets
+  # a fresh Bun process. The helper prints the exact files before each batch and retries
   # nothing: a test failure, a process timeout and a Bun runtime crash each fail
   # the shard where they happen. A timeout or a crash is additionally swept one
   # file per process, after the shard has already failed, to attribute it.
@@ -1052,6 +1116,104 @@ jobs:
       - name: Structure doc-map, ownership, and invariant bindings
         run: bun run structure:check
 
+  # The composite Bun setup, run on each runner family it serves, when a change touches only the
+  # action (see the setup_action filter). One step past the action proves it installed the runtime
+  # package.json declares; nothing else runs, so this never grows into a suite.
+  setup-action:
+    name: setup action ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.setup_action == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        id: bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Require the runtime package.json declares
+        shell: bash
+        env:
+          RESOLVED: ${{ steps.bun.outputs.version }}
+        run: |
+          set -euo pipefail
+          declared="$(node -p "require('./package.json').dependencies.bun")"
+          installed="$(bun --version)"
+          echo "declared=$declared resolved=$RESOLVED installed=$installed"
+          if [ "$RESOLVED" != "$declared" ] || [ "$installed" != "$declared" ]; then
+            echo "::error::setup-project-bun resolved '$RESOLVED' and installed '$installed', but package.json declares '$declared'"
+            exit 1
+          fi
+
+  # The Rust remote-workspace helper, when a change touches it (see the remote_helper filter).
+  # Formatting once, then clippy and the crate's tests on each platform: the sandbox and the live
+  # confinement tests compile only on macOS and Windows, and Linux covers the protocol and stub.
+  remote-helper:
+    name: remote helper ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.remote_helper == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+
+      - name: Check Rust formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --manifest-path native/remote-workspace-helper/Cargo.toml --check
+
+      - name: Run Rust clippy
+        run: cargo clippy --locked --manifest-path native/remote-workspace-helper/Cargo.toml --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --locked --manifest-path native/remote-workspace-helper/Cargo.toml
+
+  # `gates` already runs `privacy:scan` on every event it runs for, so this job
+  # covers exactly the pull requests `gates` skips -- its condition is the
+  # complement of `gates`' own, with no path list: every pull request runs the
+  # scan once, in one job or the other. A push or dispatch always runs `gates`.
+  # The aggregate below derives the same expectation from `scoped`.
+  privacy-gate:
+    name: privacy gate
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.ci != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup project Bun
+        uses: ./.github/actions/setup-project-bun
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Privacy scan
+        run: bun run privacy:scan
+
   npm-global-smoke:
     name: npm-global ${{ matrix.os }}
     needs: changes
@@ -1208,11 +1370,11 @@ jobs:
   desktop-shell:
     name: desktop shell
     needs: [changes, gates]
-    # Native-gated like platform-macos: the Rust shell is formatted, linted
-    # and tested only when native-capable paths changed.
-    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && needs.changes.outputs.native == 'true')
+    # Native shell changes run the Rust checks; package-affecting changes also run the real Linux
+    # bundle acceptance. The aggregate gate below mirrors this union exactly.
+    if: github.event_name != 'pull_request' || (needs.changes.outputs.ci == 'true' && (needs.changes.outputs.native == 'true' || needs.changes.outputs.desktop == 'true'))
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
@@ -1222,7 +1384,11 @@ jobs:
       - name: Install Tauri Linux dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf dbus-x11 xvfb xauth wmctrl xdotool openbox
+
+      - name: Setup Bun for packaged E2E
+        if: needs.changes.outputs.desktop == 'true'
+        uses: ./.github/actions/setup-project-bun
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
@@ -1248,6 +1414,79 @@ jobs:
       - name: Run Rust tests
         run: cargo test --manifest-path desktop/src-tauri/Cargo.toml
 
+      - name: Install packaged E2E dependencies
+        if: needs.changes.outputs.desktop == 'true'
+        run: |
+          bun install --frozen-lockfile
+          cd desktop
+          bun install --frozen-lockfile
+
+      - name: Build dashboard and bundled sidecar
+        if: needs.changes.outputs.desktop == 'true'
+        run: |
+          bun run build:gui
+          bun desktop/scripts/prepare-sidecar.ts --target x86_64-unknown-linux-gnu
+
+      # Build separately. One format failing must not delete or hide the other
+      # format's evidence, and neither verification artifact needs an updater key.
+      - name: Preserve the compiled Linux sidecar
+        if: needs.changes.outputs.desktop == 'true'
+        run: chmod +x desktop/scripts/appimage-patchelf.py
+
+      - name: Build Linux AppImage
+        if: needs.changes.outputs.desktop == 'true'
+        working-directory: desktop
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/opencodex-appimage-target
+          PATCHELF: ${{ github.workspace }}/desktop/scripts/appimage-patchelf.py
+        run: bunx tauri build --ci --bundles appimage --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Build Linux deb
+        if: needs.changes.outputs.desktop == 'true'
+        working-directory: desktop
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/opencodex-deb-target
+        run: bunx tauri build --ci --bundles deb --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Stage isolated Linux bundles
+        if: needs.changes.outputs.desktop == 'true'
+        env:
+          APPIMAGE_BUNDLE: ${{ runner.temp }}/opencodex-appimage-target/release/bundle/appimage
+          DEB_BUNDLE: ${{ runner.temp }}/opencodex-deb-target/release/bundle/deb
+          BUNDLE_ROOT: ${{ runner.temp }}/opencodex-linux-bundles
+        run: |
+          set -euo pipefail
+          mkdir -p "$BUNDLE_ROOT/appimage" "$BUNDLE_ROOT/deb"
+          cp -a "$APPIMAGE_BUNDLE/." "$BUNDLE_ROOT/appimage/"
+          cp -a "$DEB_BUNDLE/." "$BUNDLE_ROOT/deb/"
+          chmod -R a-w "$BUNDLE_ROOT"
+
+      - name: Run Linux packaged-shell E2E
+        if: needs.changes.outputs.desktop == 'true'
+        env:
+          REPORT_PATH: ${{ runner.temp }}/opencodex-linux-e2e/report.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$REPORT_PATH")"
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1440x900x24' bash -lc '
+            openbox >"$RUNNER_TEMP/opencodex-openbox.log" 2>&1 &
+            wm_pid=$!
+            trap '\''kill "$wm_pid" 2>/dev/null || true'\'' EXIT
+            bun desktop/scripts/linux-packaged-e2e.ts \
+              --bundle-root "$RUNNER_TEMP/opencodex-linux-bundles" \
+              --report "$REPORT_PATH" \
+              --version "$(jq -r .version package.json)"
+          '
+
+      - name: Upload Linux packaged-shell E2E report
+        if: always() && needs.changes.outputs.desktop == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-packaged-shell-e2e
+          path: ${{ runner.temp }}/opencodex-linux-e2e/report.json
+          if-no-files-found: warn
+          retention-days: 7
+
   ci:
     name: ci
     if: always()
@@ -1255,7 +1494,7 @@ jobs:
     # direct dependencies only, so a failing `select-windows-runner` would
     # otherwise reach this gate as nothing at all while its dependents report
     # `skipped`, which is the shape the step below is written to catch.
-    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, npm-global-smoke, widget, desktop-shell]
+    needs: [changes, select-windows-runner, test, storage-policy, api-usage, gates, platform-macos, macos-control, platform-windows, keyring-smoke, docker-smoke, docs-site-build, structure-gate, privacy-gate, npm-global-smoke, widget, desktop-shell, setup-action, remote-helper]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1274,7 +1513,10 @@ jobs:
           CHANGES_PACKAGING: ${{ needs.changes.outputs.packaging }}
           CHANGES_DOCS: ${{ needs.changes.outputs.docs }}
           CHANGES_STRUCTURE: ${{ needs.changes.outputs.structure }}
+          CHANGES_SETUP_ACTION: ${{ needs.changes.outputs.setup_action }}
+          CHANGES_REMOTE_HELPER: ${{ needs.changes.outputs.remote_helper }}
           CHANGES_NATIVE: ${{ needs.changes.outputs.native }}
+          CHANGES_DESKTOP: ${{ needs.changes.outputs.desktop }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -1295,14 +1537,18 @@ jobs:
           if [ "$EVENT_NAME" = "pull_request" ] && [ "$CHANGES_CI" != "true" ]; then
             scoped=not-requested
           fi
-          # platform-macos, widget and desktop-shell carry a compound
-          # condition: the ordinary scope gate AND the native path filter.
+          # platform-macos and widget carry the ordinary scope gate AND the native path filter.
+          # desktop-shell accepts that native set plus the package-E2E set.
           # This mirrors that expression exactly; where it disagrees with the
           # jobs' own `if:`, the gate fails by name instead of demanding
           # success from a job that was deliberately left unselected.
           native=not-requested
           if [ "$EVENT_NAME" != "pull_request" ] || { [ "$CHANGES_CI" = "true" ] && [ "$CHANGES_NATIVE" = "true" ]; }; then
             native=requested
+          fi
+          desktop_shell=not-requested
+          if [ "$EVENT_NAME" != "pull_request" ] || { [ "$CHANGES_CI" = "true" ] && { [ "$CHANGES_NATIVE" = "true" ] || [ "$CHANGES_DESKTOP" = "true" ]; }; }; then
+            desktop_shell=requested
           fi
           packaging=not-requested
           if [ "$CHANGES_PACKAGING" = "true" ]; then
@@ -1315,6 +1561,22 @@ jobs:
           structure=not-requested
           if [ "$CHANGES_STRUCTURE" = "true" ]; then
             structure=requested
+          fi
+          setup_action=not-requested
+          if [ "$CHANGES_SETUP_ACTION" = "true" ]; then
+            setup_action=requested
+          fi
+          remote_helper=not-requested
+          if [ "$CHANGES_REMOTE_HELPER" = "true" ]; then
+            remote_helper=requested
+          fi
+          # privacy-gate runs exactly where `gates` (scoped) does not, on every
+          # pull request the ci filter declines. Deriving it from `scoped` keeps
+          # the two scans complementary here as they are in the jobs' own
+          # conditions.
+          privacy=not-requested
+          if [ "$scoped" = not-requested ]; then
+            privacy=requested
           fi
           dispatch=not-requested
           windows=not-requested
@@ -1336,17 +1598,23 @@ jobs:
           GATED_JOBS="$GATED_JOBS macos-control platform-windows docs-site-build"
           GATED_JOBS="$GATED_JOBS structure-gate widget"
           GATED_JOBS="$GATED_JOBS desktop-shell"
+          GATED_JOBS="$GATED_JOBS setup-action remote-helper"
+          GATED_JOBS="$GATED_JOBS privacy-gate"
 
           expected_for() {
             case "$1" in
               changes|select-windows-runner) echo requested ;;
               test|storage-policy|api-usage|gates|keyring-smoke|docker-smoke)
                 echo "$scoped" ;;
-              platform-macos|widget|desktop-shell)
+              platform-macos|widget)
                 echo "$native" ;;
+              desktop-shell) echo "$desktop_shell" ;;
               npm-global-smoke) echo "$packaging" ;;
               docs-site-build) echo "$docs" ;;
               structure-gate) echo "$structure" ;;
+              setup-action) echo "$setup_action" ;;
+              remote-helper) echo "$remote_helper" ;;
+              privacy-gate) echo "$privacy" ;;
               macos-control) echo "$dispatch" ;;
               platform-windows) echo "$windows" ;;
               *) echo undeclared ;;

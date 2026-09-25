@@ -40,9 +40,11 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 ## 首次啟動
 
-應用程式會要求內附的 CLI 執行 `ocx resolve --json`；若既有本機代理可連線，就會附著其上。只有 CLI 證實代理不存在時，才會啟動內附執行環境；結果不確定時會顯示啟動失敗。接著儀表板會在應用程式的 webview 中，以找到的 loopback 端點開啟。
+應用程式會要求內附的 CLI 執行 `ocx resolve --json`；若既有本機代理可連線，就會附著其上。只有 CLI 證實代理不存在時，才會啟動內附執行環境；結果不確定時會顯示啟動失敗。接著儀表板會在應用程式的 webview 中，以找到的 loopback 端點開啟。登入時隱藏在系統匣中啟動的應用程式會保留輕量的啟動頁，直到你第一次從系統匣開啟或再次啟動應用程式時才載入儀表板。
 
 透過系統匣的 **Open dashboard** 或 **Open in browser**，可以在內嵌儀表板與一般瀏覽器間切換。系統匣也提供更新檢查。
+
+在 macOS 上，關閉儀表板後，應用程式會繼續在選單列中執行。從 Dock 或 Finder 再次開啟 OpenCodex 即可恢復儀表板，無須重新啟動代理。
 
 ## 系統匣中的用量資訊
 
@@ -58,7 +60,13 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 ## 更新
 
-選擇系統匣選單中的 **Check for Updates…** 可立即檢查。正式版也會在啟動後及每六小時自動檢查。安裝前，更新會使用專案簽署的 updater 公鑰驗證。在 macOS 上，應用程式內更新會下載 `OpenCodex-<version>-macos.app.tar.gz`；DMG 用於首次安裝。只有設定 updater 金鑰祕密時才會產生版本 manifest，屆時四個平台都必須完成簽署。
+選擇系統匣選單中的 **Check for Updates…** 可立即檢查。正式版也會在啟動後及每六小時自動檢查。
+
+當 Tauri updater 找到較新的應用程式版本時，macOS 選單列圖示或具備 tray host 的 Windows/Linux 系統匣圖示會顯示藍點。內嵌儀表板顯示相同的桌面更新訊號。連接同一代理的一般瀏覽器仍顯示代理套件的更新狀態。如果 shell 約三分鐘未回報，內嵌徽章會變為 unknown，直到重新連線。藍點只表示有更新；安裝仍須明確操作。
+
+在桌面應用程式中，選擇儀表板的更新按鈕即可開啟應用程式更新頁面。你可以在其中重新檢查、安裝待處理的已簽署更新，或返回儀表板。系統匣選單也提供相同的安裝操作。如果安裝失敗，更新仍可重試。即使 Linux 桌面沒有系統匣圖示，也可以使用此頁面。一般瀏覽器儀表板則管理該代理的套件安裝。
+
+安裝前，更新會使用專案簽署的 updater 公鑰驗證。在 macOS 上，應用程式內更新會下載 `OpenCodex-<version>-macos.app.tar.gz`；DMG 用於首次安裝。只有設定 updater 金鑰祕密時才會產生版本 manifest，屆時四個平台都必須完成簽署。
 
 ## Widget
 

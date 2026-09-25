@@ -35,6 +35,7 @@ import {
 import { resetUsageAggregateCacheForTests } from "../../src/server/management/usage-aggregate-cache";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { repoRoot } from "../helpers/repo-root";
+import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../../src/codex/subagent-defaults";
 import { startupHealthFixture } from "../helpers/startup-health";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -582,8 +583,13 @@ describe("PUT /api/settings", () => {
   });
 
   test("reports a non-retryable injection refusal without touching the ambient Codex home", () => {
-    const codexHome = join(TEST_DIR, "codex-missing-config");
+    const codexHome = join(TEST_DIR, "codex-ambiguous-config");
     mkdirSync(codexHome, { recursive: true });
+    // Ambiguous OpenCodex-managed sub-agent markers are a deterministic, non-retryable
+    // injection refusal. (A missing config.toml no longer is: it is bootstrapped, below.)
+    writeFileSync(join(codexHome, "config.toml"), [
+      MANAGED_AGENTS_TABLE_MARKER, "[agents]", MANAGED_SUBAGENT_DEFAULT_MARKER, "", 'default_subagent_model = "gpt-5.6-sol"', "",
+    ].join("\n"), "utf8");
     const response = putDesktopSwitchInIsolatedHome(
       codexHome,
       baseConfig(),
@@ -600,6 +606,20 @@ describe("PUT /api/settings", () => {
         },
       },
     });
+  });
+
+  test("applies the authless switch on a fresh Codex home without config.toml (#5422)", () => {
+    const codexHome = join(TEST_DIR, "codex-missing-config");
+    mkdirSync(codexHome, { recursive: true });
+    const response = putDesktopSwitchInIsolatedHome(
+      codexHome,
+      baseConfig(),
+      { codexDesktopAuthless: true },
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ codexDesktopSwitches: { apply: { applied: true } } });
+    expect(readFileSync(join(codexHome, "config.toml"), "utf8")).toContain("opencodex");
   });
 
   test("a paginated Codex home still applies the switch while native history relabeling stands down", async () => {
