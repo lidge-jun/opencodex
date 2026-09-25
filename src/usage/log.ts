@@ -790,7 +790,9 @@ function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undef
   }
   if (!(stage.requestBytes === null || isNonNegativeFiniteNumber(stage.requestBytes))) return undefined;
   if (!(stage.firstFrameMs === null || isNonNegativeFiniteNumber(stage.firstFrameMs))) return undefined;
-  if (!(stage.firstResponseMs === null || isNonNegativeFiniteNumber(stage.firstResponseMs))) return undefined;
+  // Records written before firstResponseMs existed omit it; read them as unmeasured.
+  const firstResponseMs = stage.firstResponseMs === undefined ? null : stage.firstResponseMs;
+  if (!(firstResponseMs === null || isNonNegativeFiniteNumber(firstResponseMs))) return undefined;
   if (!(stage.elapsedMs === null || isNonNegativeFiniteNumber(stage.elapsedMs))) return undefined;
   if (!(stage.closeCode === null || (typeof stage.closeCode === "number"
     && Number.isInteger(stage.closeCode) && stage.closeCode >= 1000 && stage.closeCode <= 4999))) {
@@ -806,7 +808,7 @@ function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undef
     controlFrames: stage.controlFrames as number,
     relayedEvents: stage.relayedEvents as number,
     firstFrameMs: stage.firstFrameMs as number | null,
-    firstResponseMs: stage.firstResponseMs as number | null,
+    firstResponseMs: firstResponseMs as number | null,
     elapsedMs: stage.elapsedMs as number | null,
     pings: stage.pings as number,
     pongs: stage.pongs as number,
