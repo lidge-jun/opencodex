@@ -540,8 +540,26 @@ Append to the native-integrations row/paragraph of `structure/gui-and-management
 ## wp3 A amendment (security audit): pin the committed Desktop mode on the live config
 
 `persistDesktopModeMarker` now calls `recordClaudeDesktopMode(config, desktopMode)` after `adoptPersistedClaudeCode`
-(diff above), mirroring `src/claude/desktop-gateway-state.ts:37-41`. Test added to
-`tests/codex-integration/native-claude-desktop-toggle.test.ts`: start from a live config with `claudeCode.desktopMode: "gateway"`
-and a persisted config whose resolved mode is first-party (the existing first-party ON fixture), PUT
-`/api/native-integrations/claude-desktop {enabled:true}` through the same `inputConfig` identity, and assert
-`live.claudeCode?.desktopMode === "first-party"` and `firstPartyDesired(live).desktop === true` after the 200.
+(diff above), mirroring `src/claude/desktop-gateway-state.ts:37-41`. File map addition:
+`tests/claude-integration/claude-desktop-first-party.test.ts | MODIFY | native first-party ON pins the committed mode on a stale live config`.
+That file already owns the first-party native fixtures (its `config()`, `dispatch(path, init, inputConfig)` and temp homes at
+lines 31-60); the gateway-only `native-claude-desktop-toggle.test.ts` keeps the OFF-publication cases.
+
+```diff
+--- a/tests/claude-integration/claude-desktop-first-party.test.ts
++++ b/tests/claude-integration/claude-desktop-first-party.test.ts
+`
+ import { setIntegrationEnabled } from "../../src/codex/desired-state";
++import { firstPartyDesired } from "../../src/claude/first-party-settings";
+` after the "native toggle: explicit first-party enable ..." test
++test("native first-party ON pins the committed mode on a stale live config", async () => {
++  // Disk says first-party (the route resolves the mode from loadConfig()); the running server still holds gateway.
++  writeFileSync(join(root, "config.json"), JSON.stringify(config({ claudeCode: { desktopMode: "first-party" } })));
++  const live = config({ claudeCode: { desktopMode: "gateway" } });
++  const enabled = await dispatch("/api/native-integrations/claude-desktop", { method: "PUT", body: JSON.stringify({ enabled: true }) }, live);
++  expect(enabled.status).toBe(200);
++  expect(enabled.body).toMatchObject({ ok: true, state: "current", desiredEnabled: true });
++  expect(live.claudeCode?.desktopMode).toBe("first-party");
++  expect(firstPartyDesired(live).desktop).toBe(true);
++});
+```
