@@ -109,11 +109,14 @@ function candidateFor(
   let declineReasons: ProtocolReasonCode[] = [];
   let nativeEligible = false;
   if (inbound === "chat") {
+    // With `nativeChatCombos` on, the combo loop judges each candidate as the concrete route it
+    // is (PF-07), so the preview must too; a policy still resolves one candidate on the bridge.
+    const comboChildNative = routeKind === "combo" && resolveProtocolSettings(config).rollout.nativeChatCombos;
     const settled: RouteResult = {
       ...route,
       provider,
       staticPolicy,
-      ...(routeKind === "direct" ? {} : { routeKind }),
+      ...(routeKind === "direct" || comboChildNative ? {} : { routeKind }),
     };
     const reason = effortRow ? "effort-row" : nativeChatDeclineReason(settled, chatBodyForFeatures(features), config);
     nativeEligible = reason === undefined;

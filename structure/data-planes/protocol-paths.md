@@ -110,7 +110,9 @@ without side effects. Combo and policy selectors are expanded from their configu
 policy evaluator; every other selector goes through `routeModel`'s deterministic branches. Each
 candidate's wire is settled the way the ingress settles it (`captureRouteStaticPolicy` for the
 original inbound, then `resolveWireProtocolOverride`), and a Chat candidate's native lane is judged
-by `nativeChatDeclineReason` against a structural body built from the requested features. Messages
+by `nativeChatDeclineReason` against a structural body built from the requested features. With
+`nativeChatCombos` on, a combo's candidates are judged as the concrete routes they are, as the
+combo loop judges them; policy candidates keep `combo-or-policy-route`. Messages
 caller-forward passthrough depends on the caller's own credential, so it is reported as
 `caller-credential-required` and never assumed. The OpenCode Go session-lane transport is not
 modelled. `tests/responses/protocol-plan-snapshot.test.ts` pins the no-side-effect property against
