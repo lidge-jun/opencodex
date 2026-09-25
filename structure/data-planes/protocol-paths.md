@@ -124,6 +124,26 @@ caller-forward passthrough depends on the caller's own credential, so it is repo
 modelled. `tests/responses/protocol-plan-snapshot.test.ts` pins the no-side-effect property against
 combo selection state.
 
+## Provider wire summary
+
+`buildProtocolProviderSummary` in `src/protocols/provider-summary.ts` (server side, side-effect
+free) answers the `provider` block of `GET /api/protocols?provider=<name>`: the adapter the provider
+receives, its `upstream` wire (`upstreamWireForAdapter`), the resolved auth mode, and the models
+whose wire was decided apart from the provider. Everything comes from `captureRouteStaticPolicy`, the
+same resolver every ingress uses, so there is no second copy of the adapter rules. The resolver's
+provenance collapses onto four public sources in `protocolAdapterSource`: `hard-pin`, `operator`
+(including `operator-capability`), `registry`, and `provider-default` for everything else.
+
+Model overrides are resolved for a Responses client. The candidates are the explicit
+`modelAdapters` keys, the registry's `modelWireDefaults` keys, the exact-id hard pins
+(`captureWireAdapterHardPins`), the default model and the listed models, at most 1024 of them; a
+model is listed when its source is not `provider-default` or its adapter differs from the
+provider's. The list is sorted, capped at `PROTOCOL_PROVIDER_OVERRIDE_LIMIT` (64) and marked
+`modelOverridesTruncated` past it. Prefix pins cannot be enumerated, so only a listed model they
+match appears. No credential, base URL or header leaves the module. The shape and its validator,
+`isProtocolProviderSummaryV1`, live in the leaf `dto.ts`. `tests/server/protocol-provider-summary.test.ts`
+covers the source mapping, the cap, the 404 and the parameter bounds.
+
 ## Source envelope, codecs and guard
 
 `src/protocols/envelope.ts` (server side; it charges the translator budget) wraps the body an
