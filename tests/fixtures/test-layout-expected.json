@@ -1291,6 +1291,7 @@
   "responses-snapshot-repair.test.ts": "responses",
   "responses-sparse-terminal-tool-scope.test.ts": "responses",
   "responses-spend-ledger-wiring.test.ts": "responses",
+  "responses-spill-orphan-sweep.test.ts": "responses",
   "responses-spill-shutdown-clock.test.ts": "responses",
   "responses-state-write-amplification.test.ts": "responses",
   "responses-state.test.ts": "responses",
