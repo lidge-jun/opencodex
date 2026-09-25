@@ -281,13 +281,15 @@ The GUI's warning is delivered in wp5; this paragraph states the management cont
 ```diff
 @@ imports
 +import { inspectDesktopFirstParty } from "../claude/desktop-first-party";
-+import type { ClaudeInterceptSettingsState } from "../claude/intercept/settings";
++import { isClaudeInterceptProxyUrl, type ClaudeInterceptSettingsState } from "../claude/intercept/settings";
 @@ ClaudeEnvDeps
 +  ownedInterceptSettings?: ClaudeInterceptSettingsState;
 +  warn?: (line: string) => void;
 @@ buildNativeClaudeEnv after const env
 +  const owned = deps.ownedInterceptSettings;
-+  if (owned?.kind === "applied" || owned?.kind === "stale") {
++  // Only an opencodex proxy that is actually present needs bypassing; a CA-only stale env must not
++  // override an inherited ALL_PROXY/HTTP_PROXY the user relies on.
++  if ((owned?.kind === "applied" || owned?.kind === "stale") && isClaudeInterceptProxyUrl(owned.env.HTTPS_PROXY)) {
 +    const expected = owned.env.HTTPS_PROXY;
 +    const foreignInheritedProxy = [env.HTTPS_PROXY, env.https_proxy].some(value =>
 +      value !== undefined && value !== "" && value !== expected);
@@ -742,3 +744,8 @@ Revisions 2–7, RP1–RP6, Replan E1–E4, and Replan F are superseded by Repla
   - `structure/ops/docs-and-release.md`: where it describes the capability registry / `skills/ocx` surface (rg
     `CAPABILITIES|skill:surface`), note that `claude config` is a declared capability; if the doc does not enumerate
     commands, no edit.
+
+- wp4 A fold (contract audit): the native bypass requires a present opencodex-shaped `HTTPS_PROXY`
+  (`isClaudeInterceptProxyUrl`) in addition to an owned settings kind. Added test in
+  `tests/claude-integration/claude-cli.test.ts`: `ownedInterceptSettings = { kind: "stale", env: { NODE_EXTRA_CA_CERTS: "<ours>" } }`
+  with inherited `ALL_PROXY=http://corp:3128` → `NO_PROXY`/`no_proxy` stay unset, `ALL_PROXY` kept, no warning.
