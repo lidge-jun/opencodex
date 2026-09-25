@@ -377,8 +377,9 @@ mod tests {
         // The fixed nonce and expiry make the signature reproducible against the TypeScript
         // implementation: this vector is createLocalManagementReadCapability over the same
         // inputs, so a drift on either side fails here before it fails on the wire.
-        let headers = CapabilityHeaders::mint(&recorded_runtime(), &Method::GET, "/api/usage?range=7d")
-            .expect("a mintable grant");
+        let headers =
+            CapabilityHeaders::mint(&recorded_runtime(), &Method::GET, "/api/usage?range=7d")
+                .expect("a mintable grant");
         assert_eq!(headers.expected_pid, "4242");
         assert_eq!(headers.nonce.len(), 43);
         assert_eq!(headers.capability.len(), 43);
