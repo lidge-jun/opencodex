@@ -226,6 +226,7 @@ function eligibleJevComboChoices(
         provider: pick.target.provider,
         model: pick.target.model,
         reasoningEfforts,
+        modelProfile: pick.target.modelProfile,
       },
     });
   }

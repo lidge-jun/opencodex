@@ -130,6 +130,20 @@ describe("combo-workspace-data", () => {
     });
   });
 
+  test("parse, edit and PUT round-trip a target-specific JEV profile", () => {
+    const parsed = parseComboList({ combos: [{
+      id: "jev-auto", strategy: "jev",
+      targets: [{ provider: "a", model: "m1", modelProfile: "Low marginal subscription cost; 1M context." }],
+    }] })[0]!;
+    expect(parsed.targets[0]?.modelProfile).toBe("Low marginal subscription cost; 1M context.");
+    expect(draftEquals(parsed, { ...parsed, targets: [{ ...parsed.targets[0]!, modelProfile: "Different" }] })).toBe(false);
+    expect(toPutBody(parsed).combo.targets[0]).toEqual({
+      provider: "a", model: "m1", modelProfile: "Low marginal subscription cost; 1M context.",
+    });
+    expect(validate({ ...parsed, targets: [{ ...parsed.targets[0]!, modelProfile: "x".repeat(513) }] }))
+      .toBe("invalidModelProfile");
+  });
+
   test("parse, dirty tracking, validation, and PUT preserve exact JEV target efforts", () => {
     const payload = {
       combos: [{

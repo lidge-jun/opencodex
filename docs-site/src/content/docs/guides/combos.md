@@ -270,6 +270,14 @@ constrained by that target's advertised ladder. JEV is not asked again if the se
 retryable failure—the existing Combo cooldown and fallback loop continues through the remaining
 configured targets.
 
+For each JEV target, **Models → Combos → Config** now has an optional **Model profile for JEV**
+field (up to 512 characters). It is stored as `targets[].modelProfile` in the combo config and
+sent as a capability description in every decision request to TypeSafe. It can describe the
+model's strengths, context window and *operator-specific marginal subscription cost*; do not
+confuse subscription allowances with public per-token API pricing. If unset, the existing
+built-in profile applies. The target allowlist and reasoning-effort limits remain authoritative:
+profile text cannot expand either. Only put information there that may be disclosed to TypeSafe.
+
 Each logical model call is decided on its own; there is no per-conversation pin. Consecutive turns of
 one session can therefore land on different targets, and every switch starts a cold provider prompt
 cache, so a mix of very different targets can cost more input tokens than it saves. Keep the
