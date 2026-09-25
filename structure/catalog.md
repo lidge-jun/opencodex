@@ -81,7 +81,8 @@ provider-wide fallback. Exact model output limits precede the provider default o
 
 Per-catalog hashed backups are recorded only after `src/codex/catalog/parsing.ts` writes or `src/codex/internal/catalog-writer.ts` publishes a new one;
 preserving an existing file never registers it, even when its deterministic name or bytes match. Retained sync initializes metadata in an empty
-root before publication without claiming the hashed path, and publication records ownership before temporary-file cleanup, whose errors stay visible.
+root before publication without claiming the hashed path, and publication attempts to record ownership before temporary-file cleanup, whose errors stay visible;
+a root with missing or invalid ownership metadata leaves the new backup unregistered, so uninstall reports it as a residual.
 Recorded paths keep their ownership; unrecorded pre-ledger backups remain residuals (after stopping OpenCodex and any needed restore, review and
 archive those exact paths, then remove only confirmed obsolete backups, never by glob). Legacy fixed-name manifest entries are not migrated by
 this rule, and uninstall keeps the [manifest validation and residual reporting contract](config.md#restore).
