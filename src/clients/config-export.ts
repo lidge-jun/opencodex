@@ -69,6 +69,17 @@ import { buildKiloClientConfig, summarizeKilo, buildKiloContribution, kiloConfig
 export { kiloConfigPath, kiloHomeDir, kiloCandidatePath, KILO_CONFIG_CANDIDATES } from "./config-export/kilo";
 export type { KiloGeneratedConfig, KiloProviderBlock, KiloModelEntry } from "./config-export/kilo";
 import { droidConfigPath, buildDroidClientConfig, summarizeDroid, buildDroidContribution } from "./config-export/droid";
+import {
+  buildCommandCodeClientConfig,
+  summarizeCommandCode,
+  buildCommandCodeContribution,
+  type CommandCodeGeneratedConfig,
+  type CommandCodeModelEntry,
+  type CommandCodeProviderBlock,
+} from "./config-export/commandcode";
+
+export type { CommandCodeGeneratedConfig, CommandCodeModelEntry, CommandCodeProviderBlock };
+export { buildCommandCodeClientConfig, summarizeCommandCode, buildCommandCodeContribution };
 
 
 
@@ -472,6 +483,16 @@ export function zcodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string 
 
 export function zcodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
   return join(zcodeHomeDir(env, home), "v2", "config.json");
+}
+
+export function commandCodeHomeDir(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  const override = env.COMMANDCODE_HOME?.trim();
+  if (override) return absoluteClientPath(override, home, "COMMANDCODE_HOME");
+  return join(home, ".commandcode");
+}
+
+export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home: string = homedir()): string {
+  return join(commandCodeHomeDir(env, home), "providers.json");
 }
 
 /**
@@ -1485,6 +1506,20 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // ZCode persists the credential in its own file and has no dedicated
     // proxy-admission header field, so real keys are never serialized and
     // remote binds refuse — same reasoning as MCode.
+    loopbackOnly: true,
+  },
+  commandcode: {
+    id: "commandcode",
+    filename: "providers.json",
+    destination: env => commandCodeConfigPath(env),
+    // No env var exists behind this integration: buildCommandCodeClientConfig
+    // references the service token file (`!cat`) or the loopback placeholder.
+    apiKeyEnv: "",
+    exportHint: "Command Code reads service token from serviceApiTokenFilePath or loopback placeholder.",
+    build: buildCommandCodeClientConfig,
+    format: "json",
+    summarize: summarizeCommandCode,
+    buildContribution: buildCommandCodeContribution,
     loopbackOnly: true,
   },
   prime: {

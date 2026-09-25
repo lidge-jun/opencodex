@@ -318,6 +318,7 @@
   "cline-client.test.ts": "clients", "cline-pass-deepseek-v4-tool-replay.test.ts": "providers",
   "cline-pass-provider.test.ts": "providers", "cline-pass-reasoning-efforts.test.ts": "providers",
   "cline-provider.test.ts": "providers", "cline-writer.test.ts": "clients",
+  "command-code-client.test.ts": "clients",
   "closed-pr-branch-cleanup.test.ts": "ci-workflows", "codebuddy-adapter.test.ts": "providers",
   "codebuddy-live-acceptance.test.ts": "providers", "codebuddy-mcp-server.test.ts": "providers",
   "codebuddy-protocol.test.ts": "providers", "codebuddy-tool-bridge-turn.test.ts": "providers",

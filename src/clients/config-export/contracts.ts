@@ -206,6 +206,7 @@ export type ExportClientId =
   | "raycast"
   | "omo"
   | "cline"
+  | "commandcode"
   | "kilo"
   | "droid";
 
