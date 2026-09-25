@@ -23,7 +23,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 자동 컨텍스트 압축 임곗값(기본값 `829800`). 자동 컨텍스트가 켜져 있을 때만 주입해요 |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (선택 사항) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (선택 사항, 기존 `ANTHROPIC_SMALL_FAST_MODEL`도 지원) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (선택 사항) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (구독으로 실행할 때 설정하지 않으면 네이티브 `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]`) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort`가 켜져 있으면 `1` (조건부) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`가 설정된 경우 (조건부, 기본값은 꺼짐) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens`가 설정된 경우 기존 컨텍스트 재정의 값 (조건부) |
@@ -142,7 +142,10 @@ Anthropic이 이를 약관 위반으로 판단해 계정을 정지할 수 있어
 Desktop은 claude.ai에 로그인된 채로 남아 채팅, 커넥터, 원격 제어를 계속 사용할 수 있어요.
 OpenCodex는 `~/.claude/settings.json`(`CLAUDE_CONFIG_DIR` 지원)의 `env`에
 `HTTPS_PROXY`와 `NODE_EXTRA_CA_CERTS`만 써요. Code 탭이 실행한 Claude Code와 그
-서브에이전트, 터미널의 `claude` CLI만 로컬 프록시를 거쳐요. 그 밖의 `api.anthropic.com`
+서브에이전트, 터미널의 `claude` CLI만 로컬 프록시를 거쳐요. 프록시 주소는
+`http://opencodex:<설치별 토큰>@127.0.0.1:<포트>` 형태이고, 토큰은 소유자만 읽을 수 있는
+`~/.opencodex/claude-intercept/proxy-token`에 보관해요. 프록시는 모든 CONNECT를 이 토큰으로
+인증해요. 그 밖의 `api.anthropic.com`
 경로는 Anthropic으로 전달돼요. CA는 OS 신뢰 저장소에 설치하지 않고,
 `NODE_EXTRA_CA_CERTS`를 읽는 Node 프로세스만 신뢰해요.
 
@@ -355,6 +358,8 @@ Claude 페이지에서 압축 값을 조절할 수 있어요. **경고:** 모델
 `ANTHROPIC_MODEL`, 네 개의 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL`, 기존
 `ANTHROPIC_SMALL_FAST_MODEL`이에요. 실제 Haiku 값은 `tierModels.haiku ?? smallFastModel`이며,
 두 Haiku 변수에 모두 들어가요.
+
+`ocx claude`를 구독 모드로 실행하면 Claude Code 자체 로그인이 `claude-sonnet-5` 같은 맨 Claude ID를 바로 Anthropic으로 보내요. 그래서 이런 ID의 컨텍스트 창은 다른 프로바이더가 같은 ID로 무엇을 적어 두든 프로바이더 레지스트리에서 가져와요. 비어 있는 Opus, Sonnet, Fable 슬롯에는 Claude Code가 그 별칭을 풀어 쓰는 네이티브 ID가 `[1m]` 표시와 함께 들어가요. 게이트웨이 뒤의 Claude Code는 표시가 없는 ID를 200k로 계산하기 때문이에요. 1M 미만으로 제한한 `anthropic` 행이나 `claudeCode.modelMap` 항목이 있는 ID에는 표시를 붙이지 않고, Haiku는 채우지도 표시하지도 않아요. 프록시 인증으로 실행하거나 `nativePassthrough`가 꺼져 있으면 라우터가 정하고, 라우팅된 행의 창만 쓰여요. 시스템 환경과 셸 파일은 허브를 거치는 실행에도 값이 전달되므로 비어 있는 슬롯을 그대로 둬요.
 
 `tierModels.haiku`와 `smallFastModel`이 모두 없으면 OpenCodex는 두 보조 모델 변수를 설정하지 않아요. 그러면 Claude Code가 네이티브 보조 모델(현재 Sonnet)을 선택하며, 네이티브 프로바이더 요금이 발생할 수 있어요.
 

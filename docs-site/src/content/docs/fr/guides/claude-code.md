@@ -54,7 +54,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Seuil de compactage du contexte automatique (par défaut `829800`) ; injecté uniquement lorsque le contexte automatique est activé |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (facultatif) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (facultatif ; ancien `ANTHROPIC_SMALL_FAST_MODEL` également) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (facultatif) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` ; lors d'un lancement par abonnement, si non défini, `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]` natif |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` lorsque `alwaysEnableEffort` est activé (conditionnel) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; désactivé par défaut) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Remplacement du contexte hérité lorsque `maxContextTokens` est défini (conditionnel) |
@@ -143,7 +143,10 @@ le choix par défaut ; n'activez first-party que si vous acceptez ce risque.
 Desktop reste connecté à claude.ai : Chat, les connecteurs et le contrôle à distance continuent de
 fonctionner. OpenCodex écrit seulement `HTTPS_PROXY` et `NODE_EXTRA_CA_CERTS` dans le bloc `env` de
 `~/.claude/settings.json` (ou le répertoire `CLAUDE_CONFIG_DIR`). Le Claude Code lancé par l'onglet
-Code, ses sous-agents et la CLI `claude` passent par le proxy local ; les autres chemins de
+Code, ses sous-agents et la CLI `claude` passent par le proxy local. L'adresse du proxy est de
+la forme `http://opencodex:<jeton par installation>@127.0.0.1:<port>` ; le jeton est conservé
+dans `~/.opencodex/claude-intercept/proxy-token`, lisible uniquement par son propriétaire, et le
+proxy authentifie chaque CONNECT avec lui. Les autres chemins de
 `api.anthropic.com` sont relayés vers Anthropic. L'AC n'est jamais installée dans le magasin de
 confiance du système ; seuls les processus Node qui lisent `NODE_EXTRA_CA_CERTS` lui font confiance.
 
@@ -469,6 +472,8 @@ Les valeurs de configuration invalides définies manuellement reviennent à 829,
 `ANTHROPIC_MODEL`, les quatre variables `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL` et l'ancienne variable
 `ANTHROPIC_SMALL_FAST_MODEL`. Le modèle Haiku effectif vaut `tierModels.haiku ?? smallFastModel` et alimente
 les deux variables Haiku.
+
+Quand `ocx claude` se lance en mode abonnement, la connexion propre de Claude Code envoie un identifiant Claude nu comme `claude-sonnet-5` directement à Anthropic ; ces identifiants prennent donc leur fenêtre de contexte dans le registre des fournisseurs, quoi qu'un autre fournisseur indique pour le même identifiant. Un emplacement Opus, Sonnet ou Fable non défini reçoit alors l'identifiant natif vers lequel Claude Code résout cet alias, avec le marqueur `[1m]`, car derrière une passerelle Claude Code compte un identifiant sans marqueur à 200k. Une ligne `anthropic` plafonnée sous 1M ou une entrée `claudeCode.modelMap` laisse son identifiant sans marqueur, et Haiku n'est jamais rempli ni marqué. Avec une authentification par proxy ou `nativePassthrough` désactivé, c'est le routeur qui décide, et seule la fenêtre d'une ligne routée compte. L'environnement système et le fichier du shell laissent les emplacements non définis vides, car leurs valeurs atteignent aussi les lancements qui passent par un hub.
 
 Lorsque `tierModels.haiku` et `smallFastModel` sont absents, OpenCodex laisse les deux variables auxiliaires non définies ; Claude Code choisit ensuite son modèle d'assistance natif (actuellement Sonnet), qui peut entraîner des frais de fournisseur natif.
 

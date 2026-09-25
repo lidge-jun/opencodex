@@ -31,6 +31,8 @@ import {
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { formatErrorResponse, bridgeToResponsesSSE, buildResponseJSON } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
+import { jsonUtf8Bytes } from "../../lib/json-byte-size";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import {
   guardEmptyCompletionEventStream,
   observeEmptyCompletion,
@@ -40,6 +42,28 @@ import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
 import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
+// LOCAL PATCH (runturn-websearch)
+import { planWebSearch } from "../../web-search";
+import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
+import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
+
+// LOCAL PATCH (runturn-websearch): top-level fields route binding or the
+// adapter itself may write during a turn. Iteration-local `turnParsed` objects
+// are shallow copies of `parsed`, so these are mirrored both directions around
+// each runTurn dispatch — clones would otherwise keep stale route state and
+// adapter-written values (e.g. Cursor's conversation id) would be lost.
+const RUNTURN_WS_ROUTE_STATE_KEYS = [
+  "_cursorIdentityScope",
+  "_cursorConversationId",
+  "_cursorClientThreadId",
+  "_kiroAuthContext",
+  "_providerContinuation",
+  "_providerContinuationOwner",
+  "_providerContinuationCandidate",
+  "_stripReasoningEncryptedContent",
+  "_dropForeignReasoningItemIds",
+  "_reasoningReplayScope",
+] as const;
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesRunTurn(
@@ -71,7 +95,7 @@ export async function executeResponsesRunTurn(
     | "noteRoutedAttemptSend"
     | "bindKeyUsageFromBridge"
   >,
-  sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
+  sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction" | "openAiSidecar">,
   responseEffects: Pick<
     ResponsesEffects,
     | "cancelResponseCompletion"
@@ -121,6 +145,31 @@ export async function executeResponsesRunTurn(
   } = responseEffects;
   const { routedCompaction } = sidecarState;
 
+  // LOCAL PATCH (runturn-websearch): resolving the OpenAI search credential can
+  // hold the account's sole cooldown-recovery probe lease. The fetch path hands
+  // it back through the bridge's onFinalize; runTurn owns no such hook, so this
+  // turn releases it on every exit — normal end, error, cancel, and every
+  // pre-response failure below. After an executed search the outcome recorder
+  // already settled the lease, making each release a generation-bound no-op.
+  const releaseSearchProbeLease = (): void => {
+    sidecarState.openAiSidecar?.releaseProbeLease?.();
+  };
+  // When Codex declared hosted web_search and a sidecar plan resolves, drive
+  // the routed model through the same search interception the fetch-path loop
+  // runs — injected as a function tool, calls intercepted, results appended to
+  // the message history between runTurn dispatches.
+  let wsPlan: ReturnType<typeof planWebSearch>;
+  try {
+    wsPlan = !routedCompaction
+      ? planWebSearch(config, parsed, false, route.provider, route.modelId, sidecarState.openAiSidecar, {
+        admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
+      })
+      : undefined;
+  } catch (error) {
+    releaseSearchProbeLease();
+    throw error;
+  }
+
     const runTurnAbort = new AbortController();
     const cleanupRunTurnAbort = linkAbortSignal(runTurnAbort, options.abortSignal);
     const queue = createAdapterEventQueue({
@@ -140,6 +189,7 @@ export async function executeResponsesRunTurn(
     } catch (error) {
       cleanupRunTurnAbort();
       queue.close();
+      releaseSearchProbeLease();
       throw error;
     }
     // One attempt of the runTurn transport, against an explicit queue. The
@@ -147,16 +197,35 @@ export async function executeResponsesRunTurn(
     // same forwarded headers, same abort signal) through a fresh queue, so the
     // attempt body must not capture the first queue. Each attempt consumes its
     // own provider pacing slot (#1584): retries are paced like first attempts.
+    // LOCAL PATCH (runturn-websearch): dispatch sequence. A 429 preflight
+    // rotation replays the turn while the abandoned attempt may still be
+    // in-flight; only the latest dispatch may merge adapter-written route
+    // state back onto `parsed`, or the superseded attempt would restore the
+    // failed account's cursor/continuation over the rotation's rebind.
+    let runTurnAttemptSeq = 0;
     const runTurnAttempt = async (
       targetQueue: AdapterEventQueue,
       recovery?: AttemptRecoveryKind,
       pacingSlotAcquired = false,
+      // LOCAL PATCH (runturn-websearch): iteration-local parsed — later search
+      // rounds carry the grown message history and adjusted tool list while
+      // selection/replay binding stays on the request's own parsed object.
+      turnParsed: PreparedResponsesRequest["parsed"] = parsed,
     ): Promise<void> => {
+      const attemptSeq = ++runTurnAttemptSeq;
       try {
         if (!pacingSlotAcquired) {
           await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         await refreshRunTurnSelection();
+        // LOCAL PATCH (runturn-websearch): refreshRunTurnSelection binds route
+        // state onto `parsed`; mirror it onto the iteration-local copy the
+        // adapter actually receives.
+        {
+          const routeState: Record<string, unknown> = {};
+          for (const k of RUNTURN_WS_ROUTE_STATE_KEYS) routeState[k] = parsed[k];
+          Object.assign(turnParsed, routeState);
+        }
         // An adapter that reports its own sends accounts for the first one at the boundary that
         // dispatches it. Logging here would claim a send that the adapter's own budget can still
         // refuse, which is exactly what happens once earlier recovery has spent the allowance.
@@ -175,7 +244,7 @@ export async function executeResponsesRunTurn(
           },
         );
         await transportState.runTurnAdapter.runTurn?.(
-          parsed,
+          turnParsed,
           {
             headers: requestState.selectedForwardHeaders,
             abortSignal: runTurnAbort.signal,
@@ -195,6 +264,17 @@ export async function executeResponsesRunTurn(
           },
           targetQueue.push,
         );
+        // LOCAL PATCH (runturn-websearch): adapters may write conversation/
+        // continuation state onto the object they received; merge it back so
+        // the next iteration's copy and request-level consumers observe it.
+        // Skipped once a newer attempt has dispatched: this attempt was
+        // abandoned by a 429 rotation, so its account's route state is stale
+        // and writing it back would undo the rotation's rebind.
+        if (attemptSeq === runTurnAttemptSeq) {
+          const routeState: Record<string, unknown> = {};
+          for (const k of RUNTURN_WS_ROUTE_STATE_KEYS) routeState[k] = turnParsed[k];
+          Object.assign(parsed, routeState);
+        }
       } catch (err) {
         targetQueue.push(err instanceof RequestPacingQueueOverloadError
           ? {
@@ -229,7 +309,30 @@ export async function executeResponsesRunTurn(
         targetQueue.close();
       }
     };
-    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true);
+    // LOCAL PATCH (runturn-websearch): the first iteration carries the
+    // synthetic web_search tool; later iterations get their own queue so the
+    // search loop can buffer each turn's events before deciding to intercept.
+    const wsFirstParsed = wsPlan ? runTurnWebSearchInitialParsed(parsed) : parsed;
+    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true, wsFirstParsed);
+    const runTurnFailoverArmed = () =>
+      route.provider.authMode === "oauth"
+      || !!(transportState.genericFailoverAccountId
+        && isGenericOAuthFailoverEnabled(config, route.providerName));
+    const dispatchSearchIteration = (iterParsed: PreparedResponsesRequest["parsed"]): AsyncIterable<AdapterEvent> => {
+      const iterQueue = createAdapterEventQueue({
+        onBacklogExceeded: () => runTurnAbort.abort(),
+      });
+      void runTurnAttempt(iterQueue, undefined, false, iterParsed);
+      const stream = iterQueue.stream();
+      if (!runTurnFailoverArmed()) return stream;
+      // LOCAL PATCH (runturn-websearch): a post-search iteration can open on a
+      // 429 too — the search cells already reached the client, so only this
+      // answer call rotates. Preflight replays it on the next account with the
+      // grown history intact; a mid-stream error still ends the turn as before.
+      return (async function* () {
+        yield* await preflightRunTurnFailover(stream, iterParsed);
+      })();
+    };
     const rotateRunTurnAdapterOnPreflight429 = async (
       error: Extract<AdapterEvent, { type: "error" }>,
     ): Promise<boolean> => {
@@ -331,6 +434,10 @@ export async function executeResponsesRunTurn(
     };
     const preflightRunTurnFailover = async (
       firstSource: AsyncIterable<AdapterEvent>,
+      // LOCAL PATCH (runturn-websearch): replayed attempts re-dispatch this
+      // request — the grown-history iteration for post-search legs, the
+      // tool-injected first request elsewhere.
+      replayParsed: PreparedResponsesRequest["parsed"] = wsFirstParsed,
     ): Promise<AsyncIterable<AdapterEvent>> => {
       let source = firstSource;
       try {
@@ -344,7 +451,7 @@ export async function executeResponsesRunTurn(
           const retryQueue = createAdapterEventQueue({
             onBacklogExceeded: () => runTurnAbort.abort(),
           });
-          void runTurnAttempt(retryQueue, "oauth-account-429");
+          void runTurnAttempt(retryQueue, "oauth-account-429", false, replayParsed);
           source = retryQueue.stream();
         }
       } finally {
@@ -372,6 +479,8 @@ export async function executeResponsesRunTurn(
       event: AdapterEvent,
     ): Extract<AdapterEvent, { type: "error" }> | undefined => {
       if (!enforceDeclaredToolNames || event.type !== "tool_call_start") return undefined;
+      // This tool is declared to the adapter by the private search loop.
+      if (wsPlan && event.name === WEB_SEARCH_TOOL_NAME) return undefined;
       const effectiveName = normalizeDeclaredToolName(event.name, declaredToolNames);
       if (declaredToolNames.has(effectiveName)) return undefined;
       return {
@@ -382,9 +491,10 @@ export async function executeResponsesRunTurn(
       };
     };
     if (parsed.stream) {
+      try {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
-      if (route.provider.authMode === "oauth" || (transportState.genericFailoverAccountId && isGenericOAuthFailoverEnabled(config, route.providerName))) {
+      if (runTurnFailoverArmed()) {
         // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
         // replayed transparently; after any output reaches the bridge, a later error stays terminal.
         eventSource = await preflightRunTurnFailover(eventSource);
@@ -399,11 +509,32 @@ export async function executeResponsesRunTurn(
           // A replay-unsafe heartbeat means the adapter already ran a local side effect, so the
           // combo must not send this turn to another target: the failure stays with this child.
           if (preflight.replayUnsafe) markResponseNonReplayable(failure);
+          releaseSearchProbeLease();
           return failure;
         }
         eventSource = preflight.stream;
       }
-      const guardedSource = emptyCompletionGuardEnabled
+      // LOCAL PATCH (runturn-websearch): intercept web_search calls across
+      // iterations; terminal output keeps flowing through the same queue/bridge.
+      if (wsPlan) {
+        eventSource = runTurnWebSearchLoop(eventSource, {
+          parsed,
+          plan: wsPlan,
+          translatorBudget,
+          emptyCompletionRetry: emptyCompletionGuardEnabled,
+          forwardProvider: wsPlan.forwardSidecar?.provider,
+          forwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
+          ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
+          recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
+          abortSignal: runTurnAbort.signal,
+          dispatch: dispatchSearchIteration,
+        });
+      }
+      // LOCAL PATCH (runturn-websearch): the empty-completion retry replays
+      // the ORIGINAL parsed request — no synthetic tool, no gathered results —
+      // so it must not fire while the search loop owns the turn. An empty
+      // forced answer is recovered inside runTurnWebSearchLoop instead.
+      const guardedSource = emptyCompletionGuardEnabled && !wsPlan
         ? guardEmptyCompletionEventStream({
             firstEvents: eventSource,
             // Identical-turn retry: same parsed request, same headers, same
@@ -428,7 +559,7 @@ export async function executeResponsesRunTurn(
           translatorBudget,
           replayCacheScope: parsed._reasoningReplayScope,
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
-          stallTimeoutSec: config.stallTimeoutSec,
+          stallTimeoutSec: wsPlan?.stallTimeoutSec ?? config.stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           declaredToolNames,
           enforceDeclaredToolNames,
@@ -459,25 +590,38 @@ export async function executeResponsesRunTurn(
         },
       );
       const bridgeTurnAc = new AbortController();
-      const trackedSse = trackStreamLifetime(sseStream, bridgeTurnAc, undefined, options.turnAdmissionLease);
+      // LOCAL PATCH (runturn-websearch): sidecar resolution may hold the
+      // account's cooldown-recovery probe. Hand it back when the stream ends —
+      // completion, failure, or client cancel; a search that ran already
+      // settled it through recordOutcome, so this release is a safe no-op then.
+      const trackedSse = trackStreamLifetime(sseStream, bridgeTurnAc, releaseSearchProbeLease, options.turnAdmissionLease);
       const response = new Response(trackedSse, {
         headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" },
       });
       runTurnAdapterSseResponses.add(response);
       return response;
+      } catch (error) {
+        // Every pre-response exit hands the probe lease back too: a turn that
+        // never started streaming has no later owner to release it.
+        releaseSearchProbeLease();
+        throw error;
+      }
     }
 
+    try {
     await runTurn();
     const firstAttemptEvents = await queue.collect();
     let runTurnEvents: AdapterEvent[] = firstAttemptEvents;
-    if (route.provider.authMode === "oauth" || (transportState.genericFailoverAccountId && isGenericOAuthFailoverEnabled(config, route.providerName))) {
+    if (runTurnFailoverArmed()) {
       runTurnEvents = [];
       for await (const event of await preflightRunTurnFailover(
         (async function* () { yield* firstAttemptEvents; })(),
       )) runTurnEvents.push(event);
     }
     let events: AdapterEvent[];
-    if (emptyCompletionGuardEnabled) {
+    // LOCAL PATCH (runturn-websearch): same exclusion as the streaming branch —
+    // a search-aware retry runs inside runTurnWebSearchLoop, not the raw guard.
+    if (emptyCompletionGuardEnabled && !wsPlan) {
       events = [];
       for await (const event of guardEmptyCompletionEventStream({
         firstEvents: (async function* () { yield* runTurnEvents; })(),
@@ -486,60 +630,110 @@ export async function executeResponsesRunTurn(
     } else {
       events = runTurnEvents;
     }
-    if (options.comboAttempt) {
-      const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
-      const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
-      // Same boundary as the streaming preflight: a replay-unsafe heartbeat means the adapter
-      // already ran a local side effect, so an undeclared tool call after it keeps the bridge's
-      // fail-closed refusal instead of becoming a hop that sends the turn to another target.
-      const replayUnsafe = events
-        .slice(0, firstMeaningfulIndex === -1 ? events.length : firstMeaningfulIndex)
-        .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
-      const classifiedError = firstMeaningful && !replayUnsafe
-        ? classifyUndeclaredFirstTool(firstMeaningful)
-        : undefined;
-      if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
-        const message = classifiedError?.message ?? (firstMeaningful?.type === "error"
-          ? firstMeaningful.message
-          : "Adapter ended before producing a response");
-        const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
-        if (replayUnsafe) markResponseNonReplayable(failure);
-        return failure;
+    // This collector outlives each search iteration, including live-output
+    // events that the loop no longer owns. Keep its lease until JSON is built.
+    let searchOutputBytes = 0;
+    try {
+      // LOCAL PATCH (runturn-websearch): buffered path runs the same interception
+      // loop; iterations dispatch through the same attempt body on fresh queues.
+      if (wsPlan) {
+        const searched: AdapterEvent[] = [];
+        let retainedReplayUnsafe = false;
+        for await (const event of runTurnWebSearchLoop(
+          (async function* () { yield* events; })(),
+          {
+            parsed,
+            plan: wsPlan,
+            translatorBudget,
+            emptyCompletionRetry: emptyCompletionGuardEnabled,
+            forwardProvider: wsPlan.forwardSidecar?.provider,
+            forwardHeaders: wsPlan.forwardSidecar?.headers ?? requestState.selectedForwardHeaders,
+            ...(wsPlan.exaConfigured ? { exaApiKey: config.webSearchSidecar?.exaApiKey } : {}),
+            recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
+            abortSignal: runTurnAbort.signal,
+            dispatch: dispatchSearchIteration,
+          },
+        )) {
+          if (event.type === "heartbeat") {
+            if (!event.replayUnsafe || retainedReplayUnsafe) continue;
+            retainedReplayUnsafe = true;
+          }
+          if (event.type === "error" && event.code === "translation_buffer_limit") runTurnAbort.abort();
+          const bytes = jsonUtf8Bytes(event) + 1;
+          translatorBudget.chargeRetained(bytes, { kind: "retained_collectors" });
+          searchOutputBytes += bytes;
+          searched.push(event);
+        }
+        events = searched;
       }
+      if (options.comboAttempt) {
+        const firstMeaningfulIndex = events.findIndex(event => event.type !== "heartbeat");
+        const firstMeaningful = firstMeaningfulIndex === -1 ? undefined : events[firstMeaningfulIndex];
+        // Same boundary as the streaming preflight: a replay-unsafe heartbeat means the adapter
+        // already ran a local side effect, so an undeclared tool call after it keeps the bridge's
+        // fail-closed refusal instead of becoming a hop that sends the turn to another target.
+        const replayUnsafe = events
+          .slice(0, firstMeaningfulIndex === -1 ? events.length : firstMeaningfulIndex)
+          .some(event => event.type === "heartbeat" && event.replayUnsafe === true);
+        const classifiedError = firstMeaningful && !replayUnsafe
+          ? classifyUndeclaredFirstTool(firstMeaningful)
+          : undefined;
+        if (!firstMeaningful || firstMeaningful.type === "error" || classifiedError) {
+          const message = classifiedError?.message ?? (firstMeaningful?.type === "error"
+            ? firstMeaningful.message
+            : "Adapter ended before producing a response");
+          const failure = formatErrorResponse(502, "upstream_error", redactSecretString(message));
+          if (replayUnsafe) markResponseNonReplayable(failure);
+          return failure;
+        }
+      }
+      let providerState: OcxProviderContinuationState | undefined;
+      const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
+        translatorBudget,
+        replayCacheScope: parsed._reasoningReplayScope,
+        hideThinkingSummary: parsed.options.hideThinkingSummary,
+        toolNsMap,
+        declaredToolNames,
+        enforceDeclaredToolNames,
+        toolParameterSchemas,
+        freeformToolNames,
+        toolSearchToolNames,
+        ...(routedCompaction ? { compaction: true } : {}),
+        onProviderState: state => { providerState = state; },
+        onUsage: usage => {
+          transportState.bindKeyUsageFromBridge(usage);
+        },
+      });
+      if (!routedCompaction) {
+        rememberKiroDeliveredFinalAnswer(transportState.adapter.name, json);
+        rememberResponseState(
+          parsed._rawBody,
+          json,
+          continuationStateForResponse(providerState),
+          responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
+        );
+      }
+      // #1926 gap 2: the buffered path queued its signature persists inside
+      // buildResponseJSON; bound the durability window before the JSON becomes
+      // externally visible.
+      await awaitThoughtSignatureDurability();
+      if (adapterResponseReachedServingTerminal(events, json)) {
+        commitReasoningReplayServingRoute();
+      }
+      notifyResponseComplete(json);
+      return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
+    } catch (error) {
+      if (!isTranslatorBudgetExceededError(error)) throw error;
+      runTurnAbort.abort();
+      return formatErrorResponse(502, "upstream_error", "upstream translation buffer exceeded the safe limit", {
+        code: "translation_buffer_limit",
+      });
+    } finally {
+      translatorBudget.releaseRetained(searchOutputBytes, { kind: "retained_collectors" });
     }
-    let providerState: OcxProviderContinuationState | undefined;
-    const json = buildResponseJSON(events, parsed._responseModelId ?? parsed.modelId, {
-      translatorBudget,
-      replayCacheScope: parsed._reasoningReplayScope,
-      hideThinkingSummary: parsed.options.hideThinkingSummary,
-      toolNsMap,
-      declaredToolNames,
-      enforceDeclaredToolNames,
-      toolParameterSchemas,
-      freeformToolNames,
-      toolSearchToolNames,
-      ...(routedCompaction ? { compaction: true } : {}),
-      onProviderState: state => { providerState = state; },
-      onUsage: usage => {
-        transportState.bindKeyUsageFromBridge(usage);
-      },
-    });
-    if (!routedCompaction) {
-      rememberKiroDeliveredFinalAnswer(transportState.adapter.name, json);
-      rememberResponseState(
-        parsed._rawBody,
-        json,
-        continuationStateForResponse(providerState),
-        responseStateOptions(adapterNeedsForcedContinuation(transportState.adapter.name)),
-      );
+    } finally {
+      // The buffered turn ends inside this function, so its every exit —
+      // JSON response, combo failure, or thrown error — hands the lease back.
+      releaseSearchProbeLease();
     }
-    // #1926 gap 2: the buffered path queued its signature persists inside
-    // buildResponseJSON; bound the durability window before the JSON becomes
-    // externally visible.
-    await awaitThoughtSignatureDurability();
-    if (adapterResponseReachedServingTerminal(events, json)) {
-      commitReasoningReplayServingRoute();
-    }
-    notifyResponseComplete(json);
-    return new Response(JSON.stringify(json), { headers: { "Content-Type": "application/json" } });
 }

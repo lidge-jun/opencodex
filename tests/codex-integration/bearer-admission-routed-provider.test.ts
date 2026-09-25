@@ -443,7 +443,7 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
   test.each([
     "configured-vision-text", "default-sidecars", "no-stored-main", "disabled-vision",
     "terminal-vision", "routed-vision", "anthropic-vision", "missing-openai",
-    "noncanonical-openai", "search-runTurn", "search-tool-choice-none",
+    "noncanonical-openai", "search-tool-choice-none",
   ])("Chat Cursor leaves native main switchable without a planned OpenAI helper (%s)", async scenario => {
     let signalStarted!: () => void;
     const started = new Promise<void>(resolve => { signalStarted = resolve; });
@@ -522,6 +522,59 @@ describe("bearer admission is not reused as a Cursor upstream credential", () =>
         try { await (await pending).text(); } finally { await server.stop(true); }
       }
       expect(getNativeMainProfileRequestCount()).toBe(0);
+    }, async () => { signalStarted(); await upstreamGate; });
+  }, SERVER_BUDGET_MS);
+
+  test("Chat Cursor web search defers native main switchability while the helper is planned", async () => {
+    let signalStarted!: () => void;
+    const started = new Promise<void>(resolve => { signalStarted = resolve; });
+    let releaseUpstream!: () => void;
+    const upstreamGate = new Promise<void>(resolve => { releaseUpstream = resolve; });
+    await withCursorCaptureServer(async (baseUrl, capturedAuth) => {
+      const config = cursorForwardConfig(baseUrl);
+      config.openaiProviderTierVersion = 2;
+      config.providers.cursorcustom!.noVisionModels = ["auto"];
+      config.providers.openai = {
+        adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex",
+        authMode: "forward", codexAccountMode: "direct",
+      };
+      config.webSearchSidecar = { enabled: true, backend: "openai", model: "gpt-5.6-luna" };
+      saveConfig(config);
+      const stored = fakeChatGptJwt({ chatgpt_account_id: "stored_main_acc", exp: Math.floor(Date.now() / 1000) + 3600 });
+      writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
+        tokens: { access_token: stored, account_id: "stored_main_acc" },
+      }));
+      const server = await startOwnedServer();
+      let settled = false;
+      const pending = originalFetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-opencodex-api-key": ADMISSION_SECRET, authorization: "Bearer cursor-upstream-token" },
+        body: JSON.stringify({ model: "cursorcustom/auto", stream: false, messages: [{ role: "user", content: "hi" }], tools: [{ type: "web_search" }] }),
+      }).then(response => { settled = true; return response; });
+      try {
+        await Promise.race([started, pending.then(async response => {
+          const result = await response.clone().json().catch(() => ({})) as { error?: { code?: string; message?: string } };
+          throw new Error(`Cursor response settled before its held upstream: HTTP ${response.status}, ${result.error?.code ?? ""}: ${result.error?.message ?? ""}`);
+        })]);
+        expect(settled).toBe(false);
+        expect(capturedAuth).toEqual(["Bearer cursor-upstream-token"]);
+        expect(getNativeMainProfileRequestCount()).toBe(1);
+        let switches = 0;
+        const manager = { switch: async () => { switches += 1; return { ok: true }; } } as unknown as NativeProfileManager;
+        const switchUrl = new URL("http://localhost/api/native-main-profiles/switch");
+        const blocked = await handleNativeProfileAPI(new Request(switchUrl, {
+          method: "POST", body: JSON.stringify({ target: "target", confirmedStopped: true }),
+        }), switchUrl, config, { manager, drainTimeoutMs: 0 });
+        expect(blocked?.status).toBe(409);
+        expect(switches).toBe(0);
+        expect(settled).toBe(false);
+        expect(nativeAuth).toEqual([]);
+      } finally {
+        releaseUpstream();
+        try { await (await pending).text(); } finally { await server.stop(true); }
+      }
+      expect(getNativeMainProfileRequestCount()).toBe(0);
+      expect(capturedAuth).toEqual(["Bearer cursor-upstream-token"]);
     }, async () => { signalStarted(); await upstreamGate; });
   }, SERVER_BUDGET_MS);
 

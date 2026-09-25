@@ -62,7 +62,7 @@ bağlanmış olarak Claude Code'u başlatır:
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Otomatik bağlam sıkıştırma eşiği (varsayılan `829800`); yalnızca otomatik bağlam etkinleştirildiğinde enjekte edilir |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (isteğe bağlı) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (isteğe bağlı; eski `ANTHROPIC_SMALL_FAST_MODEL` da geçerlidir) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (isteğe bağlı) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; abonelikle başlatmada ayarlanmamışsa yerel `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]` |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` açık olduğunda `1` (koşullu) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` ayarlandığında (koşullu; varsayılan olarak kapalı) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` ayarlandığında eski bağlam geçersiz kılma (koşullu) |
@@ -531,6 +531,8 @@ enjekte edilen altı yuvayı hesaplar: `ANTHROPIC_MODEL`, dört
 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL` ve eski
 `ANTHROPIC_SMALL_FAST_MODEL`. Geçerli Haiku, her iki Haiku değişkenine beslenen
 `tierModels.haiku ?? smallFastModel` değeridir.
+
+`ocx claude` abonelik modunda başlatıldığında Claude Code'un kendi oturumu, `claude-sonnet-5` gibi yalın bir Claude kimliğini doğrudan Anthropic'e gönderir; bu yüzden bu kimlikler, başka bir sağlayıcı aynı kimlik için ne listelerse listelesin, bağlam pencerelerini sağlayıcı kayıt defterinden alır. Ayarlanmamış bir Opus, Sonnet veya Fable yuvası, Claude Code'un o takma adı çözdüğü yerel kimliği `[1m]` işaretiyle alır; çünkü bir ağ geçidinin arkasında Claude Code işaretsiz bir kimliği 200k olarak sayar. 1M'nin altında sınırlanmış bir `anthropic` satırı veya bir `claudeCode.modelMap` girdisi kimliğini işaretsiz bırakır ve Haiku hiçbir zaman doldurulmaz ya da işaretlenmez. Proxy kimlik doğrulamasıyla başlatıldığında veya `nativePassthrough` kapalıyken yönlendirici karar verir ve yalnızca yönlendirilen satırın penceresi dikkate alınır. Sistem ortamı ve kabuk dosyası, değerleri bir hub üzerinden geçen başlatmalara da ulaştığı için ayarlanmamış yuvaları boş bırakır.
 
 Hem `tierModels.haiku` hem de `smallFastModel` bulunmadığında, OpenCodex her iki
 yardımcı değişkeni de ayarlanmamış bırakır; Claude Code daha sonra yerel

@@ -1,5 +1,9 @@
 # Providers And Adapters
 
+RunTurn hosted search uses `src/web-search/run-turn-loop.ts`: synthetic calls remain private, progress reaches the bridge during collection, and a validated terminal precedes search execution. Complete search calls remain actionable at a truncated `done`; cancellation prevents subsequent queries and calls. OAuth preflight replay in `src/server/responses/run-turn-execution.ts` retains the synthetic tool while refreshing credential-scoped route state. In `src/server/responses/sidecar-execution.ts`, a search plan takes priority over image/video bridge execution for both transports; only fetch-capable adapters enter the fetch search loop.
+
+Combo preflight allows the private search tool only while a search plan is active; client tool declaration checks and replay-unsafe heartbeat protection remain enforced.
+
 The opt-in `inlineThinkTagModels` list follows static-policy override and model-rename rules;
 shared Kiro/Chat splitting and raw display follow [Chat compatibility](providers/chat-compat.md#inline-think-tag-recovery).
 
@@ -20,6 +24,12 @@ isolated catalog and leave tool execution to the external client. Qoder appends 
 system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or
 `QODERCN_APPEND_SYSTEM_PROMPT` child environment,
 never through command-line arguments or inherited vendor variables.
+
+Coding-agent stdout is framed as bounded JSONL directly from decoded stream segments. The framer
+tracks the current line's UTF-8 byte count incrementally, searches each decoded segment once, and
+joins only when a newline or EOF completes the frame. This preserves split UTF-8, BOM, CRLF,
+blank-line, line-limit, and total-limit behavior without re-encoding the growing partial frame on
+every child stdout chunk. See [ADR-0102](decisions/ADR-0102-incremental-stream-accounting.md).
 
 Kimi Coding's Chat, API-key, and optional Responses presets consume the same model seeds in
 `src/providers/registry/model-seeds.ts`, including the native `k3-256k` ID. The Responses preset

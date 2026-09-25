@@ -72,7 +72,8 @@ Replacing config and process-state writes use `src/config/atomic-write.ts`. The 
 process-wide temp sequence, symlink target resolution, no-follow directory-entry replacement for
 externally writable integration directories, real-home test guard, owner manifest,
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
-must not replace it with a local temp-and-rename shortcut.
+must not replace it with a local temp-and-rename shortcut. Publication failures in
+`src/config/persist-unlocked.ts` and `src/config/live-reconcile.ts` follow the [publication-aware rollback contract](gui-and-management-api.md#durable-provider-patch).
 
 Windows hardening there is applied once per write, not once per harden call. Both calls stay
 `required: true` and still fail the write closed, but the pre-rename call resolves through the
@@ -346,18 +347,21 @@ returns true.
 
 ## Desktop compatibility switches report three things, not one
 
-`codexDesktopAuthless` and `codexClientCompaction` only mean anything through the injected
-`config.toml`, so persisting them is not applying them. `PUT /api/settings` used to persist
-and then converge the catalog, and a comment there claimed the injector rewrote the form;
-`convergeCodexCatalog` rejects any scope but `catalog` and never reaches `injectCodexConfig`,
-so the injected shape stayed as it was until a separate `ocx sync`.
+`codexDesktopAuthless` and `codexClientCompaction` take effect through injected `config.toml`; persisting
+them is not applying them, and `convergeCodexCatalog` (catalog scope only) never calls `injectCodexConfig`.
 
-The route now runs the real injection after catalog convergence and after the config mutation
+`PUT /api/settings` runs the real injection after catalog convergence and after the config mutation
 lock has closed — coordinated Codex writes take the Codex write lock before the config mutation
 lock, so awaiting the injector inside that transaction would invert the order — and reports
 three separate facts per switch: the **stored** value in `config.json`, the **effective** value
 this bind and role will actually produce, and whether `config.toml` was **applied**, with the
 reason and retryability when it was not. `src/codex/desktop-switches.ts` owns that projection.
+When an external `model_provider` owns `config.toml`, injection preserves the file and reports the
+effective switch and authentication source as externally controlled; a report that attempted no rewrite
+applies the same `currentExternalCodexModelProvider` predicate via `observedCodexDesktopSwitchApply`.
+A present-but-unreadable `config.toml` reports `ownership_undetermined` with `null` effective values and
+sign-in answer, since a foreign provider may still control them; both apply gates and injector-error
+observation keep that record, and recovery advice asks for a later settings read, not sync.
 
 Effective values come from `isEffectiveCodexDesktopAuthless` and
 `isEffectiveCodexClientCompaction` in `src/codex/loopback-target.ts` rather than a second copy
@@ -421,9 +425,6 @@ from the key that wins that same merged lookup, not from an independent source s
 Provider seed/enrichment and request routing consume the same field-level resolver. Persisted config
 still stores operator intent rather than the frozen result; registry-only policy is applied at
 capture/route time and explicit false or empty declarations retain their field-specific meaning.
-
-
-
 
 ## Provider validation ownership
 

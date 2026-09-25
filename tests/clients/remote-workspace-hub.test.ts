@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import {
   RemoteWorkspaceHub,
@@ -170,6 +170,51 @@ describe("remote workspace hub registry", () => {
       identity: { publicKey: first.publicKey, privateKey: second.privateKey },
       devices: [],
     })).toThrow("does not match");
+  });
+
+  test("failed revocation stays truthful and retry removes the original token across reloads", () => {
+    const { hub, store, deviceIdentity, paired } = pairedHub();
+    const closes: string[] = [];
+    const connection = new RemoteWorkspaceHubAgentConnection({
+      deviceId: paired.device.id,
+      devicePublicKey: deviceIdentity.publicKey,
+      hubIdentity: hub.identity(),
+      socket: { send() {}, close: (_code, reason) => closes.push(reason) },
+    });
+    hub.attachConnection(paired.device.id, connection);
+    connection.receive(serializeRemoteWorkspaceAgentMessage({
+      version: 1, type: "presence", capabilities: ["workspace.read"],
+    }));
+    const before = hub.listDevices();
+    const durableBefore = store.load();
+    const save = spyOn(store, "save").mockImplementation(() => {
+      expect(hub.listDevices()).toEqual(before);
+      expect(hub.connection(paired.device.id)).toBe(connection);
+      throw new Error("injected hub save failure");
+    });
+    try {
+      expect(() => hub.revokeDevice(paired.device.id)).toThrow("injected hub save failure");
+      expect(hub.listDevices()).toEqual(before);
+      expect(store.load()).toEqual(durableBefore);
+      expect(hub.authenticateDeviceToken(paired.deviceToken)?.id).toBe(paired.device.id);
+      expect(new RemoteWorkspaceHub(store).authenticateDeviceToken(paired.deviceToken)?.id).toBe(paired.device.id);
+      expect(connection.isOnline()).toBe(true);
+      expect(closes).toEqual([]);
+    } finally {
+      save.mockRestore();
+    }
+    expect(hub.revokeDevice(paired.device.id)).toBe(true);
+    expect(hub.authenticateDeviceToken(paired.deviceToken)).toBeNull();
+    expect(hub.connection(paired.device.id)).toBeNull();
+    expect(connection.isOnline()).toBe(false);
+    expect(closes).toEqual(["remote workspace device was revoked"]);
+    const writes = store.writes;
+    expect(hub.revokeDevice(paired.device.id)).toBe(false);
+    expect(store.writes).toBe(writes);
+    const reloaded = new RemoteWorkspaceHub(store);
+    expect(reloaded.listDevices()).toEqual([]);
+    expect(reloaded.authenticateDeviceToken(paired.deviceToken)).toBeNull();
+    expect(reloaded.revokeDevice(paired.device.id)).toBe(false);
   });
 });
 

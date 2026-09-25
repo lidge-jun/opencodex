@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,13 +7,14 @@ import {
   captureClaudeInterceptSettingsRollback,
   buildClaudeInterceptEnv,
   inspectClaudeInterceptSettings,
+  migrateClaudeInterceptSettings,
   removeClaudeInterceptSettings,
 } from "../../src/claude/intercept/settings";
 import { claudeInterceptEnabled, claudeInterceptProxyPort } from "../../src/claude/intercept/runtime";
 import { configSchema } from "../../src/config/schema/config-schema";
 
 const CA = "/home/u/.opencodex/claude-intercept/ca.pem";
-const env = buildClaudeInterceptEnv(8846, CA);
+const env = buildClaudeInterceptEnv(8846, CA, "test-token");
 
 function dir(): string {
   return mkdtempSync(join(tmpdir(), "ocx-intercept-settings-"));
@@ -24,7 +25,7 @@ function readSettings(configDir: string): Record<string, unknown> {
 }
 
 test("env block shape", () => {
-  expect(env).toEqual({ HTTPS_PROXY: "http://127.0.0.1:8846", NODE_EXTRA_CA_CERTS: CA });
+  expect(env).toEqual({ HTTPS_PROXY: "http://opencodex:test-token@127.0.0.1:8846", NODE_EXTRA_CA_CERTS: CA });
 });
 
 test("apply creates settings.json when absent and is idempotent", () => {
@@ -64,6 +65,26 @@ test("a previous port is stale and gets rewritten; a foreign proxy is left alone
   const otherCa = dir();
   writeFileSync(join(otherCa, "settings.json"), JSON.stringify({ env: { HTTPS_PROXY: "http://127.0.0.1:8080", NODE_EXTRA_CA_CERTS: "/etc/mitm/ca.pem" } }));
   expect(inspectClaudeInterceptSettings(env, otherCa).kind).toBe("foreign");
+});
+
+test("migrate rewrites an owned legacy env but never creates or touches foreign state", () => {
+  // A pre-auth apply left a bare loopback URL; the CA anchor still marks the env as ours.
+  const configDir = dir();
+  writeFileSync(join(configDir, "settings.json"), JSON.stringify({ theme: "dark", env: { HTTPS_PROXY: "http://127.0.0.1:8846", NODE_EXTRA_CA_CERTS: CA } }));
+  expect(migrateClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: true });
+  expect(readSettings(configDir)).toEqual({ theme: "dark", env });
+  expect(migrateClaudeInterceptSettings(env, configDir)).toMatchObject({ ok: true, changed: false });
+
+  // Absent env stays absent — migration must not enable the integration by itself.
+  const missing = dir();
+  expect(migrateClaudeInterceptSettings(env, missing)).toMatchObject({ ok: true, changed: false });
+  expect(existsSync(join(missing, "settings.json"))).toBe(false);
+
+  // Foreign env is never overwritten from the runtime path either.
+  const foreign = dir();
+  writeFileSync(join(foreign, "settings.json"), JSON.stringify({ env: { HTTPS_PROXY: "http://corp-proxy:3128" } }));
+  expect(migrateClaudeInterceptSettings(env, foreign)).toMatchObject({ ok: false, reason: "foreign_env" });
+  expect(readSettings(foreign)).toEqual({ env: { HTTPS_PROXY: "http://corp-proxy:3128" } });
 });
 
 test("remove deletes only owned values and drops an emptied env block", () => {

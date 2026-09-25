@@ -343,9 +343,10 @@ is treated as an append: the scanner verifies the previous LF and its trailing 6
 folds only the suffix into a cloned accumulator and publishes it after validation. Concurrent callers
 share that work. Cold rebuilds scan the whole ledger in fixed-size chunks and yield between bounded
 batches, so memory stays bounded and unrelated management requests remain serviceable even for a
-large existing log. The first read is proportional to ledger size; steady-state refresh work is
-proportional to newly appended bytes. The Dashboard polls its 30-day usage summary independently once
-per minute, so usage work cannot delay health/provider/settings state or run every five seconds.
+large existing log. The first read is proportional to ledger size; later refreshes hash the bounded retained window once and parse only the appended suffix, rather than rescanning the whole ledger.
+The Dashboard polls its 30-day usage independently once per minute, separate from five-second state polls.
+An unchanged retained snapshot reuses its verified region digest only for identical bounds; appends or trimming hash the returned region, preserving same-inode rewrite detection.
+> Decision record: [ADR-0102](decisions/ADR-0102-incremental-stream-accounting.md)
 
 An oversized row is skipped inside the scanner bound without shortening identities. Accumulators keep normal rows plus `usageIncomplete` / `usageIncompleteReason: "oversized_rows"` on caches and rollups; append ORs the flag and a rebuild recalculates it. Invalid-row counts are not sticky, and absence of the flag is not completeness. GUI caches warn on Usage, Dashboard, provider and key views; CLI warns in human output only; most-used order save refuses an incomplete snapshot. Quota surfaces stay separate. Legacy truncation fields keep their meaning; read/mutation failures still fail closed.
 

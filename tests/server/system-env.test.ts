@@ -104,6 +104,14 @@ describe("system environment injection", () => {
     expect(JSON.parse(trackingFile!)).toMatchObject({ pid: process.pid, port: 4567 });
   });
 
+  // System env reaches every Claude client on the machine, including an `ocx claude` launch that
+  // goes through a hub, where the router decides. Unset tier slots stay empty here (#5755).
+  test("injectSystemEnv leaves unset tier slots empty on a subscription machine", async () => {
+    const config = { ...baseConfig, claudeCode: { systemEnv: true, authMode: "subscription" } } satisfies OcxConfig;
+    expect(await injectSystemEnv(4567, config)).toEqual({ injected: true });
+    expect(launchctlCommands().filter(command => command.includes("ANTHROPIC_DEFAULT_"))).toEqual([]);
+  });
+
   test("injectSystemEnv invokes launchctl without a command shell", async () => {
     expect(await injectSystemEnv(4567, baseConfig)).toEqual({ injected: true });
 

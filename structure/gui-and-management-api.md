@@ -404,3 +404,28 @@ ownership, a GET HTTP failure stops polling without starting a second login POST
 
 Pairing-grant source limiting applies only to invalid guesses from an allowed browser origin; disallowed
 origins record no limiter state, and a valid grant redeems even from a throttled source.
+
+## Durable provider PATCH
+
+`src/server/management/provider-routes.ts` commits every provider PATCH variant through
+`src/server/management/provider-patch-transaction.ts`, including standalone default-provider
+and account-mode changes. The synchronous mutation lock encloses snapshot, mutation, save,
+and pre-publication failure restoration. Field masks are replayed against the latest provider under that same
+lock after asynchronous destination validation; rollback retains previously committed siblings.
+
+Persistence can rebase the whole live configuration before a write. Rollback therefore restores
+the original plain-object/array graph in place, including property descriptors, symbols, absent
+versus undefined fields, provider key insertion order, container identities and pending deletion provenance. Opaque
+runtime objects and accessor descriptors retain their identity; snapshotting invokes no getters.
+After atomic publication (or an already-identical persisted body), a bookkeeping failure remains
+an error but retains the published live state. `ConfigWritePublishedError` from
+the configuration persistence boundary distinguishes that outcome from a refused write; rolling back
+only memory would disagree with disk. Follow-up refresh work may remain pending after this error.
+Reconciliation, model-cache invalidation, quota/thread-cache changes, priming and catalog
+convergence remain after successful persistence in their existing order. Pacing-only updates
+keep their existing no-catalog-refresh behavior. The regression suite is
+`tests/server/management-provider-atomicity.test.ts`.
+
+> Decision record: [Durable provider PATCH](decisions/ADR-0104-durable-provider-patch.md)
+
+> Decision record: [Publication-aware rollback](decisions/ADR-0120-provider-patch-publication-boundary.md)

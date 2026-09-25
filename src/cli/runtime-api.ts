@@ -483,6 +483,8 @@ export function desktopSwitchApplyReason(reason: unknown): string {
   if (reason === "not_requested") return "no desktop switch rewrite was requested";
   if (reason === "proxy_not_running") return "the proxy is not running";
   if (reason === "integration_disabled") return "Codex integration is disabled";
+  if (reason === "external_provider") return "an external model provider owns config.toml";
+  if (reason === "ownership_undetermined") return "config.toml ownership could not be determined";
   if (reason === "write_lock_busy") return "the Codex config write lock is busy";
   if (reason === "injection_refused") return "Codex config injection was refused";
   return "the rewrite could not be completed";

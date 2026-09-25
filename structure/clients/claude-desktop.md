@@ -36,7 +36,7 @@ mutually exclusive on one machine:
 
 - **first-party** (opt-in, with account risk): Claude Desktop itself is left on claude.ai — login, Chat tab,
   connectors and remote control are untouched and no config-library profile is written. The apply
-  writes only `HTTPS_PROXY=http://127.0.0.1:<port+100>` and `NODE_EXTRA_CA_CERTS=<config>/claude-intercept/ca.pem`
+  writes only an authenticated `HTTPS_PROXY=http://opencodex:<token>@127.0.0.1:<port+100>` and `NODE_EXTRA_CA_CERTS=<config>/claude-intercept/ca.pem`
   into the `env` block of Claude Code's `settings.json` (via `src/claude/intercept/settings.ts`),
   creating the local authority first. Only the Claude Code process Desktop spawns for the Code tab
   (and its subagents, and any standalone `claude` CLI) reads that env, so only their
@@ -83,6 +83,18 @@ Windows policy health only applies in gateway mode, because first-party never to
 configuration. Ordinary Chat-tab traffic is out of scope for both modes.
 
 `src/claude/desktop-gateway-state.ts` adopts the exact committed Claude subtree and rebases the live hand-edit guard only after persistence succeeds. Pending disjoint live edits survive; later hand edits remain protected during unrelated whole-config saves. Gateway mode and fingerprint are recorded before cleanup and diagnostic awaits.
+
+### Intercept credential lifetime
+
+`src/claude/intercept/proxy-auth.ts` reads a bounded base64url credential through a checked
+regular-file descriptor, rejects links and foreign POSIX owners, and never replaces invalid
+existing entries. Creation hardens before no-replace publication. The authenticated listener
+reads this current authority for every CONNECT; absence or invalidity denies admission.
+An explicit first-party apply can recreate a missing token and the live listener follows it
+without restart. Rejected CONNECT requests include a Basic proxy-authentication challenge.
+Temporary cleanup failures warn without replacing a committed result or an earlier error;
+retained temporary entries keep their ACL memo until absence is confirmed. Established tunnels
+are not revoked by this new-connection check.
 
 ### First-party model bindings
 

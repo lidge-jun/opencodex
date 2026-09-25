@@ -23,7 +23,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 自动上下文压缩阈值（默认 `829800`）；仅在启用自动上下文时注入 |
 | `ANTHROPIC_MODEL` | `claudeCode.model`（可选） |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel`（可选，也包括旧版 `ANTHROPIC_SMALL_FAST_MODEL`） |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（可选） |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（以订阅方式启动且未设置时为原生 `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]`） |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 启用 `alwaysEnableEffort` 时设为 `1`（条件注入） |
 | `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入，默认关闭） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
@@ -304,6 +304,8 @@ v1 别名按字面解码（历史上 model ID 中包含的两字符序列 `~s` /
 `ANTHROPIC_MODEL`、四个 `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL`，以及旧版
 `ANTHROPIC_SMALL_FAST_MODEL`。有效 Haiku 值为 `tierModels.haiku ?? smallFastModel`，并会
 提供给两个 Haiku 变量。
+
+以订阅模式启动 `ocx claude` 时，Claude Code 自身的登录会把 `claude-sonnet-5` 这类裸 Claude ID 直接发送给 Anthropic，因此无论其他提供方为同一 ID 列出什么，这些 ID 的上下文窗口都取自提供方注册表。未设置的 Opus、Sonnet 或 Fable 槽位会填入 Claude Code 为该别名解析出的原生 ID，并带上 `[1m]` 标记，因为在网关之后，Claude Code 会把不带标记的 ID 按 200k 计算。上限低于 1M 的 `anthropic` 行或 `claudeCode.modelMap` 条目会让对应 ID 保持无标记，Haiku 永远不会被填入或标记。以代理认证启动或关闭 `nativePassthrough` 时，由路由器决定，只有路由行的窗口生效。系统环境和 shell 文件会让未设置的槽位保持为空，因为它们的值也会传到经由 hub 的启动。
 
 当 `tierModels.haiku` 和 `smallFastModel` 均未设置时，OpenCodex 会让两个辅助模型变量保持未设置；随后 Claude Code 会选择其原生辅助模型（目前为 Sonnet），并可能产生原生提供方费用。
 
