@@ -266,7 +266,7 @@ combo 会存储在顶层的 `combos` 对象中，并以 combo id 作为键：
 | `targets` | 是 | — | 非空、有顺序的数组，元素为已配置的 `{ provider, model, weight? }` 目标。重复的 provider/model 对会被拒绝。 |
 | `targets[].weight` | 否 | `1` | 1 到 10,000 的整数。`round-robin` 和 `random` 会使用它；`failover`、`least-used` 和 `reset-window` 会忽略它。 |
 | `targets[].lastResort` | 否 | `false` | 标记为仅在紧急情况下使用的目标。未设置 `cooldownWaitPolicy` 时不生效。它不会永久排除该目标：当没有普通目标可用时，仍会照常派发。 |
-| `strategy` | 否 | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"` 或 `"reset-window"`。 |
+| `strategy` | 否 | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、`"reset-window"` 或 `"jev"`。JEV 只决定首个符合条件的目标和 effort；后续尝试由普通 Combo fallback 处理。 |
 | `stickyLimit` | 否 | `1` | 每次 `round-robin` 选择可连续处理 1 到 100 个成功请求。仅适用于 `round-robin`。 |
 | `cooldownMs` | 否 | 未设置 → 上游回退值（请求速率限制代码为 `1302`/`1305` 的 429 为 5 秒，否则为 60 秒） | 1 到 600000 的整数。设置后，只要没有可用的上游 `Retry-After` 或 Codex 重置信号，就会作为每个目标的冷却时间应用，包括请求速率限制 429；未设置时使用上游回退值。 |
 | `waitForCooldownMs` | 否 | `0` | 0 到 600000 的整数。在返回 `combo_unavailable` 前等待最早恢复资格的冷却中目标的最长时间；请求中止会取消等待。 |

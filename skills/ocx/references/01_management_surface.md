@@ -475,6 +475,40 @@ JSON mode: `none`.
 
 - Reports desired, effective, keychain trust, the Desktop egress profile, the model count and a reason with the next command to run.
 
+### `ocx api protocols`
+
+Read the protocol contract version, API surfaces, protocol settings and feature vocabulary.
+
+| Method | Route |
+|---|---|
+| GET | `/api/protocols` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--provider` | string | Add one configured provider's upstream wire and who decided it. |
+| `--json` | boolean | Emit the GET /api/protocols body. |
+
+JSON mode: `payload`.
+
+### `ocx api explain`
+
+Preview the request path a model would take from one inbound API, computed from config.
+
+| Method | Route |
+|---|---|
+| POST | `/api/protocols/plan` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--model` | string | Model selector as a client would send it. |
+| `--inbound` | string | Inbound API: responses, chat or messages. |
+| `--feature` | string | Request feature key to judge; repeatable or comma-separated. |
+| `--json` | boolean | Emit the ProtocolPlanV1 preview. |
+
+JSON mode: `payload`.
+
+- A read-only POST: nothing is sent upstream, no combo state advances and the input is not logged.
+
 ## State-changing capabilities
 
 Each of these writes. Check the flags column before running one unattended.
@@ -1064,8 +1098,29 @@ JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 
+### `ocx api policy`
+
+Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.
+
+| Method | Route |
+|---|---|
+| GET | `/api/protocols` |
+| PATCH | `/api/protocols/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--messages` | string | Open or close the Messages API: on or off. Off also turns the Claude integration off. |
+| `--unrepresentable` | string | legacy keeps today's behavior; reject refuses a request its path cannot carry. |
+| `--rollout` | string | One switch as name=on or name=off; repeatable. Every switch defaults off. |
+| `--json` | boolean | Emit the resulting GET /api/protocols body. |
+
+JSON mode: `payload`.
+
+- A bare invocation reads and never writes.
+- A setting flag changes the operator's config; run it only when the operator asks for that change.
+
 ## Counts
 
-- declared capabilities: 60
-- of those, state-changing: 32
+- declared capabilities: 63
+- of those, state-changing: 33
 - head-resolved invocations: 2

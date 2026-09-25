@@ -592,6 +592,8 @@ so wrong types and unknown nested fields are rejected rather than silently saved
 when the server process creates its serve options and therefore requires restart; it adds no setting
 to the live `/api/settings` mutation surface.
 
+`apiSurfaces` and `protocols` on `src/types/config.ts` are parsed by `src/protocols/settings.ts` only; [Protocol Paths](data-planes/protocol-paths.md#settings) owns their schema handling, meaning and the one writer (`PATCH /api/protocols/settings`), including why closing Messages also writes `claudeCode.enabled` through `commitClaudeCodeBlock` (`src/claude/claude-code-block.ts`, the sentinel-stamping block writer every management route uses).
+
 Stored Direct substitution follows the [credential identity contract](providers/openai-accounts.md#sidecars-management-and-ui): both synchronous and asynchronous materializers discard the caller account header before applying the stored credential; ordinary native Direct passthrough is unchanged.
 
 Proxy activation and credential-safe CLI output follow [Proxy Configuration](config-proxy.md).

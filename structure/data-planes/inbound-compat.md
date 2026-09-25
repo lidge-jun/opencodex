@@ -1,5 +1,8 @@
 # Inbound Compatibility Surfaces
 
+The names used for these paths (native, translated, legacy bridge) and the declared per-feature
+dispositions are owned by [Protocol Paths](protocol-paths.md).
+
 Native result continuations and function-result injection follow [the mode-specific result and control contract](../transports/streaming-health.md#experimental-native-function-result-injection); this surface does not infer upstream support or alter its defaults.
 
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
@@ -111,7 +114,13 @@ responses-wire upstreams; the responses-lane assembly for chat-wire upstreams ke
 attempt telemetry only.
 
 Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
-or storage semantics retain the existing Chat -> Responses -> Chat bridge.
+or storage semantics retain the existing Chat -> Responses -> Chat bridge. With
+`protocols.rollout.directEncoders` on, the response half of that bridge is skipped for a single
+non-Responses route: adapter delivery encodes the adapter events straight into Chat (or, on the
+Messages ingress, Anthropic) frames and marks the response, and the ingress returns it without
+the Responses-to-client conversion. The client-visible frames are the converter's; see
+[Protocol Paths](protocol-paths.md#direct-client-encoders) and
+[`responses.md`](../transports/responses.md#direct-client-encoders).
 On its streaming return path, typed `response.heartbeat` events become SSE comment-line
 keepalives. They preserve connection liveness without adding a Chat completion chunk, changing
 usage, or claiming semantic progress; see the

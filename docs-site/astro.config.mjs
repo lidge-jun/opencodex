@@ -102,6 +102,7 @@ export default defineConfig({
             { label: "Desktop App", translations: { fr: "Application de bureau", ko: "데스크톱 앱", "zh-CN": "桌面应用", "zh-TW": "桌面 App", ru: "Настольное приложение", ja: "デスクトップアプリ", tr: "Masaüstü Uygulaması" }, slug: "guides/desktop-app" },
             { label: "Model Ordering", translations: { fr: "Ordre des modèles", ko: "모델 정렬에 관하여", "zh-CN": "模型排序", "zh-TW": "模型排序", ru: "Сортировка моделей", ja: "モデルの並び順", tr: "Model Sıralaması" }, slug: "guides/model-ordering" },
             { label: "Combos", translations: { fr: "Combinaisons", ko: "콤보", "zh-CN": "组合", "zh-TW": "組合", ru: "Комбо", ja: "コンボ", tr: "Kombolar" }, slug: "guides/combos" },
+            { label: "Protocol Paths", translations: { fr: "Chemins de protocole", ko: "프로토콜 경로", "zh-CN": "协议路径", "zh-TW": "協定路徑", ru: "Пути протоколов", ja: "プロトコル経路", tr: "Protokol Yolları" }, slug: "guides/protocol-paths" },
             { label: "Claude Code", translations: { fr: "Claude Code", ko: "Claude Code", "zh-CN": "Claude Code", "zh-TW": "Claude Code", ru: "Claude Code", ja: "Claude Code", tr: "Claude Code" }, slug: "guides/claude-code" },
             { label: "Grok Build", translations: { fr: "Grok Build", ko: "Grok Build", "zh-CN": "Grok Build", "zh-TW": "Grok Build", ru: "Grok Build", ja: "Grok Build", tr: "Grok Build" }, slug: "guides/grok-build" },
             { label: "opencode", translations: { fr: "opencode", ko: "opencode", "zh-CN": "opencode", "zh-TW": "opencode", ru: "opencode", ja: "opencode", tr: "opencode" }, slug: "guides/opencode" },

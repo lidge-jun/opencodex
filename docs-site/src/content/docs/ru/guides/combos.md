@@ -290,7 +290,7 @@ Combo хранятся в объекте верхнего уровня `combos`,
 | `targets` | Yes | — | Непустой упорядоченный массив настроенных целей `{ provider, model, weight? }`. Дубли пар provider/model запрещены. |
 | `targets[].weight` | No | `1` | Целое число от 1 до 10 000. Используется стратегиями `round-robin` и `random`; игнорируется стратегиями `failover`, `least-used` и `reset-window`. |
 | `targets[].lastResort` | Нет | `false` | Помечает цель как резервную, только для аварийных случаев. Не действует, пока не задан `cooldownWaitPolicy`. Никогда не исключает цель навсегда: если ни одна обычная цель недоступна, она используется как обычно. |
-| `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"` или `"reset-window"`. |
+| `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"` или `"jev"`. JEV выбирает только первую подходящую цель и effort; последующие попытки выполняет обычный fallback Combo. |
 | `stickyLimit` | No | `1` | Целое число от 1 до 100 успешных запросов на один выбор `round-robin`. Применяется только к `round-robin`. |
 | `cooldownMs` | No | не задано → fallback upstream (5 с для rate-limit 429 с кодами `1302`/`1305`, иначе 60 с) | Целое число от 1 до 600000. Если задано, применяется как cooldown каждой цели, когда нет пригодного upstream `Retry-After` или сигнала сброса Codex, включая rate-limit 429; если не задано, используется fallback upstream. |
 | `waitForCooldownMs` | No | `0` | Целое число от 0 до 600000. Максимальное время ожидания самой ранней подходящей цели в cooldown перед возвратом `combo_unavailable`; отмена запроса отменяет ожидание. |

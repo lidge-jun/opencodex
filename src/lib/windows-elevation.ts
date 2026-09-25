@@ -253,12 +253,15 @@ export const OCX_ELEVATED_UAC_CANCELLED = 1223;
 /**
  * The elevated process could not read a staged payload (#4692).
  *
- * `hardenSecretPath` grants the staging account and strips inheritance, so a split-token
- * elevation of the same user reads the file and an elevation answered with a DIFFERENT
- * administrator's credentials does not. The elevated side cannot explain that itself: it
- * runs hidden, so its stderr goes nowhere and only the exit code survives the boundary.
- * Without a code of its own the operator would be told "exit code 1" for a cause that
- * names its own remedy — the same undiagnosable failure this change set exists to remove.
+ * The staged ACL grants the staging account plus read for SYSTEM and
+ * BUILTIN\Administrators (#4779), so both a split-token elevation and an
+ * over-the-shoulder one answered with a different administrator's credentials
+ * can open it. A residual read failure means the hardening did not take effect
+ * or the payload was replaced. The elevated side cannot explain that itself: it
+ * runs hidden, so its stderr goes nowhere and only the exit code survives the
+ * boundary. Without a code of its own the operator would be told "exit code 1"
+ * for a cause that names its own remedy — the same undiagnosable failure this
+ * change set exists to remove.
  *
  * Deliberately outside OCX_ELEVATED_PROTOCOL_CODES: that list is the create-and-run
  * transaction's alphabet, and this code belongs to the registration path.

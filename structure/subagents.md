@@ -190,7 +190,10 @@ fixed-order tuple of every addressing field (scope, parent thread, message type,
 recipient, sender, ciphertexts) rather than a delimiter-joined string, so no field content can shift
 a boundary. One fixed-endpoint request forwards separate parts, and assignment
 replacement compares the complete original item snapshot before splicing the run. Recovery output
-is model-transcribed plaintext, not cryptographic fidelity proof, and no internal outage retry is added.
+is model-transcribed plaintext, not cryptographic fidelity proof. An opt-in `retries` bound — off
+by default and capped at two extra sends — re-issues the same admitted request only on a transient
+upstream status or a transport failure, inside the same deadline and shared flight; terminal
+statuses, invalid output, and budget exhaustion keep the bounded refusal reasons unchanged.
 Recovery recognises all four codex-rs message types (NEW_TASK, MESSAGE, FOLLOWUP_TASK,
 FINAL_ANSWER); a FINAL_ANSWER envelope may omit the Task name line, in which case the
 structured recipient is not cross-checked because the envelope names no recipient, and

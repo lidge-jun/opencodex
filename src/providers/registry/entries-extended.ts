@@ -118,6 +118,21 @@ import {
 
 export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
   {
+    // Verified 2026-09-21: docs.typesafe.ai/introduction/quickstart and /api document the fixed
+    // endpoint, Bearer auth, jev-latest, and TYPESAFE_API_KEY; typesafe.ai/legal/mca permits API integration.
+    id: "jev",
+    label: "TypeSafe JEV",
+    baseUrl: "https://api.typesafe.ai/v1/systemone",
+    adapter: "jev-decision",
+    authKind: "key",
+    credentialOnly: true,
+    dashboardUrl: "https://console.typesafe.ai",
+    liveModels: false,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    note: "TypeSafe JEV decision service for the optional JEV Combo strategy. This credential-only preset does not publish a directly routable model.",
+  },
+  {
     id: "baseten",
     label: "Baseten Model APIs",
     baseUrl: "https://inference.baseten.co/v1",

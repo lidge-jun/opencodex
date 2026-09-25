@@ -34,6 +34,13 @@ import {
   describeElevatedRegistrationFailure,
 } from "../../src/service";
 import type { WindowsSchedulerInstallVerification } from "../../src/service";
+import {
+  hardenSecretDir,
+  hardenSecretPath,
+  resetHardenedStateForTests,
+  setIcaclsRunnerForTests,
+  setPlatformForTests,
+} from "../../src/lib/windows-secret-acl";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -151,12 +158,89 @@ describe("elevated Task Scheduler payload staging", () => {
     }
   });
 
+  test("the default staging ACL grants read to SYSTEM and administrators; secrets stay owner-only", () => {
+    // #4779: an over-the-shoulder UAC prompt answered with a DIFFERENT administrator's
+    // credentials produces an elevated token that is not the staging account, so an
+    // owner-only staged payload could not be opened by the elevated process at all.
+    // The payloads are task definitions, not credentials, and their bytes ride a
+    // SHA-256 pinned before UAC — so the staging ACL grants Administrators and SYSTEM
+    // read while every secret call site keeps the owner-only shape.
+    const parent = mkdtempSync(join(tmpdir(), "ocx-elevated-stage-acl-"));
+    const stageDir = join(parent, "private-stage");
+    const secretDir = join(parent, "secret-dir");
+    const secretFile = join(parent, "secret.txt");
+    mkdirSync(secretDir, { mode: 0o700 });
+    writeFileSync(secretFile, "x");
+    const icaclsCalls: string[][] = [];
+    resetHardenedStateForTests();
+    setPlatformForTests("win32");
+    setIcaclsRunnerForTests(args => {
+      icaclsCalls.push(args);
+      return { success: true, exitCode: 0, timedOut: false, stdout: "" };
+    });
+    try {
+      const staged = stageElevatedSchedulerRegistration("<Task />", "<Task />", {
+        createStageDir: () => {
+          mkdirSync(stageDir, { mode: 0o700 });
+          return stageDir;
+        },
+      });
+      try {
+        const grantsFor = (target: string) => icaclsCalls
+          .filter(args => args[0] === target && args.includes("/grant:r"))
+          .map(args => args.slice(args.indexOf("/grant:r") + 1));
+
+        // The staging directory grants owner full control plus read/traverse for
+        // SYSTEM and BUILTIN\Administrators, so an elevated process running as a
+        // different administrator can still open the payloads it contains.
+        const dirAces = grantsFor(stageDir);
+        expect(dirAces).toHaveLength(1);
+        expect(dirAces[0]).toHaveLength(3);
+        expect(dirAces[0]![0]).toMatch(/^\*S-1-5-\d+(-\d+)*:\(OI\)\(CI\)\(F\)$/);
+        expect(dirAces[0]).toContain("*S-1-5-18:(OI)(CI)(RX)");
+        expect(dirAces[0]).toContain("*S-1-5-32-544:(OI)(CI)(RX)");
+
+        // Each payload grants read — never write — to the same elevated principals.
+        for (const payload of [staged.xml, staged.expectedExisting!]) {
+          const fileAces = grantsFor(payload.path);
+          expect(fileAces).toHaveLength(1);
+          expect(fileAces[0]).toHaveLength(3);
+          expect(fileAces[0]![0]).toMatch(/^\*S-1-5-\d+(-\d+)*:\(F\)$/);
+          expect(fileAces[0]).toContain("*S-1-5-18:(R)");
+          expect(fileAces[0]).toContain("*S-1-5-32-544:(R)");
+        }
+      } finally {
+        staged.cleanup();
+      }
+
+      // The widened shape must not leak into the secret API: a real-secret call site
+      // keeps exactly the owner grant and nothing else.
+      icaclsCalls.length = 0;
+      hardenSecretPath(secretFile, { required: true });
+      hardenSecretDir(secretDir, { required: true });
+      const fileAces = icaclsCalls
+        .filter(args => args[0] === secretFile && args.includes("/grant:r"))
+        .map(args => args.slice(args.indexOf("/grant:r") + 1));
+      const dirAces = icaclsCalls
+        .filter(args => args[0] === secretDir && args.includes("/grant:r"))
+        .map(args => args.slice(args.indexOf("/grant:r") + 1));
+      expect(fileAces).toHaveLength(1);
+      expect(fileAces[0]![0]).toMatch(/^\*S-1-5-\d+(-\d+)*:\(F\)$/);
+      expect(dirAces).toHaveLength(1);
+      expect(dirAces[0]).toHaveLength(1);
+      expect(dirAces[0]![0]).toMatch(/^\*S-1-5-\d+(-\d+)*:\(OI\)\(CI\)\(F\)$/);
+    } finally {
+      setPlatformForTests(null);
+      setIcaclsRunnerForTests(null);
+      resetHardenedStateForTests();
+      removeTreeWithRetry(parent);
+    }
+  });
+
   test("an unreadable staged payload is reported with its cause and its remedy", () => {
     // The elevated process runs hidden, so nothing it writes survives and the exit code is
-    // the entire user-facing error. Staging adds exactly one new failure -- the payload is
-    // readable only by the account that created it, so an elevation answered with another
-    // administrator's credentials cannot open it -- and reporting that as a bare number
-    // would reproduce what made #4692 expensive to diagnose in the first place.
+    // the entire user-facing error. Reporting that as a bare number would reproduce what
+    // made #4692 expensive to diagnose in the first place.
     const message = describeElevatedRegistrationFailure(
       "Background service install failed",
       OCX_ELEVATED_STAGING_UNREADABLE,
@@ -164,8 +248,8 @@ describe("elevated Task Scheduler payload staging", () => {
     );
     expect(message).toContain("could not read the staged task definition");
     expect(message).toContain("C:\\Temp\\opencodex-service-stage-aaaaaa");
-    expect(message).toContain("different administrator account");
-    expect(message).toContain("Approve the prompt as the signed-in user");
+    expect(message).toContain("administrators");
+    expect(message).toContain("elevated as an administrator");
     expect(message).not.toMatch(/exit code \d+/);
 
     // Every other code keeps the plain form; this is a named cause, not a catch-all.

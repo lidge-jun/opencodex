@@ -1,4 +1,5 @@
 import { persistCommittedDesktopGateway } from "../../claude/desktop-gateway-state";
+import { commitClaudeCodeBlock } from "../../claude/claude-code-block";
 /**
  * Toggle routes for the integrations that are NOT file-merged clients.
  *
@@ -886,19 +887,13 @@ export async function handleNativeIntegrationRoutes(ctx: ManagementContext): Pro
       } satisfies NativeToggleEnvelope);
     }
 
-    const next = { ...(config.claudeCode ?? {}), enabled };
     /*
-     * Stamp the migration sentinel on every persist of this block, exactly as
-     * PUT /api/claude-code does (agent-settings-routes.ts:1068).
-     *
-     * The migration reads "a claudeCode block with no authMode" as a pre-upgrade
-     * subscriber and pins it to literal subscription. Toggling Claude ON is one
-     * of the two ways a block gets CREATED, so without this the next startServer
-     * would silently convert a user's Auto auth mode into a sticky manual
-     * subscription — a failure that surfaces nowhere near this route.
+     * Same block writer as PUT /api/claude-code: it stamps the migration sentinel.
+     * Toggling Claude ON is one of the two ways a block gets CREATED, so without the
+     * sentinel the next startServer would silently convert a user's Auto auth mode into
+     * a sticky manual subscription — a failure that surfaces nowhere near this route.
      */
-    if (!next.authModeMigratedAt) next.authModeMigratedAt = new Date().toISOString();
-    config.claudeCode = next;
+    commitClaudeCodeBlock(config, { ...(config.claudeCode ?? {}), enabled });
 
     /*
      * `deps.` first: ManagementApiDeps carries this seam so route tests with an

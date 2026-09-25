@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGoogleAdapter } from "../../../src/adapters/google";
+import { summarizeGoogleWireShape } from "../../../src/adapters/google-wire-shape";
 import { chatCompletionsToResponsesBody } from "../../../src/chat/inbound";
 import { bridgeToResponsesSSE, buildResponseJSON } from "../../../src/bridge";
 import { withTestTranslatorBudget } from "../../helpers/translator-budget";
@@ -772,5 +773,34 @@ describe("CCA thought summary provenance and replay", () => {
         ? { type: "thinking_delta", thinking: "thinking" }
         : { type: "reasoning_raw_delta", text: "thinking" });
     }
+  });
+});
+
+describe("google adapter — opening functionCall turn (issue #5008)", () => {
+  // Context compaction can truncate a long history so it opens on an assistant tool call, which
+  // compiles to a model functionCall at contents[0]. Antigravity rejects that with a 400:
+  // "function call turn comes immediately after a user turn or after a function response turn"
+  // (wire-shape class call-turn-opens-request, captured on a real failing session).
+  const truncatedHeadMessages = [
+    { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { cmd: "ls" } }] },
+    { role: "toolResult", toolCallId: "call_1", toolName: "bash", content: "ok", isError: false },
+    { role: "user", content: "next step" },
+  ];
+
+  test("a functionCall-opening request gets a user turn before the first model turn", async () => {
+    const contents = await geminiContents(parsedWith(truncatedHeadMessages));
+
+    expect(contents[0].role).toBe("user");
+    expect(contents[1].role).toBe("model");
+    expect(contents[1].parts.some(p => "functionCall" in p)).toBe(true);
+    expect(contents[2].parts.some(p => "functionResponse" in p)).toBe(true);
+  });
+
+  test("the repaired head reports no call-turn-opens-request ordering violation", async () => {
+    const { body } = await createGoogleAdapter(provider).buildRequest(parsedWith(truncatedHeadMessages));
+    const shape = summarizeGoogleWireShape(JSON.parse(body));
+
+    expect(shape.firstOrderingViolation).toBeNull();
+    expect(shape.orderingViolations).toBe(0);
   });
 });

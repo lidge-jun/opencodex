@@ -333,7 +333,7 @@ Les combos sont stockés dans l'objet `combos` de niveau supérieur, saisi par l
 | --- | --- | --- | --- |
 | `targets` | Oui | — | Tableau ordonné non vide de `{ provider, model, weight? }` cibles configurées. Les paires provider/model en double sont rejetées. |
 | `targets[].weight` | Non | `1` | Entier de 1 à 10 000. Utilisé par `round-robin` et `random` ; ignoré par `failover`, `least-used` et `reset-window`. |
-| `strategy` | Non | `"failover"` | Valeurs autorisées : `"failover"`, `"round-robin"`, `"random"`, `"least-used"` et `"reset-window"`. |
+| `strategy` | Non | `"failover"` | Valeurs autorisées : `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"` et `"jev"`. JEV décide uniquement de la première cible éligible et de l’effort ; le fallback Combo ordinaire gère les tentatives suivantes. |
 | `stickyLimit` | Non | `1` | Nombre entier de 1 à 100 requêtes réussies par sélection à tour de rôle. S’applique uniquement à `round-robin`. |
 | `defaultEffort` | Non | `null` | `low`, `medium`, `high`, `xhigh`, `max` ou `ultra` ; appliqué uniquement lorsque l'appelant omet ses efforts et que la cible annonce son soutien. |
 | `reasoningEffortMode` | Non | `"strict"` | `strict` ou `adaptive` ; choisit l’intersection des capacités et la normalisation par cible. |

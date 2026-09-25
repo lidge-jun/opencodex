@@ -46,13 +46,17 @@ describe("capability table is a leaf data module", () => {
     }
   });
 
-  test("a capability declaring routes marks mutation consistently", () => {
-    // A capability that drives only GETs must not claim to mutate, and one driving a
-    // write must not claim otherwise -- the flag is what --mutating-only filters on.
+  test("a capability declaring routes marks mutation consistently", async () => {
+    // A capability that drives only reads must not claim to mutate, and one driving a
+    // write must not claim otherwise -- the flag is what --mutating-only filters on. The
+    // registry's `mutates` decides, so a read-only POST (`POST /api/protocols/plan`, a
+    // preview that sends nothing) is a read; an undeclared route falls back to its method.
+    const { MANAGEMENT_ROUTES } = await import("../../src/server/management/route-registry");
+    const declared = new Map(MANAGEMENT_ROUTES.map(r => [`${r.method} ${r.path}`, r.mutates] as const));
     const wrong: string[] = [];
     for (const cap of CAPABILITIES) {
       if (cap.routes.length === 0) continue;
-      const anyWrite = cap.routes.some(r => r.method !== "GET");
+      const anyWrite = cap.routes.some(r => declared.get(`${r.method} ${r.path}`) ?? r.method !== "GET");
       if (anyWrite !== cap.mutates) wrong.push(capabilityInvocation(cap));
     }
     expect(wrong).toEqual([]);
