@@ -156,6 +156,9 @@ There is a second live-mode edge: `persistDesktopModeMarker` at native routes li
 +  });
 +  if (outcome.status === "unavailable") return false;
 +  adoptPersistedClaudeCode(config, outcome.value);
++  // The mode marker IS the committed transaction (same reason as desktop-gateway-state.ts:37-41):
++  // without an armed baseline the three-way adopt keeps a stale live desktopMode, so pin the leaf.
++  recordClaudeDesktopMode(config, desktopMode);
 +  return true;
  }
 @@
@@ -532,3 +535,13 @@ Append to the native-integrations row/paragraph of `structure/gui-and-management
 > After `PUT /api/native-integrations/claude-desktop` persists its intent, and whenever the Desktop mode marker is
 > persisted, the route adopts the committed state into the running server config, because the Claude intercept's
 > per-request first-party callback reads that live object; a failed write leaves it unchanged.
+
+
+## wp3 A amendment (security audit): pin the committed Desktop mode on the live config
+
+`persistDesktopModeMarker` now calls `recordClaudeDesktopMode(config, desktopMode)` after `adoptPersistedClaudeCode`
+(diff above), mirroring `src/claude/desktop-gateway-state.ts:37-41`. Test added to
+`tests/codex-integration/native-claude-desktop-toggle.test.ts`: start from a live config with `claudeCode.desktopMode: "gateway"`
+and a persisted config whose resolved mode is first-party (the existing first-party ON fixture), PUT
+`/api/native-integrations/claude-desktop {enabled:true}` through the same `inputConfig` identity, and assert
+`live.claudeCode?.desktopMode === "first-party"` and `firstPartyDesired(live).desktop === true` after the 200.
