@@ -815,6 +815,7 @@
     "cursor-native-exec-common.test.ts": "providers/cursor",
     "cursor-native-exec-policy.test.ts": "providers/cursor",
     "cursor-native-exec-shell.test.ts": "providers/cursor",
+    "cursor-foreground-shell.test.ts": "providers/cursor",
     "cursor-native-exec.test.ts": "providers/cursor",
     "cursor-oauth-shell.test.ts": "providers/cursor",
     "cursor-oauth.test.ts": "providers/cursor",

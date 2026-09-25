@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolve } from "node:path";
+import { runForegroundShell, type CursorForegroundShellOwner } from "./native-foreground-shell";
 import { create } from "@bufbuild/protobuf";
 import {
   BackgroundShellSpawnErrorSchema,
@@ -178,7 +179,11 @@ export function rejectShellStreamExecForPolicy(execMsg: ExecServerMessage, hint?
   ];
 }
 
-export async function shellStreamExec(execMsg: ExecServerMessage): Promise<Uint8Array[]> {
+export async function shellStreamExec(
+  execMsg: ExecServerMessage,
+  owner?: CursorForegroundShellOwner,
+  signal?: AbortSignal,
+): Promise<Uint8Array[]> {
   if (execMsg.message.case !== "shellStreamArgs") throw new Error("invalid shell stream exec");
   const args = execMsg.message.value;
   const cwd = resolve(args.workingDirectory || process.cwd());
@@ -188,36 +193,13 @@ export async function shellStreamExec(execMsg: ExecServerMessage): Promise<Uint8
       event: { case: "start", value: create(ShellStreamStartSchema, { sandboxPolicy: args.requestedSandboxPolicy }) },
     })),
   ];
-  const result = await new Promise<{ stdout: string; stderr: string; code: number; aborted: boolean }>(resolvePromise => {
-    const child = spawn(args.command, { cwd, shell: true });
-    let stdout = "";
-    let stderr = "";
-    let aborted = false;
-    const timeout = setTimeout(() => {
-      aborted = true;
-      child.kill();
-    }, args.hardTimeout || 120_000);
-    child.stdout.on("data", chunk => {
-      stdout += String(chunk);
-    });
-    child.stderr.on("data", chunk => {
-      stderr += String(chunk);
-    });
-    child.on("close", code => {
-      clearTimeout(timeout);
-      resolvePromise({ stdout, stderr, code: code ?? 1, aborted });
-    });
-    child.on("error", err => {
-      clearTimeout(timeout);
-      resolvePromise({ stdout, stderr: stderr + errorText(err), code: 1, aborted });
-    });
-  });
-  if (result.stdout) {
+  const result = await runForegroundShell(args.command, cwd, args.hardTimeout, owner, signal);
+  if (result.stdout && !result.aborted) {
     replies.push(execBytes(execMsg, "shellStream", create(ShellStreamSchema, {
       event: { case: "stdout", value: create(ShellStreamStdoutSchema, { data: result.stdout }) },
     })));
   }
-  if (result.stderr) {
+  if (result.stderr && !result.aborted) {
     replies.push(execBytes(execMsg, "shellStream", create(ShellStreamSchema, {
       event: { case: "stderr", value: create(ShellStreamStderrSchema, { data: result.stderr }) },
     })));
@@ -237,7 +219,7 @@ export async function shellStreamExec(execMsg: ExecServerMessage): Promise<Uint8
             command: args.command,
             workingDirectory: cwd,
             exitCode: result.code,
-            signal: "",
+            signal: result.signal,
             stdout: result.stdout,
             stderr: result.stderr,
             executionTime: Date.now() - started,
@@ -251,7 +233,7 @@ export async function shellStreamExec(execMsg: ExecServerMessage): Promise<Uint8
             command: args.command,
             workingDirectory: cwd,
             exitCode: result.code,
-            signal: "",
+            signal: result.signal,
             stdout: result.stdout,
             stderr: result.stderr,
             executionTime: Date.now() - started,

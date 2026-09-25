@@ -20,7 +20,16 @@ approval and sandbox path. `nativeLocalExec: "on"` is the explicit config-owner 
 local experiments; `off` and the backwards-compatible `codex-sandbox` spelling both fail closed.
 MCP, screen recording, and computer-use stay on their separate explicit executor/MCP config paths.
 
+An opted-in foreground `shellStreamArgs` command belongs to exactly one live transport. On POSIX,
+the transport starts it in an owned process group, retains at most 1 MiB across raw stdout and
+stderr, and tears the group down on request abort, timeout, stream end/reset/error, or transport
+close. Teardown uses a bounded TERM-to-KILL ladder and drains or destroys pipes before settlement;
+aborted output is returned once as a bounded typed failure rather than duplicated into stream
+frames. Windows refuses this experimental foreground operation until a job-object owner can prove
+descendant cleanup. Background shell admission and its longer-lived registry remain separate.
+
 > Decision record: [ADR-0047](../decisions/ADR-0047-cursor-native-exec.md)
+> Foreground ownership record: [ADR-0105](../decisions/ADR-0105-cursor-foreground-shell-ownership.md)
 
 Cursor's generic tool-use prompt filter must preserve every Responses-owned execution-path tool
 that survives the transport budget: unified Desktop `exec` as well as the legacy
