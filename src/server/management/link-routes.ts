@@ -11,9 +11,13 @@ import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, readLinkStore, writeLinkStore, type LinkStore } from "../../link/store";
 import { createSshRunner, type SshRunner } from "../../link/ssh-runner";
 import { projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
+import { isLinkPort } from "../../link/ports";
+import { joinHome, type ClientLinkJoinDeps } from "../../client/link-join";
+import { clientLinkTunnelStatus } from "../../client/link-tunnel";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { issueApiKeyInProcess, revokeApiKeyInProcess, type IssuedApiKey } from "./oauth-account-routes";
+import { acceptSystemRestart } from "./system-restart";
 
 const PROBE_TTL_MS = 5 * 60_000;
 const APPLY_ADMISSION_TIMEOUT_MS = 15_000;
@@ -48,6 +52,8 @@ export interface LinkRouteState {
 }
 
 const states = new WeakMap<object, LinkRouteState>();
+// One process runs at most one join: a join ends by restarting this process as a client.
+let joinInProgress = false;
 
 function fail(code: string, message: string, status: number): Response {
   return Response.json({ error: { code, message } }, { status, headers: { "cache-control": "no-store" } });
@@ -327,7 +333,7 @@ async function apply(ctx: ManagementContext, state: LinkRouteState): Promise<Res
 
 async function issue(ctx: ManagementContext): Promise<Response> {
   const body = exactBody(await readManagementJsonBodyOr(ctx.req, null), ["alias", "tunnelPort"]);
-  if (!body || typeof body.alias !== "string" || !port(body.tunnelPort)) return fail("invalid_body", "alias and tunnelPort are required.", 400);
+  if (!body || typeof body.alias !== "string" || !isLinkPort(body.tunnelPort)) return fail("invalid_body", "alias and tunnelPort are required.", 400);
   try { assertSshAlias(body.alias); } catch { return fail("invalid_alias", "alias must be a valid SSH host alias.", 400); }
   let issued: IssuedApiKey;
   try { issued = issueKey(ctx, `link:${body.alias}`); }
@@ -362,6 +368,53 @@ async function issue(ctx: ManagementContext): Promise<Response> {
   } catch {
     const compensation = await compensateNewLink(ctx, state, record);
     return compensation ?? fail(failureCode, failureCode === "listener_unavailable" ? "The link listener is unavailable." : "The link could not be issued.", 503);
+  }
+}
+
+type LinkJoinRouteOverrides = {
+  joinHome?: typeof joinHome;
+};
+
+function joinRouteOverrides(ctx: ManagementContext): LinkJoinRouteOverrides {
+  return ctx.deps as ManagementApiDepsWithJoinOverrides;
+}
+
+type ManagementApiDepsWithJoinOverrides = ManagementContext["deps"] & LinkJoinRouteOverrides;
+
+function joinFailure(error: unknown): Response {
+  const code = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
+  switch (code) {
+    case "host_not_confirmed": return fail("host_not_confirmed", "Confirm the SSH host before joining the link.", 409);
+    case "host_confirmation_expired": return fail("host_confirmation_expired", "The SSH host confirmation has expired.", 409);
+    case "join_port_failed": return fail("join_port_failed", "No local port is available for the link tunnel.", 503);
+    case "join_issue_failed": return fail("join_issue_failed", "The home could not issue a link.", 502);
+    case "join_tunnel_failed": return fail("join_tunnel_failed", "The SSH tunnel to the home did not become ready.", 502);
+    case "admission_failed": return fail("admission_failed", "The home refused the issued link key.", 502);
+    default: return fail("join_connect_failed", "The client link join could not be completed.", 502);
+  }
+}
+
+async function handleJoin(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
+  const body = exactBody(await readManagementJsonBodyOr(ctx.req, null), ["alias"]);
+  if (!body || typeof body.alias !== "string") return fail("invalid_body", "alias is required.", 400);
+  try { assertSshAlias(body.alias); } catch { return fail("invalid_alias", "alias must be a valid SSH host alias.", 400); }
+  if (joinInProgress) return fail("join_in_progress", "A link join is already in progress.", 409);
+  joinInProgress = true;
+  try {
+    const confirmed = state.confirmedHosts?.get(body.alias);
+    const overrides = joinRouteOverrides(ctx);
+    const deps: ClientLinkJoinDeps = {
+      runner: runnerFor(ctx),
+      knownHostsFile: knownHostsFile(ctx),
+      scheduleRestart: () => { acceptSystemRestart(); },
+      ...(confirmed ? { confirmedHost: confirmed } : {}),
+    };
+    const result = await (overrides.joinHome ?? joinHome)(deps, { alias: body.alias });
+    return Response.json({ linkId: result.linkId, alias: body.alias, restarting: true }, { status: 202 });
+  } catch (error) {
+    return joinFailure(error);
+  } finally {
+    joinInProgress = false;
   }
 }
 
@@ -412,6 +465,14 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
   const path = url.pathname;
   if (!isLinkPath(path)) return null;
   if (ctx.guiSessionIssuance === "tailscale-identity") return fail("tailscale_session_refused", "Tailscale identity sessions cannot use link routes.", 403);
+  if (url.pathname === "/api/link/join" && req.method === "POST") {
+    const denied = auth(ctx, "dashboard");
+    if (denied) return denied;
+    if ((ctx.config.runtimeRole ?? "standalone") !== "standalone") return fail("standalone_required", "Client initiated links require standalone runtime mode.", 409);
+    const state = suppliedState ?? stateFor(ctx);
+    if (!state) return fail("link_unavailable", "The link lifecycle is unavailable.", 503);
+    return handleJoin(ctx, state);
+  }
   const state = suppliedState ?? stateFor(ctx);
   if (!state) return fail("link_unavailable", "The link lifecycle is unavailable.", 503);
   if (url.pathname === "/api/link/status" && req.method === "GET") {
@@ -419,7 +480,10 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     if (denied) return denied;
     const store = readStoreFor(ctx);
     const listenerStatus = state.listener.status();
-    const dto: LinkStatusDto = projectLinkStatus(store, state.supervisor.status(), listenerStatus, ctx.config, readCompensation());
+    const dto: LinkStatusDto = projectLinkStatus(
+      store, state.supervisor.status(), listenerStatus, ctx.config, readCompensation(),
+      ctx.config.runtimeRole === "client" ? clientLinkTunnelStatus() : null,
+    );
     for (const link of dto.links) {
       const failure = state.compensationFailures?.get(link.id);
       if (failure) Object.assign(link, { state: "failed" as const, since: failure.since, reason: failure.reason });
