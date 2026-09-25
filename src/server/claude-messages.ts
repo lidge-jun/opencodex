@@ -61,6 +61,7 @@ import {
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
 import { featuresFromMessagesBody } from "../protocols/features";
+import { resolveApiSurfaceSettings } from "../protocols/settings";
 import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
 import {
   isApiAuthRequired,
@@ -151,11 +152,19 @@ export function buildClaudeReplayConfig(config: OcxConfig): OcxConfig {
   };
 }
 
+/**
+ * Messages exposure, shared by /v1/messages and /v1/messages/count_tokens so the two can never
+ * disagree. `resolveApiSurfaceSettings` is the only reader: an explicit
+ * `apiSurfaces.messages.enabled` wins, a malformed one closes the surface, and absence inherits
+ * `claudeCode.enabled`.
+ */
 function claudeInboundDisabled(config: OcxConfig): Response | null {
-  if (config.claudeCode?.enabled === false) {
-    return anthropicErrorResponse(403, "Claude inbound is disabled (GUI: Claude ON toggle / config.claudeCode.enabled)", "permission_error");
-  }
-  return null;
+  const messages = resolveApiSurfaceSettings(config).messages;
+  if (messages.enabled) return null;
+  const detail = messages.source === "invalid"
+    ? "config.apiSurfaces.messages is not a valid setting, so the surface stays closed"
+    : "GUI: API page Messages toggle / config.apiSurfaces.messages.enabled / config.claudeCode.enabled";
+  return anthropicErrorResponse(403, `Messages API is disabled (${detail})`, "permission_error");
 }
 
 async function readAnthropicBody(req: Request, budget: TranslatorBudget, maxBytes: number): Promise<unknown> {
