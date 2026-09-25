@@ -159,6 +159,7 @@
   "protocol-features.test.ts": "responses",
   "protocol-baseline.test.ts": "responses",
   "protocol-dto.test.ts": "responses",
+  "protocol-path.test.ts": "responses",
   "chat-inbound-reasoning-none.test.ts": "responses",
   "chat-native-decline-reason.test.ts": "responses",
   "chat-inbound-reasoning-replay.test.ts": "responses",
