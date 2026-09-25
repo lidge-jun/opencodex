@@ -23,7 +23,9 @@ Existing spellings keep their names and map through explicit functions in the sa
 `nativeChatDeclineReason` in `src/server/chat-native-eligibility.ts` names, as one of these
 reason codes, the first rule that keeps a Chat request off the native Chat lane;
 `isNativeChatRouteEligible` is defined as "no reason", so the lane decision and the reason a plan
-or trace reports cannot disagree.
+or trace reports cannot disagree. `nativeMessagesDeclineReason` in
+`src/server/messages-native-eligibility.ts` does the same for the managed native Messages lane
+(below).
 
 `contract.ts`, `src/protocols/features.ts`, `src/protocols/baseline.ts`,
 `src/protocols/path.ts`, `src/protocols/dto.ts`, `src/protocols/plan.ts` and `src/protocols/guard.ts` are leaf modules: the dashboard imports them directly, so they import
@@ -59,7 +61,8 @@ path the protocol-first-class work targets. Today Chat to Chat and Responses to 
 native, Chat and Messages reach a Responses upstream through their codec directly, and every
 other Chat or Messages pair (including Messages to a proxy-managed Anthropic key) travels through
 `responses-internal`; every routed Chat or Messages path streams internally and folds for a
-non-streaming client. No target cell contains `responses-internal`.
+non-streaming client. No target cell contains `responses-internal`. `current` describes the
+default configuration, with every rollout switch off.
 `tests/responses/protocol-baseline.test.ts` pins both sides.
 
 ## Plan and trace shapes
@@ -75,8 +78,8 @@ exposes, within fixed limits, and both validators reject anything that is not ex
 `src/protocols/trace.ts` is server side and is not a leaf. The Chat Completions ingress
 (`src/server/chat-completions.ts`) marks the lane it chose, the reason code that declined the
 native lane, and the request's features; the Messages ingress (`src/server/claude-messages.ts`)
-marks caller-forward passthrough as the native lane, the translated path as the bridge, and a
-disabled surface or a compatibility reject as blocked. The Responses ingress needs no mark: its
+marks caller-forward passthrough and the managed native lane as native, the translated path as
+the bridge, and a disabled surface or a compatibility reject as blocked. The Responses ingress needs no mark: its
 path follows the final adapter's wire. Marks live in WeakMaps keyed by the request log context
 and the live attempt objects, and no mark function throws into the request.
 
@@ -112,7 +115,10 @@ candidate's wire is settled the way the ingress settles it (`captureRouteStaticP
 original inbound, then `resolveWireProtocolOverride`), and a Chat candidate's native lane is judged
 by `nativeChatDeclineReason` against a structural body built from the requested features. With
 `nativeChatCombos` on, a combo's candidates are judged as the concrete routes they are, as the
-combo loop judges them; policy candidates keep `combo-or-policy-route`. Messages
+combo loop judges them; policy candidates keep `combo-or-policy-route`. With
+`protocols.rollout.managedMessagesNative` on, a Messages candidate is judged the same way by
+`nativeMessagesDeclineReason`; with it off Messages candidates carry no decline reason, exactly as
+before the lane existed. Messages
 caller-forward passthrough depends on the caller's own credential, so it is reported as
 `caller-credential-required` and never assumed. The OpenCode Go session-lane transport is not
 modelled. `tests/responses/protocol-plan-snapshot.test.ts` pins the no-side-effect property against
@@ -141,7 +147,8 @@ hop (the internal Responses body) still does.
 Only when `resolveProtocolSettings(config).unrepresentable === "reject"` do the Chat and Messages
 ingresses build an envelope and run the guard, after the route and its wire settle and before the
 request is sent: Chat on the native path when the native lane was chosen, otherwise on the
-bridge path to the settled adapter's wire; Messages on the bridge path. Combo and policy routes
+bridge path to the settled adapter's wire; Messages on the native path when the managed native
+lane was chosen, otherwise on the bridge path. Combo and policy routes
 and an unroutable model are not judged at ingress; with `nativeChatCombos` on, a Chat combo's
 candidates are judged one by one inside the combo loop (below). A refusal answers 400 in the ingress's own
 error shape (Chat `invalid_request_error` / `unsupported_feature`; Anthropic
@@ -199,6 +206,47 @@ per candidate. Policy routes select a single candidate in the router and stay on
 transport side (send budget, failover, logging) is in
 [Responses transport](../transports/responses.md#native-chat-candidates-in-combos).
 
+## Managed native Messages
+
+Behind `protocols.rollout.managedMessagesNative` (default off). A Messages request whose settled
+route is a direct, key-auth `anthropic` provider is sent as Messages instead of replaying through
+Responses. `nativeMessagesDeclineReason` names the first rule that keeps a route off the lane:
+`rollout-disabled`, `cross-wire-ir` (another adapter), `auth-mode-not-native` (OAuth, which is
+PF-10, or `forward`), `combo-or-policy-route`, `effort-row` / `fast-row` (synthetic rows need the
+adapter's wire rewrite), `vision-preprocessing` (an image for a model declared unable to read
+it). The ingress, `count_tokens` and the planner all ask it.
+
+`src/server/claude-messages.ts` decides the lane after the route and its wire settle and after the
+managed-client steps already applied to the body (alias/modelMap resolution, `ocx-route`, effort
+directives). The caller-forward passthrough is decided earlier, on the caller's own credential,
+and returns before this point; the two branches share no credential and no header. The body sent
+is `envelope.freshBody()` when a source envelope exists, otherwise the ingress's own body.
+`src/server/messages-native.ts` is imported lazily, only for an eligible route.
+
+`buildAnthropicMessagesPassthroughRequest` in `src/adapters/anthropic/passthrough.ts` builds the
+request from that body: the top-level allowlist (`model, messages, system, max_tokens, metadata,
+stop_sequences, stream, temperature, top_p, top_k, tools, tool_choice, thinking, output_config,
+service_tier`), the wire model, and the URL, `anthropic-version`, client identity and key placement
+the Anthropic adapter uses (`resolveAnthropicMessagesUrl`, `anthropicBaseRequestHeaders`,
+`applyAnthropicKeyAuth`), plus the provider's configured headers. No caller header is read, so the
+caller's `Authorization`, `x-api-key` and `anthropic-beta` never reach the provider; a beta
+allowlist is PF-10. A dropped field has no name in the feature vocabulary, so it records no
+feature effect.
+
+`handleNativeMessages` mirrors native Chat on the shared pieces: `beginInferenceAttempt`,
+`createFinalRequestLog`, the request spend tracker charged per physical send, proactive key
+selection, 401 and 429 key-pool rotation, same-target 429 replay, the reset/transient retry
+policy and `sendWithConnectionPolicy`. Before sending it runs the image normalizer, the image
+guard and the tool-call-id repair the caller-forward passthrough runs. A streaming caller gets the
+upstream SSE relayed byte for byte through `tapAnthropicSseForLog`, which records usage and the
+terminal and applies the body stall and size guards; a non-streaming caller gets the upstream JSON
+(or a folded stream). Upstream errors answer in Anthropic shape with the translated lane's status
+policy (transient 5xx as 529, replay refusals kept non-retryable). `count_tokens` estimates the
+body the builder would send when the route is eligible, and sends nothing.
+`tests/adapters/anthropic/anthropic-messages-passthrough.test.ts`,
+`tests/responses/messages-native-eligibility.test.ts` and
+`tests/claude-integration/messages-native.test.ts` pin the builder, the rule and the lane.
+
 ## Settings
 
 `resolveApiSurfaceSettings` and `resolveProtocolSettings` in `src/protocols/settings.ts` are the
@@ -207,9 +255,11 @@ always served. The Messages surface uses an explicit `apiSurfaces.messages.enabl
 present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
 `protocols.rollout` switch defaults off; the OAuth native-Messages switch is effective only with
-the key-auth one. The Chat and Messages ingresses read the unrepresentable policy (above), and
-`directEncodersApply` reads `directEncoders` on both, and the Chat ingress reads `nativeChatCombos` for
-combo routes (above); no request path reads the other rollout switches yet.
+the key-auth one. The Chat and Messages ingresses read the unrepresentable policy (above);
+`directEncodersApply` reads `directEncoders` on both; the Chat ingress reads `nativeChatCombos`
+for combo routes (above); `managedMessagesNative` is read through `nativeMessagesDeclineReason`
+by the Messages ingress, `count_tokens` and the planner (below). No request path reads the
+other rollout switches yet.
 
 `claudeInboundDisabled` in `src/server/claude-messages.ts` is the Messages ingress reader: both
 `/v1/messages` and `/v1/messages/count_tokens` call it, so the two routes cannot disagree, and a
