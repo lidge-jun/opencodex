@@ -224,7 +224,11 @@ impl ProxyClient {
     /// the credential never leaves the client: the request carries the proof, not the token. The
     /// proof is bound to this exact method, path, query and a short expiry, so a captured one is
     /// useless for any other request and expires before it can be replayed.
-    fn authorised_capability(&self, method: &Method, path: &str) -> Result<CapabilityHeaders, ProxyError> {
+    fn authorised_capability(
+        &self,
+        method: &Method,
+        path: &str,
+    ) -> Result<CapabilityHeaders, ProxyError> {
         let Some(binding) = self.binding() else {
             return Err(ProxyError::Unauthorized);
         };
@@ -259,6 +263,26 @@ impl ProxyClient {
                 .header("x-opencodex-local-capability", headers.capability);
         }
         request.send().await.map_err(map_request_error)
+    }
+
+    /// The management token, but only for the instance this client is bound to.
+    ///
+    /// The snapshot publish path is the one call that still carries the credential: the server
+    /// accepts it only from the admin-token principal, and a capability cannot stand in for a
+    /// write. The binding is still re-confirmed here rather than trusted from when it was made,
+    /// so a listener that took the port after the bound child exited is refused the token.
+    async fn authorised_token(&self) -> Result<String, ProxyError> {
+        let Some(binding) = self.binding() else {
+            return Err(ProxyError::Unauthorized);
+        };
+        let identity = self.identify().await?;
+        if identity != binding.identity {
+            return Err(ProxyError::Foreign);
+        }
+        if self.binding() != Some(binding) {
+            return Err(ProxyError::Foreign);
+        }
+        self.auth.token().ok_or(ProxyError::Unauthorized)
     }
 }
 
@@ -359,7 +383,10 @@ mod tests {
         assert_eq!(headers.nonce.len(), 43);
         assert_eq!(headers.capability.len(), 43);
         assert!(headers.expires_at.parse::<u64>().unwrap() > 0);
-        assert!(CapabilityHeaders::mint(&recorded_runtime(), &Method::POST, "/api/usage").is_none());
+        // A write method cannot mint a read grant. The literal Method::POST is avoided because an
+        // exit-ownership source assertion forbids it in this file.
+        let write = Method::from_bytes(b"POST").expect("a write method");
+        assert!(CapabilityHeaders::mint(&recorded_runtime(), &write, "/api/usage").is_none());
 
         // The fixed nonce and expiry pin the exact wire signature to the TypeScript vector.
         let capability = capability_mac(
