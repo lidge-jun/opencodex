@@ -41,3 +41,19 @@ A hit is fixed by rewriting the unpushed commits.
 `gh pr view <PR> --json headRefOid,statusCheckRollup`, then `gh run list --commit <HEAD>` and
 `gh run view <run> --json event,headSha,attempt,status,conclusion,jobs`. Report run ids, events and
 conclusions; pending, skipped, cancelled and approval-blocked are reported as such, never as passing.
+
+## wp6 P amendment (no-local-suites directive and rebase)
+
+Supersedes the local-gates table above where it names test runs:
+
+1. Rebase `feat/claude-cli-first-party` onto the current `origin/dev` (`git fetch origin dev`, `git merge-tree --write-tree HEAD
+   origin/dev` must report no conflicts first, then `git rebase origin/dev`). The branch is unpublished, so this rewrites
+   nothing anyone has pulled.
+2. Local gates at the rebased head, non-suite only: `bun run typecheck`, `(cd gui && bun x tsc -p tsconfig.app.json --noEmit)`,
+   `bun run lint:gui`, `bun run skill:surface:check`, `bun run structure:check`, `bun run privacy:scan`,
+   `git diff --check origin/dev..HEAD`, plus the account-identifier grep of the push range.
+3. Push, open the PR (template sections; Verification states plainly that local test suites were not run on the maintainer's
+   instruction and lists the static gates, the isolated-server render check, and the hosted CI runs), upload the screenshot
+   to the `pr-assets` branch and link it by commit SHA.
+4. Check = exact-head hosted CI: record run ids, events and conclusions; a failing test job is a real result to fix in a
+   follow-up commit on this branch, never rerun blindly.
