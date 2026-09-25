@@ -14,6 +14,7 @@ import {
   type ApiAuthMatrixRow,
   type ApiEndpointInfo,
   type ApiKeyEntry,
+  type ApiSurfacesInfo,
   type ModelTests,
 } from "../../pages/api-keys-utils";
 import {
@@ -44,6 +45,10 @@ export interface ApiKeysWorkspaceProps {
   keysLoadFailed: boolean;
   endpoints: ApiEndpointInfo;
   claudeCodeEnabled: boolean;
+  /** Per-API state and source; absent from a server that predates surface settings. */
+  surfaces?: ApiSurfacesInfo;
+  /** Reload after the Messages toggle wrote a new setting. */
+  onSurfacesChanged?: () => void;
   localeTag?: string;
   newName: string;
   creating: boolean;
@@ -95,6 +100,8 @@ export default function ApiKeysWorkspace({
   keysLoadFailed,
   endpoints,
   claudeCodeEnabled,
+  surfaces,
+  onSurfacesChanged,
   localeTag,
   newName,
   creating,
@@ -539,7 +546,14 @@ export default function ApiKeysWorkspace({
                   <ClientConfigPanel apiBase={apiBase} baseUrl={endpoints.baseUrl} hasKeys={keys.length > 0} />
                 </div>
                 <div id={sectionAnchorId("api", "endpoints")} className="awi-section-anchor">
-                  <ApiKeysEndpointsPanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} authMatrix={authMatrix} />
+                  <ApiKeysEndpointsPanel
+                    endpoints={endpoints}
+                    claudeCodeEnabled={claudeCodeEnabled}
+                    authMatrix={authMatrix}
+                    surfaces={surfaces}
+                    apiBase={apiBase}
+                    onSurfacesChanged={onSurfacesChanged}
+                  />
                 </div>
                 {/* Reference, then prediction: which path a request would take through the
                     endpoints above. Asked of the server on demand; it sends nothing upstream. */}
