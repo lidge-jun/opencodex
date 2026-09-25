@@ -318,7 +318,7 @@ gui/src/fetch-json.ts:28-43의 error boundary를 따른다.
 | candidate/manual alias probe | POST /api/link/probe | { alias } | 응답 { alias, fingerprint, keyType }을 confirmation view에 고정. ocxVersion은 사용자가 지문을 확인한 뒤 POST /api/link/confirm-host 응답 { alias, fingerprint, ocxVersion }에서만 받아 표시 |
 | fingerprint confirm | POST /api/link/confirm-host | { alias, fingerprint } | 확인된 alias를 apply 단계로 전환 |
 | apply | POST /api/link/apply | { alias } | 즉시 status polling; 성공 toast와 connected row |
-| disconnect | DELETE /api/link/{id} | 없음 | status 재조회; 204/JSON 양쪽의 성공 envelope을 허용 |
+| disconnect | DELETE /api/link/{id} | 없음 | status 재조회; 204/JSON (무효: 감사 반영 Averroes 절 참조) 양쪽의 성공 envelope을 허용 |
 
 확인 전에는 apply를 호출하지 않는다. probe 오류, malformed JSON, 401/403, 409, 5xx는 모두
 localized error와 retry path로 매핑한다. HTTP error message를 logic discriminator로 사용하지 않는다.
@@ -581,13 +581,13 @@ headroom을 계산하지 않고, locale parity와 bun run lint:i18n을 gate로 �
 | fingerprint cancel | confirmation에서 cancel | sheet가 alias step으로 돌아가고 confirm-host/apply 호출 0 |
 | confirm-host 성공 | checkbox + confirm | POST body가 { alias, fingerprint }; apply 전 confirmed view 유지 |
 | confirm-host 실패 | non-2xx | localized confirm error, apply disabled |
-| apply 성공 | apply 201/200 후 status connected | POST { alias }, polling 결과 connected dot/label과 row 생성 |
+| apply 성공 | apply 201/200 (무효: 감사 반영 Averroes 절 참조) 후 status connected | POST { alias }, polling 결과 connected dot/label과 row 생성 |
 | apply timeout/failure | request reject 또는 failed status | failed label, retry visible, silent fallback 없음 |
 | reconnecting | `links[].state = "reconnecting"` | amber label/live region, request action remains disabled or retry-only |
 | reconnecting → connected | next poll connected | green label and connected row |
 | reconnecting → failed | next poll failed | red label and actionable retry |
 | disconnect confirm cancel | confirm dialog negative | DELETE 호출 0, row 유지 |
-| disconnect success | confirm + DELETE 204/JSON | DELETE /api/link/{id}, row 제거, last row면 off state |
+| disconnect success | confirm + DELETE 204/JSON (무효: 감사 반영 Averroes 절 참조) | DELETE /api/link/{id}, row 제거, last row면 off state |
 | disconnect failure | DELETE non-2xx | error notice, row/status 유지 |
 | workspace unavailable | App availability false + #remote-workspace | nav entry와 component가 없고 localized unavailable copy만 표시 |
 | workspace available | App availability true | #remote-workspace nav row와 existing component가 표시 |
@@ -778,5 +778,56 @@ routes and does not weaken them”을 명시한다. MAINTAINERS.md:11의 securit
 
 - 반영 확인(Descartes MISALIGNED 2건):
   - W5-4 확정: App의 효과는 `useEffect(..., [page, sharedSessionReady, sharedBase])`. `sharedSessionReady`가 false면 조회하지 않고 원격 워크스페이스 내비 항목을 숨긴다. 조회 실패도 숨김(가용성 불명 = 비노출). 페이지 이동마다 한 번, 중복 요청은 진행 중 요청을 재사용.
-  - W5-9 확정: 파일 변경 지도에 NEW `gui/scripts/remote-link-fixture.ts` 추가. 계약: `bun gui/scripts/remote-link-fixture.ts --port <n>`이 `gui/dist`를 제공하고, `GET /opencodex-session`·`/api/remote-workspace/status`·`/api/link/status`·`/api/link/candidates`·`POST /api/link/probe`·`/api/link/confirm-host`·`/api/link/apply`에 고정 JSON을 돌려준다. 상태는 URL 쿼리 `?fixture=off|role|home-connected|add-sheet|fingerprint`로 고른다(서버는 Referer 쿼리 또는 쿠키 `ocx-fixture`로 판별). 재현 명령: `cd gui && bun run build && bun scripts/remote-link-fixture.ts --port 5199` 후 agbrowse로 각 상태를 1440×900, 390×844로 캡처. 검증 표에 이 명령과 `bun run lint:i18n`, `bun test tests`, `bun run lint`, `bun run build`, docs-site 빌드(`cd docs-site && bun run build`)를 추가한다.
+  - W5-9 확정: 파일 변경 지도에 NEW `gui/scripts/remote-link-fixture.ts` 추가. 계약: `bun gui/scripts/remote-link-fixture.ts --port <n>`이 `gui/dist`를 제공하고, `GET /opencodex-session`·`/api/remote-workspace/status (무효: 감사 반영 Averroes 절 참조)`·`/api/link/status`·`/api/link/candidates`·`POST /api/link/probe`·`/api/link/confirm-host`·`/api/link/apply`에 고정 JSON을 돌려준다. 상태는 URL 쿼리 `?fixture=off|role|home-connected|add-sheet|fingerprint`로 고른다(서버는 Referer 쿼리 또는 쿠키 `ocx-fixture`로 판별). 재현 명령: `cd gui && bun run build && bun scripts/remote-link-fixture.ts --port 5199` 후 agbrowse로 각 상태를 1440×900, 390×844로 캡처. 검증 표에 이 명령과 `bun run lint:i18n`, `bun test tests`, `bun run lint`, `bun run build`, docs-site 빌드(`cd docs-site && bun run build`)를 추가한다.
   - 실행 증거는 B/C 단계에서 만든다(계획 단계 문서는 결정 기록).
+
+## 감사 반영 (Averroes FAIL r1, wp5 계획 감사) — 이 절이 앞선 모든 내용보다 우선한다
+
+1. `#remote` 호환(반박 + 대안): 사용자가 `#remote`에서 링크 화면을 원한다고 명시했으므로(PRD 문제 정의) `#remote`는 Remote Link로 바꾼다. 옛 북마크 대책: 원격 워크스페이스가 사용 가능한 설치(App 가용성 조회가 true)에서는 Remote Link 화면 맨 위에 "원격 워크스페이스는 이제 별도 화면에 있어요 → 열기"(`#remote-workspace`) 카드를 항상 보여 준다. 테스트: 가용성 true면 카드와 링크가 렌더링되고 클릭 시 hash가 `#remote-workspace`, false면 카드 없음. `#remote-workspace` 직접 진입은 가용성과 무관하게 기존 RemoteWorkspace 화면(비활성 안내 포함)을 연다.
+2. 오류 코드: `gui/src/remote-link-api.ts`(NEW)에 `readLinkJson<T>(res): Promise<T>`를 두고, 비정상 응답은 본문 `{error:{code,message}}`에서 code를 꺼내 `LinkApiError(code, status)`로 던진다(기존 `readJsonOrThrow`는 건드리지 않음). code → i18n 키 표: `invalid_body`, `invalid_alias`, `ssh_unreachable`, `probe_failed`, `host_confirmation_expired`, `host_fingerprint_mismatch`, `remote_ocx_missing`, `listener_unavailable`, `key_issue_failed`, `link_apply_failed`, `link_connect_timeout`, `compensation_failed`, `remote_disconnect_failed`, `key_revoke_failed`, `link_remove_failed`, `tailscale_session_refused`, `link_unavailable` + 알 수 없는 코드용 `remoteLink.error.generic`. 구현 시 link-routes.ts에서 실제 code 목록을 `rg -o 'fail\("[a-z_]+"'`로 뽑아 표와 대조하고, 표에 없는 코드가 있으면 추가한다. 테스트: 각 code가 해당 문구를 보여 줌, 알 수 없는 code는 generic.
+3. 강제 해제: DELETE가 `remote_disconnect_failed`(502)면 두 번째 확인 대화상자("기기에 연결할 수 없어요. 이 컴퓨터에서만 링크를 지울까요? 그 기기는 직접 `ocx disconnect` 해야 해요")를 띄우고 확인 시 `DELETE /api/link/{id}` 본문 `{"force":true}`. `compensation_failed` 행은 실패 점(빨강) + 사유 문구 + "링크 지우기" 버튼(같은 DELETE 흐름). 테스트: 502 → 강제 확인 → force 본문 전송, compensation_failed 행 렌더링.
+4. 상태 코드 고정: apply 202 `{linkId}`, DELETE 200 `{linkId}`, probe 200, confirm-host 200, candidates 200. 테스트·픽스처 모두 이 값만.
+5. 픽스처 엔드포인트: 원격 워크스페이스 가용성은 `GET /api/remote-workspace`(remote-workspace-routes.ts:61). W5-9 표기의 `/api/remote-workspace/status (무효: 감사 반영 Averroes 절 참조)`는 폐기. 파일 변경 지도에 NEW `gui/scripts/remote-link-fixture.ts` 포함.
+6. 문서 파일: NEW `docs-site/src/content/docs/guides/remote-link.md`와 7개 번역 `docs-site/src/content/docs/{fr,ko,zh-cn,zh-tw,ru,ja,tr}/guides/remote-link.md`, 그리고 `docs-site/astro.config.mjs` 사이드바의 Guides 그룹에 remote-hub 옆으로 등록(기존 remote-workspace 등록 방식과 같게). 기존 remote-hub/remote-workspace 가이드에서 새 페이지로 한 줄 링크.
+7. 비차단 반영: 테스트에 `role: "home", links: [], child: null` 홈 빈 상태와, 꺼짐 스위치·역할 선택만으로는 GET 외 요청이 없음을 요청 기록으로 확인. CSS는 gui/design-system의 토큰(간격·반경·색)만 쓰고 새 원시 값이 필요하면 토큰을 먼저 추가한다.
+
+## 감사 반영 (Averroes FAIL r2)
+
+1. 오류 코드 목록은 구현된 라우트에서 뽑은 것이 전부다(`rg -o 'fail\("[a-z_]+"' src/server/management/link-routes.ts`, 2026-09-25 기준 24개). r1 절 2번의 목록은 이 표로 대체한다(`ssh_unreachable`, `remote_ocx_missing`, `link_connect_timeout`은 존재하지 않으므로 폐기). 구현은 이 목록을 `gui/src/remote-link-api.ts`에 `LINK_ERROR_CODES` 상수로 두고, GUI 테스트가 같은 명령에 해당하는 정규식으로 `src/server/management/link-routes.ts`를 읽어 뽑은 집합과 상수가 같은지 확인한다(서버가 코드를 추가하면 GUI 테스트가 실패).
+
+| code | i18n 키 |
+|---|---|
+| `admission_timeout` | `remoteLink.error.admission_timeout` |
+| `compensation_failed` | `remoteLink.error.compensation_failed` |
+| `fingerprint_failed` | `remoteLink.error.fingerprint_failed` |
+| `forbidden` | `remoteLink.error.forbidden` |
+| `host_confirmation_expired` | `remoteLink.error.host_confirmation_expired` |
+| `host_fingerprint_mismatch` | `remoteLink.error.host_fingerprint_mismatch` |
+| `host_not_confirmed` | `remoteLink.error.host_not_confirmed` |
+| `invalid_alias` | `remoteLink.error.invalid_alias` |
+| `invalid_body` | `remoteLink.error.invalid_body` |
+| `invalid_link_id` | `remoteLink.error.invalid_link_id` |
+| `key_issue_failed` | `remoteLink.error.key_issue_failed` |
+| `key_revoke_failed` | `remoteLink.error.key_revoke_failed` |
+| `link_apply_failed` | `remoteLink.error.link_apply_failed` |
+| `link_exists` | `remoteLink.error.link_exists` |
+| `link_not_found` | `remoteLink.error.link_not_found` |
+| `link_remove_failed` | `remoteLink.error.link_remove_failed` |
+| `link_unavailable` | `remoteLink.error.link_unavailable` |
+| `listener_unavailable` | `remoteLink.error.listener_unavailable` |
+| `probe_failed` | `remoteLink.error.probe_failed` |
+| `remote_connect_failed` | `remoteLink.error.remote_connect_failed` |
+| `remote_disconnect_failed` | `remoteLink.error.remote_disconnect_failed` |
+| `remote_port_failed` | `remoteLink.error.remote_port_failed` |
+| `tailscale_session_refused` | `remoteLink.error.tailscale_session_refused` |
+| `version_probe_failed` | `remoteLink.error.version_probe_failed` |
+| (알 수 없는 code) | `remoteLink.error.generic` |
+
+2. 새 문구 키(영어 원문, 10개 로케일 모두 추가, `bun run lint:i18n` 통과). 위 표의 오류 키도 모두 10개 로케일에 추가한다.
+   - `remoteLink.workspaceMoved.title`: "Remote Workspace has its own page now"
+   - `remoteLink.workspaceMoved.open`: "Open Remote Workspace"
+   - `remoteLink.forceRemove.title`: "This machine could not reach {alias}"
+   - `remoteLink.forceRemove.body`: "Remove the link only on this machine? Afterwards run {cmd} on {alias} yourself." ({cmd}는 `<Trans>`의 `ocx disconnect` 코드 칩)
+   - `remoteLink.forceRemove.confirm`: "Remove here only"
+   - `remoteLink.row.removeFailedLink`: "Remove link"
+3. 앞 절의 `201/200`, `204/JSON`, `/api/remote-workspace/status` 표기는 본문에서 무효로 표시했다.
