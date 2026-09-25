@@ -3438,4 +3438,8 @@ export const zh: Record<TKey, string> = {
   "compatProtocol.axisNote": "这里只有 Lab 判定。请求如何传递（原生或转译）请见 API 页面的请求路径预览。",
   "protocolLinks.labEvidence": "此组合的 Lab 证据",
   "protocolLinks.providerSettings": "提供商设置",
+  "cws.plan.title": "各目标的路径",
+  "cws.plan.description": "询问代理每个目标会如何传递带有客户端 API 所有可表达功能的请求，以及哪些功能所有目标都保留。不会向上游发送任何内容。",
+  "cws.plan.run": "显示路径",
+  "cws.plan.savedOnly": "显示的是已保存的组合。请先保存更改再预览。",
 };

@@ -3406,4 +3406,8 @@ export const fr: Record<TKey, string> = {
   "compatProtocol.axisNote": "Il s'agit uniquement de verdicts Lab. Le mode d'acheminement d'une requête (natif ou traduit) est affiché par l'aperçu du chemin de requête sur la page API.",
   "protocolLinks.labEvidence": "Preuves Lab pour cette paire",
   "protocolLinks.providerSettings": "Paramètres du fournisseur",
+  "cws.plan.title": "Chemins des cibles",
+  "cws.plan.description": "Demande au proxy comment chaque cible transporterait une requête utilisant toutes les fonctionnalités de l'API cliente, et lesquelles toutes les cibles conservent. Rien n'est envoyé en amont.",
+  "cws.plan.run": "Afficher les chemins",
+  "cws.plan.savedOnly": "Affiche le combo enregistré. Enregistrez vos modifications pour les prévisualiser.",
 };

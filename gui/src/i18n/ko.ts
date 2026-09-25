@@ -3439,4 +3439,8 @@ export const ko: Record<TKey, string> = {
   "compatProtocol.axisNote": "Lab 판정만 표시합니다. 요청이 어떻게 전달되는지(네이티브 또는 변환)는 API 페이지의 요청 경로 미리보기에 나옵니다.",
   "protocolLinks.labEvidence": "이 조합의 Lab 근거",
   "protocolLinks.providerSettings": "프로바이더 설정",
+  "cws.plan.title": "대상별 경로",
+  "cws.plan.description": "클라이언트 API가 표현할 수 있는 모든 기능을 담은 요청을 각 대상이 어떻게 전달하는지, 모든 대상이 유지하는 기능은 무엇인지 프록시에 묻습니다. 업스트림으로는 아무것도 보내지 않습니다.",
+  "cws.plan.run": "경로 보기",
+  "cws.plan.savedOnly": "저장된 콤보를 보여 줍니다. 변경 사항을 미리 보려면 먼저 저장하세요.",
 };

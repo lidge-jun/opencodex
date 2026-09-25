@@ -3417,4 +3417,8 @@ export const de: Record<TKey, string> = {
   "compatProtocol.axisNote": "Dies sind nur Lab-Urteile. Wie eine Anfrage zugestellt wird (nativ oder übersetzt), zeigt die Anfragepfad-Vorschau auf der API-Seite.",
   "protocolLinks.labEvidence": "Lab-Nachweise für dieses Paar",
   "protocolLinks.providerSettings": "Anbietereinstellungen",
+  "cws.plan.title": "Pfade der Ziele",
+  "cws.plan.description": "Fragt den Proxy, wie jedes Ziel eine Anfrage mit allen Funktionen der Client-API übertragen würde und welche Funktionen alle Ziele erhalten. Es wird nichts an den Anbieter gesendet.",
+  "cws.plan.run": "Pfade anzeigen",
+  "cws.plan.savedOnly": "Zeigt die gespeicherte Kombination. Speichern Sie Ihre Änderungen, um sie in der Vorschau zu sehen.",
 };

@@ -3439,4 +3439,8 @@ export const ja: Record<TKey, string> = {
   "compatProtocol.axisNote": "これは Lab の判定のみです。リクエストの配送方法（ネイティブまたは変換）は API ページのリクエスト経路プレビューに表示されます。",
   "protocolLinks.labEvidence": "この組の Lab エビデンス",
   "protocolLinks.providerSettings": "プロバイダー設定",
+  "cws.plan.title": "ターゲットごとの経路",
+  "cws.plan.description": "クライアント API が表現できるすべての機能を含むリクエストを各ターゲットがどう運ぶか、すべてのターゲットで保たれる機能は何かをプロキシに問い合わせます。上流には何も送信しません。",
+  "cws.plan.run": "経路を表示",
+  "cws.plan.savedOnly": "保存済みのコンボを表示しています。変更をプレビューするには保存してください。",
 };

@@ -3409,4 +3409,8 @@ export const vi: Record<TKey, string> = {
   "compatProtocol.axisNote": "Đây chỉ là kết luận của Lab. Cách một request được chuyển đi (native hay được dịch) hiển thị trong phần xem trước đường đi request trên trang API.",
   "protocolLinks.labEvidence": "Bằng chứng Lab cho cặp này",
   "protocolLinks.providerSettings": "Cài đặt nhà cung cấp",
+  "cws.plan.title": "Đường đi của từng đích",
+  "cws.plan.description": "Hỏi proxy xem mỗi đích sẽ chuyển một request có mọi tính năng mà API phía client biểu diễn được như thế nào, và tính năng nào được mọi đích giữ lại. Không gửi gì lên upstream.",
+  "cws.plan.run": "Hiển thị đường đi",
+  "cws.plan.savedOnly": "Đang hiển thị combo đã lưu. Hãy lưu thay đổi để xem trước chúng.",
 };
