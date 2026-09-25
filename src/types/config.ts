@@ -37,6 +37,9 @@ export interface OcxProtocolsConfig {
  * /v1/messages surface, the `ocx claude` launcher, and the GUI Claude page.
  */
 export interface OcxClaudeCodeConfig {
+  /** Route the standalone Claude Code CLI through the first-party intercept (settings.json env).
+   * Independent of Desktop's first-party mode. Absent/false = off. */
+  cliFirstParty?: boolean;
   /**
    * Opt-in relocation of supported trailing Claude harness notices from system instructions
    * to a user input message on translated routes. Changes the Desktop cache-key prefix.

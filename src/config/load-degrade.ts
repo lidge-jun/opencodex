@@ -544,6 +544,10 @@ export function normalizePersistedClaudeCode(claudeCode: unknown): OcxConfig["cl
     return claudeCode as OcxConfig["claudeCode"];
   }
   const normalized = { ...claudeCode } as Record<string, unknown>;
+  // A malformed hand edit must not arm CLI interception or discard the whole config.
+  if (Object.hasOwn(normalized, "cliFirstParty") && typeof normalized.cliFirstParty !== "boolean") {
+    delete normalized.cliFirstParty;
+  }
   if (Object.hasOwn(normalized, "subagentEffort") && !isClaudeSubagentEffort(normalized.subagentEffort)) {
     delete normalized.subagentEffort;
   }

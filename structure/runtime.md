@@ -254,7 +254,7 @@ its proxy port defaults to the public port + 100 (`claudeCode.intercept.port`), 
 degrades to a startup warning rather than a startup failure; stop joins both sockets. A server asked
 for an ephemeral public port (`startServer(0)`, the shape every in-process test fixture uses) has no
 stable port to derive from, so the pair stays off unless `claudeCode.intercept.port` is explicit. Requests on this ingress also honour first-party model bindings (`claudeCode.intercept.modelMap`); see [Claude Desktop](clients/claude-desktop.md#first-party-model-bindings). Picker mode adds a second, Desktop-only CONNECT proxy on the next port; see [Claude Desktop](clients/claude-desktop.md#picker-mode-the-desktop-egress-proxy).
-
+Two independent intents can want that settings env: Desktop first-party mode and `claudeCode.cliFirstParty` for the standalone CLI. `src/claude/first-party-settings.ts` owns the union: `reconcileClaudeFirstPartySettings` writes the owned pair while either intent is on, keeps the file untouched while an intent is on but the intercept cannot run, and removes the owned pair only when neither intent remains. `firstPartyProxyStatus` classifies what the settings file currently points at against the bound listener (`none`, `live`, `stopped`, `disabled`, `broken`, `foreign`, `local`, `unknown`); it reads the proxy token and never mints it.
 Auxiliary listener bind failures carry the listener key and effective address through `AuxiliaryListenerBindError` in `src/server/ports.ts`. `src/cli/index.ts` reports them without retrying the public port. Startup still rolls back every earlier socket synchronously.
 
 A failed public, loopback, or management bind rolls back earlier sockets; a failed hub-link bind warns

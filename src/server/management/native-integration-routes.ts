@@ -711,7 +711,7 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
       // Picker mode goes first: stop terminating claude.ai, drop its profile and trust.
       return await runPickerTransition(current, async ops => {
         const pickerOff = await ops.disableLocked({ persist: false });
-        const firstPartyRemoved = removeDesktopFirstParty();
+        const firstPartyRemoved = removeDesktopFirstParty(loadConfig());
         if (!firstPartyRemoved.ok) {
           return postCommitRefusal(409, "claude-desktop", "write_failed",
             `Claude Code settings could not be read (${firstPartyRemoved.path}); the first-party proxy env was left in place.`, { desiredEnabled });
@@ -731,6 +731,7 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
           ok: true, clientId: "claude-desktop", changed, state: "absent", desiredEnabled,
           message: [
             changed ? "Claude Desktop integration disabled." : "Claude Desktop integration is already off.",
+            firstPartyRemoved.retainedFor === "cli" ? "Shared first-party settings remain for Claude Code CLI." : "",
             pickerCleanupNote(pickerOff),
           ].filter(Boolean).join(" "),
         } satisfies NativeToggleEnvelope);
@@ -816,13 +817,14 @@ async function handleClaudeDesktopToggle(ctx: ManagementContext): Promise<Respon
         if (!result.written) return postCommitRefusal(500, "claude-desktop", "write_failed", "Claude Desktop apply failed.", { desiredEnabled: latestDesiredEnabled });
         const committed = persistCommittedDesktopGateway(ctx.config, latest.claudeCode?.desktopProfile, result.fingerprint);
         const stateWarning = committed.ok ? "" : " The committed gateway mode/profile state was not saved.";
-        const removed = removeDesktopFirstParty();
+        const removed = removeDesktopFirstParty(loadConfig());
         if (!removed.ok) return postCommitRefusal(500, "claude-desktop", "write_failed", "Gateway applied, but first-party settings cleanup did not complete." + stateWarning, { desiredEnabled: latestDesiredEnabled });
         return jsonResponse({
           ok: true, clientId: "claude-desktop", changed: true, state: "current", desiredEnabled: latestDesiredEnabled,
           message: [
             "Claude Desktop integration enabled.",
             stateWarning,
+            removed.retainedFor === "cli" ? "Shared first-party settings remain for Claude Code CLI." : "",
             pickerCleanupNote(pickerOff),
           ].filter(Boolean).join(" "),
         } satisfies NativeToggleEnvelope);

@@ -425,9 +425,12 @@ export async function applyDesktop(
   const modeSaved = saveDesktopMode("gateway", deps);
   const warning = [result.warning, modeSaved ? "" : "desktop mode marker was not saved"].filter(Boolean).join(" ");
   // The gateway mode is committed before retiring first-party settings.
-  const removed = removeDesktopFirstParty();
+  const removed = removeDesktopFirstParty(loadConfig());
   if (!removed.ok) return { ok: false, path: removed.path, reason: "first_party_settings_unreadable",
     warning: ["gateway applied; first-party cleanup remains incomplete", warning].filter(Boolean).join(" ") };
+  if (removed.retainedFor === "cli") {
+    return { ...result, warning: [warning, "Shared first-party settings remain for Claude Code CLI."].filter(Boolean).join(" ") };
+  }
   if (warning) return { ...result, warning };
   return result;
 }

@@ -139,7 +139,7 @@ test("first-party apply writes only the proxy env, creates the CA, and removes c
   expect(refreshed.ok && refreshed.changed).toBe(true);
   expect(settings().env?.HTTPS_PROXY).toBe(expectedProxyUrl(10400));
 
-  const removed = removeDesktopFirstParty();
+  const removed = removeDesktopFirstParty(config());
   expect(removed).toMatchObject({ ok: true, changed: true });
   expect(settings()).toEqual({ theme: "dark", env: { FOO: "bar" } });
 });
@@ -149,7 +149,7 @@ test("first-party apply refuses foreign proxy env and disabled intercept", () =>
   writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ env: { HTTPS_PROXY: "http://corp-proxy:3128" } }));
   expect(applyDesktopFirstParty(config())).toMatchObject({ ok: false, reason: "foreign_env" });
   expect(settings().env).toEqual({ HTTPS_PROXY: "http://corp-proxy:3128" });
-  expect(removeDesktopFirstParty()).toMatchObject({ ok: true, changed: false });
+  expect(removeDesktopFirstParty(config())).toMatchObject({ ok: true, changed: false });
   expect(applyDesktopFirstParty(config({ runtimeRole: "client" }))).toMatchObject({ ok: false, reason: "intercept_disabled" });
 });
 

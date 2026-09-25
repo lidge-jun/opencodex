@@ -1226,7 +1226,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
         const committed = persistCommittedDesktopGateway(config, state.profile, result.fingerprint);
         const modeWarning = committed.ok ? undefined : `Gateway applied, but its mode/profile state was not saved (${committed.reason}).`;
         // The durable marker describes the committed gateway even if old-mode cleanup fails.
-        const firstPartyRemoved = removeDesktopFirstParty();
+        const firstPartyRemoved = removeDesktopFirstParty(loadConfig());
         if (!firstPartyRemoved.ok) {
           return { response: jsonResponse({
             error: `Claude Code settings could not be parsed (${firstPartyRemoved.path}); first-party cleanup remains incomplete after gateway apply.`,
@@ -1235,10 +1235,10 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
             ...(modeWarning ? { warning: modeWarning } : {}),
           }, 500) };
         }
-        return { result, committed, modeWarning, pickerOff };
+        return { result, committed, modeWarning, pickerOff, firstPartyRemoved };
       });
       if (outcome.response) return outcome.response;
-      const { result, committed, modeWarning, pickerOff } = outcome as Exclude<typeof outcome, { response: Response }>;
+      const { result, committed, modeWarning, pickerOff, firstPartyRemoved } = outcome as Exclude<typeof outcome, { response: Response }>;
       const { claudeDesktopPolicyWarning, getCachedClaudeDesktopPolicy } = await import("../../claude/desktop-policy");
       const policyState = deps.probeClaudeDesktopPolicy
         ? await deps.probeClaudeDesktopPolicy({ platform: deps.platform ?? process.platform })
@@ -1247,7 +1247,9 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const pickerWarning = pickerOff.residual?.length
         ? `Picker mode cleanup is incomplete (${pickerOff.residual.join(", ")}); run ocx claude desktop picker off.`
         : undefined;
-      const warning = [modeWarning, policyWarning, pickerWarning].filter(Boolean).join(" ");
+      const warning = [modeWarning, policyWarning, pickerWarning,
+        firstPartyRemoved.retainedFor === "cli"
+          ? "Shared first-party settings remain for Claude Code CLI." : undefined].filter(Boolean).join(" ");
       return jsonResponse({
         ok: true,
         mode: "gateway",

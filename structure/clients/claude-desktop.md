@@ -47,9 +47,12 @@ mutually exclusive on one machine:
 
 `resolveClaudeDesktopMode` uses observations from `observeClaudeDesktopMode` in this order:
 explicit `claudeCode.desktopMode` → selected owned gateway row → persisted
-`desktopProfile.appliedFingerprint` → owned first-party env in `~/.claude/settings.json` →
-gateway. The owned env observation preserves first-party installs applied before mode persistence;
-foreign proxy settings do not count. `resolveClaudeDesktopApplyMode` preserves the resolved mode.
+`desktopProfile.appliedFingerprint` → legacy Desktop-owned first-party env →
+gateway. This env observation preserves Desktop installs that predate mode persistence
+only while CLI first-party intent is off. An owned env observed with
+`claudeCode.cliFirstParty === true` is not Desktop-mode evidence, even when the
+intercept is disabled; foreign proxy settings do not count.
+`resolveClaudeDesktopApplyMode` preserves the resolved mode.
 An apply for a first-party install with `claudeCode.intercept.enabled: false` is refused with
 `intercept_disabled` rather than switched to gateway. New installs apply gateway.
 `src/claude/desktop-risk.ts` owns the account-suspension warning: first-party sends subscription
@@ -70,9 +73,9 @@ cleanup via `src/claude/desktop-gateway-state.ts`. Cleanup failure remains a par
 subsequent default applies and status retain the gateway choice. A separate persistence failure
 is reported explicitly; its mode/profile snapshot is not claimed to have been saved. These file operations are ordered,
 not a crash-atomic transaction across the settings file and Desktop library.
-Disabling the integration (native toggle, `ocx ensure` with the durable switch OFF) removes both the
-gateway profile and the first-party env. With the switch ON in first-party mode, `ocx ensure`
-re-applies a stale env (the proxy port follows the public port).
+Disabling Desktop integration removes its gateway profile. It removes the owned first-party env
+only when `claudeCode.cliFirstParty` is not set; otherwise the env stays for the CLI. With Desktop
+first-party ON, `ocx ensure` re-applies a stale env; the proxy port follows the public port.
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
 `POST /api/claude-desktop/apply` with `mode` ∈ `first-party|gateway|static|hybrid|discovery` and
