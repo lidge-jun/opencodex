@@ -704,3 +704,37 @@ Revisions 2–7, RP1–RP6, Replan E1–E4, and Replan F are superseded by Repla
 - H: Referred to the single cause-neutral copy in wp5 and added seam-bound stale-settings GET cases for intercept disabled and hub client alongside Claude disabled; acceptance now covers all three.
 
 - Audit cycle 3 note (non-blocking, folded): the `runtimeRole: "client"` GET case builds its config with a valid `client` connection block, because the config validator requires the pairing (`tests/server/config.test.ts:432-442`).
+
+## wp4 P amendment (architect stale-check)
+
+- Anchors in `src/server/management/agent-settings-routes.ts` moved by two lines after wp2; re-anchor by the quoted
+  text, not the line number.
+- CLI parser guard (`src/cli/integrations.ts`, `handleClaudeConfigCommand`), placed after every `take*` call and
+  `rejectArgs`, before `runtimeRequest`:
+
+  ```ts
+  const firstParty = takeBooleanOption(args, "--first-party");
+  // ... existing take* calls and rejectArgs(args, CLAUDE_USAGE) ...
+  if (firstParty !== undefined) {
+    if (Object.keys(body).length > 0) {
+      throw new CliUsageError("--first-party must be set on its own (it writes Claude Code's settings file immediately)", CLAUDE_USAGE);
+    }
+    body.cliFirstParty = firstParty;
+  }
+  ```
+  `CLAUDE_USAGE` gains a separate line `ocx claude config set --first-party <on|off> [--json]`. The parser test covers
+  `--first-party on` (body `{cliFirstParty:true}`), `--first-party off`, and `--first-party on --system-env on` (usage error,
+  no request).
+- Structure docs owned by the areas wp4 changes (`structure/INDEX.md`: `src/cli/` → runtime, config, clients/claude-desktop,
+  ops/docs-and-release; `src/server/` → runtime), added to the file map:
+  - `structure/runtime.md`: next to the Claude intercept pair paragraph, "`ocx claude` with Claude routing off launches
+    natively; when the shared settings env carries opencodex's proxy it adds `NO_PROXY=*` (and `no_proxy`) so the launch
+    bypasses it, unless an inherited foreign `HTTPS_PROXY` is present, in which case it warns instead."
+  - `structure/config.md`: after the wp2 `cliFirstParty` paragraph, "It is written only by a standalone
+    `PUT /api/claude-code { cliFirstParty }` and `ocx claude config set --first-party`; the enable path pins an absent
+    `desktopMode` in the same persisted mutation."
+  - `structure/clients/claude-desktop.md`: in the Surfaces lines, "`ocx claude config set --first-party on|off` and the
+    Claude Code page switch control the CLI intent; `ocx ensure` refreshes a stale or absent env while it is on."
+  - `structure/ops/docs-and-release.md`: where it describes the capability registry / `skills/ocx` surface (rg
+    `CAPABILITIES|skill:surface`), note that `claude config` is a declared capability; if the doc does not enumerate
+    commands, no edit.
