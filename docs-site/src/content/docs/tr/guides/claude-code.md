@@ -164,21 +164,23 @@ Anthropic bunu kullanım koşullarının ihlali sayıp hesabınızı askıya ala
 ağ geçididir; bu riski kabul ediyorsanız first-party modunu seçin.
 :::
 
-Desktop claude.ai oturumunu korur; Chat, bağlayıcılar ve uzaktan kontrol çalışmaya devam eder.
-OpenCodex yalnızca `~/.claude/settings.json` dosyasındaki (`CLAUDE_CONFIG_DIR` desteklenir)
-`env` alanına `HTTPS_PROXY` ve `NODE_EXTRA_CA_CERTS` yazar. Code sekmesinin başlattığı
-Claude Code, alt ajanları ve bağımsız `claude` CLI yerel vekilden geçer; diğer
-`api.anthropic.com` yolları Anthropic'e iletilir. CA, işletim sisteminin güven deposuna
-kurulmaz; yalnızca `NODE_EXTRA_CA_CERTS` okuyan Node süreçleri ona güvenir.
+Desktop first-party, Code sekmesini ve alt ajanlarını OpenCodex üzerinden yönlendirir. Bağımsız Claude Code CLI için ayrı bir anahtar vardır. İkisi de `settings.json` içindeki aynı vekil ve CA ayarlarını okur: yalnızca biri açıkken diğeri de TLS’nin yerelde sonlandığı yerel vekilden geçer, ancak Messages istekleri değiştirilmeden Anthropic’e iletilir.
 
 Mod `claudeCode.desktopMode` içinde saklanır. First-party modunu açıkça veya bu sürümden önce
 uygulayan kurulumlar bu modu korur; mevcut ağ geçidi de korunur. Açık mod yoksa önce OpenCodex'e
 ait seçili ağ geçidi satırı, sonra kayıtlı ağ geçidi parmak izi, ardından `settings.json`
-içindeki OpenCodex'e ait first-party ayarları değerlendirilir; hiçbiri yoksa ağ geçidi seçilir.
+içindeki OpenCodex'e ait first-party ayarları değerlendirilir; hiçbiri yoksa ağ geçidi seçilir. Yalnızca CLI first-party için yazılmış bir ortam, Desktop'ın first-party modunda olduğunun kanıtı değildir.
 Katalog eşitlemesi ve model listesi güncellemesi, first-party kurulumunun üstüne ağ geçidi
 profili yazmaz. `claudeCode.intercept.enabled: false` olduğunda mevcut first-party kurulumunda
 apply işlemi `intercept_disabled` ile reddedilir; yeni kurulum ağ geçidini uygular. Başka bir
 vekilin ayarları üzerine yazılmaz. Mod değiştirince Desktop'ı tamamen kapatıp yeniden açın.
+
+### Claude Code CLI first-party
+
+Claude → Code bölümünde CLI anahtarını açın veya `ocx claude config set --first-party on` çalıştırın; kapatmak için `off` kullanın. Yerel vekil kullanılamıyorsa, CA hazırlanamazsa, ayarlar okunamazsa veya anahtarlar başka bir programa aitse açma isteği reddedilir. Kapatma yine de kaydedilir. Yalnız Desktop first-party açıkken terminalde tamamen yerel bağlantı için kabukta `NO_PROXY='*'` ayarlayın. Yukarıdaki hesap riski CLI için de geçerlidir.
+Claude yönlendirmesini kapatmak yönetilen vekil ayarlarını korur. Dinleyici çalışırken tüm Messages istekleri değiştirilmeden iletilir; durduğunda OpenCodex çalışana veya Desktop/CLI first-party kapatılana kadar doğrudan `claude` bağlanamaz. `ocx claude` yerel başlatması `NO_PROXY=*` değerini yalnızca yönetilen ayarlar varken ve yabancı bir HTTPS vekili miras alınmamışken ayarlar. Aksi halde yabancı vekili korur ve ayarlardaki kesmenin sürdüğünü bildirir: first-party özelliğini kapatın veya ayarı kaldırın.
+Arayüz okunamayan ayarları (unknown), opencodex belirteçli URL ile yabancı CA birleşimini (foreign: HTTPS_PROXY / NODE_EXTRA_CA_CERTS değerlerini elle düzeltin) ve Claude yönlendirmesi kapalıyken dinleyicinin istekleri değiştirmeden iletmeye devam etmesini (disabled: yeniden başlatmadan önce first-party modunu kapatın) ayırt eder. Dinleyici yoksa stopped; yönetilen CA ile port veya belirteç uyuşmuyorsa broken durumudur. First-party açıkken kesme kullanılamıyorsa stopped ve broken, routingOff uyarısını gösterir: Claude yönlendirmesi veya kesme kapalı ya da bu makine başka bir opencodex merkezinin istemcisidir; bu makinede yeniden etkinleştirin veya ayarları kaldırmak için first-party modunu kapatın. Kesme kullanılabilirken stopped opencodex uygulamasını başlatmayı, broken ise `ocx ensure` ya da yeniden başlatmayı önerir. Yalnız CLI açık ama vekil yoksa uygulanmadı, tek istemci açık ve vekil çalışıyorsa paylaşılan iletim, iki istemci kapalıyken vekil kalmışsa artık ayar uyarısı görünür.
+unknown, ayarların hâlâ opencodex vekiline işaret edip etmediğinin belirlenemediği anlamına gelir. Yabancı CA ile birlikte 127.0.0.1 üzerindeki belirteçsiz vekil local durumudur: sahipliği doğrulanamaz; artık kullanmıyorsanız ~/.claude/settings.json içindeki HTTPS_PROXY değerini kaldırın. disabled yalnızca ayarlar çalışan dinleyiciyle eşleşiyorsa geçerlidir; port veya belirteç farklıysa yönlendirme kapalı olsa bile broken görünür.
 
 ### Picker modu: first-party Code sekmesinde opencodex modelleri
 
