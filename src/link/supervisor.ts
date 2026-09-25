@@ -34,6 +34,7 @@ export interface LinkSupervisor {
   reload(): Promise<void>;
   stopLink(linkId: string): Promise<void>;
   status(): readonly LinkTunnelStatus[];
+  notifyAuthenticatedRequest?(apiKeyId: string): void;
   stop(): Promise<void>;
 }
 
@@ -59,9 +60,13 @@ export interface LinkSupervisorDeps {
   removePidfile?: (path: string) => void;
   platform?: NodeJS.Platform;
   random?: () => number;
+  apiKeys?: () => readonly { id: string; name: string }[];
+  revokeApiKey?: (id: string) => boolean;
+  warn?: (message: string) => void;
 }
 
 const TIMER_MS = 1_000;
+const SPAWN_GRACE_MS = 5_000;
 
 function sameArgv(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -118,6 +123,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   });
+  const warn = deps.warn ?? ((message: string) => console.warn(message));
 
   let store: LinkStore = emptyLinkStore();
   let started = false;
@@ -128,6 +134,20 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const children = new Map<string, { child: SshChild; argv: readonly string[] }>();
   const orphanUnverified = new Set<string>();
   const recordInstances = new Map<string, string>();
+
+  const reconcileApiKeys = (): void => {
+    const keys = deps.apiKeys?.() ?? [];
+    if (!deps.revokeApiKey || keys.length === 0) return;
+    const referenced = new Set(store.links.map(link => link.apiKeyId));
+    for (const key of keys) {
+      if (!key.name.startsWith("link:") || referenced.has(key.id)) continue;
+      try {
+        if (deps.revokeApiKey(key.id)) warn(`[link] revoked orphaned link key id=${key.id}`);
+      } catch (error) {
+        warn(`[link] orphaned link key revoke failed id=${key.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  };
 
   const pidfilePath = (linkId: string): string => join(storeDir, `${linkId}.pid`);
 
@@ -192,7 +212,6 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       children.set(record.id, { child, argv });
       orphanUnverified.delete(record.id);
       setEvent(record.id, { type: "spawn", now: now() });
-      setEvent(record.id, { type: "ready", now: now() });
       writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv });
       void child.exited.then(async () => {
         if (children.get(record.id)?.child !== child) return;
@@ -224,6 +243,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         child.child.kill("SIGTERM");
         children.delete(record.id);
         conditionalRemovePidfile(record.id, child.child.pid);
+      } else if (next.kind === "connecting" && child && current - next.since >= SPAWN_GRACE_MS) {
+        setEvent(record.id, { type: "ready", now: current });
       } else if (dueForSpawn(next, current)) {
         spawnFor(record);
       }
@@ -242,6 +263,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const begin = (): void => {
     if (started || stopping) return;
     store = readStore();
+    reconcileApiKeys();
     reapOrphans();
     started = true;
     for (const record of store.links) recordInstances.set(record.id, recordInstance(record, store.listenerPort));
@@ -251,12 +273,23 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     syncTimer();
   };
 
+  let queuedLifecycle: (() => void | Promise<void>) | undefined;
   const runLifecycle = (operation: () => void | Promise<void>): Promise<void> => {
-    if (!lifecycleFlight) {
-      lifecycleFlight = Promise.resolve().then(operation).finally(() => {
-        lifecycleFlight = undefined;
-      });
+    if (lifecycleFlight) {
+      queuedLifecycle = operation;
+      return lifecycleFlight;
     }
+    lifecycleFlight = (async () => {
+      let next: (() => void | Promise<void>) | undefined = operation;
+      while (next) {
+        await next();
+        next = queuedLifecycle;
+        queuedLifecycle = undefined;
+      }
+    })().finally(() => {
+      lifecycleFlight = undefined;
+      queuedLifecycle = undefined;
+    });
     return lifecycleFlight;
   };
 
@@ -321,6 +354,14 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       });
     },
     stopLink,
+    notifyAuthenticatedRequest(apiKeyId: string) {
+      for (const record of store.links) {
+        if (record.direction === "hub-initiated" && record.apiKeyId === apiKeyId && children.has(record.id)) {
+          const state = states.get(record.id);
+          if (state?.kind === "connecting" || state?.kind === "reconnecting") setEvent(record.id, { type: "ready", now: now() });
+        }
+      }
+    },
     status() {
       return store.links.map(record => {
         if (record.direction === "client-initiated") {

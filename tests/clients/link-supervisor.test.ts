@@ -56,7 +56,7 @@ test("spawns only hub links with the exact reverse forward argv", () => {
   expect(argv).toContain("-R");
   expect(argv).toContain("127.0.0.1:19002:127.0.0.1:19001");
   expect(argv).toContain("ExitOnForwardFailure=yes");
-  expect(supervisor.status()[0]!.state).toEqual({ kind: "connected", since: expect.any(Number) });
+  expect(supervisor.status()[0]!.state).toEqual({ kind: "connecting", since: expect.any(Number) });
   fake.children[0]!.resolve(143);
   return supervisor.stop();
 });
@@ -88,6 +88,43 @@ test("reconnects transient network exits only after the injected timer is due", 
   timers[0]!();
   expect(fake.children).toHaveLength(2);
   await supervisor.stop();
+});
+
+test("marks a live tunnel connected after the grace period or authenticated catalog request", async () => {
+  const fake = fakeRunner();
+  const timers: Array<() => void> = [];
+  let current = 0;
+  const store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 1 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+  });
+  supervisor.start();
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "connecting" });
+  supervisor.notifyAuthenticatedRequest!("lnk_0123456789abcdef-key");
+  expect(supervisor.status()[0]!.state).toMatchObject({ kind: "connected" });
+  await supervisor.stop();
+
+  const second = fakeRunner();
+  const grace = createLinkSupervisor({
+    readStore: () => store,
+    runner: second.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    now: () => current,
+    setTimer: callback => { timers.push(callback); return 2 as unknown as ReturnType<typeof setInterval>; },
+    clearTimer: () => {},
+  });
+  current = 0;
+  grace.start();
+  current = 5_000;
+  timers.at(-1)!();
+  expect(grace.status()[0]!.state).toMatchObject({ kind: "connected" });
+  second.children[0]!.resolve(143);
+  await grace.stop();
 });
 
 test("auth and host ownership failures do not retry, and client links stay client-owned", async () => {
@@ -185,5 +222,47 @@ test("concurrent reload calls spawn a newly added link once", async () => {
   await Promise.all([supervisor.reload(), supervisor.reload()]);
   expect(fake.children).toHaveLength(1);
   fake.children[0]!.resolve(143);
+  await supervisor.stop();
+});
+
+test("a reload requested during a reload runs once after the current reload", async () => {
+  const fake = fakeRunner();
+  const first = record("hub-initiated", "lnk_0123456789abcdef");
+  const second = record("hub-initiated", "lnk_fedcba9876543210");
+  let store = baseStore(first);
+  const supervisor = createLinkSupervisor({ readStore: () => store, runner: fake.runner, pidfileDir: "/tmp/opencodex-link-supervisor-test" });
+  supervisor.start();
+  store = baseStore(second);
+  const firstReload = supervisor.reload();
+  await Promise.resolve();
+  store = baseStore(second, { ...record("hub-initiated", "lnk_abcdef0123456789"), tunnelPort: 19003 });
+  const secondReload = supervisor.reload();
+  fake.children[0]!.resolve(143);
+  await Promise.all([firstReload, secondReload]);
+  expect(fake.children).toHaveLength(3);
+  await supervisor.stop();
+});
+
+test("reconciles unowned link keys at supervisor start without logging secrets", async () => {
+  const fake = fakeRunner();
+  const revoked: string[] = [];
+  const warnings: string[] = [];
+  const store = baseStore({ ...record("client-initiated", "lnk_0123456789abcdef"), apiKeyId: "kept-key" });
+  const supervisor = createLinkSupervisor({
+    readStore: () => store,
+    runner: fake.runner,
+    pidfileDir: "/tmp/opencodex-link-supervisor-test",
+    apiKeys: () => [
+      { id: "orphan-key", name: "link:old" },
+      { id: "kept-key", name: "link:home" },
+      { id: "other-key", name: "other" },
+    ],
+    revokeApiKey: id => { revoked.push(id); return true; },
+    warn: message => warnings.push(message),
+  });
+  await supervisor.ensureStarted();
+  expect(revoked).toEqual(["orphan-key"]);
+  expect(warnings[0]).toContain("orphan-key");
+  expect(warnings[0]).not.toContain("link:old");
   await supervisor.stop();
 });

@@ -12,6 +12,8 @@ import {
   type LinkListenerStatus,
 } from "./link-listener";
 import { createLinkSupervisor, type LinkSupervisor } from "../../link/supervisor";
+import { saveConfigPreservingClaudeCode } from "../../config/live-reconcile";
+import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
 export { LINK_INGRESS_HOSTNAME } from "./link-listener";
 import type { ServerIngress } from "./serve-options";
 
@@ -42,7 +44,25 @@ export interface OptionalListenerSet<T> {
 export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): OptionalListenerSet<T> {
   const claudeIntercept: ClaudeInterceptLifecycle<T> = createClaudeInterceptLifecycle<T>();
   const linkListener: LinkListenerLifecycle<T> = createLinkListenerLifecycle<T>(linkDeps);
-  const supervisor = createLinkSupervisor();
+  let activeConfig: OcxConfig | undefined;
+  const supervisor = createLinkSupervisor({
+    apiKeys: () => activeConfig?.apiKeys ?? [],
+    revokeApiKey: id => {
+      if (!activeConfig) return false;
+      const before = activeConfig.apiKeys ?? [];
+      if (!before.some(key => key.id === id)) return false;
+      activeConfig.apiKeys = before.filter(key => key.id !== id);
+      try {
+        saveConfigPreservingClaudeCode(activeConfig);
+        reconcileLiveStateStores();
+      } catch (error) {
+        activeConfig.apiKeys = before;
+        throw error;
+      }
+      return true;
+    },
+  });
+  let unregisterSupervisorAdmission: (() => void) | undefined;
   let supervisorStop: (() => Promise<void>) | undefined;
 
   return {
@@ -59,7 +79,9 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
     linkStatus: () => linkListener.status(),
     linkSupervisor: () => supervisor,
     start(ctx) {
+      activeConfig = ctx.config;
       linkListener.start({ dispatch: ctx.dispatch, maxRequestBodySize: ctx.maxRequestBodySize });
+      unregisterSupervisorAdmission ??= linkListener.onAuthenticatedCatalog(apiKeyId => supervisor.notifyAuthenticatedRequest?.(apiKeyId));
       supervisor.start();
       supervisorStop = () => supervisor.stop();
       claudeIntercept.start({
@@ -85,6 +107,8 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       }
       try { await linkListener.stop(); } catch (error) { failure ??= error; }
       try { await claudeIntercept.stop(); } catch (error) { failure ??= error; }
+      unregisterSupervisorAdmission?.();
+      unregisterSupervisorAdmission = undefined;
       if (failure) throw failure;
     },
   };

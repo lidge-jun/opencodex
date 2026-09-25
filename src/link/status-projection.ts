@@ -1,6 +1,7 @@
 import type { LinkStore } from "./store";
 import type { LinkTunnelStatus } from "./supervisor";
 import type { TunnelState } from "./tunnel-state";
+import { readCompensation, type CompensationStore } from "./compensation";
 
 export type LinkWireState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
 
@@ -41,7 +42,10 @@ function asWireState(state: TunnelState | "client-owned"): LinkWireState {
 function stateDetails(
   record: LinkStore["links"][number],
   status: LinkTunnelStatus | undefined,
+  compensation?: CompensationStore,
 ): { state: LinkWireState; since: string; reason: string | null } {
+  const failure = compensation?.entries[record.id];
+  if (failure) return { state: "failed", since: failure.since, reason: failure.reason };
   if (!status || status.state === "client-owned") {
     return { state: "idle", since: record.createdAt, reason: null };
   }
@@ -60,18 +64,19 @@ export function projectLinkStatus(
   supervisorStates: readonly LinkTunnelStatus[],
   listenerStatus: LinkListenerStatusProjection,
   config: LinkStatusConfig,
+  compensation: CompensationStore = readCompensation(),
 ): LinkStatusDto {
   const byId = new Map(supervisorStates.map(status => [status.linkId, status]));
   const links = store.links.map(record => ({
     id: record.id,
     alias: record.alias,
     direction: record.direction,
-    ...stateDetails(record, byId.get(record.id)),
+    ...stateDetails(record, byId.get(record.id), compensation),
     tunnelPort: record.tunnelPort,
   }));
   const childRecord = config.runtimeRole === "client" ? store.links[0] : undefined;
   const childStatus = childRecord
-    ? stateDetails(childRecord, byId.get(childRecord.id))
+    ? stateDetails(childRecord, byId.get(childRecord.id), compensation)
     : undefined;
   const role = config.runtimeRole === "client"
     ? "child"

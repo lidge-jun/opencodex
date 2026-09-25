@@ -1646,5 +1646,6 @@
   "link-admission-wait.test.ts": "clients",
   "link-fingerprint.test.ts": "clients",
   "cli-link.test.ts": "cli",
-  "link-management-routes.test.ts": "server"
+  "link-management-routes.test.ts": "server",
+  "link-compensation.test.ts": "clients"
 }

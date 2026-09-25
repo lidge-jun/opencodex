@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { projectLinkStatus } from "../../src/link/status-projection";
 import type { LinkStore } from "../../src/link/store";
+import type { CompensationStore } from "../../src/link/compensation";
 
 const store: LinkStore = {
   version: 1,
@@ -55,4 +56,13 @@ test("an unverified orphan is exposed as a failed stale tunnel", () => {
     orphan: "orphan-unverified",
   }], { state: "failed", port: null }, { runtimeRole: "standalone" });
   expect(dto.links[0]).toMatchObject({ state: "failed", reason: "stale tunnel may hold the port" });
+});
+
+test("projects a persisted compensation failure across supervisor restarts", () => {
+  const compensation: CompensationStore = {
+    version: 1,
+    entries: { [store.links[0]!.id]: { reason: "compensation_failed", since: "2026-09-25T00:02:00.000Z" } },
+  };
+  const dto = projectLinkStatus(store, [], { state: "listening", port: 19001 }, { runtimeRole: "hub" }, compensation);
+  expect(dto.links[0]).toMatchObject({ state: "failed", since: "2026-09-25T00:02:00.000Z", reason: "compensation_failed" });
 });

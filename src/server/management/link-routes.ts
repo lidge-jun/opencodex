@@ -6,6 +6,7 @@ import { assertSshAlias, buildExecArgv, buildFingerprintArgv, buildProbeArgv } f
 import { parseFingerprintLine } from "../../link/fingerprint";
 import { awaitFirstAdmission } from "../../link/admission-wait";
 import { linkKnownHostsPath, linkStorePath } from "../../link/paths";
+import { clearCompensationFailed, compensationPath, markCompensationFailed, readCompensation } from "../../link/compensation";
 import { loadHostCandidates } from "../../link/ssh-config";
 import { newLinkId, readLinkStore, writeLinkStore, type LinkStore } from "../../link/store";
 import { createSshRunner, type SshRunner } from "../../link/ssh-runner";
@@ -159,7 +160,11 @@ function revokeKeyIdempotent(ctx: ManagementContext, id: string): boolean {
 }
 
 function compensationFailure(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number], phase: string): Response {
-  (state.compensationFailures ??= new Map()).set(record.id, { since: new Date((ctx.deps.now ?? Date.now)()).toISOString(), reason: "compensation_failed" });
+  const since = new Date((ctx.deps.now ?? Date.now)()).toISOString();
+  (state.compensationFailures ??= new Map()).set(record.id, { since, reason: "compensation_failed" });
+  try { markCompensationFailed(record.id, since, compensationPath()); } catch (error) {
+    console.warn(`[link] compensation marker persistence failed linkId=${record.id}: ${error instanceof Error ? error.message : String(error)}`);
+  }
   console.warn(`[link] compensation_failed linkId=${record.id} phase=${phase}`);
   return fail("compensation_failed", "The link compensation could not be completed.", 500);
 }
@@ -185,6 +190,7 @@ async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, 
     if (next.links.length !== current.links.length) {
       writeStoreFor(ctx, next);
     }
+    clearCompensationFailed(record.id, compensationPath());
     state.compensationFailures?.delete(record.id);
     if (next.links.length === 0) await state.listener.close();
     return null;
@@ -323,7 +329,6 @@ async function issue(ctx: ManagementContext): Promise<Response> {
   const body = exactBody(await readManagementJsonBodyOr(ctx.req, null), ["alias", "tunnelPort"]);
   if (!body || typeof body.alias !== "string" || !port(body.tunnelPort)) return fail("invalid_body", "alias and tunnelPort are required.", 400);
   try { assertSshAlias(body.alias); } catch { return fail("invalid_alias", "alias must be a valid SSH host alias.", 400); }
-  const before = readStoreFor(ctx);
   let issued: IssuedApiKey;
   try { issued = issueKey(ctx, `link:${body.alias}`); }
   catch { return fail("key_issue_failed", "The link key could not be issued.", 503); }
@@ -339,16 +344,21 @@ async function issue(ctx: ManagementContext): Promise<Response> {
   const record = { id, alias: body.alias, direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: body.tunnelPort, apiKeyId: issued.id, createdAt: new Date((ctx.deps.now ?? Date.now)()).toISOString() };
   let failureCode = "link_issue_failed";
   try {
-    if (before.links.some(link => link.id === id)) throw new Error("link id collision");
-    writeStoreFor(ctx, { ...before, links: [...before.links, record] });
+    const current = readStoreFor(ctx);
+    if (current.links.some(link => link.id === id)) throw new Error("link id collision");
+    if (current.links.some(link => link.alias === body.alias && link.direction === "client-initiated")) {
+      const compensation = await compensateNewLink(ctx, state, record);
+      return compensation ?? fail("link_exists", "A link for this alias already exists.", 409);
+    }
+    writeStoreFor(ctx, { ...current, links: [...current.links, record] });
     await state.listener.ensureStarted();
     if (state.listener.status().state !== "listening") {
       failureCode = "listener_unavailable";
       throw new Error("link listener unavailable");
     }
-    const current = readStoreFor(ctx);
-    if (!port(current.listenerPort)) throw new Error("link listener did not bind");
-    return Response.json({ linkId: id, apiKeyId: issued.id, key: issued.key, listenerPort: current.listenerPort });
+    const boundStore = readStoreFor(ctx);
+    if (!port(boundStore.listenerPort)) throw new Error("link listener did not bind");
+    return Response.json({ linkId: id, apiKeyId: issued.id, key: issued.key, listenerPort: boundStore.listenerPort });
   } catch {
     const compensation = await compensateNewLink(ctx, state, record);
     return compensation ?? fail(failureCode, failureCode === "listener_unavailable" ? "The link listener is unavailable." : "The link could not be issued.", 503);
@@ -364,15 +374,34 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
   if (!isRecord(body) || Object.keys(body).some(key => key !== "force") || (body.force !== undefined && typeof body.force !== "boolean")) return fail("invalid_body", "force must be a boolean.", 400);
   const force = body.force === true;
   await state.supervisor.stopLink(id);
+  const restartTunnel = async (): Promise<void> => {
+    try {
+      await state.supervisor.ensureStarted();
+      await state.supervisor.reload();
+    } catch (error) {
+      console.warn(`[link] tunnel restart failed linkId=${id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   if (!force && record.direction === "hub-initiated") {
     try {
       const result = await runnerFor(ctx).run(buildExecArgv({ alias: record.alias, argv: ["ocx", "disconnect"], knownHostsFile: knownHostsFile(ctx) }), { timeoutMs: 30_000 });
-      if (result.code !== 0) return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502);
-    } catch { return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502); }
+      if (result.code !== 0) {
+        await restartTunnel();
+        return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502);
+      }
+    } catch {
+      await restartTunnel();
+      return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502);
+    }
   }
   if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
-  const next = { ...current, links: current.links.filter(link => link.id !== id) };
-  try { writeStoreFor(ctx, next); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
+  let next: LinkStore;
+  try {
+    const latest = readStoreFor(ctx);
+    next = { ...latest, links: latest.links.filter(link => link.id !== id) };
+    if (next.links.length !== latest.links.length) writeStoreFor(ctx, next);
+    clearCompensationFailed(id, compensationPath());
+  } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
   state.compensationFailures?.delete(id);
   if (next.links.length === 0) await state.listener.close();
   return Response.json({ linkId: id });
@@ -390,7 +419,7 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     if (denied) return denied;
     const store = readStoreFor(ctx);
     const listenerStatus = state.listener.status();
-    const dto: LinkStatusDto = projectLinkStatus(store, state.supervisor.status(), listenerStatus, ctx.config);
+    const dto: LinkStatusDto = projectLinkStatus(store, state.supervisor.status(), listenerStatus, ctx.config, readCompensation());
     for (const link of dto.links) {
       const failure = state.compensationFailures?.get(link.id);
       if (failure) Object.assign(link, { state: "failed" as const, since: failure.since, reason: failure.reason });

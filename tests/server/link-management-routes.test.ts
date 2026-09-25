@@ -93,7 +93,10 @@ async function call(path: string, method: string, body: unknown, deps: Managemen
   return response;
 }
 
-afterEach(() => { if (temp) { try { rmSync(temp, { recursive: true, force: true }); } catch {} temp = ""; } });
+afterEach(() => {
+  if (temp) rmSync(temp, { recursive: true, force: true });
+  temp = "";
+});
 
 describe("link management routes", () => {
   test("enforces dashboard, loopback admin, and Tailscale route principals", async () => {
@@ -122,6 +125,94 @@ describe("link management routes", () => {
     expect(Object.keys(issueBody).sort()).toEqual(["apiKeyId", "key", "linkId", "listenerPort"]);
     expect((await call(`/api/link/${issueBody.linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(200);
     expect(h.events).toContain("close");
+  });
+
+  test("rejects a duplicate live client-initiated alias", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-duplicate-client-"));
+    const h = harness();
+    expect((await call("/api/link/issue", "POST", { alias: "home", tunnelPort: 2200 }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(200);
+    const duplicate = await call("/api/link/issue", "POST", { alias: "home", tunnelPort: 2201 }, h.deps, "admin-token", true, null, true, h.config);
+    expect(duplicate?.status).toBe(409);
+    expect(await duplicate!.json()).toMatchObject({ error: { code: "link_exists" } });
+    expect(h.store.links).toHaveLength(1);
+    expect(h.config.apiKeys).toHaveLength(1);
+  });
+
+  test("issue preserves a record written while the key is being issued", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-issue-race-"));
+    const h = harness();
+    const other = { id: "lnk_fedcba9876543210", alias: "other", direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: 2201, apiKeyId: "other-key", createdAt: "2026-09-25T00:00:00.000Z" };
+    const issueApiKey = h.deps.issueApiKey!;
+    const deps = {
+      ...h.deps,
+      issueApiKey: (cfg: OcxConfig, name: string) => {
+        h.deps.writeLinkStore!({ ...h.store, links: [other] });
+        return issueApiKey(cfg, name);
+      },
+    };
+    expect((await call("/api/link/issue", "POST", { alias: "home", tunnelPort: 2200 }, deps, "admin-token", true, null, true, h.config))?.status).toBe(200);
+    expect(h.store.links.map(link => link.alias)).toEqual(["other", "home"]);
+  });
+
+  test("apply preserves a record written while remote SSH connect waits", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-race-"));
+    const h = harness();
+    const other = { id: "lnk_fedcba9876543210", alias: "other", direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: 2201, apiKeyId: "other-key", createdAt: "2026-09-25T00:00:00.000Z" };
+    const baseRunner = applyRunner(h);
+    const deps = {
+      ...h.deps,
+      sshRunner: {
+        ...baseRunner,
+        async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
+          if (argv.join(" ").includes("connect")) h.deps.writeLinkStore!({ ...h.store, links: [other, ...h.store.links] });
+          return baseRunner.run(argv, options);
+        },
+      },
+    };
+    expect((await call("/api/link/probe", "POST", { alias: "home" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    expect((await call("/api/link/confirm-host", "POST", { alias: "home", fingerprint: "SHA256:abcdefghijklmnop" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    expect((await call("/api/link/apply", "POST", { alias: "home" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(202);
+    expect(h.store.links.map(link => link.alias)).toEqual(["other", "home"]);
+  });
+
+  test("remove preserves a record written while remote disconnect waits", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-remove-race-"));
+    const h = harness();
+    const existing = { id: "lnk_0123456789abcdef", alias: "home", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-1", createdAt: "2026-09-25T00:00:00.000Z" };
+    const other = { id: "lnk_fedcba9876543210", alias: "other", direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: 2201, apiKeyId: "other-key", createdAt: "2026-09-25T00:00:00.000Z" };
+    h.deps.writeLinkStore!({ ...h.store, links: [existing] });
+    const runner: SshRunner = {
+      async run() {
+        h.deps.writeLinkStore!({ ...h.store, links: [existing, other] });
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
+    };
+    expect((await call("/api/link/lnk_0123456789abcdef", "DELETE", {}, { ...h.deps, sshRunner: runner }, "admin-token", true, null, true, h.config))?.status).toBe(200);
+    expect(h.store.links.map(link => link.alias)).toEqual(["other"]);
+  });
+
+  test("restarts a hub tunnel before reporting a failed remote disconnect", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-disconnect-failed-"));
+    const h = harness();
+    h.deps.writeLinkStore!({ ...h.store, links: [{
+      id: "lnk_0123456789abcdef",
+      alias: "home",
+      direction: "hub-initiated",
+      hostKeyFingerprint: "SHA256:abcdefghijklmnop",
+      tunnelPort: 2200,
+      apiKeyId: "key-1",
+      createdAt: "2026-09-25T00:00:00.000Z",
+    }] });
+    const runner: SshRunner = {
+      async run() { return { code: 1, stdout: "", stderr: "disconnect failed" }; },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
+    };
+    const response = await call("/api/link/lnk_0123456789abcdef", "DELETE", {}, { ...h.deps, sshRunner: runner }, "admin-token", true, null, true, h.config);
+    expect(response?.status).toBe(502);
+    expect(await response!.json()).toMatchObject({ error: { code: "remote_disconnect_failed" } });
+    expect(h.events).toContain("reload");
+    expect(h.store.links).toHaveLength(1);
   });
 
   test("rejects issue when ensureStarted leaves the listener failed and compensates", async () => {
