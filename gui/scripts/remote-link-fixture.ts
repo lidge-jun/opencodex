@@ -42,7 +42,7 @@ async function appDocument(request: Request): Promise<Response> {
   const origin = new URL(request.url).origin;
   const fixture = fixtureFor(request, new URL(request.url));
   const runtimeRole = standaloneFixtures.has(fixture) ? "standalone" : "hub";
-  const tags = `<meta name="opencodex-runtime-role" content="${runtimeRole}"><meta name="opencodex-remote-link-fixture" content="${fixture}"><meta name="opencodex-session-token" content="ocx_session_fixture"><meta name="opencodex-session-csrf" content="fixture-csrf"><meta name="opencodex-session-origin" content="${origin}"><meta name="opencodex-session-server-origin" content="${origin}">`;
+  const tags = `<meta name="opencodex-runtime-role" content="${runtimeRole}"><meta name="opencodex-session-token" content="ocx_session_fixture"><meta name="opencodex-session-csrf" content="fixture-csrf"><meta name="opencodex-session-origin" content="${origin}"><meta name="opencodex-session-server-origin" content="${origin}">`;
   return new Response(body.replace("</head>", `${tags}</head>`), { headers: { "content-type": "text/html" } });
 }
 

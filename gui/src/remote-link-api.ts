@@ -14,6 +14,8 @@ export const LINK_ERROR_CODES = [
   "join_in_progress",
   "join_issue_failed",
   "join_port_failed",
+  "join_restart_failed",
+  "join_rollback_failed",
   "join_tunnel_failed",
   "key_issue_failed",
   "key_revoke_failed",

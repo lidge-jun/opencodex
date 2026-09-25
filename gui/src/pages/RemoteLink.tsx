@@ -43,6 +43,8 @@ const ERROR_TKEY: Record<LinkErrorCode, TKey> = {
   join_in_progress: "remoteLink.error.join_in_progress",
   join_issue_failed: "remoteLink.error.join_issue_failed",
   join_port_failed: "remoteLink.error.join_port_failed",
+  join_restart_failed: "remoteLink.error.join_restart_failed",
+  join_rollback_failed: "remoteLink.error.join_rollback_failed",
   join_tunnel_failed: "remoteLink.error.join_tunnel_failed",
   key_issue_failed: "remoteLink.error.key_issue_failed",
   key_revoke_failed: "remoteLink.error.key_revoke_failed",
@@ -72,6 +74,7 @@ const REASON_TKEY: Record<string, TKey> = {
 };
 
 type FailedAction = { phase: "probe" | "apply" | "join"; alias: string };
+type LinkAttempt = { controller: AbortController; sequence: number };
 
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null; }
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
@@ -123,6 +126,23 @@ export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable =
   const roleRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const statusRequestRef = useRef<{ controller: AbortController; sequence: number } | null>(null);
   const statusSequenceRef = useRef(0);
+  const linkAttemptRef = useRef<LinkAttempt | null>(null);
+  const linkAttemptSequenceRef = useRef(0);
+
+  const startLinkAttempt = useCallback((): LinkAttempt => {
+    linkAttemptRef.current?.controller.abort();
+    const attempt = { controller: new AbortController(), sequence: ++linkAttemptSequenceRef.current };
+    linkAttemptRef.current = attempt;
+    return attempt;
+  }, []);
+
+  const cancelLinkAttempt = useCallback(() => {
+    linkAttemptSequenceRef.current += 1;
+    linkAttemptRef.current?.controller.abort();
+    linkAttemptRef.current = null;
+  }, []);
+
+  const isCurrentLinkAttempt = (attempt: LinkAttempt): boolean => linkAttemptRef.current?.sequence === attempt.sequence && !attempt.controller.signal.aborted;
 
   const abortStatusRequest = useCallback(() => {
     statusSequenceRef.current += 1;
@@ -186,72 +206,93 @@ export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable =
     }
   }, [confirming]);
 
-  // Cancelling the sheet abandons the attempt, so a failed attempt's banner must not outlive it:
-  // leaving uiState at "failed" would show a Retry with nothing left to retry.
-  const closeSheet = () => { setSheetOpen(false); setProbe(null); setConfirmation(null); setCheckedFingerprint(false); setActionError(null); setFailedAction(null); setUiState(current => (current === "failed" ? "adding-child" : current)); addButtonRef.current?.focus(); };
+  // Cancelling the sheet abandons the attempt, so late responses cannot recreate its state.
+  const closeSheet = () => { cancelLinkAttempt(); setSheetOpen(false); setCandidates([]); setProbe(null); setConfirmation(null); setCheckedFingerprint(false); setActionError(null); setFailedAction(null); setBusy(null); setUiState(current => ["failed", "adding-child", "confirming-host", "applying", "joining"].includes(current) ? "adding-child" : current); addButtonRef.current?.focus(); };
   const standaloneRuntime = isStandaloneRuntime();
   const openSheet = async () => {
-    setSheetOpen(true); setUiState("adding-child"); setActionError(null); setBusy("candidates");
-    try { setCandidates(parseCandidates(await requestLinkJson<unknown>(apiBase, "/api/link/candidates"))); }
-    catch (error) { setActionError(errorKey(error)); }
-    finally { setBusy(null); }
-  };
-  const fixtureMode = typeof document === "undefined" ? null : document.querySelector('meta[name="opencodex-remote-link-fixture"]')?.getAttribute("content");
-  const fixtureInitializedRef = useRef(false);
-  const initializeFixture = useEffectEvent(() => {
-    if (fixtureInitializedRef.current || !standaloneRuntime) return;
-    fixtureInitializedRef.current = true;
-    if (fixtureMode === "standalone-find-home") { setRole("child"); void openSheet(); return; }
-    if (fixtureMode === "standalone-joining" || fixtureMode === "standalone-join-failure") {
-      setRole("child"); setAlias("child-workstation"); setProbe({ alias: "child-workstation", fingerprint: "SHA256:fixture-host-key", keyType: "ED25519" });
-      setConfirmation({ alias: "child-workstation", fingerprint: "SHA256:fixture-host-key", ocxVersion: "0.0.0-fixture" }); setCheckedFingerprint(true); setSheetOpen(true);
-      if (fixtureMode === "standalone-joining") { setBusy("join"); setUiState("joining"); }
-      else { setActionError("remoteLink.error.join_tunnel_failed"); setFailedAction({ phase: "join", alias: "child-workstation" }); setUiState("failed"); }
-      return;
+    const attempt = startLinkAttempt();
+    setSheetOpen(true); setUiState("adding-child"); setCandidates([]); setProbe(null); setConfirmation(null); setCheckedFingerprint(false); setActionError(null); setFailedAction(null); setBusy("candidates");
+    try {
+      const result = await requestLinkJson<unknown>(apiBase, "/api/link/candidates", { signal: attempt.controller.signal });
+      if (!isCurrentLinkAttempt(attempt)) return;
+      setCandidates(parseCandidates(result));
+    } catch (error) {
+      if (!isCurrentLinkAttempt(attempt)) return;
+      setActionError(errorKey(error));
+    } finally {
+      if (isCurrentLinkAttempt(attempt)) setBusy(null);
     }
-    if (fixtureMode === "standalone-restart-waiting") { setRole("child"); setUiState("restart-waiting"); }
-  });
-  useEffect(() => { window.setTimeout(initializeFixture, 0); }, [standaloneRuntime]);
-  const runProbe = async (requestedAlias = alias.trim()) => {
+  };
+  const runProbe = async (requestedAlias = alias.trim(), attempt = linkAttemptRef.current ?? startLinkAttempt()) => {
     const value = requestedAlias.trim();
     if (!value) return;
     setBusy("probe"); setActionError(null); setProbe(null); setConfirmation(null); setCheckedFingerprint(false); setFailedAction(null); setUiState("adding-child");
-    try { setProbe(parseProbe(await requestLinkJson<unknown>(apiBase, "/api/link/probe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: value }) }))); }
-    catch (error) { setActionError(errorKey(error)); setFailedAction({ phase: "probe", alias: value }); setUiState("failed"); }
-    finally { setBusy(null); }
+    try {
+      const result = await requestLinkJson<unknown>(apiBase, "/api/link/probe", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: value }), signal: attempt.controller.signal });
+      if (!isCurrentLinkAttempt(attempt)) return;
+      setProbe(parseProbe(result));
+    } catch (error) {
+      if (!isCurrentLinkAttempt(attempt)) return;
+      setActionError(errorKey(error)); setFailedAction({ phase: "probe", alias: value }); setUiState("failed");
+    } finally {
+      if (isCurrentLinkAttempt(attempt)) setBusy(null);
+    }
   };
   const confirmHost = async () => {
     if (!probe || !checkedFingerprint) return;
+    const attempt = linkAttemptRef.current;
+    if (!attempt) return;
     setBusy("confirm"); setActionError(null);
-    try { setConfirmation(parseConfirmation(await requestLinkJson<unknown>(apiBase, "/api/link/confirm-host", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: probe.alias, fingerprint: probe.fingerprint }) }))); }
-    catch (error) { setActionError(errorKey(error)); }
-    finally { setBusy(null); }
+    try {
+      const result = await requestLinkJson<unknown>(apiBase, "/api/link/confirm-host", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: probe.alias, fingerprint: probe.fingerprint }), signal: attempt.controller.signal });
+      if (!isCurrentLinkAttempt(attempt)) return;
+      setConfirmation(parseConfirmation(result));
+    } catch (error) {
+      if (!isCurrentLinkAttempt(attempt)) return;
+      setActionError(errorKey(error));
+    } finally {
+      if (isCurrentLinkAttempt(attempt)) setBusy(null);
+    }
   };
-  const applyLink = async () => {
-    if (!confirmation) return;
+  const applyLink = async (attempt = linkAttemptRef.current) => {
+    const confirmed = confirmation;
+    if (!confirmed || !attempt) return;
     setBusy("apply"); setActionError(null); setFailedAction(null); setUiState("applying");
-    try { await requestLinkJson<{ linkId: string }>(apiBase, "/api/link/apply", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: confirmation.alias }) }); closeSheet(); await refreshStatus(); }
-    catch (error) { setActionError(errorKey(error)); setFailedAction({ phase: "apply", alias: confirmation.alias }); setUiState("failed"); }
-    finally { setBusy(null); }
+    try {
+      await requestLinkJson<{ linkId: string }>(apiBase, "/api/link/apply", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: confirmed.alias }), signal: attempt.controller.signal });
+      if (!isCurrentLinkAttempt(attempt)) return;
+      closeSheet();
+      void refreshStatus();
+    } catch (error) {
+      if (!isCurrentLinkAttempt(attempt)) return;
+      setActionError(errorKey(error)); setFailedAction({ phase: "apply", alias: confirmed.alias }); setUiState("failed");
+    } finally {
+      if (isCurrentLinkAttempt(attempt)) setBusy(null);
+    }
   };
 
-  const joinLink = async (requestedAlias = confirmation?.alias) => {
+  const joinLink = async (requestedAlias = confirmation?.alias, attempt = linkAttemptRef.current ?? startLinkAttempt()) => {
     const value = requestedAlias?.trim();
     if (!value) return;
     setBusy("join"); setActionError(null); setFailedAction(null); setUiState("joining");
     try {
-      await requestLinkJson<{ linkId: string; alias: string; restarting: true }>(apiBase, "/api/link/join", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: value }) });
-      setSheetOpen(false); setUiState("restart-waiting");
+      await requestLinkJson<{ linkId: string; alias: string; restarting: true }>(apiBase, "/api/link/join", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ alias: value }), signal: attempt.controller.signal });
+      if (!isCurrentLinkAttempt(attempt)) return;
+      closeSheet(); setUiState("restart-waiting");
     } catch (error) {
+      if (!isCurrentLinkAttempt(attempt)) return;
       setActionError(errorKey(error)); setFailedAction({ phase: "join", alias: value }); setUiState("failed");
-    } finally { setBusy(null); }
+    } finally {
+      if (isCurrentLinkAttempt(attempt)) setBusy(null);
+    }
   };
 
   const retryFailedAction = () => {
     if (!failedAction) { void refreshStatus(); return; }
-    if (failedAction.phase === "probe") { setAlias(failedAction.alias); void runProbe(failedAction.alias); return; }
-    if (failedAction.phase === "join") { void joinLink(failedAction.alias); return; }
-    void applyLink();
+    const attempt = startLinkAttempt();
+    if (failedAction.phase === "probe") { setAlias(failedAction.alias); void runProbe(failedAction.alias, attempt); return; }
+    if (failedAction.phase === "join") { void joinLink(failedAction.alias, attempt); return; }
+    void applyLink(attempt);
   };
 
   const closeConfirmation = () => {
@@ -294,8 +335,8 @@ export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable =
       {workspaceAvailable && <section className="panel remote-link-workspace-card"><div><strong>{t("remoteLink.workspaceMoved.title")}</strong><p>{t("remoteLink.workspaceMoved.body")}</p></div><button type="button" className="btn btn-ghost btn-sm" onClick={onOpenWorkspace ?? (() => { window.location.hash = "remote-workspace"; })}>{t("remoteLink.workspaceMoved.open")}</button></section>}
       {statusError && <Notice tone="err"><span className="remote-link-error">{t(statusError)}</span></Notice>}
       {statusRows.length === 0 && uiState === "off" && <section className="panel remote-link-off-preview"><div className="remote-link-switch-row"><div><strong>{t("link.switch")}</strong><p className="remote-link-info">{t("link.switchOffHint")}</p></div><button type="button" role="switch" className="remote-link-switch" aria-checked="false" aria-label={t("link.switch")} onClick={() => setUiState("role-select")} /></div><div className="remote-link-preview-content" aria-hidden="true"><div className="remote-link-preview-row"><div className="remote-link-preview-lines"><span /><span /><span /></div><span className="remote-link-status">{t("remoteLink.status.idle")}</span></div><div className="remote-link-preview-row"><div className="remote-link-preview-lines"><span /><span /></div><span className="remote-link-status">{t("remoteLink.role.child")}</span></div></div></section>}
-      {uiState === "role-select" && <section className="panel remote-link-panel"><div><h3>{t("link.role.title")}</h3><p className="remote-link-info">{t("link.role.hint")}</p></div><div className="remote-link-role-grid" role="radiogroup" aria-label={t("link.role.title")}><button ref={element => { roleRefs.current[0] = element; }} type="button" role="radio" tabIndex={role === "home" ? 0 : -1} aria-checked={role === "home"} className="remote-link-role-card" onClick={() => setRole("home")} onKeyDown={event => { if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(0, event.key); } }}><strong>{t("link.role.home")}</strong><span>{t("link.role.homeHint")}</span></button><button ref={element => { roleRefs.current[1] = element; }} type="button" role="radio" tabIndex={standaloneRuntime && role === "child" ? 0 : -1} aria-checked={role === "child"} aria-disabled={!standaloneRuntime} className="remote-link-role-card" onClick={() => { if (standaloneRuntime) { setRole("child"); void openSheet(); } }} onKeyDown={event => { if (standaloneRuntime && ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(1, event.key); } }}><strong>{t("link.role.child")}</strong><span>{t("link.role.childHint")}</span></button></div>{!standaloneRuntime && <Notice tone="warn">{t("remoteLink.childDisabled")}</Notice>}{role === "child" && standaloneRuntime && <Notice tone="warn">{t("link.childPending")}</Notice>}<button type="button" className="btn btn-primary" disabled={primaryActionDisabled} onClick={() => { if (role === "home") setUiState("adding-child"); else void openSheet(); }}>{role === "child" ? t("remoteLink.findHome.action") : t("link.continue")}</button></section>}
-      {(uiState === "connected" || uiState === "reconnecting" || uiState === "failed" || uiState === "restart-waiting" || status?.role === "child" || statusRows.length > 0 || uiState === "adding-child" || uiState === "confirming-host" || uiState === "applying" || uiState === "joining") && <section className="panel remote-link-panel"><div className="remote-link-toolbar"><div><h3>{role === "child" && standaloneRuntime ? t("remoteLink.findHome.title") : t("link.children")}</h3><p className="remote-link-info">{uiState === "restart-waiting" ? t("remoteLink.restart.waiting") : t(roleLabel)}</p></div><button ref={addButtonRef} type="button" className="btn btn-primary btn-sm" onClick={() => void openSheet()} disabled={busy !== null || uiState === "applying" || uiState === "joining" || uiState === "restart-waiting" || status?.role === "child"}><IconPlus />{role === "child" && standaloneRuntime ? t("remoteLink.findHome.action") : t("link.addChild")}</button></div>{uiState === "restart-waiting" ? <div className="remote-link-restart" aria-live="polite"><strong>{t("remoteLink.restart.title")}</strong><p>{t("remoteLink.restart.body")}</p></div> : status?.role === "child" ? <div className="remote-link-children" aria-live="polite"><div className="remote-link-row"><div className="remote-link-row-main"><strong>{status.child?.alias ?? t("remoteLink.role.child")}</strong>{status.child && <div className="remote-link-row-meta"><span className="remote-link-status" data-state={status.child.state}>{t(STATUS_LABEL[status.child.state])}</span></div>}</div></div></div> : statusRows.length > 0 ? <div className="remote-link-children" aria-live="polite">{statusRows.map(row => <div className="remote-link-row" key={row.id}><div className="remote-link-row-main"><strong>{row.alias}</strong><div className="remote-link-row-meta"><span className="remote-link-status" data-state={row.state}>{t(STATUS_LABEL[row.state])}</span><span>{row.direction === "hub-initiated" ? t("remoteLink.direction.hub") : t("remoteLink.direction.client")}</span>{row.reason && <span className="remote-link-error">{row.reason in REASON_TKEY ? t(REASON_TKEY[row.reason]) : <>{t("remoteLink.reason.generic")} <code>{row.reason}</code></>}</span>}</div></div><button type="button" className="btn btn-ghost btn-sm" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setConfirming({ row, force: false }); }} disabled={busy !== null}><IconTrash />{t("link.disconnect")}</button></div>)}</div> : <p className="remote-link-info">{t("link.noChildren")}</p>}{(uiState === "reconnecting" || uiState === "failed") && <div className="remote-link-status-message" aria-live="polite"><span className="remote-link-status" data-state={uiState === "failed" ? "failed" : "reconnecting"}>{t(STATUS_LABEL[uiState === "failed" ? "failed" : "reconnecting"])}</span><button type="button" className="btn btn-ghost btn-sm" onClick={retryFailedAction}>{t("link.retry")}</button></div>}{uiState === "joining" && <p className="remote-link-info" aria-live="polite">{t("remoteLink.joining")}</p>}{actionError && <Notice tone="err"><span className="remote-link-error">{t(actionError)}</span></Notice>}</section>}
+      {uiState === "role-select" && <section className="panel remote-link-panel"><div><h3>{t("link.role.title")}</h3><p className="remote-link-info">{t("link.role.hint")}</p></div><div className="remote-link-role-grid" role="radiogroup" aria-label={t("link.role.title")}><button ref={element => { roleRefs.current[0] = element; }} type="button" role="radio" tabIndex={role === "home" ? 0 : -1} aria-checked={role === "home"} className="remote-link-role-card" onClick={() => setRole("home")} onKeyDown={event => { if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(0, event.key); } }}><strong>{t("link.role.home")}</strong><span>{t("link.role.homeHint")}</span></button><button ref={element => { roleRefs.current[1] = element; }} type="button" role="radio" tabIndex={standaloneRuntime && role === "child" ? 0 : -1} aria-checked={role === "child"} aria-disabled={!standaloneRuntime} className="remote-link-role-card" onClick={() => { if (standaloneRuntime) { setRole("child"); void openSheet(); } }} onKeyDown={event => { if (standaloneRuntime && ["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) { event.preventDefault(); moveRole(1, event.key); } }}><strong>{t("link.role.child")}</strong><span>{t("link.role.childHint")}</span></button></div>{!standaloneRuntime && <Notice tone="warn">{t("remoteLink.childDisabled")}</Notice>}<button type="button" className="btn btn-primary" disabled={primaryActionDisabled} onClick={() => { if (role === "home") setUiState("adding-child"); else void openSheet(); }}>{role === "child" ? t("remoteLink.findHome.action") : t("link.continue")}</button></section>}
+      {(uiState === "connected" || uiState === "reconnecting" || uiState === "failed" || uiState === "restart-waiting" || status?.role === "child" || statusRows.length > 0 || uiState === "adding-child" || uiState === "confirming-host" || uiState === "applying" || uiState === "joining") && <section className="panel remote-link-panel"><div className="remote-link-toolbar"><div><h3>{role === "child" && standaloneRuntime ? t("remoteLink.findHome.title") : t("link.children")}</h3><p className="remote-link-info">{uiState === "restart-waiting" ? t("remoteLink.restart.waiting") : t(roleLabel)}</p></div><button ref={addButtonRef} type="button" className="btn btn-primary btn-sm" onClick={() => void openSheet()} disabled={busy !== null || uiState === "applying" || uiState === "joining" || uiState === "restart-waiting" || status?.role === "child"}><IconPlus />{role === "child" && standaloneRuntime ? t("remoteLink.findHome.action") : t("link.addChild")}</button></div>{uiState === "restart-waiting" ? <div className="remote-link-restart" aria-live="polite"><strong>{t("remoteLink.restart.title")}</strong><p>{t("remoteLink.restart.body")}</p></div> : status?.role === "child" ? <div className="remote-link-children" aria-live="polite"><div className="remote-link-row"><div className="remote-link-row-main"><strong>{status.child?.alias ?? t("remoteLink.role.child")}</strong>{status.child && <div className="remote-link-row-meta"><span className="remote-link-status" data-state={status.child.state}>{t(STATUS_LABEL[status.child.state])}</span></div>}</div></div></div> : statusRows.length > 0 ? <div className="remote-link-children" aria-live="polite">{statusRows.map(row => <div className="remote-link-row" key={row.id}><div className="remote-link-row-main"><strong>{row.alias}</strong><div className="remote-link-row-meta"><span className="remote-link-status" data-state={row.state}>{t(STATUS_LABEL[row.state])}</span><span>{row.direction === "hub-initiated" ? t("remoteLink.direction.hub") : t("remoteLink.direction.client")}</span>{row.reason && <span className="remote-link-error">{row.reason in REASON_TKEY ? t(REASON_TKEY[row.reason]) : <>{t("remoteLink.reason.generic")} <code>{row.reason}</code></>}</span>}</div></div><button type="button" className="btn btn-ghost btn-sm" onClick={event => { disconnectTriggerRef.current = event.currentTarget; setConfirming({ row, force: false }); }} disabled={busy !== null}><IconTrash />{t("link.disconnect")}</button></div>)}</div> : <p className="remote-link-info">{t("link.noChildren")}</p>}{(uiState === "reconnecting" || (uiState === "failed" && ((failedAction !== null && actionError !== "remoteLink.error.join_restart_failed") || statusRows.some(row => row.state === "failed")))) && <div className="remote-link-status-message" aria-live="polite"><span className="remote-link-status" data-state={uiState === "failed" ? "failed" : "reconnecting"}>{t(STATUS_LABEL[uiState === "failed" ? "failed" : "reconnecting"])}</span><button type="button" className="btn btn-ghost btn-sm" onClick={retryFailedAction}>{t("link.retry")}</button></div>}{uiState === "joining" && <p className="remote-link-info" aria-live="polite">{t("remoteLink.joining")}</p>}{actionError && <Notice tone="err"><span className="remote-link-error">{t(actionError)}</span></Notice>}</section>}
 
       <dialog ref={sheetRef} className="remote-link-sheet" aria-labelledby="remote-link-sheet-title" onCancel={event => { event.preventDefault(); closeSheet(); }}>
         <div className="remote-link-sheet-head"><h3 id="remote-link-sheet-title">{role === "child" && standaloneRuntime ? t("remoteLink.findHome.title") : t("link.sheetTitle")}</h3><button type="button" className="btn btn-ghost btn-icon" onClick={closeSheet} aria-label={t("link.close")}><IconX /></button></div>

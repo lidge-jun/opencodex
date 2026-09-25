@@ -186,6 +186,32 @@ test("join maps standalone_required to an actionable message", async () => {
   expect(host.textContent).toContain("Child links can only be started from a standalone runtime.");
 });
 
+test("join_restart_failed shows restart guidance without Retry", async () => {
+  declareRuntimeRole("standalone");
+  globalThis.fetch = (async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "home-one", source: "ssh_config" }] });
+    if (path === "/api/link/probe") return response({ alias: "home-one", fingerprint: "SHA256:test", keyType: "ed25519" });
+    if (path === "/api/link/confirm-host") return response({ alias: "home-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
+    if (path === "/api/link/join") return response({ error: { code: "join_restart_failed" } }, 500);
+    return response({ ...baseStatus, role: "standalone" });
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { ([...host.querySelectorAll('[role="radio"]')][1] as HTMLButtonElement).click(); });
+  await flush();
+  await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Confirm host"))?.click(); });
+  await flush();
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Connect as Child"))?.click(); });
+  await flush();
+  expect(host.textContent).toContain("The link is ready. Restart OpenCodex on this computer to finish connecting as a Child.");
+  expect(host.textContent).not.toContain("Retry");
+});
+
 test("workspace card is available only through the availability prop", async () => {
   globalThis.fetch = (async () => response(baseStatus)) as typeof fetch;
   const host = await mount({ workspaceAvailable: true });
@@ -386,4 +412,59 @@ test("cancelling a failed apply leaves no dead Retry behind", async () => {
   await flush();
   expect([...host.querySelectorAll("button")].some(button => button.textContent === "Retry")).toBe(false);
   expect([...host.querySelectorAll("button")].some(button => button.textContent?.includes("Add child"))).toBe(true);
+});
+
+test("cancelling a join ignores a late failure", async () => {
+  declareRuntimeRole("standalone");
+  let releaseJoin!: (value: Response) => void;
+  const joinResponse = new Promise<Response>(resolve => { releaseJoin = resolve; });
+  globalThis.fetch = (async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "home-one", source: "ssh_config" }] });
+    if (path === "/api/link/probe") return response({ alias: "home-one", fingerprint: "SHA256:test", keyType: "ed25519" });
+    if (path === "/api/link/confirm-host") return response({ alias: "home-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
+    if (path === "/api/link/join") return joinResponse;
+    return response({ ...baseStatus, role: "standalone" });
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { ([...host.querySelectorAll('[role="radio"]')][1] as HTMLButtonElement).click(); });
+  await flush();
+  await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Confirm host"))?.click(); });
+  await flush();
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Connect as Child"))?.click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent === "Cancel")?.click(); });
+  releaseJoin(response({ error: { code: "join_tunnel_failed" } }, 502));
+  await flush();
+  expect(host.textContent).not.toContain("Retry");
+  expect(host.textContent).not.toContain("The tunnel to Home could not be started.");
+});
+
+test("cancelling candidates prevents a late response from appearing in a new attempt", async () => {
+  let releaseFirst!: (value: Response) => void;
+  let candidateCalls = 0;
+  const firstCandidates = new Promise<Response>(resolve => { releaseFirst = resolve; });
+  globalThis.fetch = (async input => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/candidates") {
+      candidateCalls += 1;
+      return candidateCalls === 1 ? firstCandidates : response({ candidates: [{ alias: "new-home", source: "ssh_config" }] });
+    }
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent === "Cancel")?.click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
+  await flush();
+  releaseFirst(response({ candidates: [{ alias: "stale-home", source: "ssh_config" }] }));
+  await flush();
+  expect(host.textContent).toContain("new-home");
+  expect(host.textContent).not.toContain("stale-home");
 });
