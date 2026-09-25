@@ -1399,7 +1399,11 @@ export async function handleClaudeCountTokens(
     if (wantsNativePassthrough(req, config, requestPolicy, model, cc)) {
       return await anthropicNativePassthrough(req, config, { model, provider: "anthropic-native", surface: "claude" }, undefined, raw, "/v1/messages/count_tokens");
     }
-    const inputTokens = estimateClaudeRequestTokens(raw, model);
+    // PF-08: an eligible managed-key route counts the body the native lane would send.
+    const nativeCountBody = resolveProtocolSettings(config).rollout.managedMessagesNative
+      ? (await import("./messages-native")).nativeMessagesCountBody(config, cc, raw, { fastRow: countFastRow !== null })
+      : undefined;
+    const inputTokens = estimateClaudeRequestTokens(nativeCountBody ?? raw, model);
     return new Response(JSON.stringify({ input_tokens: inputTokens }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
