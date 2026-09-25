@@ -8,11 +8,12 @@ description: 透過 SSH 連接 OpenCodex Home 電腦與 Child 電腦。
 ## 需求
 
 - Home 可以使用 OpenSSH 金鑰登入 Child。
+- 對於由 Child 發起的連結，Child 必須能使用 OpenSSH 金鑰登入 Home（不支援密碼登入）。
 - Child 已安裝 OpenCodex。
 - 兩台電腦執行 macOS 或 Linux。
 - Home 儀表板擁有完整的已配對工作階段。
 
-密碼 SSH、Windows，以及由 Child 發起的連結不在目前流程中。Child 發起的流程**即將推出**。
+密碼 SSH 和 Windows 不在目前流程中。若要從 Child 發起連線，請在獨立執行的 Child 儀表板中選擇 **子裝置** → **尋找 Home**，選取 Home 的 SSH 主機，檢查並確認主機金鑰指紋，然後選擇 **以子裝置身分連線**。Child 必須能使用 SSH 金鑰登入 Home（不支援密碼登入），而且 Home 上正在執行 `ocx`。用戶端通道連接埠必須是 `1024` 或更高。加入後，Child 會重新啟動並連線到 Home。這個入口只在 standalone 執行個體中提供。
 
 ## 從 `#remote` 新增 Child
 
@@ -42,6 +43,8 @@ description: 透過 SSH 連接 OpenCodex Home 電腦與 Child 電腦。
 ```bash
 ocx disconnect
 ```
+
+若要中斷由 Child 發起的連結，請在 Child 上執行 `ocx disconnect`。這個命令會中斷用戶端通道，並透過 SSH 在 Home 上撤銷連結。如果 Home 撤銷失敗，命令會輸出：`Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
 ## 安全性
 

@@ -8,11 +8,12 @@ A machine link connects an OpenCodex **Home** computer to a **Child** computer o
 ## Requirements
 
 - The Home computer can log in to the Child with an OpenSSH key.
+- For a Child-initiated link, the Child can log in to Home with an OpenSSH key (password login is not supported).
 - OpenCodex is installed on the Child computer.
 - Both computers run macOS or Linux.
 - The Home dashboard has a full paired session.
 
-Password SSH, Windows, and a Child-initiated link are outside the current flow. The Child-initiated flow is **coming soon**.
+Password SSH and Windows are outside the current flow. For a Child-initiated link, open the standalone Child dashboard, choose **Child** → **Find Home**, select the SSH host for Home, check and confirm the host-key fingerprint, then choose **Connect as Child**. The Child must be able to log in to Home with an SSH key (password login is not supported), and `ocx` must be running on Home. The client tunnel port is `1024` or higher. After joining, the Child restarts and connects through Home. This option is available only on a standalone runtime.
 
 ## Add a Child from `#remote`
 
@@ -42,6 +43,8 @@ If the Home cannot reach the Child to run its disconnect command, choose **Remov
 ```bash
 ocx disconnect
 ```
+
+To disconnect a Child-initiated link, run `ocx disconnect` on the Child. It disconnects the client tunnel and revokes the link on Home over SSH. If Home revocation fails, it prints: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
 ## Security
 

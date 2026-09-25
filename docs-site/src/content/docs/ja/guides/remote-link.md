@@ -8,11 +8,12 @@ description: SSH で OpenCodex の Home コンピューターと Child コンピ
 ## 要件
 
 - Home から Child に OpenSSH キーでログインできること。
+- Child から開始するリンクでは、Child から Home に OpenSSH キーでログインできる必要があります（パスワードログインには対応していません）。
 - Child に OpenCodex がインストールされていること。
 - 両方のコンピューターが macOS または Linux であること。
 - Home のダッシュボードに完全なペアリング済みセッションがあること。
 
-パスワード SSH、Windows、Child から開始するリンクは現在のフローに含まれません。Child 開始フローは**近日対応予定**です。
+パスワード SSH と Windows は現在のフローに含まれません。Child からリンクを開始するには、スタンドアロンの Child ダッシュボードで **子** → **Home を探す** を選び、Home の SSH ホストを選択し、ホストキーのフィンガープリントを確認してから **子として接続** を選びます。Child から Home へ SSH キーでログインできる必要があり（パスワードログインには対応していません）、Home では `ocx` が実行中である必要があります。クライアントトンネルのポートは `1024` 以上です。参加後、Child は再起動して Home に接続します。この項目はスタンドアロンランタイムでのみ使用できます。
 
 ## `#remote` から Child を追加する
 
@@ -42,6 +43,8 @@ Home から Child に接続解除コマンドを実行できない場合は **Re
 ```bash
 ocx disconnect
 ```
+
+Child から開始したリンクを切断するには、Child で `ocx disconnect` を実行します。このコマンドはクライアントトンネルを切断し、SSH 経由で Home のリンクを失効させます。Home での失効に失敗すると、次のメッセージが表示されます: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
 ## セキュリティ
 

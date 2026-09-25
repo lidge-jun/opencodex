@@ -8,11 +8,12 @@ Makine bağlantısı, bir OpenCodex **Home** bilgisayarını bir **Child** bilgi
 ## Gereksinimler
 
 - Home bilgisayarı, Child bilgisayarına OpenSSH anahtarıyla giriş yapabilir.
+- Child tarafından başlatılan bağlantı için Child, Home bilgisayarına OpenSSH anahtarıyla giriş yapabilmelidir (parola girişi desteklenmez).
 - Child bilgisayarında OpenCodex kuruludur.
 - Her iki bilgisayar da macOS veya Linux çalıştırır.
 - Home kontrol panelinde tam bir eşleştirilmiş oturum vardır.
 
-Parola SSH, Windows ve Child tarafından başlatılan bağlantı mevcut akışın dışındadır. Child tarafından başlatılan akış **yakında geliyor**.
+Parolalı SSH ve Windows mevcut akışın dışındadır. Child üzerinden bağlantı başlatmak için bağımsız çalışan Child kontrol panelinde **Çocuk** → **Home'u bul** seçeneklerini izleyin, Home için SSH ana bilgisayarını seçin, ana bilgisayar anahtarı parmak izini kontrol edip onaylayın ve ardından **Çocuk olarak bağlan** seçeneğini seçin. Child, Home bilgisayarına SSH anahtarıyla giriş yapabilmelidir (parola girişi desteklenmez) ve Home üzerinde `ocx` çalışıyor olmalıdır. İstemci tüneli portu `1024` veya daha yüksek olmalıdır. Katılma işleminden sonra Child yeniden başlar ve Home bilgisayarına bağlanır. Bu seçenek yalnızca standalone çalışma zamanında kullanılabilir.
 
 ## `#remote` üzerinden Child ekleme
 
@@ -42,6 +43,8 @@ Home, bağlantıyı kesme komutunu çalıştırmak için Child'a ulaşamıyorsa 
 ```bash
 ocx disconnect
 ```
+
+Child tarafından başlatılan bağlantıyı kesmek için Child üzerinde `ocx disconnect` komutunu çalıştırın. Komut istemci tünelinin bağlantısını keser ve SSH üzerinden Home üzerindeki bağlantıyı iptal eder. Home üzerindeki iptal başarısız olursa şu mesajı yazdırır: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
 ## Güvenlik
 

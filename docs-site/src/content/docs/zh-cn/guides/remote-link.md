@@ -8,11 +8,12 @@ description: 通过 SSH 将 OpenCodex 主机与子机连接起来。
 ## 要求
 
 - 主机可以使用 OpenSSH 密钥登录子机。
+- 对于由子机发起的链接，子机必须能使用 OpenSSH 密钥登录主机（不支持密码登录）。
 - 子机已安装 OpenCodex。
 - 两台电脑运行 macOS 或 Linux。
 - 主机控制台拥有完整的已配对会话。
 
-密码 SSH、Windows 以及由子机发起的链接不在当前流程中。子机发起的流程**即将推出**。
+密码 SSH 和 Windows 不在当前流程中。要从子机发起连接，请在独立运行的子机控制台中选择 **子设备** → **查找 Home**，选择 Home 的 SSH 主机，检查并确认主机密钥指纹，然后选择 **以子设备身份连接**。子机必须能使用 SSH 密钥登录 Home（不支持密码登录），并且 Home 上正在运行 `ocx`。客户端隧道端口必须为 `1024` 或更高。加入后，子机会重启并连接到 Home。此入口仅在 standalone 运行时提供。
 
 ## 从 `#remote` 添加子机
 
@@ -42,6 +43,8 @@ description: 通过 SSH 将 OpenCodex 主机与子机连接起来。
 ```bash
 ocx disconnect
 ```
+
+要断开由子机发起的链接，请在子机上运行 `ocx disconnect`。该命令会断开客户端隧道，并通过 SSH 在 Home 上撤销链接。如果 Home 撤销失败，命令会输出：`Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
 ## 安全
 

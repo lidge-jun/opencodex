@@ -8,11 +8,12 @@ Une liaison entre machines connecte un ordinateur OpenCodex **Home** à un ordin
 ## Conditions requises
 
 - Home peut se connecter à Child avec une clé OpenSSH.
+- Pour une liaison initiée par Child, Child peut se connecter à Home avec une clé OpenSSH (la connexion par mot de passe n’est pas prise en charge).
 - OpenCodex est installé sur Child.
 - Les deux ordinateurs utilisent macOS ou Linux.
 - Le tableau de bord Home dispose d’une session appairée complète.
 
-SSH par mot de passe, Windows et la liaison initiée par Child ne font pas partie du flux actuel. Le flux initié par Child est **bientôt disponible**.
+SSH par mot de passe et Windows restent hors du flux actuel. Pour démarrer une liaison depuis Child, ouvrez le tableau de bord du Child autonome, choisissez **Enfant** → **Trouver le Home**, sélectionnez l’hôte SSH de Home, vérifiez puis confirmez l’empreinte de la clé hôte, et choisissez **Connecter comme Enfant**. Child doit pouvoir se connecter à Home avec une clé SSH (les mots de passe ne sont pas pris en charge), et `ocx` doit être en cours d’exécution sur Home. Le port du tunnel client est `1024` ou supérieur. Après la jonction, Child redémarre et se connecte via Home. Cette option est disponible uniquement en mode autonome.
 
 ## Ajouter un Child depuis `#remote`
 
@@ -42,6 +43,8 @@ Si Home ne peut pas joindre Child pour exécuter la déconnexion, choisissez **R
 ```bash
 ocx disconnect
 ```
+
+Pour déconnecter une liaison initiée par Child, exécutez `ocx disconnect` sur Child. La commande déconnecte le tunnel client et révoque la liaison sur Home via SSH. Si cette révocation échoue, elle affiche : `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
 ## Sécurité
 
