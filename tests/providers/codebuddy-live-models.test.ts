@@ -117,6 +117,51 @@ describe("CodeBuddy live model fetch", () => {
     const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
     expect(result).toMatchObject({ ok: false, error: "invalid_output" });
   });
+
+  test("a chunked body that crosses the byte limit fails as too_large and cancels the stream", async () => {
+    // 256 KiB chunks: the third crossing chunk must cancel the reader, so a compromised
+    // upstream cannot keep discovery reading (or buffering) past the advertised cap.
+    const chunk = new Uint8Array(256 * 1024).fill(0x61);
+    let cancelled = false;
+    let pulls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() { cancelled = true; },
+    });
+    const fetchLike = (async () => new Response(stream, { status: 200, headers: { "content-type": "application/json" } })) as typeof fetch;
+    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
+    expect(result).toMatchObject({ ok: false, error: "too_large" });
+    expect(cancelled).toBe(true);
+    // Two chunks fit under the cap; the third is the crossing one. The stream machinery
+    // may prefetch one chunk ahead, so the bound is "a handful", never stream-sized.
+    expect(pulls).toBeLessThanOrEqual(4);
+  });
+
+  test("a declared Content-Length above the cap is refused without reading the body", async () => {
+    const chunk = new Uint8Array(16).fill(0x61);
+    let pulls = 0;
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunk);
+      },
+      cancel() { cancelled = true; },
+    });
+    const fetchLike = (async () => new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json", "content-length": String(600 * 1024) },
+    })) as typeof fetch;
+    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
+    expect(result).toMatchObject({ ok: false, error: "too_large" });
+    // The declared length is refused before the body is read; the wrapper's teardown may
+    // still cost one prefetch chunk, never the declared 600 KiB.
+    expect(pulls).toBeLessThanOrEqual(1);
+    expect(cancelled).toBe(true);
+  });
 });
 
 describe("CodeBuddy catalog cache isolation", () => {

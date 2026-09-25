@@ -3,6 +3,7 @@ import type { CodeBuddyProfile } from "./profiles";
 
 const MAX_CONFIG_BYTES = 512 * 1024;
 const MAX_MODELS = 128;
+const MAX_ERROR_BODY_BYTES = 4 * 1024;
 
 export type CodeBuddyModelsResult =
   | { ok: true; models: string[] }
@@ -33,6 +34,46 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 // until the vendor tightens it — and a rejection then degrades through the same failure path as
 // any other discovery failure.
 const CLI_USER_AGENT = "CLI/2.126.0 CodeBuddy/2.126.0";
+
+/**
+ * Read at most `cap` bytes of an untrusted upstream body, then stop reading. A body that
+ * would cross the cap is cancelled at the reader the moment the crossing chunk arrives, so a
+ * malformed or compromised upstream cannot make discovery buffer an unbounded response (the
+ * same contract as the vision sidecar's bounded error-body read).
+ */
+async function readBoundedBodyText(res: Response, cap: number): Promise<
+  | { ok: true; text: string }
+  | { ok: false; reason: "exceeded" | "read"; detail?: string }
+> {
+  if (!res.body) return { ok: true, text: "" };
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let out = "";
+  let seen = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (seen + value.byteLength > cap) {
+        try { void reader.cancel("CodeBuddy config body byte limit reached").catch(() => undefined); }
+        catch { /* best-effort body teardown */ }
+        return { ok: false, reason: "exceeded" };
+      }
+      seen += value.byteLength;
+      out += decoder.decode(value, { stream: true });
+    }
+    out += decoder.decode();
+    return { ok: true, text: out };
+  } catch (error) {
+    return { ok: false, reason: "read", detail: String((error as Error)?.message ?? error).slice(0, 200) };
+  }
+}
+
+/** A declared Content-Length above the cap is refused before a single byte is read. */
+function declaredLengthExceeds(response: Response, cap: number): boolean {
+  const declared = Number(response.headers.get("content-length"));
+  return Number.isSafeInteger(declared) && declared > cap;
+}
 
 /**
  * Parse the key-scoped roster out of the product configuration envelope.
@@ -116,20 +157,34 @@ export async function fetchCodeBuddyModels(
   }
   if (response.status !== 200) {
     let detail = `HTTP ${response.status}`;
-    try {
-      const envelope = await response.json() as unknown;
-      if (isPlainObject(envelope) && typeof envelope.msg === "string") {
-        detail = `HTTP ${response.status} (${String(envelope.msg).slice(0, 120)})`;
+    // The error envelope is untrusted upstream output too; read it bounded and skip the
+    // message entirely when it does not fit a small error-body cap.
+    const errorBody = await readBoundedBodyText(response, MAX_ERROR_BODY_BYTES);
+    if (errorBody.ok) {
+      try {
+        const envelope = JSON.parse(errorBody.text) as unknown;
+        if (isPlainObject(envelope) && typeof envelope.msg === "string") {
+          detail = `HTTP ${response.status} (${String(envelope.msg).slice(0, 120)})`;
+        }
+      } catch {
+        // The status line alone is enough when the body is not a JSON envelope.
       }
-    } catch {
-      // The status line alone is enough when the body is not a JSON envelope.
     }
     return { ok: false, error: "http", detail };
   }
-  const bodyText = await response.text();
-  if (Buffer.byteLength(bodyText) > MAX_CONFIG_BYTES) return { ok: false, error: "too_large" };
+  if (declaredLengthExceeds(response, MAX_CONFIG_BYTES)) {
+    try { void response.body?.cancel("CodeBuddy config body byte limit reached").catch(() => undefined); }
+    catch { /* best-effort body teardown */ }
+    return { ok: false, error: "too_large" };
+  }
+  const body = await readBoundedBodyText(response, MAX_CONFIG_BYTES);
+  if (!body.ok) {
+    return body.reason === "exceeded"
+      ? { ok: false, error: "too_large" }
+      : { ok: false, error: "http", detail: `CodeBuddy config body read failed${body.detail ? ": " + body.detail : ""}` };
+  }
   try {
-    return parseCodeBuddyConfigRoster(JSON.parse(bodyText) as unknown);
+    return parseCodeBuddyConfigRoster(JSON.parse(body.text) as unknown);
   } catch {
     return { ok: false, error: "invalid_output", detail: "CodeBuddy config response is not valid JSON" };
   }
