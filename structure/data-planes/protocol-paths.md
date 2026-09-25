@@ -214,7 +214,20 @@ Responses. `nativeMessagesDeclineReason` names the first rule that keeps a route
 `rollout-disabled`, `cross-wire-ir` (another adapter), `auth-mode-not-native` (OAuth, which is
 PF-10, or `forward`), `combo-or-policy-route`, `effort-row` / `fast-row` (synthetic rows need the
 adapter's wire rewrite), `vision-preprocessing` (an image for a model declared unable to read
-it). The ingress, `count_tokens` and the planner all ask it.
+it), and `bridge-only-policy` when operator policy that only the translated path applies would
+engage: a pinned reasoning effort for the route (`resolvePinnedEffort`, read with the translated
+body's model id as the bridge reads it), a blocked-skill bundle the translator would elide
+(`anthropicBodyElidesBlockedSkill` in `src/claude/inbound.ts`), or a `web_search*` server tool the
+web-search sidecar could serve (not excluded by `tool_choice`, sidecar not disabled in the Claude
+replay config; backend credentials are decided at dispatch, so this errs toward the bridge). The
+ingress, `count_tokens` and the planner all ask it. The planner can judge only the config-and-route
+parts: skill elision and web search depend on body content no feature describes.
+
+With the switch on, a declined route re-marks its bridge entry with the decline reason (after
+any `effort-row` / `fast-row`), so the trace says why the bridge was taken; with it off nothing is
+added. `claudeCode.stabilizePromptCache` is not a decline rule: it is a Claude-app cache
+optimization rather than routing policy, applies only on the translated path, and is a recorded
+gap of the native lane.
 
 `src/server/claude-messages.ts` decides the lane after the route and its wire settle and after the
 managed-client steps already applied to the body (alias/modelMap resolution, `ocx-route`, effort
@@ -238,14 +251,19 @@ feature effect.
 selection, 401 and 429 key-pool rotation, same-target 429 replay, the reset/transient retry
 policy and `sendWithConnectionPolicy`. Before sending it runs the image normalizer, the image
 guard and the tool-call-id repair the caller-forward passthrough runs. A streaming caller gets the
-upstream SSE relayed byte for byte through `tapAnthropicSseForLog`, which records usage and the
+upstream SSE relayed through `tapAnthropicSseForLog`, which records usage and the
 terminal and applies the body stall and size guards; a non-streaming caller gets the upstream JSON
-(or a folded stream). Upstream errors answer in Anthropic shape with the translated lane's status
+(or a folded stream). Either way `model` is rewritten to the selector the client sent, as the
+translated lane answers (`message_start.message.model` on a stream, found within the first 64 KiB;
+everything else is relayed as is). Upstream errors answer in Anthropic shape with the translated lane's status
 policy (transient 5xx as 529, replay refusals kept non-retryable). `count_tokens` estimates the
 body the builder would send when the route is eligible, and sends nothing.
 `tests/adapters/anthropic/anthropic-messages-passthrough.test.ts`,
-`tests/responses/messages-native-eligibility.test.ts` and
-`tests/claude-integration/messages-native.test.ts` pin the builder, the rule and the lane.
+`tests/responses/messages-native-eligibility.test.ts`,
+`tests/responses/messages-native-bridge-policy.test.ts`,
+`tests/claude-integration/messages-native.test.ts` and
+`tests/claude-integration/messages-native-decline-trace.test.ts` pin the builder, the rule, the
+lane and the decline trace.
 
 ## Settings
 
