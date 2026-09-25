@@ -253,7 +253,8 @@ pick after the pin would leave the first attempt on the cooled key.
 
 Native Chat Completions is a separate entry path: `src/server/chat-completions.ts` routes
 eligible `openai-chat` requests to `src/server/chat-native.ts` and never through Responses
-core, so that file repeats the same call before it binds the adapter. Native compact
+core, so that file repeats the same call before it binds the adapter; the managed native
+Messages lane (`src/server/messages-native.ts`) does the same. Native compact
 (`src/server/responses/compact.ts`) and the keyed Images relay (`src/server/images.ts`)
 do the same for the same reason. Request paths assign the Transport variant, not the bare
 `selectProactiveApiKey` snapshot: the snapshot is the persisted row, so it carries none of the
@@ -469,7 +470,7 @@ reachable from `core.ts`.
 | Module | Contract |
 | --- | --- |
 | `context.ts` | `createInferenceSendBudget(req, logCtx)` is the one construction of an ingress-owned send holder: the default guarded policy with this request's spend tracker as observer. `handleResponses` calls it only when no holder was inherited, because attaching the tracker parks it on `logCtx`. |
-| `final-log.ts` | `createFinalRequestLog(logIds, logCtx)` owns one request's final row: the first `finish(status, meta)` writes it, every later call is a no-op, and without log ids the claim settles with nothing written. The bridged Chat and Messages ingresses and native Chat finish through it. |
+| `final-log.ts` | `createFinalRequestLog(logIds, logCtx)` owns one request's final row: the first `finish(status, meta)` writes it, every later call is a no-op, and without log ids the claim settles with nothing written. The bridged Chat and Messages ingresses, native Chat and native Messages finish through it. |
 | `attempt.ts` | `beginInferenceAttempt(logCtx, { provider, model, adapter })` opens the next attempt ordinal, makes it the active attempt with its start time, appends it to the request, and returns `seal(accountLabel?)` and `finish(status, usage?)`. |
 | `client-wire.ts` | `markClientWire(response, protocol)` / `clientWireOf(response)` record, per `Response` identity, that a body is already in a client's wire. `createClientWireLog` / `attachClientWireLog` / `clientWireLogOf` carry the request-log facts of such a body (a start payload, one terminal, a cancel), buffered until the deferred log subscribes. The combo marks a native Chat child's answer and its refusal of an all-unrepresentable combo as `chat` (below). |
 | `client-wire-log.ts` | `recordClientWireRequestLog` is the deferred request log of a client-wire response: `responseWithDeferredRequestLog` calls it instead of tapping the body, and it applies the Responses SSE tap's rules to the reported facts (payload inspection until the terminal, `terminal_sse` phase, `httpStatusForRequestLogTerminal`, 499 for a cancel before any terminal, one row). |
@@ -569,6 +570,8 @@ in the Chat shape, blocked trace) with no send. `n > 1` is never emulated with s
 inferences. Policy routes resolve one candidate in `routeModel` and never reach this loop, so they
 are not migrated. `tests/responses/chat-native-combo.test.ts` pins the source body, failover
 within the shared budget, no resend after output, the switch-off path and both reject outcomes.
+Managed native Messages ([Protocol Paths](../data-planes/protocol-paths.md#managed-native-messages))
+reuses `beginInferenceAttempt` and `createFinalRequestLog` with its own 401/429 key-rotation loop.
 
 ## Adapter-to-Responses bridge
 
