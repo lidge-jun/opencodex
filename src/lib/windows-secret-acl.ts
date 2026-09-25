@@ -49,10 +49,27 @@ const hardenedDirectories = new Map<string, HardenedIdentity>();
 const hardenedPaths = new Map<string, HardenedIdentity>();
 /**
  * Paths whose harden TIMED OUT this process: do not re-stall every loadConfig on them.
- * `false` means one explicitly authorized recovery attempt remains; `true` means
- * that attempt was consumed. Ordinary callers never consume it.
+ * `consumed: false` means one explicitly authorized recovery attempt remains;
+ * `consumed: true` means that attempt was consumed at `consumedAt`.
+ *
+ * A consumed memo re-arms once per `TIMEOUT_MEMO_REARM_MS` window, and only for a
+ * caller carrying `retryTimedOutOnce` (issue #3522). The destination-keyed memo for a
+ * STABLE path — the response-spill directory — used to refuse every later harden for
+ * the life of the process: one transient icacls outage consumed the single recovery
+ * and durable publication never succeeded again, while the process reported healthy.
+ * The window keeps anti-restall bounded (at most one real attempt per window) while a
+ * recovered runner can clear the memo and resume publication without a restart.
  */
-const timedOutPaths = new Map<string, boolean>();
+const timedOutPaths = new Map<string, { consumed: boolean; consumedAt: number }>();
+
+/**
+ * Quiet period before a consumed timeout memo admits one caller-owned recovery
+ * attempt. Far above the per-harden deadline cap (60s) so a still-stalled icacls
+ * produces at most one bounded probe per window and every other refusal stays
+ * instant; short enough that a recovered icacls resumes same-process hardening
+ * without waiting for a restart.
+ */
+export const TIMEOUT_MEMO_REARM_MS = 5 * 60_000;
 /** Compatibility slack before the outer belt releases a caller whose killed child has not reaped. */
 const ASYNC_ICACLS_BELT_MARGIN_MS = 250;
 const pendingAsyncIcaclsReaps = new Map<string, Set<Promise<void>>>();
@@ -252,7 +269,8 @@ export interface HardenOptions {
   /**
    * Consume the one recovery attempt for a previously timed-out memo key.
    * Only a caller that owns its own single-flight and bounded retry policy should
-   * set this. It never clears or bypasses an already-consumed timeout memo.
+   * set this. It never clears or bypasses an already-consumed timeout memo before
+   * its re-arm window (`TIMEOUT_MEMO_REARM_MS`) has elapsed.
    */
   retryTimedOutOnce?: boolean;
 }
@@ -869,22 +887,30 @@ function previousTimeoutError(retryConsumed: boolean): TimeoutMemoRefusalError {
   ), { aclFailureOrigin: "timeout_memo_refusal" as const });
 }
 
-/** Consume, but never reset, the single explicit recovery attempt for this key. */
+/**
+ * Consume the single explicit recovery attempt for this key. A consumed key re-arms
+ * only after `TIMEOUT_MEMO_REARM_MS` of quiet, and only for `retryTimedOutOnce` —
+ * flagless callers always get an instant refusal.
+ */
 function timeoutMemoErrorIfBlocked(
   memoKey: string,
   opts: HardenOptions,
 ): NodeJS.ErrnoException | null {
-  const retryConsumed = timedOutPaths.get(memoKey);
-  if (retryConsumed === undefined) return null;
-  if (opts.retryTimedOutOnce && retryConsumed === false) {
-    timedOutPaths.set(memoKey, true);
+  const entry = timedOutPaths.get(memoKey);
+  if (entry === undefined) return null;
+  // A re-armed memo reports the plain previous-timeout refusal to flagless callers
+  // (so a retry-owning caller that saw it comes back carrying the flag) but admits
+  // one fresh attempt only to `retryTimedOutOnce`.
+  const rearmed = entry.consumed && nowFn() - entry.consumedAt >= TIMEOUT_MEMO_REARM_MS;
+  if (opts.retryTimedOutOnce && (!entry.consumed || rearmed)) {
+    timedOutPaths.set(memoKey, { consumed: true, consumedAt: nowFn() });
     return null;
   }
-  return previousTimeoutError(retryConsumed);
+  return previousTimeoutError(entry.consumed && !rearmed);
 }
 
 function recordTimeout(memoKey: string): void {
-  if (!timedOutPaths.has(memoKey)) timedOutPaths.set(memoKey, false);
+  if (!timedOutPaths.has(memoKey)) timedOutPaths.set(memoKey, { consumed: false, consumedAt: 0 });
 }
 
 /**
