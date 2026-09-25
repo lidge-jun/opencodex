@@ -995,6 +995,15 @@ async function handleClaudeMessagesWithBudget(
     ? nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector)
     : "rollout-disabled";
   const nativeMessagesRoute = settledRoute && nativeDecline === undefined ? settledRoute : undefined;
+  // With the switch on, a declined route says why on its bridge mark, as native Chat does.
+  if (nativeDecline && nativeDecline !== "rollout-disabled") {
+    markProtocolEntry(logCtx, {
+      inbound: "messages",
+      lane: "bridge",
+      reasonCodes: [...(effortRow ? ["effort-row" as const] : fastRow ? ["fast-row" as const] : []), nativeDecline],
+      features: messagesFeatures,
+    });
+  }
   // Combo and policy children are judged per candidate (PF-07); an unknown model has no route.
   if (envelope && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
     const verdict = checkRepresentable({
