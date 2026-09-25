@@ -41,7 +41,7 @@
 .remote-link-fingerprint { margin: 0; padding: var(--space-3); overflow-wrap: anywhere; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); font-family: var(--font-code); font-size: var(--text-label); }
 .remote-link-workspace-card { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
 .remote-link-workspace-card p { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-label); }
-.remote-link-sheet { width: min(620px, calc(100vw - var(--space-4))); max-height: min(760px, calc(100dvh - var(--space-4))); margin: auto 0 auto auto; padding: var(--space-6); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-lg) 0 0 var(--radius-lg); background: var(--bg); color: var(--text); box-shadow: var(--shadow); }
+.remote-link-sheet { width: min(620px, calc(100vw - var(--space-4))); max-height: min(760px, calc(100dvh - var(--space-4))); margin: auto; padding: var(--space-6); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg); color: var(--text); box-shadow: var(--shadow); }
 .remote-link-sheet::backdrop { background: color-mix(in srgb, var(--text) 24%, transparent); }
 .remote-link-sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 .remote-link-sheet-head h3 { margin: 0; font-size: var(--text-title); }
