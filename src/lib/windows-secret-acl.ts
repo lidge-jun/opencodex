@@ -1015,7 +1015,8 @@ function hardenEntry(
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
-  if (existingAclAlreadyCompliant(targetPath, directory, deadline)) return { ok: true };
+  // The owner-only compliance probe cannot vouch for a shape that also needs read ACEs.
+  if (extraReadAces.length === 0 && existingAclAlreadyCompliant(targetPath, directory, deadline)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {
