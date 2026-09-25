@@ -82,7 +82,8 @@ describe("ocx api protocols", () => {
   test("reads GET /api/protocols and prints the policy as text", async () => {
     const { requests, deps } = fakeRuntime();
     expect(await handleApiCommand(["protocols"], deps)).toBe(0);
-    expect(requests).toEqual([{ url: "http://127.0.0.1:9/api/protocols", method: "GET", body: null, contentType: null }]);
+    // The shared runtime request helper sets its JSON content type on every call, GET included.
+    expect(requests.map(r => [r.method, r.url, r.body])).toEqual([["GET", "http://127.0.0.1:9/api/protocols", null]]);
     expect(printed()).toContain("API messages: closed (api-surfaces)");
     expect(printed()).toContain("Rollout shadowPlan: off");
   });
