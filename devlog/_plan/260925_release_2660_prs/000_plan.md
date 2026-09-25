@@ -127,3 +127,18 @@ proposal D1-D7 received 2026-09-25. Main dispositions:
    `ac3ea085e6`); B checks `git log origin/dev..HEAD` shows exactly those two after cherry-pick.
 7. MINOR (runner policy missing in 060): rebutted; 060 section 1 carries the "Runners:" paragraph.
 8. MINOR: no action.
+
+## Execution finding (wp3/wp4, 2026-09-25 ~12:10Z) — amends cross-cutting rule 2
+
+Close/reopen does not rebuild the merge ref. The reopened runs checked out the old merge commits
+(#5835 run 36131541136: `Merge 61dfd0225a into 76db92a4cd`; #5757: `... into 88b9da8c51`), so
+they failed exactly as before. A fresh merge ref needs a new head: main uses GitHub's update-branch
+(`gh pr update-branch <n>`, a server-side merge of `dev` into the head branch; forks only with
+`maintainerCanModify`), then approves fork runs after reading the diff. The PR description or a
+comment names the merge commit so the author knows the branch moved.
+
+#5754 (wp3) failed its own head's contract test
+`tests/codex-integration/bearer-admission-routed-provider.test.ts` "search-runTurn": the PR
+deliberately plans the OpenAI search helper for runTurn adapters, and that test still asserted the
+old no-helper contract; its CI had never run tests (fork approval pending). It moves to a new
+work-phase wp8 (test contract update on the fork branch, then land); wp7 waits for wp8.
