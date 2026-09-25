@@ -6,17 +6,21 @@ import { windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import type { OcxProviderContinuationState } from "../types";
 import {
   deleteResponseSpill,
+  inspectResponseSpillDir,
   noteStubSwapForTest,
   PERIODIC_SPILL_SWEEP_OPTS,
   readResponseSpill,
   recoverOrphanedResponseSpills,
   responseSpillDirectory,
   responseSpillPayloadCap,
+  type ResponseSpillDirInspection,
   type ResponseSpillRef,
   writeResponseSpillDurably,
 } from "./spill-store";
+import { collectReferencedSpillFileNames, snapshotReferencedSpillFileNames } from "./state/spill-inspect";
 import { clientCarriedPrefixLength, providerIssuedIdentity } from "./state/replay-fingerprint";
 export type { ResponseStateTempRecoveryResult, ResponseStateTempRecoveryOptions } from "./state/temp-recovery";
+export type { ResponseSpillDirInspection } from "./spill-store";
 export { recoverStaleResponseStateTemps, reclaimAbandonedResponseStateTemps, inspectAbandonedResponseStateTemps, sweepAbandonedResponseStateTemps } from "./state/temp-recovery";
 import { recoverStaleResponseStateTemps } from "./state/temp-recovery";
 export type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
@@ -1247,6 +1251,25 @@ export function responseStateMetrics(): ResponseStateMetrics {
     spillReadFailures: spillCounters.readFailures,
     replayScopeMismatchDrops,
   };
+}
+
+/**
+ * Read-only spill directory report shared by `ocx doctor` and /api/system/memory.
+ *
+ * "Owned" means still claimed by something durable: the live "spill" stubs,
+ * superseded generations queued in pendingSpillUnlinks, and every name the
+ * persisted snapshot still references. The snapshot half is what a separate
+ * process (doctor) can see, and it stays correct in-process too — a restart
+ * reloads the snapshot and re-owns those files. Shares the orphan predicate
+ * with recoverOrphanedResponseSpills, so this report and a later reclaim
+ * cannot disagree; it never unlinks.
+ */
+export function inspectResponseSpillStorage(): ResponseSpillDirInspection {
+  const referenced = collectReferencedSpillFileNames(states.values(), pendingSpillUnlinks);
+  for (const name of snapshotReferencedSpillFileNames(snapshotPath(), SNAPSHOT_FILE_MAX_BYTES)) {
+    referenced.add(name);
+  }
+  return inspectResponseSpillDir(referenced);
 }
 
 /**

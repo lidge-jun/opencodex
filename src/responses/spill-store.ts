@@ -13,6 +13,7 @@ import {
   readFileSync,
   unlinkSync,
   writeSync,
+  type Stats,
 } from "node:fs";
 import { createHash, randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
@@ -757,6 +758,103 @@ export function deleteResponseSpill(ref: ResponseSpillRef): void {
   } catch { /* best effort */ }
 }
 
+type SpillDirNameKind = "spill" | "temp";
+
+/** Directory-iteration plumbing shared by reclaim and the dry-run inspector.
+ *  ONE loop serves both the real directory handle and the injected test seam
+ *  (review C2-2: two duplicated loops let the test prove only its own copy).
+ *  Callers must request the next name strictly AFTER their scan-cap check, so
+ *  entry SCAN_MAX+1 is never requested from either source. */
+function openSpillDirScan(dir: string): { nextName: () => string | null; close: () => void } | null {
+  let handle: ReturnType<typeof opendirSync> | null = null;
+  const injected = spillIoForTest?.readdirEntry;
+  if (!injected) {
+    try { handle = opendirSync(dir); } catch { return null; }
+  }
+  return {
+    nextName: () => {
+      if (injected) return injected();
+      const entry = handle!.readSync();
+      return entry ? entry.name : null;
+    },
+    close: () => { try { handle?.closeSync(); } catch { /* best effort */ } },
+  };
+}
+
+/** Orphan predicate, name half: a spill-shaped name nobody references. Shared by
+ *  reclaim and the dry-run inspector so the report and the unlink cannot disagree. */
+function orphanSpillNameKind(name: string, referencedFileNames: ReadonlySet<string>): SpillDirNameKind | null {
+  if (referencedFileNames.has(name)) return null;
+  if (OWNED_SPILL_NAME.test(name)) return "spill";
+  if (OWNED_SPILL_TEMP_NAME.test(name)) return "temp";
+  return null;
+}
+
+/** Orphan predicate, stat half: a regular file (never a symlink) past the grace window. */
+function spillEntryPastGrace(stat: Stats, graceMs: number): boolean {
+  return stat.isFile() && !stat.isSymbolicLink() && Date.now() - stat.mtimeMs >= graceMs;
+}
+
+export interface ResponseSpillDirInspection {
+  scanned: number;
+  /** The walk stopped at RESPONSE_SPILL_SCAN_MAX, so every count describes a
+   *  prefix of the directory and the real totals are higher. */
+  truncated: boolean;
+  /** Every regular file present, spill-shaped or not — the honest disk total. */
+  files: number;
+  bytes: number;
+  /** Regular files named in the caller's referenced set. */
+  ownedFiles: number;
+  ownedBytes: number;
+  /** Spill/temp-shaped regular files unreferenced and past the orphan grace. */
+  orphanFiles: number;
+  orphanBytes: number;
+}
+
+/**
+ * Dry-run counterpart of recoverOrphanedResponseSpills: same directory walk and
+ * the same orphan predicate, but it counts and never unlinks. It stats every
+ * entry (bounded by RESPONSE_SPILL_SCAN_MAX) because `bytes` is the disk total
+ * an operator sizes the directory by — reclaim only stats orphan candidates.
+ */
+export function inspectResponseSpillDir(
+  referencedFileNames: ReadonlySet<string>,
+  dir = responseSpillDirectory(),
+  opts?: { graceMs?: number },
+): ResponseSpillDirInspection {
+  const result: ResponseSpillDirInspection = {
+    scanned: 0, truncated: false, files: 0, bytes: 0,
+    ownedFiles: 0, ownedBytes: 0, orphanFiles: 0, orphanBytes: 0,
+  };
+  const graceMs = opts?.graceMs ?? RESPONSE_SPILL_ORPHAN_GRACE_MS;
+  const scan = openSpillDirScan(dir);
+  if (!scan) return result;
+  try {
+    while (result.scanned < RESPONSE_SPILL_SCAN_MAX) {
+      const name = scan.nextName();
+      if (name === null) break;
+      result.scanned += 1;
+      const path = join(dir, name);
+      let stat: Stats;
+      try { stat = lstatSync(path); } catch { continue; }
+      if (!stat.isFile() || stat.isSymbolicLink()) continue;
+      result.files += 1;
+      result.bytes += stat.size;
+      if (referencedFileNames.has(name)) {
+        result.ownedFiles += 1;
+        result.ownedBytes += stat.size;
+      } else if (orphanSpillNameKind(name, referencedFileNames) !== null && spillEntryPastGrace(stat, graceMs)) {
+        result.orphanFiles += 1;
+        result.orphanBytes += stat.size;
+      }
+    }
+  } finally {
+    scan.close();
+  }
+  result.truncated = result.scanned >= RESPONSE_SPILL_SCAN_MAX;
+  return result;
+}
+
 export function recoverOrphanedResponseSpills(
   referencedFileNames: ReadonlySet<string>,
   dir = responseSpillDirectory(),
@@ -767,37 +865,24 @@ export function recoverOrphanedResponseSpills(
   const scanMax = opts?.scanMax ?? RESPONSE_SPILL_SCAN_MAX;
   const cleanupMax = opts?.cleanupMax ?? RESPONSE_SPILL_CLEANUP_MAX;
   const deadline = opts?.deadlineMs === undefined ? Infinity : Date.now() + opts.deadlineMs;
-  // ONE loop serves both the real directory handle and the injected test seam
-  // (review C2-2: two duplicated loops let the test prove only its own copy).
-  // The reader is called strictly AFTER the scan-cap check, so entry
-  // SCAN_MAX+1 is never requested from either source.
-  let handle: ReturnType<typeof opendirSync> | null = null;
-  const injected = spillIoForTest?.readdirEntry;
-  if (!injected) {
-    try { handle = opendirSync(dir); } catch { return result; }
-  }
-  const nextName = (): string | null => {
-    if (injected) return injected();
-    const entry = handle!.readSync();
-    return entry ? entry.name : null;
-  };
+  const scan = openSpillDirScan(dir);
+  if (!scan) return result;
   try {
     while (result.scanned < scanMax && Date.now() < deadline) {
-      const name = nextName();
+      const name = scan.nextName();
       if (name === null) break;
       result.scanned += 1;
       if (result.removed + result.failed >= cleanupMax) break;
-      const spillMatch = OWNED_SPILL_NAME.exec(name);
-      const isOwnedTemp = OWNED_SPILL_TEMP_NAME.test(name);
-      if ((!spillMatch && !isOwnedTemp) || referencedFileNames.has(name)) continue;
+      const orphanKind = orphanSpillNameKind(name, referencedFileNames);
+      if (orphanKind === null) continue;
       const path = join(dir, name);
-      let stat: ReturnType<typeof lstatSync>;
+      let stat: Stats;
       try { stat = lstatSync(path); } catch { continue; }
-      if (!stat.isFile() || stat.isSymbolicLink() || Date.now() - stat.mtimeMs < graceMs) continue;
+      if (!spillEntryPastGrace(stat, graceMs)) continue;
       try {
         // Orphaned publish temps get the full ephemeral release; stable
         // orphaned spills keep destination-keyed timeout memos.
-        if (isOwnedTemp) unlinkEphemeral(path);
+        if (orphanKind === "temp") unlinkEphemeral(path);
         else unlink(path);
         result.removed += 1;
         result.bytesRemoved += stat.size;
@@ -806,7 +891,7 @@ export function recoverOrphanedResponseSpills(
       }
     }
   } finally {
-    try { handle?.closeSync(); } catch { /* best effort */ }
+    scan.close();
   }
   return result;
 }
