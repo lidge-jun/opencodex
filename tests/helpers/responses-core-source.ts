@@ -28,6 +28,7 @@ export const RESPONSES_CORE_MODULES = [
   "core-auth.ts",
   "core-normalize.ts",
   "core-combo.ts",
+  "core-combo-native.ts",
   "request-prepare.ts",
   "shadow-target-availability.ts",
   "compaction-routing.ts",

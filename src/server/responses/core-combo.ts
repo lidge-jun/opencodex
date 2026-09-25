@@ -75,6 +75,8 @@ import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
 import { settleOperatorReplacement } from "../../lib/upstream-retry";
+import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
+import { clientWireOf } from "../inference/client-wire";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -195,6 +197,17 @@ export async function executeComboResponses(
   // counter, but nothing read it as a limit across targets -- while its transition and
   // alternate-target ledgers come from the target list rather than from the single-target
   // account-move profile (#4546).
+  // PF-07: present only for a Chat combo with `nativeChatCombos` on; otherwise every child
+  // takes the bridge below exactly as before.
+  const protocolLanes = createComboProtocolLanes({
+    source: options.protocolSource,
+    req,
+    config,
+    logCtx,
+    admission: options.admission,
+    comboId,
+    targets: combo.targets,
+  });
   const comboSendScope = isRequestExecutionBudget(options.sendBudget)
     ? deriveSendBudgetScope(options.sendBudget, comboExecutionBudgetPolicy(combo.targets.length))
     : undefined;
@@ -298,7 +311,7 @@ export async function executeComboResponses(
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
-    payloadEligible(target) && reasoningReplayEligible(target);
+    payloadEligible(target) && reasoningReplayEligible(target) && (protocolLanes?.pickable(target) ?? true);
   const onlyReplayIncompatibleTargetsRemain = (excluded: Iterable<string> = []): boolean => {
     const excludedKeys = new Set(excluded);
     const remaining = combo.targets.filter(target => {
@@ -398,6 +411,9 @@ export async function executeComboResponses(
   }
 
   if (!pick) {
+    // Every enabled candidate skipped as unrepresentable: the ingress refusal, with no send.
+    const protocolRefusal = protocolLanes?.refusal();
+    if (protocolRefusal) return protocolRefusal;
     if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
     return options.abortSignal?.aborted
       ? clientCancelledResponse()
@@ -556,8 +572,31 @@ export async function executeComboResponses(
           && targetEligible(target)
           && !isComboTargetInCooldown(comboId, target),
         );
-      response = await requestDispatchers.handleResponses(childRequest, config, childLog, {
+      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget);
+      response = nativeChild ? await dispatchNativeComboChild({
+        source: options.protocolSource!,
+        plan: nativeChild,
+        logCtx,
+        childLog,
+        attempt,
+        startedAt: started,
+        ...(options.turnAdmissionLease ? { turnAdmissionLease: options.turnAdmissionLease } : {}),
+        // Attempt-relative TTFT, recorded here for the same reason as the bridge child below.
+        onFirstOutput: () => {
+          if (attempt.firstOutputMs === undefined) {
+            attempt.firstOutputMs = Math.max(0, Date.now() - started);
+          }
+          options.onFirstOutput?.();
+        },
+        callbacks: {
+          onTerminal: callbackGate.onTerminal,
+          onCancel: callbackGate.onCancel,
+          onResponseComplete: callbackGate.onResponseComplete,
+        },
+      }) : await requestDispatchers.handleResponses(childRequest, config, childLog, {
         ...options,
+        // A bridge child is a concrete route; the native source belongs to this loop only.
+        ...(options.protocolSource ? { protocolSource: undefined } : {}),
         // After the spread: the child must run on THIS target's ladder, not on the holder the
         // parent arrived with.
         sendBudget: targetSendBudget,
@@ -597,7 +636,9 @@ export async function executeComboResponses(
       return clientCancelledResponse();
     }
 
-    if (response.ok && !runTurnAdapterSseResponses.has(response)) {
+    // A native Chat child reports a pre-stream failure by status before any byte, so its body
+    // is never peeked; a non-OK one takes the ordinary failure path below.
+    if (response.ok && !runTurnAdapterSseResponses.has(response) && clientWireOf(response) !== "chat") {
       const nativePassthrough = isNativePassthroughSseResponse(response);
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;
