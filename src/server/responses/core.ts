@@ -9,8 +9,7 @@ import type {
 import { createTranslatorBudget } from "../../lib/translator-budget";
 import { captureExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import { captureCallerDirectAuth } from "../../providers/caller-authorization";
-import { createRequestExecutionBudget } from "../../lib/request-execution-budget";
-import { attachRequestSpendTracker } from "./request-spend";
+import { createInferenceSendBudget } from "../inference/context";
 import { finalizeOwnedTranslatorBudget } from "./core-lifetime";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { executeComboResponses } from "./core-combo";
@@ -58,7 +57,7 @@ export async function handleResponses(
         || req.headers.get("x-opencodex-vision-describe") === "1",
       translatorBudget,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
-      sendBudget: options.sendBudget ?? createRequestExecutionBudget(undefined, undefined, attachRequestSpendTracker(req, logCtx)),
+      sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
     });
     return ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
   } catch (error) {
