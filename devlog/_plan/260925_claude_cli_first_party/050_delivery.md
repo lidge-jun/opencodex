@@ -23,7 +23,7 @@ Superseded by the maintainer directive (see "wp6 P amendment"): no local test su
 ## Privacy self-check before the first push
 
 Grep the push range for account identifiers seen during research (the maintainer's e-mail, org id,
-org name) and for any absolute home paths in committed docs: `git log -p origin/dev..HEAD | rg -n -i '<ids>'`.
+org name) and for any absolute home paths in committed docs: `git log -p origin/dev..HEAD | rg -n -i -f .tmp/privacy-ids.txt` (the pattern file lives in the gitignored `.tmp/` of the task worktree and lists the account e-mail, org id and org name seen during research plus the macOS home-directory prefix; the identifiers themselves are never written into a tracked file). Exit 1 (no match) is the pass condition..
 A hit is fixed by rewriting the unpushed commits.
 
 ## Push and PR
