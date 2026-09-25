@@ -245,3 +245,32 @@ test("known and unknown status reasons remain understandable", async () => {
   expect(host.textContent).toContain("The connection timed out.");
   expect(host.querySelector("code")?.textContent).toBe("future reason");
 });
+
+test("cancelling a failed apply leaves no dead Retry behind", async () => {
+  globalThis.fetch = (async (input) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh config" }] });
+    if (path === "/api/link/probe") return response({ alias: "child-one", fingerprint: "SHA256:test", keyType: "ed25519" });
+    if (path === "/api/link/confirm-host") return response({ alias: "child-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
+    if (path === "/api/link/apply") return response({ error: { code: "link_apply_failed" } }, 502);
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Confirm host"))?.click(); });
+  await flush();
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Connect child"))?.click(); });
+  await flush();
+  expect(host.textContent).toContain("Retry");
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent === "Cancel")?.click(); });
+  await flush();
+  expect([...host.querySelectorAll("button")].some(button => button.textContent === "Retry")).toBe(false);
+  expect([...host.querySelectorAll("button")].some(button => button.textContent?.includes("Add child"))).toBe(true);
+});

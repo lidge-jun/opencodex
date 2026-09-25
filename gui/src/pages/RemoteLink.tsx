@@ -210,7 +210,9 @@ export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable =
     }
   }, [confirming]);
 
-  const closeSheet = () => { setSheetOpen(false); setProbe(null); setConfirmation(null); setCheckedFingerprint(false); setActionError(null); setFailedAction(null); addButtonRef.current?.focus(); };
+  // Cancelling the sheet abandons the attempt, so a failed attempt's banner must not outlive it:
+  // leaving uiState at "failed" would show a Retry with nothing left to retry.
+  const closeSheet = () => { setSheetOpen(false); setProbe(null); setConfirmation(null); setCheckedFingerprint(false); setActionError(null); setFailedAction(null); setUiState(current => (current === "failed" ? "adding-child" : current)); addButtonRef.current?.focus(); };
   const openSheet = async () => {
     setSheetOpen(true); setUiState("adding-child"); setActionError(null); setBusy("candidates");
     try { setCandidates(parseCandidates(await requestLinkJson<unknown>(apiBase, "/api/link/candidates"))); }
