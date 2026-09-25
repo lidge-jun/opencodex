@@ -118,6 +118,7 @@ import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse, type WorkflowRe
 export {
   addFinalRequestLog,
   filterRequestLogs,
+  queryRequestLogs,
   hydrateRequestLogsFromDisk,
   httpStatusForTerminalStatus,
   httpStatusFromTerminalError,
