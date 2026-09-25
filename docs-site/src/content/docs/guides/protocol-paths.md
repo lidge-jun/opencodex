@@ -100,7 +100,7 @@ These switches stage the new paths. Each defaults to off, and a switch that is o
 | --- | --- |
 | `nativeChatCombos` | An eligible Chat candidate inside a combo is sent natively from its own copy of the client body; the other candidates keep the bridge. |
 | `managedMessagesNative` | A Messages request whose route is a direct, key-authenticated Anthropic provider is sent as Messages instead of through the bridge. Routes that need bridge-only behaviour (a pinned effort, blocked-skill elision, the web-search sidecar, vision preprocessing, synthetic rows) stay on the bridge. |
-| `managedMessagesNativeOAuth` | Reserved for native Messages over Anthropic OAuth. Effective only together with `managedMessagesNative`; this version does not read it. |
+| `managedMessagesNativeOAuth` | Native Messages for the unpooled `anthropic` OAuth provider on `api.anthropic.com`. Effective only together with `managedMessagesNative`; a pooled Anthropic OAuth account set stays on the bridge. |
 | `directEncoders` | For a non-Responses upstream, the answer to a Chat or Messages client is encoded directly from the adapter's events instead of through the internal Responses stream. The request side is unchanged. |
 | `shadowPlan` | At the end of each Chat or Messages request, the plan a preview would have predicted is compared with the path the request took; a disagreement adds `planMismatch: true` to the log row's path record. No second request is sent. |
 
@@ -144,8 +144,9 @@ These paths still use the internal Responses bridge or are not covered:
 - `previous_response_id`, `store`, `background`, and compaction stay Responses features.
 - Adapters whose wire is none of the three APIs (Gemini, Kiro, Cursor, and others) are translated
   through the IR with no feature claims.
-- Native Chat over OAuth is not planned. Native Messages over Anthropic OAuth is not available in
-  this version.
-- The managed native Messages path does not forward a caller's `anthropic-beta` header, drops
+- Native Chat over OAuth is not planned. Native Messages over Anthropic OAuth covers only an
+  unpooled account; a pooled account set stays on the bridge.
+- The managed native Messages path forwards a caller's `anthropic-beta` values only from a short
+  allowlist and only to `api.anthropic.com`, drops
   top-level fields outside its allowlist without a feature effect, and does not apply
   `claudeCode.stabilizePromptCache`.
