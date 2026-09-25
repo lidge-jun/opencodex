@@ -57,7 +57,7 @@
     "tests/server/config.test.ts": 3828,
     "tests/server/management-provider-validation.test.ts": 5506,
     "tests/server/server-auth.test.ts": 4589,
-    "tests/server/server-combo-failover-e2e.test.ts": 4218,
+    "tests/server/server-combo-failover-e2e.test.ts": 4166,
     "tests/server/server-images.test.ts": 2755,
     "tests/server/server-live.test.ts": 2253,
     "tests/service/service.test.ts": 4106,
