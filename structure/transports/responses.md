@@ -460,6 +460,26 @@ send-holder/permit behavior. Cross-owner source assertions read the actual imple
 `tests/helpers/responses-core-source.ts`; focused passthrough and subagent assertions read their
 specific delivery/preparation owner. Existing runtime Lab-boundary tests still start at `core.ts`.
 
+### Shared inference primitives
+
+`src/server/inference/` holds the execution pieces the Responses pipeline and the native lanes
+share, so a native lane reuses them instead of copying them. The directory is Lab-free and is
+reachable from `core.ts`.
+
+| Module | Contract |
+| --- | --- |
+| `context.ts` | `createInferenceSendBudget(req, logCtx)` is the one construction of an ingress-owned send holder: the default guarded policy with this request's spend tracker as observer. `handleResponses` calls it only when no holder was inherited, because attaching the tracker parks it on `logCtx`. |
+| `final-log.ts` | `createFinalRequestLog(logIds, logCtx)` owns one request's final row: the first `finish(status, meta)` writes it, every later call is a no-op, and without log ids the claim settles with nothing written. The bridged Chat and Messages ingresses and native Chat finish through it. |
+| `attempt.ts` | `beginInferenceAttempt(logCtx, { provider, model, adapter })` opens the next attempt ordinal, makes it the active attempt with its start time, appends it to the request, and returns `seal(accountLabel?)` and `finish(status, usage?)`. |
+| `client-wire.ts` | `markClientWire(response, protocol)` / `clientWireOf(response)` record, per `Response` identity, that a body is already in a client's wire. Nothing marks responses yet. |
+
+Native Chat in `src/server/chat-native.ts` is split in two. `handleNativeChatCompletions` opens
+the attempt and owns the final log row; `runNativeChatAttempt(execution, attemptHandle)` runs
+effort normalization, the send loop, key failover, 429 replay, relay and usage, and reports each
+outcome through the `finishLog` it is given. A caller that owns a different final row can
+therefore run a native attempt without the attempt writing that row itself. Native Chat keeps
+its own spend tracker rather than a send holder.
+
 ## Adapter-to-Responses bridge
 
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
