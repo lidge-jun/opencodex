@@ -110,6 +110,10 @@ function settingsUpdateLines(
     const detail = typeof apply.detail === "string" && apply.detail.length > 0 ? ` Details: ${apply.detail}` : "";
     const retry = apply.reason === "external_provider"
       ? ""
+      : apply.reason === "ownership_undetermined"
+      ? " Restore read access to config.toml, then inspect 'ocx system settings --json'."
+      : apply.reason === "integration_disabled"
+      ? " Enable Codex integration before applying the stored settings."
       : " Run 'ocx sync' to apply the stored settings.";
     lines.push(`Codex config: ~/.codex/config.toml was not rewritten because ${desktopSwitchApplyReason(apply.reason)}.${detail}${retry}`);
   }

@@ -361,7 +361,8 @@ effective switch and authentication source as externally controlled. A report th
 rewrite checks the same `currentExternalCodexModelProvider` predicate via `observedCodexDesktopSwitchApply`.
 A present-but-unreadable `config.toml` reports `ownership_undetermined`: the effective values and
 the sign-in answer stay `null` rather than presenting local state a foreign provider may still
-control, and the apply gates keep that record instead of collapsing it to their own reason.
+control; both apply gates and injector-error observation retain that record. Recovery advice requests
+a later settings read, not sync, when ownership is unknown or integration is disabled.
 
 Effective values come from `isEffectiveCodexDesktopAuthless` and
 `isEffectiveCodexClientCompaction` in `src/codex/loopback-target.ts` rather than a second copy

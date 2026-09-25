@@ -305,3 +305,34 @@ test("PUT /api/settings reports external Codex ownership when the integration is
     removeTreeWithRetry(root);
   }
 }, 15_000);
+
+test("post-gate injector read failure retains undetermined ownership and null effective state", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-settings-post-gate-"));
+  const codexHome = join(root, "codex");
+  mkdirSync(join(codexHome, "config.toml"), { recursive: true });
+  try {
+    const result = runIsolatedSettingsRequest({ root, codexHome,
+      routeConfig: { ...ISOLATED_PROVIDER_CONFIG, clientIntegrations: { codex: true } },
+      scriptBody: `
+        const { writeRuntimePort } = await import("./src/config/process-state");
+        writeRuntimePort({ pid: process.pid, port: config.port });
+        const request = new Request("http://127.0.0.1:10100/api/settings", {
+          method: "PUT", headers: { host: "127.0.0.1:10100", "content-type": "application/json" },
+          body: JSON.stringify({ codexDesktopAuthless: true, codexClientCompaction: true }),
+        });
+        const response = await handleManagementAPI(request, new URL(request.url), config, {
+          saveConfigPreservingClaudeCode: () => {},
+          getCachedStartupHealth: async () => startupHealthFixture(),
+          createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+        });
+      `,
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ codexDesktopSwitches: {
+      codexDesktopAuthless: { stored: true, effective: null },
+      codexClientCompaction: { stored: true, effective: null },
+      apply: { applied: false, reason: "ownership_undetermined", retryable: true },
+      authSource: { presentsCodexAccount: null },
+    } });
+  } finally { removeTreeWithRetry(root); }
+}, 15000);

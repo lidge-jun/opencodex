@@ -224,6 +224,10 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     // advice is meaningless on that outcome, same as the Desktop-switch report.
     const retry = apply.reason === "external_provider"
       ? ""
+      : apply.reason === "ownership_undetermined"
+      ? " Restore read access to config.toml, then inspect 'ocx system settings --json'."
+      : apply.reason === "integration_disabled"
+      ? " Enable Codex integration before applying the stored settings."
       : " Run 'ocx sync' to apply the stored settings.";
     lines.push(apply.applied === true
       ? "Codex config: ~/.codex/config.toml was rewritten."

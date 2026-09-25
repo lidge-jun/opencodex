@@ -709,8 +709,8 @@ If `config.toml` exists but cannot be read (permissions, or a delete racing the 
 report withholds the effective values and the sign-in answer as undetermined instead of showing
 the state OpenCodex would compute locally. The apply record keeps that explanation — including on
 a save whose injection gate is already closed by a disabled integration or a stopped proxy — and
-marks it retryable, so `ocx sync` or a later settings read reports the settled answer once the
-file reads again.
+marks it retryable, so a later `ocx system settings --json` read reports the settled answer once
+the file is readable again. With Codex integration disabled, `ocx sync` is catalog-only and cannot apply it.
 
 Keep one tool as the owner of Codex provider configuration. To use OpenCodex behind an existing
 provider manager, point that provider at `http://127.0.0.1:10100/v1` with Responses passthrough

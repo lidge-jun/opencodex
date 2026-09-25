@@ -220,6 +220,9 @@ export async function applyCodexConfigInjection(
       detail: result.message,
     };
   } catch (error) {
+    // The injector may fail its ownership read after the initial apply gates passed.
+    const ownership = await observedOwnershipApply();
+    if (ownership) return ownership;
     return {
       applied: false,
       reason: "injection_refused",

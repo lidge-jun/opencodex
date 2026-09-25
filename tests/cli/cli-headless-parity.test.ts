@@ -205,8 +205,9 @@ describe("ocx system settings desktop switches", () => {
       expect(output).toContain("was not rewritten because config.toml ownership could not be determined");
       expect(output).toContain("Auth source: Whether the Codex app requires its own account sign-in is undetermined");
       expect(output).not.toContain("controlled by the external model provider");
-      // Ownership may settle on a later read, so the retry advice stays.
-      expect(output).toContain("ocx sync");
+      // Observation can recover while integration stays disabled; sync cannot inject then.
+      expect(output).not.toContain("ocx sync");
+      expect(output).toContain("ocx system settings --json");
     } finally {
       logSpy.mockRestore();
     }
@@ -1449,4 +1450,24 @@ test("provider edit rejects incomplete text-only targeting before contacting the
     }
     expect(requests).toHaveLength(0);
   } finally { error.mockRestore(); }
+});
+
+describe("ownership recovery advice does not assume injection is enabled", () => {
+  for (const reason of ["ownership_undetermined", "integration_disabled"]) {
+    test(`sidecar ${reason} does not promise sync will apply settings`, async () => {
+      const { requests, deps } = fakeRuntime(() => ({
+        ok: true, codexWebSearch: { applied: false, reason, retryable: true },
+      }));
+      const log = spyOn(console, "log").mockImplementation(() => {});
+      try {
+        expect(await handleAgentCommand(["sidecar", "web", "--enabled", "on"], deps)).toBe(0);
+        expect(requests).toHaveLength(1);
+        const text = log.mock.calls.flat().join("\n");
+        expect(text).toContain("was not rewritten");
+        expect(text).not.toContain("ocx sync");
+        expect(text).toContain(reason === "ownership_undetermined"
+          ? "ocx system settings --json" : "Enable Codex integration");
+      } finally { log.mockRestore(); }
+    });
+  }
 });
