@@ -92,7 +92,11 @@ function planCandidate(
   else if (mode === "translated") reasons.push(requestPath.length === 2 ? "cross-wire-codec" : "cross-wire-ir");
   else reasons.push("not-migrated");
   if (upstream === "other") reasons.push("upstream-other");
-  if (lane === "bridge" && input.inbound !== "responses") reasons.push(...candidate.declineReasons);
+  // Why the native lane was declined matters only where a native lane could exist: toward a
+  // different wire the path reason above already says it.
+  if (lane === "bridge" && input.inbound !== "responses" && upstream === input.inbound) {
+    reasons.push(...candidate.declineReasons);
+  }
   if (!eligible) reasons.push("feature-unrepresentable");
 
   return {
