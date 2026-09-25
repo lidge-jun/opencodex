@@ -38,7 +38,7 @@ async function staticFile(pathname: string): Promise<Response> {
 async function appDocument(request: Request): Promise<Response> {
   const body = await readFile(join(root, "index.html"), "utf8");
   const origin = new URL(request.url).origin;
-  const tags = `<meta name="opencodex-runtime-role" content="client"><meta name="opencodex-session-token" content="ocx_session_fixture"><meta name="opencodex-session-csrf" content="fixture-csrf"><meta name="opencodex-session-origin" content="${origin}"><meta name="opencodex-session-server-origin" content="${origin}">`;
+  const tags = `<meta name="opencodex-runtime-role" content="hub"><meta name="opencodex-session-token" content="ocx_session_fixture"><meta name="opencodex-session-csrf" content="fixture-csrf"><meta name="opencodex-session-origin" content="${origin}"><meta name="opencodex-session-server-origin" content="${origin}">`;
   return new Response(body.replace("</head>", `${tags}</head>`), { headers: { "content-type": "text/html" } });
 }
 
@@ -48,7 +48,6 @@ const server = Bun.serve({
     const url = new URL(request.url);
     const fixture = fixtureFor(request, url);
     if (url.pathname === "/opencodex-session") return new Response(`<meta name="opencodex-session-token" content="ocx_session_fixture"><meta name="opencodex-session-csrf" content="fixture-csrf"><meta name="opencodex-session-origin" content="${url.origin}"><meta name="opencodex-session-server-origin" content="${url.origin}">`, { headers: { "content-type": "text/html" } });
-    if (url.pathname === "/api/machine/status" && request.method === "GET") return json({ mode: "client", connected: true, machineBase: url.origin, sharedBase: url.origin, sharedServerOrigin: url.origin, managementTransport: "direct", apiKeyId: "fixture-api-key", protocolVersion: 1, connectedAt: "2026-09-25T00:00:00.000Z" });
     if (url.pathname === "/api/remote-workspace" && request.method === "GET") return json({ available: true, devices: [], runtimes: {}, sessions: [] });
     if (url.pathname === "/api/link/status" && request.method === "GET") return json(status(fixture));
     if (url.pathname === "/api/link/candidates" && request.method === "GET") return json({ candidates: [{ alias: "child-workstation", source: "ssh_config" }, { alias: "tailscale-child", source: "tailscale" }] });
