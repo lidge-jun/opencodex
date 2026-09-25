@@ -48,6 +48,16 @@ requests/sockets. Only allowlisted event types and localized error categories ar
 displayed. Tests live in `gui/tests/audio-api-client.test.ts`,
 `gui/tests/audio-api-panel.test.tsx`, `gui/tests/api-auth-memory.test.ts` and
 `tests/server/api-access-endpoints.test.ts`.
+
+The API page's request path preview is
+`gui/src/components/protocols/ProtocolPlanPanel.tsx`, placed after the endpoints section. It asks
+`POST /api/protocols/plan` through `gui/src/protocol-api.ts`, which validates the answer with the
+shared `isProtocolPlanV1` and caches it per target, selector, sorted features and policy revision;
+a 404 from an older server turns the preview off without an error. The panel shows each candidate's
+path, delivery mode, fidelity, reasons and feature effects (`FeatureDispositionList.tsx`), and the
+features every eligible candidate guarantees apart from those only some keep. Delivery mode is not a
+verification verdict, so the panel shows no Lab badge and does not read `ExternalModelRow.native`.
+Tests live in `gui/tests/protocol-api.test.ts` and `tests/server/protocol-routes.test.ts`.
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
 existing reading line. The section strip stays one row at every width.
