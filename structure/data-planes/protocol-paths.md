@@ -230,9 +230,10 @@ transport side (send budget, failover, logging) is in
 
 Behind `protocols.rollout.managedMessagesNative` (default off). A Messages request whose settled
 route is a direct, key-auth `anthropic` provider is sent as Messages instead of replaying through
-Responses. `nativeMessagesDeclineReason` names the first rule that keeps a route off the lane:
-`rollout-disabled`, `cross-wire-ir` (another adapter), `auth-mode-not-native` (OAuth, which is
-PF-10, or `forward`), `combo-or-policy-route`, `effort-row` / `fast-row` (synthetic rows need the
+Responses; with `managedMessagesNativeOAuth` also on, so is an unpooled Anthropic OAuth account
+(below). `nativeMessagesDeclineReason` names the first rule that keeps a route off the lane:
+`rollout-disabled`, `cross-wire-ir` (another adapter), `auth-mode-not-native` (`forward`, or an
+OAuth route the OAuth rule does not admit), `oauth-account-pool`, `combo-or-policy-route`, `effort-row` / `fast-row` (synthetic rows need the
 adapter's wire rewrite), `vision-preprocessing` (an image for a model declared unable to read
 it), and `bridge-only-policy` when operator policy that only the translated path applies would
 engage: a pinned reasoning effort for the route (`resolvePinnedEffort`, read with the translated
@@ -259,12 +260,45 @@ is `envelope.freshBody()` when a source envelope exists, otherwise the ingress's
 `buildAnthropicMessagesPassthroughRequest` in `src/adapters/anthropic/passthrough.ts` builds the
 request from that body: the top-level allowlist (`model, messages, system, max_tokens, metadata,
 stop_sequences, stream, temperature, top_p, top_k, tools, tool_choice, thinking, output_config,
-service_tier`), the wire model, and the URL, `anthropic-version`, client identity and key placement
-the Anthropic adapter uses (`resolveAnthropicMessagesUrl`, `anthropicBaseRequestHeaders`,
-`applyAnthropicKeyAuth`), plus the provider's configured headers. No caller header is read, so the
-caller's `Authorization`, `x-api-key` and `anthropic-beta` never reach the provider; a beta
-allowlist is PF-10. A dropped field has no name in the feature vocabulary, so it records no
-feature effect.
+service_tier`), the wire model, and the URL, `anthropic-version`, client identity and credential
+placement the Anthropic adapter uses (`resolveAnthropicMessagesUrl`, `anthropicBaseRequestHeaders`,
+`applyAnthropicKeyAuth` / `applyAnthropicOAuthAuth`), plus the provider's configured headers. The
+builder never mutates its input. A dropped field has no name in the feature vocabulary, so it
+records no feature effect.
+
+Caller betas. The only caller header the lane receives is `anthropic-beta`, which the ingress
+hands over explicitly; `Authorization` and `x-api-key` never reach the provider.
+`src/adapters/anthropic/beta-allowlist.ts` keeps a value only when it is on the list for the
+destination's class and re-emits it in the list's own spelling: `interleaved-thinking-2025-05-14`
+for `api.anthropic.com`, nothing for an Anthropic-compatible host. Proxy-owned betas (the OAuth
+pair) are set by the builder, and an operator's configured beta is merged, not replaced. Any
+dropped value adds `anthropic-beta-dropped` to the trace; the value itself is never recorded.
+
+Opaque state and credential domains. `src/protocols/opaque-state.ts` defines a credential domain
+as the provider's base host plus its credential class (`key`, `oauth`, ...); first-party means
+HTTPS to `api.anthropic.com` on the default port. Thinking `signature`s and `redacted_thinking`
+blocks are sent only to first-party Anthropic. For any other or unknown destination the builder
+sends a copy without them (the signature field dropped, the thinking text kept, a redacted block
+dropped, a message left empty dropped) and the trace gains `opaque-state-stripped`. Under
+`unrepresentable: "reject"` the ingress refuses such a request before any send (`blocked`,
+`feature-unrepresentable` + `opaque-state-stripped`), and a rebuild that would strip mid-request
+fails closed. Because the source body is never mutated, each build — including one after a key
+re-selection moves to another domain — decides from the full envelope copy the lane was given.
+
+OAuth. Behind `managedMessagesNativeOAuth`, which `resolveProtocolSettings` treats as off unless
+`managedMessagesNative` is on. Only the `anthropic` provider the OAuth store serves, only to
+`api.anthropic.com` (the builder refuses any other host for an OAuth token), and only an unpooled
+account set: `anthropicAccountPool.enabled` (config) or a stored quorum of two usable accounts
+(`hasAnthropicFailoverQuorum`, supplied by the ingress and `count_tokens`, never by the planner)
+declines with `oauth-account-pool`, because rotation, session affinity and quota ranking live in
+`prepareResponsesTransport`. `src/server/messages-native-oauth.ts` resolves the account at
+dispatch by the same steps that transport takes for an unpooled route (capture the selection,
+resolve the active snapshot, commit against the capture) and re-checks the binding before every
+physical send, re-resolving through the same owner if it moved. Planning and `count_tokens` read
+config and the read-only account set only; nothing selects, refreshes or writes. The body gets the
+Claude Code identity block and declared client tool names under the OAuth prefix; the answer's
+`tool_use` names are mapped back for exactly those names. A 401 or 429 is answered as the bridge
+answers an unpooled account: no refresh replay, no same-token replay, no rotation.
 
 `handleNativeMessages` mirrors native Chat on the shared pieces: `beginInferenceAttempt`,
 `createFinalRequestLog`, the request spend tracker charged per physical send, proactive key
@@ -279,11 +313,17 @@ everything else is relayed as is). Upstream errors answer in Anthropic shape wit
 policy (transient 5xx as 529, replay refusals kept non-retryable). `count_tokens` estimates the
 body the builder would send when the route is eligible, and sends nothing.
 `tests/adapters/anthropic/anthropic-messages-passthrough.test.ts`,
+`tests/adapters/anthropic/anthropic-beta-allowlist.test.ts`,
+`tests/adapters/anthropic/anthropic-messages-passthrough-oauth.test.ts`,
+`tests/responses/protocol-opaque-state.test.ts`,
+`tests/responses/messages-native-oauth-eligibility.test.ts`,
+`tests/claude-integration/messages-native-oauth.test.ts`,
+`tests/claude-integration/messages-native-opaque-state.test.ts`,
 `tests/responses/messages-native-eligibility.test.ts`,
 `tests/responses/messages-native-bridge-policy.test.ts`,
 `tests/claude-integration/messages-native.test.ts` and
 `tests/claude-integration/messages-native-decline-trace.test.ts` pin the builder, the rule, the
-lane and the decline trace.
+lane, the decline trace, the beta allowlist, opaque state and OAuth.
 
 ## Settings
 
@@ -295,9 +335,9 @@ present, closes when that value is present but malformed, and otherwise inherits
 `protocols.rollout` switch defaults off; the OAuth native-Messages switch is effective only with
 the key-auth one. The Chat and Messages ingresses read the unrepresentable policy (above);
 `directEncodersApply` reads `directEncoders` on both; the Chat ingress reads `nativeChatCombos`
-for combo routes (above); `managedMessagesNative` is read through `nativeMessagesDeclineReason`
-by the Messages ingress, `count_tokens` and the planner (below). No request path reads the
-other rollout switches yet.
+for combo routes (above); `managedMessagesNative` and `managedMessagesNativeOAuth` are read
+through `nativeMessagesDeclineReason` by the Messages ingress, `count_tokens` and the planner
+(above). No request path reads the other rollout switches yet.
 
 `claudeInboundDisabled` in `src/server/claude-messages.ts` is the Messages ingress reader: both
 `/v1/messages` and `/v1/messages/count_tokens` call it, so the two routes cannot disagree, and a

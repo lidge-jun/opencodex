@@ -48,6 +48,8 @@ Kept current by each packet that migrates something.
 | Responses-only features on Chat/Messages | `previous_response_id`, `store`, `background`, compaction stay on the bridge |
 | Non-public-wire adapters (`other`) | translated through the IR; no feature claims |
 | OAuth native Chat | not planned in this unit |
-| Messages → key-auth Anthropic | native behind `managedMessagesNative` (PF-08); bridge while off. Caller `anthropic-beta` is not forwarded (PF-10 allowlist); top-level fields outside the allowlist are dropped with no feature effect |
-| Messages → Anthropic OAuth | bridge until `managedMessagesNativeOAuth` (PF-10) |
+| Messages → key-auth Anthropic | native behind `managedMessagesNative` (PF-08); bridge while off. Caller `anthropic-beta` passes only through the PF-10 allowlist (`interleaved-thinking-2025-05-14` to `api.anthropic.com`, nothing to a compatible host); a dropped value is traced as `anthropic-beta-dropped`, never by value. Top-level fields outside the allowlist are dropped with no feature effect |
+| Messages → Anthropic OAuth | native behind `managedMessagesNativeOAuth` (PF-10) for the unpooled `anthropic` provider on `api.anthropic.com`; bridge while off |
+| Messages → pooled Anthropic OAuth | not migrated (PF-10): `anthropicAccountPool.enabled` or two usable stored accounts decline with `oauth-account-pool`, because rotation, session affinity and quota ranking live in the Responses transport |
+| Opaque thinking state on the native lane | signatures and `redacted_thinking` reach `api.anthropic.com` only; elsewhere removed and traced as `opaque-state-stripped` (reason code, not a feature effect: a same-wire hop has no degraded disposition), refused before any send under `reject` |
 | Messages native lane, translated-only steps | a pinned route effort, blocked-skill elision, the web-search sidecar and vision preprocessing keep the request on the bridge (`bridge-only-policy` / `vision-preprocessing`); `stabilizePromptCache` is a recorded gap — the native lane does not apply it |
