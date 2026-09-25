@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { atomicWriteFile, isMissingPathError } from "../config/atomic-write";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir } from "../lib/windows-secret-acl";
+import { isLinkPort } from "./ports";
 import { assertSshAlias } from "./ssh-argv";
 
 /**
@@ -62,7 +63,7 @@ function assertOnlyKeys(raw: Record<string, unknown>, allowed: Set<string>, wher
   }
 }
 
-const isPort = (value: unknown): value is number =>
+const isListenerPort = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
 
 function parseRecord(value: unknown, index: number): LinkRecord {
@@ -77,7 +78,7 @@ function parseRecord(value: unknown, index: number): LinkRecord {
   const fingerprint = raw.hostKeyFingerprint;
   if (fingerprint === null ? raw.direction !== "client-initiated"
     : typeof fingerprint !== "string" || !FINGERPRINT.test(fingerprint)) fail("hostKeyFingerprint");
-  if (!isPort(raw.tunnelPort)) fail("tunnelPort");
+  if (!isLinkPort(raw.tunnelPort)) fail("tunnelPort");
   if (typeof raw.apiKeyId !== "string" || !API_KEY_ID.test(raw.apiKeyId)) fail("apiKeyId");
   if (typeof raw.createdAt !== "string" || Number.isNaN(Date.parse(raw.createdAt))) fail("createdAt");
   return {
@@ -98,7 +99,7 @@ export function parseLinkStore(text: string): LinkStore {
   const body = raw as Record<string, unknown>;
   assertOnlyKeys(body, STORE_KEYS, "links.json");
   if (body.version !== 1) throw new LinkStoreError("links.json has an unsupported version");
-  if (body.listenerPort !== null && !isPort(body.listenerPort)) throw new LinkStoreError("listenerPort is invalid");
+  if (body.listenerPort !== null && !isListenerPort(body.listenerPort)) throw new LinkStoreError("listenerPort is invalid");
   if (!Array.isArray(body.links)) throw new LinkStoreError("links is not an array");
   const links = body.links.map(parseRecord);
   const ids = new Set(links.map(link => link.id));

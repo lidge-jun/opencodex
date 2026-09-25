@@ -72,6 +72,8 @@ import {
 } from "./state";
 import { assertClientCatalogCompatible, type CatalogCompatibilityDeps } from "./catalog-compatibility";
 import { hubStateCachePath } from "./hub-state";
+import { ClientLinkStateError, clearClientLinkState, readClientLinkState } from "./link-state";
+import { isLinkPort } from "../link/ports";
 
 class RotationRecoveryRequiredError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -540,7 +542,7 @@ export async function connectClient(
     linkMode = (options.transport ?? "hub") === "link";
     if (linkMode) {
       if (options.credential.kind !== "link" || !options.link
-        || !Number.isInteger(options.link.tunnelPort) || options.link.tunnelPort < 1024 || options.link.tunnelPort > 65535
+        || !isLinkPort(options.link.tunnelPort)
         || !/^lnk_[0-9a-f]{16}$/.test(options.link.linkId)
         || !/^ocx_data_[0-9a-f]{40}$/.test(options.credential.key)
         || !options.credential.apiKeyId.trim() || options.credential.apiKeyId.length > 256) {
@@ -990,6 +992,17 @@ export async function disconnectClient(
     if (!disconnectAtLeast(receipt, "clearing_connection")) advance("clearing_connection");
     if (clearClientConnection(receipt.owner) === "conflict") throw new Error("client_disconnect_owner_changed");
     if (!disconnectAtLeast(receipt, "connection_cleared")) advance("connection_cleared");
+    if (connection?.transport === "link" && connection.link) {
+      // A corrupt sidecar is left in place: the connection is already cleared, the client runtime
+      // will not start a tunnel for a disconnected client, and the next join overwrites the file.
+      let sidecarLinkId: string | null = null;
+      try {
+        sidecarLinkId = readClientLinkState()?.linkId ?? null;
+      } catch (error) {
+        if (!(error instanceof ClientLinkStateError)) throw error;
+      }
+      if (sidecarLinkId === connection.link.linkId) clearClientLinkState(connection.link.linkId);
+    }
     removeHubStateCache();
     requireDesktopResult(finishRemoteDesktopCleanup(held, receipt.owner));
     if (receipt.phase !== "complete") advance("complete");

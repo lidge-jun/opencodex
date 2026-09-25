@@ -15,8 +15,14 @@ import {
   connectClient,
 } from "../client/connect";
 import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
+import { readClientLinkState } from "../client/link-state";
+import { teardownClientLink } from "../client/link-teardown";
+import { reapOrphanTunnel } from "../client/link-tunnel";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import type { ClientLifecycleLockDeps } from "../client/lifecycle-lock";
+import { linkKnownHostsPath } from "../link/paths";
+import { createSshRunner, type SshRunner } from "../link/ssh-runner";
+import type { OrphanTunnelResult } from "../client/link-tunnel";
 import { inspectRemoteDesktopStore } from "../claude/desktop-remote-store";
 import type { OcxConnectedClientId } from "../types";
 import {
@@ -38,6 +44,12 @@ import {
 export interface ClientCommandDeps extends RuntimeApiDeps {
   lifecycleLockDeps?: ClientLifecycleLockDeps;
   catalogProbeDeps?: ClientCatalogProbeDeps;
+  linkTeardownDeps?: {
+    runner?: Pick<SshRunner, "run">;
+    reapOrphanTunnel?: () => Promise<OrphanTunnelResult>;
+    knownHostsFile?: string;
+    timeoutMs?: number;
+  };
 }
 
 export interface ClientCatalogProbeDeps extends CatalogCompatibilityDeps {
@@ -496,15 +508,33 @@ export async function handleConnectCommand(argv: string[], deps: ClientCommandDe
   });
 }
 
-export async function handleDisconnectCommand(argv: string[], deps: Pick<ClientCommandDeps, "lifecycleLockDeps"> = {}): Promise<number> {
+export async function handleDisconnectCommand(
+  argv: string[],
+  deps: Pick<ClientCommandDeps, "lifecycleLockDeps" | "linkTeardownDeps"> = {},
+): Promise<number> {
   return runCliAction(async () => {
     const args = [...argv];
     const keepCatalog = takeFlag(args, "--keep-catalog");
     const wantsJson = takeFlag(args, "--json");
     rejectArgs(args, DISCONNECT_USAGE, { redactValues: true });
+    const teardown = await teardownClientLink({
+      readSidecar: readClientLinkState,
+      connectedLinkId: () => {
+        const state = readClientConnectionState();
+        return state.kind === "connected" && state.value.transport === "link"
+          ? state.value.link?.linkId ?? null
+          : null;
+      },
+      reapOrphanTunnel: deps.linkTeardownDeps?.reapOrphanTunnel ?? (() => reapOrphanTunnel()),
+      runner: deps.linkTeardownDeps?.runner ?? createSshRunner(),
+      knownHostsFile: deps.linkTeardownDeps?.knownHostsFile ?? linkKnownHostsPath(),
+      timeoutMs: deps.linkTeardownDeps?.timeoutMs,
+    });
     const result = await disconnectClient({ keepCatalog }, deps);
     const payload = {
       ...result,
+      homeRevoke: teardown.homeRevoke,
+      tunnel: teardown.tunnel,
       revoke: {
         apiKeyId: result.apiKeyId,
         location: "Integrations → API Keys",
@@ -515,7 +545,13 @@ export async function handleDisconnectCommand(argv: string[], deps: Pick<ClientC
       ...(result.desktopRestoration === "standard_fallback"
         ? ["Previous Desktop settings were not recorded; the managed profile was switched to standard mode."] : []),
       ...(result.restartRequired ? ["Fully quit and reopen Claude Desktop; local cleanup cannot revoke an in-memory credential."] : []),
-      `The hub key ${result.apiKeyId} is still valid. Revoke it from Integrations → API Keys.`,
+      ...(teardown.homeRevoke === "failed" && teardown.linkId
+        ? [`Home revoke failed; run ocx link revoke --link-id ${teardown.linkId} on the home.`] : []),
+      ...(teardown.tunnel?.tunnel === "unresolved"
+        ? [`A link tunnel (pid ${teardown.tunnel.pid}) may still be running; stop it if it is.`] : []),
+      teardown.homeRevoke === "revoked"
+        ? `The home revoked link ${teardown.linkId} and its key ${result.apiKeyId}.`
+        : `The hub key ${result.apiKeyId} is still valid. Revoke it from Integrations → API Keys.`,
     ]);
   });
 }

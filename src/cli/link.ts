@@ -1,5 +1,6 @@
 import { assertSshAlias } from "../link/ssh-argv";
 import { linkStorePath } from "../link/paths";
+import { isLinkPort } from "../link/ports";
 import { readLinkStore, type LinkDirection, type LinkStore } from "../link/store";
 import { findAvailablePort } from "../server/ports";
 import {
@@ -73,7 +74,7 @@ function assertExactKeys(value: Record<string, unknown>, keys: readonly string[]
   }
 }
 
-function validPort(value: unknown): value is number {
+function validListenerPort(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
 }
 
@@ -96,7 +97,7 @@ function validateStatus(value: unknown): LinkStatusPayload {
   if (value.listener.state !== "off" && value.listener.state !== "listening" && value.listener.state !== "failed") {
     throw new Error("invalid link API response: listener state");
   }
-  if (value.listener.port !== null && !validPort(value.listener.port)) {
+  if (value.listener.port !== null && !validListenerPort(value.listener.port)) {
     throw new Error("invalid link API response: listener port");
   }
   if (!Array.isArray(value.links)) throw new Error("invalid link API response: links");
@@ -106,7 +107,7 @@ function validateStatus(value: unknown): LinkStatusPayload {
     if (typeof candidate.id !== "string" || !LINK_ID.test(candidate.id)
       || !validString(candidate.alias) || (candidate.direction !== "hub-initiated" && candidate.direction !== "client-initiated")
       || (candidate.state !== "connecting" && candidate.state !== "connected" && candidate.state !== "reconnecting" && candidate.state !== "failed" && candidate.state !== "idle")
-      || !validString(candidate.since) || !validNullableString(candidate.reason) || !validPort(candidate.tunnelPort)) {
+      || !validString(candidate.since) || !validNullableString(candidate.reason) || !isLinkPort(candidate.tunnelPort)) {
       throw new Error(`invalid link API response: link ${index} fields`);
     }
     return {
@@ -149,7 +150,7 @@ function validateIssue(value: unknown): LinkIssuePayload {
   if (typeof value.linkId !== "string" || !LINK_ID.test(value.linkId)
     || typeof value.apiKeyId !== "string" || !API_KEY_ID.test(value.apiKeyId)
     || typeof value.key !== "string" || !DATA_KEY.test(value.key)
-    || !validPort(value.listenerPort)) {
+    || !validListenerPort(value.listenerPort)) {
     throw new Error("invalid link API response: issue fields");
   }
   return {
@@ -209,15 +210,15 @@ async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
   takeJsonFlag(args);
   rejectArgs(args, LINK_USAGE);
   const port = await (deps.choosePort ?? (() => findAvailablePort(0, "127.0.0.1")))();
-  if (!validPort(port)) throw new Error("port allocator returned an invalid port");
+  if (!isLinkPort(port)) throw new Error("port allocator returned an invalid link port");
   console.log(JSON.stringify({ port }));
 }
 
 async function runIssue(args: string[], deps: LinkCliDeps): Promise<void> {
   takeJsonFlag(args);
   const alias = takeOption(args, "--alias");
-  const tunnelPort = takeIntegerOption(args, "--tunnel-port", { min: 1 });
-  if (!alias || tunnelPort === undefined || tunnelPort > 65535) {
+  const tunnelPort = takeIntegerOption(args, "--tunnel-port", { min: 1024 });
+  if (!alias || tunnelPort === undefined || !isLinkPort(tunnelPort)) {
     throw new CliUsageError("issue requires --alias and --tunnel-port", LINK_USAGE);
   }
   try { assertSshAlias(alias); }

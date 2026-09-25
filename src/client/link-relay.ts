@@ -9,6 +9,7 @@ import {
   validateHubRelayRequestHeaders,
 } from "./hub-relay";
 import { linkRouteAllowed } from "../link/routes";
+import { isLinkPort } from "../link/ports";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
@@ -42,7 +43,7 @@ function jsonError(status: number, error: string, retry = false): Response {
 }
 
 export function linkRelayDestination(url: URL, target: LinkRelayTarget): string {
-  if (!Number.isInteger(target.tunnelPort) || target.tunnelPort < 1024 || target.tunnelPort > 65535) {
+  if (!isLinkPort(target.tunnelPort)) {
     throw new RangeError("invalid link tunnel port");
   }
   return `http://127.0.0.1:${target.tunnelPort}${url.pathname}${url.search}`;

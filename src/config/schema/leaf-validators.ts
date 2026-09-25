@@ -854,6 +854,8 @@ const connectedClientIdSchema = z.enum(["codex", "claude"]);
 const clientTimestampSchema = z.string().datetime({ offset: true });
 const clientTransportSchema = z.enum(["hub", "link"]);
 const linkTransportSchema = z.object({
+  // Same range as isLinkPort in src/link/ports.ts, restated here because the config schema sits on
+  // every install's core path and must not import link code (tests/lab/core-link-boundary.test.ts).
   tunnelPort: z.number().int().min(1024).max(65535),
   linkId: z.string().regex(/^lnk_[0-9a-f]{16}$/),
 }).strict();
