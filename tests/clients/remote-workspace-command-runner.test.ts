@@ -32,9 +32,9 @@ function fixture() {
 }
 
 function privateBubblewrapFixture(): string {
-  // The production guard checks every ancestor, so tmpdir's shared /tmp parent
-  // is deliberately ineligible. Own a disposable sibling under the trusted
-  // interpreter directory without chmod'ing the interpreter or shared parents.
+  // These argv tests never execute bubblewrap. On Unix, use a system executable
+  // whose ancestors are trusted even when the test's Bun binary lives under /tmp.
+  if (process.platform !== "win32") return "/usr/bin/env";
   const root = mkdtempSync(join(dirname(realpathSync(process.execPath)), "ocx-bwrap-fixture-"));
   roots.push(root);
   const path = join(root, "bwrap");

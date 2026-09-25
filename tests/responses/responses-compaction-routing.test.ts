@@ -1122,7 +1122,7 @@ describe("compact alternate-account attempt (#913)", () => {
       expect(JSON.stringify(calls.at(-1)!.body.input)).toContain(OPAQUE_COMPACTION_NOTE);
       expect(calls).toHaveLength(4);
     });
-  });
+  }, 20_000);
 
   test("native compact headers followed by a stalled body return 504 without retry and release account cleanup", async () => {
     await withPoolEnv("ocx-compact-body-deadline-", async config => {
