@@ -7,8 +7,10 @@
  */
 import { anthropicBodyElidesBlockedSkill } from "../claude/inbound";
 import { isClaudeWebSearchToolName } from "../claude/outbound";
+import { isAnthropicAccountPoolEnabled } from "../oauth/anthropic-routing";
 import type { ProtocolReasonCode } from "../protocols/contract";
 import { featuresFromMessagesBody } from "../protocols/features";
+import { credentialDomainFor } from "../protocols/opaque-state";
 import { resolveProtocolSettings } from "../protocols/settings";
 import type { RouteResult } from "../router";
 import type { OcxConfig } from "../types";
@@ -21,6 +23,7 @@ export type NativeMessagesDeclineReason = Extract<
   | "rollout-disabled"
   | "cross-wire-ir"
   | "auth-mode-not-native"
+  | "oauth-account-pool"
   | "combo-or-policy-route"
   | "effort-row"
   | "fast-row"
@@ -38,6 +41,13 @@ export interface NativeMessagesSelector {
   routeSelector?: string;
   /** The Claude settings this ingress reads (intercept bindings applied); defaults to config's. */
   claudeCode?: OcxConfig["claudeCode"];
+  /**
+   * Runtime fact, supplied by a caller that is about to send: two or more usable Anthropic OAuth
+   * accounts are stored, so the bridge would rotate accounts on a 429
+   * (`hasAnthropicFailoverQuorum`). It reads the account store, so the planner never supplies it
+   * and judges OAuth from config alone.
+   */
+  oauthFailoverQuorum?: boolean;
 }
 
 type Rec = Record<string, unknown>;
@@ -83,12 +93,36 @@ function bridgeOnlyPolicyApplies(
 }
 
 /**
+ * The credential rule. A proxy-managed key is native since PF-08. An Anthropic OAuth account
+ * is native only with `managedMessagesNativeOAuth` on (itself effective only with
+ * `managedMessagesNative`), only for the `anthropic` provider the OAuth store serves, and only
+ * to `api.anthropic.com`. A pooled account set declines: rotation, session affinity and quota
+ * ranking live in the Responses pipeline's transport and are not replicated here. `forward`
+ * belongs to the caller.
+ */
+function credentialDeclineReason(
+  route: RouteResult,
+  config: OcxConfig,
+  selector: NativeMessagesSelector,
+): NativeMessagesDeclineReason | undefined {
+  const provider = route.provider;
+  if (provider.authMode === undefined || provider.authMode === "key") return undefined;
+  if (provider.authMode !== "oauth") return "auth-mode-not-native";
+  if (!resolveProtocolSettings(config).rollout.managedMessagesNativeOAuth) return "auth-mode-not-native";
+  if (route.providerName !== "anthropic") return "auth-mode-not-native";
+  if (!credentialDomainFor(provider)?.firstPartyAnthropic) return "auth-mode-not-native";
+  if (isAnthropicAccountPoolEnabled(config) || selector.oauthFailoverQuorum === true) return "oauth-account-pool";
+  return undefined;
+}
+
+/**
  * The first rule that keeps a Messages request off the managed native lane, or `undefined` when
  * the route is eligible.
  *
  * - the `protocols.rollout.managedMessagesNative` switch is off;
  * - the final adapter is not `anthropic`;
- * - the credential is not a proxy-managed key (OAuth is PF-10; `forward` belongs to the caller);
+ * - the credential is neither a proxy-managed key nor an eligible Anthropic OAuth account
+ *   (`credentialDeclineReason`); a pooled OAuth account set is `oauth-account-pool`;
  * - a combo or policy route owns multi-candidate execution in the Responses pipeline;
  * - a synthetic effort or fast row needs the adapter that owns its wire rewrite;
  * - an image would reach a model the operator declared unable to read it;
@@ -104,7 +138,8 @@ export function nativeMessagesDeclineReason(
   if (!resolveProtocolSettings(config).rollout.managedMessagesNative) return "rollout-disabled";
   const provider = route.provider;
   if (provider.adapter !== "anthropic") return "cross-wire-ir";
-  if (provider.authMode !== undefined && provider.authMode !== "key") return "auth-mode-not-native";
+  const credentialDecline = credentialDeclineReason(route, config, selector);
+  if (credentialDecline) return credentialDecline;
   if (route.combo || route.routeKind === "combo" || route.routeKind === "policy") return "combo-or-policy-route";
   if (selector.effortRow) return "effort-row";
   if (selector.fastRow) return "fast-row";
