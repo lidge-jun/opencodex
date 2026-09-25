@@ -208,6 +208,7 @@ describe("ocx system settings desktop switches", () => {
       // Observation can recover while integration stays disabled; sync cannot inject then.
       expect(output).not.toContain("ocx sync");
       expect(output).toContain("ocx system settings --json");
+      expect(output).toContain("Resolve the reported config.toml read error");
     } finally {
       logSpy.mockRestore();
     }
@@ -1465,6 +1466,7 @@ describe("ownership recovery advice does not assume injection is enabled", () =>
         const text = log.mock.calls.flat().join("\n");
         expect(text).toContain("was not rewritten");
         expect(text).not.toContain("ocx sync");
+        if (reason === "ownership_undetermined") expect(text).toContain("Resolve the reported config.toml read error");
         expect(text).toContain(reason === "ownership_undetermined"
           ? "ocx system settings --json" : "Enable Codex integration");
       } finally { log.mockRestore(); }

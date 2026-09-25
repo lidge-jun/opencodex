@@ -225,7 +225,7 @@ async function sidecar(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     const retry = apply.reason === "external_provider"
       ? ""
       : apply.reason === "ownership_undetermined"
-      ? " Restore read access to config.toml, then inspect 'ocx system settings --json'."
+      ? " Resolve the reported config.toml read error, then inspect 'ocx system settings --json'."
       : apply.reason === "integration_disabled"
       ? " Enable Codex integration before applying the stored settings."
       : " Run 'ocx sync' to apply the stored settings.";
