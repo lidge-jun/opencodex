@@ -499,3 +499,12 @@ GUI의 `gui/tests/remote-link-client.test.tsx`는 별도 GUI test runner 대상�
 - 남은 위험: macOS의 고아 터널은 자동 정리하지 않는다. 허브 revoke 뒤에는 발급 키가 무효라서 고아 터널로 들어오는 요청은 허브 리스너에서 401로 막힌다.
 - 테스트(client-link-teardown.test.ts): 주입한 플랫폼·procfs 읽기로 Linux 일치(reaped), 불일치(absent, 프로세스 미접촉), 비Linux(unresolved, pidfile 유지) 세 경우.
 
+
+
+## 구현 정정 (B 착수, 2026-09-25) — r3와 r5의 충돌 해소
+
+- r3는 "CLI는 터널을 죽이지 않는다", r5는 "disconnect teardown에서 고아 터널 회수"라서, 런타임이 살아 있을 때 Linux에서 회수하면 런타임 소유 터널까지 argv가 일치해 죽는다.
+- pidfile 경로는 `<configDir>/link/client-tunnel.pid`, 본문은 `{ version: 1, linkId, pid, argv, ownerPid }`다. `ownerPid`는 터널을 띄운 프로세스(client 런타임 또는 join 중인 standalone 프로세스)다.
+- `reapOrphanTunnel()`은 `ownerPid`가 살아 있으면 아무것도 건드리지 않고 `{ tunnel: "owned" }`를 돌려준다. 소유자가 죽었을 때만 r5 규칙(Linux 정확 argv 일치 → reaped, 불일치·부재 → absent, 비Linux → unresolved)을 적용한다.
+- 공용 인터페이스: `src/link/ports.ts`, `src/client/link-state.ts`, `src/client/link-tunnel.ts`(시그니처)를 B 첫 커밋에서 고정하고 병렬 실행자가 이 시그니처에 맞춰 구현한다.
+
