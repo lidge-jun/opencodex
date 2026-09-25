@@ -117,6 +117,8 @@ export interface HandleNativeMessagesOptions {
   /** The selector the client sent, echoed on the request log. */
   requestedModel: string;
   translatorBudget: TranslatorBudget;
+  /** The facts the ingress judged eligibility with; re-applied if key selection changes. */
+  selector?: NativeMessagesSelector;
 }
 
 type FinishLog = (status: number, message?: string, closeReason?: FinalRequestLogMeta["closeReason"]) => void;
@@ -299,7 +301,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     ? Math.max(0, requestTransientPolicy.attempts - transientSendsUsed)
     : Number.POSITIVE_INFINITY;
   const transientSendAvailable = (): boolean => remainingTransientSends() > 0;
-  const selector: NativeMessagesSelector = {};
+  const selector: NativeMessagesSelector = options.selector ?? {};
 
   const send = async (recovery?: "rate-limit-429" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
@@ -596,7 +598,7 @@ export function nativeMessagesCountBody(
   config: OcxConfig,
   cc: OcxConfig["claudeCode"],
   body: Rec,
-  selector: NativeMessagesSelector,
+  rows: Pick<NativeMessagesSelector, "effortRow" | "fastRow">,
 ): Rec | undefined {
   if (typeof body.model !== "string") return undefined;
   try {
@@ -610,6 +612,7 @@ export function nativeMessagesCountBody(
       route.providerName, route.modelId, route.provider, route.staticPolicy.effectiveAlias, "anthropic",
     );
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy);
+    const selector: NativeMessagesSelector = { ...rows, routeSelector: selectorId, claudeCode: cc };
     if (nativeMessagesDeclineReason(route, body, config, selector) !== undefined) return undefined;
     return buildAnthropicMessagesPassthroughRequest(route.provider, route.modelId, body, config).wireBody;
   } catch {
