@@ -117,6 +117,12 @@ test("the scroll buttons appear only when the chips overflow, and page the one r
   expect(view.buttons()[1]?.getAttribute("aria-disabled")).toBe("true");
   await click(view.buttons()[0]!);
   expect(calls[1]?.left).toBe(-240);
+
+  // A chip widened without any scroll or list resize (a late web font): the stored edge says
+  // "at end", but the live metrics can still scroll, so » must page instead of ignoring the press.
+  Object.defineProperty(view.list, "scrollWidth", { configurable: true, value: 2000 });
+  await click(view.buttons()[1]!);
+  expect(calls[2]?.left).toBe(240);
   await view.unmount();
 });
 

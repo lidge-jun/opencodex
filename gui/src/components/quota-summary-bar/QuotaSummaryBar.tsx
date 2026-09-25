@@ -250,8 +250,9 @@ export function QuotaSummaryChips({ rows, t, locale }: { rows: QuotaSummaryRow[]
     ));
   }, []);
 
-  // Chip widths change with the rows (a new provider, a longer percent), which resizes nothing
-  // the observer watches, so the row signature re-measures on the next frame as well.
+  // Chips can widen without the list box changing size (a new provider, a longer percent, a late
+  // web font), so the observer watches every chip as well as the list, and the row signature
+  // re-measures on the next frame for chips that arrive with the new rows.
   const rowsKey = rows.map(row => `${row.provider}:${row.label}:${formatQuotaPercent(row.headline.percent)}:${row.severity}`).join("|");
   useEffect(() => {
     const list = listRef.current;
@@ -259,6 +260,7 @@ export function QuotaSummaryChips({ rows, t, locale }: { rows: QuotaSummaryRow[]
     const frame = requestAnimationFrame(measure);
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => measure());
     observer?.observe(list);
+    for (const chip of Array.from(list.children)) observer?.observe(chip);
     return () => {
       cancelAnimationFrame(frame);
       observer?.disconnect();
@@ -268,7 +270,12 @@ export function QuotaSummaryChips({ rows, t, locale }: { rows: QuotaSummaryRow[]
   const page = (direction: -1 | 1) => {
     const list = listRef.current;
     if (!list) return;
-    if (direction < 0 ? edges.atStart : edges.atEnd) return;
+    // Read the live metrics: the stored edges can lag a layout change the observers missed.
+    const max = list.scrollWidth - list.clientWidth;
+    if (direction < 0 ? list.scrollLeft <= 1 : list.scrollLeft >= max - 1) {
+      measure();
+      return;
+    }
     const reduceMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     list.scrollBy({ left: direction * Math.max(list.clientWidth * PAGE_FRACTION, 80), behavior: reduceMotion ? "auto" : "smooth" });
   };
