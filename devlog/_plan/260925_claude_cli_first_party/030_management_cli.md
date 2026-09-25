@@ -39,6 +39,10 @@ GUI normalization, notice copy and the ten catalog payloads are owned by `040_su
 | `scripts/test-layout/layout.json` | MODIFY | explicit new parser test domain |
 | `tests/fixtures/test-layout-expected.json` | MODIFY | expected new parser test domain |
 | `skills/ocx/references/01_management_surface.md` | MODIFY, GENERATED | `bun run skill:surface` output |
+| `structure/runtime.md` | MODIFY | ocx claude native NO_PROXY behaviour (wp4 P amendment) |
+| `structure/config.md` | MODIFY | cliFirstParty writers (wp4 P amendment) |
+| `structure/clients/claude-desktop.md` | MODIFY | CLI intent surfaces and ensure refresh (wp4 P amendment) |
+| `structure/ops/docs-and-release.md` | MODIFY if it enumerates capabilities | claude config declared (wp4 P amendment) |
 
 ## Source-anchored edits
 
