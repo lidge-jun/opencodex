@@ -144,7 +144,9 @@ export type QuotaInactiveReason = "no_credit";
  */
 export function quotaInactiveReason(
   config: OcxConfig,
-  targets: readonly { provider: string }[],
+  // A combo votes over its own targets, which carry a model; the single-provider case has none,
+  // and an absent model keeps gating on every window exactly as before.
+  targets: readonly { provider: string; model?: string }[],
   now = Date.now(),
 ): QuotaInactiveReason | undefined {
   const usable = targets.filter(target => {
@@ -156,7 +158,7 @@ export function quotaInactiveReason(
   for (const target of usable) {
     const provider = config.providers[target.provider]!;
     const quota = getCachedProviderRoutingQuota(target.provider, provider, now);
-    if (!quota || !cachedProviderQuotaIsExhausted(quota, now)) return undefined;
+    if (!quota || !cachedProviderQuotaIsExhausted(quota, now, target.model)) return undefined;
   }
   return "no_credit";
 }
