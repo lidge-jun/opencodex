@@ -500,9 +500,30 @@ shell-injection surface. Delivery is attempted once; there is no retry.
 
 Read recent detections with `ocx provider resets` or `GET /api/quota-resets`.
 
+## API surfaces (`apiSurfaces`)
+
+Responses (`/v1/responses`) and Chat Completions (`/v1/chat/completions`) are always served.
+The Messages API (`/v1/messages` and `/v1/messages/count_tokens`) can be closed on its own.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `apiSurfaces.messages.enabled?` | `boolean` | inherit | `true` serves the Messages API, `false` refuses both routes with 403. Unset inherits `claudeCode.enabled`, so a Claude integration that is off also closes Messages. |
+
+A present but malformed value (a non-object `apiSurfaces` or `messages`, or a non-boolean
+`enabled`) closes the Messages API rather than falling back to the inherited value. Both
+routes always agree.
+
+The dashboard's API page shows one card per API with the setting's source (explicit,
+inherited from Claude settings, or invalid) and a toggle for Messages. Turning Messages off
+there writes `apiSurfaces.messages.enabled: false` **and** `claudeCode.enabled: false` in the
+same save, so a proxy version older than this setting, which only reads `claudeCode.enabled`,
+keeps the endpoint closed after a downgrade. Turning it on writes only
+`apiSurfaces.messages.enabled: true`; an older version then still follows
+`claudeCode.enabled` and may keep Messages closed, which is the safe direction.
+
 ## Claude Code (`claudeCode`)
 
-These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx claude` launcher, and the Claude dashboard page.
+These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx claude` launcher, and the Claude dashboard page. Whether the Messages API is served at all is decided by [`apiSurfaces`](#api-surfaces-apisurfaces), which inherits `claudeCode.enabled` while unset.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |

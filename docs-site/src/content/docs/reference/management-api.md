@@ -515,11 +515,17 @@ keys are not returned to dashboard clients.
 | --- | --- | --- |
 | `GET /api/protocols` | Return the protocol contract version, which APIs are served, the protocol settings, the current policy revision, and the request features a preview understands | — |
 | `POST /api/protocols/plan` | Preview the path a request would take: `{ "model": "...", "inbound": "responses" \| "chat" \| "messages", "features": [...] }` returns each route candidate's request and response path, delivery mode, fidelity, feature effects, and reasons | 400 invalid JSON, unknown field, model over 200 characters, unknown inbound, or more than 24 / unknown features |
+| `PATCH /api/protocols/settings` | Change protocol settings: `{ "messagesEnabled"?: boolean, "unrepresentable"?: "legacy" \| "reject", "rollout"?: { ...boolean switches } }`. Returns the same body as `GET /api/protocols`. Closing Messages also sets `claudeCode.enabled` to `false` in the same save; opening it writes only `apiSurfaces.messages.enabled` | 400 invalid JSON, empty body, unknown field, wrong type, or `rollout.managedMessagesNativeOAuth` without `rollout.managedMessagesNative`; 409 configuration busy; 500 save failed (nothing changes) |
 
 A preview is computed from configuration alone. It sends nothing to any provider, costs nothing,
 does not advance combo rotation, and is not logged. The API page in the dashboard shows the same
 preview under **Request path preview**. A delivery mode of `native` describes how the request
 travels; it is not a compatibility verification.
+
+`PATCH /api/protocols/settings` is the only writer here and backs the Messages toggle on the
+API page. The rollout switches are staged and default off; see
+[API surfaces](/reference/configuration/server/#api-surfaces-apisurfaces) for how the Messages
+setting interacts with `claudeCode.enabled` across upgrades and downgrades.
 
 ### Providers
 
