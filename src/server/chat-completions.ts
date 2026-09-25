@@ -70,9 +70,13 @@ import {
   type TranslatorBudget,
 } from "../lib/translator-budget";
 import { handleNativeChatCompletions, nativeChatDeclineReason } from "./chat-native";
-import type { ProtocolReasonCode } from "../protocols/contract";
+import { upstreamWireForAdapter, type ProtocolReasonCode } from "../protocols/contract";
+import { createProtocolEnvelope } from "../protocols/envelope";
 import { featuresFromChatBody } from "../protocols/features";
-import { markProtocolEntry } from "../protocols/trace";
+import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
+import { requestPathForLane } from "../protocols/path";
+import { resolveProtocolSettings } from "../protocols/settings";
+import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
 import { jsonCompletionSse } from "./chat-native-sse";
 import { parseRequestEffortRowId } from "./effort-row";
 import { parseSyntheticRowId } from "./fast-row";
@@ -240,11 +244,32 @@ async function handleChatCompletionsWithBudget(
     /* unknown model: let handleResponses shape the 404 */
   }
 
+  // Off by default: under the legacy policy nothing below is built and the request is unchanged.
+  const envelope = resolveProtocolSettings(config).unrepresentable === "reject"
+    ? createProtocolEnvelope({ inbound: "chat", body: chatBody, translatorBudget })
+    : undefined;
+  // Combo and policy children are judged per candidate (PF-07); an unknown model has no route.
+  if (envelope && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
+    const verdict = checkRepresentable({
+      inbound: "chat",
+      requestPath: chatNativeRoute
+        ? requestPathForLane("chat", "native", "chat")
+        : requestPathForLane("chat", "bridge", upstreamWireForAdapter(settledRoute.provider.adapter)),
+      features: envelope.features(),
+      policy: "reject",
+    });
+    if (!verdict.ok) {
+      markProtocolBlocked(logCtx, { inbound: "chat", reasonCodes: verdict.reasonCodes, features: verdict.features });
+      logCtx.errorCode = "unsupported_feature";
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return chatCompletionsErrorResponse(400, unrepresentableMessage(verdict.features), "invalid_request_error", "unsupported_feature");
+    }
+  }
   markProtocolEntry(logCtx, {
     inbound: "chat",
     lane: chatNativeRoute ? "native" : "bridge",
     reasonCodes: !chatNativeRoute && nativeDecline ? [nativeDecline] : [],
-    features: () => featuresFromChatBody(chatBody),
+    features: envelope ? () => envelope.features() : () => featuresFromChatBody(chatBody),
   });
   if (chatNativeRoute) {
     return handleNativeChatCompletions({
