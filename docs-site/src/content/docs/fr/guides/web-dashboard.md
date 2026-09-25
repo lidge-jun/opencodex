@@ -48,9 +48,13 @@ force jamais d'actualisation en amont.
 - Chaque étiquette affiche la fenêtre signalée prioritaire : d'abord hebdomadaire, puis mensuelle,
   puis 5 heures, puis une fenêtre nommée par le fournisseur ou des crédits prépayés.
 - Une étiquette passe en ambre à 70 % d'utilisation et en rouge à 90 %.
-- Survolez une étiquette ou cliquez dessus pour voir toutes les fenêtres signalées avec leur heure de
-  réinitialisation et l'heure de la lecture. Appuyez sur Échap ou cliquez ailleurs pour fermer une
-  étiquette épinglée.
+- Survolez une étiquette ou donnez-lui le focus au clavier pour voir toutes les fenêtres signalées
+  avec leur heure de réinitialisation et l'heure de la lecture. Sur un écran tactile, le premier
+  appui affiche ces détails.
+- Cliquez sur une étiquette (ou appuyez une seconde fois) pour ouvrir l'onglet Comptes de ce
+  fournisseur dans Fournisseurs, où ses comptes ou clés API sont gérés.
+- La barre reste toujours sur une seule ligne. Quand les étiquettes ne tiennent pas, faites-la
+  défiler horizontalement ou utilisez les boutons « et » à chaque extrémité.
 - Les fournisseurs qui ne signalent aucune fenêtre de quota sont omis. La barre est masquée quand
   aucun fournisseur n'en signale.
 - Le bord droit indique quand le tableau de bord a lu les rapports pour la dernière fois. Il passe en
