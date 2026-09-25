@@ -73,8 +73,8 @@ describe("path semantics", () => {
 });
 
 describe("leaf-module boundary", () => {
-  const LEAVES = ["contract.ts", "features.ts", "baseline.ts", "dto.ts", "path.ts"];
-  const ALLOWED = new Set(["./contract", "./features", "../compatibility/manifest"]);
+  const LEAVES = ["contract.ts", "features.ts", "baseline.ts", "dto.ts", "path.ts", "plan.ts"];
+  const ALLOWED = new Set(["./contract", "./features", "./dto", "./path", "../compatibility/manifest"]);
 
   for (const file of LEAVES) {
     test(`src/protocols/${file} imports only protocol leaves`, () => {
