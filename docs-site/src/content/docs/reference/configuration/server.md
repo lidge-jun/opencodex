@@ -521,6 +521,38 @@ keeps the endpoint closed after a downgrade. Turning it on writes only
 `apiSurfaces.messages.enabled: true`; an older version then still follows
 `claudeCode.enabled` and may keep Messages closed, which is the safe direction.
 
+## Protocol paths (`protocols`)
+
+How a Chat Completions or Messages request may reach a provider. Every value defaults to the
+behavior before these keys existed; see [Protocol paths](/guides/protocol-paths/) for the delivery
+modes, the preview, and the per-request trace.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `protocols.unrepresentable?` | `"legacy" \| "reject"` | `"legacy"` | `legacy` sends a request whose path drops a feature and records the loss in the trace. `reject` refuses it with HTTP 400 before any send, naming only the feature keys. |
+| `protocols.rollout.nativeChatCombos?` | `boolean` | `false` | Send an eligible Chat candidate inside a combo natively from its own copy of the client body. |
+| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to a direct, key-authenticated Anthropic provider instead of through the internal Responses bridge. |
+| `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Reserved for native Messages over Anthropic OAuth. Read as off unless `managedMessagesNative` is on; this version does not read it. |
+| `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
+| `protocols.rollout.shadowPlan?` | `boolean` | `false` | Compare each Chat or Messages request's path with the plan a preview predicts and mark a disagreement as `planMismatch` on its log row. Sends nothing extra. |
+
+A malformed `protocols` block is dropped to these defaults, because each default is the
+conservative one. Only `true` turns a switch on.
+
+```json
+{
+  "protocols": {
+    "unrepresentable": "legacy",
+    "rollout": { "shadowPlan": true }
+  }
+}
+```
+
+`ocx api policy` shows the resolved values and changes them through the running proxy
+(`--unrepresentable <legacy|reject>`, `--rollout <switch>=<on|off>`, `--messages <on|off>` for
+[`apiSurfaces`](#api-surfaces-apisurfaces)). It writes only when a setting flag is given. The
+dashboard's API page and `PATCH /api/protocols/settings` use the same validation.
+
 ## Claude Code (`claudeCode`)
 
 These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx claude` launcher, and the Claude dashboard page. Whether the Messages API is served at all is decided by [`apiSurfaces`](#api-surfaces-apisurfaces), which inherits `claudeCode.enabled` while unset.
