@@ -823,21 +823,24 @@ function filterMainPolicyMonthlyQuota(
 /**
  * Parse ordinary main-policy usage, rejecting messages with invalid numeric window percentages.
  * Mark a valid primary of at least 24h as replacement evidence only when both other windows
- * are explicitly null or at least 24h. A null result supplies no usable policy observation.
+ * are explicitly null or at least 24h. An allowed, non-exhausted two-window response may omit
+ * tertiary only when secondary is explicitly null. A null result supplies no policy observation.
  */
 export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQuotaObservation | null {
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
   const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
   const [primary, secondary, tertiary] = windows;
-  // WHAM explicitly reports absent windows as null; omissions cannot prove replacement.
+  // The two-window WHAM shape can omit tertiary; secondary must still be explicit.
+  const allowedTwoWindow = secondary === null && !Object.hasOwn(data.rate_limit!, "tertiary_window")
+    && data.rate_limit?.allowed === true && data.rate_limit?.limit_reached === false;
   // Policy trusts one complete snapshot only when every non-null window is >=24h AND
   // carries a valid usage reading: a long window without used_percent leaves that
   // window's usage unknown, and unknown usage must never release a block.
   // Headers never supply this proof, and reset time alone still cannot release a block.
   if (quota && normalizeUsagePercent(primary?.used_percent) !== undefined && isExplicitLongWindow(primary)
     && (secondary === null || isMeasuredLongWindow(secondary))
-    && (tertiary === null || isMeasuredLongWindow(tertiary))) {
+    && (tertiary === null || isMeasuredLongWindow(tertiary) || allowedTwoWindow)) {
     return { ...quota, shortWindowAbsent: true };
   }
   return quota;

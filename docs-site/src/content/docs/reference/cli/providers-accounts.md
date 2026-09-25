@@ -164,7 +164,11 @@ its primary window explicitly lasts **at least 24 hours** and secondary/tertiary
 or also explicitly last at least 24 hours and report their usage. This follows the parser's short/long boundary, so a
 one-day window qualifies as well as weekly/monthly windows. The current window still uses the same
 98% threshold. This relies on the single reported snapshot; repeated observations are not required.
-Omitted secondary/tertiary fields, an unknown primary duration, or partial response headers cannot clear a previous block.
+WHAM can omit the optional tertiary field. That two-window response also replaces the old 5h value
+when secondary is explicitly `null`, `rate_limit.allowed` is `true`, and `rate_limit.limit_reached`
+is `false`, with the same measured long primary requirement. Other omissions, an unknown primary
+duration, or partial response headers cannot clear a previous block. This lets a successful quota
+refresh recover a weekly-only account whose display is below 98% but whose policy retained an old 5h 100% value.
 
 The persisted option is `"codexMainAccountHardLock"` in OpenCodex's `config.json`. An absent key or
 `true` means on; only an explicit `false` turns it off, and that is what switching the setting off
