@@ -67,6 +67,12 @@ describe("usage log persists the codex ws stage record (#4191)", () => {
     expect(roundTripped.attempts?.[0]?.codexWsStage?.closeCode).toBeNull();
   });
 
+  test("a stage persisted before firstResponseMs existed still hydrates", () => {
+    const { firstResponseMs: _omitted, ...legacy } = validStage;
+    const roundTripped = normalizeUsageEntryForTest(entryWithStage(legacy));
+    expect(roundTripped.attempts?.[0]?.codexWsStage).toEqual({ ...validStage, firstResponseMs: null });
+  });
+
   test("corrupt stage shapes are dropped, not passed through", () => {
     const corrupt = { ...validStage, closeCode: "1006", upstreamFrames: "many" };
     const roundTripped = normalizeUsageEntryForTest(entryWithStage(corrupt));
