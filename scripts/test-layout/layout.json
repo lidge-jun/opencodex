@@ -1111,6 +1111,7 @@
     "management-route-registry.test.ts": "server",
     "protocol-routes.test.ts": "server",
     "protocol-settings-route.test.ts": "server",
+    "protocol-provider-summary.test.ts": "server",
     "management-workflow-budget-routes.test.ts": "server",
     "managing-cli.test.ts": "service",
     "memory-watchdog.test.ts": "server",
