@@ -3196,6 +3196,7 @@ export const zh: Record<TKey, string> = {
   "remoteLink.findHome.body": "选择要连接此子设备的 Home 电脑。",
   "remoteLink.findHome.action": "查找 Home",
   "remoteLink.findHome.connect": "以子设备身份连接",
+  "remoteLink.findHome.empty": "尚未连接到 Home。",
   "remoteLink.joining": "正在连接 Home…",
   "remoteLink.restart.title": "此电脑将重启，以子设备身份连接。",
   "remoteLink.restart.body": "子设备准备就绪后，控制面板会自动重新连接。",

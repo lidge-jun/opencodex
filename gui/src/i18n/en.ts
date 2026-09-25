@@ -3209,6 +3209,7 @@ export const en = {
   "remoteLink.findHome.body": "Choose the Home computer to connect this Child to.",
   "remoteLink.findHome.action": "Find Home",
   "remoteLink.findHome.connect": "Connect as Child",
+  "remoteLink.findHome.empty": "Not connected to a Home yet.",
   "remoteLink.joining": "Joining Home…",
   "remoteLink.restart.title": "This computer will restart to connect as a Child.",
   "remoteLink.restart.body": "The dashboard will reconnect automatically when the Child is ready.",

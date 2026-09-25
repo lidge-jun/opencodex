@@ -3198,6 +3198,7 @@ export const ru: Record<TKey, string> = {
   "remoteLink.findHome.body": "Выберите компьютер Home, к которому подключить этот Child.",
   "remoteLink.findHome.action": "Найти Home",
   "remoteLink.findHome.connect": "Подключить как Child",
+  "remoteLink.findHome.empty": "Пока не подключено к Home.",
   "remoteLink.joining": "Подключение к Home…",
   "remoteLink.restart.title": "Компьютер перезапустится для подключения как Child.",
   "remoteLink.restart.body": "Панель управления подключится автоматически, когда Child будет готов.",

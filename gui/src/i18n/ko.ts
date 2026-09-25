@@ -3197,6 +3197,7 @@ export const ko: Record<TKey, string> = {
   "remoteLink.findHome.body": "이 자식 컴퓨터를 연결할 홈 컴퓨터를 선택하세요.",
   "remoteLink.findHome.action": "홈 찾기",
   "remoteLink.findHome.connect": "자식으로 연결",
+  "remoteLink.findHome.empty": "아직 연결된 홈이 없습니다.",
   "remoteLink.joining": "홈에 연결하는 중…",
   "remoteLink.restart.title": "이 컴퓨터는 자식으로 연결하기 위해 재시작합니다.",
   "remoteLink.restart.body": "자식이 준비되면 대시보드가 자동으로 다시 연결됩니다.",

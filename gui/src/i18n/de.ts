@@ -3175,6 +3175,7 @@ export const de: Record<TKey, string> = {
   "remoteLink.findHome.body": "Wählen Sie den Home-Computer für dieses Kind aus.",
   "remoteLink.findHome.action": "Home suchen",
   "remoteLink.findHome.connect": "Als Kind verbinden",
+  "remoteLink.findHome.empty": "Noch mit keinem Home verbunden.",
   "remoteLink.joining": "Home wird verbunden …",
   "remoteLink.restart.title": "Dieser Computer wird neu gestartet, um sich als Kind zu verbinden.",
   "remoteLink.restart.body": "Das Dashboard verbindet sich automatisch wieder, sobald das Kind bereit ist.",

@@ -3197,6 +3197,7 @@ export const ja: Record<TKey, string> = {
   "remoteLink.findHome.body": "この子コンピューターを接続する Home を選択してください。",
   "remoteLink.findHome.action": "Home を探す",
   "remoteLink.findHome.connect": "子として接続",
+  "remoteLink.findHome.empty": "まだ Home に接続されていません。",
   "remoteLink.joining": "Home に接続しています…",
   "remoteLink.restart.title": "このコンピューターは子として接続するため再起動します。",
   "remoteLink.restart.body": "子の準備ができるとダッシュボードは自動的に再接続します。",

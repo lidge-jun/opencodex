@@ -3198,6 +3198,7 @@ export const tr: Record<TKey, string> = {
   "remoteLink.findHome.body": "Bu Çocuk bilgisayarının bağlanacağı Home bilgisayarını seçin.",
   "remoteLink.findHome.action": "Home'u bul",
   "remoteLink.findHome.connect": "Çocuk olarak bağlan",
+  "remoteLink.findHome.empty": "Henüz bir Home'a bağlı değil.",
   "remoteLink.joining": "Home'a bağlanılıyor…",
   "remoteLink.restart.title": "Bu bilgisayar Çocuk olarak bağlanmak için yeniden başlatılacak.",
   "remoteLink.restart.body": "Çocuk hazır olduğunda pano otomatik olarak yeniden bağlanır.",

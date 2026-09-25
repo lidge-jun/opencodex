@@ -3133,6 +3133,7 @@ export const vi: Record<TKey, string> = {
   "remoteLink.findHome.body": "Chọn máy Home để kết nối máy con này.",
   "remoteLink.findHome.action": "Tìm Home",
   "remoteLink.findHome.connect": "Kết nối với vai trò máy con",
+  "remoteLink.findHome.empty": "Chưa kết nối với Home nào.",
   "remoteLink.joining": "Đang kết nối với Home…",
   "remoteLink.restart.title": "Máy tính này sẽ khởi động lại để kết nối với vai trò máy con.",
   "remoteLink.restart.body": "Bảng điều khiển sẽ tự động kết nối lại khi máy con sẵn sàng.",
