@@ -73,10 +73,12 @@ function normalizeIds(value: unknown, ids: Map<string, string>): unknown {
   return value;
 }
 
+/** Comment-only SSE blocks are keepalive frames: compared like any other frame, never dropped. */
 function normalizeEvents(text: string): unknown[] {
   const ids = new Map<string, string>();
   return text.split("\n\n").filter(block => block.trim().length > 0).map(block => {
     const lines = block.split("\n");
+    if (lines.every(line => line.startsWith(":"))) return { keepalive: lines.join("\n") };
     const event = lines.find(line => line.startsWith("event:"))?.slice(6).trim();
     const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("");
     return { event, data: normalizeIds(JSON.parse(data), ids) };
@@ -315,5 +317,56 @@ describe("direct Messages fold matches bridge + collector (non-stream)", () => {
   test("status mapping: overflow is 413, a stream error is 502", async () => {
     expect((await expectFoldParity(SCENARIOS["translation buffer overflow"]!.events)).status).toBe(413);
     expect((await expectFoldParity(SCENARIOS["adapter EOF without a terminal"]!.events)).status).toBe(502);
+  });
+});
+
+describe("direct Messages encoder stream lifecycle", () => {
+  test("wire-silence heartbeats reach the client as the converter's pings", async () => {
+    // Only the 1 s beat is driven (not the 20 s keepalive); relayed/first-output hooks must
+    // ignore the pings.
+    const beats: (() => void)[] = [];
+    const timers = {
+      setInterval: (handler: () => void, ms: number) => { if (ms === 1_000) beats.push(handler); return beats.length; },
+      clearInterval: () => {},
+    };
+    const run = async (encode: (events: AsyncGenerator<AdapterEvent>) => ReadableStream<Uint8Array>) => {
+      beats.length = 0;
+      let release: (() => void) | undefined;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      async function* quiet(): AsyncGenerator<AdapterEvent> {
+        yield { type: "text_delta", text: "thinking" };
+        await gate;
+        yield { type: "text_delta", text: " done" };
+        yield { type: "done" };
+      }
+      const text = new Response(encode(quiet())).text();
+      await Bun.sleep(5);
+      for (let i = 0; i < 3; i++) for (const beat of beats) beat();
+      release?.();
+      return normalizeEvents(await text) as { event?: string }[];
+    };
+    const legacy = await run(events => {
+      const translatorBudget = createTestTranslatorBudget();
+      return responsesSseToAnthropicSse(
+        bridgeToResponsesSSE(events, "internal/model", undefined, undefined, undefined, undefined, 1_000, {
+          translatorBudget, enforceDeclaredToolNames: false, timers,
+        }),
+        "client-model",
+        { translatorBudget, inputTokenFloor: INPUT_FLOOR, pingIntervalMs: 0 },
+      );
+    });
+    const relayed: unknown[] = [];
+    let firstOutputs = 0;
+    const direct = await run(events => encodeAnthropicMessageSse(events, {
+      ...directOptions(), heartbeatMs: 1_000, timers,
+      hooks: { onRelayed: observation => { relayed.push(observation); }, onFirstOutput: () => { firstOutputs++; } },
+    }));
+
+    expect(direct).toEqual(legacy);
+    // message_start's own ping, then one per silent beat after the first clears wire activity.
+    const pings = direct.filter(frame => frame.event === "ping");
+    expect(pings).toHaveLength(3);
+    expect(relayed).toHaveLength(direct.length - 2);
+    expect(firstOutputs).toBe(1);
   });
 });
