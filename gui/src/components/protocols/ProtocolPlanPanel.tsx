@@ -14,6 +14,7 @@ import { FEATURE_SOURCES, PROTOCOL_FEATURES, type ProtocolFeature } from "../../
 import type { ExternalModelRow, GatewayInboundProtocol } from "../../api-access-models";
 import { useT, type TKey } from "../../i18n/shared";
 import { fetchProtocolPlan } from "../../protocol-api";
+import { openCompatibilityPair, openProviderSettings, protocolPairUpstream } from "../../protocol-deep-links";
 import { FeatureDispositionList } from "./FeatureDispositionList";
 
 const INBOUNDS: readonly Protocol[] = ["responses", "chat", "messages"];
@@ -62,7 +63,12 @@ function FeatureNames({ features }: { features: readonly ProtocolFeature[] }) {
   );
 }
 
-function PlanResult({ plan }: { plan: ProtocolPlanV1 }) {
+/**
+ * One plan, candidate by candidate. Each candidate links to its provider's settings (which
+ * wire it receives) and to the compatibility matrix for its pair (what the Lab has verified);
+ * the plan itself never claims verification. Shared with the combo detail panel.
+ */
+export function PlanResult({ plan }: { plan: ProtocolPlanV1 }) {
   const t = useT();
   return (
     <div className="protocol-plan-result" aria-live="polite">
@@ -128,6 +134,18 @@ function PlanResult({ plan }: { plan: ProtocolPlanV1 }) {
                 )}
               </dl>
               <FeatureDispositionList effects={candidate.featureEffects} unknownFeatures={candidate.unknownFeatures} />
+              <div className="protocol-plan-links">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => openProviderSettings(candidate.provider)}>
+                  {t("protocolLinks.providerSettings")}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => openCompatibilityPair({ inbound: plan.inbound, upstream: protocolPairUpstream(candidate.upstream) })}
+                >
+                  {t("protocolLinks.labEvidence")}
+                </button>
+              </div>
             </li>
           ))}
         </ol>
