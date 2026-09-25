@@ -193,7 +193,7 @@ export async function shellStreamExec(
       event: { case: "start", value: create(ShellStreamStartSchema, { sandboxPolicy: args.requestedSandboxPolicy }) },
     })),
   ];
-  const result = await runForegroundShell(args.command, cwd, args.hardTimeout, owner, signal);
+  const result = await runForegroundShell(args.command, cwd, args.hardTimeout ?? 120_000, owner, signal);
   if (result.stdout && !result.aborted) {
     replies.push(execBytes(execMsg, "shellStream", create(ShellStreamSchema, {
       event: { case: "stdout", value: create(ShellStreamStdoutSchema, { data: result.stdout }) },
