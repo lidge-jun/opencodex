@@ -74,6 +74,8 @@ import { createFinalRequestLog } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
+import type { ComboProtocolSource } from "./responses/core-combo-native";
+import type { ProtocolEnvelope } from "../protocols/envelope";
 
 export { isNativeChatRouteEligible, nativeChatDeclineReason } from "./chat-native-eligibility";
 
@@ -220,6 +222,38 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     finalLog.finish(status, { closeReason });
   };
   return runNativeChatAttempt({ ...options, finishLog }, attemptHandle);
+}
+
+/**
+ * The Chat source a combo hands its native children (PF-07). A child runs on the attempt the
+ * combo opened and reports through the combo's callbacks, so the final row stays the parent's.
+ */
+export function createNativeChatComboSource(input: {
+  req: Request;
+  config: OcxConfig;
+  envelope: ProtocolEnvelope;
+  requestedModel: string;
+  requestedStream: boolean;
+  translatorBudget: TranslatorBudget;
+}): ComboProtocolSource {
+  return {
+    inbound: "chat",
+    envelope: input.envelope,
+    dispatchNativeChild: child => runNativeChatAttempt({
+      req: input.req,
+      config: input.config,
+      logCtx: child.childLog,
+      route: child.route,
+      chatBody: child.body,
+      requestedModel: input.requestedModel,
+      requestedStream: input.requestedStream,
+      translatorBudget: input.translatorBudget,
+      finishLog: child.finishLog,
+      sendBudget: child.sendBudget,
+      onFirstOutput: child.onFirstOutput,
+      ...(child.turnAdmissionLease ? { turnAdmissionLease: child.turnAdmissionLease } : {}),
+    }, child.attemptHandle),
+  };
 }
 
 /**

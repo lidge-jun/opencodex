@@ -49,7 +49,7 @@ import {
   type RequestLogContext,
 } from "./request-log";
 import { createFinalRequestLog } from "./inference/final-log";
-import { clientWireOf } from "./inference/client-wire";
+import { clientWireLogOf, clientWireOf } from "./inference/client-wire";
 import { directEncodersApply } from "./inference/client-encoder-delivery";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
@@ -71,7 +71,7 @@ import {
   isTranslatorBudgetExceededError,
   type TranslatorBudget,
 } from "../lib/translator-budget";
-import { handleNativeChatCompletions, nativeChatDeclineReason } from "./chat-native";
+import { createNativeChatComboSource, handleNativeChatCompletions, nativeChatDeclineReason } from "./chat-native";
 import { upstreamWireForAdapter, type ProtocolReasonCode } from "../protocols/contract";
 import { createProtocolEnvelope } from "../protocols/envelope";
 import { featuresFromChatBody } from "../protocols/features";
@@ -246,8 +246,13 @@ async function handleChatCompletionsWithBudget(
     /* unknown model: let handleResponses shape the 404 */
   }
 
-  // Off by default: under the legacy policy nothing below is built and the request is unchanged.
-  const envelope = resolveProtocolSettings(config).unrepresentable === "reject"
+  // Off by default: under the legacy policy with `nativeChatCombos` off nothing below is built
+  // and the request is unchanged. An effort row keeps its effort on the Responses body only, so
+  // its combo stays on the bridge.
+  const protocolSettings = resolveProtocolSettings(config);
+  const nativeChatCombos = protocolSettings.rollout.nativeChatCombos
+    && settledRoute?.combo !== undefined && !effortRow;
+  const envelope = protocolSettings.unrepresentable === "reject" || nativeChatCombos
     ? createProtocolEnvelope({ inbound: "chat", body: chatBody, translatorBudget })
     : undefined;
   // Combo and policy children are judged per candidate (PF-07); an unknown model has no route.
@@ -428,6 +433,12 @@ async function handleChatCompletionsWithBudget(
     abortSignal: req.signal,
     // Body is Responses-shaped by now, but the client spoke Chat Completions.
     inboundWire: "chat",
+    // PF-07: the combo sends eligible candidates natively from this envelope.
+    ...(envelope && nativeChatCombos ? {
+      protocolSource: createNativeChatComboSource({
+        req, config, envelope, requestedModel, requestedStream: stream, translatorBudget,
+      }),
+    } : {}),
     // Terminal vision-describe marker (roadmap 180): the bridge rebuilds
     // headers from the FORWARD_HEADERS allowlist, which would drop the raw
     // header — so the fact is detected here and carried as an option flag.
@@ -440,9 +451,13 @@ async function handleChatCompletionsWithBudget(
       ? { clientEncoder: { protocol: "chat" as const, stream, model: requestedModel } }
       : {}),
   });
-  // Already in the Chat wire (direct encoder): no conversion, still the deferred request log.
+  // Already in the Chat wire: no conversion. A direct-encoder body (PF-09) reports its own log
+  // facts to the deferred request log. A native combo child (PF-07) carries none: its row is
+  // written by the terminal callbacks above, and the deferred log's Responses-shaped inspector
+  // would misread a Chat stream, so of those only a refusal is wrapped.
   if (clientWireOf(upstream) === "chat") {
-    return logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
+    if (!logIds || (upstream.ok && !clientWireLogOf(upstream))) return upstream;
+    return responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx);
   }
 
   // Rewrite non-2xx before deferred logging so /api/logs records the client-facing status
