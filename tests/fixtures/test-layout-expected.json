@@ -14,6 +14,7 @@
   "adapter-input-media-guard.test.ts": "adapters",
   "adapter-registry-authority.test.ts": "adapters",
   "adapter-resolve.test.ts": "server",
+  "inference-attempt.test.ts": "server",
   "inference-final-log.test.ts": "server",
   "inference-send-budget.test.ts": "server",
   "adapter-tool-conformance.test.ts": "adapters",
