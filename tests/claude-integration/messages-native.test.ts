@@ -74,7 +74,12 @@ const SSE_FRAMES = [
   { event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 7 } } },
   { event: "message_stop", data: { type: "message_stop" } },
 ];
-const SSE_TEXT = SSE_FRAMES.map(frame => `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`).join("");
+const sseText = (frames: readonly { event: string; data: unknown }[]) => frames.map(frame => `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`).join("");
+const SSE_TEXT = sseText(SSE_FRAMES);
+/** What the client receives: the upstream stream with its selector echoed in message_start. */
+const ECHOED_SSE_TEXT = sseText(SSE_FRAMES.map((frame, index) => index === 0
+  ? { ...frame, data: { ...frame.data, message: { ...(frame.data as { message: Record<string, unknown> }).message, model: "anth/claude-x" } } }
+  : frame));
 
 function ok(seenRequest: Seen): Response {
   if (seenRequest.body.stream === true) {
@@ -162,7 +167,8 @@ describe("managed native Messages", () => {
       "anthropic-beta": "fixture-beta",
     });
     expect(response.status).toBe(200);
-    expect(JSON.parse(text)).toEqual(MESSAGE_JSON);
+    // The client's selector is echoed, as on the translated lane.
+    expect(JSON.parse(text)).toEqual({ ...MESSAGE_JSON, model: "anth/claude-x" });
     expect(seen).toHaveLength(1);
     const sent = seen[0]!;
     expect(sent.path).toBe("/v1/messages");
@@ -180,12 +186,12 @@ describe("managed native Messages", () => {
     expect(JSON.stringify(row)).not.toContain("fixture-key-alpha");
   });
 
-  test("relays the upstream stream unchanged and records its usage", async () => {
+  test("relays the upstream stream (selector echoed in message_start) and records its usage", async () => {
     const config = fixtureConfig(startUpstream());
     const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: true });
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
-    expect(text).toBe(SSE_TEXT);
+    expect(text).toBe(ECHOED_SSE_TEXT);
     expect(seen[0]!.body.stream).toBe(true);
     const row = rowFor(requestId);
     expect(row.status).toBe(200);
