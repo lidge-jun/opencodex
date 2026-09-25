@@ -149,6 +149,38 @@ fixed at the bridge entry mark, before an effort override rewrites `thinking`.
 `tests/responses/protocol-envelope.test.ts`, `tests/responses/protocol-guard.test.ts` and
 `tests/responses/protocol-ingress-guard.test.ts` pin them.
 
+## Direct client encoders
+
+`src/protocols/encoders/` turns `AdapterEvent` streams into the Chat Completions and Anthropic
+Messages wires without the internal Responses SSE. It is server side and not a leaf.
+`adapter-events.ts` is the driver: it ports the item state machine of `bridgeToResponsesSSE`
+(item boundaries, signature grouping, hidden and redacted reasoning envelopes, tool naming and
+argument gating, the integral-float repair, every terminal with its usage and durability rule,
+the wire-silence heartbeat and stall watchdog, pull-based stepping, cancellation) and calls one
+`ClientWireWriter` method wherever the bridge would emit a frame a client converter reads.
+`chat.ts` (`encodeChatCompletionSse`, `foldChatCompletion`) and `messages.ts`
+(`encodeAnthropicMessageSse`, `foldAnthropicMessage`) are the writers. They reuse the
+converters' own helpers, exported from `src/chat/outbound.ts` and `src/claude/outbound.ts`
+(ids, chunk and frame builders, usage mapping, `chatCompletionsStreamErrorPayload`,
+`chatCompletionsFailedResponse`, `chatCompletionsIncompleteOutcome`,
+`anthropicIncompleteOutcome`, `anthropicFailedStatus`, the message snapshot, the web-search pair),
+so the frames a client receives are the converters' frames. A fold is the encoded stream read by
+the existing collector.
+
+Deliberate equivalences, pinned by the parity tests: a Chat function call is delivered as one
+complete tool-call chunk when it completes, as the converter always did; Messages streams
+`input_json_delta` fragments; custom and tool-search calls and server-side search activity have
+no Chat representation; a Messages thinking block is buffered until its item closes. The one
+behavior that differs is backpressure: the Messages converter read the bridge eagerly, while the
+encoder steps one event per pull.
+
+The server side is `src/server/inference/client-encoder-delivery.ts`, described with the
+[Responses transport](../transports/responses.md#direct-client-encoders). A directly encoded
+attempt is traced with `markAttemptProtocolPath`: the request path is still the bridge path
+(`[inbound, "responses-internal", "ir", upstream]`, mode `legacy-bridge`) because the request
+side still decodes through the Responses projection, and the response path is
+`[upstream, "ir", inbound]`.
+
 ## Settings
 
 `resolveApiSurfaceSettings` and `resolveProtocolSettings` in `src/protocols/settings.ts` are the
@@ -157,8 +189,9 @@ always served. The Messages surface uses an explicit `apiSurfaces.messages.enabl
 present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
 `protocols.rollout` switch defaults off; the OAuth native-Messages switch is effective only with
-the key-auth one. The Chat and Messages ingresses read the unrepresentable policy (above); no
-request path reads the rollout switches yet.
+the key-auth one. The Chat and Messages ingresses read the unrepresentable policy (above), and
+`directEncodersApply` reads `directEncoders` on both; no request path reads the other rollout
+switches yet.
 
 `claudeInboundDisabled` in `src/server/claude-messages.ts` is the Messages ingress reader: both
 `/v1/messages` and `/v1/messages/count_tokens` call it, so the two routes cannot disagree, and a

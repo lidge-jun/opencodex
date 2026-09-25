@@ -428,7 +428,7 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 | `sidecar-execution.ts` | Image/video versus web-search execution and their shared rotation hook. |
 | `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns. |
 | `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery and the shared continuation retry counter. |
-| `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging. |
+| `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; a streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
 
 Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`,
 `core-combo-failure.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`,
@@ -471,7 +471,49 @@ reachable from `core.ts`.
 | `context.ts` | `createInferenceSendBudget(req, logCtx)` is the one construction of an ingress-owned send holder: the default guarded policy with this request's spend tracker as observer. `handleResponses` calls it only when no holder was inherited, because attaching the tracker parks it on `logCtx`. |
 | `final-log.ts` | `createFinalRequestLog(logIds, logCtx)` owns one request's final row: the first `finish(status, meta)` writes it, every later call is a no-op, and without log ids the claim settles with nothing written. The bridged Chat and Messages ingresses and native Chat finish through it. |
 | `attempt.ts` | `beginInferenceAttempt(logCtx, { provider, model, adapter })` opens the next attempt ordinal, makes it the active attempt with its start time, appends it to the request, and returns `seal(accountLabel?)` and `finish(status, usage?)`. |
-| `client-wire.ts` | `markClientWire(response, protocol)` / `clientWireOf(response)` record, per `Response` identity, that a body is already in a client's wire. Nothing marks responses yet. |
+| `client-wire.ts` | `markClientWire(response, protocol)` / `clientWireOf(response)` record, per `Response` identity, that a body is already in a client's wire. `createClientWireLog` / `attachClientWireLog` / `clientWireLogOf` carry the request-log facts of such a body (a start payload, one terminal, a cancel), buffered until the deferred log subscribes. |
+| `client-wire-log.ts` | `recordClientWireRequestLog` is the deferred request log of a client-wire response: `responseWithDeferredRequestLog` calls it instead of tapping the body, and it applies the Responses SSE tap's rules to the reported facts (payload inspection until the terminal, `terminal_sse` phase, `httpStatusForRequestLogTerminal`, 499 for a cancel before any terminal, one row). |
+| `client-encoder-delivery.ts` | Direct Chat/Messages delivery (PF-09), described below. |
+
+### Direct client encoders
+
+Behind `protocols.rollout.directEncoders` (default off). The Chat and Messages ingresses set
+`HandleResponsesOptions.clientEncoder` (`{ protocol, stream, model, inputTokenFloor? }`) when
+`directEncodersApply` holds for the route they settled: the switch is on and the route is one
+concrete target whose adapter is not `openai-responses`. `clientEncoderForDelivery` re-checks at
+delivery, because core can still change the route: combo children (`comboAttempt`), policy or
+combo route decisions, routed compaction and Responses-wire adapters keep the bridged body.
+Passthrough, run-turn adapters and sidecar turns never reach this branch.
+
+In the streaming adapter branch `deliverClientEncodedResponse` encodes the guarded event stream
+with `encodeChatCompletionSse` or `encodeAnthropicMessageSse` (`src/protocols/encoders/`)
+instead of `bridgeToResponsesSSE`, and preserves the bridge's effects:
+
+- Every event is also retained as a shallow copy on the request's translator budget
+  (`retainTranslatedEvent`). At any terminal the copies are folded with `buildResponseJSON`
+  (`recordBufferedDelivery: false`, declared-tool enforcement off as on the bridge for these
+  wires), which runs the replay-cache effects and releases the copies; overflow and client
+  cancel release them without folding.
+- A `done` terminal hands the folded response to the same `onCompletedResponse` the bridge uses
+  (`commitReasoningReplayServingRoute`, the Kiro final-answer memo, `rememberResponseState`
+  unless compaction, `notifyResponseComplete`), after the thought-signature durability barrier
+  where the bridge awaited it. `bindKeyUsageFromBridge` gets the adapter usage under the bridge's
+  `onUsage` rules.
+- The body goes through `trackStreamLifetime` with the same cleanup and admission lease; the
+  terminal and a client cancel call `cancelResponseCompletion` and abort the upstream once.
+- Client frames are counted with `noteRelayedEvent`.
+- The request log learns the bridge's `response.created` snapshot and a terminal payload with the
+  bridge's usage presence rules through the client-wire log channel.
+
+A non-streaming client gets the encoded stream folded by the existing collectors
+(`collectChatCompletionResponse`, `collectAnthropicMessageResponse`), with the status mapping the
+ingresses applied. The response is marked with `markClientWire`, and the ingress returns it
+without the Responses-to-client conversion; the Chat ingress still wraps it with
+`responseWithDeferredRequestLog`, which subscribes to the log channel. The attempt's trace is
+marked with `markAttemptProtocolPath`: request path and mode stay the bridge's, the response path
+becomes `[upstream, "ir", client]`. `tests/responses/protocol-direct-encoders-chat.test.ts`,
+`tests/responses/protocol-direct-encoders-messages.test.ts` and
+`tests/server/inference-client-encoder-delivery.test.ts` cover parity and wiring.
 
 Native Chat in `src/server/chat-native.ts` is split in two. `handleNativeChatCompletions` opens
 the attempt and owns the final log row; `runNativeChatAttempt(execution, attemptHandle)` runs
@@ -485,7 +527,11 @@ its own spend tracker rather than a send holder.
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
 `src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body
-from the same events. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
+from the same events. `buildResponseJSON` records a buffered delivery on the attempt unless the
+caller passes `recordBufferedDelivery: false`, which the direct client encoders do because they
+count their own frames. `src/protocols/encoders/adapter-events.ts` ports the bridge's item state
+machine for those encoders, so a change to item boundaries, tool naming or terminal handling in
+`sse.ts` has to be made there too; the parity tests fail when the two diverge. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
 keeps only allowlisted transport verdict codes. Adapter error events take a different path:
 `src/bridge/internal.ts` carries an event's own `code` into the SSE and JSON failure, after
 mapping cyber-policy codes to HTTP 400. The same file holds the shared usage shaping; `input_tokens_details` and
