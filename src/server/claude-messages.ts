@@ -49,7 +49,8 @@ import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
-import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
+import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext } from "./request-log";
+import { createFinalRequestLog } from "./inference/final-log";
 import {
   conversationIdFromClaudeMetadata,
   getOrAllocateRequestSessionLane,
@@ -468,12 +469,7 @@ async function anthropicNativePassthrough(
   logCtx.model = model;
   logCtx.provider = "anthropic-native";
   logCtx.requestedModel = model;
-  let logged = false;
-  const finalize = (status: number, meta: { closeReason: PassthroughCloseReason | "non_stream" }) => {
-    if (!logIds || logged) return;
-    logged = true;
-    addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
-  };
+  const finalize = createFinalRequestLog(logIds, logCtx).finish;
 
   const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
   const search = new URL(req.url).search;
@@ -1022,12 +1018,7 @@ async function handleClaudeMessagesWithBudget(
   // via the terminal callbacks; routed streams get the Responses-vocabulary log tap
   // BEFORE translation (the translated Anthropic stream has no response.completed
   // frame, so tapping it records a bogus 502 with no usage/cache detail).
-  let nativeLogged = false;
-  const finalizeNativeLog = (status: number, meta: { terminalStatus?: RequestLogEntry["terminalStatus"]; closeReason: "terminal" | "client_cancel" }) => {
-    if (!logIds || nativeLogged) return;
-    nativeLogged = true;
-    addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
-  };
+  const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, buildClaudeReplayConfig(config), logCtx, {
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
