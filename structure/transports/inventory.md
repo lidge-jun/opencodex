@@ -106,7 +106,7 @@ buffer remains bounded by the byte cap independently of this constant-size wait 
 The focused tests check live-chunk collection with `WeakRef`/`Bun.gc` while a read is stalled,
 and bound per-promise reaction attachment independently of garbage-collector timing.
 
-> Decision record: [ADR-5830](../decisions/ADR-5830-bounded-response-ownership.md)
+> Decision record: [ADR-0101](../decisions/ADR-0101-bounded-response-ownership.md)
 
 `readBoundedResponseBody` accepts `reportUtf8Validity`: the body decodes with replacement
 characters instead of rejecting, and a result that reached EOF carries `utf8Valid`. Combined with

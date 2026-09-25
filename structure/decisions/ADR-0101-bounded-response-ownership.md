@@ -1,4 +1,4 @@
-# ADR-5830 — decision recorded under "Bounded response ingestion and OrcaRouter login"
+# ADR-0101 — decision recorded under "Bounded response ingestion and OrcaRouter login"
 
 - Contract owner: [transports/inventory.md](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login)
 
