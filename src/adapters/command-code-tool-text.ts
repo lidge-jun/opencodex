@@ -22,9 +22,9 @@ import { validatesRestoredValue } from "./command-code-restored-schema";
  * A text block that opens with `<tool_call>` is therefore held instead of streamed. It is dropped
  * when a native call proves it is a duplicate, or restored on an eligible clean MiMo finish when
  * it names a declared tool with arguments that fit its schema. Other markup is released unchanged.
- * MiMo can also append the markup after ordinary prose inside one text block; the stream filter
- * splits such a delta at the marker and holds the markup part the same way (#5698; a marker split
- * across deltas after prose is still released as text).
+ * MiMo can also append the markup after ordinary prose inside one text block; once prose has
+ * started, later markers stay presentation text rather than opening a held call, so a quoted
+ * example can never reach the wire as an executable tool call.
  * A malformed envelope that still opens and closes around a declared function name, but that the
  * strict parser rejects, is dropped instead of released when the native call for that same function
  * arrives, and on the clean-finish path, so the echo never reaches the client.
@@ -557,24 +557,6 @@ export class CommandCodeToolTextFilter {
         break;
       }
     }
-  }
-
-  /** Route ordinary prose through the queued wire path (shared by the mid-stream marker split). */
-  private queueProseDelta(block: TextBlock, prose: string): AdapterEvent[] {
-    const preceding = this.makeRoom(encoder.encode(prose).byteLength);
-    this.retain(block, prose);
-    const bytes = encoder.encode(prose).byteLength;
-    const tail = this.pending.at(-1);
-    if (tail?.kind === "chunk" && tail.block === block && this.head < this.pending.length) {
-      tail.parts.push(prose);
-      tail.bytes += bytes;
-      this.queueOperations++;
-    } else {
-      this.pending.push({ kind: "chunk", block, parts: [prose], bytes });
-      this.queueOperations++;
-    }
-    this.queuedBytes += bytes;
-    return preceding;
   }
 
   private drop(block: TextBlock): void {
