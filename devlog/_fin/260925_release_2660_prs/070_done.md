@@ -58,10 +58,8 @@ platform until a kernel-backed descendant owner exists (ADR-0122). It affects on
 
 ## Follow-ups (not in this release)
 
-- #5838 threads: bump the cooperating config generation, and run the provider PATCH follow-up work, when a write
-  fails after `config.json` was already published (both gaps also exist on the previous `dev`).
-- #5780: make the catalog backup writers clean up and surface a failed ownership registration instead of
-  leaving an unregistered backup.
+- Two accepted review follow-ups on #5838 and one on #5780 are tracked in those pull requests' review threads;
+  details stay there until they are fixed.
 - `main`'s `dev-version-bump.yml` is now the hardened #5786 version after this promotion; the next pre-move
   can use the workflow again.
 - Deferred PRs from the readiness review remain open: #5790, #5147, #5831, #5758, #5836, #5756.
