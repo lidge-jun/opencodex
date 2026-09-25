@@ -368,8 +368,11 @@ describe("provider registry parity", () => {
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.low).toBe("low");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.xhigh).toBe("high");
     expect(KEY_LOGIN_PROVIDERS.deepseek.modelReasoningEffortMap?.["deepseek-v4-flash"]?.max).toBe("max");
+    // The retired deepseek-v4-pro stays OUT of `models` (line 357) but inside the preserve
+    // list: it still routes to a thinking-mode model, so a saved config that carries it
+    // must get reasoning replay rather than a guaranteed 400 (#5421).
     expect(KEY_LOGIN_PROVIDERS.deepseek.preserveReasoningContentModels)
-      .toEqual(["deepseek-flash", "deepseek-v4-flash"]);
+      .toEqual(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"]);
     // #4436: first-party Flash accepts images; unprobed compatibility aliases keep the sidecar.
     expect(KEY_LOGIN_PROVIDERS.deepseek.noVisionModels).toEqual([
       "deepseek-chat", "deepseek-reasoner", "deepseek-v4-flash",
