@@ -5,7 +5,8 @@
  * the planner reaches the router and the ingress eligibility rules, and a static import
  * would put them on every dashboard request.
  *
- * GET and the plan preview are read-only. The preview is computed from config alone
+ * GET (optionally with `?provider=<name>`, src/protocols/provider-summary.ts) and the plan
+ * preview are read-only. The preview is computed from config alone
  * (src/protocols/plan-snapshot.ts): it sends nothing upstream, advances no combo state, and
  * never logs its input. PATCH /api/protocols/settings is the one writer; it validates in
  * src/server/management/protocol-settings-patch.ts, persists through the locked
@@ -16,6 +17,7 @@ import { jsonResponse } from "../auth-cors";
 import { isProtocol, PROTOCOL_CONTRACT_VERSION } from "../../protocols/contract";
 import { isProtocolFeature, PROTOCOL_FEATURES, type ProtocolFeature } from "../../protocols/features";
 import { previewProtocolPlan, type ProtocolPlanRequest } from "../../protocols/plan-snapshot";
+import { buildProtocolProviderSummary } from "../../protocols/provider-summary";
 import { protocolPolicyRevision, resolveApiSurfaceSettings, resolveProtocolSettings } from "../../protocols/settings";
 import type { OcxConfig } from "../../types";
 import type { ManagementContext } from "./context";
@@ -28,6 +30,7 @@ import {
 } from "./protocol-settings-patch";
 
 export const PROTOCOL_PLAN_LIMITS = { modelLength: 200, features: 24 } as const;
+export const PROTOCOL_PROVIDER_QUERY_LIMIT = 200;
 
 const PLAN_BODY_KEYS = new Set(["model", "inbound", "features"]);
 const INVALID_BODY = Symbol("invalid-body");
@@ -70,6 +73,22 @@ function protocolInfo(config: OcxConfig) {
     settings: resolveProtocolSettings(config),
     features: PROTOCOL_FEATURES,
   };
+}
+
+/**
+ * `GET /api/protocols?provider=<name>`: the usual body plus the provider's wire summary. The
+ * name is bounded and must name a configured provider; neither error echoes it back.
+ */
+function protocolInfoForProvider(ctx: ManagementContext, values: string[]): Response {
+  const { req, config } = ctx;
+  const name = values.length === 1 ? values[0]!.trim() : "";
+  if (!name || name.length > PROTOCOL_PROVIDER_QUERY_LIMIT || /[\u0000-\u001f\u007f]/.test(name)) {
+    const message = `provider must be one non-empty name of at most ${PROTOCOL_PROVIDER_QUERY_LIMIT} characters`;
+    return jsonResponse({ error: { code: "invalid_provider", message } }, 400, req, config);
+  }
+  const provider = buildProtocolProviderSummary(config, name);
+  if (!provider) return jsonResponse({ error: { code: "unknown_provider", message: "no provider with that name" } }, 404, req, config);
+  return jsonResponse({ ...protocolInfo(config), provider }, 200, req, config);
 }
 
 /** Only SQLITE_BUSY is contention worth retrying; any other lock failure repeats forever. */
@@ -117,7 +136,8 @@ export async function handleProtocolRoutes(ctx: ManagementContext): Promise<Resp
 
   if (url.pathname === "/api/protocols") {
     if (req.method !== "GET") return null;
-    return jsonResponse(protocolInfo(config), 200, req, config);
+    if (!url.searchParams.has("provider")) return jsonResponse(protocolInfo(config), 200, req, config);
+    return protocolInfoForProvider(ctx, url.searchParams.getAll("provider"));
   }
 
   if (url.pathname === "/api/protocols/settings") {
