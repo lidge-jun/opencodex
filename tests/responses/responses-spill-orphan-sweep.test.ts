@@ -170,11 +170,12 @@ describe("Periodic orphan response-spill sweep", () => {
     setIcaclsRunnerForTests(() => ICACLS_OK);
     setResponseStateByteCapForTests(1_024);
 
+    let destination = "";
     try {
       rememberLarge("resp_inflight_periodic", "i".repeat(8_000));
       await destinationStarted;
       const dir = responseSpillDirectory(home);
-      const destination = readdirSync(dir).find(name => name.endsWith(".spill.json"))!;
+      destination = readdirSync(dir).find(name => name.endsWith(".spill.json"))!;
       const temp = readdirSync(dir).find(name => name.endsWith(".tmp"))!;
       agePastGrace(join(dir, destination));
       agePastGrace(join(dir, temp));
