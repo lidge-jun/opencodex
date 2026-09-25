@@ -546,6 +546,21 @@ export function applyAnthropicKeyAuth(headers: Record<string, string>, provider:
   else headers["x-api-key"] = provider.apiKey;
 }
 
+/**
+ * OAuth (Claude Pro/Max) credential placement: the bearer, the OAuth beta pair and the Claude
+ * Code client fingerprint. Shared by the adapter and the managed native lane.
+ */
+export function applyAnthropicOAuthAuth(headers: Record<string, string>, accessToken: string): void {
+  headers["Authorization"] = `Bearer ${accessToken}`;
+  headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
+  // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
+  // header set is a non-first-party signature. (cch billing-header signing is intentionally
+  // out of scope — brittle and version-coupled.)
+  Object.assign(headers, CLAUDE_CODE_HEADERS);
+  headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(accessToken);
+  headers["x-client-request-id"] = crypto.randomUUID();
+}
+
 /** The provider's Messages endpoint, refusing a base URL with an unresolved `{placeholder}`. */
 export function resolveAnthropicMessagesUrl(provider: Pick<OcxProviderConfig, "baseUrl">): string {
   const url = anthropicMessagesUrl(provider.baseUrl);
@@ -1169,18 +1184,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const fastSpeed = anthropicFastSpeed(parsed, provider);
       if (fastSpeed) body.speed = fastSpeed.value;
       const headers = anthropicBaseRequestHeaders(parsed.stream);
-      if (isOAuth) {
-        headers["Authorization"] = `Bearer ${provider.apiKey}`;
-        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA;
-        // Match the real Claude Code CLI request fingerprint: a valid OAuth token with an empty
-        // header set is a non-first-party signature. (cch billing-header signing is intentionally
-        // out of scope — brittle and version-coupled.)
-        Object.assign(headers, CLAUDE_CODE_HEADERS);
-        headers["X-Claude-Code-Session-Id"] = claudeCodeSessionId(provider.apiKey);
-        headers["x-client-request-id"] = crypto.randomUUID();
-      } else {
-        applyAnthropicKeyAuth(headers, provider);
-      }
+      if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey);
+      else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, fastSpeed?.betas ?? []);
 
