@@ -2,8 +2,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
-import RemoteLink, { parseRemoteLinkStatus, type RemoteLinkStatusWire } from "../src/pages/RemoteLink";
-import { LINK_ERROR_CODES, LinkApiError, readLinkJson } from "../src/remote-link-api";
+import RemoteLink from "../src/pages/RemoteLink";
+import { LINK_ERROR_CODES, LinkApiError, parseRemoteLinkStatus, readLinkJson, type RemoteLinkStatusWire } from "../src/remote-link-api";
 import { LanguageProvider } from "../src/i18n/provider";
 import { LOCALES } from "../src/i18n/shared";
 

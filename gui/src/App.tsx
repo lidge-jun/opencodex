@@ -137,7 +137,7 @@ export default function App() {
   const [targetError, setTargetError] = useState(false);
   const [sharedSessionReady, setSharedSessionReady] = useState(() => hasApiSession("shared"));
   const [sharedSessionEpoch, setSharedSessionEpoch] = useState(0);
-  const [remoteWorkspaceAvailable, setRemoteWorkspaceAvailable] = useState(false);
+  const [remoteWorkspaceAvailableState, setRemoteWorkspaceAvailable] = useState(false);
   const [sessionLoggingOut, setSessionLoggingOut] = useState(false);
   /*
    * Results from the two sidebar orbs used to be `alert()`, which the app's webview draws
@@ -191,11 +191,7 @@ export default function App() {
   const sharedBase = apiBaseForPlane("shared", targets);
 
   useEffect(() => {
-    if (!sharedSessionReady) {
-      // oxlint-disable-next-line react/react-compiler -- logout must hide the capability immediately.
-      setRemoteWorkspaceAvailable(false);
-      return;
-    }
+    if (!sharedSessionReady) return;
     const controller = new AbortController();
     void fetch(`${sharedBase}/api/remote-workspace`, { signal: controller.signal, cache: "no-store" })
       .then(response => response.ok ? response.json() as Promise<{ available?: unknown }> : Promise.reject(new Error("unavailable")))
@@ -203,6 +199,7 @@ export default function App() {
       .catch(() => { if (!controller.signal.aborted) setRemoteWorkspaceAvailable(false); });
     return () => controller.abort();
   }, [page, sharedSessionReady, sharedBase]);
+  const remoteWorkspaceAvailable = sharedSessionReady && remoteWorkspaceAvailableState;
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
