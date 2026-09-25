@@ -33,7 +33,7 @@ function reasoningIdentityDigest(value: string): string {
 }
 
 /** Fixed-size identity that preserves protocol boundaries without retaining upstream strings. */
-function boundedReasoningIdentity(value: unknown): string {
+export function boundedReasoningIdentity(value: unknown): string {
   if (typeof value === "number") {
     if (Number.isSafeInteger(value) && value >= 0) return `n${value}`;
     if (Number.isFinite(value)) return `d${value}`;
@@ -104,7 +104,7 @@ export function anthropicUsage(usage: unknown, webSearchRequests = 0): Rec {
   };
 }
 
-function sseFrame(name: string, data: Rec): string {
+export function sseFrame(name: string, data: Rec): string {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
@@ -161,7 +161,7 @@ export function sanitizeWebSearchInput(input: unknown): Rec {
  * input (query/queries) and the web_search_tool_result content (hits, or the error
  * object when the search failed). Shared by the SSE and JSON translation paths.
  */
-function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultContent: unknown; completed: boolean } {
+export function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultContent: unknown; completed: boolean } {
   const action = isRec(item.action) ? item.action : {};
   const queries = Array.isArray(action.queries)
     ? action.queries.filter((q): q is string => typeof q === "string" && q.length > 0)
@@ -205,7 +205,7 @@ function webSearchPairFromItem(item: Rec): { id: string; input: Rec; resultConte
  * is not a claim about upstream's tokenizer, and it is not final — `message_delta` carries the
  * authoritative count for every reader that waits for it, exactly as before.
  */
-function messageSnapshot(model: string, confirmedUsage?: Rec, inputTokenFloor?: number): Rec {
+export function messageSnapshot(model: string, confirmedUsage?: Rec, inputTokenFloor?: number): Rec {
   const usage = confirmedUsage
     ?? (typeof inputTokenFloor === "number" && Number.isFinite(inputTokenFloor) && inputTokenFloor > 0
       ? { input_tokens: Math.trunc(inputTokenFloor), output_tokens: 0 }
@@ -220,6 +220,43 @@ function messageSnapshot(model: string, confirmedUsage?: Rec, inputTokenFloor?: 
     stop_sequence: null,
     usage,
   };
+}
+
+/**
+ * A Responses incomplete reason as the Anthropic client sees it: an output cap and a content
+ * filter are real stop reasons; every other reason is a retryable overload so Claude Code backs
+ * off instead of accepting a truncated turn.
+ */
+export function anthropicIncompleteOutcome(
+  reason: unknown,
+  message: unknown,
+): { stopReason: "max_tokens" | "refusal" } | { failMessage: string } {
+  if (reason === "max_output_tokens") return { stopReason: "max_tokens" };
+  if (reason === "content_filter") return { stopReason: "refusal" };
+  return {
+    failMessage: typeof message === "string" && message.trim()
+      ? message
+      : `upstream response was incomplete${typeof reason === "string" ? ` (${reason})` : ""}`,
+  };
+}
+
+/**
+ * The HTTP status a Responses `response.failed` error object maps to on the Anthropic wire.
+ * Internal failure envelopes carry the classified {type, code, message} but no numeric status,
+ * so it is derived with the same mapping /api/logs uses; a classified 429/401/400 then reaches
+ * Claude Code as its real Anthropic error type instead of a retryable overload.
+ */
+export function anthropicFailedStatus(error: Rec, message: string): number {
+  const code = typeof error.code === "string" ? error.code : undefined;
+  return code === "translation_buffer_limit"
+    ? 413
+    : typeof error.status === "number"
+      ? error.status
+      : httpStatusFromTerminalError({
+        type: typeof error.type === "string" ? error.type : undefined,
+        code: typeof error.code === "string" ? error.code : null,
+        message,
+      });
 }
 
 interface OpenBlock {
@@ -668,16 +705,9 @@ export function responsesSseToAnthropicSse(
           case "response.incomplete": {
             const response = isRec(data.response) ? data.response : {};
             const details = isRec(response.incomplete_details) ? response.incomplete_details : {};
-            if (details.reason === "max_output_tokens") {
-              finish("max_tokens", response.usage);
-            } else if (details.reason === "content_filter") {
-              finish("refusal", response.usage);
-            } else {
-              const message = typeof details.message === "string" && details.message.trim()
-                ? details.message
-                : `upstream response was incomplete${typeof details.reason === "string" ? ` (${details.reason})` : ""}`;
-              fail(529, message, true);
-            }
+            const outcome = anthropicIncompleteOutcome(details.reason, details.message);
+            if ("stopReason" in outcome) finish(outcome.stopReason, response.usage);
+            else fail(529, outcome.failMessage, true);
             break;
           }
           case "response.failed": {
@@ -688,19 +718,7 @@ export function responsesSseToAnthropicSse(
             if (code === "translation_buffer_limit") {
               throw new TranslatorBudgetExceededError("live_transient", TRANSLATOR_MAX_TURN_BYTES);
             }
-            const status = code === "translation_buffer_limit"
-              ? 413
-              : typeof error.status === "number"
-                ? error.status
-                // Internal response.failed envelopes carry the classified {type, code, message}
-                // but no numeric status. Derive it with the same mapping /api/logs uses so a
-                // classified 429/401/400 reaches Claude Code as its real Anthropic error type
-                // instead of being masked as retryable overload.
-                : httpStatusFromTerminalError({
-                  type: typeof error.type === "string" ? error.type : undefined,
-                  code: typeof error.code === "string" ? error.code : null,
-                  message,
-                });
+            const status = anthropicFailedStatus(error, message);
             // Unclassified status-absent response.failed (relaySseWithFailedTail synthetic
             // tail) still lands on a transient 5xx here — the mid-stream reset shape maps to
             // overloaded_error by design.
