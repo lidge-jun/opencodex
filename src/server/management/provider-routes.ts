@@ -36,6 +36,7 @@ import {
   submitManualLoginCode,
   upsertOAuthProvider,
 } from "../../oauth";
+import { commitProviderPatch } from "./provider-patch-transaction";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import { canonicalAutoReviewModelKey, mergeModelPinnedEfforts, modelPinnedEffortsConfigError, pinnedReasoningEffortConfigError } from "../../config/provider-validation";
 import { replaceProviderAccountSet } from "../../oauth/store";
@@ -1424,9 +1425,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (!provider || !isCanonicalOpenAiForwardProvider(provider)) {
         return jsonResponse({ error: "provider openai must be the canonical built-in provider" }, 400);
       }
-      const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-      config.providers.openai = { ...provider, codexAccountMode: mode };
-      save(config);
+      commitProviderPatch(config, () => {
+        config.providers.openai = { ...provider, codexAccountMode: mode };
+      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
       reconcileLiveStateStores();
       (deps.clearProviderQuotaCache ?? clearProviderQuotaCache)();
       (deps.clearThreadAccountMap ?? clearThreadAccountMap)();
@@ -1451,9 +1452,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (config.providers[name]!.disabled) {
         return jsonResponse({ error: "cannot set a disabled provider as default", code: "default_provider_disabled" }, 400);
       }
-      const { saveConfigPreservingClaudeCode: save } = await import("../../config");
-      config.defaultProvider = name;
-      save(config);
+      commitProviderPatch(config, () => {
+        config.defaultProvider = name;
+      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
       reconcileLiveStateStores();
       return jsonResponse({ success: true, name, defaultProvider: name });
     }
@@ -1558,19 +1559,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const validation = validateConfigCandidate({ ...config, providers: { ...config.providers, [name]: candidate } });
         if (!validation.ok) { replayError = validation.error; return; }
       }
-      const previous = Object.getOwnPropertyDescriptor(config.providers, name);
-      const rollback = pinsTouched ? captureConfigTopLevelRollback(config, []) : undefined;
-      try {
+      commitProviderPatch(config, () => {
         config.providers[name] = candidate;
-        (deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode)(config);
-      } catch (error) {
-        if (rollback) {
-          if (previous) Object.defineProperty(config.providers, name, previous);
-          else delete config.providers[name];
-          rollback();
-        }
-        throw error;
-      }
+      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();
