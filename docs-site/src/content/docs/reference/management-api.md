@@ -528,7 +528,9 @@ the format opencodex sends to that provider; it does not open or close any clien
 the provider-wide adapter, save the provider's settings as usual (`PATCH /api/providers`).
 
 `PATCH /api/protocols/settings` is the only writer here and backs the Messages toggle on the
-API page. The rollout switches are staged and default off; see
+API page. The CLI drives these routes with `ocx api protocols`, `ocx api explain` and
+`ocx api policy`. The rollout switches are staged and default off
+([Protocol paths](/guides/protocol-paths/#rollout-switches)); see
 [API surfaces](/reference/configuration/server/#api-surfaces-apisurfaces) for how the Messages
 setting interacts with `claudeCode.enabled` across upgrades and downgrades.
 
