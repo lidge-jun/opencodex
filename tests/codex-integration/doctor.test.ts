@@ -854,6 +854,15 @@ describe("doctor response-state spill report", () => {
     })).join("\n");
     expect(lines).toContain("the real total is higher");
   });
+
+  test("a truncated scan with no orphans in the prefix is not reported clean", () => {
+    const lines = formatResponseSpillLines(result({
+      scanned: 4096, truncated: true, files: 4096, bytes: 512 * 1024 * 1024,
+    }));
+    expect(lines[0]).toStartWith("  !!");
+    expect(lines[0]).toContain("in the first 4096 entries");
+    expect(lines.join("\n")).toContain("the rest of the directory was not checked");
+  });
 });
 
 describe("doctor spill report wiring (end to end)", () => {

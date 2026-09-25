@@ -871,6 +871,14 @@ export function formatResponseTempLines(
  * so a file a restart would re-own is never reported as garbage.
  */
 export function formatResponseSpillLines(result: ResponseSpillDirInspection): string[] {
+  // A truncated scan saw only a prefix of the directory, so zero orphans there is
+  // not a clean bill of health: the unscanned tail may still hold them.
+  if (result.orphanFiles === 0 && result.truncated) {
+    return [
+      `  !!  No orphaned response-state spill files in the first ${result.scanned} entries (${result.files} file(s), ${mb(result.bytes)} scanned).`,
+      "      Scan stopped at its entry budget; the rest of the directory was not checked.",
+    ];
+  }
   if (result.orphanFiles === 0) {
     return [`  ok  No orphaned response-state spill files (${result.files} file(s), ${mb(result.bytes)} on disk).`];
   }
