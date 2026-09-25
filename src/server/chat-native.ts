@@ -58,16 +58,15 @@ import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectio
 import { linkAbortSignal } from "./responses";
 import {
   addFinalRequestLog,
-  beginRequestAttempt,
   noteProviderAttemptSend,
   recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
   recordFirstOutput,
   recordAttemptCredentialSource,
-  sealRequestAttemptIdentity,
   type RequestLogContext,
 } from "./request-log";
 import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
+import { beginInferenceAttempt } from "./inference/attempt";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
@@ -175,16 +174,13 @@ interface HandleNativeChatOptions {
 export async function handleNativeChatCompletions(options: HandleNativeChatOptions): Promise<Response> {
   const { req, config, logCtx, logIds, route, requestedModel, requestedStream, translatorBudget } = options;
   logCtx.inboundProtocol = "chat";
-  const attempt = beginRequestAttempt(
-    (logCtx.attempts?.length ?? 0) + 1,
-    route.providerName,
-    route.modelId,
-    "openai-chat",
-  );
-  logCtx.activeAttempt = attempt;
-  logCtx.activeAttemptStartedAt = Date.now();
-  (logCtx.attempts ??= []).push(attempt);
-  sealRequestAttemptIdentity(attempt, route.providerName, "openai-chat", logCtx.accountLogLabel);
+  const attemptHandle = beginInferenceAttempt(logCtx, {
+    provider: route.providerName,
+    model: route.modelId,
+    adapter: "openai-chat",
+  });
+  attemptHandle.seal(logCtx.accountLogLabel);
+  const { attempt } = attemptHandle;
 
   let logged = false;
   const finishLog = (status: number, message?: string, closeReason: "non_stream" | "terminal" | "client_cancel" = "non_stream") => {
