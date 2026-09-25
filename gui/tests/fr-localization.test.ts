@@ -210,6 +210,11 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   // untranslated `~$`); the templates are pure placeholders on purpose.
   "logs.cost.approximate",
   "logs.cost.lowerBound",
+  // Protocol wire names on the Logs protocol path, and the IR acronym beside them.
+  "logs.protocol.wire.responses",
+  "logs.protocol.wire.chat",
+  "logs.protocol.wire.messages",
+  "logs.protocol.hop.ir",
 ]);
 
 function placeholders(value: string): string[] {
