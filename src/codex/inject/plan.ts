@@ -102,6 +102,19 @@ export type CodexInjectionPlan =
     }
   | CodexInjectionPlanOk;
 
+function websocketsForRoutingTarget(
+  config: OcxConfig | undefined,
+  routingTarget: CodexRoutingTarget,
+): boolean {
+  // A link client reaches the hub through an HTTP-only tunnel. Its local Codex target is
+  // deliberately distinct from the tunnel origin, so force the injected websocket setting off
+  // even when the operator enabled the global websocket option. Hub mode can also use a local
+  // HTTP target with admission, so the explicit discriminator is required here.
+  return (routingTarget as CodexRoutingTarget & { link?: boolean }).link === true
+    ? false
+    : websocketsEnabled(config ?? {});
+}
+
 export function deriveCodexInjectionPlan(
   source: string,
   ctx: CodexInjectionPlanContext,
@@ -240,7 +253,7 @@ export function deriveCodexInjectionPlan(
     content =
       content.trimEnd() +
       "\n" +
-      buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}), config?.codexProviderDisplayName);
+      buildProviderTableBlockForTarget(routingTarget, websocketsForRoutingTarget(config, routingTarget), config?.codexProviderDisplayName);
     // 3) Keep existing `openai`-tagged threads reaching the proxy (see above). Ownership rules
     // are the Design B ones: a user's own root line is never replaced.
     if (keepRootOverrideAlongsideTable) {
@@ -299,7 +312,7 @@ export function deriveCodexInjectionPlan(
   const profileContent = buildProfileFileForTarget(
     routingTarget,
     catalogPath,
-    websocketsEnabled(config ?? {}),
+    websocketsForRoutingTarget(config, routingTarget),
     config?.fastMode,
     config?.codexProviderDisplayName,
   );
@@ -358,7 +371,7 @@ export function deriveCodexInjectionPlan(
    */
   if (hadOcxProviderTableOnDisk && !providerTableMode) {
     content = applyEol(
-      content.trimEnd() + "\n" + buildProviderTableBlockForTarget(routingTarget, websocketsEnabled(config ?? {}), config?.codexProviderDisplayName),
+      content.trimEnd() + "\n" + buildProviderTableBlockForTarget(routingTarget, websocketsForRoutingTarget(config, routingTarget), config?.codexProviderDisplayName),
       eol,
     );
   }

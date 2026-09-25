@@ -539,6 +539,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleConnectCommand } = await import("./connect");
     return await handleConnectCommand(deps.args.slice(1));
   },
+  link: async deps => {
+    const { runLinkCommand } = await import("./link");
+    return await runLinkCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
+  },
   "remote-workspace": async deps => {
     const { runRemoteWorkspaceCommand } = await import("./remote-workspace");
     return await runRemoteWorkspaceCommand(deps.args.slice(1));
@@ -730,6 +734,15 @@ const commandRunners: Record<string, CommandRunner> = {
     await refreshVersionCache(channel);
     return 0;
   },
+  "__update-badge": async deps => {
+    if (deps.args.length !== 1) {
+      console.error("Usage: ocx __update-badge");
+      return 64;
+    }
+    const { readUpdateBadge } = await import("../update/badge");
+    console.log(JSON.stringify(readUpdateBadge()));
+    return 0;
+  },
   "__tray-start": async deps => {
     return (await deps.handleTrayProxyStart()) ? 0 : 1;
   },
@@ -882,6 +895,10 @@ const commandRunners: Record<string, CommandRunner> = {
   "api-key": async deps => {
     const { handleAccessCommand } = await import("./access");
     return await handleAccessCommand(["key", ...deps.args.slice(1)]);
+  },
+  api: async deps => {
+    const { handleApiCommand } = await import("./api-protocols");
+    return await handleApiCommand(deps.args.slice(1));
   },
   export: async deps => {
     const { handleExportCommand } = await import("./export-command");

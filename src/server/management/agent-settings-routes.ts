@@ -1740,15 +1740,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
     }
     if (body.fastMode !== undefined) config.fastMode = nextFastMode;
-    config.claudeCode = next;
-    // Stamp the migration sentinel on EVERY persist of this block. The migration reads
-    // "a claudeCode block with no authMode" as a pre-upgrade subscriber and pins it to
-    // literal subscription — correct for a config written before `auto` existed, fatal
-    // for one written after. Without this, choosing Auto (which DELETES authMode) or
-    // merely toggling Claude on (App.tsx PUTs `{enabled}` alone and creates the block)
-    // would be converted into a sticky manual subscription by the next startServer, and
-    // auto would survive exactly one proxy lifetime with no way back.
-    if (!next.authModeMigratedAt) next.authModeMigratedAt = new Date().toISOString();
+    // Stamps the auth-mode migration sentinel on EVERY persist of this block. Without it,
+    // choosing Auto (which DELETES authMode) or merely toggling Claude on (App.tsx PUTs
+    // `{enabled}` alone and creates the block) would be converted into a sticky manual
+    // subscription by the next startServer, with no way back.
+    const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
+    commitClaudeCodeBlock(config, next);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     save(config);
     const warnings: string[] = [];

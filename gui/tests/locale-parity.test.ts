@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
+import { LOCALES } from "../src/i18n/shared";
 
-const LOCALES = ["en", "de", "fr", "ja", "ko", "ru", "tr", "zh", "zh-TW"] as const;
+const LOCALE_CODES = LOCALES.map(locale => locale.code);
 
 async function readDict(locale: string): Promise<Map<string, string>> {
   const src = await Bun.file(new URL(`../src/i18n/${locale}.ts`, import.meta.url)).text();
@@ -48,6 +49,11 @@ const ZH_TW_KEEP_ENGLISH: ReadonlySet<string> = new Set([
   "api.modelsEndpoint",
   "api.protocolChatCompletions",
   "api.protocolMessages",
+  // Short wire names on the Logs protocol path, and the IR acronym beside them.
+  "logs.protocol.wire.responses",
+  "logs.protocol.wire.chat",
+  "logs.protocol.wire.messages",
+  "logs.protocol.hop.ir",
   "api.protocolResponses",
   "api.responsesEndpoint",
   // Provider proper nouns (Taiwan keeps the English brand; "火山方舟" is Mainland usage)
@@ -222,7 +228,7 @@ test("zh-TW ships no untranslated English placeholders beyond the intentional al
 // complete parity guard, independent of the claude-desktop-locale file.
 test("every locale key set matches the English source", async () => {
   const en = [...(await readDict("en")).keys()].sort();
-  for (const locale of LOCALES.filter(l => l !== "en")) {
+  for (const locale of LOCALE_CODES.filter(l => l !== "en")) {
     const other = [...(await readDict(locale)).keys()].sort();
     expect(`${locale} key count: ${other.length}`).toBe(`${locale} key count: ${en.length}`);
     expect(other).toEqual(en);
@@ -253,7 +259,7 @@ const CURSOR_KEEP_ENGLISH_BY_LOCALE: Record<string, ReadonlySet<string>> = {
 
 test("every locale translates the Cursor tab beyond the brand labels", async () => {
   const en = await readDict("en");
-  for (const locale of LOCALES.filter(l => l !== "en")) {
+  for (const locale of LOCALE_CODES.filter(l => l !== "en")) {
     const dict = await readDict(locale);
     const stale: string[] = [];
     for (const [key, value] of dict) {
@@ -267,7 +273,7 @@ test("every locale translates the Cursor tab beyond the brand labels", async () 
   }
 });
 
-const DSH_VISIBLE_COPY: Record<(typeof LOCALES)[number], readonly [string, string, string]> = {
+const DSH_VISIBLE_COPY: Record<(typeof LOCALE_CODES)[number], readonly [string, string, string]> = {
   en: [
     "DeepSeek Harness (DSH)",
     "DSH",
@@ -313,10 +319,15 @@ const DSH_VISIBLE_COPY: Record<(typeof LOCALES)[number], readonly [string, strin
     "DSH",
     "OpenCodex 只管理 $DSH_HOME/settings.yaml 中的 llm-pi-ai.providers.opencodex。DSH 會熱重載該 provider；你的預設模型與 deepseek-official 維持不變。目前僅支援 loopback，且不會寫入真實憑證。",
   ],
+  vi: [
+    "DeepSeek Harness (DSH)",
+    "DSH",
+    "OpenCodex chỉ quản lý llm-pi-ai.providers.opencodex trong $DSH_HOME/settings.yaml. DSH sẽ hot reload provider này; model mặc định của bạn và deepseek-official không thay đổi. Hiện chỉ hỗ trợ loopback; không ghi credential thật nào.",
+  ],
 };
 
 test("every locale carries the exact DSH label and ownership semantics", async () => {
-  for (const locale of LOCALES) {
+  for (const locale of LOCALE_CODES) {
     const dict = await readDict(locale);
     const expected = DSH_VISIBLE_COPY[locale];
     expect(dict.get("api.clientConfig.clientDsh")).toBe(expected[0]);
@@ -339,7 +350,7 @@ test("every locale carries the exact DSH label and ownership semantics", async (
  * are the part that must survive translation unchanged.
  */
 test("every locale keeps the three facts Aside's ownership sentence carries", async () => {
-  for (const locale of LOCALES) {
+  for (const locale of LOCALE_CODES) {
     const dict = await readDict(locale);
     expect(dict.get("api.clientConfig.clientAside"), locale).toBe("Aside");
     expect(dict.get("integrations.tab.aside"), locale).toBe("Aside");

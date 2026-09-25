@@ -203,6 +203,10 @@ describe("GET /api/system/memory", () => {
 	        spillLastWriteSuccessAt: number | null;
 	        replayScopeMismatchDrops: number;
 	      };
+      responseSpill: {
+        scanned: number; truncated: boolean; files: number; bytes: number;
+        ownedFiles: number; ownedBytes: number; orphanFiles: number; orphanBytes: number;
+      };
 	      appOwnedBytes: ReturnType<typeof appOwnedBytesSnapshot>;
 	      inspectionCounters: {
 	        frameBufferHighWaterBytes: number; completedItemsMaxCount: number; frameCapOverflows: number;
@@ -247,6 +251,15 @@ describe("GET /api/system/memory", () => {
     expect(spillLastWriteFailureAt === null || Number.isFinite(spillLastWriteFailureAt)).toBe(true);
     expect(spillLastWriteSuccessAt === null || Number.isFinite(spillLastWriteSuccessAt)).toBe(true);
     expect(body.responseState.count).toBeGreaterThanOrEqual(0);
+    // responseSpill is the dry-run spill-directory report: scalar-only counts and a
+    // truncation flag — no paths, filenames, or response ids.
+    expect(Object.keys(body.responseSpill).sort()).toEqual([
+      "bytes", "files", "orphanBytes", "orphanFiles", "ownedBytes", "ownedFiles", "scanned", "truncated",
+    ]);
+    expect(typeof body.responseSpill.truncated).toBe("boolean");
+    const { truncated: _truncated, ...numericSpill } = body.responseSpill;
+    expect(Object.values(numericSpill)
+      .every(value => typeof value === "number" && Number.isFinite(value))).toBe(true);
     expect(body.appOwnedBytes).toEqual({
       budgetBytes: expect.any(Number),
       retainedBytes: expect.any(Number),

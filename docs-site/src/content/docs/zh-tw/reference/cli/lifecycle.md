@@ -176,6 +176,12 @@ Windows 工作排程器安裝使用一般處理程序優先順序（`Priority=4`
 可能在 CPU 競爭時延遲健康檢查回應，導致處理程序仍在執行時系統匣顯示 Offline。升級後執行 `ocx service repair`，
 即可遷移該註冊優先順序並重新啟動服務；過程中可能需要核准 UAC 提示。已設為一般或高優先順序時，不會僅因優先順序而重新註冊。
 
+在 Linux 上，systemd unit 會呼叫安裝時於 `PATH` 中找到的第一個一般可執行 `ocx` 檔案，而非已安裝套件樹內的 Bun 與 CLI 路徑。**mise**、**asdf** 等版本管理器會安裝到帶版本的目錄，並在升級時刪除舊目錄；其穩定的 shim 讓 unit 持續可解析。沒有 `ocx` 啟動器的原始碼 checkout 保留直接的 Bun + CLI 形式。Bun 啟動前選定的可信 `OPENCODEX_BUN_PATH` 會透過 shim 保留；套件內附的 Bun 路徑會在升級後重新被發現。
+
+在 macOS 上，launchd 改為使用安裝或修復時選定的套件內 Bun 與 CLI 路徑。這可防止可變的 PATH shim 在後續重啟時取得服務 API 權杖與已設定的代理環境。升級由版本管理器管理的安裝後，請在重新啟動服務前執行 `ocx service repair` 以更新這些路徑。
+
+在此變更之前安裝的定義仍帶有舊的帶版本路徑，且無法自行遷移——一旦舊執行檔被刪除，就不會有 opencodex 程式碼執行來修復它。升級後請執行一次 `ocx service repair`。之後 Linux 服務啟動會跟隨啟動器；macOS 的 repair 會將新的套件路徑寫入 launchd 定義。外部升級不會取代已在執行的代理：當已安裝的 CLI 比執行中的代理更新時，執行 `ocx service restart` 讓新組建提供服務。在 macOS 上，此情況下 `repair` 並不足夠：定義沒有改變，而不改變任何內容的 repair 不會重新載入任何內容。反之若代理較新，請依 [`ocx status`](#ocx-status---json) 的說明檢查 CLI 安裝與 `PATH`。
+
 | 子指令 | 動作 |
 | --- | --- |
 | 無 | 服務不存在時安裝並啟動；已存在時執行 `repair`。正常的 Windows 工作排程器定義會沿用；過時的定義可能會重新註冊並需要提高權限。 |
@@ -245,6 +251,7 @@ ocx codex-shim uninstall
 
 安裝並控制 Windows 狀態列圖示。它在 Windows 登入時啟動並提供一鍵代理控制。`start` 與 `stop` 僅控制圖示；請用其選單控制代理。`--no-start` 適用於 `install`，並在不立即啟動它的情況下安裝 tray。
 已淘汰：OpenCodex 桌面應用程式在 Windows、macOS 與 Linux 提供系統匣；沒有桌面應用程式的安裝仍可使用 `ocx tray`。
+得知有較新的套件版本時，系統匣會在連線、警告或離線圖示上加上藍點，並顯示 **Update available**。系統匣約每分鐘檢查一次本機快取的徽章；結果過期或無法取得時會移除藍點。此選單項目會開啟儀表板，你可以在那裡開始套件更新。它不會自動安裝。
 
 ## 儀表板
 

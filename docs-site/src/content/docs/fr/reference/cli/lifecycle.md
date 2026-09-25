@@ -200,6 +200,31 @@ aux contrôles de santé en cas de contention CPU : la zone de notification affi
 Après la mise à jour, exécutez `ocx service repair` pour migrer cette priorité enregistrée et redémarrer le service.
 Une confirmation UAC peut être nécessaire. Une priorité déjà normale ou haute ne déclenche pas, à elle seule, de réenregistrement.
 
+Sous Linux, l’unité systemd invoque le premier fichier `ocx` ordinaire et exécutable trouvé dans `PATH`
+au moment de l’installation, plutôt que les chemins Bun et CLI à l’intérieur de l’arborescence du paquet
+installé. Les gestionnaires de versions comme **mise** et **asdf** installent dans un répertoire
+versionné et suppriment l’ancien lors d’une mise à niveau ; leur shim stable permet à l’unité de
+continuer à résoudre. Les checkouts de source sans lanceur `ocx` conservent la forme directe Bun + CLI.
+Un `OPENCODEX_BUN_PATH` de confiance choisi avant le démarrage de Bun est conservé à travers le shim ;
+les chemins du Bun embarqué dans le paquet sont redécouverts après les mises à niveau.
+
+Sous macOS, launchd utilise à la place les chemins Bun et CLI propres au paquet choisis lors de
+l’installation ou de la réparation. Cela empêche un shim PATH mutable de recevoir le jeton d’API du
+service et l’environnement de proxy configuré lors d’un redémarrage ultérieur. Après la mise à niveau
+d’une installation gérée par un gestionnaire de versions, exécutez `ocx service repair` pour
+actualiser ces chemins avant de redémarrer le service.
+
+Les définitions installées avant ce changement portent encore les anciens chemins versionnés et ne
+peuvent pas migrer d’elles-mêmes — une fois l’ancien exécutable supprimé, aucun code opencodex ne
+s’exécute pour le réparer. Exécutez `ocx service repair` une fois après la mise à niveau. Les
+démarrages du service Linux suivent alors le lanceur ; la réparation macOS écrit les nouveaux chemins
+du paquet dans la définition launchd. Un proxy déjà en cours d’exécution n’est pas remplacé par une
+mise à niveau externe : lorsque la CLI installée est plus récente que le proxy en cours, exécutez
+`ocx service restart` pour que la nouvelle version serve. Sous macOS, `repair` ne suffit pas dans ce
+cas : la définition n’a pas changé, et une réparation qui ne change rien ne recharge rien. Si c’est le
+proxy qui est plus récent, vérifiez l’installation de la CLI et le `PATH` comme décrit sous
+[`ocx status`](#ocx-status---json).
+
 | Sous-commande | Action |
 | --- | --- |
 | aucune | Installe et démarre le service s’il est absent ; sinon, applique `repair` au service existant. Une définition Task Scheduler Windows saine est réutilisée ; une définition obsolète peut être réenregistrée et nécessiter une élévation. |
@@ -304,6 +329,7 @@ Utilisez `ocx service` pour maintenir un proxy d’arrière-plan toujours actif,
 
 Installe et contrôle l’icône OpenCodex dans la zone de notification Windows. Elle démarre à l’ouverture de session et fournit des commandes du proxy accessibles en un clic. `start` et `stop` contrôlent uniquement l’icône ; utilisez son menu pour contrôler le proxy. `--no-start` s’applique à `install` et installe l’icône sans la lancer immédiatement.
 Obsolète : l’application OpenCodex fournit la zone de notification sous Windows, macOS et Linux ; `ocx tray` reste disponible pour les installations sans l’application de bureau.
+Lorsqu'une version plus récente du paquet est connue, la zone de notification ajoute un point bleu à l'icône en ligne, d'avertissement ou hors ligne et affiche **Update available**. Elle vérifie le badge mis en cache localement environ une fois par minute ; les résultats obsolètes ou indisponibles retirent le point. L'élément ouvre le tableau de bord, où vous pouvez lancer la mise à jour du paquet. L'installation automatique est désactivée.
 
 ## Tableau de bord
 

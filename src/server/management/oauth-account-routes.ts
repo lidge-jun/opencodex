@@ -59,7 +59,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { OcxApiKeyEntry, OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -145,6 +145,45 @@ function validateKeyName(
   if (opts.required && !value) return { error: "name required" };
   if (value.length > 64) return { error: "name too long" };
   return { value };
+}
+
+export type IssuedApiKey = Pick<OcxApiKeyEntry, "id" | "name" | "key" | "createdAt">;
+
+/** Shared one-time data-key issuance used by the dashboard and link transactions. */
+export function issueApiKeyInProcess(config: OcxConfig, name: string): IssuedApiKey {
+  const checked = validateKeyName(name, { required: true });
+  if ("error" in checked) throw new Error(checked.error);
+  const entry: IssuedApiKey = {
+    id: randomUUID(),
+    name: checked.value,
+    key: `ocx_data_${randomBytes(20).toString("hex")}`,
+    createdAt: new Date().toISOString(),
+  };
+  const previous = config.apiKeys;
+  config.apiKeys = [...(previous ?? []), entry];
+  try {
+    saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
+  } catch (error) {
+    config.apiKeys = previous;
+    throw error;
+  }
+  return entry;
+}
+
+/** Revoke and persist one data key; callers can retain their own record on false. */
+export function revokeApiKeyInProcess(config: OcxConfig, id: string): boolean {
+  const before = config.apiKeys ?? [];
+  if (!before.some(key => key.id === id)) return false;
+  config.apiKeys = before.filter(key => key.id !== id);
+  try {
+    saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
+  } catch (error) {
+    config.apiKeys = before;
+    throw error;
+  }
+  return true;
 }
 
 function metaMuseConsentRequired(provider: string, principal: ManagementContext["principal"]): Response | null {
@@ -955,16 +994,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const nameField = validateKeyName(body.name, { required: false });
     if ("error" in nameField) return jsonResponse({ error: nameField.error }, 400, req, config);
     const name = nameField.value || "default";
-    // A direct random draw. The previous derivation hashed every configured
-    // provider API key into the input, which was never needed for uniqueness and
-    // made this secret's safety argument depend on string concatenation rather
-    // than the RNG. 20 bytes is the same 40 hex characters as before, so nothing
-    // that pattern-matches the key shape changes.
-    const key = "ocx_data_" + randomBytes(20).toString("hex");
-    const entry = { id: randomUUID(), name, key, createdAt: new Date().toISOString() };
-    config.apiKeys = [...(config.apiKeys ?? []), entry];
-    saveConfigPreservingClaudeCode(config);
-    reconcileLiveStateStores();
+    const entry = issueApiKeyInProcess(config, name); // shared helper uses randomBytes(20)
     return jsonResponse({ id: entry.id, name: entry.name, key: entry.key, createdAt: entry.createdAt }, 201, req, config);
   }
 
@@ -1021,12 +1051,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readJsonBody(req);
     if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
     if (typeof body.id !== "string" || !body.id) return jsonResponse({ error: "id required" }, 400, req, config);
-    const before = (config.apiKeys ?? []).length;
-    config.apiKeys = (config.apiKeys ?? []).filter(k => k.id !== body.id);
     // A stale id must not read as a successful revocation.
-    if (config.apiKeys.length === before) return jsonResponse({ error: "key not found" }, 404, req, config);
-    saveConfigPreservingClaudeCode(config);
-    reconcileLiveStateStores();
+    if (!revokeApiKeyInProcess(config, body.id)) return jsonResponse({ error: "key not found" }, 404, req, config);
     return jsonResponse({ success: true }, 200, req, config);
   }
   return null;

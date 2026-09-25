@@ -43,7 +43,7 @@ bun run dev:gui
 | **Dashboard 摘要** | 显示 multi-agent 模式、在线状态、版本、运行时间、provider 数量、30 天 token 总量、活动 provider 和可用的原生/路由模型。 |
 | **Sub-agent delegation** | 选择供 OpenCodex 委派指引与可选的 Codex 原生子代理默认值共用的原生/路由模型和可选 reasoning 强度。它不是逐次生成的路由器，详见下文。 |
 | **Sidecar** | 选择 web-search 模型及强度，以及图像描述模型；更改从下一次请求开始生效。 |
-| **Maintenance** | 重新同步 Codex 模型目录，查看项目级配置绕过警告，检查 latest/preview 版本，并可在更新后重启代理。 |
+| **Maintenance** | 重新同步 Codex 模型目录，查看项目级配置绕过警告，检查 latest/preview 版本，并可在更新后重启代理。 在桌面 shell 中，该更新入口会打开原生应用更新页面，而不是运行包更新器。 |
 | **启动安全** | 显示注入的 Codex 路由能否在重启后继续工作，并分别显示服务、launcher shim 状态和准确的修复命令。 |
 | **Windows 托盘** | 安装用户登录托盘，一键控制代理启动、停止、重启、面板和状态。托盘不是代理重启服务。 |
 | **Codex 自动启动** | 允许已安装的 Codex launcher shim 运行 `ocx ensure`。此开关不会安装 shim 或后台服务。 |

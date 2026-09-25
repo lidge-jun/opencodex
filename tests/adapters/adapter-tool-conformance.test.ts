@@ -408,6 +408,13 @@ async function restoredStreamInput(adapterId: string, wire: AdapterWire): Promis
 describe("registry-derived routed tool conformance", () => {
   test("provider and model-wire configuration ids are registry members", () => {
     for (const provider of PROVIDER_REGISTRY) {
+      if (provider.credentialOnly) {
+        expect(getAdapterDefinition(provider.adapter), provider.id).toBeUndefined();
+        expect(provider.liveModels, provider.id).toBe(false);
+        expect(provider.models, provider.id).toBeUndefined();
+        expect(provider.defaultModel, provider.id).toBeUndefined();
+        continue;
+      }
       expect(getAdapterDefinition(provider.adapter), provider.id).toBeDefined();
       for (const value of Object.values(provider.modelWireDefaults ?? {})) {
         const adapterId = typeof value === "string" ? value : value.wire;
@@ -419,7 +426,7 @@ describe("registry-derived routed tool conformance", () => {
     }
   });
 
-  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder"]);
+  const TOOL_LESS_ADAPTERS = new Set(["codebuddy", "qoder", "claude-cli"]);
   // The Devin adapter is runTurn-only: it streams Connect-RPC from runTurn, so
   // buildRequest returns a placeholder and tools never travel the wire path.
   // Both Devin provider rows share it and differ only in where the credential

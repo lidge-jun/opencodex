@@ -47,6 +47,21 @@ mismatched, and standalone results become marked text instead of unpaired functi
 Representable data-URL images remain sibling `inline_data` parts in either case.
 
 > Decision record: [ADR-0058](../decisions/ADR-0058-google-tool-result-adjacency-repair.md)
+
+## Google opening functionCall repair
+
+A `functionCall` turn may not open `contents`: the upstream requires a call turn to follow a
+user or function-response turn and rejects an opening call turn with
+"function call turn comes immediately after a user turn or after a function response turn"
+(HTTP 400). Client-side context compaction can truncate a long history so it opens on an
+assistant tool call. `messagesToGeminiFormat` prepends a user `"(continue)"` nudge when the
+first compiled turn is `model` carrying a `functionCall` — the same repair Kiro applies to
+assistant-head turns in `src/adapters/kiro/payload.ts`. A model head carrying only text is left
+alone: no upstream rule against it is demonstrated, so repairing it would inject a turn into
+valid requests.
+
+> Decision record: [ADR-5008](../decisions/ADR-5008-google-opening-functioncall-repair.md)
+
 ## Structured output on generateContent
 
 A caller's Responses `text.format` reaches the Gemini wire as

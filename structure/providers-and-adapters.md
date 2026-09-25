@@ -105,6 +105,63 @@ OAuth presets resolve discovery against the same canonical registry transport as
 before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
 OAuth bearer token.
 
+## TypeSafe JEV decision provider
+
+`src/providers/registry/entries-extended.ts` owns the canonical `jev` key preset at
+`https://api.typesafe.ai/v1/systemone` with adapter `jev-decision`. It is a credential owner, not an
+inference route: the registry marks it `credentialOnly`, its adapter is deliberately absent from the
+routable adapter registry, live discovery is disabled, no default/static model is published, and
+key login returns unknown without probing a nonexistent model catalog. The normal `ocx login jev`
+flow and provider-workspace API-key panel both persist the same credential-only row. Combo validation
+rejects the decision provider as a target. `src/server/management/provider-routes.ts`
+special-cases its connection test through the same bounded decision client before the generic
+static-catalog branch. The test sends no user prompt and returns only sanitized health status.
+
+The request path consumes a configured literal/reference key only when the row still matches the
+canonical registry transport, with `TYPESAFE_API_KEY` and the standard provider-derived
+`JEV_API_KEY` as explicit environment fallbacks. A same-named custom destination cannot receive
+either credential through the JEV client. All automated coverage mocks TypeSafe; live-key behavior
+remains an operator smoke boundary.
+
+`src/combos/jev.ts` extracts bounded user-task, previous-assistant, and latest-tool-output text plus
+the tool name and boolean signals; raw image data, tool arguments, encrypted reasoning, headers, and
+the JEV credential are excluded. It owns the joint target/effort choice map, strict response
+validation, fixed `jev-latest` destination, four-second deadline, no-redirect policy, bounded response,
+and caller-cancellation propagation. Missing credentials or safe state, transport failures, and invalid
+answers fail open to the first eligible target; no response can escape the configured choice map.
+Telemetry never retains extracted state or credentials.
+
+`src/server/responses/core-combo.ts` computes current eligibility, asks JEV once for the initial pick,
+applies the validated effort, and removes caller `service_tier` for that child. A retryable child
+failure re-enters the ordinary Combo fallback loop from the untouched request without another JEV
+call. Each target may carry an optional non-empty `reasoningEfforts` allowlist. Omission keeps the
+backward-compatible all-advertised behavior; a present list is intersected with current capabilities,
+and an empty intersection removes that target from the JEV choice map rather than broadening it.
+Direct models and every other Combo strategy bypass this path. The shared Combo editor owns the GUI
+checkboxes and `Create JEV Auto` template; no second model picker or JEV-only editor exists.
+
+JEV setup stays inside those existing shells. A configured `jev-decision` provider Overview exposes
+**Create JEV Auto**, which navigates to the registered `models/combos/jev-auto` action hash.
+`gui/src/pages/Combos.tsx` owns that one-shot add intent and normalizes the hash when the modal
+closes; `ComboWorkspace` and `combo-workspace-add-modal.tsx` reuse the ordinary Combo form and target
+editor with a pure template from `combo-workspace-data.ts`. The template includes only currently
+available Astra/Sol/Luna rows, remains fully editable, marks the first eligible row as fail-open,
+and displays known effort ladders. The JEV provider is hidden from the target picker because it owns
+only the decision credential. Existing model rows, default selection, and direct picker behavior are
+unchanged; an existing `jev-auto` id or alias disables or reports the quick action.
+An existing JEV Combo adds a lazy **Stats** detail tab. It polls only while visible, uses the
+management API's JEV projection, and keeps decision-service tokens separate from physical model
+tokens. Config remains the ordinary editable Combo form, including per-target effort allowlists.
+
+`src/usage/jev-stats.ts` owns the parallel content-free JEV projection. Its retained accumulator is
+keyed by Combo and stable preset boundary, shares concurrent reads, verifies append identity and LF
+digest, clones before folding a suffix, and starts a fresh accumulator after a rebuild-required
+scan. It counts physical sends from `attempts[].sendCount`, ignores zero-send rows for fallback
+detection, and folds identities beyond 255 concrete rows into one explicit overflow row while
+preserving global totals. Up to four JEV projections participate in the same app-owned memory budget
+and eviction path as ordinary usage aggregates. Read failure returns HTTP 500 rather than a partial
+projection.
+
 The Crusoe preset uses that fixed-key path at `https://api.inference.crusoecloud.com/v1`. Its
 registry-owned policy admits only public rows whose `architecture.modality` is `text` or
 `multimodal`, caps the response at 256 KiB and 256 raw rows, and leaves same-named custom

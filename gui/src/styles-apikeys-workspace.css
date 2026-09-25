@@ -829,3 +829,114 @@
   .apikeys-workspace-shell .section-tabs { top: 53px; }
   .apikeys-workspace-shell .awi-section-anchor { scroll-margin-top: 108px; }
 }
+
+/* Request path preview (components/protocols). Delivery mode badges carry their label as
+   text, so colour only repeats what the words already say. */
+.protocol-plan-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.protocol-plan-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  flex: 1 1 220px;
+}
+.protocol-plan-field .input { max-width: 100%; }
+.protocol-plan-features {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5) var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.protocol-plan-features legend { padding: 0; margin-bottom: var(--space-1); }
+.protocol-plan-feature {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.protocol-plan-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.protocol-plan-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.protocol-plan-result code { overflow-wrap: anywhere; }
+.protocol-plan-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.protocol-plan-candidate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.protocol-plan-candidate-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.protocol-feature-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.protocol-feature-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* API surface cards (PF-04): one card per public API. Inherits the endpoint URL styling from
+   .api-endpoints; a closed surface stays visible, dimmed rather than hidden. */
+.api-endpoints.api-surface-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.api-surface-card {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.api-surface-card-off {
+  border-style: dashed;
+}
+.api-surface-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.api-surface-card-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: var(--weight-semibold);
+}
+.api-surface-invalid {
+  color: var(--red);
+}
+.api-surface-card-link {
+  align-self: flex-start;
+}
+@media (max-width: 960px) {
+  .api-endpoints.api-surface-cards { grid-template-columns: minmax(0, 1fr); }
+}

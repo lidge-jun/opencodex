@@ -9,15 +9,15 @@ description: Разработка opencodex — настройка окруже�
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
-bun run setup:hooks  # установить post-merge и удалить прежний управляемый pre-push
+bun run setup:hooks  # удалить прежние управляемые pre-push и post-merge
 bun run dev:proxy    # прокси-API в режиме разработки
 bun run dev:gui      # dev-сервер дашборда (другой терминал)
 bun run typecheck    # bun x tsc --noEmit
 bun run test        # полный набор тестов (по умолчанию)
 ```
 
-`bun run setup:hooks` устанавливает только `post-merge` и удаляет прежний управляемый хук
-`pre-push`, если он не был изменён. Пользовательские хуки сохраняются. Хук `pre-push` больше
+`bun run setup:hooks` удаляет прежние управляемые хуки `pre-push` и `post-merge`,
+если они не были изменены. Пользовательские хуки сохраняются. Хук `pre-push` больше
 не обязателен; `bun run prepush` остаётся необязательной ручной проверкой.
 
 `bun run dev` остаётся псевдонимом для `bun run dev:proxy`. Dev-сервер дашборда — `bun run dev:gui`;

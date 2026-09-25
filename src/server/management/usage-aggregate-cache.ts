@@ -15,6 +15,10 @@ import {
 } from "../../usage/summary";
 import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
 import type { UsageTimeWindow } from "../../usage/time-range";
+import {
+  createJevStatsAccumulator,
+  type JevStatsAccumulator,
+} from "../../usage/jev-stats";
 
 import {
   cacheApiKeyUsageFromRollup,
@@ -34,6 +38,19 @@ interface RetainedUsageAggregate {
   retainedAt: number;
 }
 
+interface RetainedJevStatsAggregate {
+  accumulator: JevStatsAccumulator;
+  usageIncomplete: boolean;
+  revision: UsageLogRevision | null;
+  identityKey: string;
+  revisionKey: string;
+  processedThroughBytes: number;
+  processedThroughDigest: string;
+  retainedAt: number;
+}
+
+type RetainedAggregateState = RetainedUsageAggregate | RetainedJevStatsAggregate;
+
 export interface UsageAggregateResult {
   accumulator: UsageSummaryAccumulator;
   usageIncomplete: boolean;
@@ -50,6 +67,14 @@ export interface UsageAggregateOptions {
   managementUsageMaxReadBytes?: number;
 }
 
+export interface JevStatsAggregateResult {
+  accumulator: JevStatsAccumulator;
+  usageIncomplete: boolean;
+  revision: UsageLogRevision | null;
+  processedThroughBytes: number;
+  update: "unchanged" | "append" | "rebuild";
+}
+
 export interface UsageAggregateRetainedStats {
   count: number;
   bytes: number;
@@ -62,11 +87,15 @@ const MAX_REBUILD_ATTEMPTS = 2;
 const MAX_RETAINED_FILTERED_AGGREGATES = 4;
 
 let retainedAggregate: RetainedUsageAggregate | null = null;
-const pinnedAggregates = new Set<RetainedUsageAggregate>();
+const pinnedAggregates = new Set<RetainedAggregateState>();
 let baseFlight: Promise<UsageAggregateResult> | null = null;
 const filteredFlights = new Map<string, Promise<UsageAggregateResult>>();
 const retainedFilteredAggregates = new Map<string, RetainedUsageAggregate>();
 const MAX_CONCURRENT_FILTERED_AGGREGATES = 4;
+const retainedJevStatsAggregates = new Map<string, RetainedJevStatsAggregate>();
+const jevStatsFlights = new Map<string, Promise<JevStatsAggregateResult>>();
+const MAX_RETAINED_JEV_STATS_AGGREGATES = 4;
+const MAX_CONCURRENT_JEV_STATS_AGGREGATES = 4;
 
 function currentTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -418,10 +447,171 @@ async function refreshFilteredAggregate(
   return appendFilteredAggregate(key, state, filter, window);
 }
 
+function jevStatsResultFrom(
+  state: RetainedJevStatsAggregate,
+  update: JevStatsAggregateResult["update"],
+): JevStatsAggregateResult {
+  return {
+    accumulator: state.accumulator,
+    usageIncomplete: state.usageIncomplete,
+    revision: state.revision,
+    processedThroughBytes: state.processedThroughBytes,
+    update,
+  };
+}
+
+function trimRetainedJevStatsAggregates(): void {
+  while (retainedJevStatsAggregates.size > MAX_RETAINED_JEV_STATS_AGGREGATES) {
+    const oldest = [...retainedJevStatsAggregates]
+      .filter(([, state]) => !pinnedAggregates.has(state))
+      .sort(([, left], [, right]) => left.retainedAt - right.retainedAt)[0];
+    if (!oldest) return;
+    retainedJevStatsAggregates.delete(oldest[0]);
+  }
+}
+
+function publishJevStatsAggregate(
+  key: string,
+  state: RetainedJevStatsAggregate,
+  update: JevStatsAggregateResult["update"],
+): JevStatsAggregateResult {
+  retainedJevStatsAggregates.set(key, state);
+  trimRetainedJevStatsAggregates();
+  enforceAppOwnedMemoryBudget();
+  return jevStatsResultFrom(state, update);
+}
+
+function retainedJevStatsState(
+  accumulator: JevStatsAccumulator,
+  scan: Awaited<ReturnType<typeof scanUsageLedgerCooperatively>>,
+  priorIncomplete = false,
+): RetainedJevStatsAggregate {
+  return {
+    accumulator,
+    usageIncomplete: priorIncomplete || scan.oversizedRows > 0,
+    revision: scan.revision,
+    identityKey: usageLogIdentityKey(scan.revision),
+    revisionKey: usageLogRevisionKey(scan.revision),
+    processedThroughBytes: scan.processedThroughBytes,
+    processedThroughDigest: scan.processedThroughDigest,
+    retainedAt: Date.now(),
+  };
+}
+
+async function rebuildJevStatsAggregate(
+  key: string,
+  comboId: string | null,
+  since: number | null,
+): Promise<JevStatsAggregateResult> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_REBUILD_ATTEMPTS; attempt += 1) {
+    // A rebuild-required result means the opened ledger changed underneath the
+    // scan. Start from a fresh accumulator so no partially observed row can be
+    // returned or retained.
+    const accumulator = createJevStatsAccumulator({ comboId, since });
+    try {
+      const scan = await scanUsageLedgerCooperatively({ onEntry: entry => accumulator.add(entry) });
+      return publishJevStatsAggregate(key, retainedJevStatsState(accumulator, scan), "rebuild");
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof UsageLedgerRebuildRequiredError) || attempt + 1 >= MAX_REBUILD_ATTEMPTS) {
+        throw error;
+      }
+    }
+  }
+  throw lastError ?? new Error("JEV stats aggregate rebuild did not settle");
+}
+
+function jevStatsRequiresRebuild(
+  state: RetainedJevStatsAggregate,
+  observed: UsageLogRevision | null,
+): boolean {
+  if (state.identityKey !== usageLogIdentityKey(observed)) return true;
+  if (!state.revision || !observed) return state.revision !== observed;
+  if (observed.size < state.revision.size) return true;
+  return observed.size === state.revision.size && usageLogRevisionKey(observed) !== state.revisionKey;
+}
+
+async function appendJevStatsAggregate(
+  key: string,
+  state: RetainedJevStatsAggregate,
+  comboId: string | null,
+  since: number | null,
+): Promise<JevStatsAggregateResult> {
+  pinnedAggregates.add(state);
+  let rebuildAfterUnpin = false;
+  try {
+    const candidate = state.accumulator.clone();
+    const scan = await scanUsageLedgerCooperatively({
+      startAtBytes: state.processedThroughBytes,
+      expectedIdentityKey: state.identityKey,
+      expectedProcessedThroughDigest: state.processedThroughDigest,
+      onEntry: entry => candidate.add(entry),
+    });
+    const next = retainedJevStatsState(candidate, scan, state.usageIncomplete);
+    return publishJevStatsAggregate(key, next, "append");
+  } catch (error) {
+    if (retainedJevStatsAggregates.get(key) === state) retainedJevStatsAggregates.delete(key);
+    if (error instanceof UsageLedgerRebuildRequiredError) rebuildAfterUnpin = true;
+    else throw error;
+  } finally {
+    pinnedAggregates.delete(state);
+    trimRetainedJevStatsAggregates();
+  }
+  if (rebuildAfterUnpin) return rebuildJevStatsAggregate(key, comboId, since);
+  throw new Error("JEV stats aggregate append did not settle");
+}
+
+async function refreshJevStatsAggregate(
+  key: string,
+  comboId: string | null,
+  since: number | null,
+): Promise<JevStatsAggregateResult> {
+  const state = retainedJevStatsAggregates.get(key);
+  if (!state) return rebuildJevStatsAggregate(key, comboId, since);
+  const observed = currentUsageLogRevision();
+  if (jevStatsRequiresRebuild(state, observed)) {
+    retainedJevStatsAggregates.delete(key);
+    return rebuildJevStatsAggregate(key, comboId, since);
+  }
+  if (state.revisionKey === usageLogRevisionKey(observed)) {
+    state.retainedAt = Date.now();
+    return jevStatsResultFrom(state, "unchanged");
+  }
+  return appendJevStatsAggregate(key, state, comboId, since);
+}
+
+/**
+ * Return one checkpointed JEV projection for a combo and fixed calendar range.
+ * Concurrent readers share a flight; later polls scan only a verified append
+ * suffix, and unchanged ledgers perform no file read.
+ */
+export async function getJevStatsAggregate(options: {
+  comboId?: string | null;
+  since?: number | null;
+} = {}): Promise<JevStatsAggregateResult> {
+  const comboId = options.comboId ?? null;
+  const since = options.since ?? null;
+  const key = JSON.stringify([comboId, since]);
+  const existing = jevStatsFlights.get(key);
+  if (existing) return existing;
+  if (jevStatsFlights.size >= MAX_CONCURRENT_JEV_STATS_AGGREGATES) {
+    throw new Error("too many concurrent JEV stats aggregates");
+  }
+  const flight = refreshJevStatsAggregate(key, comboId, since);
+  jevStatsFlights.set(key, flight);
+  try {
+    return await flight;
+  } finally {
+    if (jevStatsFlights.get(key) === flight) jevStatsFlights.delete(key);
+  }
+}
+
 export function usageAggregateRetainedStats(): UsageAggregateRetainedStats {
   const states = [
     ...(retainedAggregate ? [retainedAggregate] : []),
     ...retainedFilteredAggregates.values(),
+    ...retainedJevStatsAggregates.values(),
   ];
   if (states.length === 0) {
     return { count: 0, bytes: 0, evictableBytes: 0, pinnedBytes: 0, oldestAt: null };
@@ -449,19 +639,27 @@ export function usageAggregateRetainedStats(): UsageAggregateRetainedStats {
 }
 
 export function discardRetainedUsageAggregate(): number {
-  const candidates: Array<{ key: string | null; state: RetainedUsageAggregate }> = [
+  const candidates: Array<{
+    kind: "base" | "filtered" | "jev";
+    key: string | null;
+    state: RetainedAggregateState;
+  }> = [
     ...(retainedAggregate && !pinnedAggregates.has(retainedAggregate)
-      ? [{ key: null, state: retainedAggregate }]
+      ? [{ kind: "base" as const, key: null, state: retainedAggregate }]
       : []),
     ...[...retainedFilteredAggregates]
       .filter(([, state]) => !pinnedAggregates.has(state))
-      .map(([key, state]) => ({ key, state })),
+      .map(([key, state]) => ({ kind: "filtered" as const, key, state })),
+    ...[...retainedJevStatsAggregates]
+      .filter(([, state]) => !pinnedAggregates.has(state))
+      .map(([key, state]) => ({ kind: "jev" as const, key, state })),
   ];
   const oldest = candidates.sort((left, right) => left.state.retainedAt - right.state.retainedAt)[0];
   if (!oldest) return 0;
   const released = oldest.state.accumulator.estimatedBytes;
-  if (oldest.key === null) retainedAggregate = null;
-  else retainedFilteredAggregates.delete(oldest.key);
+  if (oldest.kind === "base") retainedAggregate = null;
+  else if (oldest.kind === "filtered") retainedFilteredAggregates.delete(oldest.key!);
+  else retainedJevStatsAggregates.delete(oldest.key!);
   return released;
 }
 
@@ -471,4 +669,6 @@ export function resetUsageAggregateCacheForTests(): void {
   baseFlight = null;
   filteredFlights.clear();
   retainedFilteredAggregates.clear();
+  jevStatsFlights.clear();
+  retainedJevStatsAggregates.clear();
 }

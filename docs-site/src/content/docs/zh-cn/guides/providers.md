@@ -181,7 +181,7 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 
 ## 3. API 密钥目录
 
-opencodex 内置 97 个预设：80 个密钥预设、13 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 99 个预设：82 个密钥预设、13 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 

@@ -689,9 +689,15 @@ jobs:
           # release is therefore created as a draft and becomes public here, once the
           # verified bundle is attached. The only edit permitted is this flip — the
           # notes still come from the validated notes file written at creation.
-          if [ "$(gh release view "$release_tag" --json isDraft --jq .isDraft)" = "true" ]; then
-            gh release edit "$release_tag" --draft=false
-          fi
+          draft_state="$(gh release view "$release_tag" --json isDraft --jq .isDraft)"
+          case "$draft_state" in
+            true) gh release edit "$release_tag" --draft=false ;;
+            false) ;;
+            # A successful query that answers neither true nor false — an empty body or an
+            # unexpected shape — must not leave the release a silent draft: only an explicit
+            # false may pass.
+            *) echo "unexpected draft state: $draft_state" >&2; exit 1 ;;
+          esac
 
   # One row per fact a release run can establish: the public GitHub release, the npm version read
   # back from the registry, and the npm dist-tag. A green run used to read the same whichever of

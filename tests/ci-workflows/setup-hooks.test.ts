@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { repoPath } from "../helpers/repo-root";
@@ -13,6 +13,18 @@ const legacyHook = [
   "# Installed by: bun run setup:hooks",
   "set -e",
   "exec bun run prepush",
+  "",
+].join("\n");
+// The retired post-merge shim, kept as a fixture so the test does not depend on a file the
+// change removes. It must match the script's retired hash byte-for-byte after normalization.
+const legacyPostMergeHook = [
+  "#!/usr/bin/env sh",
+  '# Post-merge hook shim. The actual command lives in package.json ("postmerge").',
+  "# Installed by: bun run setup:hooks",
+  "#",
+  "# Never fails the merge: the merge already happened by the time this runs, so a",
+  "# non-zero exit here would only print a confusing error after a successful pull.",
+  "bun run postmerge || true",
   "",
 ].join("\n");
 const roots: string[] = [];
@@ -34,7 +46,7 @@ function fixture(): string {
   roots.push(root);
   git(root, "init", "--quiet");
   mkdirSync(join(root, "scripts"));
-  for (const name of ["setup-hooks.ts", "post-merge.sh"]) {
+  for (const name of ["setup-hooks.ts"]) {
     copyFileSync(repoPath("scripts", name), join(root, "scripts", name));
   }
   return root;
@@ -85,15 +97,14 @@ describe("local hook setup", () => {
     }
   });
 
-  test("fresh setup installs only post-merge and is idempotent", () => {
+  test("fresh setup installs no hooks and is idempotent", () => {
     const root = fixture();
     setup(root);
     const hookDir = hooks(root);
     expect(existsSync(join(hookDir, "pre-push"))).toBe(false);
-    expect(readFileSync(join(hookDir, "post-merge"), "utf8"))
-      .toBe(readFileSync(repoPath("scripts/post-merge.sh"), "utf8"));
+    expect(existsSync(join(hookDir, "post-merge"))).toBe(false);
     setup(root);
-    expect(readdirSync(hookDir).filter(name => name.startsWith("post-merge.backup-"))).toEqual([]);
+    expect(readdirSync(hookDir).filter(name => name.includes(".backup-"))).toEqual([]);
   });
 
   for (const ending of ["\n", "\r\n"]) {
@@ -102,16 +113,63 @@ describe("local hook setup", () => {
       writeFileSync(join(hooks(root), "pre-push"), legacyHook.replace(/\n/g, ending));
       setup(root);
       expect(existsSync(join(hooks(root), "pre-push"))).toBe(false);
-      expect(existsSync(join(hooks(root), "post-merge"))).toBe(true);
+      expect(existsSync(join(hooks(root), "post-merge"))).toBe(false);
+    });
+
+    test(`retires the shipped post-merge shim with ${JSON.stringify(ending)} line endings`, () => {
+      // An installed copy keeps executing pulled code on every merge until it is removed,
+      // so setup must retire the exact shim rather than leave the vector in place.
+      const root = fixture();
+      writeFileSync(join(hooks(root), "post-merge"), legacyPostMergeHook.replace(/\n/g, ending));
+      setup(root);
+      expect(existsSync(join(hooks(root), "post-merge"))).toBe(false);
     });
   }
+
+  // POSIX-only: chmod 0000 makes readFileSync throw EACCES for the owner, so the
+  // pre-push attempt fails while post-merge stays removable. Windows' read-only
+  // attribute blocks writes, not reads, so it cannot model this failure.
+  (process.platform === "win32" ? test.skip : test)(
+    "a failed pre-push removal still retires post-merge and exits nonzero", () => {
+      const root = fixture();
+      const hookDir = hooks(root);
+      const unreadable = join(hookDir, "pre-push");
+      writeFileSync(unreadable, legacyHook);
+      chmodSync(unreadable, 0o000);
+      // A process with CAP_DAC_OVERRIDE (e.g. root or some CI containers) can
+      // still read a 0000 file, so the child would succeed and the status-1
+      // expectation would fail despite correct behavior. Probe first and skip
+      // when the mode bit cannot model an unreadable fixture.
+      try {
+        readFileSync(unreadable, "utf8");
+        chmodSync(unreadable, 0o600);
+        console.warn("setup-hooks test skipped: chmod 0000 does not block reads for this process.");
+        return;
+      } catch {
+        // Unreadable as intended; continue.
+      }
+      writeFileSync(join(hookDir, "post-merge"), legacyPostMergeHook);
+      const run = spawnSync(process.execPath, [join(root, "scripts/setup-hooks.ts")], {
+        cwd: root, env: gitEnv(root), encoding: "utf8", timeout: 10_000,
+      });
+      expect(run.status).toBe(1);
+      expect(run.stderr + run.stdout).toContain("pre-push");
+      expect(existsSync(join(hookDir, "post-merge"))).toBe(false);
+      expect(existsSync(unreadable)).toBe(true);
+      // Restore readability so fixture cleanup can remove the file.
+      chmodSync(unreadable, 0o600);
+    },
+  );
 
   test("preserves custom hooks even when they contain the old shim", () => {
     const root = fixture();
     const custom = legacyHook + "echo custom validation\n";
     writeFileSync(join(hooks(root), "pre-push"), custom);
+    const customPostMerge = legacyPostMergeHook + "echo custom rebuild\n";
+    writeFileSync(join(hooks(root), "post-merge"), customPostMerge);
     setup(root);
     expect(readFileSync(join(hooks(root), "pre-push"), "utf8")).toBe(custom);
+    expect(readFileSync(join(hooks(root), "post-merge"), "utf8")).toBe(customPostMerge);
   });
 
   test("uses a configured hooks directory without touching the default one", () => {
@@ -121,10 +179,13 @@ describe("local hook setup", () => {
     const customDir = join(root, "custom hooks");
     mkdirSync(customDir);
     writeFileSync(join(customDir, "pre-push"), legacyHook);
+    // A stale shim copied into a shared hooksPath keeps executing pulled code in
+    // every repo that resolves it, so setup must retire it there too.
+    writeFileSync(join(customDir, "post-merge"), legacyPostMergeHook);
     git(root, "config", "core.hooksPath", customDir);
     setup(root);
     expect(existsSync(join(customDir, "pre-push"))).toBe(false);
-    expect(existsSync(join(customDir, "post-merge"))).toBe(true);
+    expect(existsSync(join(customDir, "post-merge"))).toBe(false);
     expect(readFileSync(join(original, "pre-push"), "utf8")).toBe(legacyHook);
   });
 
@@ -140,7 +201,7 @@ describe("local hook setup", () => {
     setup(linked);
     expect(hooks(linked)).toBe(shared);
     expect(existsSync(join(shared, "pre-push"))).toBe(false);
-    expect(existsSync(join(shared, "post-merge"))).toBe(true);
+    expect(existsSync(join(shared, "post-merge"))).toBe(false);
   });
 
   test.skipIf(process.platform === "win32")("preserves symlinked pre-push hooks", () => {

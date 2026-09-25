@@ -1,4 +1,5 @@
 import { loadConfig } from "../config";
+import { isReservedCodexAccountWord, reportCodexAccountTargetError, resolveCodexAccountTarget } from "./account-target";
 import { hasPassiveAccountQuota } from "../providers/quota";
 import { closeSync, openSync, readSync } from "node:fs";
 import {
@@ -39,15 +40,15 @@ const AUTO_NOTE = "auto (no pin — lowest-usage account is selected per request
 const EXTENDED_USAGE = `Usage:
   ocx account refresh <provider> [--json]
   ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]
-  ocx account alias <provider> <id|main> <display-name|-> [--json]
-  ocx account priority <provider> <id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
-  ocx account pause <provider> <id|main> [--json]
-  ocx account resume <provider> <id|main> [--json]
+  ocx account alias <provider> <id|alias|main> <display-name|-> [--json]
+  ocx account priority <provider> <id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
+  ocx account pause <provider> <id|alias|main> [--json]
+  ocx account resume <provider> <id|alias|main> [--json]
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
-  ocx account remove <provider> <id|main> --yes [--json]
-  ocx account clear-cooldown <provider> <id|main> [--json]
+  ocx account remove <provider> <id|alias|main> --yes [--json]
+  ocx account clear-cooldown <provider> <id|alias|main> [--json]
   ocx account add-key <provider> [--label <label>] [--json]
   ocx account import <provider> --format <format> (--file <path>|--stdin) [--json]`;
 const PIPE_GUIDANCE = `Pipe the API key on stdin, for example:
@@ -447,12 +448,24 @@ export async function cmdRemove(args: string[], deps: AccountDeps): Promise<numb
   }
   const classified = configAndType(deps, name);
   if ("error" in classified) return wantsJson ? fail(classified.error) : usage(`Error: ${classified.error}`);
-  const id = classified.type === "codex" && requestedId === "main" ? MAIN_ID : requestedId;
-  if (classified.type === "codex" && id === MAIN_ID) return wantsJson
+  if (classified.type === "codex" && (requestedId === "main" || requestedId === MAIN_ID)) return wantsJson
     ? fail("the main Codex App login cannot be removed")
     : usage("Error: the main Codex App login cannot be removed");
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return fail("Proxy not reachable. Start it with 'ocx start' or 'ocx ensure'.");
+  let id = requestedId;
+  if (classified.type === "codex") {
+    const target = await resolveCodexAccountTarget(deps, baseUrl, requestedId);
+    if ("networkDown" in target) {
+      const reason = target.transportError ? ` reason: ${target.transportError}` : "";
+      return fail(`Proxy not reachable. Start it with 'ocx start' or 'ocx ensure'.${reason}`);
+    }
+    if ("error" in target) {
+      const message = target.kind === "not_found" ? `account or key "${requestedId}" was not found` : target.error;
+      return wantsJson ? fail(message) : usage(`Error: ${message}`);
+    }
+    id = target.id;
+  }
   const before = await fetchRows(deps, baseUrl, name, classified.type);
   if (before.networkDown) return fail("Proxy not reachable. Start it with 'ocx start' or 'ocx ensure'.");
   if (before.errorJson) return fail(errorText(before.errorJson, `failed to verify ${name} before removal`));
@@ -633,9 +646,12 @@ export async function cmdClearCooldown(args: string[], deps: AccountDeps): Promi
   if (classified.type !== "codex") {
     return usage(`Error: ${name} is not a Codex account pool; cooldown clearing applies to Codex accounts only`);
   }
-  const id = requestedId === "main" ? MAIN_ID : requestedId;
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+  const target = await resolveCodexAccountTarget(deps, baseUrl, requestedId);
+  if ("networkDown" in target) return proxyUnreachable(target.transportError);
+  if ("error" in target) return reportCodexAccountTargetError(target);
+  const id = target.id;
   const response = await apiJson(deps, baseUrl, "POST", "/api/codex-auth/accounts/clear-cooldown", { id });
   if (response.status === 0) return proxyUnreachable(response.transportError);
   if (response.status !== 200) return apiError(response.json, `failed to clear cooldown for ${requestedId}`, response.status);
@@ -693,8 +709,6 @@ export async function cmdPriority(args: string[], deps: AccountDeps): Promise<nu
   if (classified.type !== "codex") {
     return usage("Error: selection order only applies to the openai Codex account pool");
   }
-  const id = requestedId === "main" ? MAIN_ID : requestedId;
-
   // Validate before touching the network so a typo never reaches the proxy.
   let priority: number | null | undefined;
   if (requestedPriority !== undefined) {
@@ -706,6 +720,13 @@ export async function cmdPriority(args: string[], deps: AccountDeps): Promise<nu
 
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+  const target = await resolveCodexAccountTarget(deps, baseUrl, requestedId);
+  if ("networkDown" in target) return proxyUnreachable(target.transportError);
+  if ("error" in target) {
+    if (target.kind === "not_found" && priority === undefined) return usage(`Error: no ${name} account ${requestedId}`);
+    return reportCodexAccountTargetError(target);
+  }
+  const id = target.id;
 
   // No value means "show" — a read must not rewrite what it is reporting.
   if (priority === undefined) {
@@ -770,10 +791,12 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
   if (classified.type !== "codex") {
     return usage(`Error: ${verb} applies to the openai Codex account pool`);
   }
-  const id = requestedId === "main" ? MAIN_ID : requestedId;
-
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+  const target = await resolveCodexAccountTarget(deps, baseUrl, requestedId);
+  if ("networkDown" in target) return proxyUnreachable(target.transportError);
+  if ("error" in target) return reportCodexAccountTargetError(target);
+  const id = target.id;
 
   const response = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/accounts/pause", { id, paused });
   // Transport sentinel first: status 0 means the proxy never answered, and comparing it to
@@ -996,12 +1019,21 @@ export async function cmdAlias(args: string[], deps: AccountDeps): Promise<numbe
   if (!name || !requestedId || requestedAlias === undefined || args.length) return usage();
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
-  const id = classified.type === "codex" && requestedId === "main" ? MAIN_ID : requestedId;
-  if (id === MAIN_ID) return usage("Error: the main Codex App login cannot be renamed");
+  if (classified.type === "codex" && (requestedId === "main" || requestedId === MAIN_ID)) {
+    return usage("Error: the main Codex App login cannot be renamed");
+  }
   const alias = requestedAlias === "-" ? "" : requestedAlias.trim();
   if (alias.length > 80 || /[\x00-\x1f\x7f]/.test(alias)) return usage("Error: alias must be at most 80 printable characters");
+  if (classified.type === "codex" && isReservedCodexAccountWord(alias)) return usage(`Error: "${alias}" is reserved for \`ocx account use\` and cannot be an alias`);
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+  let id = requestedId;
+  if (classified.type === "codex") {
+    const target = await resolveCodexAccountTarget(deps, baseUrl, requestedId);
+    if ("networkDown" in target) return proxyUnreachable(target.transportError);
+    if ("error" in target) return reportCodexAccountTargetError(target);
+    id = target.id;
+  }
   const path = classified.type === "codex"
     ? "/api/codex-auth/accounts/alias"
     : classified.type === "oauth"

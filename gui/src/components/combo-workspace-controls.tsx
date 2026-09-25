@@ -160,9 +160,28 @@ export function TargetEditor({
   const provs = enabledProviders(providers);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
+  const failOpenIndex = strategy === "jev"
+    ? targets.findIndex((target) => {
+        const provider = providers.find(candidate => candidate.name === target.provider.trim());
+        return !!target.provider.trim()
+          && !!target.model.trim()
+          && provider !== undefined
+          && provider.disabled !== true
+          && provider.adapter !== "jev-decision"
+          && providerQuotaStates[target.provider.trim()] !== "exhausted";
+      })
+    : -1;
 
   const update = (index: number, patch: Partial<ComboTarget>) => {
     onChange(targets.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+
+  const replaceModel = (index: number, patch: Pick<ComboTarget, "provider" | "model">) => {
+    onChange(targets.map((row, i) => {
+      if (i !== index) return row;
+      const { reasoningEfforts: _reasoningEfforts, ...rest } = row;
+      return { ...rest, ...patch };
+    }));
   };
 
   const reorder = (from: number, to: number) => {
@@ -188,12 +207,23 @@ export function TargetEditor({
         const dragging = dragIndex === index;
         const dropTarget = overIndex === index && dragIndex !== null && dragIndex !== index;
         const quotaState = providerQuotaStates[row.provider.trim()] ?? "unknown";
+        const advertisedReasoningEfforts = models.find(
+          model => model.provider === row.provider && model.id === row.model,
+        )?.reasoningEfforts;
+        const selectableReasoningEfforts = advertisedReasoningEfforts === undefined
+          ? undefined
+          : COMBO_EFFORTS.filter(effort => advertisedReasoningEfforts.includes(effort));
+        const selectedReasoningEfforts = selectableReasoningEfforts === undefined
+          ? []
+          : row.reasoningEfforts === undefined
+            ? selectableReasoningEfforts
+            : row.reasoningEfforts.filter(effort => selectableReasoningEfforts.includes(effort));
         return (
+          <div key={row.clientKey ?? `${row.provider}:${row.model}`} className="cwi-target-entry">
           <div
-            key={row.clientKey ?? `${row.provider}:${row.model}`}
             className={[
               "cwi-target-row",
-              strategy === "failover" ? "cwi-target-row--failover" : "",
+              strategy === "failover" || strategy === "jev" ? "cwi-target-row--failover" : "",
               dragging ? "cwi-target-row--dragging" : "",
               dropTarget ? "cwi-target-row--drop" : "",
             ].filter(Boolean).join(" ")}
@@ -255,7 +285,7 @@ export function TargetEditor({
               onChange={(e) => {
                 const provider = e.target.value;
                 const first = modelsForProvider(models, provider, providers)[0] ?? "";
-                update(index, { provider, model: first });
+                replaceModel(index, { provider, model: first });
               }}
             >
               <option value="">{t("cws.target.pickProvider")}</option>
@@ -270,7 +300,7 @@ export function TargetEditor({
               value={row.model}
               disabled={modelSelectDisabled}
               aria-label={t("cws.target.model")}
-              onChange={(e) => update(index, { model: e.target.value })}
+              onChange={(e) => replaceModel(index, { provider: row.provider, model: e.target.value })}
             >
               <option value="">
                 {modelSelectDisabled
@@ -315,6 +345,44 @@ export function TargetEditor({
                 <IconTrash width={14} height={14} />
               </button>
             </div>
+          </div>
+          {strategy === "jev" && (
+            <div className="cwi-jev-target-meta">
+              {index === failOpenIndex && <span className="chip">{t("cws.jev.failOpen")}</span>}
+              {selectableReasoningEfforts === undefined
+                ? <span className="muted">{t("cws.jev.effortsUnknown")}</span>
+                : selectableReasoningEfforts.length === 0
+                  ? <span className="muted">{t("cws.jev.effortsNone")}</span>
+                  : (
+                    <fieldset className="cwi-jev-efforts">
+                      <legend>{t("cws.jev.allowedEfforts")}</legend>
+                      {selectableReasoningEfforts.map((effort) => {
+                        const checked = selectedReasoningEfforts.includes(effort);
+                        return (
+                          <label key={effort} className="cwi-jev-effort">
+                            <input
+                              type="checkbox"
+                              data-jev-effort
+                              value={effort}
+                              checked={checked}
+                              disabled={checked && selectedReasoningEfforts.length === 1}
+                              onChange={(event) => {
+                                const nextSet = new Set(selectedReasoningEfforts);
+                                if (event.target.checked) nextSet.add(effort);
+                                else nextSet.delete(effort);
+                                update(index, {
+                                  reasoningEfforts: selectableReasoningEfforts.filter(candidate => nextSet.has(candidate)),
+                                });
+                              }}
+                            />
+                            <span>{effort}</span>
+                          </label>
+                        );
+                      })}
+                    </fieldset>
+                  )}
+            </div>
+          )}
           </div>
         );
       })}

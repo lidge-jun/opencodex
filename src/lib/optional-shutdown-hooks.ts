@@ -22,12 +22,22 @@
 type ShutdownHook = () => void;
 
 const hooks = new Map<string, ShutdownHook>();
+let hooksRan = false;
 
 /**
  * Register (or replace) the teardown for one optional subsystem.
  *
  * Keyed so repeated activation of the same subsystem cannot accumulate duplicate hooks.
  * Returns a detach function so an owner-scoped lease can release its registration.
+ *
+ * Registration after a sweep is NOT retro-applied: the hook waits for the next
+ * `runOptionalShutdownHooks`, which a draining process never reaches. Callers whose work
+ * must not outlive the sweep should gate on `didRunOptionalShutdownHooks`.
+ *
+ * The `hooksRan` latch is process-lifetime: every production caller runs the sweep inside
+ * `drainAndShutdown`, whose callers then exit or hand off to a newly spawned process —
+ * there is no in-process restart after a sweep. `resetOptionalShutdownHooksForTests`
+ * models that fresh process; it is the only way a post-sweep subsystem may start again.
  */
 export function registerOptionalShutdownHook(key: string, hook: ShutdownHook): () => void {
   hooks.set(key, hook);
@@ -37,8 +47,14 @@ export function registerOptionalShutdownHook(key: string, hook: ShutdownHook): (
   };
 }
 
+/** Whether `runOptionalShutdownHooks` has run at least once since the last test reset. */
+export function didRunOptionalShutdownHooks(): boolean {
+  return hooksRan;
+}
+
 /** Run every registered teardown. Never throws. */
 export function runOptionalShutdownHooks(): void {
+  hooksRan = true;
   for (const [key, hook] of [...hooks]) {
     try {
       hook();
@@ -54,4 +70,5 @@ export function runOptionalShutdownHooks(): void {
 /** Test-only reset so an isolated lifecycle test does not inherit registrations. */
 export function resetOptionalShutdownHooksForTests(): void {
   hooks.clear();
+  hooksRan = false;
 }

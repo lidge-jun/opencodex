@@ -151,15 +151,17 @@ follows is: an own `input` with a string value streams progressively, because co
 it precedence over everything else in the object whatever its position; an `input` with a
 non-string value, a text that is not an object, and an object `JSON.parse` can no longer accept
 all publish their own bytes, because that is what completion returns for them; every other
-object HOLDS until it parses, because a key that has not arrived yet can still change the
-answer. Fallback fields fall out of that last rule rather than being recognized separately:
-they only unwrap as the single string field, so no prefix decides them. Classification is
+object HOLDS until it closes, because a key that has not arrived yet can still change the
+answer. Fallback fields decide at that close rather than from a parse: they only unwrap as the
+single string field, so the scan keeps a last-wins table of the members it already walked and
+consults it once — one string fallback field releases its value as `input`, anything else
+streams the raw text byte-exact through whatever trailing whitespace follows. Classification is
 bounded to `MAX_FREEFORM_WRAPPER_SCAN_CHARS`, which keeps the work per delta from growing with
 the arguments. Past the bound nothing is previewed at all: the authoritative parse still
-unwraps the wrapper at completion, so the bound costs preview and never agreement. The parse
-that releases a held object therefore runs only where the scan SAW the object close, which is
-what keeps a buffer whose deltas happen to end on a brace from being re-read on every one of
-them.
+unwraps the wrapper at completion, so the bound costs preview and never agreement. Because the
+close resolves from the member table instead of `JSON.parse`, fragmented trailing whitespace
+and deltas that happen to end on a brace can never reparse a growing provider-controlled
+buffer.
 
 What that policy costs is worth stating plainly, because it is a real narrowing. A body that IS
 a parseable JSON object but not a wrapper — `{"code":1}` or `{"code":"a","script":"b"}` — now
@@ -251,7 +253,8 @@ pick after the pin would leave the first attempt on the cooled key.
 
 Native Chat Completions is a separate entry path: `src/server/chat-completions.ts` routes
 eligible `openai-chat` requests to `src/server/chat-native.ts` and never through Responses
-core, so that file repeats the same call before it binds the adapter. Native compact
+core, so that file repeats the same call before it binds the adapter; the managed native
+Messages lane (`src/server/messages-native.ts`) does the same. Native compact
 (`src/server/responses/compact.ts`) and the keyed Images relay (`src/server/images.ts`)
 do the same for the same reason. Request paths assign the Transport variant, not the bare
 `selectProactiveApiKey` snapshot: the snapshot is the persisted row, so it carries none of the
@@ -426,10 +429,10 @@ is composed from the following owners in `src/server/responses/`; none is a gene
 | `sidecar-execution.ts` | Image/video versus web-search execution and their shared rotation hook. |
 | `completion-policy.ts`, `run-turn-execution.ts` | Empty-completion eligibility and adapter-owned event turns. |
 | `adapter-dispatch.ts` | Translated initial dispatch, bounded recovery and the shared continuation retry counter. |
-| `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging. |
+| `adapter-continuation.ts`, `adapter-delivery.ts` | Continuation event sources and final streaming/buffered bridging; a streamed turn with a `clientEncoder` option is handed to `src/server/inference/client-encoder-delivery.ts` instead of the bridge. |
 
 Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts`,
-`core-combo-failure.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`,
+`core-combo-failure.ts`, `core-combo-native.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`,
 `core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
 and small composition contracts. Existing public helper names are re-exported by `core.ts`.
 Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf.
@@ -458,12 +461,128 @@ send-holder/permit behavior. Cross-owner source assertions read the actual imple
 `tests/helpers/responses-core-source.ts`; focused passthrough and subagent assertions read their
 specific delivery/preparation owner. Existing runtime Lab-boundary tests still start at `core.ts`.
 
+### Shared inference primitives
+
+`src/server/inference/` holds the execution pieces the Responses pipeline and the native lanes
+share, so a native lane reuses them instead of copying them. The directory is Lab-free and is
+reachable from `core.ts`.
+
+| Module | Contract |
+| --- | --- |
+| `context.ts` | `createInferenceSendBudget(req, logCtx)` is the one construction of an ingress-owned send holder: the default guarded policy with this request's spend tracker as observer. `handleResponses` calls it only when no holder was inherited, because attaching the tracker parks it on `logCtx`. |
+| `final-log.ts` | `createFinalRequestLog(logIds, logCtx)` owns one request's final row: the first `finish(status, meta)` writes it, every later call is a no-op, and without log ids the claim settles with nothing written. The bridged Chat and Messages ingresses, native Chat and native Messages finish through it. |
+| `attempt.ts` | `beginInferenceAttempt(logCtx, { provider, model, adapter })` opens the next attempt ordinal, makes it the active attempt with its start time, appends it to the request, and returns `seal(accountLabel?)` and `finish(status, usage?)`. |
+| `client-wire.ts` | `markClientWire(response, protocol)` / `clientWireOf(response)` record, per `Response` identity, that a body is already in a client's wire. `createClientWireLog` / `attachClientWireLog` / `clientWireLogOf` carry the request-log facts of such a body (a start payload, one terminal, a cancel), buffered until the deferred log subscribes. The combo marks a native Chat child's answer and its refusal of an all-unrepresentable combo as `chat` (below). |
+| `client-wire-log.ts` | `recordClientWireRequestLog` is the deferred request log of a client-wire response: `responseWithDeferredRequestLog` calls it instead of tapping the body, and it applies the Responses SSE tap's rules to the reported facts (payload inspection until the terminal, `terminal_sse` phase, `httpStatusForRequestLogTerminal`, 499 for a cancel before any terminal, one row). |
+| `client-encoder-delivery.ts` | Direct Chat/Messages delivery (PF-09), described below. |
+
+### Direct client encoders
+
+Behind `protocols.rollout.directEncoders` (default off). The Chat and Messages ingresses set
+`HandleResponsesOptions.clientEncoder` (`{ protocol, stream, model, inputTokenFloor? }`) when
+`directEncodersApply` holds for the route they settled: the switch is on and the route is one
+concrete target whose adapter is not `openai-responses`. `clientEncoderForDelivery` re-checks at
+delivery, because core can still change the route: combo children (`comboAttempt`), policy or
+combo route decisions, routed compaction and Responses-wire adapters keep the bridged body.
+Passthrough, run-turn adapters and sidecar turns never reach this branch.
+
+In the streaming adapter branch `deliverClientEncodedResponse` encodes the guarded event stream
+with `encodeChatCompletionSse` or `encodeAnthropicMessageSse` (`src/protocols/encoders/`)
+instead of `bridgeToResponsesSSE`, and preserves the bridge's effects:
+
+- Every event is also retained as a shallow copy on the request's translator budget
+  (`retainTranslatedEvent`). At any terminal the copies are folded with `buildResponseJSON`
+  (`recordBufferedDelivery: false`, declared-tool enforcement off as on the bridge for these
+  wires), which runs the replay-cache effects and releases the copies; overflow and client
+  cancel release them without folding.
+- A `done` terminal hands the folded response to the same `onCompletedResponse` the bridge uses
+  (`commitReasoningReplayServingRoute`, the Kiro final-answer memo, `rememberResponseState`
+  unless compaction, `notifyResponseComplete`), after the thought-signature durability barrier
+  where the bridge awaited it. `bindKeyUsageFromBridge` gets the adapter usage under the bridge's
+  `onUsage` rules.
+- The body goes through `trackStreamLifetime` with the same cleanup and admission lease; the
+  terminal and a client cancel call `cancelResponseCompletion` and abort the upstream once.
+- Client frames are counted with `noteRelayedEvent`; wire-silence keepalives (the Chat `: opencodex heartbeat` comment, the Messages `ping`) are delivered as the converters deliver them but, like the bridge heartbeat, not counted.
+- The request log learns the bridge's `response.created` snapshot and a terminal payload with the
+  bridge's usage presence rules through the client-wire log channel.
+
+A non-streaming client gets the encoded stream folded by the existing collectors
+(`collectChatCompletionResponse`, `collectAnthropicMessageResponse`), with the status mapping the
+ingresses applied. The response is marked with `markClientWire`, and the ingress returns it
+without the Responses-to-client conversion; the Chat ingress still wraps it with
+`responseWithDeferredRequestLog`, which subscribes to the log channel. The attempt's trace is
+marked with `markAttemptProtocolPath`: request path and mode stay the bridge's, the response path
+becomes `[upstream, "ir", client]`. `tests/responses/protocol-direct-encoders-chat.test.ts`,
+`tests/responses/protocol-direct-encoders-messages.test.ts` and
+`tests/server/inference-client-encoder-delivery.test.ts` cover parity and wiring.
+
+Native Chat in `src/server/chat-native.ts` is split in two. `handleNativeChatCompletions` opens
+the attempt and owns the final log row; `runNativeChatAttempt(execution, attemptHandle)` runs
+effort normalization, the send loop, key failover, 429 replay, relay and usage, and reports each
+outcome through the `finishLog` it is given. A caller that owns a different final row can
+therefore run a native attempt without the attempt writing that row itself. A standalone native
+Chat request keeps its own spend tracker rather than a send holder; a combo child is handed the
+combo's per-target budget instead (below).
+
+### Native Chat candidates in combos
+
+`protocols.rollout.nativeChatCombos` (off by default) lets a Chat combo send an eligible
+candidate on the native Chat lane. The Chat ingress supplies `HandleResponsesOptions.protocolSource`
+(`ComboProtocolSource` in `core-combo-native.ts`: the source envelope and a native dispatcher)
+only for a combo route with the switch on and no effort row; without it the combo loop runs
+exactly as before, and a bridge child never inherits it.
+
+For the candidate about to dispatch, `core-combo-native.ts` settles the concrete route the way the
+Chat ingress settles a single route (the key's model scope, the static policy for a Chat inbound,
+the wire override, the OpenCode Go transport) and applies `isNativeChatRouteEligible` to a fresh
+`envelope.freshBody()` copy whose `model` is the concrete selector. A candidate whose adapter is
+not `openai-chat` is decided without a copy. An eligible child is dispatched through
+`protocolSource.dispatchNativeChild`, which runs `runNativeChatAttempt` on the attempt the combo
+already opened (its opening stays hand-rolled: the ordinal comes from the parent context while the
+active attempt and requested effort land on the child context, which `beginInferenceAttempt`
+does not express). The child gets the combo's per-target send budget, the client's abort signal
+and the turn lease, and the combo's reasoning-effort policy mapped onto `reasoning_effort`
+through `concreteComboRequestBody`, so the two lanes cannot disagree on effort. It records its
+attempt path as native (`[chat, chat]`) and its answer is marked `chat`.
+
+Send accounting: the combo's hop reservation already booked the target's first send, so the native
+child opens no spend tracker; it reports each physical send to the target budget (the first
+settles the hop's booking, each later one is charged and booked by the request's one tracker), its
+transient ladder and 429 replays are capped by the shared base allowance at the same cap its own
+ladder uses, and a refusal answers 429 `request_send_budget_exhausted` in the Chat shape.
+
+A marked child skips `preflightComboStreamResponse`: native Chat reports a pre-stream failure by
+HTTP status before any byte, and a non-OK answer goes through `consumeComboFailure` unchanged. A
+non-OK answer produced after the child observed output (a folded non-streaming answer that failed
+mid-stream) is marked non-replayable, so the combo stops rather than re-running a turn that
+already ran upstream. The child's final-log callback never writes the parent's row: a terminal,
+cancellation or folded success publishes through the combo's child callback gate, which reaches
+the Chat ingress's final-row owner only after the combo commits, and usage learned after the
+merge is carried to the parent first. The Chat ingress returns a `chat`-marked success as it is;
+only a `chat`-marked refusal goes through `responseWithDeferredRequestLog`, whose SSE inspector
+reads Responses events and would misread a Chat stream.
+
+Under `unrepresentable: "reject"`, each candidate's path (native, or the bridge to its settled
+adapter's wire) is judged with `checkRepresentable`; a failing candidate is excluded from the pick
+predicate and `feature-unrepresentable` is appended to the request's trace entry mark. When every
+enabled candidate is skipped, the combo answers the ingress's refusal (400 `unsupported_feature`
+in the Chat shape, blocked trace) with no send. `n > 1` is never emulated with several
+inferences. Policy routes resolve one candidate in `routeModel` and never reach this loop, so they
+are not migrated. `tests/responses/chat-native-combo.test.ts` pins the source body, failover
+within the shared budget, no resend after output, the switch-off path and both reject outcomes.
+Managed native Messages ([Protocol Paths](../data-planes/protocol-paths.md#managed-native-messages))
+reuses `beginInferenceAttempt` and `createFinalRequestLog` with its own 401/429 key-rotation loop.
+
 ## Adapter-to-Responses bridge
 
 `src/bridge.ts` is a re-export facade; the implementation lives in `src/bridge/`.
 `src/bridge/sse.ts` (`bridgeToResponsesSSE`) turns adapter events into the Responses SSE stream,
 and `src/bridge/response-json.ts` (`buildResponseJSON`) builds the non-streaming Responses body
-from the same events. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
+from the same events. `buildResponseJSON` records a buffered delivery on the attempt unless the
+caller passes `recordBufferedDelivery: false`, which the direct client encoders do because they
+count their own frames. `src/protocols/encoders/adapter-events.ts` ports the bridge's item state
+machine for those encoders, so a change to item boundaries, tool naming or terminal handling in
+`sse.ts` has to be made there too; the parity tests fail when the two diverge. `src/bridge/errors.ts` (`formatErrorResponse`) formats error responses and
 keeps only allowlisted transport verdict codes. Adapter error events take a different path:
 `src/bridge/internal.ts` carries an event's own `code` into the SSE and JSON failure, after
 mapping cyber-policy codes to HTTP 400. The same file holds the shared usage shaping; `input_tokens_details` and

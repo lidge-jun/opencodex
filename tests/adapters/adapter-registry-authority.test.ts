@@ -24,6 +24,7 @@ const EXPECTED_ADAPTER_NAMES = {
   devin: "devin",
   "mimo-free": "mimo-free",
   qoder: "qoder",
+  "claude-cli": "claude-cli",
 } as const;
 
 function provider(adapter: string): OcxProviderConfig {

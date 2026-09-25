@@ -73,6 +73,7 @@ import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaRepo
 import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
 import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
 import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
+import { resolveJevDecision } from "../../combos/jev";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
 import { providerRequestPacingStatus } from "../../providers/request-pacing";
 import { CODEX_FORWARD_BASE_URL, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
@@ -1609,6 +1610,35 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ok: true,
         latencyMs: 0,
         message: "Passthrough provider is configured (forwards your Codex login; no upstream /models).",
+      });
+    }
+    if (name === "jev" && providerMatchesRegistryTransport(name, prov)) {
+      const probe = { targetKey: "jev/probe", effort: null } as const;
+      const decision = await resolveJevDecision({
+        body: { input: "Verify the configured TypeSafe JEV decision service." },
+        candidates: [{
+          key: probe.targetKey,
+          provider: "jev",
+          model: "jev-latest",
+          reasoningEfforts: [],
+        }],
+        fallback: probe,
+        config,
+        signal: req.signal,
+      });
+      if (decision.gate === "apply") {
+        return jsonResponse({
+          ok: true,
+          latencyMs: decision.latencyMs,
+          message: "Connected. TypeSafe JEV answered a decision probe.",
+        });
+      }
+      return jsonResponse({
+        ok: false,
+        latencyMs: decision.latencyMs,
+        error: decision.gate === "missing_key"
+          ? "TypeSafe JEV API key is not configured"
+          : `TypeSafe JEV decision probe failed (${decision.gate})`,
       });
     }
     if (prov.liveModels === false) {

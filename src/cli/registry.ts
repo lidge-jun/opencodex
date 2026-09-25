@@ -131,6 +131,18 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "link",
+    usage: "ocx link <port|issue|status|revoke>",
+    summary: "Allocate and manage a loopback remote home link.",
+    details: [
+      "Port: ocx link port [--json]",
+      "Issue: ocx link issue --alias <alias> --tunnel-port <port> [--json]",
+      "Status: ocx link status [--json]",
+      "Revoke: ocx link revoke --link-id <id> [--json]",
+      "Issue, status, and revoke use the running proxy's loopback management API and admin token.",
+    ],
+  },
+  {
     name: "remote-workspace",
     usage: "ocx remote-workspace <pair|agent|status>",
     summary: "Pair this OCX-only computer with a hub and run its remote workspace executor.",
@@ -392,6 +404,17 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   { name: "api-key", usage: "ocx api-key <list|create|rotate|remove> ...", summary: "Alias of ocx access key." },
   {
+    name: "api",
+    usage: "ocx api <protocols|explain|policy> ...",
+    summary: "Inspect protocol paths, preview a request path, and read or change the protocol policy.",
+    details: [
+      "protocols [--provider <name>]   Contract version, API surfaces, protocol settings and feature vocabulary.",
+      "explain --model <id> --inbound <responses|chat|messages> [--feature <key>]...   Preview the request path; sends nothing upstream.",
+      "policy                          Read the protocol policy; with --messages, --unrepresentable or --rollout <switch>=<on|off> it changes config.",
+      "Every rollout switch defaults off. `ocx api policy` writes only when a setting flag is given.",
+    ],
+  },
+  {
     name: "export",
     usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline> [--json] [--out <path>] [--force]",
     summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline) wired to the running proxy.",
@@ -592,6 +615,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     hidden: true,
     usage: "ocx __refresh-version [preview|latest]",
     summary: "Hidden detached helper: refresh the cached latest version.",
+  },
+  {
+    name: "__update-badge",
+    hidden: true,
+    usage: "ocx __update-badge",
+    summary: "Hidden internal: print cached package update badge JSON.",
   },
   {
     name: "__tray-start",

@@ -108,9 +108,30 @@ import {
   STEPFUN_MODEL_INPUT_MODALITIES,
   STEPFUN_NO_VISION_MODELS,
   STEPFUN_REASONING_EFFORTS,
+  ANTHROPIC_MODELS,
+  ANTHROPIC_MODEL_CONTEXT_WINDOWS,
+  ANTHROPIC_MODEL_INPUT_MODALITIES,
+  ANTHROPIC_MODEL_REASONING_EFFORTS,
+  ANTHROPIC_REASONING_EFFORTS,
+  ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
 } from "./model-seeds";
 
 export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
+  {
+    // Verified 2026-09-21: docs.typesafe.ai/introduction/quickstart and /api document the fixed
+    // endpoint, Bearer auth, jev-latest, and TYPESAFE_API_KEY; typesafe.ai/legal/mca permits API integration.
+    id: "jev",
+    label: "TypeSafe JEV",
+    baseUrl: "https://api.typesafe.ai/v1/systemone",
+    adapter: "jev-decision",
+    authKind: "key",
+    credentialOnly: true,
+    dashboardUrl: "https://console.typesafe.ai",
+    liveModels: false,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    note: "TypeSafe JEV decision service for the optional JEV Combo strategy. This credential-only preset does not publish a directly routable model.",
+  },
   {
     id: "baseten",
     label: "Baseten Model APIs",
@@ -1431,5 +1452,55 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     noVisionModels: STEPFUN_NO_VISION_MODELS,
     reasoningEfforts: STEPFUN_REASONING_EFFORTS,
     note: "StepFun (阶跃星辰) official OpenAI-compatible API.",
+  },
+  {
+    // Official Claude Code CLI as the transport for a Claude subscription (§三十一). The CLI owns
+    // the account: this row stores no token and the adapter reads and injects none, so the request
+    // path is Anthropic's own harness rather than a replayed Claude Code identity against the
+    // Messages API. `baseUrl` is the destination the subscription's traffic reaches; OpenCodex
+    // never sends it. Fails closed if the row's base URL is overridden.
+    // v1 runs tools-disabled (`--tools ""`, no `--mcp-config`) so the client keeps tool ownership:
+    // text/reasoning only until the shared capture-only tool bridge lands. Requires the CLI:
+    // `npm i -g @anthropic-ai/claude-code`, plus a signed-in session (`claude` -> /login).
+    // GOVERNANCE: whether a subscription login may be driven through a proxy for a third-party
+    // agent is Anthropic's call rather than OpenCodex's — flagged for maintainer review, as with
+    // the CodeBuddy rows above.
+    id: "claude-cli",
+    label: "Claude Code CLI (subscription)",
+    adapter: "claude-cli",
+    baseUrl: "https://api.anthropic.com",
+    // `key` + `keyOptional`, deliberately not `local`. "local" (Ollama, vLLM, LM Studio) means the
+    // traffic never leaves the machine and there is no credential to classify; this row reaches
+    // api.anthropic.com, so `local` misreported it wherever auth is classified — the account
+    // surface answered "local provider ... has no credentials" (`classifyAccount`,
+    // src/cli/account-api.ts) and the dashboard filed the row as a local runtime. What IS true is
+    // keyless: the CLI reads the operator's own sign-in, so `keyOptional` is the existing flag that
+    // exempts a row from key enforcement without claiming a key exists. Key rows are also what
+    // `deriveProviderPresets` lists, so this entry needs no `dashboardPreset` flag to stay
+    // reachable from the Providers page.
+    authKind: "key",
+    keyOptional: true,
+    // There is no key console for a keyless row: the link that helps an operator is the one that
+    // documents the install and sign-in this provider requires.
+    dashboardUrl: "https://docs.claude.com/en/docs/claude-code/setup",
+    defaultModel: "claude-sonnet-5",
+    models: [...ANTHROPIC_MODELS],
+    // Static roster, exactly like the CodeBuddy rows. Without this the catalog treats the row as a
+    // live-discovery candidate and requests a model list the CLI route never serves: a real start
+    // logged `Provider model discovery for "claude-cli" failed with HTTP 404` and then fell back to
+    // these ids anyway. `liveModels: false` makes the configured roster authoritative and skips the
+    // request entirely (src/codex/catalog/provider-models.ts).
+    liveModels: false,
+    modelContextWindows: { ...ANTHROPIC_MODEL_CONTEXT_WINDOWS },
+    // Text-only for v1, not the image modality the Messages API rows publish. The CLI parses an
+    // image frame (verified against 2.1.270), but a headless turn has no verified contract that the
+    // harness hands those bytes to the model, and advertising a modality the route cannot honour
+    // makes a route selection pick this row for a picture it then answers blind. The adapter refuses
+    // direct image input for the same reason; the vision sidecar still captions images into text.
+    noVisionModels: [...ANTHROPIC_MODELS],
+    reasoningEfforts: ANTHROPIC_REASONING_EFFORTS,
+    modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
+    defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
+    note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token, reads none and injects none — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership: text/reasoning only for now. Subscription routing authorization flagged for maintainer review.",
   },
 ];

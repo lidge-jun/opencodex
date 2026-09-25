@@ -66,7 +66,7 @@ Codex Auth 페이지에서 이 picker 동작을 opt-in할 수 있습니다. 비�
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number }[]` | required | 순서가 있는 concrete route입니다. `weight`는 1–10000이며 기본값은 `1`입니다. |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | 선택 전략입니다. 대상 순서는 `failover` 우선순위이고, 가중치는 `round-robin`과 `random` 추첨 비율을 결정하며, `least-used`는 기록된 성공 횟수를 따르고, `reset-window`는 가장 가까운 할당량 재설정을 따릅니다. |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window" \| "jev"` | `"failover"` | 선택 전략입니다. 대상 순서는 `failover` 우선순위이고, 가중치는 `round-robin`과 `random` 추첨 비율을 결정하며, `least-used`는 기록된 성공 횟수를 따르고, `reset-window`는 가장 가까운 할당량 재설정을 따릅니다. `jev`는 첫 번째 적격 대상과 effort를 한 번의 제한된 결정으로 선택한 뒤 일반적인 순서 기반 fallback을 사용합니다. |
 | `stickyLimit?` | `number` | `1` | 한 round-robin 배치에서 유지되는 성공 요청 수입니다. 범위는 1–100입니다. |
 | `defaultEffort?` | `"low" \| "medium" \| "high" \| "xhigh" \| "max" \| "ultra" \| null` | unset | `defaultEffort`는 콤보 기본값이 null이 아니고, 선택한 대상의 지원 목록이 알려져 있으며 비어 있지 않을 때 생략된 `reasoning.effort`를 채웁니다. 설정값을 지원하면 그대로 사용합니다. 그렇지 않으면 설정값 이하의 가장 높은 지원 단계를 사용하고, 그런 단계가 없으면 가장 낮은 지원 단계를 사용합니다. 지원 목록이 없거나 비어 있으면 기본값을 생략합니다. |
 | `reasoningEffortMode?` | `"strict" \| "adaptive"` | `"strict"` | `"strict"`는 빈 목록을 포함한 알려진 대상 지원 목록의 교집합을 사용하고, `"adaptive"`는 빈 목록을 제외합니다. 알 수 없는 목록은 두 모드 모두 교집합을 제한하지 않습니다. 전송 시 명시적 빈 목록은 두 모드에서 effort·thinking 제어를 제거하고, 알 수 없는 목록은 adaptive에서만 제거합니다. `reasoning.summary`는 보존됩니다. 알려진 비어 있지 않은 대상의 effort 결정과 대상 선택·순서는 그대로입니다. |

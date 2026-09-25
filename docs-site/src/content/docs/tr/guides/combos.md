@@ -367,7 +367,7 @@ saklanır:
 | --- | --- | --- | --- |
 | `targets` | Evet | — | Yapılandırılmış `{ provider, model, weight? }` hedeflerinin boş olmayan sıralı dizisi. Yinelenen sağlayıcı/model çiftleri reddedilir. |
 | `targets[].weight` | Hayır | `1` | 1 ile 10.000 arasında tam sayı. `round-robin` ve `random` tarafından kullanılır; `failover`, `least-used` ve `reset-window` tarafından yok sayılır. |
-| `strategy` | Hayır | `"failover"` | İzin verilen değerler: `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`. |
+| `strategy` | Hayır | `"failover"` | İzin verilen değerler: `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`, `"jev"`. JEV yalnızca ilk uygun hedefi ve effort değerini belirler; sonraki denemeleri normal Combo fallback'i yönetir. |
 | `stickyLimit` | Hayır | `1` | Yalnızca `round-robin` için geçerlidir; seçim başına 1 ile 100 arasında başarılı istek tam sayısı. |
 | `defaultEffort` | Hayır | `null` | `low`, `medium`, `high`, `xhigh`, `max` veya `ultra`; yalnızca arayan çabayı atladığında ve hedef desteği bildirdiğinde uygulanır. |
 | `reasoningEffortMode` | Hayır | `"strict"` | `strict` veya `adaptive`; karma yetenek kesişimini ve hedefe özel normalizasyonu seçer. |

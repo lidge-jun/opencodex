@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { repoPath } from "../helpers/repo-root";
 import {
   discoverStableProxyForRestart,
   isProxyReplacement,
@@ -286,5 +288,15 @@ describe("tray proxy coordinator", () => {
       waitForReplacement: async () => { throw replacementError; },
     });
     expect(replacement).toEqual({ ok: false, phase: "replacement", error: replacementError });
+  });
+
+  test("update dot preserves base safety icon and opens dashboard", () => {
+    const source = readFileSync(repoPath("src", "tray", "windows-tray.ps1"), "utf8");
+    expect(source).toContain('if ($startup.status -eq "at-risk") {');
+    expect(source).toContain('if ($script:updateAvailable) { $warningUpdateIcon } else { $warningIcon }');
+    expect(source).toContain('if ($script:updateAvailable) { $onlineUpdateIcon } else { $onlineIcon }');
+    expect(source).toContain('if ($script:updateAvailable) { $offlineUpdateIcon } else { $offlineIcon }');
+    expect(source).toContain('$updateItem = $menu.Items.Add("Update available")');
+    expect(source).toContain('$updateItem.add_Click({ Start-OcxCommand @("gui") })');
   });
 });

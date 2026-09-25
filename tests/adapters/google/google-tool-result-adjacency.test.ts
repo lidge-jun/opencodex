@@ -56,9 +56,11 @@ describe("Google adapter tool-result adjacency repair (#2199)", () => {
       result("call_1", "bash", "done"),
     ]);
 
-    expect(contents).toHaveLength(2);
-    expect(contents.map(turn => turn.role)).toEqual(["model", "user"]);
-    expect(functionResponses(contents[1])).toEqual([
+    // The opening user turn is the #5008 head repair: a history opening on a call turn would
+    // otherwise leave the functionCall at contents[0], which Antigravity rejects.
+    expect(contents).toHaveLength(3);
+    expect(contents.map(turn => turn.role)).toEqual(["user", "model", "user"]);
+    expect(functionResponses(contents[2])).toEqual([
       { name: "bash", response: { result: "done" }, id: "call_1" },
     ]);
   });
@@ -69,15 +71,15 @@ describe("Google adapter tool-result adjacency repair (#2199)", () => {
       user("continue"),
     ]);
 
-    expect(contents.map(turn => turn.role)).toEqual(["model", "user", "user"]);
-    expect(functionResponses(contents[1])).toEqual([
+    expect(contents.map(turn => turn.role)).toEqual(["user", "model", "user", "user"]);
+    expect(functionResponses(contents[2])).toEqual([
       {
         name: "exec_command",
         response: { result: "[missing tool_result for this tool_use in history]" },
         id: "call_missing",
       },
     ]);
-    expect(contents[2].parts).toEqual([{ text: "continue" }]);
+    expect(contents[3].parts).toEqual([{ text: "continue" }]);
   });
 
   test("parallel responses are emitted in call order even when history is reversed", async () => {
@@ -87,8 +89,8 @@ describe("Google adapter tool-result adjacency repair (#2199)", () => {
       result("call_1", "first", "one"),
     ]);
 
-    expect(contents).toHaveLength(2);
-    expect(functionResponses(contents[1])).toEqual([
+    expect(contents).toHaveLength(3);
+    expect(functionResponses(contents[2])).toEqual([
       { name: "first", response: { result: "one" }, id: "call_1" },
       { name: "second", response: { result: "two" }, id: "call_2" },
     ]);
@@ -102,7 +104,7 @@ describe("Google adapter tool-result adjacency repair (#2199)", () => {
       result("call_orphan", "mystery", "orphan result"),
     ]);
 
-    const responseTurn = contents[1];
+    const responseTurn = contents[2];
     expect(functionResponses(responseTurn)).toEqual([
       { name: "bash", response: { result: "first result" }, id: "call_1" },
       {
@@ -159,10 +161,10 @@ describe("Google adapter tool-result adjacency repair (#2199)", () => {
       result("call_1", "bash", "late"),
     ]);
 
-    expect(contents.map(turn => turn.role)).toEqual(["model", "user", "user", "user"]);
-    expect(functionResponses(contents[1])[0]).toMatchObject({ id: "call_1" });
-    expect(contents[2].parts).toEqual([{ text: "barrier" }]);
-    expect(contents[3].parts).toEqual([
+    expect(contents.map(turn => turn.role)).toEqual(["user", "model", "user", "user", "user"]);
+    expect(functionResponses(contents[2])[0]).toMatchObject({ id: "call_1" });
+    expect(contents[3].parts).toEqual([{ text: "barrier" }]);
+    expect(contents[4].parts).toEqual([
       { text: "[tool_result without adjacent tool_use: bash (call_1)]\nlate" },
     ]);
   });

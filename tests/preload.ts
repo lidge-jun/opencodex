@@ -28,7 +28,7 @@
  */
 import { afterAll } from "bun:test";
 import { isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
-import { createIsolatedTestEnvironment } from "../scripts/test";
+import { createIsolatedTestEnvironment, LIVE_INSTALL_CREDENTIAL_ENV } from "../scripts/test";
 import {
   acquireTestRunLock,
   resolveBareTestRunIdentity,
@@ -47,6 +47,8 @@ const isolated = createIsolatedTestEnvironment();
 for (const [key, value] of Object.entries(isolated.env)) {
   if (value !== undefined) process.env[key] = value;
 }
+// The sandbox drops these from its env, but this process started with them, so remove them here.
+for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete process.env[name];
 
 // Arm the guard once the sandbox is in place, and BEFORE the run lock.
 //
@@ -72,6 +74,7 @@ for (const [key, value] of Object.entries(isolated.env)) {
 process.env.OCX_TEST_HOME_GUARD = "1";
 // Lets a test assert one preload per process rather than assuming Bun's scheduling.
 process.env.OCX_TEST_PRELOAD_PID = String(process.pid);
+process.env.OCX_DISABLE_UPDATE_CHECK = "1";
 
 if (!isTestHomeGuardArmed() || !protectedHomeForTests()) {
   throw new Error("test home guard failed to arm; refusing to run tests unprotected");

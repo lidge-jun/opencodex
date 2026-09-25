@@ -1,4 +1,6 @@
 import type { OcxConfig } from "../../types";
+import type { Channel } from "../../update/index";
+import type { UpdateCheckResult } from "../../update/job";
 import type { NativeProfileApiDeps } from "../../codex/native-profile-api";
 import type { CodexLogGuardProtectionDeps } from "../../codex/log-guard/protection";
 import type { CodexLogGuardMaintenanceDeps } from "../../codex/log-guard/maintenance";
@@ -23,6 +25,11 @@ import type { RequestMetricsSnapshotter } from "../request-metrics";
 
 import type { RemoteWorkspaceHub } from "../../remote-control/workspace-hub";
 import type { RemoteWorkspaceSessionService } from "../../remote-control/workspace-sessions";
+import type { LinkSupervisor } from "../../link/supervisor";
+import type { LinkListenerLifecycle } from "../index/link-listener";
+import type { SshRunner } from "../../link/ssh-runner";
+import type { LinkStore } from "../../link/store";
+import type { IssuedApiKey } from "./oauth-account-routes";
 
 export type RemoteWorkspaceHubApi = Pick<RemoteWorkspaceHub,
   "identity" | "createPairingGrant" | "assertPairingSourceAllowed" | "pairDevice"
@@ -31,9 +38,15 @@ export type RemoteWorkspaceHubApi = Pick<RemoteWorkspaceHub,
 export type RemoteWorkspaceSessionsApi = Pick<RemoteWorkspaceSessionService,
   "availability" | "list" | "create" | "prompt" | "submitPrompt" | "stop" | "shutdown">;
 
+export interface ManagementRequestIngress {
+  trustedLoopback: boolean;
+  guiSessionIssuance?: import("../gui-session").GuiSessionIssuance | null;
+}
+
 export interface ManagementApiDeps {
   /** Read-only process-local aggregate metrics; absent keeps the scrape route unavailable. */
   requestMetrics?: RequestMetricsSnapshotter;
+  checkPackageUpdate?: (channel: Channel) => Promise<UpdateCheckResult>;
   remoteWorkspaceHub?: RemoteWorkspaceHubApi;
   remoteWorkspaceSessions?: RemoteWorkspaceSessionsApi;
   /** The listener retains and awaits teardown only after this optional subsystem activates. */
@@ -127,6 +140,17 @@ export interface ManagementApiDeps {
    * `saveConfigPreservingClaudeCode` above exists to prevent.
    */
   codexPromptPaths?: CodexPromptPaths;
+  /** Link seams are getters so the optional listener and supervisor are singletons. */
+  linkSupervisor?: () => LinkSupervisor;
+  linkListener?: () => Pick<LinkListenerLifecycle<unknown>, "ensureStarted" | "status" | "close" | "onAuthenticatedCatalog">;
+  readLinkStore?: () => LinkStore;
+  writeLinkStore?: (store: LinkStore) => void;
+  linkKnownHostsPath?: () => string;
+  sshRunner?: SshRunner;
+  issueApiKey?: (config: OcxConfig, name: string) => IssuedApiKey;
+  revokeApiKey?: (config: OcxConfig, id: string) => boolean;
+  loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
+  now?: () => number;
 }
 
 
@@ -148,6 +172,10 @@ export interface ManagementContext {
   principal?: ManagementPrincipal;
   /** Narrow current-session revocation seam; contains neither the token nor session map. */
   sessionControl?: ManagementSessionControl;
+  /** Whether the request arrived through a trusted loopback ingress. */
+  trustedLoopbackIngress: boolean;
+  /** The issuance mode of the session, when the principal is a GUI session. */
+  guiSessionIssuance: import("../gui-session").GuiSessionIssuance | null;
   convergeCodexCatalog: () => Promise<CatalogDisposition>;
   syncClaudeAgentDefsBestEffort: () => Promise<void>;
 }

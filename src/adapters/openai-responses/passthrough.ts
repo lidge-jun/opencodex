@@ -324,9 +324,11 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = normalizeResponsesToolResultAdjacency(outBody);
       }
       if (forward) {
-        outBody = stripUnsupportedForwardParams(outBody);
-        // Only the canonical ChatGPT backend rejects the retired field; a self-hosted or
-        // third-party forward gateway may still accept it, so this must not be widened.
+        // `metadata` is stripped on every forward route for compatibility with the canonical backend.
+        // `max_output_tokens` is stripped only when this provider is the canonical backend.
+        outBody = stripUnsupportedForwardParams(outBody, isCanonicalOpenAiForwardProvider(provider));
+        // Only the canonical ChatGPT backend rejects the canonical-only fields below; a self-hosted
+        // or third-party forward gateway may accept them, so this guard must not be widened.
         if (isCanonicalOpenAiForwardProvider(provider)) {
           outBody = stripCanonicalForwardSamplingParams(outBody);
           outBody = stripDeprecatedPromptCacheRetention(outBody, parsed.modelId);
@@ -472,6 +474,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                   dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
                   stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
                   dropForeignItemId: parsed._dropForeignReasoningItemIds === true,
+                  requirePlaintextReasoning: requiresPlaintextReasoningReplay(provider),
                 },
               ),
               provider,

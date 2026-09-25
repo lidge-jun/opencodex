@@ -163,8 +163,8 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 | `GET, POST /api/windows-tray` | 讀取 Windows tray 狀態或安裝／啟動／停止／解除安裝它 | 400 不支援平台／動作；500 操作失敗 |
 | `GET /api/diagnostics/project-config` | 讀取快取的專案設定警告 | — |
 | `POST /api/sync` | 將目前模型目錄同步到 Codex | 500 同步失敗 |
-| `GET /api/update/check` | 檢查 `latest` 或 `preview` 更新頻道 | 400 無效 tag |
-| `POST /api/update/run` | 啟動更新工作，可選擇接著重啟 | 400 無效 body；工作專屬衝突／錯誤狀態 |
+| `GET /api/update/check` | 非同步檢查 `latest` 或 `preview` 套件頻道，成功時更新快取 | 400 無效 tag |
+| `POST /api/update/run` | 非同步檢查新版套件，再啟動更新工作，並可選擇重新啟動 | 400 無效 body；工作專屬衝突／錯誤狀態 |
 | `GET /api/update/status` | 依 id 輪詢更新工作 | 404 未知工作 |
 | `GET, PUT /api/sidecar-settings` | 讀取或更新網頁搜尋與視覺 sidecar 模型／backend 設定 | 400 無效結構、backend 或限制 |
 | `GET, PUT /api/shadow-call-settings` | 讀取或更新 shadow-call 攔截設定 | 400 無效結構或值 |
@@ -274,7 +274,12 @@ OpenAI 也遵循此規則：開關不會選擇特殊的 922k 模式。生效中�
 | --- | --- | --- |
 | `GET /api/github/star` | 透過使用者的 `gh` session 讀取 repository 加星狀態 | 狀態專屬的固定結果代碼 |
 | `POST /api/github/star` | 僅從已認證的人類動作為 repository 加星 | 403 `agent_consent_required`，針對無儀表板 session 證據的 agent 驅動呼叫者 |
-| `GET /api/update/badge` | 讀取便宜的側邊欄更新徽章狀態 | — |
+| `GET /api/update/badge` | 直接讀取快取的套件更新徽章，不查詢登錄檔；快取缺失、頻道不符或已達 40 小時時回傳 `unknown: true`。`surface=desktop&session=<id>` 僅讀取該桌面應用程式工作階段。 | 400 無效 surface；桌面工作階段缺失或過期時回傳 `unknown: true` |
+| `POST /api/update/desktop-snapshot` | 桌面 shell 透過已繫結的代理用戶端發布 Tauri updater 的顯示狀態 | 帶有 `Origin` 標頭或並非原始 `admin-token` principal 時回傳 403；欄位無效時回傳 400；超過 1 KiB 時回傳 413 |
+
+桌面 snapshot 是暫時的顯示狀態，不是安裝要求。代理在記憶體中最多保留 32 個工作階段，並在最後一次 heartbeat 後 180 秒使其過期。未指定 surface=desktop 的一般瀏覽器仍讀取套件更新徽章。
+
+對符合條件的套件安裝，代理啟動後若快取缺失或超過 20 小時便檢查更新，之後每小時檢查快取是否過期。`OCX_DISABLE_UPDATE_CHECK=1` 僅停用自動檢查；明確的檢查及執行要求仍可使用。
 
 :::caution
 管理認證證明對代理的存取權；它不證明花費使用者身分的同意。agent 絕不能繞過 `agent_consent_required`。使用者必須選擇是否為 repository 加星。

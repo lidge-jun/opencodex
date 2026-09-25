@@ -443,7 +443,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 97 built-in presets: 80 key-based, 13 OAuth, three local, and one default
+opencodex ships 99 built-in presets: 82 key-based, 13 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -561,6 +561,11 @@ so Pi sends its per-session identity to the proxy. Existing manually managed Pi
 configurations can set this option on their `opencodex` provider as well.
 Pi can omit session affinity when `cacheRetention` is `none`; enable cache retention
 when a stable upstream session is required.
+
+**MiMo tool-call echoes.** On OpenCode Go and other Chat Completions routes, a bare
+`<tool_call>` block is hidden when it duplicates one structured call to the same tool
+with the same effective input. If the input differs or several calls could explain
+the block, the markup remains visible. Tool execution still uses the structured call.
 
 **OpenCode Zen** (`opencode-zen`) and the keyless **OpenCode Free** preset share
 `https://opencode.ai/zen/v1`. Free models on that gateway often hit a short-window burst
@@ -911,6 +916,63 @@ OpenCodex provides official adapter support for Qoder through the `qoder` (Globa
 - **Tool Ownership:** The CLI runs single-turn `stream-json` with `--tools ""`, `--strict-mcp-config`, setting sources disabled, and session persistence disabled, so Codex keeps exclusive tool ownership. v1 is text and reasoning only; image input fails explicitly.
 - **Quota:** No public quota API is used, so totals and reset times are unavailable. Insufficient-credit errors (vendor code 118) surface as HTTP 429 `insufficient_quota`.
 - **Operators:** Qoder Global is operated by BRIGHT ZENITH PRIVATE LIMITED under the [product service terms](https://qoder.com/product-service); Qoder CN by 通义云启（杭州）信息技术有限公司 with Alibaba Cloud. Verify `ocx provider test qoder` (or `qoder-cn`) after configuring.
+
+### Claude Code CLI (subscription)
+
+OpenCodex can spend a Claude subscription through Anthropic's own harness instead of replaying a
+Claude Code identity against the Messages API. The `claude-cli` preset runs the official Claude Code
+CLI headlessly (`claude -p`, `stream-json`) once per turn:
+
+```json
+{
+  "providers": {
+    "claude-cli": {
+      "adapter": "claude-cli",
+      "baseUrl": "https://api.anthropic.com"
+    }
+  }
+}
+```
+
+- **Prerequisites:** `npm install -g @anthropic-ai/claude-code`, then sign in once with `claude`
+  (or `claude setup-token`). The CLI uses the machine's own Claude Code sign-in (the macOS Keychain
+  entry, or `~/.claude/.credentials.json` elsewhere).
+- **No credential stored:** this row holds no API key, and OpenCodex never reads, copies or forwards
+  a Claude token. The CLI owns the login and bills the account itself. A CLI that is not signed in
+  fails the turn with a sign-in error naming the command, instead of a generic `401`.
+  Classification follows the same fact: the preset is a keyless key row (`keyOptional`), so it needs
+  no API key and no key field is offered for it. An API key saved on this row by other means is never
+  handed to the harness — key billing belongs to the `anthropic-apikey` preset.
+- **One sign-in serves the whole proxy:** the harness reads the Claude Code sign-in of the user
+  OpenCodex runs as, so every request routed through this row — from any client of the proxy —
+  spends that one Claude account. There is no per-client account, no pooling and no multiplexing;
+  giving several people their own Claude usage needs one proxy user per sign-in.
+- **Input media:** the row publishes its models as text-only for v1. The CLI accepts an image frame
+  on its stream-json input, but no headless turn has been shown to hand those bytes to the model, so
+  an image sent straight to this provider is refused (`unsupported_input_modality`, the same
+  refusal the Qoder presets make) instead of being silently dropped and answered blind. With the
+  vision sidecar on the request path, images are captioned into text before they reach the row.
+- **Isolation:** every turn runs in a scoped child environment with no inherited `ANTHROPIC_*`
+  variable (a `claude` already pointed at this proxy therefore cannot loop back into it), telemetry,
+  feedback and the auto-updater disabled, and `--tools ""`, `--strict-mcp-config` plus
+  `--setting-sources ""`. The harness loads no CLAUDE.md, skill, hook, plugin or MCP server from the
+  machine and can neither read, write, exec nor browse. No session is persisted between turns.
+- **System prompt:** the caller's system and developer prompts replace the Claude Code preset
+  (`--system-prompt-file`), so the turn answers the client's contract rather than the harness
+  persona. The folded prompt is staged in a private per-turn file (mode `0600`) and passed by path,
+  because process arguments are world-readable through process listing; a request that carries
+  neither a system nor a developer prompt gets an empty file, which replaces the preset with nothing.
+- **Tool ownership:** v1 is text and reasoning only, exactly like the CodeBuddy and Qoder presets:
+  with no tool channel, approval, sandboxing and execution stay with the client. The shared
+  capture-only tool bridge is the documented follow-up.
+- **Destination:** the canonical row names `https://api.anthropic.com` because that is where the
+  subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
+  URL fails closed rather than handing the turn to another environment.
+
+> **Terms:** this preset spends your Claude subscription through Anthropic's own CLI. Whether
+> driving that harness headlessly from a proxy fits your plan's terms is a question between you and
+> Anthropic. OpenCodex does not convert the login into an API key and does not reproduce the CLI's
+> HTTP identity.
 
 ### A6API credit quota
 

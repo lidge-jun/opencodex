@@ -17,6 +17,8 @@ import "./styles/claude-desktop-mode-picker.css";
 import "./styles/claude-first-party-bindings.css";
 import "./styles/claude-desktop-picker.css";
 import "./styles/anthropic-reset-grants.css";
+import "./styles/star-onboarding.css";
+import "./styles/protocol-evidence.css";
 import "./pages/tray.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

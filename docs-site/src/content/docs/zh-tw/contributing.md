@@ -9,14 +9,14 @@ description: opencodex 的開發環境、結構、約定，以及新增 provider
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
-bun run setup:hooks  # 安裝 post-merge 並移除舊的受管理 pre-push
+bun run setup:hooks  # 移除舊的受管理 pre-push 與 post-merge
 bun run dev:proxy    # 開發模式代理 API
 bun run dev:gui      # 儀表板 dev 伺服器（另一個終端）
 bun run typecheck    # bun x tsc --noEmit
 bun run test        # 完整測試套件（預設）
 ```
 
-`bun run setup:hooks` 僅安裝 `post-merge`，並移除未經修改的舊版受管理 `pre-push` 掛鉤，
+`bun run setup:hooks` 移除未經修改的舊版受管理 `pre-push` 與 `post-merge` 掛鉤，
 保留自訂掛鉤。`pre-push` 掛鉤不再是必要項目；`bun run prepush` 仍可作為選用的手動檢查。
 
 `bun run dev` 繼續作為 `bun run dev:proxy` 的別名。儀表板 dev 伺服器使用 `bun run dev:gui`；

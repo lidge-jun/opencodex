@@ -33,6 +33,13 @@ configurable via `stallTimeoutSec`, checked on the 2 s heartbeat tick) closes th
 adapter events arrive. Adapter-yielded `{ type: "heartbeat" }` events DO reset the watchdog.
 The Anthropic adapter maps both SSE comments and `ping` events to that heartbeat (#5707), so an
 upstream that only pings while a long thinking block is silent still counts as live.
+When the Responses-to-Chat converter receives that typed heartbeat, it emits the same bounded SSE
+comment after ensuring the initial assistant-role chunk. Chat clients therefore keep receiving
+transport bytes during long reasoning without a fabricated content/tool/usage event. The comment
+does not reset a semantic-progress watchdog, and it does not alter the bridge's upstream stall or
+cancellation decisions.
+
+> Decision record: [ADR-5805](../decisions/ADR-5805-chat-completions-heartbeat-relay.md)
 
 Top-level `emptyCompletionRetry: true` opts Responses turns into one identical replay when an
 upstream turn produces neither output text nor a tool call, including a stream that ends before a

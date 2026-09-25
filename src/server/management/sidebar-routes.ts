@@ -24,6 +24,7 @@
  * gate accepts only after matching origin and the per-session CSRF token.
  */
 import { jsonResponse } from "../auth-cors";
+import { verifyLocalDesktopSnapshotBody } from "../local-desktop-snapshot-auth";
 import { agentDrivenMarkers } from "../../cli/agent-driven";
 import type { ManagementContext } from "./context";
 
@@ -95,6 +96,62 @@ export async function handleSidebarRoutes(ctx: ManagementContext): Promise<Respo
       ok: result.ok,
       ...(result.code ? { code: result.code } : {}),
     });
+  }
+
+  if (url.pathname === "/api/update/desktop-snapshot" && req.method === "POST") {
+    // Only the native ProxyClient publishes this state; browsers always send Origin.
+    if (req.headers.has("origin")) {
+      return Response.json({ error: "desktop snapshot does not accept browser-origin requests" }, { status: 403 });
+    }
+    if (ctx.principal !== "admin-token" && ctx.principal !== "local-desktop-snapshot-capability") {
+      return jsonResponse({ error: "desktop snapshot requires admin token or snapshot capability" }, 403, req, ctx.config);
+    }
+    if (req.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
+      return jsonResponse({ error: "invalid desktop snapshot" }, 400, req, ctx.config);
+    }
+    const declared = Number(req.headers.get("content-length") ?? "0");
+    if (Number.isFinite(declared) && declared > 1024) {
+      return jsonResponse({ error: "desktop snapshot too large" }, 413, req, ctx.config);
+    }
+    const reader = req.body?.getReader();
+    if (!reader) return jsonResponse({ error: "invalid desktop snapshot" }, 400, req, ctx.config);
+    const bytes = new Uint8Array(1024);
+    let used = 0;
+    try {
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        if (used + part.value.length > bytes.length) {
+          await reader.cancel();
+          return jsonResponse({ error: "desktop snapshot too large" }, 413, req, ctx.config);
+        }
+        bytes.set(part.value, used);
+        used += part.value.length;
+      }
+      const body = bytes.subarray(0, used);
+      if (ctx.principal === "local-desktop-snapshot-capability" && !verifyLocalDesktopSnapshotBody(req, body)) {
+        return jsonResponse({ error: "invalid desktop snapshot capability body" }, 403, req, ctx.config);
+      }
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(body);
+      const { desktopBadgeStore } = await import("../../update/desktop-badge");
+      if (!desktopBadgeStore.put(JSON.parse(decoded))) {
+        return jsonResponse({ error: "invalid desktop snapshot" }, 400, req, ctx.config);
+      }
+    } catch {
+      return jsonResponse({ error: "invalid desktop snapshot" }, 400, req, ctx.config);
+    }
+    return jsonResponse({ ok: true }, 200, req, ctx.config);
+  }
+
+  if (url.pathname === "/api/update/badge" && req.method === "GET"
+    && url.searchParams.get("surface") === "desktop") {
+    const { desktopBadgeStore } = await import("../../update/desktop-badge");
+    return jsonResponse(desktopBadgeStore.read(url.searchParams.get("session")), 200, req, ctx.config);
+  }
+
+  if (url.pathname === "/api/update/badge" && req.method === "GET"
+    && url.searchParams.has("surface") && url.searchParams.get("surface") !== "desktop") {
+    return jsonResponse({ error: "invalid badge surface" }, 400, req, ctx.config);
   }
 
   if (url.pathname === "/api/update/badge" && req.method === "GET") {
