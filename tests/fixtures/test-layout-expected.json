@@ -928,6 +928,7 @@
   "management-provider-validation.test.ts": "server",
   "management-provider-verbosity.test.ts": "server",
   "management-route-registry.test.ts": "server",
+  "protocol-routes.test.ts": "server",
   "management-workflow-budget-routes.test.ts": "server",
   "managing-cli.test.ts": "service",
   "memory-watchdog.test.ts": "server",
