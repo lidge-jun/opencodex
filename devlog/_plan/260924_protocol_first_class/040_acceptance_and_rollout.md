@@ -39,6 +39,7 @@ Kept current by each packet that migrates something.
 | Path | State after this unit |
 |---|---|
 | Chat/Messages request decode | still produces a Responses-shaped body before the IR (`responses-internal`); codecs are named entry points over the existing translators |
+| Chat/Messages response encode (PF-09) | migrated behind `directEncoders` for one concrete non-Responses route in the streaming adapter delivery: `[upstream, ir, client]`. Still through `responses-internal`: combo and policy children, routed compaction, run-turn adapters (Cursor, Devin, coding-agent CLIs, CodeBuddy), sidecar turns, the buffered `parseResponse` branch (unused by these ingresses, which always stream internally), and every route while the switch is off. Responses-wire upstreams keep their existing codec path |
 | Policy-route children | native Chat only if dispatched through the combo child loop (PF-07 records the outcome) |
 | Sidecars (web search, vision, image generation) | Responses pipeline only |
 | Responses-only features on Chat/Messages | `previous_response_id`, `store`, `background`, compaction stay on the bridge |

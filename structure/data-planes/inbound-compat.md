@@ -114,7 +114,13 @@ responses-wire upstreams; the responses-lane assembly for chat-wire upstreams ke
 attempt telemetry only.
 
 Combo/policy routes and requests that need Responses-only hosted tools, continuation, background,
-or storage semantics retain the existing Chat -> Responses -> Chat bridge.
+or storage semantics retain the existing Chat -> Responses -> Chat bridge. With
+`protocols.rollout.directEncoders` on, the response half of that bridge is skipped for a single
+non-Responses route: adapter delivery encodes the adapter events straight into Chat (or, on the
+Messages ingress, Anthropic) frames and marks the response, and the ingress returns it without
+the Responses-to-client conversion. The client-visible frames are the converter's; see
+[Protocol Paths](protocol-paths.md#direct-client-encoders) and
+[`responses.md`](../transports/responses.md#direct-client-encoders).
 Chat-to-Responses traffic that lands on `api.meta.ai` inherits the same 64-character tool-name
 aliasing as native Responses; see [`responses.md`](../transports/responses.md).
 
