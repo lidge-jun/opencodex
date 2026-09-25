@@ -916,6 +916,16 @@ export interface OcxConfig {
    */
   codexDesktopAuthless?: boolean;
   /**
+   * Opt-in automatic desktop-authless failover driven by main-account Codex quota. While the
+   * main ChatGPT/Codex 5h window reports exhausted, the proxy engages `codexDesktopAuthless`
+   * (dedicated `opencodex` provider, no ChatGPT login gate) so independently credentialed
+   * routed models stay submittable in Codex Desktop, whose composer is otherwise disabled
+   * account-wide. When the window recovers, the setting is restored to authenticated routing.
+   * Each transition rewrites `~/.codex/config.toml` and restarts Codex clients to adopt it.
+   * Default off; manual `codexDesktopAuthless` edits win until the next sweep re-evaluates.
+   */
+  codexDesktopAuthlessAuto?: boolean;
+  /**
    * Opt into Codex-owned client compaction while keeping OpenCodex routing. On an authenticated
    * loopback bind, inject the dedicated `opencodex` model provider instead of overriding the
    * built-in `openai` provider, so Codex does not select native remote compaction. Default off.

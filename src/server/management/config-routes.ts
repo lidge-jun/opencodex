@@ -453,6 +453,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       fastRows?: unknown;
       codexMainAccountHardLock?: unknown;
       codexDesktopAuthless?: unknown;
+      codexDesktopAuthlessAuto?: unknown;
       codexClientCompaction?: unknown;
       compactionRouting?: unknown;
     };
@@ -466,9 +467,10 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.fastRows === undefined
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
+      && body.codexDesktopAuthlessAuto === undefined
       && body.codexClientCompaction === undefined
       && body.compactionRouting === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, or compactionRouting" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexDesktopAuthlessAuto, codexClientCompaction, or compactionRouting" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -494,6 +496,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.codexDesktopAuthless !== undefined && typeof body.codexDesktopAuthless !== "boolean") {
       return jsonResponse({ error: "codexDesktopAuthless boolean is required" }, 400);
+    }
+    if (body.codexDesktopAuthlessAuto !== undefined && typeof body.codexDesktopAuthlessAuto !== "boolean") {
+      return jsonResponse({ error: "codexDesktopAuthlessAuto boolean is required" }, 400);
     }
     if (body.codexClientCompaction !== undefined && typeof body.codexClientCompaction !== "boolean") {
       return jsonResponse({ error: "codexClientCompaction boolean is required" }, 400);
@@ -557,6 +562,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexMainAccountHardLock: Object.hasOwn(config, "codexMainAccountHardLock"),
       codexDesktopAuthless: config.codexDesktopAuthless,
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
+      codexDesktopAuthlessAuto: config.codexDesktopAuthlessAuto,
+      hasCodexDesktopAuthlessAuto: Object.hasOwn(config, "codexDesktopAuthlessAuto"),
       codexClientCompaction: config.codexClientCompaction,
       hasCodexClientCompaction: Object.hasOwn(config, "codexClientCompaction"),
     };
@@ -600,6 +607,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (body.codexMainAccountHardLock === true) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
       if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
+      if (body.codexDesktopAuthlessAuto === true) config.codexDesktopAuthlessAuto = true;
+      else if (body.codexDesktopAuthlessAuto === false) deleteConfigTopLevelKey(config, "codexDesktopAuthlessAuto");
       if (body.codexClientCompaction === true) config.codexClientCompaction = true;
       else if (body.codexClientCompaction === false) deleteConfigTopLevelKey(config, "codexClientCompaction");
       if (compactionRouting === null) deleteConfigTopLevelKey(config, "compactionRouting");
@@ -649,6 +658,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexDesktopAuthless) {
         config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
       } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
+      if (previousSettings.hasCodexDesktopAuthlessAuto) {
+        config.codexDesktopAuthlessAuto = previousSettings.codexDesktopAuthlessAuto;
+      } else deleteConfigTopLevelKey(config, "codexDesktopAuthlessAuto");
       if (previousSettings.hasCodexClientCompaction) {
         config.codexClientCompaction = previousSettings.codexClientCompaction;
       } else deleteConfigTopLevelKey(config, "codexClientCompaction");
@@ -702,6 +714,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       catalogRefreshPending,
       fastRows: config.fastRows !== false,
       codexDesktopAuthless: authlessIsEnabled,
+      codexDesktopAuthlessAuto: config.codexDesktopAuthlessAuto === true,
       codexClientCompaction: clientCompactionIsEnabled,
       codexDesktopSwitches,
       compactionRouting: config.compactionRouting ?? null,
