@@ -8,6 +8,7 @@ import {
   ensureProxyForClaude,
   fetchClaudeCodeState,
   isProxyOnlyModelId,
+  readConnectedClaudeContextWindows,
   nativeModelOverride,
   readPickerDefaultModel,
   rootSkipPermissionsNotice,
@@ -126,23 +127,27 @@ describe("ocx claude native fallback", () => {
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
-  test("preserves an unrelated loopback gateway and its user credential", () => {
+  test("preserves an unrelated gateway, its user credential, and its host-managed guard", () => {
     for (const baseUrl of ["http://localhost:8080", "http://127.0.0.1:10100"]) {
       const env = buildNativeClaudeEnv(cfg({ port: 10100 }), {
         ANTHROPIC_BASE_URL: baseUrl,
         ANTHROPIC_API_KEY: "sk-ant-user-key",
+        CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST: "1",
       }, {
         preBunAnthropicSlots: ["ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"],
       });
 
       expect(env.ANTHROPIC_BASE_URL).toBe(baseUrl);
       expect(env.ANTHROPIC_API_KEY).toBe("sk-ant-user-key");
+      expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe("1");
     }
   });
 
   test("keeps unrelated slash model ids and recognizes configured provider routes", () => {
     expect(isProxyOnlyModelId("mock/model", ["mock"])).toBe(true);
     expect(isProxyOnlyModelId("claude-ocx2-abcd")).toBe(true);
+    expect(isProxyOnlyModelId("ocx-claude-mock--model")).toBe(true);
+    expect(isProxyOnlyModelId("ocx-claude2-openrouter--a~sb[1m]")).toBe(true);
     expect(isProxyOnlyModelId("arn:aws:bedrock:region:acct:inference-profile/us.anthropic.model", ["mock"])).toBe(false);
     expect(isProxyOnlyModelId("claude-opus-5")).toBe(false);
   });
@@ -153,6 +158,31 @@ describe("ocx claude native fallback", () => {
     expect(nativeModelOverride("claude-ocx2-abcd", "mock/model", [], ["mock"]).flag).toBeUndefined();
     expect(nativeModelOverride("claude-ocx2-abcd", "opus", ["--model", "sonnet"], ["mock"]))
       .toEqual({});
+  });
+
+  test("a connected client's window map keeps legacy claude-ocx selectors next to the current ones", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-claude-connected-catalog-"));
+    try {
+      const path = join(dir, "catalog.json");
+      writeFileSync(path, JSON.stringify({ models: [
+        { slug: "cursor/gpt-5.6-luna", context_window: 1_000_000 },
+        { slug: "gpt-5.6-sol", context_window: 272_000 },
+      ] }));
+      const windows = readConnectedClaudeContextWindows(path);
+      expect(windows["ocx-claude-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+      expect(windows["claude-ocx-cursor--gpt-5.6-luna"]).toBe(1_000_000);
+      expect(windows["ocx-claude-native--gpt-5.6-sol"]).toBe(272_000);
+      expect(windows["claude-ocx-native--gpt-5.6-sol"]).toBe(272_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a saved current ocx-claude selector also falls back to the configured native model", () => {
+    expect(nativeModelOverride("ocx-claude-mock--model", "opus", [], ["mock"]))
+      .toMatchObject({ flag: ["--model", "opus"] });
+    expect(nativeModelOverride("ocx-claude2-openrouter--a~sb", "opus", [], ["mock"]))
+      .toMatchObject({ flag: ["--model", "opus"] });
   });
 
   test("preserves the root opt-in on native fallback", () => {
@@ -270,7 +300,8 @@ describe("ocx claude env assembly", () => {
     // OAuth — the launcher must leave it unset on an open loopback proxy.
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY).toBe("1");
-    expect(env.ANTHROPIC_MODEL).toBe("claude-ocx-gemini--gemini-3-pro");
+    // A legacy configured slot leaves in the current spelling (same route, real window).
+    expect(env.ANTHROPIC_MODEL).toBe("ocx-claude-gemini--gemini-3-pro");
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("gemini/gemini-3-flash");
     expect(env.ANTHROPIC_SMALL_FAST_MODEL).toBe("gemini/gemini-3-flash");
     // Never both token vars (Claude Code auth-conflict warning, 003 E1).
@@ -361,16 +392,16 @@ describe("ocx claude env assembly", () => {
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
   });
 
-  test("opt-in levers: alwaysEnableEffort=1, maxContextTokens injects the official pair", () => {
+  test("opt-in levers: maxContextTokens sets the window without disabling compact", () => {
     const env = buildClaudeEnv(cfg({
       claudeCode: { alwaysEnableEffort: true, maxContextTokens: 1_000_000 },
     }), 10100, {});
     expect(env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT).toBe("1");
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("1000000");
-    // MAX_CONTEXT_TOKENS alone is ignored for recognized claude-shaped ids; the
-    // official pair requires DISABLE_COMPACT (exact name, no CLAUDE_CODE_ prefix).
-    expect(env.DISABLE_COMPACT).toBe("1");
-    // Legacy override wins rule-1 inside the CLI -> auto-context stays inert.
+    // Current ocx-claude ids do not start with claude-, so Claude Code honors
+    // the window without DISABLE_COMPACT. Do not inject it.
+    expect(env.DISABLE_COMPACT).toBeUndefined();
+    // maxContextTokens still disables the auto-compact window env.
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
   });
 
@@ -385,6 +416,15 @@ describe("ocx claude env assembly", () => {
     expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("500000");
     expect(env.DISABLE_COMPACT).toBe("0");
     expect(env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT).toBe("0");
+  });
+
+  test("maxContextTokens outside the compact window range never produces a compact lever", () => {
+    for (const value of [50_000, 2_000_000]) {
+      const env = buildClaudeEnv(cfg({ claudeCode: { maxContextTokens: value } }), 10100, {});
+      expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe(String(value));
+      expect(env.DISABLE_COMPACT).toBeUndefined();
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+    }
   });
 
   test("invalid maxContextTokens values inject nothing", () => {

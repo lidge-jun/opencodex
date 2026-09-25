@@ -291,7 +291,7 @@ describe("combo request cloning", () => {
     expect(concrete).toEqual({
       model: "a/m1",
       input: [{ role: "user", content: "hi" }],
-      reasoning: { effort: "high" },
+      reasoning: { effort: "high", summary: "auto" },
     });
     expect(raw).toEqual({ model: "combo/free", input: [{ role: "user", content: "hi" }] });
     expect(concrete.input).not.toBe(raw.input);
@@ -430,15 +430,15 @@ describe("combo request cloning", () => {
    */
   test("a combo default above the target ladder is downgraded, not dropped (#3108)", () => {
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "max", ["low", "medium", "high"]).reasoning)
-      .toEqual({ effort: "high" });
+      .toEqual({ effort: "high", summary: "auto" });
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "high", ["low", "medium"]).reasoning)
-      .toEqual({ effort: "medium" });
+      .toEqual({ effort: "medium", summary: "auto" });
     // Exact support is still passed through untouched.
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "max", ["high", "max"]).reasoning)
-      .toEqual({ effort: "max" });
+      .toEqual({ effort: "max", summary: "auto" });
     // Never raises: a request below everything supported takes the lowest rung, not a higher one.
     expect(concreteComboRequestBody({ model: "combo/x" }, target, "low", ["high", "max"]).reasoning)
-      .toEqual({ effort: "high" });
+      .toEqual({ effort: "high", summary: "auto" });
     // A caller-supplied effort still wins over the combo default.
     expect(concreteComboRequestBody(
       { model: "combo/x", reasoning: { effort: "low" } }, target, "max", ["low", "medium", "high"],
@@ -490,6 +490,7 @@ describe("combo request cloning", () => {
 describe("combo target cooldowns", () => {
   const target = { provider: "a", model: "m1" };
 
+  /** Verify numeric and HTTP-date delays obey the selected local or server ceiling. */
   test("parses numeric and date Retry-After values with exact bounds", () => {
     const now = Date.parse("2026-07-18T00:00:00.000Z");
     expect(parseRetryAfterMs("0.001", now)).toBe(1);
@@ -498,6 +499,29 @@ describe("combo target cooldowns", () => {
     expect(parseRetryAfterMs(new Date(now + 90_000).toUTCString(), now)).toBe(90_000);
     expect(parseRetryAfterMs(new Date(now + 90_000).toUTCString().toLowerCase(), now)).toBe(90_000);
     expect(parseRetryAfterMs(new Date(now + 900_000).toUTCString(), now)).toBe(600_000);
+    const serverDelay = { preserveServerDelay: true };
+    expect(parseRetryAfterMs("14400", now, serverDelay)).toBe(14_400_000);
+    expect(parseRetryAfterMs("86400", now, serverDelay)).toBe(86_400_000);
+    expect(parseRetryAfterMs("999999", now, serverDelay)).toBe(86_400_000);
+    expect(parseRetryAfterMs(new Date(now + 4 * 60 * 60_000).toUTCString(), now, serverDelay)).toBe(14_400_000);
+    expect(parseRetryAfterMs(new Date(now + 2 * 86_400_000).toUTCString(), now, serverDelay)).toBe(86_400_000);
+  });
+
+  /** Verify recorded cooldowns expire at their own ceiling without truncating valid delays. */
+  test("caps only explicit server cooldowns at one day", () => {
+    const now = Date.parse("2026-07-18T00:00:00.000Z");
+    coolComboTarget("numeric-retry", target, { now, retryAfter: "999999" });
+    coolComboTarget("date-retry", target, { now, retryAfter: new Date(now + 2 * 86_400_000).toUTCString() });
+    coolComboTarget("multi-hour-retry", target, { now, retryAfter: "14400" });
+    coolComboTarget("local-fallback", target, { now, cooldownMs: 999_999_999 });
+    for (const comboId of ["numeric-retry", "date-retry"]) {
+      expect(isComboTargetInCooldown(comboId, target, now + 86_400_000 - 1)).toBe(true);
+      expect(isComboTargetInCooldown(comboId, target, now + 86_400_000)).toBe(false);
+    }
+    expect(isComboTargetInCooldown("multi-hour-retry", target, now + 14_400_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("multi-hour-retry", target, now + 14_400_000)).toBe(false);
+    expect(isComboTargetInCooldown("local-fallback", target, now + 600_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("local-fallback", target, now + 600_000)).toBe(false);
   });
 
   test("rejects missing malformed zero and expired Retry-After values", () => {
@@ -1171,6 +1195,20 @@ describe("combo failure policy and advancement", () => {
 });
 
 describe("deterministic combo selection", () => {
+  test("jev is a valid persisted strategy and its synchronous fail-open is configured order", () => {
+    const raw = {
+      strategy: "jev",
+      targets: [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2" },
+      ],
+    } as unknown as OcxComboConfig;
+    expect(comboConfigIssues("auto", raw, baseConfig().providers)).toEqual([]);
+    expect(normalizeComboConfig(raw).strategy).toBe("jev");
+    const config = baseConfig({ combos: { auto: raw } });
+    expect(pickComboTarget(config, "auto")?.target.provider).toBe("a");
+  });
+
   test("replacing quota snapshots removes providers omitted from the refresh", () => {
     const now = Date.now();
     replaceCachedProviderQuotas([
@@ -1475,7 +1513,31 @@ describe("combo validation and normalization", () => {
       { raw: { targets: [null] }, path: ["targets", 0], message: "must be an object" },
       { raw: { targets: [{ provider: " ", model: "m1" }] }, path: ["targets", 0, "provider"], message: "is required" },
       { raw: { targets: [{ provider: "missing", model: "m1" }] }, path: ["targets", 0, "provider"], message: "not configured" },
+      {
+        raw: { targets: [{ provider: "jev", model: "jev-latest" }] },
+        providers: {
+          ...providers,
+          jev: { adapter: "jev-decision", baseUrl: "https://api.typesafe.ai/v1/systemone" },
+        },
+        path: ["targets", 0, "provider"],
+        message: "decision service and cannot be a model target",
+      },
       { raw: { targets: [{ provider: "a", model: " " }] }, path: ["targets", 0, "model"], message: "is required" },
+      {
+        raw: { targets: [{ provider: "a", model: "m1", reasoningEfforts: [] }] },
+        path: ["targets", 0, "reasoningEfforts"],
+        message: "non-empty array",
+      },
+      {
+        raw: { targets: [{ provider: "a", model: "m1", reasoningEfforts: ["turbo"] }] },
+        path: ["targets", 0, "reasoningEfforts", 0],
+        message: "low, medium, high, xhigh, max, ultra",
+      },
+      {
+        raw: { targets: [{ provider: "a", model: "m1", reasoningEfforts: ["low", "low"] }] },
+        path: ["targets", 0, "reasoningEfforts", 1],
+        message: "must not contain duplicates",
+      },
       {
         raw: VALID_COMBO,
         providers: { a: { ...providers.a!, disabled: true } },
@@ -1547,6 +1609,9 @@ describe("combo validation and normalization", () => {
       stickyLimit: 1,
       cooldownMs: undefined,
       waitForCooldownMs: 0,
+      // #5691: null unless explicitly configured, so an absent or malformed
+      // value can never silently opt a combo into deferring its last resort.
+      cooldownWaitPolicy: null,
       defaultEffort: "high",
       defaultEffortMode: "fallback",
       reasoningEffortMode: "strict",
@@ -1554,9 +1619,52 @@ describe("combo validation and normalization", () => {
       alias: null,
       nativeAlias: false,
       displayName: null,
-      targets: [{ provider: "a", model: "m1", weight: 2 }],
+      targets: [{ provider: "a", model: "m1", weight: 2, lastResort: false }],
     });
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
+    const targetReasoningEfforts: OcxComboDefaultEffort[] = ["low", "high"];
+    const normalizedTargetEfforts = normalizeComboConfig({
+      targets: [{ provider: "a", model: "m1", reasoningEfforts: targetReasoningEfforts }],
+    });
+    expect(normalizedTargetEfforts.targets[0]?.reasoningEfforts).toEqual(["low", "high"]);
+    targetReasoningEfforts.push("max");
+    expect(normalizedTargetEfforts.targets[0]?.reasoningEfforts).toEqual(["low", "high"]);
+    // #5691: both new fields default to the inert value, and only the exact
+    // literal opts in — the same rule reasoningEffortMode follows below.
+    expect(normalizeComboConfig({
+      cooldownWaitPolicy: "eventually" as never,
+      targets: [{ provider: "a", model: "m1" }],
+    }).cooldownWaitPolicy).toBeNull();
+    expect(normalizeComboConfig({
+      cooldownWaitPolicy: "before-last-resort",
+      targets: [{ provider: "a", model: "m1", lastResort: true }],
+    })).toMatchObject({
+      cooldownWaitPolicy: "before-last-resort",
+      targets: [{ provider: "a", model: "m1", lastResort: true }],
+    });
+    expect(comboConfigIssues("free", {
+      cooldownWaitPolicy: "eventually" as never,
+      targets: [{ provider: "a", model: "m1" }],
+    }, baseConfig().providers).some(issue => issue.path[0] === "cooldownWaitPolicy")).toBe(true);
+    expect(comboConfigIssues("free", {
+      targets: [{ provider: "a", model: "m1", lastResort: "yes" as never }],
+    }, baseConfig().providers).some(issue => issue.path[2] === "lastResort")).toBe(true);
+    // …and a truthy non-boolean normalizes to false rather than opting in, so a
+    // config that fails validation cannot still change routing if it is loaded.
+    expect(normalizeComboConfig({
+      targets: [{ provider: "a", model: "m1", lastResort: "yes" as never }],
+    }).targets[0]!.lastResort).toBe(false);
+    // #5736: the normalizer's explicit `false` must not reach stored config. Targets that
+    // never opt in keep exactly the keys they had, so enabling this feature does not add a
+    // noise key to every target of every combo in the file.
+    const sparseTargets = normalizeComboConfig({
+      targets: [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2", lastResort: true },
+      ],
+    }).targets.map(({ lastResort, ...target }) => (lastResort ? { ...target, lastResort: true } : target));
+    expect(Object.hasOwn(sparseTargets[0]!, "lastResort")).toBe(false);
+    expect(sparseTargets[1]).toMatchObject({ lastResort: true });
     // Anything that is not the literal "adaptive" normalizes to today's behavior, so a
     // malformed or absent value can never silently opt a user in.
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).reasoningEffortMode).toBe("strict");

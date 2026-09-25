@@ -109,10 +109,15 @@ export function concreteComboRequestBody(
     }
     return clone;
   }
+  if (defaultEffortMode === "force") stripAlternativeReasoningControls(clone);
   if (reasoning === undefined) {
-    clone.reasoning = { effort: resolvedEffort };
+    clone.reasoning = { effort: resolvedEffort, summary: "auto" };
   } else {
-    clone.reasoning = { ...(reasoning as Record<string, unknown>), effort: resolvedEffort };
+    clone.reasoning = {
+      ...(reasoning as Record<string, unknown>),
+      effort: resolvedEffort,
+      ...((reasoning as Record<string, unknown>).summary === undefined ? { summary: "auto" } : {}),
+    };
   }
   return clone;
 }
@@ -125,6 +130,10 @@ function stripUnsupportedReasoningControls(body: Record<string, unknown>): void 
     if (Object.keys(next).length > 0) body.reasoning = next;
     else delete body.reasoning;
   }
+  stripAlternativeReasoningControls(body);
+}
+
+function stripAlternativeReasoningControls(body: Record<string, unknown>): void {
   delete body.reasoning_effort;
   delete body.thinking_budget;
   delete body.thinking;

@@ -25,6 +25,9 @@ import {
   findExpectedPriceOverlay,
   findVerifiedPriceOverride,
   findPriorityPricingRule,
+  cursorFastPriceMultiplier,
+  cursorFastPriceSource,
+  cursorFastPriceSupported,
   findContextTier,
   isLongContext,
   type Cost4,
@@ -257,6 +260,7 @@ function resolveMatchedPriceExact(
   // operator's explicit price is authoritative for the ~$ estimate.
   const userOverlay = userOverlayMatch(provider, modelId, userOverlays);
   if (userOverlay) return userOverlay;
+  if (!cursorFastPriceSupported(provider, modelId)) return null;
   const verifiedOverride = overlays === EXPECTED_PRICE_OVERLAYS
     ? findVerifiedPriceOverride(provider, modelId)
     : undefined;
@@ -264,11 +268,12 @@ function resolveMatchedPriceExact(
     return {
       provider,
       modelId,
-      cost4: verifiedOverride.cost4,
+      cost4: multiplyCursorFastCost(verifiedOverride.cost4, provider, modelId),
       source: "expected",
       sourceRef: verifiedOverride.source,
       verifiedAt: verifiedOverride.verifiedAt,
       status: verifiedOverride.status,
+      ...cursorFastPriceProvenance(provider, modelId),
     };
   }
   const metadataProvider = resolveMetadataProvider(provider);
@@ -280,26 +285,48 @@ function resolveMatchedPriceExact(
       provider,
       modelId,
       jawcodeProvider: metadataProvider,
-      cost4: bundled.cost,
+      cost4: multiplyCursorFastCost(bundled.cost, provider, modelId),
       source: "jawcode",
       status: "verified",
+      ...cursorFastPriceProvenance(provider, modelId),
     };
   }
   const overlay = findExpectedPriceOverlay(provider, modelId, overlays);
   if (!overlay || !validCost4(overlay.cost4) || !hasNonZeroCost(overlay.cost4)) {
-    return options.allowModelLevelFallback === false ? null : resolveModelLevelPrice(provider, modelId);
+    if (options.allowModelLevelFallback === false) return null;
+    const fallback = resolveModelLevelPrice(provider, modelId);
+    return fallback
+      ? { ...fallback, cost4: multiplyCursorFastCost(fallback.cost4, provider, modelId), ...cursorFastPriceProvenance(provider, modelId) }
+      : null;
   }
   if (overlay.status === "unverified") return null;
   return {
     provider,
     modelId,
     ...(metadataProvider ? { jawcodeProvider: metadataProvider } : {}),
-    cost4: overlay.cost4,
+    cost4: multiplyCursorFastCost(overlay.cost4, provider, modelId),
     source: "expected",
     sourceRef: overlay.source,
     verifiedAt: overlay.verifiedAt,
     status: overlay.status,
+    ...cursorFastPriceProvenance(provider, modelId),
   };
+}
+
+function multiplyCursorFastCost(cost4: Cost4, provider: string, modelId: string): Cost4 {
+  const multiplier = cursorFastPriceMultiplier(provider, modelId);
+  if (multiplier === 1) return cost4;
+  return {
+    input: cost4.input * multiplier,
+    output: cost4.output * multiplier,
+    cacheRead: cost4.cacheRead * multiplier,
+    cacheWrite: cost4.cacheWrite * multiplier,
+  };
+}
+
+function cursorFastPriceProvenance(provider: string, modelId: string): Pick<MatchedPrice, "sourceRef" | "status"> | Record<never, never> {
+  const sourceRef = cursorFastPriceSource(provider, modelId);
+  return sourceRef ? { sourceRef, status: "verified" } : {};
 }
 
 /** User-configured overlay match; explicit zero rates are authoritative too. */

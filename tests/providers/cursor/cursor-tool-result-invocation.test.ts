@@ -154,12 +154,13 @@ describe("cursor replayed tool results name their invocation", () => {
     expect(step).toContain("invoked: exec_command with");
   });
 
-  // composer-2.5 (non-fast) is a NATIVE wire model that still routes through the external
-  // tool-continuation path (discovery.ts cursorNeedsExternalToolContinuation), so it echoes results
-  // into root as text and needs the invocation named too. Gating on `externalModel` would have
-  // skipped exactly this model (audit 001 F2).
-  test("composer-2.5 root replay names the invocation too", () => {
-    const root = resultRoot(encode(history(), "composer-2.5"));
+  // composer-2.5 and composer-2.5-fast are NATIVE wire models that still route through the
+  // external tool-continuation path (discovery.ts cursorNeedsExternalToolContinuation), so they
+  // echo results into root as text and need the invocation named too. Gating on `externalModel`
+  // would have skipped exactly these models (audit 001 F2). Fast used to stay on resumeAction;
+  // empty Chat Completions completions on 2026-09-21 put it on the same path as non-fast.
+  test.each(["composer-2.5", "composer-2.5-fast"])("%s root replay names the invocation too", modelId => {
+    const root = resultRoot(encode(history(), modelId));
     expect(root).toBeDefined();
     expect(root).toContain("invoked: exec_command with");
   });
@@ -171,8 +172,8 @@ describe("cursor replayed tool results name their invocation", () => {
     expect(root).not.toContain("invoked:");
   });
 
-  test("native composer replay keeps results off the root prompt entirely", () => {
-    const bytes = encode(history(), "composer-2.5-fast");
+  test("native composer-1 replay keeps results off the root prompt entirely", () => {
+    const bytes = encode(history(), "composer-1");
     expect(rootTexts(bytes).some(text => text.startsWith("[Tool Result]"))).toBe(false);
     expect(rootTexts(bytes).some(text => text.includes("invoked:"))).toBe(false);
   });
@@ -405,8 +406,8 @@ describe("cursor checkpoint continuation names the invocation from covered histo
     expect(root).not.toContain("invoked:");
   });
 
-  test("native composer keeps checkpoint results off the root prompt", () => {
-    const roots = rootTexts(encodeCheckpoint(history(), "composer-2.5-fast", 2));
+  test("native composer-1 keeps checkpoint results off the root prompt", () => {
+    const roots = rootTexts(encodeCheckpoint(history(), "composer-1", 2));
     expect(roots.some(text => text.startsWith("[Tool Result]"))).toBe(false);
     expect(roots.some(text => text.includes("invoked:"))).toBe(false);
   });
@@ -603,6 +604,36 @@ describe("cursor spare envelope budget restores clipped invocation arguments", (
     expect(line).toContain(JSON.stringify(args));
   });
 
+  test("an impossible restoration serializes its arguments only once in the refund pass", () => {
+    let serializations = 0;
+    const args = {
+      toJSON() {
+        serializations++;
+        return { contents: "A".repeat(CURSOR_EXTERNAL_ROOT_BYTE_LIMIT + 1) };
+      },
+    };
+    // The refund pass must not allocate a full-size byte buffer while deciding whether the
+    // restoration fits. encode() calls with a string longer than the envelope mean someone
+    // reintroduced the unbounded fullBytes measurement this change removed.
+    let oversizedEncodes = 0;
+    const originalEncode = TextEncoder.prototype.encode;
+    TextEncoder.prototype.encode = function (input?: string) {
+      if (typeof input === "string" && input.length > CURSOR_EXTERNAL_ROOT_BYTE_LIMIT) oversizedEncodes++;
+      return originalEncode.call(this, input);
+    };
+    let line: string | undefined;
+    try {
+      line = invokedLine(resultRoot(encode(writeFileHistory(args), "grok-4.6-high")));
+    } finally {
+      TextEncoder.prototype.encode = originalEncode;
+    }
+    expect(line).toEndWith("…[arguments truncated]");
+    // Indexing and initial rendering account for three calls; the refund pass adds exactly one and
+    // must reuse that serialization instead of calling the rendering helper for a fifth copy.
+    expect(serializations).toBe(4);
+    expect(oversizedEncodes).toBe(0);
+  });
+
   // The refund pass must be a no-op below the cap: a line that was never clipped has nothing to
   // restore, and rewriting it would only risk drift from the admission-time rendering.
   test("an under-cap argument is unchanged", () => {
@@ -611,13 +642,13 @@ describe("cursor spare envelope budget restores clipped invocation arguments", (
     expect(invokedLine(root)).toBe("invoked: write_file with " + JSON.stringify(args));
   });
 
-  // composer-2.5 is a NATIVE wire model (isCursorExternalWireModel is false) that still routes
-  // through the external tool-continuation path, so it echoes results into roots and accumulates
-  // the same clipped lines. This is the case the echoToolResultInRoot gate exists for: a gate
-  // written as externalModel would leave the one native model with clipped lines capped.
-  test("native composer-2.5 root replay is restored too", () => {
+  // composer-2.5 and composer-2.5-fast are NATIVE wire models (isCursorExternalWireModel is false)
+  // that still route through the external tool-continuation path, so they echo results into roots
+  // and accumulate the same clipped lines. This is the case the echoToolResultInRoot gate exists
+  // for: a gate written as externalModel would leave these native models with clipped lines capped.
+  test.each(["composer-2.5", "composer-2.5-fast"])("native %s root replay is restored too", modelId => {
     const args = { contents: "A".repeat(4600) };
-    const root = resultRoot(encode(writeFileHistory(args), "composer-2.5"));
+    const root = resultRoot(encode(writeFileHistory(args), modelId));
     expect(root).toBeDefined();
     const line = invokedLine(root);
     expect(line).toBeDefined();

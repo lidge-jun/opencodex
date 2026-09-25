@@ -85,10 +85,11 @@ export function shouldUseCodexWsUpstream(
   url: string,
   init?: RequestInit,
   runtime: BunRuntimeGateInput = currentBunRuntimeIdentity(),
-  upstreamWebsocketConfigured = false,
+  upstreamWebsocketConfigured?: boolean,
 ): boolean {
   if (!bunSupportsBoundedCodexWsRelay(runtime)) return false;
   if (socks5ProxyFromEnv()) return false;
+  if (url === CODEX_RESPONSES_HTTP_URL && upstreamWebsocketConfigured === false) return false;
   // Bun's client WebSocket API delivers only fully assembled messages and has
   // no enforceable inbound payload limit. Keep arbitrary provider endpoints on
   // bounded HTTP/SSE until the client can reject fragmented text and binary
@@ -138,7 +139,7 @@ export function codexWsUpstreamFetch(
   // Never infer backend support from a model name or enable controls on a gateway.
   const control = nativeControl?.kind === "injection"
     ? ((prepared.canonical || url === OPENAI_API_RESPONSES_URL) && isInjectionRequest(JSON.parse(frameText)) ? nativeControl : undefined)
-    : (prepared.canonical || url === OPENAI_API_RESPONSES_URL) ? nativeControl : undefined;
+    : prepared.canonical ? nativeControl : undefined;
   if (control?.kind === "injection" && url === OPENAI_API_RESPONSES_URL) {
     const beta = headers["openai-beta"];
     if (!beta?.split(",").some(value => value.trim() === "responses_multi_agent=v1")) {

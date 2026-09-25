@@ -231,12 +231,13 @@ ikiye ayrılır.
 | Sınıflandırılmış kimlik doğrulama, abonelik, kota, hız sınırı, aşırı yük veya yukarı akış sunucu hatası | Yalnızca durum yeterli olmadığında bile hedefi soğutun ve atlayın. |
 | İstemci iptali (499), `origin_rejected`, siber politika reddi, bağlam taşması veya diğer geçersiz istek | Durun ve hatayı döndürün; başka bir hedef isteği geçerli kılmaz. |
 | `user` alanını açıkça reddeden, `reasoning.effort`/`reasoning_effort` için desteklenmeyen değer bildiren veya modele özgü görüntü girdisini reddeden (`param: input`) yapılandırılmış HTTP 400 | Çıktı başlamadan önce bekleme süresi kaydetmeden sonraki uygun hedefe atlar; aşağıdaki isteğe bağlı parametre uyumluluğuna bakın. |
+| Süreç içi bir bağdaştırıcının (`runTurn`) yürüttüğü Responses turunda, geçerli isteğin bildirmediği ilk araç çağrısı (herhangi bir çıktıdan ve yeniden oynatılamaz yan etkiden önce) | Hedefi bekleme süresine alır ve aynı araç kataloğuyla sonraki hedefe atlar. Görünür çıktıdan veya yeniden oynatılamaz bir yan etkiden sonra ret kesindir. Chat Completions ve Anthropic Messages istekleri değişmez. |
 | Diğer sınıflandırılmamış hatalar | Durun ve hatayı döndürün. |
 
 Atlanan bir hedef varsayılan olarak 60 saniye boyunca soğuma süresine girer.
 Yukarı akış yanıtı geçerli bir `Retry-After` değeri içeriyorsa opencodex bunun
 yerine onu kullanır. Sayısal saniyeler ve HTTP tarihi değerleri kabul edilir ve
-her soğuma süresi en fazla 10 dakika ile sınırlandırılır.
+açık `Retry-After` gecikmesi en fazla 24 saat, sıfırlama kaynaklı, yapılandırılmış ve varsayılan soğuma süreleri en fazla 10 dakika ile sınırlandırılır.
 
 Geçerli istek denenen aynı hedefi asla yeniden denemez. Daha sonraki istekler
 soğuma süresi dolana kadar onu atlar. Uygun hiçbir hedef kalmazsa proxy
@@ -246,6 +247,7 @@ soğuma süresi dolana kadar onu atlar. Uygun hiçbir hedef kalmazsa proxy
 Yük devretme kasıtlı olarak sınırlandırılmıştır. Hedefe özgü kullanılabilirlik,
 kimlik doğrulama, kota ve aşırı yük hatalarına yardımcı olur; arayan hatalarını
 veya politika retlerini gizlemez.
+Kombo olmayan bir Responses isteğinde, izin listesindeki bir xAI politika 403'ü Codex onu taşıma hatası olarak yeniden denemeden önce HTTP 200 `incomplete/content_filter` yanıtına dönüştürülür; bkz. [xAI policy refusals](/tr/reference/proxy-formats/#xai-policy-refusals). Kombo atlamaları özgün HTTP 403'ü yine bir atlama olarak sınıflandırır.
 :::
 
 ## Varsayılan akıl yürütme çabası
@@ -365,7 +367,7 @@ saklanır:
 | --- | --- | --- | --- |
 | `targets` | Evet | — | Yapılandırılmış `{ provider, model, weight? }` hedeflerinin boş olmayan sıralı dizisi. Yinelenen sağlayıcı/model çiftleri reddedilir. |
 | `targets[].weight` | Hayır | `1` | 1 ile 10.000 arasında tam sayı. `round-robin` ve `random` tarafından kullanılır; `failover`, `least-used` ve `reset-window` tarafından yok sayılır. |
-| `strategy` | Hayır | `"failover"` | İzin verilen değerler: `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`. |
+| `strategy` | Hayır | `"failover"` | İzin verilen değerler: `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`, `"jev"`. JEV yalnızca ilk uygun hedefi ve effort değerini belirler; sonraki denemeleri normal Combo fallback'i yönetir. |
 | `stickyLimit` | Hayır | `1` | Yalnızca `round-robin` için geçerlidir; seçim başına 1 ile 100 arasında başarılı istek tam sayısı. |
 | `defaultEffort` | Hayır | `null` | `low`, `medium`, `high`, `xhigh`, `max` veya `ultra`; yalnızca arayan çabayı atladığında ve hedef desteği bildirdiğinde uygulanır. |
 | `reasoningEffortMode` | Hayır | `"strict"` | `strict` veya `adaptive`; karma yetenek kesişimini ve hedefe özel normalizasyonu seçer. |
@@ -388,7 +390,7 @@ Her hedef şu anda uygun değildir: örneğin sağlayıcısı devre dışıdır,
 soğumaktadır, bu istek için zaten denenmiştir veya şifrelenmiş bir v2 görevi onu
 hariç tutmaktadır. Hedef sağlayıcı durumunu ve son yukarı akış hatalarını
 kontrol edin. Soğuma süreleri için 60 saniyelik varsayılanı veya yukarı akış
-`Retry-After` süresini (asla 10 dakikadan fazla olamaz) bekleyin, ardından
+`Retry-After` süresini (açık `Retry-After` için en fazla 24 saat, diğer soğuma süreleri için en fazla 10 dakika) bekleyin, ardından
 yeniden deneyin.
 
 ### Takma adım neden reddedildi?

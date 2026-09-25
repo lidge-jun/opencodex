@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { basename } from "node:path";
 import {
   cleanupSupersededResponseSpillPublication,
   createResponseSpillPublicationControl,
@@ -656,6 +657,21 @@ export function spillQueueHoldsResidentCandidate(id: string, state: ResidentResp
 /** Superseded generation a queued job will replace, if one is already parked on it. */
 export function spillQueueSupersededSpillFor(id: string): ResponseSpillRef | undefined {
   return pendingResponseSpillById.get(id)?.supersededSpill;
+}
+
+/**
+ * File names an orphan sweep must keep: each queued job's superseded generation,
+ * its in-flight temp, and its destination — all still owned but not yet named by
+ * `states` or `pendingSpillUnlinks`.
+ */
+export function spillQueueReferencedSpillFileNames(): Set<string> {
+  const names = new Set<string>();
+  for (const job of pendingResponseSpills) {
+    if (job.supersededSpill) names.add(job.supersededSpill.fileName);
+    if (job.publicationControl.tempPath) names.add(basename(job.publicationControl.tempPath));
+    if (job.publicationControl.destinationPath) names.add(basename(job.publicationControl.destinationPath));
+  }
+  return names;
 }
 
 /** Test-only: release queued jobs and zero the queue-owned byte accounting. */

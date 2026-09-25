@@ -9,7 +9,16 @@ export const LOCAL_MANAGEMENT_CAPABILITY_TTL_MS = 10_000;
 
 export const LOCAL_MANAGEMENT_READ_PATHS = {
   codexAccounts: "/api/codex-auth/accounts",
+  codexAuthActive: "/api/codex-auth/active",
+  oauthAccounts: "/api/oauth/accounts",
+  providerKeys: "/api/providers/keys",
+  config: "/api/config",
   systemMemory: "/api/system/memory",
+  companionSettings: "/api/companion/settings",
+  usage: "/api/usage",
+  startupHealth: "/api/startup-health",
+  providerQuotas: "/api/provider-quotas",
+  usageTimeline: "/api/usage/timeline",
 } as const;
 
 export type LocalManagementReadPath =
@@ -32,7 +41,16 @@ export function parseExpectedLocalManagementPid(value: string | null): ExpectedL
 
 function isLocalManagementReadPath(path: string): path is LocalManagementReadPath {
   return path === LOCAL_MANAGEMENT_READ_PATHS.codexAccounts
-    || path === LOCAL_MANAGEMENT_READ_PATHS.systemMemory;
+    || path === LOCAL_MANAGEMENT_READ_PATHS.codexAuthActive
+    || path === LOCAL_MANAGEMENT_READ_PATHS.oauthAccounts
+    || path === LOCAL_MANAGEMENT_READ_PATHS.providerKeys
+    || path === LOCAL_MANAGEMENT_READ_PATHS.config
+    || path === LOCAL_MANAGEMENT_READ_PATHS.systemMemory
+    || path === LOCAL_MANAGEMENT_READ_PATHS.companionSettings
+    || path === LOCAL_MANAGEMENT_READ_PATHS.usage
+    || path === LOCAL_MANAGEMENT_READ_PATHS.startupHealth
+    || path === LOCAL_MANAGEMENT_READ_PATHS.providerQuotas
+    || path === LOCAL_MANAGEMENT_READ_PATHS.usageTimeline;
 }
 
 function localReadCapabilityPayload(
@@ -44,7 +62,11 @@ function localReadCapabilityPayload(
   expiresAt: number,
 ): string | null {
   if (!BASE64URL_256.test(nonce)) return null;
-  if (method !== LOCAL_READ_METHOD || !isLocalManagementReadPath(path)) return null;
+  // `path` arrives as pathname+search. The allowlist judges the pathname; the query is
+  // still signed into the payload, so a capability minted for one range cannot be replayed
+  // against another. Query-less paths keep the exact v1 payload shape.
+  const pathname = path.split("?", 1)[0]!;
+  if (method !== LOCAL_READ_METHOD || !isLocalManagementReadPath(pathname)) return null;
   if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
   if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) return null;
@@ -56,7 +78,7 @@ export function createLocalManagementReadCapability(
   secret: string,
   nonce: string,
   method: string,
-  path: string,
+  path: string, // pathname plus any query; the query is bound into the signature
   pid: number,
   port: number,
   expiresAt: number,

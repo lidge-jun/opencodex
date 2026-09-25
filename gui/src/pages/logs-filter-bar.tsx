@@ -1,8 +1,9 @@
 import { useRef } from "react";
-import type { TFn } from "../i18n/shared";
+import type { TFn, TKey } from "../i18n/shared";
 import { IconX } from "../icons";
 import { formatProviderDisplayName } from "../provider-icons";
-import type { LogFilterState, LogStatusFilter, LogTimeWindow } from "./logs-filter";
+import { PROTOCOL_MODE_KEYS } from "../components/protocols/protocol-labels";
+import { LOG_PROTOCOL_MODE_FILTERS, type LogFilterState, type LogProtocolModeFilter, type LogStatusFilter, type LogTimeWindow } from "./logs-filter";
 import { logsSurfaceKeyDown } from "./logs-surface-keydown";
 
 interface LogsFilterBarProps {
@@ -114,6 +115,13 @@ export function LogsFilterBar({
             <option value="errors">{t("logs.filter.status.errors")}</option>
           </select>
         </label>
+
+        <label className="muted text-control logs-filter-field">
+          {t("logs.filter.protocol.label")}
+          <select className="input select-sm" value={filters.protocolMode ?? "all"} aria-label={t("logs.filter.protocol.label")} onChange={event => onFilterChange({ ...filters, protocolMode: event.target.value as LogProtocolModeFilter })}>
+            {LOG_PROTOCOL_MODE_FILTERS.map(mode => <option key={mode} value={mode}>{t(protocolModeFilterKey(mode))}</option>)}
+          </select>
+        </label>
       </div>
 
       <div className="logs-toolbar logs-toolbar-secondary">
@@ -131,4 +139,10 @@ export function LogsFilterBar({
       </div>
     </div>
   );
+}
+
+function protocolModeFilterKey(mode: LogProtocolModeFilter): TKey {
+  if (mode === "all") return "logs.filter.protocol.all";
+  if (mode === "none") return "logs.filter.protocol.none";
+  return PROTOCOL_MODE_KEYS[mode];
 }

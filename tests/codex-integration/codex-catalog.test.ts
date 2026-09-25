@@ -66,6 +66,7 @@ import { convergeCodexCatalog } from "../../src/codex/convergence";
 import { resetCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
 import { resolveCodexCatalogSerializationDatabasePath, resolveEffectiveUserIdentity } from "../../src/codex/user-identity";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
+import { NEUTRAL_IDENTITY_LINE } from "../../src/adapters/identity";
 
 const originalFetch = globalThis.fetch;
 
@@ -414,7 +415,7 @@ describe("combo catalog capability intersection", () => {
       expect(row.slug).toBe(alias);
       expect(row.display_name).toBe(alias);
       expect(row.owned_by).toBe("combo");
-      expect(row.base_instructions).toContain("mixed");
+      expect(row.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
       expect(row).not.toHaveProperty("model_messages");
       expect(row.tool_mode).toBe("code_mode_only");
       expect(row.web_search_tool_type).toBe("text_and_image");
@@ -3426,7 +3427,7 @@ describe("Codex catalog routed normalization", () => {
     expect(routed?.supports_search_tool).toBe(true);
     expect(routed?.supports_reasoning_summaries).toBe(false);
     expect(routed?.base_instructions).not.toBe(nativeTemplate().base_instructions);
-    expect(routed?.base_instructions).toContain("claude-sonnet-4-6");
+    expect(routed?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
     expect(routed?.default_reasoning_level).toBe("medium");
   });
 
@@ -3560,7 +3561,7 @@ describe("Codex catalog routed normalization", () => {
     expect(sol?.display_name).toBe("GPT-5.6-Sol");
     expect(terra?.display_name).toBe("GPT-5.6-Terra");
     expect(luna?.display_name).toBe("GPT-5.6-Luna");
-    expect(sol?.description).toBe("Latest frontier agentic coding model.");
+    expect(sol?.description).toBe("Reliable agentic workhorse for everyday tasks.");
     expect(sol?.availability_nux).toBeDefined();
 
     // Per-slug multi-agent generation: sol/terra v2, luna v1.
@@ -3753,9 +3754,9 @@ describe("Codex catalog routed normalization", () => {
       display_name: "Daybreak Blue",
       // The pinned snapshot stays a verbatim copy of what upstream shipped; the live
       // contract (1,050,000 / 922,000) is carried by NATIVE_OPENAI_CONTEXT_OVERRIDES and
-      // applied on top by applyNativeOpenAiContextOverride, so the raw entry still reads 372k.
-      context_window: 372_000,
-      max_context_window: 372_000,
+      // applied on top by applyNativeOpenAiContextOverride, so the raw entry reads 272k/872k.
+      context_window: 272_000,
+      max_context_window: 872_000,
       comp_hash: "3000",
       tool_mode: "code_mode_only",
       use_responses_lite: true,
@@ -3764,10 +3765,9 @@ describe("Codex catalog routed normalization", () => {
       multi_agent_version: "v2",
     });
     expect(source).not.toHaveProperty("availability_nux");
-    expect(source?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
+    expect(source?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
     expect(source?.base_instructions).not.toContain("based on GPT-5");
-    expect((source?.model_messages as { instructions_template?: string })?.instructions_template)
-      .toContain("powered by the gpt-daybreak-blue-latest");
+    expect((source?.model_messages as { instructions_template?: string })?.instructions_template).toContain(NEUTRAL_IDENTITY_LINE);
 
     // NATIVE_OPENAI_MODELS already contains the slug; passing it again would double it.
     const projected = buildCatalogEntries(
@@ -3947,7 +3947,7 @@ describe("Codex catalog routed normalization", () => {
       multi_agent_version: "v2",
       opencodex_catalog_kind: CODEX_CUSTOM_MODEL_CATALOG_KIND,
     });
-    expect(daybreak?.base_instructions).toContain("powered by the gpt-daybreak-blue-latest");
+    expect(daybreak?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
     expect(daybreak?.model_messages).toBeDefined();
     expect(entries.some(entry => entry.slug === NATIVE_DAYBREAK_BLUE_MODEL)).toBe(false);
     expect(entries.some(entry => entry.slug === `main/${NATIVE_DAYBREAK_BLUE_MODEL}`)).toBe(false);
@@ -3995,7 +3995,7 @@ describe("Codex catalog routed normalization", () => {
       display_name: "GPT-6-Astra", multi_agent_reasoning_effort: "xhigh",
       service_tiers: [{ id: "priority", name: "Fast", description: "2x speed, increased usage" }],
     });
-    expect(astra?.base_instructions).toContain("powered by the gpt-6-astra");
+    expect(astra?.base_instructions).toContain(NEUTRAL_IDENTITY_LINE);
     expect(astra?.base_instructions).not.toContain("daybreak");
   });
 
@@ -4249,7 +4249,7 @@ describe("Codex catalog routed normalization", () => {
     expect(luna?.display_name).toBe("GPT-5.6-Luna");
     expect((luna?.supported_reasoning_levels as { effort: string }[]).map(l => l.effort))
       .toEqual(["low", "medium", "high", "xhigh", "max"]);
-    expect(luna?.priority).toBe(3); // upstream priority restored for the upgraded entry
+    expect(luna?.priority).toBe(8); // upstream priority restored for the upgraded entry
     expect(sol?.genuine_marker).toBe("from-installed-catalog");
     expect(sol?.priority).toBe(1);
   });
@@ -4269,7 +4269,7 @@ describe("Codex catalog routed normalization", () => {
     const sol = merged.find(entry => entry.slug === "gpt-5.6-sol");
 
     expect(sol?.display_name).toBe("GPT-5.6-Sol");
-    expect(sol?.description).toBe("Latest frontier agentic coding model.");
+    expect(sol?.description).toBe("Reliable agentic workhorse for everyday tasks.");
     expect(sol?.priority).toBe(41);
     expect(sol).not.toHaveProperty("stale_marker");
   });
@@ -6839,7 +6839,7 @@ describe("OpenAI API trusted catalog augmentation", () => {
     "gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
     "gpt-5.6-sol-pro", "gpt-5.6-terra-pro", "gpt-5.6-luna-pro",
     "daybreak-red-latest", "daybreak-blue-latest",
-    "gpt-6-astra",
+    "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
   ];
 
   test("Astra API registry metadata reaches the emitted catalog independently of native limits", async () => {
@@ -7103,17 +7103,6 @@ describe("shouldExposeRoutedModel — Gemini image-capable exemption", () => {
     ]) {
       expect(shouldExposeRoutedModel({ provider: "openrouter", id })).toBe(false);
     }
-  });
-
-  test("still filters compatibility-excluded slugs", () => {
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "hy3-preview" })).toBe(false);
-    // Issue #2330: uncallable or stale OpenCode Go models
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "mimo-v2-omni" })).toBe(false);
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "mimo-v2-pro" })).toBe(false);
-    // Control / live models are exposed
-    expect(shouldExposeRoutedModel({ provider: "opencode-free", id: "deepseek-v4-flash-free" })).toBe(true);
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "grok-4.6" })).toBe(true);
-    expect(shouldExposeRoutedModel({ provider: "opencode-go", id: "glm-5.2" })).toBe(true);
   });
 });
 

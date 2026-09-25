@@ -54,7 +54,14 @@ const LOCAL_BUNDLES: Record<string, readonly string[]> = {
  * required and unmet. The committed config keeps `createUpdaterArtifacts: true`, so the release
  * build is untouched.
  */
-const LOCAL_CONFIG = JSON.stringify({ bundle: { createUpdaterArtifacts: false } });
+function localConfig(platform: string): string {
+  return JSON.stringify({ bundle: {
+    createUpdaterArtifacts: false,
+    // Sign nested executables and the bundle even without a Developer ID. Leaving
+    // their old linker signatures in place creates an app that macOS kills at launch.
+    ...(platform === "darwin" ? { macOS: { signingIdentity: "-" } } : {}),
+  } });
+}
 
 export interface SpawnResult {
   status: number | null;
@@ -100,7 +107,7 @@ export function runBuildLocal(deps: BuildLocalDeps): number {
   for (const format of bundles) {
     // One invocation per format: a format this host cannot build must not destroy the
     // artifacts of formats it can.
-    const args = ["tauri", "build", "--ci", "--bundles", format, "--config", LOCAL_CONFIG, ...deps.argv];
+    const args = ["tauri", "build", "--ci", "--bundles", format, "--config", localConfig(deps.platform), ...deps.argv];
     const first = deps.spawn(args);
     let status = first.status ?? 1;
     if (first.error) {
@@ -111,7 +118,7 @@ export function runBuildLocal(deps: BuildLocalDeps): number {
       // verbose pass is where the tool's own stderr reaches the terminal. The retry is
       // diagnostics only — the recorded status stands either way.
       deps.error(`[build:local] ${format} failed; rerunning with --verbose for the bundler's diagnostics`);
-      const retry = deps.spawn(["tauri", "--verbose", "build", "--ci", "--bundles", format, "--config", LOCAL_CONFIG, ...deps.argv]);
+      const retry = deps.spawn(["tauri", "--verbose", "build", "--ci", "--bundles", format, "--config", localConfig(deps.platform), ...deps.argv]);
       if (retry.error) deps.error(`[build:local] could not start tauri: ${retry.error.message}`);
     }
     attempts.push({ format, status });

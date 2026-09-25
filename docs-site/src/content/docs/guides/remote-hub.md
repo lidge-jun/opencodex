@@ -3,6 +3,8 @@ title: Remote Hub Deployment
 description: Run a one-port opencodex hub on Linux, macOS, or Docker with a loopback companion listener, a self-provisioned data token, ocx hub invite, a loopback-only management ingress, Tailscale Serve, and headless OAuth.
 ---
 
+For SSH machine links, see [Remote Link](/guides/remote-link/).
+
 An opencodex hub keeps provider credentials and usage state on one host while authenticated clients
 use its data plane remotely. The browser-facing management plane is separate: an optional listener
 binds only `127.0.0.1`, serves the dashboard and `/api/*`, and is intended to sit behind Tailscale
@@ -60,6 +62,16 @@ The hub automatically issues a per-client key. The client writes it to the exist
 `service-api-token` file, never `config.json`. While connected, usage comes from the hub usage store
 filtered to that client's stable `apiKeyId`. After disconnect, usage comes from the local store.
 OpenCodex does not mirror usage between the two stores.
+`ocx service uninstall` removes the local service but preserves an existing key when the client is
+connected, its connection metadata is invalid or mismatched, or a pending connection marker matches
+the current key. A valid marker for an older key does not retain an unrelated service key.
+If a marker is unsafe, malformed, or unreadable, token cleanup cannot be verified;
+the command warns instead of claiming the key was kept. Use `ocx disconnect` to remove a connected
+client's local key and state.
+
+If a client saved a remote `http://` Hub URL before the secure transport rule, its Hub
+operations now return `insecure_http_refused`. Run `ocx disconnect` locally, then reconnect
+to the Hub with `https://` (or use loopback HTTP when both sides are on the same machine).
 
 Rotate a connected client with a fresh transient authority:
 
@@ -110,6 +122,18 @@ the request and shows matching cached hub state, or `unavailable` if no matching
 Bind the data listener to the hub's Tailscale address, enable the loopback companion so the hub's
 own processes reach that same port without a credential, and publish management separately. The
 values below are examples:
+
+:::danger[Use a dedicated single-tenant host]
+The loopback companion is unauthenticated: every process and OS user on this machine can use the
+hub's provider credentials and account quota, and can exhaust the shared turn capacity that
+authenticated remote clients depend on. Do not enable it on a shared or multi-tenant host. If the
+host is shared, leave the `unauthenticatedLoopbackListener` setting disabled and do not run the hub's local
+integrations.
+
+Binding to `127.0.0.1` means the kernel refuses remote connections, but it does not stop a browser:
+a page you visit can make your browser connect to `127.0.0.1`. The listener therefore applies the
+same `Host` and `Origin` checks as an ordinary loopback bind.
+:::
 
 ```bash
 ocx config set runtimeRole hub
@@ -215,6 +239,9 @@ separate ports:
 ```bash
 ocx config set unauthenticatedLoopbackListener '{"enabled":true,"port":10104}'
 ```
+
+The ported form is the same unauthenticated surface: the dedicated-host warning above applies to
+this command too.
 
 With a `port` set, the local integrations follow the listener and write `http://127.0.0.1:10104`
 instead. The port must differ from the proxy port and is never OS-assigned: an ephemeral port would

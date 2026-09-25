@@ -318,4 +318,89 @@ describe("pinnedHttpsGet transport", () => {
     expect(resIdleMs).toBe(12_345);
     await resp.arrayBuffer();
   });
+
+  test("schedules the 10s connect deadline by default and rejects a stalled connect", async () => {
+    // A socket stuck in `connecting`: TCP/TLS setup never completes, so the
+    // idle timers (which only start once the connection exists) never arm.
+    const requestMock = mock((_options: unknown, _onResponse?: Function) => {
+      const req = new EventEmitter() as EventEmitter & { setTimeout: Function; end: Function; destroy: Function };
+      req.setTimeout = mock(() => {});
+      req.destroy = mock(() => {});
+      req.end = mock(() => {
+        const socket = new EventEmitter() as EventEmitter & { connecting: boolean };
+        socket.connecting = true; // never emits secureConnect
+        req.emit("socket", socket);
+      });
+      return req;
+    });
+    mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
+
+    // Observe scheduled deadlines without waiting for them: record the delay,
+    // arm nothing, and fire the connect deadline manually.
+    const realSetTimeout = globalThis.setTimeout;
+    const scheduled: { delay: number; fire: (...args: unknown[]) => void }[] = [];
+    globalThis.setTimeout = ((
+      cb: (...args: unknown[]) => void,
+      delay?: number,
+    ) => {
+      scheduled.push({ delay: delay ?? 0, fire: cb });
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout;
+    try {
+      const { pinnedHttpsGet, DOWNLOAD_CONNECT_TIMEOUT_MS } = await import("../../src/images/artifacts");
+      expect(DOWNLOAD_CONNECT_TIMEOUT_MS).toBe(10_000);
+      const pending = pinnedHttpsGet(
+        "https://cdn.example/stalled.png",
+        { address: "93.184.216.34", family: 4 },
+      );
+      await new Promise(resolve => realSetTimeout(resolve, 0));
+      const connectDeadline = scheduled.find(t => t.delay === DOWNLOAD_CONNECT_TIMEOUT_MS);
+      expect(connectDeadline).toBeDefined();
+      connectDeadline!.fire();
+      await expect(pending).rejects.toThrow(/connect timed out/);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
+
+  test("forwards an explicit connectTimeoutMs override", async () => {
+    const requestMock = mock((_options: unknown, _onResponse?: Function) => {
+      const req = new EventEmitter() as EventEmitter & { setTimeout: Function; end: Function; destroy: Function };
+      req.setTimeout = mock(() => {});
+      req.destroy = mock(() => {});
+      req.end = mock(() => {
+        const socket = new EventEmitter() as EventEmitter & { connecting: boolean };
+        socket.connecting = true; // never emits secureConnect
+        req.emit("socket", socket);
+      });
+      return req;
+    });
+    mock.module("node:https", () => ({ default: { request: requestMock }, request: requestMock }));
+
+    const realSetTimeout = globalThis.setTimeout;
+    const scheduled: { delay: number; fire: (...args: unknown[]) => void }[] = [];
+    globalThis.setTimeout = ((
+      cb: (...args: unknown[]) => void,
+      delay?: number,
+    ) => {
+      scheduled.push({ delay: delay ?? 0, fire: cb });
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout;
+    try {
+      const { pinnedHttpsGet } = await import("../../src/images/artifacts");
+      const pending = pinnedHttpsGet(
+        "https://cdn.example/stalled.png",
+        { address: "93.184.216.34", family: 4 },
+        undefined,
+        { connectTimeoutMs: 250 },
+      );
+      await new Promise(resolve => realSetTimeout(resolve, 0));
+      const override = scheduled.find(t => t.delay === 250);
+      expect(override).toBeDefined();
+      override!.fire();
+      await expect(pending).rejects.toThrow(/connect timed out/);
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
 });

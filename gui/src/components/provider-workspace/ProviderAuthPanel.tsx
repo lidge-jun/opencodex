@@ -22,8 +22,10 @@ import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
 import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
+import { AnthropicGrantBadge, AnthropicResetGrantModal } from "./AnthropicResetGrants";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import { useGrokResetCoupons } from "../../hooks/useGrokResetCoupons";
+import { useAnthropicResetGrants } from "../../hooks/useAnthropicResetGrants";
 import { Switch } from "../../ui";
 import type {
   AccountLoadState,
@@ -234,6 +236,14 @@ export default function ProviderAuthPanel({
   );
   const grokCoupons = useGrokResetCoupons({ apiBase, accountIds: grokAccountIds, enabled: grokCouponsEnabled });
   const [couponAccount, setCouponAccount] = useState<OAuthAccountRow | null>(null);
+  // Claude usage resets ride a separate usage read, like the Grok coupons above.
+  const claudeGrantsEnabled = isOauth && item.name === "anthropic" && accounts.length > 0;
+  const claudeAccountIds = useMemo(
+    () => (claudeGrantsEnabled ? accounts.filter(account => !accountShowsReauth(account)).map(account => account.id) : []),
+    [claudeGrantsEnabled, accounts],
+  );
+  const claudeGrants = useAnthropicResetGrants({ apiBase, accountIds: claudeAccountIds, enabled: claudeGrantsEnabled });
+  const [grantAccount, setGrantAccount] = useState<OAuthAccountRow | null>(null);
   const refreshQuota = async () => {
     if (!onRefreshQuota || refreshingQuota) return;
     const generation = ++quotaRefreshGeneration.current;
@@ -566,6 +576,9 @@ export default function ProviderAuthPanel({
                         onClick={() => setCouponAccount(account)}
                       />
                     )}
+                    {claudeGrantsEnabled && !showReauth && (
+                      <AnthropicGrantBadge entry={claudeGrants.entries[account.id]} t={t} onClick={() => setGrantAccount(account)} />
+                    )}
                     <button type="button" className="btn btn-ghost btn-sm"
                       onClick={() => void authHandlers.onEditAlias(item.name, "oauth", account.id, account.alias)}>
                       {t("prov.editAlias")}
@@ -594,6 +607,15 @@ export default function ProviderAuthPanel({
                 entry={grokCoupons.entries[couponAccount.id]}
                 controller={grokCoupons}
                 onClose={() => setCouponAccount(null)}
+              />
+            )}
+            {grantAccount && (
+              <AnthropicResetGrantModal
+                accountId={grantAccount.id}
+                accountLabel={oauthAccountDisplayLabel(accounts, grantAccount, t)}
+                entry={claudeGrants.entries[grantAccount.id]}
+                controller={claudeGrants}
+                onClose={() => setGrantAccount(null)}
               />
             )}
             {accountLoadState === "ready" && loggedIn && accounts.length === 0 && (

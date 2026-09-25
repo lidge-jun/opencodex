@@ -1,5 +1,6 @@
 import { comboFailureDecision } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
+import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
 import { linkRequestSessionLane } from "../request-log-conversation";
 import type { OcxConfig } from "../../types";
@@ -8,6 +9,8 @@ import { handleResponses as handleResponsesCore } from "./core";
 import { requestPacingOverloadResponse } from "./pacing-overload";
 import { captureExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import { captureCallerDirectAuth } from "../../providers/caller-authorization";
+import { resolvePolicyProfileId } from "../../routing/profile";
+import { parseSyntheticRowId } from "../fast-row";
 
 type CoreHandler = typeof handleResponsesCore;
 type CoreOptions = Parameters<CoreHandler>[3];
@@ -82,6 +85,8 @@ function errorCodeFromText(text: string): string | undefined {
 
 async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal): Promise<boolean> {
   if (response.status < 400 || signal?.aborted) return false;
+  // A response that must not be sent again cannot open a policy-candidate retry either.
+  if (isNonReplayableResponse(response)) return false;
   try {
     const inspected = await readBoundedResponseBody(response.clone(), { signal });
     const text = inspected.displaySafe ? inspected.text : "";
@@ -146,7 +151,16 @@ export async function handleResponsesWithPolicyFallback(
     } : {}),
     onRequestBodyParsed: body => {
       options.onRequestBodyParsed?.(body);
-      if (body && typeof body === "object" && !Array.isArray(body)) rawBody = body as Record<string, unknown>;
+      if (rawBody === null && body && typeof body === "object" && !Array.isArray(body)
+        && typeof (body as { model?: unknown }).model === "string") {
+        const model = (body as { model: string }).model;
+        const { fastRow, effortRow } = parseSyntheticRowId(model, config);
+        if (resolvePolicyProfileId(config, fastRow?.baseId ?? effortRow?.baseId ?? model) === null) return;
+        // Recovery and other core preparation may mutate the parsed body in place. Keep an
+        // immutable snapshot of the original wire body so a retry cannot serialize those
+        // mutations. Object-identity metadata is re-established by each attempt, not serialized.
+        rawBody = structuredClone(body as Record<string, unknown>);
+      }
     },
     onStoredPool401ReplayDispatched: () => {
       storedPool401ReplayDispatched = true;

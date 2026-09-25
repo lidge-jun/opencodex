@@ -22,6 +22,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  */
 
 let TEST_DIR = "";
+const previousHome = process.env.OPENCODEX_HOME;
 
 const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 
@@ -39,7 +40,8 @@ describe("codex refresh-failure classification", () => {
     await flushConfigDirHardeningForTests();
     setIcaclsRunnerForTests(null);
     setAsyncIcaclsRunnerForTests(null);
-    delete process.env.OPENCODEX_HOME;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
     if (TEST_DIR) removeTreeWithRetry(TEST_DIR);
     TEST_DIR = "";
   });

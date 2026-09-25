@@ -170,8 +170,8 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-WSL üzerinde, `CODEX_HOME` ayarlanmamışsa ve Linux `~/.codex/config.toml` mevcut
-değilse, opencodex `/mnt/c/Users/*/.codex/config.toml` konumunda tek bir Windows
+WSL üzerinde, `CODEX_HOME` ayarlanmamışsa ve Linux `~/.codex` dizini mevcut
+değilse ya da hiçbir Codex durumu (`config.toml`, `auth.json`, `sessions`, `history.jsonl`) içermiyorsa, opencodex `/mnt/c/Users/*/.codex/config.toml` konumunda tek bir Windows
 Codex Desktop evini de kontrol eder. Tam olarak bir aday mevcut olduğunda bu
 dizini kullanır, böylece WSL app-server modu ve Windows Codex Desktop aynı
 yapılandırma ve kimlik doğrulama dosyalarını paylaşır. Bu algılamayı geçersiz
@@ -420,7 +420,7 @@ yeniden başlatma ipucunu yazdırır; `ocx doctor` yeniden başlatma güvenliği
 
 Katalog senkronizasyonu seçilen alt ajan modellerini Codex için kullanılabilir
 hale getirir; seçici sıralaması için [Codex App model
-seçicisi](/tr/guides/codex-app-models/#subagent-selection) ve v1/base/v2
+seçicisi](/tr/guides/codex-app-models/#alt-ajan-seçimi) ve v1/base/v2
 delegasyonu ve geri dönüş davranışı için [Alt Ajan
 Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
@@ -463,7 +463,7 @@ ocx restore    # durdurmadan geri yükleyin  (takma ad: ocx eject)
 ocx restore back # düz Codex'i çalışan proxy'ye yeniden yönlendirin
 ```
 
-opencodex yönetilen bir [arka plan servisi](/tr/reference/cli/#ocx-service)
+opencodex yönetilen bir [arka plan servisi](/tr/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove)
 olarak çalıştığında `OCX_SERVICE=1` ayarlar, böylece servis odaklı bir yeniden
 başlatma Codex yapılandırmasını **bozmaz** — yalnızca açık bir `ocx stop` / `ocx
 service stop` yerel Codex'i geri yükler.

@@ -823,8 +823,8 @@ describe("CLI /api sync wiring for stale app-servers (#476)", () => {
     // write actually landed, never on a refused/failed serialization attempt.
     expect(syncCacheCase).toContain("withCatalogWriteSerialization");
     // #1931: explicit sync-cache refreshes even when injection is OFF (side profiles).
-    expect(syncCacheCase).toContain("invalidateCodexModelsCacheWithPermit(permit, owningCodexHome, { allowWhenDesiredDisabled: true })");
-    const gate = 'if (invalidated.kind === "completed" && invalidated.value)';
+    expect(syncCacheCase).toContain("invalidateCodexModelsCacheWithPermitOutcome(permit, owningCodexHome, { allowWhenDesiredDisabled: true })");
+    const gate = 'if (invalidated.kind === "completed" && invalidated.value === "written")';
     expect(syncCacheCase).toContain(gate);
     expect(syncCacheCase).toContain("handleRestartScopeAfterWrite");
     expect(syncCacheCase.indexOf(gate))

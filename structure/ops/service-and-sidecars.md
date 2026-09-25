@@ -13,7 +13,7 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 Service startup and restore use the [catalog retirement policy](../catalog.md#shared-catalog);
 retirement does not itself change service registration or user-selected model configuration.
 
-Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses.md#passthrough-sse-stream-shapes-314).
+Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts. Response-attached WebSocket telemetry follows the [stage record identity contract](../transports/responses-wire-shapes.md#passthrough-sse-stream-shapes-314).
 
 ## Background service command selection
 
@@ -26,6 +26,10 @@ existing task. Explicit `ocx service install` remains the operator-owned registr
 
 > Decision record: [ADR-0028](../decisions/ADR-0028-background-service-command-selection.md)
 
+## Windows npm tray update badge
+
+The npm Windows tray owns six installed ICOs: online, warning, and offline base safety glyphs plus one blue-dot variant of each. Its hidden `ocx __update-badge` child reads the package cache without refreshing or writing it. The tray samples no more often than every 60 seconds, caps stdout and stderr at 16 KiB each, requests termination after 12 seconds or a pipe overflow, and reaps the child on later Windows Forms ticks before allowing another launch. A successful badge observation expires after 180 seconds; failed reads do not extend it. The **Update available** item opens the dashboard and never installs a package. Shutdown requests child termination, waits at most 500 ms, and disposes the probe before tray UI disposal.
+
 ## Windows startup ownership listing reuse
 
 One proxy startup asks service-home ownership twice before listen: once before cache invalidation and
@@ -36,23 +40,38 @@ enumeration twice made a measured 12.3-second fallback cost roughly 25 seconds b
 
 > Decision record: [ADR-0029](../decisions/ADR-0029-windows-startup-ownership-listing-reuse.md)
 
+## Service-manager probe
+
+`src/service-manager-probe.ts` (`inspectServiceManagerInstallation`) reports what the platform
+service manager has installed for opencodex, read-only and fail-closed. It reads the service
+definition itself and parses the `CODEX_HOME` and `OPENCODEX_HOME` values embedded in it, because
+installation writes the definition before the state file: an interrupted reinstall can leave the
+two naming different homes, and on macOS a logged-out user can have the plist on disk with no GUI
+domain to query. The probe returns what it saw and does not decide ownership; callers such as
+`src/integrations/native/ownership-preflight.ts` compare the homes. Every command it runs is
+read-only and time-bounded, so it is safe while the proxy runs under that same manager.
+
 ## Stable service launcher (launchd and systemd)
 
-Launchd and systemd installation resolve the first absolute `ocx` PATH candidate that is both a regular file
+Systemd installation resolves the first absolute `ocx` PATH candidate that is both a regular file
 and executable, keeps that path lexical so a version-manager shim remains an indirection, and
 records the same single resolution in the service definition and service state. Definition
-construction (`buildPlist`, `buildUnit`) never performs PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
-fallback, keeping diagnostics and tests independent of the host PATH.
+construction (`buildUnit`) never performs PATH discovery itself: callers provide either the resolved launcher or an explicit direct Bun/CLI
+fallback, keeping diagnostics and tests independent of the host PATH. Launchd always uses the
+package-local Bun and CLI pair selected by the trusted install or repair invocation; it never hands
+credential-bearing service state to a mutable PATH launcher, and a `launcherPath` recorded by an
+older install is reported stale so `ocx service repair` re-bakes the trusted package paths.
 
 Launcher mode omits the package-local Bun provenance pair because an upgrade may delete that
 versioned tree. The only runtime path carried through the launcher is a pre-Bun, proof-bound
 `OPENCODEX_BUN_PATH` whose durable runtime source is `override`; bundled and process fallbacks are
 rediscovered by the current launcher. The API-auth token remains file-backed and is loaded only by
 the service shell at start. On macOS, `start` and detailed `status` compare the live launchd job
-against `expectedLaunchdCommand`, which follows the recorded `launcherPath` rather than re-walking
-PATH, so a launcher-backed job is never misreported as an older plist (#3464).
+against `expectedLaunchdCommand`, which still follows a `launcherPath` recorded by a pre-pinning
+install rather than re-walking PATH, so such a job is never misreported as an older plist (#3464).
 
 > Decision record: [ADR-0030](../decisions/ADR-0030-stable-service-launcher-launchd-and-systemd.md)
+> Decision record: [ADR-0100](../decisions/ADR-0100-stable-service-launcher-launchd-and-systemd.md)
 
 ## Sidecars
 
@@ -72,6 +91,14 @@ Anthropic from credentials alone.
 
 On the OpenAI path there is one deterministic `openai` sidecar candidate and its current account mode
 owns credential selection; API-key OpenAI is not a ChatGPT forward sidecar candidate.
+
+`src/sidecar/` holds what both sidecars share. `src/sidecar/auth.ts` decides whether ChatGPT or
+Anthropic auth is present for sidecar purposes, from config and stored account state and never from
+request headers; per-request usability stays with the executors. `src/sidecar/candidates.ts` builds
+the candidate set both sidecars start from: a model may be offered as a sidecar backend only when
+the management model picker would show it, except the fixed slot model of a logged-in side. Vision
+then removes provably text-only models, and web search keeps only models whose probed backend has an
+executor (`src/web-search/backends.ts`).
 
 Sidecar failures must degrade to text markers or skipped capability, not abort the main request.
 
@@ -149,9 +176,9 @@ so the flag does not identify the peer responsible for corruption. Existing diag
 not rewritten. Audio devices, WebRTC media negotiation, captions and spoken handoff delivery remain
 client responsibilities.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../gui-and-management-api.md#upstream-key-account-attribution), independently of subscription quota observations.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](../dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger. Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
-Connected CLI usage follows the [client-scoped hub usage contract](../gui-and-management-api.md#usage-accounting); local management and account data remain separate.
+Connected CLI usage follows the [client-scoped hub usage contract](../dashboard-and-usage.md#usage-accounting); local management and account data remain separate.
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](../remote-workspace.md) owns that integration.
 
@@ -161,9 +188,9 @@ Chat helper admission in `src/server/responses/core.ts` follows the
 claims stored main, after terminal vision, routed vision and search exclusions.
 
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](../gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](../dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
+Codex pool settings and their consumers follow the [reset-first ordering contract](../providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback and preserved affinity.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;
 its defaults and exclusions are owned by [Responses transport](../transports/responses.md).
@@ -175,7 +202,7 @@ privately to final dispatch; preliminary route selection does not inject Go-only
 
 Native Chat applies qualifying effort ceilings independently of model pins; pin selection precedes the cap and only pins or cap rewrites enter wire mapping. The [catalog effort contract](../catalog.md#ultra-reasoning-level) records the V1/compaction exemptions and caller-preservation boundary.
 
-Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-tiers.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
+Pool quota producers and account commands follow the [bounded raw-observation contract](../providers/openai-accounts.md#bounded-pool-quota-observations), separate from the latest display snapshot and capacity estimates.
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
@@ -196,10 +223,47 @@ Native steering generation overrides, explicit public-API eligibility and the co
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
 
 The service loads the optional `compactionRouting` block from persisted configuration.
-[Responses ingress](../transports/responses.md#compaction-routing-overrides) applies it to individual compaction
+[Responses ingress](../transports/responses-failover.md#compaction-routing-overrides) applies it to individual compaction
 requests whose trigger the block names.
 
 Standalone binaries use `src/lib/standalone.ts` to detect the Bun `$bunfs` runtime and
 `src/service/state.ts` to compose durable service commands as `<execPath> start`, without a
 source-tree CLI path. The copied `gui/dist` directory is located by `src/server/gui-static.ts`;
 `OPENCODEX_GUI_DIST` remains an explicit override.
+
+## Bun updater ownership transaction
+
+`src/update/ownership-transaction.ts` holds one mutation lease across the Bun updater's awaited
+stop, package replacement and recovery work. The parent never puts its token in the global
+environment. Fixed stop/service/direct-recovery children can join it; package-manager and
+ancillary children receive environments without the capability. Refusals return through the
+lease boundary before exiting, and thrown failures release it after owner-aware recovery.
+Replacement and recovery inspect both the captured endpoint and the freshly read runtime record.
+Malformed or unreadable records remain unknown. Recovery requires the same complete owner
+identity and proven-dead liveness; unknown or transferred ownership never starts another proxy.
+Direct recovery retains the lease until readiness or its bounded deadline. The normal successful
+manual-runtime update still prints the existing restart hint.
+
+The npm transaction creates each staging directory exclusively and may clean that fresh path
+while the creating process still owns it. A later update only reports staging leftovers. It does
+not recursively delete them from a marker: the marker is not an authorization secret, and a
+neighbouring writer could replace a previously checked pathname with a link before traversal.
+
+The probe ceilings are module-load constants in `src/server/proxy-liveness.ts`: 750 ms for the
+shared default and 1500 ms (three attempts) for `SERVICE_STOP_LIVENESS` and
+`START_OWNERSHIP_LIVENESS`. `OCX_PROBE_TIMEOUT_MS` (whole milliseconds, 1 to 30000) only raises
+them for hosts whose loopback connects are slowed by a security layer; each ceiling keeps its floor,
+so an override can never shorten the budgets that prevent a duplicate proxy, and a value above the
+30 s ceiling is ignored so the single-shot stop deadline (`timeoutMs * attempts + 250` in
+`src/service/orchestration.ts`) stays bounded. `tests/server/probe-timeout-env.test.ts` reads the
+constants in child processes.
+
+`src/update/install-detection.mjs` examines both lexical and resolved package paths. An enclosing mise installation owns its nested npm/aube package only when the adjacent `.mise.backend.toml` identifies the containing tool alias and the canonical `npm:@bitkyc08/opencodex` backend. That verified outer owner takes precedence over the inner npm layout. Two verified owners whose tool roots differ only by a symlinked ancestor (macOS `/var` -> `/private/var`) are compared by canonical directory and count as one install. An unreadable or contradictory ownership boundary on either path takes precedence over a verified owner on the other path, refusing mutation without inventing a tool name or recovery command. One boundary is not OpenCodex's at all: on Windows, npm -g under a mise-managed Node puts the package directly in `<mise>/installs/node/<version>/node_modules`, whose adjacent record is Node's own (`short = "node"`, `full = "core:node"`). That exact record with the package directly in the runtime's global `node_modules` is an npm install and falls through to npm detection; any other backend, alias or deeper layout stays fail-closed (`tests/update/update-mise-node-runtime.test.ts`). `ocx update`, dashboard update checks, and update workers expose `installer: "mise"`; checks remain read-only, while mutation is refused with `mise upgrade <verified-alias>` before any proxy stop, package write, or worker creation. The package-tree integrity guard remains active for mise packages.
+
+## Package cache refresh
+
+src/update/refresh-scheduler.ts owns the package cache timer and per-channel singleflight for the running proxy. Eligible npm, pnpm and Bun installs refresh missing or 20-hour-stale `version.json` after bind, check staleness hourly and retry failures with bounded backoff. Each server start owns one scheduler reference; the last matching stop disarms the timer. A stopped automatic lookup cannot write a late result, but an explicit check joining that lookup marks explicit interest and writes its successful result even if the last listener stops before it resolves. Source/mise installs and `OCX_DISABLE_UPDATE_CHECK=1` do not start automatic lookup; explicit requests remain available.
+
+src/update/async-check.ts uses the existing owner-bound registry target with a bounded asynchronous child; pnpm owner discovery runs in src/update/pnpm-owner-worker.ts off the request loop. `src/update/notify.ts` writes successful results atomically and preserves a dismissal only for the same channel and version. The interactive pre-bind prompt reads the cache and does not launch a second detached refresh. `src/update/badge.ts` only reads the cache and reports unknown at 40 hours.
+
+The desktop badge snapshot in src/update/desktop-badge.ts is process-local display state keyed by a Tauri session id. A 60-second shell heartbeat renews receipt time; entries expire after 180 seconds and the store retains at most 32 sessions. It is separate from the package version cache and from the updater job/ownership transaction. A proxy restart reports unknown until a bound desktop shell republishes; no update installation can be authorized by this snapshot.

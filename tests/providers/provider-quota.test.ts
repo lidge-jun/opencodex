@@ -1130,7 +1130,7 @@ describe("fetchProviderQuotaReports", () => {
     expect(result.reports).toHaveLength(1);
     expect(result.reports[0]?.source).toBe("deepseek:balance");
     expect(result.reports[0]?.quota.customWindows).toEqual([{
-      label: "API balance ($6.00 total, $4.00 granted)",
+      label: "API balance (¥6.00 total, ¥4.00 granted)",
       percent: 0,
     }]);
     expect(seen).toHaveLength(1);

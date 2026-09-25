@@ -36,7 +36,7 @@ function writeStdoutFully(text: string): void {
 const USAGE = `Usage:
   ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--code -] [--no-wait] [--json]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
-  ocx account cancel <provider> [--flow <flow-id>] [--json]
+  ocx account cancel <provider> [--flow <flow-id>] [--json] (--flow required for codex)
   ocx account reset-credits <account-id|main> [--consume --yes [--operation-id <uuid>]] [--json]
   ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <token-id>] [--operation-id <uuid>]] [--json]
 
@@ -281,10 +281,13 @@ async function cancel(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
   const provider = args.shift()?.trim().toLowerCase();
   const wantsJson = takeFlag(args, "--json");
-  const flowId = takeOption(args, "--flow");
+  const flowId = takeOption(args, "--flow")?.trim();
   if (!provider) throw new CliUsageError("provider is required", USAGE);
   rejectArgs(args, USAGE);
   const codex = CODEX_NAMES.has(provider);
+  if (codex && !flowId) {
+    throw new CliUsageError("Codex login cancel requires --flow <flow-id> (printed by 'ocx account login').", USAGE);
+  }
   const result = await runtimeRequest(codex ? "/api/codex-auth/login/cancel" : "/api/oauth/login/cancel", {
     method: "POST",
     body: JSON.stringify(codex ? { flowId } : { provider }),

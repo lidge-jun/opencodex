@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.png" alt="opencodex — universal provider proxy for Codex, Claude Code, Claude Desktop and Grok Build" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>Universal provider proxy for OpenAI Codex, Claude Code, Claude Desktop &amp; Grok Build</b><br>
 Two commands, and every one of them runs any LLM you point it at.</p>
@@ -13,6 +17,13 @@ Two commands, and every one of them runs any LLM you point it at.</p>
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="Download for macOS (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Download for Windows (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Download for Linux (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Download for Linux (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -78,7 +89,7 @@ account while existing threads stay pinned to the account that started them.
 
 ## Quick start
 
-### Personal install
+### Personal install (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; the Bun runtime is bundled automatically
@@ -92,26 +103,28 @@ Open **http://localhost:10100** and configure everything in the web dashboard �
 re-opens the dashboard at any time.
 
 <details>
-<summary><b>Desktop app and macOS widget — beta</b></summary>
+<summary><b>Desktop app (beta)</b></summary>
 
-A native shell around the same dashboard, plus a WidgetKit extension that shows proxy status,
-today's usage and provider quotas without opening a browser. The proxy is unchanged: the app
-finds a running one or starts the bundled `ocx` sidecar, and the dashboard stays at
-**http://localhost:10100**.
+The desktop app is the same proxy and dashboard in a native window, with a tray and bundled `ocx`.
+It attaches to a proxy that is already running, or starts its bundled one, and the dashboard stays
+on the proxy port (**http://localhost:10100** unless you configured another). Pick the file for your
+platform from the [latest release](https://github.com/lidge-jun/opencodex/releases/latest):
 
-It is beta. Builds are signed for integrity but not notarized, so macOS asks for a
-right-click → **Open** on first launch and Windows SmartScreen warns on the installer. The
-widget needs macOS 14 or newer; the snapshot model it renders lives in [`app/`](./app)
-(`MenuBarCore`).
+| Platform | File | Notes |
+|---|---|---|
+| macOS 13+ (Apple Silicon and Intel) | `OpenCodex-<version>-macos.dmg` | Universal build, signed with a Developer ID and notarized |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Not code-signed yet: SmartScreen asks once, choose **More info → Run anyway** |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` or `-linux-amd64.deb` | The tray needs an AppIndicator-capable desktop |
 
-Download it from the [latest release](https://github.com/lidge-jun/opencodex/releases), or build
-it locally with `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
-
-Install locations, service files and everything else written to disk are listed in
-[`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed). The
-[Desktop App guide](https://lidge-jun.github.io/opencodex/guides/desktop-app/) and the
-[macOS Menu Bar App guide](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/) cover
-per-platform installation and the Gatekeeper prompt.
+Every file has a `.sha256` next to it on the release page. On macOS 14+ the app also ships a
+WidgetKit extension that shows proxy status, today's usage and provider quotas; the snapshot model
+it renders lives in [`app/`](./app) (`MenuBarCore`). To build the app yourself, run
+`bun install && bun run build:gui` at the repository root, then in `desktop/` run
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` on macOS,
+or `bun install && bun run prepare-sidecar && bun run build:local` on Windows and Linux (the widget
+step needs macOS). The [Desktop App guide](https://opencodex.me/guides/desktop-app/) and the
+[macOS Menu Bar App guide](https://opencodex.me/guides/macos-menu-bar/) cover first launch, and
+[`AGENTS_INSTALL.md`](./AGENTS_INSTALL.md#where-things-are-installed) lists everything written to disk.
 
 </details>
 
@@ -207,8 +220,9 @@ setup, authenticated acceptance checks, remote management, and rollback.
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -216,8 +230,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -249,13 +264,13 @@ when it is unreachable). `ocx status` / `ocx doctor` / `ocx health` report the r
 
 ## Supported platforms
 
-| OS | Status | Service manager |
-|---|---|---|
-| macOS (arm64 / x64) | Fully supported | launchd |
-| Linux (x64 / arm64) | Fully supported | systemd (user unit) |
-| Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) |
+| OS | Status | Service manager | Desktop app (beta) |
+|---|---|---|---|
+| macOS (arm64 / x64) | Fully supported | launchd | Universal `.dmg` |
+| Linux (x64 / arm64) | Fully supported | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | Fully supported | Task Scheduler (hidden) / opt-in native service (`--native`, WinSW) | x64 `.msi` |
 
-Requires [Node](https://nodejs.org) 18+. The Bun runtime is bundled on `npm install` — no separate
+The CLI install requires [Node](https://nodejs.org) 18+; the desktop app needs neither Node nor Bun. The Bun runtime is bundled on `npm install` — no separate
 Bun install needed, no WSL needed on Windows. If npm blocked the bundled runtime's install scripts,
 see the [installation docs](https://opencodex.me/getting-started/installation/).
 
@@ -293,14 +308,15 @@ see the [installation docs](https://opencodex.me/getting-started/installation/).
 <details>
 <summary>Memory ownership details</summary>
 
-OpenCodex tracks 36 categories of process-retained state. Each has a documented bound:
+OpenCodex tracks process-retained state in the categories below. Each has a documented bound:
 
-- **12 retained stores** (request log, debug rings, image cache, model cache, vision
+- **14 retained stores** (request log, debug rings, image cache, model cache, vision
   descriptions, cursor blobs, responses continuation, etc.) are byte-accounted and
-  evicted by the app-owned memory budget (default 256 MiB).
+  evicted by the app-owned memory budget (default 256 MiB), except the native control replay
+  store, which is pinned and never evicted.
 - **4 observed buffers** (translator accumulators, image/OAuth/Grok tails) are
   monitored for in-flight byte pressure without eviction.
-- **24 state-store registrations** handle expiry sweeps (60 s interval) and
+- **28 state-store registrations** handle expiry sweeps (60 s interval) and
   config-generation reconciliation so stale provider/account keys are removed.
 - **Path and fingerprint memos** (workspace metadata, hardened identities, installation
   salts, mode-hint capabilities) use insertion-order LRU caps (8–128 entries).
@@ -328,6 +344,20 @@ codex -m "ollama/llama3" "Refactor this function"
 Omit the `provider/` prefix to use the default provider or auto-match by model name pattern.
 Provider model ids containing `/` are exposed with inner slashes aliased to `-`; the raw
 full-slash form keeps working too. Details: [model routing docs](https://opencodex.me/guides/model-routing/).
+
+### JEV Auto routing (optional)
+
+TypeSafe JEV can choose the first model and reasoning effort for an opt-in Combo while the normal
+model picker and every direct route stay unchanged. Add the credential with `ocx login jev`, from
+**Providers → TypeSafe JEV → Add API key**, or through `TYPESAFE_API_KEY`/`JEV_API_KEY`. Then open
+**Models → Combos → Create JEV Auto**, choose the allowed target models, and check the exact efforts
+JEV may select for each target. Leaving a target's effort setting untouched allows all efforts that
+model currently advertises.
+
+JEV is consulted only for `jev-auto` and only once per logical model call. Missing credentials,
+network failures, or invalid decisions fail open to the first currently eligible target; caller
+cancellation still cancels the request. Automated tests use a mocked TypeSafe endpoint and do not
+validate a live JEV account.
 
 ## Providers & adapters
 

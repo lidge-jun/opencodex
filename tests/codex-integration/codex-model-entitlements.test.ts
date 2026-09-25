@@ -1660,10 +1660,9 @@ describe("entitlement client version (#2886)", () => {
   });
 
   test("ungating the 5.6 family empties the derivation without lowering the floor", () => {
-    // The trio carried the only snapshot rows the derivation could see: each records 0.142.2,
-    // and gpt-daybreak-blue-latest has no row at all. Ungating them therefore empties
-    // deriveGatedClientVersionFloor, which falls to the 0.142.2 fallback -- BELOW the measured
-    // minimum. The composed floor survives only because the measurement wins that comparison.
+    // Once the trio is ungated, the only gated row left is gpt-daybreak-blue-latest, whose
+    // shipped row (re-pinned 2026-09-23) records 0.142.2 -- BELOW the measured minimum. The
+    // composed floor survives only because the measurement wins that comparison.
     //
     // Without this test the failure mode is silent: the floor would quietly drop to 0.142.2,
     // upstream would answer without gpt-5.6 again, and #3442 would be undone by a change that
@@ -1671,7 +1670,7 @@ describe("entitlement client version (#2886)", () => {
     const rows = (upstreamModelsSnapshot as { models?: Array<Record<string, unknown>> }).models ?? [];
     const afterUngating = new Set([DAYBREAK]);
 
-    expect(deriveGatedClientVersionFloor(rows, afterUngating)).toBeNull();
+    expect(deriveGatedClientVersionFloor(rows, afterUngating)).toBe("0.142.2");
     expect(composeGatedClientVersionFloorForTests(rows, afterUngating)).toBe("0.144.0");
     // And the shipped constant agrees, so this is the live state and not a synthetic one.
     expect(GATED_MODEL_CLIENT_VERSION_FLOOR).toBe("0.144.0");

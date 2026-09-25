@@ -36,7 +36,7 @@ import { fileURLToPath } from "node:url";
 import { isRealBunBinary } from "../src/lib/bun-binary-validator.mjs";
 import { npmInvocation } from "../src/update/npm-invocation.mjs";
 import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-invocation.mjs";
-import { detectInstallFromPath } from "../src/update/install-detection.mjs";
+import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
 import {
   pnpmOwnerInvocation,
   resolvePnpmGlobalOwner,
@@ -49,7 +49,8 @@ import {
   runNpmCachePreflight,
 } from "../src/update/npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "../src/update/tray-update-plan.mjs";
-import { bootRestoreProbe, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
+import { bootRestoreProbe, launcherUsableAfterNpmUpdate, transactionalNpmUpdate } from "../src/update/transactional-install.mjs";
+import { npmUpdateFailureGuidance } from "../src/update/update-failure-guidance.mjs";
 import {
   CODEX_CLI_VERSION_MANAGER_ROOT_ENV_SLOTS,
   isCodexCliUpdateInspectionArgv,
@@ -70,7 +71,8 @@ try {
 }
 const require = createRequire(import.meta.url);
 const here = dirname(fileURLToPath(import.meta.url));
-const installMethod = detectInstallFromPath(here, { exists: existsSync });
+const installOwnership = detectInstallOwnershipFromPath(here, { exists: existsSync });
+const installMethod = installOwnership.installer;
 const cliPath = join(here, "..", "src", "cli", "index.ts");
 const NODE_LAUNCH_CONTEXT_ENV = "OCX_NODE_LAUNCH_CONTEXT";
 const NODE_LAUNCH_PROOF_PREFIX = "--ocx-internal-launch-proof=";
@@ -549,6 +551,7 @@ function runPackageManagerSelfUpdate(manager) {
   };
 
   let res;
+  let npmFailure = null;
   try {
     // Stop authority is decided under the same lease the child joins. A takeover between the
     // earlier preflight and this boundary therefore blocks stop before it is sent.
@@ -726,9 +729,8 @@ function runPackageManagerSelfUpdate(manager) {
           },
           log: (line) => console.log(line),
         });
-        postUpdateLauncherUsable = tx.ok
-          || tx.rolledBack === true
-          || ["stage", "verify", "swap-backup"].includes(tx.phase);
+        postUpdateLauncherUsable = launcherUsableAfterNpmUpdate(tx);
+        if (!tx.ok) npmFailure = tx;
         if (tx.ok) {
           res = { status: 0 };
         } else if (tx.phase === "stage" || tx.phase === "verify") {
@@ -820,6 +822,13 @@ function runPackageManagerSelfUpdate(manager) {
     process.exit(0);
   }
   if (trayBeforeUpdate.restoreOnFailure && postUpdateLauncherUsable) runTrayLifecycle(postUpdateLauncher, "start");
+  if (npmFailure) {
+    // Phase-specific next step (#5624): whether the previous version is still in place decides
+    // between "retry" and "restore", and a bare reinstall must follow a stop (#5496).
+    const guidance = npmUpdateFailureGuidance({ ...npmFailure, pkgName: PKG, version: latest || undefined, tag });
+    console.error(`\nUpdate failed (npm ${npmFailure.phase}). ${guidance.lines.join(" ")}`);
+    process.exit(1);
+  }
   const manual = manager === "pnpm"
     ? `pnpm add -g --allow-build=bun ${PKG}@${tag}`
     : `npm install -g --allow-scripts=bun ${PKG}@${tag}`;
@@ -913,6 +922,19 @@ if (updateHelpRequested) {
 const codexCliUpdateInspection = isCodexCliUpdateInspectionArgv(process.argv);
 if (codexCliUpdateInspection && typeof process.versions.bun === "string") {
   console.error("opencodex: codex-cli-update inspection must use the published Node launcher.");
+  process.exit(1);
+}
+
+if (process.argv[2] === "update" && installMethod === "mise") {
+  if (installOwnership.owner) {
+    console.error(
+      `opencodex: this installation is externally managed by mise; update it with: mise upgrade ${installOwnership.owner.tool}`,
+    );
+  } else {
+    console.error(
+      "opencodex: this installation appears to be managed by mise, but its ownership metadata is unreadable or inconsistent; repair the mise installation metadata before updating.",
+    );
+  }
   process.exit(1);
 }
 

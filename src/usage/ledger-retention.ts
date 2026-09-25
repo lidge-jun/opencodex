@@ -124,6 +124,7 @@ export function enforceUsageLedgerSizeLimit(
   } catch {
     return { kind: "deferred", currentBytes: captured.size, reason: "revision-changed" };
   }
+  let sourceClosed = false;
   try {
     const opened = fstatSync(sourceFd);
     if (Number(opened.size) !== captured.size || Number(opened.ino) !== captured.ino) {
@@ -137,6 +138,10 @@ export function enforceUsageLedgerSizeLimit(
     }
     atomicWriteFileStreamed(path, descriptor => {
       copyRange(sourceFd, descriptor, start, captured.size);
+      // Windows cannot replace a destination held open by this reader. The
+      // copied bytes are complete; keep the pathname revision guard below.
+      closeSync(sourceFd);
+      sourceClosed = true;
       options.onSpanCopied?.();
     }, {
       // The last possible moment. Anything that appended, replaced or rewrote the ledger while
@@ -155,6 +160,6 @@ export function enforceUsageLedgerSizeLimit(
     }
     throw error;
   } finally {
-    closeSync(sourceFd);
+    if (!sourceClosed) closeSync(sourceFd);
   }
 }

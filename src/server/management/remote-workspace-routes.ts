@@ -10,9 +10,9 @@ function response(body: unknown, status = 200): Response {
 }
 
 function sessionOnly(ctx: ManagementContext): Response | null {
-  return ctx.principal === "gui-session"
+  return ctx.principal === "gui-session" && ctx.sessionControl?.isPaired(ctx.req, ctx.config) === true
     ? null
-    : response({ error: "A dashboard session is required for Remote Workspace changes." }, 403);
+    : response({ error: "A paired dashboard session is required for Remote Workspace changes." }, 403);
 }
 
 async function jsonObject(req: Request): Promise<Record<string, unknown>> {

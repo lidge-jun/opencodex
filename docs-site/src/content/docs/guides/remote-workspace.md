@@ -3,6 +3,8 @@ title: Remote Workspace
 description: Keep Codex, Claude Code, Pi, and their logins on one OCX Hub while OCX-only computers provide the workspace and build environment.
 ---
 
+For SSH machine links, see [Remote Link](/guides/remote-link/).
+
 Remote Workspace lets one OpenCodex Hub run your coding agents while another computer supplies the
 project files, commands, tests, and build compute. A phone or third computer can control the session
 through the Hub dashboard.
@@ -51,10 +53,13 @@ using the feature; do not configure both the legacy sandbox and a permission pro
 
 ## Pair an Executor
 
-1. Open **Remote Workspace** in the Hub dashboard.
-2. Select **Create pairing code**.
-3. On Computer 2, change into the project directory you want to expose.
-4. Copy the generated **Linux / macOS terminal** or **Windows PowerShell** command for that computer.
+1. Pair the browser with the Hub through the dashboard pairing panel. Run the displayed
+   `ocx gui pair --origin` command on the Hub and enter its one-time code; an automatically
+   bootstrapped local or Tailscale session may view status but cannot control Remote Workspace.
+2. Open **Remote Workspace** in that paired Hub dashboard.
+3. Select **Create pairing code**.
+4. On Computer 2, change into the project directory you want to expose.
+5. Copy the generated **Linux / macOS terminal** or **Windows PowerShell** command for that computer.
    It pairs the current directory and keeps
    `ocx remote-workspace agent` connected in that terminal.
 

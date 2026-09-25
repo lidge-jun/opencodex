@@ -13,8 +13,11 @@ export interface CodingAgentProviderProfile {
   /** Canonical OpenCodex provider id this profile serves. */
   providerId: string;
   /** Vendor family; selects the arg/env builder in the family adapter. */
-  family: "codebuddy" | "qoder";
-  /** Region; drives the vendor's own region switch and keeps credentials deterministic. */
+  family: "claude" | "codebuddy" | "qoder";
+  /**
+   * Region; drives the vendor's own region switch and keeps credentials deterministic.
+   * A family with a single destination carries `global`.
+   */
   region: "global" | "cn";
   /** Human label for diagnostics/error copy (never sent upstream). */
   label: string;
@@ -26,8 +29,13 @@ export interface CodingAgentProviderProfile {
   canonicalBaseUrl: string;
   /** Executable names to resolve on PATH, in preference order. */
   binaryCandidates: readonly string[];
-  /** Official credential environment variable consumed by the CLI. */
-  tokenEnv: string;
+  /**
+   * Official credential environment variable consumed by the CLI.
+   *
+   * Omitted when the CLI owns its own sign-in (Claude Code reads the operator's `claude` session),
+   * where the adapter neither requires nor injects a key and has no secret to redact.
+   */
+  tokenEnv?: string;
   /** Install command surfaced when the CLI is missing (§二十六). */
   installHint: string;
   /** Official documentation for the automation surface. */

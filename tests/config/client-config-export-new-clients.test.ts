@@ -97,6 +97,7 @@ describe("hermes", () => {
     const block = doc.providers[OPENCODE_PROVIDER_ID]!;
     expect(block.api_key).toBe(HERMES_API_KEY_ENV_REF);
     expect(block.api_mode).toBe("chat_completions");
+    expect(block.session_affinity_header).toBe("session-id");
     expect(block.discover_models).toBe(false);
     expect(block.models).toEqual({
       "anthropic/claude-opus-4-8": { supports_vision: true },

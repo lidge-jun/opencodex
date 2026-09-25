@@ -3,6 +3,8 @@ title: Remote Hub 部署
 description: 使用仅回环管理入口、Tailscale Serve 和无头 OAuth 运行 opencodex hub。
 ---
 
+有关 SSH 机器链接，请参阅[远程链接](/zh-cn/guides/remote-link/)。
+
 Remote Hub 将提供商凭据、模型目录和使用记录保存在一台主机上，经过身份验证的客户端直接访问其数据平面。管理平面相互独立：可选管理监听器只绑定 `127.0.0.1`，仅提供控制台和 `/api/*`。它不提供 `/v1/*`、`/healthz`、`/readyz` 或 WebSocket。不要直接发布 `10101`，也不要使用 Tailscale Funnel。
 
 ## 角色与信任边界
@@ -18,6 +20,7 @@ ocx sync
 面向人阅读的就绪诊断会把目录值中的 C0/C1 控制字符、DEL 以及 Unicode 行分隔符和段落分隔符（U+2028、U+2029）显示为可见的十六进制转义，首次连接时如此，`ocx sync` 拒绝重新获取的 hub 目录时也一样。JSON 状态仍保留原始的诊断值。
 
 客户端密钥写入仅所有者可读的 `service-api-token`，绝不会写入 `config.json`。连接期间，使用记录来自 hub 并按稳定的 `apiKeyId` 过滤；断开后显示本地记录。两者不会镜像。
+`ocx service uninstall` 会移除本地服务，但在客户端处于连接状态、其连接元数据无效或不匹配，或待处理的连接标记与当前密钥一致时保留现有密钥。旧密钥的有效标记不会保留无关的服务密钥。如果标记不安全、格式错误或无法读取，则无法确认令牌清理结果，此时命令会发出警告，而不会声称密钥已保留。要移除已连接客户端的本地密钥和状态，请使用 `ocx disconnect`。
 
 Admin token 只能执行普通管理，永远不能创建用户同意会话。用户同意操作必须使用服务器签发的 `gui-session`、匹配的 Origin 和 CSRF。`Tailscale-User-Login` 只在独立管理入口可信；请在 `remoteGui.allowedTailscaleUsers` 中填写准确登录名。
 

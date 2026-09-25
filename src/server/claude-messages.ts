@@ -17,12 +17,15 @@ import { jsonUtf8Bytes } from "../lib/json-byte-size";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { enforceAnthropicImageLimits, sniffImageDimensions } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
-import { AnthropicRequestError, DesktopModelMappingUnavailableError, anthropicToResponsesTranslation, extractOcxEffortDirective, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
+import { createToolCallIdAllocator } from "../adapters/tool-call-id";
+import { messagesToResponsesTranslation } from "../protocols/codecs/messages";
+import { AnthropicRequestError, DesktopModelMappingUnavailableError, extractOcxEffortDirective, extractOcxRouteDirective, resolveInboundModel, type ClaudeCacheKeySource } from "../claude/inbound";
 import { isKnownDesktop3pModelId, resolveDesktop3pAlias } from "../claude/desktop-3p";
-import { resolveAlias, claudeCodeNativeAlias } from "../claude/alias";
+import { resolveAlias, claudeCodeNativeAlias, legacyAliasForNative } from "../claude/alias";
 import { recordDesktopRequest } from "../claude/desktop-health";
 import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
+import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
 import {
   applyReplayRefusalClientHeaders,
@@ -47,7 +50,8 @@ import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
 import type { OcxConfig } from "../types";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
-import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext, type RequestLogEntry } from "./request-log";
+import { addFinalRequestLog, httpStatusForRequestLogTerminal, recordFirstOutput, type RequestLogContext } from "./request-log";
+import { createFinalRequestLog } from "./inference/final-log";
 import {
   conversationIdFromClaudeMetadata,
   getOrAllocateRequestSessionLane,
@@ -56,7 +60,21 @@ import {
   sessionLaneIdFromRequest,
 } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
+import { clientWireOf } from "./inference/client-wire";
+import { directEncodersApply } from "./inference/client-encoder-delivery";
+import type { ClientEncoderOption } from "./responses/core-options";
 import { handleResponses } from "./responses";
+import { upstreamWireForAdapter } from "../protocols/contract";
+import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
+import { featuresFromMessagesBody, type ProtocolFeature } from "../protocols/features";
+import { credentialDomainFor, messagesBodyHasOpaqueState } from "../protocols/opaque-state";
+import { hasAnthropicFailoverQuorum } from "../oauth/anthropic-routing";
+import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
+import { requestPathForLane } from "../protocols/path";
+import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
+import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
+import { recordProtocolShadowPlan } from "../protocols/shadow-plan";
+import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
 import {
   isApiAuthRequired,
   isDataPlaneAdmissionSecret,
@@ -85,6 +103,11 @@ import {
 
 type Rec = Record<string, unknown>;
 
+/** Which listener a Claude Messages request arrived on. Only the intercept ingress honours bindings. */
+export interface ClaudeIngressOptions {
+  claudeIntercept?: boolean;
+}
+
 /**
  * Decode a Claude selector that may carry the fast marker.
  *
@@ -112,7 +135,8 @@ function decodeClaudeFastSelector(raw: string, cc?: OcxConfig["claudeCode"]): st
 function decodeFablePickerAlias(raw: string, cc?: OcxConfig["claudeCode"]): string {
   const decoded = resolveInboundModel(raw, cc);
   if (!decoded.startsWith("claude-fable-")) return raw;
-  return claudeCodeNativeAlias(decoded) === raw ? decoded : raw;
+  // A picker value saved before the ocx-claude spelling keeps the native passthrough too.
+  return claudeCodeNativeAlias(decoded) === raw || legacyAliasForNative(decoded) === raw ? decoded : raw;
 }
 
 function isRec(v: unknown): v is Rec {
@@ -140,11 +164,19 @@ export function buildClaudeReplayConfig(config: OcxConfig): OcxConfig {
   };
 }
 
+/**
+ * Messages exposure, shared by /v1/messages and /v1/messages/count_tokens so the two can never
+ * disagree. `resolveApiSurfaceSettings` is the only reader: an explicit
+ * `apiSurfaces.messages.enabled` wins, a malformed one closes the surface, and absence inherits
+ * `claudeCode.enabled`.
+ */
 function claudeInboundDisabled(config: OcxConfig): Response | null {
-  if (config.claudeCode?.enabled === false) {
-    return anthropicErrorResponse(403, "Claude inbound is disabled (GUI: Claude ON toggle / config.claudeCode.enabled)", "permission_error");
-  }
-  return null;
+  const messages = resolveApiSurfaceSettings(config).messages;
+  if (messages.enabled) return null;
+  const detail = messages.source === "invalid"
+    ? "config.apiSurfaces.messages is not a valid setting, so the surface stays closed"
+    : "GUI: API page Messages toggle / config.apiSurfaces.messages.enabled / config.claudeCode.enabled";
+  return anthropicErrorResponse(403, `Messages API is disabled (${detail})`, "permission_error");
 }
 
 async function readAnthropicBody(req: Request, budget: TranslatorBudget, maxBytes: number): Promise<unknown> {
@@ -195,8 +227,9 @@ function wantsNativePassthrough(
   config: OcxConfig,
   requestPolicy: RequestPolicyView,
   model: unknown,
+  cc: OcxConfig["claudeCode"] = config.claudeCode,
 ): model is string {
-  if (config.claudeCode?.nativePassthrough === false) return false;
+  if (cc?.nativePassthrough === false) return false;
   if (typeof model !== "string" || !/^(claude|anthropic)/i.test(model)) return false;
   // Authorization and x-api-key both belong to the upstream on this branch. An exposed listener
   // therefore requires the dedicated admission header even though the routed Messages surface
@@ -207,7 +240,8 @@ function wantsNativePassthrough(
   }
   if (!hasAnthropicNativeCredential(req, config)) return false;
   // An alias or modelMap hit means the user asked for a ROUTED model: translate instead.
-  return resolveInboundModel(model, config.claudeCode) === model;
+  // `cc` carries first-party intercept bindings for requests on the claude-intercept ingress.
+  return resolveInboundModel(model, cc) === model;
 }
 
 function shouldForwardNativeHeader(name: string, value: string, config: OcxConfig): boolean {
@@ -224,7 +258,7 @@ function uuidFromHex(hex32: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined {
+export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined {
   if (!usage) return undefined;
   const num = (v: unknown) => typeof v === "number" ? v : 0;
   const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
@@ -406,6 +440,44 @@ export function tapAnthropicSseForLog(
   });
 }
 
+/**
+ * `tool_use.id` / `tool_result.tool_use_id` must match Anthropic's wire contract
+ * (`^[a-zA-Z0-9_-]+$`, <=64 chars). Third-party models mint other shapes — Devin's
+ * swe-2 emits `Bash:0#<hex>` — and a session history carrying them 400s the moment it
+ * is switched to a native Anthropic model ("messages.N.content.M.tool_use.id: String
+ * should match pattern"). The adapter path normalizes these via
+ * adapters/tool-call-id.ts (#1780); this passthrough bypasses that adapter, so the same
+ * allocator runs here. Stateless per request: conforming ids pass through byte-identical
+ * (prompt-cache keys untouched), rewritten ids keep call/result pairing stable.
+ * An empty id has no representable wire form, and forwarding `""` is what Anthropic
+ * rejects (#1767), so the request fails locally with a 400 before any upstream fetch.
+ */
+export function sanitizePassthroughToolCallIds(messages: unknown[]): void {
+  const blocks: Rec[] = [];
+  for (const message of messages) {
+    if (!isRec(message) || !Array.isArray(message.content)) continue;
+    for (const block of message.content) if (isRec(block)) blocks.push(block);
+  }
+  const fieldOf = (block: Rec): "id" | "tool_use_id" | undefined => {
+    if (typeof block.type !== "string") return undefined;
+    if (block.type.endsWith("tool_use")) return "id";
+    if (block.type.endsWith("tool_result")) return "tool_use_id";
+    return undefined;
+  };
+  const callIds = createToolCallIdAllocator();
+  for (const block of blocks) {
+    const field = fieldOf(block);
+    if (field && typeof block[field] === "string") callIds.reserve(block[field] as string);
+  }
+  for (const block of blocks) {
+    const field = fieldOf(block);
+    if (!field || typeof block[field] !== "string") continue;
+    const wire = callIds.allocate(block[field] as string);
+    if (wire === undefined) throw new AnthropicRequestError(`${block.type} block has an empty ${field}`);
+    block[field] = wire;
+  }
+}
+
 async function anthropicNativePassthrough(
   req: Request,
   config: OcxConfig,
@@ -418,12 +490,7 @@ async function anthropicNativePassthrough(
   logCtx.model = model;
   logCtx.provider = "anthropic-native";
   logCtx.requestedModel = model;
-  let logged = false;
-  const finalize = (status: number, meta: { closeReason: PassthroughCloseReason | "non_stream" }) => {
-    if (!logIds || logged) return;
-    logged = true;
-    addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
-  };
+  const finalize = createFinalRequestLog(logIds, logCtx).finish;
 
   const base = (config.claudeCode?.anthropicBaseUrl ?? "https://api.anthropic.com").replace(/\/$/, "");
   const search = new URL(req.url).search;
@@ -435,6 +502,7 @@ async function anthropicNativePassthrough(
   if (Array.isArray(body.messages)) {
     await normalizeAnthropicImages(body.messages, { abortSignal: req.signal });
     enforceAnthropicImageLimits(body.messages);
+    sanitizePassthroughToolCallIds(body.messages);
   }
   const headers = new Headers();
   req.headers.forEach((value, name) => {
@@ -637,11 +705,12 @@ export async function handleClaudeMessages(
   logCtx: RequestLogContext,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
   requestPolicy: RequestPolicyView = config,
+  ingress: ClaudeIngressOptions = {},
 ): Promise<Response> {
   const translatorBudget = createTranslatorBudget();
   try {
     return finalizeTranslatorBudgetResponse(
-      await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds, requestPolicy),
+      await handleClaudeMessagesWithBudget(req, config, logCtx, translatorBudget, logIds, requestPolicy, ingress),
       translatorBudget,
     );
   } catch (error) {
@@ -663,13 +732,17 @@ async function handleClaudeMessagesWithBudget(
   translatorBudget: TranslatorBudget,
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission },
   requestPolicy: RequestPolicyView = config,
+  ingress: ClaudeIngressOptions = {},
 ): Promise<Response> {
   logCtx.surface = "claude";
   const disabled = claudeInboundDisabled(config);
   if (disabled) {
+    markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: ["surface-disabled"] });
     if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 403, { closeReason: "non_stream" });
     return disabled;
   }
+  // Model resolution reads this view; every other claudeCode setting keeps reading `config`.
+  const cc = claudeCodeForIngress(config.claudeCode, ingress.claudeIntercept === true);
 
   let anthropicBody: unknown;
   let internalBody: Rec;
@@ -678,6 +751,9 @@ async function handleClaudeMessagesWithBudget(
   let effortRow: ParsedEffortRowId | null = null;
   let fastRow: ParsedFastRowId | null = null;
   let requestedModel = "";
+  // Built only under the reject policy; the legacy default leaves this request untouched.
+  let envelope: ProtocolEnvelope | undefined;
+  let messagesFeatures: () => Iterable<ProtocolFeature> = () => [];
   try {
     anthropicBody = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
     // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
@@ -698,7 +774,7 @@ async function handleClaudeMessagesWithBudget(
       }
     }
     if (isRec(anthropicBody) && typeof anthropicBody.model === "string") {
-      anthropicBody.model = decodeFablePickerAlias(anthropicBody.model, config.claudeCode);
+      anthropicBody.model = decodeFablePickerAlias(anthropicBody.model, cc);
     }
     if (isRec(anthropicBody) && typeof anthropicBody.model === "string") {
       requestedModel = anthropicBody.model;
@@ -709,7 +785,7 @@ async function handleClaudeMessagesWithBudget(
       ({ fastRow, effortRow } = parseSyntheticRowId(
         requestedModel,
         config,
-        () => decodeClaudeFastSelector(requestedModel, config.claudeCode),
+        () => decodeClaudeFastSelector(requestedModel, cc),
       ));
       if (effortRow) {
         anthropicBody.model = effortRow.baseId;
@@ -723,7 +799,7 @@ async function handleClaudeMessagesWithBudget(
       "messages",
       anthropicBody,
       isRec(anthropicBody) && typeof anthropicBody.model === "string"
-        ? resolveInboundModel(anthropicBody.model, config.claudeCode)
+        ? resolveInboundModel(anthropicBody.model, cc)
         : undefined,
       req.headers.get("anthropic-beta") ?? undefined,
     );
@@ -740,10 +816,25 @@ async function handleClaudeMessagesWithBudget(
       );
       if (claudeConversationId) logCtx.conversationId = claudeConversationId;
     }
-    // A fast row blocks passthrough, unlike the chat case: this path forwards to Anthropic's
-    // own API, whose wire has no service_tier field and whose FastWire kind has an empty
-    // adapter set by design, so the tier would be silently dropped.
-    if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model)) {
+    // A fast row blocks passthrough, unlike the chat case: native passthrough forwards the
+    // caller's body with the caller's credential and never runs the Anthropic adapter, so the
+    // proxy-owned `speed` + beta (anthropic-speed wire) and its usage.speed observation would be
+    // silently skipped. Translation reaches the adapter, which owns both.
+    const messagesBody = anthropicBody;
+    if (isRec(messagesBody) && resolveProtocolSettings(config).unrepresentable === "reject") {
+      envelope = createProtocolEnvelope({ inbound: "messages", body: messagesBody, translatorBudget });
+    }
+    const sourceEnvelope = envelope;
+    // The bridge entry mark below reads these before an effort override rewrites `thinking`,
+    // which also fixes the envelope's cached features on the caller's own settings.
+    // Scanned once, like the envelope's cache, so a later mark reports the same features.
+    let scannedFeatures: ReadonlySet<ProtocolFeature> | undefined;
+    messagesFeatures = sourceEnvelope
+      ? () => sourceEnvelope.features()
+      : () => (scannedFeatures ??= featuresFromMessagesBody(messagesBody));
+    if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
+      markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
+      recordProtocolShadowPlan(logCtx, config, { inbound: "messages", model: requestedModel });
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
     }
     // Capture source semantics before effort rewriting or translation drops fields.
@@ -760,6 +851,7 @@ async function handleClaudeMessagesWithBudget(
         anthropicBeta: req.headers.get("anthropic-beta") ?? undefined,
       });
       if (compatibility.decision === "reject") {
+        markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: ["compatibility-reject"], features: messagesFeatures });
         logCtx.errorCode = "claude_compatibility_unsupported";
         if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
         return anthropicErrorResponse(400, compatibility.reason!, "invalid_request_error");
@@ -772,6 +864,14 @@ async function handleClaudeMessagesWithBudget(
         };
       }
     }
+    // Features are read here, before an effort override rewrites the thinking settings.
+    markProtocolEntry(logCtx, {
+      inbound: "messages",
+      lane: "bridge",
+      reasonCodes: effortRow ? ["effort-row"] : fastRow ? ["fast-row"] : [],
+      features: messagesFeatures,
+    });
+    recordProtocolShadowPlan(logCtx, config, { inbound: "messages", model: requestedModel });
     if (isRec(anthropicBody) && effortOverride) {
       anthropicBody.output_config = {
         ...(isRec(anthropicBody.output_config) ? anthropicBody.output_config : {}),
@@ -779,7 +879,7 @@ async function handleClaudeMessagesWithBudget(
       };
       delete anthropicBody.thinking;
     }
-    const translation = anthropicToResponsesTranslation(anthropicBody, config.claudeCode, translatorBudget);
+    const translation = messagesToResponsesTranslation(anthropicBody, cc, translatorBudget);
     internalBody = translation.body;
     // The Anthropic translator builds its body from model/input/store/stream plus sampling
     // fields only, so the caller intent is applied to the TRANSLATED body rather than the
@@ -823,9 +923,11 @@ async function handleClaudeMessagesWithBudget(
   // the translated Anthropic SSE into a message JSON for non-streaming clients.
   internalBody.stream = true;
 
+  let clientEncoder: ClientEncoderOption | undefined;
   // Native ChatGPT passthrough (openai-responses forward) accepts only Codex-shaped
   // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
+  let settledRoute: ReturnType<typeof routeModel> | undefined;
   try {
     const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
     // Same reason as the native Chat lane: this route can be sent from here, so
@@ -842,6 +944,10 @@ async function handleClaudeMessagesWithBudget(
     );
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy);
     logCtx.routeDecision = route.routeDecision;
+    settledRoute = route;
+    if (directEncodersApply(config, route)) {
+      clientEncoder = { protocol: "messages", stream, model: requestedModel, inputTokenFloor: claudeRequestTokenFloor() };
+    }
     if (route.provider.adapter === "openai-responses") {
       delete internalBody.max_output_tokens;
       delete internalBody.temperature;
@@ -883,6 +989,70 @@ async function handleClaudeMessagesWithBudget(
       return anthropicErrorResponse(404, err.message, "invalid_request_error");
     }
     /* unknown model: let handleResponses shape the 404 */
+  }
+
+  // PF-08: a managed-key Anthropic route sends its Messages body natively. The caller-forward
+  // passthrough above was decided on the caller's own credential and never reaches this point.
+  const nativeSelector: NativeMessagesSelector = {
+    effortRow: !!effortRow, fastRow: !!fastRow, routeSelector: String(internalBody.model ?? ""), claudeCode: cc,
+    // PF-10: a stored second OAuth account turns on the bridge's rotation, so it stays there.
+    ...(settledRoute?.provider.authMode === "oauth" ? { oauthFailoverQuorum: hasAnthropicFailoverQuorum() } : {}),
+  };
+  const nativeDecline = settledRoute && isRec(anthropicBody)
+    ? nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector)
+    : "rollout-disabled";
+  const nativeMessagesRoute = settledRoute && nativeDecline === undefined ? settledRoute : undefined;
+  // With the switch on, a declined route says why on its bridge mark, as native Chat does.
+  if (nativeDecline && nativeDecline !== "rollout-disabled") {
+    markProtocolEntry(logCtx, {
+      inbound: "messages",
+      lane: "bridge",
+      reasonCodes: [...(effortRow ? ["effort-row" as const] : fastRow ? ["fast-row" as const] : []), nativeDecline],
+      features: messagesFeatures,
+    });
+  }
+  // Combo and policy children are judged per candidate (PF-07); an unknown model has no route.
+  if (envelope && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
+    const verdict = checkRepresentable({
+      inbound: "messages",
+      requestPath: requestPathForLane("messages", nativeMessagesRoute ? "native" : "bridge", upstreamWireForAdapter(settledRoute.provider.adapter)),
+      features: envelope.features(),
+      policy: "reject",
+    });
+    if (!verdict.ok) {
+      markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: verdict.reasonCodes, features: verdict.features });
+      logCtx.errorCode = "unsupported_feature";
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return anthropicErrorResponse(400, unrepresentableMessage(verdict.features), "invalid_request_error");
+    }
+  }
+  // PF-10: opaque thinking state reaches only first-party Anthropic; under `reject` a native
+  // route to anyone else refuses the request instead of sending it without that state.
+  if (envelope && nativeMessagesRoute && !credentialDomainFor(nativeMessagesRoute.provider)?.firstPartyAnthropic
+    && messagesBodyHasOpaqueState(anthropicBody as Rec)) {
+    markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: ["feature-unrepresentable", "opaque-state-stripped"], features: messagesFeatures });
+    logCtx.errorCode = "unsupported_feature";
+    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+    return anthropicErrorResponse(400, "The selected route cannot carry thinking signatures or redacted_thinking blocks", "invalid_request_error");
+  }
+  if (nativeMessagesRoute) {
+    markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
+    let nativeBody: Rec;
+    try {
+      // Built from the source envelope when there is one, after the managed-client steps above.
+      nativeBody = envelope ? envelope.freshBody() : anthropicBody as Rec;
+    } catch (err) {
+      if (!isTranslatorBudgetExceededError(err)) throw err;
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 413, { closeReason: "non_stream" });
+      return anthropicErrorResponse(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
+    }
+    const { handleNativeMessages } = await import("./messages-native");
+    return await handleNativeMessages({
+      req, config, logCtx, ...(logIds ? { logIds } : {}),
+      route: nativeMessagesRoute, body: nativeBody, requestedModel, translatorBudget, selector: nativeSelector,
+      // The one caller header the native lane is given; the builder allowlists it.
+      callerAnthropicBeta: req.headers.get("anthropic-beta"),
+    });
   }
 
   const headers = new Headers({ "content-type": "application/json" });
@@ -954,12 +1124,7 @@ async function handleClaudeMessagesWithBudget(
   // via the terminal callbacks; routed streams get the Responses-vocabulary log tap
   // BEFORE translation (the translated Anthropic stream has no response.completed
   // frame, so tapping it records a bogus 502 with no usage/cache detail).
-  let nativeLogged = false;
-  const finalizeNativeLog = (status: number, meta: { terminalStatus?: RequestLogEntry["terminalStatus"]; closeReason: "terminal" | "client_cancel" }) => {
-    if (!logIds || nativeLogged) return;
-    nativeLogged = true;
-    addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, meta);
-  };
+  const finalizeNativeLog = createFinalRequestLog(logIds, logCtx).finish;
   const upstream = await handleResponses(internalReq, buildClaudeReplayConfig(config), logCtx, {
     // Routing keeps Claude-only sidecar overrides; admission policy must follow the live owner.
     codexAuthPolicy: config,
@@ -982,8 +1147,11 @@ async function handleClaudeMessagesWithBudget(
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
     onNativePassthroughCancel: () => finalizeNativeLog(499, { closeReason: "client_cancel" }),
+    ...(clientEncoder ? { clientEncoder } : {}),
   });
   const response = logIds ? responseWithDeferredRequestLog(upstream, logIds.requestId, logIds.start, logCtx) : upstream;
+  // Already in the Messages wire (direct encoder): no conversion.
+  if (clientWireOf(upstream) === "messages") return response;
 
   if (!response.ok) {
     // Read the shared provenance verdict before consuming and re-wrapping the body. A refusal
@@ -1211,9 +1379,11 @@ export async function handleClaudeCountTokens(
   req: Request,
   config: OcxConfig,
   requestPolicy: RequestPolicyView = config,
+  ingress: ClaudeIngressOptions = {},
 ): Promise<Response> {
   const disabled = claudeInboundDisabled(config);
   if (disabled) return disabled;
+  const cc = claudeCodeForIngress(config.claudeCode, ingress.claudeIntercept === true);
 
   let body: unknown;
   const translatorBudget = createTranslatorBudget();
@@ -1245,23 +1415,27 @@ export async function handleClaudeCountTokens(
       model = stripOneMillionMarker(countRoute);
       raw.model = model;
     }
-    model = decodeFablePickerAlias(model, config.claudeCode);
+    model = decodeFablePickerAlias(model, cc);
     raw.model = model;
     // Fast-only: count_tokens never parsed an effort row, so it must not start. It returns a
     // token estimate and sends no tier, so only the IDENTITY is corrected - without this the
     // synthetic id reaches native passthrough as a model Anthropic has never heard of.
     const countFastRow = parseFastOnlyRowId(
-      config, () => decodeClaudeFastSelector(model, config.claudeCode),
+      config, () => decodeClaudeFastSelector(model, cc),
     );
     if (countFastRow) {
       model = countFastRow.baseId;
       raw.model = model;
     }
-    captureClaudeInbound("count_tokens", raw, resolveInboundModel(model, config.claudeCode), req.headers.get("anthropic-beta") ?? undefined);
-    if (wantsNativePassthrough(req, config, requestPolicy, model)) {
+    captureClaudeInbound("count_tokens", raw, resolveInboundModel(model, cc), req.headers.get("anthropic-beta") ?? undefined);
+    if (wantsNativePassthrough(req, config, requestPolicy, model, cc)) {
       return await anthropicNativePassthrough(req, config, { model, provider: "anthropic-native", surface: "claude" }, undefined, raw, "/v1/messages/count_tokens");
     }
-    const inputTokens = estimateClaudeRequestTokens(raw, model);
+    // PF-08: an eligible managed-key route counts the body the native lane would send.
+    const nativeCountBody = resolveProtocolSettings(config).rollout.managedMessagesNative
+      ? (await import("./messages-native")).nativeMessagesCountBody(config, cc, raw, { fastRow: countFastRow !== null })
+      : undefined;
+    const inputTokens = estimateClaudeRequestTokens(nativeCountBody ?? raw, model);
     return new Response(JSON.stringify({ input_tokens: inputTokens }), {
       status: 200,
       headers: { "Content-Type": "application/json" },

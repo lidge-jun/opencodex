@@ -19,6 +19,7 @@ const MAX_COMPONENTS = 16;
 
 function durationSeconds(tail: string, allowBareSeconds: boolean): number | undefined {
   let rest = tail.trimStart();
+  if (allowBareSeconds && rest.startsWith("~")) rest = rest.slice(1).trimStart();
   let seconds = 0;
   let components = 0;
   while (true) {
@@ -39,6 +40,10 @@ function durationSeconds(tail: string, allowBareSeconds: boolean): number | unde
     rest = rest.slice(component[0].length);
     const separator = SEPARATOR.exec(rest)![0];
     const next = rest.slice(separator.length);
+    // The approximation marker belongs to the whole hint, once, before the
+    // first component. A second one ("~1 minute ~30 seconds") is malformed and
+    // must reject the hint rather than shorten it to the first component.
+    if (next.startsWith("~")) return undefined;
     if (!/^[+-]?(?:\d|\.\d)/.test(next)) break;
     // A numeric continuation is part of this duration; a malformed second
     // component must reject the hint, not silently shorten it to the first.
@@ -50,7 +55,8 @@ function durationSeconds(tail: string, allowBareSeconds: boolean): number | unde
 
 /**
  * Supports reset(s) in, try again in and Retry-After/retry after hints; accepts
- * compound durations and rounds UP once after summing all components.
+ * compound durations, the generated Retry-After approximation marker, and
+ * rounds UP once after summing all components.
  * A bare number is permitted only for header-style Retry-After hints, never
  * for "reset in 2026". When a message declares several usable lower bounds,
  * honour the longest one rather than re-entering a still-live quota window.

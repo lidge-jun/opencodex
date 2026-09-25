@@ -96,6 +96,47 @@ export const HEAD_CAPABILITIES: readonly HeadCapability[] = [
  */
 export const CAPABILITIES: readonly Capability[] = [
   {
+    command: ["link", "port"],
+    summary: "Allocate a free loopback port for a remote home link.",
+    routes: [],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the selected port as JSON." }],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["link", "issue"],
+    summary: "Issue one link credential and record its tunnel metadata.",
+    routes: [{ method: "POST", path: "/api/link/issue" }],
+    flags: [
+      { name: "--alias", value: "string", required: true, summary: "SSH host alias for the linked machine." },
+      { name: "--tunnel-port", value: "number", required: true, summary: "Remote loopback port for the reverse tunnel." },
+      { name: "--json", value: "boolean", summary: "Emit the issue result as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["Requires the running proxy's admin token on loopback; the one-time data key is printed only on stdout."],
+  },
+  {
+    command: ["link", "status"],
+    summary: "Read link listener and tunnel status.",
+    routes: [{ method: "GET", path: "/api/link/status" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the K16 status payload as JSON." }],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["link", "revoke"],
+    summary: "Revoke a link credential and remove its link record.",
+    routes: [{ method: "DELETE", path: "/api/link/{id}" }],
+    flags: [
+      { name: "--link-id", value: "string", required: true, summary: "Link id to revoke." },
+      { name: "--json", value: "boolean", summary: "Emit the revoked link id as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["Requires the running proxy's admin token on loopback."],
+  },
+  {
     "command": [
       "remote-workspace",
       "pair"
@@ -784,7 +825,7 @@ export const CAPABILITIES: readonly Capability[] = [
     summary: "Restart the Codex desktop app and app-servers.",
     routes: [{ method: "POST", path: "/api/system/codex-restart" }],
     flags: [
-      { name: "--yes", value: "boolean", summary: "Required: fully quits and relaunches the operator's Codex desktop app and restarts its app-servers." },
+      { name: "--yes", value: "boolean", summary: "Required: fully quits and relaunches the operator's Codex desktop app, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts; also restarts its app-servers." },
       { name: "--json", value: "boolean", summary: "Emit the restart result as JSON." },
     ],
     mutates: true,
@@ -792,7 +833,7 @@ export const CAPABILITIES: readonly Capability[] = [
     details: [
       "`sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.",
       "Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.",
-      "--yes is mandatory because this interrupts a running editor session, which must never happen because an agent guessed a subcommand.",
+      "--yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.",
     ],
   },
   {
@@ -804,6 +845,75 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "payload",
     details: [
       "Distinct from `claude desktop show`, which reports what this machine WOULD write; this reports what is actually in effect, which only the running proxy knows.",
+    ],
+  },
+  {
+    command: ["claude", "desktop", "bind"],
+    summary: "First-party: serve a Claude Desktop Code tab picker model with an opencodex route.",
+    routes: [{ method: "PUT", path: "/api/claude-desktop/first-party-bindings" }],
+    flags: [],
+    mutates: true,
+    json: "none",
+    details: [
+      "Takes a picker model id (claude-sonnet-4-6) and a route in the Desktop route vocabulary (provider/model or native/<slug>); the route must be one the Desktop profile can offer.",
+      "Only Claude Code traffic that reaches the proxy through the first-party intercept (Desktop's Code tab, the claude CLI) honours it; ocx claude and the public Messages endpoint are unaffected.",
+      "The Desktop picker keeps Anthropic's label; the binding changes which model answers, starting with the next request.",
+    ],
+  },
+  {
+    command: ["claude", "desktop", "unbind"],
+    summary: "Remove a first-party Claude Desktop Code tab picker binding.",
+    routes: [{ method: "PUT", path: "/api/claude-desktop/first-party-bindings" }],
+    flags: [],
+    mutates: true,
+    json: "none",
+    details: [
+      "Removing an id that is not bound is a no-op; the remaining bindings are printed.",
+    ],
+  },
+  {
+    command: ["claude", "desktop", "picker", "status"],
+    summary: "First-party picker mode: whether Claude Desktop's Code tab lists opencodex models, and what is missing if not.",
+    routes: [{ method: "GET", path: "/api/claude-desktop/picker" }],
+    flags: [],
+    mutates: false,
+    json: "none",
+    details: [
+      "Reports desired, effective, keychain trust, the Desktop egress profile, the model count and a reason with the next command to run.",
+    ],
+  },
+  {
+    command: ["claude", "desktop", "picker", "on"],
+    summary: "Turn first-party picker mode on and remember the choice.",
+    routes: [{ method: "PUT", path: "/api/claude-desktop/picker" }],
+    flags: [],
+    mutates: true,
+    json: "none",
+    details: [
+      "Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.",
+      "Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards.",
+    ],
+  },
+  {
+    command: ["claude", "desktop", "picker", "off"],
+    summary: "Turn first-party picker mode off, remove its Desktop egress profile and certificate trust, and remember the choice.",
+    routes: [{ method: "PUT", path: "/api/claude-desktop/picker" }],
+    flags: [],
+    mutates: true,
+    json: "none",
+    details: [
+      "Works without a running proxy: the preference is saved and the picker profile and trust are removed locally.",
+    ],
+  },
+  {
+    command: ["claude", "desktop", "picker", "trust"],
+    summary: "Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.",
+    routes: [{ method: "PUT", path: "/api/claude-desktop/picker" }],
+    flags: [],
+    mutates: true,
+    json: "none",
+    details: [
+      "The server removes trust this command added if the enable is refused; if the request is lost, trust is left alone and picker status tells what happened.",
     ],
   },
   {
@@ -876,6 +986,51 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "payload",
     details: ["A bare invocation reads and never writes."],
+  },
+  {
+    command: ["api", "protocols"],
+    summary: "Read the protocol contract version, API surfaces, protocol settings and feature vocabulary.",
+    routes: [{ method: "GET", path: "/api/protocols" }],
+    flags: [
+      { name: "--provider", value: "string", summary: "Add one configured provider's upstream wire and who decided it." },
+      { name: "--json", value: "boolean", summary: "Emit the GET /api/protocols body." },
+    ],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["api", "explain"],
+    summary: "Preview the request path a model would take from one inbound API, computed from config.",
+    routes: [{ method: "POST", path: "/api/protocols/plan" }],
+    flags: [
+      { name: "--model", value: "string", required: true, summary: "Model selector as a client would send it." },
+      { name: "--inbound", value: "string", required: true, summary: "Inbound API: responses, chat or messages." },
+      { name: "--feature", value: "string", summary: "Request feature key to judge; repeatable or comma-separated." },
+      { name: "--json", value: "boolean", summary: "Emit the ProtocolPlanV1 preview." },
+    ],
+    mutates: false,
+    json: "payload",
+    details: ["A read-only POST: nothing is sent upstream, no combo state advances and the input is not logged."],
+  },
+  {
+    command: ["api", "policy"],
+    summary: "Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.",
+    routes: [
+      { method: "GET", path: "/api/protocols" },
+      { method: "PATCH", path: "/api/protocols/settings" },
+    ],
+    flags: [
+      { name: "--messages", value: "string", summary: "Open or close the Messages API: on or off. Off also turns the Claude integration off." },
+      { name: "--unrepresentable", value: "string", summary: "legacy keeps today's behavior; reject refuses a request its path cannot carry." },
+      { name: "--rollout", value: "string", summary: "One switch as name=on or name=off; repeatable. Every switch defaults off." },
+      { name: "--json", value: "boolean", summary: "Emit the resulting GET /api/protocols body." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "A bare invocation reads and never writes.",
+      "A setting flag changes the operator's config; run it only when the operator asks for that change.",
+    ],
   },
 ];
 

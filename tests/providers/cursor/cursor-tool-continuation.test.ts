@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { create, fromBinary } from "@bufbuild/protobuf";
 import { handleCursorNativeKv } from "../../../src/adapters/cursor/native-exec";
-import { encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
+import { CURSOR_GROK_CODE_MODE_CONTINUATION_GUIDANCE, encodeCursorRunRequest } from "../../../src/adapters/cursor/protobuf-request";
 import {
   AgentClientMessageSchema,
   GetBlobArgsSchema,
@@ -104,7 +104,7 @@ describe("363-B: tool result reaches the model via rootPromptMessagesJson", () =
 
   test("native resume models do not few-shot [Tool Result] as assistant chat", () => {
     const bytes = encodeCursorRunRequest({
-      modelId: "composer-2.5-fast",
+      modelId: "composer-1",
       conversationId: "c1",
       system: ["You are helpful."],
       messages: [{ role: "tool", content: "[tool_result]\ncall_id: call_1\nname: mcp__fs__read_file\nis_error: false\noutput:\nFILE CONTENTS HERE" }],
@@ -321,4 +321,58 @@ describe("363-A: turn-1 termination for Responses client tool via exec mcpArgs",
     expect(planB.finalizeWhenDrained).toBe(true);
     expect(finalizeAfterDrain(state).map(e => e.type)).toEqual(["done"]);
   });
+});
+
+describe("Cursor Grok exec continuation output boundary", () => {
+  const tools = [{ name: "exec", freeform: true, description: "Run JavaScript", parameters: {} }];
+  const user = { role: "user" as const, content: "Use exec, then return only the final JSON object.", timestamp: 1 };
+  const result = { role: "toolResult" as const, toolCallId: "call_exec", toolName: "exec", content: "Script completed\nOutput:\nPRIVATE_OBSERVATION", isError: false, timestamp: 3 };
+  const call: OcxMessage = { role: "assistant", model: "cursor/grok-4.6", timestamp: 2, content: [{ type: "toolCall", id: "call_exec", name: "exec", arguments: { input: "text(await tools.read_fixture())" } }] };
+  function encoded(modelId = "cursor-grok-4.6-high", catalog = tools, history: OcxMessage[] = [user, call, result], retry = false) {
+    return encodeCursorRunRequest({ modelId, conversationId: "fixture-output-boundary", system: ["Follow the requested answer format."], tools: catalog, messages: [{ role: "tool", content: result.content }], rawMessages: history, ...(retry ? { echoRetryContinuationText: "Continue after a rejected envelope." } : {}) });
+  }
+  function action(bytes: Uint8Array) {
+    const msg = fromBinary(AgentClientMessageSchema, bytes);
+    if (msg.message.case !== "runRequest" || msg.message.value.action?.action.case !== "userMessageAction") throw new Error("Expected user action");
+    return msg.message.value.action.action.value.userMessage?.text ?? "";
+  }
+  test.each([false, true])("keeps output-channel guidance after the current user request on normal/retry continuation %s", retry => {
+    const before = JSON.stringify([user, call, result]);
+    const bytes = encoded(undefined, undefined, undefined, retry);
+    const text = action(bytes);
+    expect(text.indexOf(CURSOR_GROK_CODE_MODE_CONTINUATION_GUIDANCE)).toBeGreaterThan(text.indexOf(user.content));
+    expect(text).toContain("unless the user explicitly requests that raw output");
+    expect(text).not.toContain("PRIVATE_OBSERVATION");
+    expect(JSON.stringify(decodeRoots(bytes))).toContain("PRIVATE_OBSERVATION");
+    expect(JSON.stringify([user, call, result])).toBe(before);
+  });
+  test("does not apply to another model, ordinary functions, or a fresh user turn", () => {
+    expect(action(encoded("claude-4.6-sonnet-high"))).not.toContain("[Code-mode continuation]");
+    expect(action(encoded(undefined, [{ ...tools[0]!, freeform: false }]))).not.toContain("[Code-mode continuation]");
+    expect(action(encoded(undefined, undefined, [user]))).not.toContain("[Code-mode continuation]");
+  });
+  test("retains explicit raw-output requests instead of suppressing or rewriting evidence", () => {
+    const rawUser = { ...user, content: "Return the complete raw output verbatim." };
+    const bytes = encoded(undefined, undefined, [rawUser, call, result]);
+    expect(action(bytes)).toContain(rawUser.content);
+    expect(action(bytes)).toContain("unless the user explicitly requests that raw output");
+    expect(decodeRoots(bytes).flatMap((root: any) => Array.isArray(root.content) ? root.content.map((part: any) => part.text ?? "") : [root.content]).join("\n")).toContain(result.content);
+  });
+});
+
+test("corrective replay preserves the wire role while widening clipped arguments", () => {
+  const args = { contents: "A".repeat(4600) };
+  const bytes = encodeCursorRunRequest({
+    modelId: "cursor-grok-4.6-high", conversationId: "role-restoration", system: ["Use tool evidence."],
+    messages: [{ role: "tool", content: "saved" }], echoRetryContinuationText: "Do not repeat the envelope.",
+    rawMessages: [
+      { role: "user", content: "Write once.", timestamp: 1 },
+      { role: "assistant", model: "cursor/grok-4.6", timestamp: 2, content: [{ type: "toolCall", id: "save", name: "write_file", arguments: args }] },
+      { role: "toolResult", toolCallId: "save", toolName: "write_file", content: "saved", isError: false, timestamp: 3 },
+    ],
+  });
+  const root = decodeRoots(bytes).find(item => JSON.stringify(item).includes("invoked:")) as { role: string; content: { text: string }[] };
+  expect(root.role).toBe("user");
+  expect(root.content[0]!.text).toContain(JSON.stringify(args));
+  expect(root.content[0]!.text).not.toContain("arguments truncated");
 });

@@ -224,7 +224,7 @@ describe("declared short-window producer evidence", () => {
     }
   }
 
-  test.each([0, "0", 98.99, "98.99", 99, "99", 100, "100"])("owned WHAM and headers accept valid boundary %s", async value => {
+  test.each([0, "0", 97.99, "97.99", 98, "98", 99, "99", 100, "100"])("owned WHAM and headers accept valid boundary %s", async value => {
     const aclOk = { success: true, exitCode: 0, timedOut: false, stdout: "" };
     setIcaclsRunnerForTests(() => aclOk);
     setAsyncIcaclsRunnerForTests(async () => aclOk);
@@ -240,12 +240,12 @@ describe("declared short-window producer evidence", () => {
     await fetchMainAccountInfo(true);
     const cfg = { codexMainAccountHardLock: true };
     expect(getMainPolicyQuota()?.weeklyPercent).toBe(Number(value));
-    expect(getMainAccountHardLockStatus(cfg).state).toBe(Number(value) < 99 ? "ready" : "blocked");
+    expect(getMainAccountHardLockStatus(cfg).state).toBe(Number(value) < 98 ? "ready" : "blocked");
     clearAccountQuota();
     applyAccountQuotaFromUpstreamHeaders(MAIN, new Headers({ "x-codex-primary-used-percent": String(value) }),
       undefined, writerFor());
     expect(getMainPolicyQuota()?.weeklyPercent).toBe(Number(value));
-    expect(getMainAccountHardLockStatus(cfg).state).toBe(Number(value) < 99 ? "ready" : "blocked");
+    expect(getMainAccountHardLockStatus(cfg).state).toBe(Number(value) < 98 ? "ready" : "blocked");
     expect(calls).toBe(1);
   });
 

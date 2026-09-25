@@ -120,6 +120,34 @@ export type ClaudeInterceptSettingsWrite =
   | { ok: true; changed: boolean; path: string }
   | { ok: false; reason: "unreadable" | "foreign_env"; path: string };
 
+/** Capture only the managed keys. Rollback preserves unrelated edits and refuses
+ * to overwrite a newer proxy/CA choice made after this apply. */
+export function captureClaudeInterceptSettingsRollback(
+  expected: ClaudeInterceptEnv,
+  configDir = claudeConfigDir(),
+): () => boolean {
+  const path = settingsPath(configDir);
+  const before = readSettings(path);
+  if ("error" in before && before.error !== "missing") return () => false;
+  const previous = "doc" in before ? { ...envRecord(before.doc) } : {};
+  return () => {
+    try {
+      const current = readSettings(path);
+      if (!("doc" in current)) return false;
+      const env = envRecord(current.doc);
+      if (CLAUDE_INTERCEPT_MANAGED_ENV.some(key => env[key] !== expected[key])) return false;
+      for (const key of CLAUDE_INTERCEPT_MANAGED_ENV) {
+        if (previous[key] === undefined) delete env[key];
+        else env[key] = previous[key];
+      }
+      if (Object.keys(env).length === 0) delete current.doc.env;
+      else current.doc.env = env;
+      writeSettings(path, current.doc);
+      return true;
+    } catch { return false; }
+  };
+}
+
 /**
  * Write the intercept env into `settings.json`. Refuses when a managed key already holds a
  * value opencodex did not write (a user-configured corporate proxy, for instance).

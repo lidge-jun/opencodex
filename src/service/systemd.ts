@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -198,6 +198,21 @@ export function startSystemd(): void {
 export function stopSystemd(): void { try { sh(`systemctl --user stop ${TASK}`); } catch { /* not running */ } }
 
 export function statusSystemd(): string { try { return sh(`systemctl --user status ${TASK}`); } catch { return ""; } }
+
+/** Strict user-unit inactivity proof for guarded desktop takeover. */
+export function probeSystemdUnitInactive(deps: { show?: () => string } = {}): "inactive" | "active" | "unknown" {
+  try {
+    const output = (deps.show ?? (() => execFileSync("systemctl", ["--user", "show", "-p", "ActiveState", "-p", "MainPID", TASK], {
+      encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "pipe"],
+    })))();
+    const active = systemdProperty(output, "ActiveState")?.toLowerCase();
+    const pid = systemdProperty(output, "MainPID");
+    if (active === "inactive" && pid === "0") return "inactive";
+    if (["active", "activating", "deactivating", "reloading"].includes(active ?? "")
+      || (pid !== null && /^\d+$/.test(pid) && Number(pid) > 0)) return "active";
+    return "unknown";
+  } catch { return "unknown"; }
+}
 
 export function uninstallSystemd(deps: {
   run?: (command: string) => string;

@@ -216,7 +216,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
     const result = await startLoginFlow("chatgpt", {
       forceLogin: true,
       ...(useDeviceFlow ? { flow: "device" as const } : {}),
-    });
+    }, { flowId });
 
     // Open the browser server-side (same pattern as /api/oauth/login in management-api.ts).
     // The GUI's window.open is popup-blocked because it runs after an await, not a direct click.
@@ -532,11 +532,21 @@ export async function handleCodexAuthLoginCode(req: Request): Promise<Response> 
 }
 
 export async function handleCodexAuthLoginCancel(req: Request): Promise<Response> {
-  const body = (await req.json().catch(() => ({}))) as { flowId?: string };
+  const body: unknown = await req.json().catch(() => null);
+  const suppliedId = body && typeof body === "object" && !Array.isArray(body)
+    ? (body as { flowId?: unknown }).flowId : undefined;
+  const flowId = typeof suppliedId === "string" ? suppliedId.trim() : "";
+  if (!flowId) return jsonResponse({ error: "flowId required" }, 400);
   const { cancelLoginFlow } = await import("../../oauth");
-  const cancelled = cancelLoginFlow("chatgpt");
-  expireCodexAuthFlow(body.flowId ?? null);
-  return jsonResponse({ ok: true, cancelled });
+  const flow = codexAuthLoginState.get(flowId);
+  if (!flow || flow.status !== "pending") {
+    return jsonResponse({ error: "login flow expired or unknown" }, 400);
+  }
+  if (!cancelLoginFlow("chatgpt", flowId)) {
+    return jsonResponse({ error: "login flow expired or unknown" }, 400);
+  }
+  expireCodexAuthFlow(flowId);
+  return jsonResponse({ ok: true, cancelled: true });
 }
 
 export async function handleCodexAuthLoginStatus(req: Request, url: URL, config: OcxConfig): Promise<Response> {

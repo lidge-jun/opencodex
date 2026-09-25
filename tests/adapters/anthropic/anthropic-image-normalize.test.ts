@@ -17,7 +17,11 @@ import {
   sniffImageDimensions,
   TOTAL_IMAGE_BASE64_BUDGET,
 } from "../../../src/adapters/anthropic-image-guard";
-import { TIER0_COUNT } from "../../../src/adapters/anthropic-image-codec";
+import {
+  recordEmittedPosition,
+  recordedEmittedPosition,
+  TIER0_COUNT,
+} from "../../../src/adapters/anthropic-image-codec";
 
 /** 1x1 red PNG — the smallest real, fully-decodable fixture. */
 const ONE_PX_PNG =
@@ -127,8 +131,14 @@ describe("bounded normalization cache accounting", () => {
     await Promise.all([first, second]);
     const stats = getNormalizeStatsForTests();
     expect(stats.cacheEntries).toBe(1);
-    expect(stats.cacheBytes).toBe(anthropicImageNormalizeRetainedStoreSnapshot().bytes);
     expect(stats.cacheBytes).toBeGreaterThan(1_000);
+    // The snapshot's byte total is exactly the encode cache plus the pinned
+    // position store — no hidden or double-counted rows.
+    expect(stats.positionBytes).toBeGreaterThan(0);
+    const snapshot = anthropicImageNormalizeRetainedStoreSnapshot();
+    expect(snapshot.bytes).toBe(stats.cacheBytes + stats.positionBytes);
+    expect(snapshot.pinnedBytes).toBe(stats.positionBytes);
+    expect(snapshot.evictableBytes).toBe(stats.cacheBytes);
   });
 
   test("one encoded value above maxEntrySize is returned but not cached", async () => {
@@ -164,6 +174,53 @@ describe("bounded normalization cache accounting", () => {
     expect(released).toBeGreaterThan(0);
     expect(released).toBeGreaterThanOrEqual(getNormalizeStatsForTests().metadataBytes / Math.max(1, before.count));
     expect(anthropicImageNormalizeRetainedStoreSnapshot().bytes).toBe(before.bytes - released);
+  });
+
+  test("position identities retain a fixed amount for caller-controlled media types", () => {
+    const hugeMediaType = `image/${"x".repeat(1024 * 1024)}`;
+    recordEmittedPosition(ONE_PX_PNG, hugeMediaType, 1);
+    const first = anthropicImageNormalizeRetainedStoreSnapshot();
+    expect(first.count).toBe(1);
+    expect(first.bytes).toBeLessThan(256);
+
+    recordEmittedPosition(ONE_PX_PNG, `${hugeMediaType}y`, 2);
+    const second = anthropicImageNormalizeRetainedStoreSnapshot();
+    // Invalid/overlong media types hash to a fixed-size key but stay DISTINCT:
+    // folding them onto application/octet-stream let a different invalid type
+    // reuse a prior emitted position and demote the second image to a smaller
+    // tier. Each now keeps its own position row.
+    expect(second.count).toBe(first.count + 1);
+    expect(second.bytes).toBeLessThan(256);
+    expect(recordedEmittedPosition(ONE_PX_PNG, hugeMediaType)).toBe(1);
+    expect(recordedEmittedPosition(ONE_PX_PNG, `${hugeMediaType}y`)).toBe(2);
+  });
+
+  test("older position memory is pinned: budget eviction clears cache slots first", async () => {
+    // The position entry is written BEFORE the cache entry, so it is the oldest
+    // retained row. Shared-budget eviction must still reclaim the cache slot and
+    // leave the pinned position readable — losing it mid-request would drop the
+    // image back to an age-derived tier and re-encode already-emitted bytes.
+    recordEmittedPosition(ONE_PX_PNG, "image/png", 2);
+    await normalizeImageTargets([target(fakePngBase64(100, 100, 128))], { validate });
+    const before = anthropicImageNormalizeRetainedStoreSnapshot();
+    const stats = getNormalizeStatsForTests();
+    expect(stats.cacheEntries).toBeGreaterThan(0);
+    expect(stats.positionBytes).toBeGreaterThan(0);
+    expect(before.bytes).toBe(stats.cacheBytes + stats.positionBytes);
+    expect(before.pinnedBytes).toBe(stats.positionBytes);
+
+    const released = evictOldestAnthropicImageNormalizeForBudget();
+    expect(released).toBeGreaterThan(0);
+    const after = anthropicImageNormalizeRetainedStoreSnapshot();
+    expect(after.pinnedBytes).toBe(before.pinnedBytes);
+    expect(after.evictableBytes).toBe(before.evictableBytes - released);
+    expect(after.bytes).toBe(before.bytes - released);
+    expect(recordedEmittedPosition(ONE_PX_PNG, "image/png")).toBe(2);
+
+    // With the cache drained there is nothing left the shared budget may take:
+    // position rows are never its eviction candidates.
+    expect(evictOldestAnthropicImageNormalizeForBudget()).toBe(0);
+    expect(recordedEmittedPosition(ONE_PX_PNG, "image/png")).toBe(2);
   });
 });
 
@@ -668,6 +725,47 @@ describe("bounded parallel first pass (WP170)", () => {
     // Only the three real images encoded; URL + over-limit sources consumed no slot.
     expect(g.stats().arrivals).toBe(3);
     expect(dropped.sort()).toEqual([1, 2]);
+  });
+
+  test("a mid-pass position-store eviction cannot change an unpulled target's pinned position", async () => {
+    // The pinned target sits LAST in the shared index queue: every earlier worker
+    // iteration reads its own position synchronously, then parks inside encode —
+    // so the first encode's 4096+entry fill evicts the pinned entry BEFORE the
+    // pinned target's turn. Without the pre-pass snapshot that late read would
+    // miss and fall back to the age-derived tier (maxEdge 2000 instead of 700).
+    const images = distinctImages(IMAGE_NORMALIZE_CONCURRENCY + 1);
+    const pinned = images[images.length - 1]!;
+    recordEmittedPosition(pinned, "image/png", 2);
+
+    let evicted = false;
+    const seenEdges: number[] = [];
+    const encode: EncodeFn = async (_input, spec) => {
+      seenEdges.push(spec.maxEdge);
+      if (!evicted) {
+        for (let i = 0; i < 4_200; i++) recordEmittedPosition(`filler-${i}`, "image/png", 0);
+        // The oldest entry (the pinned one) must actually be gone, otherwise the
+        // test proves nothing about reading through an eviction.
+        evicted = recordedEmittedPosition(pinned, "image/png") === undefined;
+      }
+      const b64len = 4 * 1024;
+      const px = fakePngBase64(Math.min(64, spec.maxEdge), Math.min(64, spec.maxEdge), Math.ceil((b64len / 4) * 3));
+      return { data: px.slice(0, b64len), mediaType: "image/webp" };
+    };
+
+    const targets: NormalizeTarget[] = images.map(b64 => ({
+      base64: b64,
+      mediaType: "image/png",
+      replace: () => {},
+      drop: () => {},
+    }));
+    await normalizeImageTargets(targets, { encode });
+
+    expect(evicted).toBe(true);
+    expect(seenEdges).toHaveLength(images.length);
+    // The unpinned targets start at their age-derived tier 0; the pinned target —
+    // pulled last, after its store entry was evicted — still resumes at position 2.
+    expect(seenEdges.slice(0, -1).every(edge => edge === TIER_SPECS[0].maxEdge)).toBe(true);
+    expect(seenEdges[seenEdges.length - 1]).toBe(TIER_SPECS[2].maxEdge);
   });
 });
 

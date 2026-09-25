@@ -107,6 +107,80 @@ test("Messages through CONNECT reach the router; other paths relay to the config
   expect(getClaudeInterceptState()).toBeNull();
 }, SERVER_BUDGET_MS);
 
+test("a first-party binding routes a picker id on the intercept only; the public listener still passes it through", async () => {
+  const upstreamHits: string[] = [];
+  const fakeAnthropic = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(req) {
+      upstreamHits.push(`${req.method} ${new URL(req.url).pathname}`);
+      return Response.json({ id: "msg_upstream", type: "message", role: "assistant", model: "claude-sonnet-4-6", content: [{ type: "text", text: "upstream" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 1 } });
+    },
+  });
+  const providerHits: Array<{ path: string; model: unknown }> = [];
+  const fakeProvider = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(req) {
+      const body = await req.json().catch(() => ({})) as { model?: unknown; stream?: unknown };
+      providerHits.push({ path: new URL(req.url).pathname, model: body.model });
+      const chunk = { id: "c1", object: "chat.completion.chunk", created: 1, model: "fake-model", choices: [{ index: 0, delta: { role: "assistant", content: "bound" }, finish_reason: null }] };
+      const done = { id: "c1", object: "chat.completion.chunk", created: 1, model: "fake-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
+      if (body.stream) {
+        return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: ${JSON.stringify(done)}\n\ndata: [DONE]\n\n`, { headers: { "content-type": "text/event-stream" } });
+      }
+      return Response.json({ id: "c1", object: "chat.completion", created: 1, model: "fake-model", choices: [{ index: 0, message: { role: "assistant", content: "bound" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+    },
+  });
+  const interceptPort = await findAvailablePort(0, "127.0.0.1");
+  const publicPort = await findAvailablePort(0, "127.0.0.1", { reservedPort: interceptPort });
+  saveConfig({
+    port: publicPort,
+    hostname: "127.0.0.1",
+    defaultProvider: "bindtarget",
+    providers: {
+      bindtarget: { adapter: "openai-chat", baseUrl: `http://127.0.0.1:${fakeProvider.port}/v1`, allowPrivateNetwork: true, apiKey: "sk-fake", models: ["fake-model"], liveModels: false },
+    },
+    claudeCode: {
+      anthropicBaseUrl: `http://127.0.0.1:${fakeAnthropic.port}`,
+      intercept: { port: interceptPort, modelMap: { "claude-sonnet-4-6": "bindtarget/fake-model" } },
+    },
+  } as unknown as OcxConfig);
+  const server = startServer(publicPort);
+  try {
+    const state = await waitForIntercept();
+    const ca = readFileSync(state.caCertPath, "utf8");
+    const proxy = `http://127.0.0.1:${state.proxyPort}`;
+    const request = { model: "claude-sonnet-4-6", max_tokens: 8, messages: [{ role: "user", content: "hi" }] };
+    const anthropicHeaders = { "content-type": "application/json", "anthropic-version": "2023-06-01", "x-api-key": "sk-ant-not-real" };
+
+    // Desktop's Code tab: the picker id arrives through the CONNECT tunnel and is served by the binding.
+    const bound = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", proxy, tls: { ca }, headers: anthropicHeaders, body: JSON.stringify(request) });
+    expect(bound.status).toBe(200);
+    expect(providerHits.map(hit => hit.model)).toEqual(["fake-model"]);
+    expect(upstreamHits).toEqual([]);
+
+    // count_tokens for a bound id is estimated locally, never passed through to Anthropic.
+    const counted = await fetch("https://api.anthropic.com/v1/messages/count_tokens", { method: "POST", proxy, tls: { ca }, headers: anthropicHeaders, body: JSON.stringify(request) });
+    expect(counted.status).toBe(200);
+    expect(upstreamHits).toEqual([]);
+
+    // The same id on the public listener is not a first-party request: native passthrough as before.
+    const direct = await fetch(`http://127.0.0.1:${publicPort}/v1/messages`, {
+      method: "POST",
+      headers: { ...anthropicHeaders, "x-opencodex-api-key": "public-secret" },
+      body: JSON.stringify(request),
+    });
+    expect(direct.status).toBe(200);
+    expect(upstreamHits).toEqual(["POST /v1/messages"]);
+    expect(providerHits).toHaveLength(1);
+  } finally {
+    await server.stop(true);
+    fakeAnthropic.stop(true);
+    fakeProvider.stop(true);
+  }
+}, SERVER_BUDGET_MS);
+
 test("an ephemeral public port starts no proxy unless intercept.port is explicit", async () => {
   const base = {
     hostname: "127.0.0.1",

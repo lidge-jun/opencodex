@@ -1,17 +1,24 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import * as nodeFs from "node:fs";
 import {
+  chmodSync,
   existsSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
+  readFileSync,
+  renameSync,
   readdirSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  hardenReusedServiceApiToken,
   readServiceApiTokenState,
   readTokenBackupState,
   removeOrphanTokenBackup,
@@ -26,8 +33,13 @@ import {
   writeTokenBackup,
 } from "../../src/lib/service-secrets";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { loadConfig, saveConfig } from "../../src/config";
+import { readClientConnectionState } from "../../src/client/state";
+import { clearClientConnectPending, markClientConnectPending } from "../../src/client/state";
+import { removeServiceTokenAfterUninstall } from "../../src/service/cli";
 
 let home = "";
+const previousHome = process.env.OPENCODEX_HOME;
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-service-secret-"));
@@ -35,8 +47,116 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   if (home) removeTreeWithRetry(home);
+});
+
+describe("service uninstall credential ownership", () => {
+  /** Run cleanup under the same synthetic lifecycle lock as a client connection. */
+  function cleanup(): "removed" | "absent" | "retained" | "unverified" {
+    return removeServiceTokenAfterUninstall({ lockPath: join(home, "lifecycle.sqlite") });
+  }
+
+  test("keeps the connected client's key while removing the service", () => {
+    const token = writeServiceApiTokenFile("ocx_client_key");
+    const config = loadConfig();
+    config.runtimeRole = "client";
+    config.client = {
+      serverUrl: "https://hub.example.test", managementUrl: "https://hub.example.test",
+      managementTransport: "direct", selectedClients: ["codex"],
+      tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "client-key",
+      tokenFingerprint: token.fingerprint, protocolVersion: 1,
+      connectedAt: "2026-09-06T00:00:00.000Z",
+    };
+    saveConfig(config);
+    expect(readClientConnectionState().kind).toBe("connected");
+
+    expect(cleanup()).toBe("retained");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_client_key\n");
+    rmSync(token.path);
+    expect(cleanup()).toBe("absent");
+  });
+
+  test("removes an unowned service token", () => {
+    const token = writeServiceApiTokenFile("ocx_service_key");
+    expect(readClientConnectionState().kind).toBe("disconnected");
+    expect(cleanup()).toBe("removed");
+    expect(existsSync(token.path)).toBe(false);
+    expect(cleanup()).toBe("absent");
+  });
+
+  test("retains a key owned by a pending connection", () => {
+    const token = writeServiceApiTokenFile("ocx_pending_client_key");
+    markClientConnectPending(token.fingerprint);
+    expect(readClientConnectionState().kind).toBe("disconnected");
+    expect(cleanup()).toBe("retained");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_pending_client_key\n");
+    clearClientConnectPending(token.fingerprint);
+    expect(cleanup()).toBe("removed");
+  });
+
+  test("a stale pending marker does not retain a replacement service key", () => {
+    const staleFingerprint = serviceApiTokenFingerprint("ocx_old_client_key");
+    markClientConnectPending(staleFingerprint);
+    const token = writeServiceApiTokenFile("ocx_replacement_service_key");
+    expect(cleanup()).toBe("removed");
+    expect(existsSync(token.path)).toBe(false);
+    expect(readFileSync(join(home, "client-connect-pending"), "utf8")).toBe(`${staleFingerprint}\n`);
+  });
+
+  for (const marker of ["", "z".repeat(64) + "\n", "a".repeat(66)]) {
+    test(`malformed pending marker of length ${marker.length} leaves cleanup unverified`, () => {
+      const token = writeServiceApiTokenFile("ocx_uncertain_pending_key");
+      writeFileSync(join(home, "client-connect-pending"), marker);
+      expect(cleanup()).toBe("unverified");
+      expect(readFileSync(token.path, "utf8")).toBe("ocx_uncertain_pending_key\n");
+    });
+  }
+
+  test("unsafe or unreadable pending markers preserve the key without claiming ownership", () => {
+    const token = writeServiceApiTokenFile("ocx_unreadable_pending_key");
+    const markerPath = join(home, "client-connect-pending");
+    mkdirSync(markerPath);
+    expect(cleanup()).toBe("unverified");
+    nodeFs.rmdirSync(markerPath);
+    markClientConnectPending(token.fingerprint);
+    const original = nodeFs.readFileSync;
+    const read = spyOn(nodeFs, "readFileSync").mockImplementation(((path: any, ...args: any[]) => {
+      if (path === markerPath) throw Object.assign(new Error("fixture marker read failure"), { code: "EACCES" });
+      return original(path, ...args);
+    }) as typeof nodeFs.readFileSync);
+    try { expect(cleanup()).toBe("unverified"); }
+    finally { read.mockRestore(); }
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_unreadable_pending_key\n");
+  });
+
+  test("keeps the token when client metadata is incomplete", () => {
+    const token = writeServiceApiTokenFile("ocx_uncertain_key");
+    writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client" }));
+    expect(readClientConnectionState().kind).toBe("mismatched");
+
+    expect(cleanup()).toBe("retained");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_uncertain_key\n");
+  });
+
+  test("keeps the token when client metadata is invalid", () => {
+    const token = writeServiceApiTokenFile("ocx_invalid_client_key");
+    writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", client: {} }));
+    expect(readClientConnectionState().kind).toBe("invalid");
+
+    expect(cleanup()).toBe("retained");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_invalid_client_key\n");
+  });
+
+  test("reports unavailable lifecycle ownership separately from retained keys", () => {
+    const token = writeServiceApiTokenFile("ocx_unverified_key");
+    const blockedLock = join(home, "blocked-lifecycle-lock");
+    mkdirSync(blockedLock);
+
+    expect(removeServiceTokenAfterUninstall({ lockPath: blockedLock })).toBe("unverified");
+    expect(readFileSync(token.path, "utf8")).toBe("ocx_unverified_key\n");
+  });
 });
 
 /**
@@ -76,6 +196,46 @@ describe("startup data-plane token resolution", () => {
 });
 
 describe("service API token ownership", () => {
+  test("hardens the validated token descriptor rather than a replacement pathname", () => {
+    if (process.platform === "win32") return;
+    const path = serviceApiTokenFilePath();
+    const openedToken = join(home, "opened-token");
+    const victim = join(home, "victim");
+    writeFileSync(path, "ocx_data_original\n", { mode: 0o644 });
+    writeFileSync(victim, "executable\n", { mode: 0o755 });
+    chmodSync(path, 0o644);
+    chmodSync(victim, 0o755);
+
+    const state = hardenReusedServiceApiToken(token => {
+      expect(token).toBe("ocx_data_original");
+      renameSync(path, openedToken);
+      symlinkSync(victim, path);
+    });
+
+    expect(state).toMatchObject({ kind: "present", token: "ocx_data_original" });
+    expect(statSync(openedToken).mode & 0o777).toBe(0o600);
+    expect(statSync(victim).mode & 0o777).toBe(0o755);
+    // Identity at return: the swap during validation is replaced, so the path
+    // the caller reports names a hardened file holding the validated token —
+    // never the substituted symlink.
+    expect(lstatSync(path).isSymbolicLink()).toBe(false);
+    expect(lstatSync(path).mode & 0o777).toBe(0o600);
+    expect(readFileSync(path, "utf8").trim()).toBe("ocx_data_original");
+  });
+
+  test("a non-regular token path is unsafe rather than blocking the open", () => {
+    if (process.platform === "win32") return;
+    const path = serviceApiTokenFilePath();
+    execFileSync("mkfifo", [path]);
+
+    const state = hardenReusedServiceApiToken(() => {
+      throw new Error("validation must not run for a non-regular token path");
+    });
+
+    expect(state.kind).toBe("unsafe");
+    if (state.kind === "unsafe") expect(state.reason).toContain("regular file");
+  });
+
   test("writes only the exact owner path through an atomic owner-only replacement", () => {
     const token = "ocx_data_0123456789abcdef0123456789abcdef01234567";
     const persisted = writeServiceApiTokenFile(token);

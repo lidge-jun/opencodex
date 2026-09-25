@@ -16,6 +16,8 @@ import { clearCodingAgentBinaryCache, type CodingAgentProviderProfile } from "..
  */
 export interface CodeBuddyProfile extends CodingAgentProviderProfile {
   family: "codebuddy";
+  /** Required for this family: the CLI is driven with a vendor API key. */
+  tokenEnv: string;
   /** Official `CODEBUDDY_INTERNET_ENVIRONMENT` value for this region. */
   internetEnvironment: "public" | "internal";
 }

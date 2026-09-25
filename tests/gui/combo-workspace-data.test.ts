@@ -11,6 +11,7 @@ import {
   groupCombos,
   intersectComboEfforts,
   isValidComboId,
+  jevAutoDraft,
   parseComboList,
   providerQuotaStatesFromReports,
   nextProviderQuotaStateExpiration,
@@ -104,6 +105,92 @@ function validate(
 }
 
 describe("combo-workspace-data", () => {
+  test("parse and PUT preserve the JEV strategy", () => {
+    const parsed = parseComboList({
+      combos: [{
+        id: "jev-auto",
+        alias: "jev-auto",
+        strategy: "jev",
+        reasoningEffortMode: "adaptive",
+        targets: [{ provider: "openai", model: "gpt-6-astra" }],
+      }],
+    })[0]!;
+
+    expect(parsed.strategy).toBe("jev");
+    expect(toPutBody(parsed)).toEqual({
+      id: "jev-auto",
+      combo: {
+        targets: [{ provider: "openai", model: "gpt-6-astra" }],
+        strategy: "jev",
+        defaultEffort: null,
+        imageInput: "auto",
+        reasoningEffortMode: "adaptive",
+        alias: "jev-auto",
+      },
+    });
+  });
+
+  test("parse, dirty tracking, validation, and PUT preserve exact JEV target efforts", () => {
+    const payload = {
+      combos: [{
+        id: "jev-auto",
+        strategy: "jev",
+        targets: [
+          { provider: "a", model: "m1", reasoningEfforts: ["low", "high"] },
+          { provider: "b", model: "m2" },
+        ],
+      }],
+    };
+    const parsed = parseComboList(payload)[0]!;
+
+    expect(parsed.targets[0]?.reasoningEfforts).toEqual(["low", "high"]);
+    expect(parsed.targets[1]?.reasoningEfforts).toBeUndefined();
+    expect(toPutBody(parsed).combo.targets).toEqual([
+      { provider: "a", model: "m1", reasoningEfforts: ["low", "high"] },
+      { provider: "b", model: "m2" },
+    ]);
+
+    payload.combos[0]!.targets[0]!.reasoningEfforts!.push("max");
+    expect(parsed.targets[0]?.reasoningEfforts).toEqual(["low", "high"]);
+    expect(draftEquals(parsed, {
+      ...parsed,
+      targets: [{ ...parsed.targets[0]!, reasoningEfforts: ["low"] }, parsed.targets[1]!],
+    })).toBe(false);
+    expect(validate(combo({
+      strategy: "jev",
+      targets: [{ provider: "a", model: "m1", reasoningEfforts: [] }],
+    }))).toBe("invalidReasoningEfforts");
+  });
+
+  test("JEV Auto template uses the available Astra, Sol, and Luna targets in fail-open order", () => {
+    const draft = jevAutoDraft([
+      { provider: "native-only", id: "gpt-6-astra", reasoningEfforts: ["medium"] },
+      { provider: "native-only", id: "gpt-5.6-sol", reasoningEfforts: ["medium"] },
+      { provider: "native-only", id: "gpt-5.6-luna", reasoningEfforts: ["medium"] },
+      { provider: "openai", id: "gpt-5.6-luna", reasoningEfforts: ["low", "medium"] },
+      { provider: "anthropic", id: "claude-sonnet-5" },
+      { provider: "openai", id: "gpt-6-astra", reasoningEfforts: ["medium", "high"] },
+      { provider: "openai", id: "gpt-5.6-sol", reasoningEfforts: ["low", "medium", "high"] },
+    ], new Set(["openai", "anthropic"]));
+
+    expect(draft).toMatchObject({
+      id: "jev-auto",
+      model: "jev-auto",
+      alias: "jev-auto",
+      strategy: "jev",
+      defaultEffort: null,
+      reasoningEffortMode: "adaptive",
+    });
+    expect(draft.targets.map(({ provider, model }) => ({ provider, model }))).toEqual([
+      { provider: "openai", model: "gpt-6-astra" },
+      { provider: "openai", model: "gpt-5.6-sol" },
+      { provider: "openai", model: "gpt-5.6-luna" },
+    ]);
+    expect(draft.targets.every(target => typeof target.clientKey === "string")).toBe(true);
+    draft.targets.splice(1, 1);
+    expect(draft.targets.map(target => target.model)).toEqual(["gpt-6-astra", "gpt-5.6-luna"]);
+  });
+
   test("parseComboList accepts normalized GET rows and skips malformed entries", () => {
     const items = parseComboList({
       combos: [
@@ -283,10 +370,12 @@ describe("combo-workspace-data", () => {
     expect(parsedItem?.reasoningEffortMode).toBe("adaptive");
     expect(toPutBody(parsedItem!).combo.reasoningEffortMode).toBe("adaptive");
 
-    // The default stays off the wire so a GET -> PUT round-trip never writes it back.
-    expect(toPutBody(combo()).combo).not.toHaveProperty("reasoningEffortMode");
-    expect(toPutBody(combo({ reasoningEffortMode: "strict" })).combo)
-      .not.toHaveProperty("reasoningEffortMode");
+    // Strict now goes on the wire explicitly (#5687): the server preserves an omitted field
+    // from the stored combo, so an omitted strict could never replace a stored adaptive.
+    // Storage stays sparse — the server drops the default before persisting.
+    expect(toPutBody(combo()).combo.reasoningEffortMode).toBe("strict");
+    expect(toPutBody(combo({ reasoningEffortMode: "strict" })).combo.reasoningEffortMode)
+      .toBe("strict");
   });
 
   test("draftEquals treats a reasoningEffortMode change as dirty", () => {
@@ -536,6 +625,8 @@ describe("combo-workspace-data", () => {
         ],
         strategy: "round-robin",
         defaultEffort: "high",
+        imageInput: "auto",
+        reasoningEffortMode: "strict",
         stickyLimit: 7,
       },
     });
@@ -550,6 +641,8 @@ describe("combo-workspace-data", () => {
         targets: [{ provider: "a", model: "m1" }],
         strategy: "failover",
         defaultEffort: "medium",
+        imageInput: "auto",
+        reasoningEffortMode: "strict",
       },
     });
     expect("stickyLimit" in failoverBody.combo).toBe(false);
@@ -582,6 +675,8 @@ describe("combo-workspace-data", () => {
         ],
         strategy: "failover",
         defaultEffort: "medium",
+        imageInput: "auto",
+        reasoningEffortMode: "strict",
         alias: "deepseek-v4-flash",
       },
     });
@@ -768,10 +863,10 @@ describe("combo imageInput draft persistence", () => {
     expect(draftEquals(base, disabled)).toBe(false);
   });
 
-  test("toPutBody emits imageInput only when disabled", () => {
+  test("toPutBody always sends imageInput so auto can replace a stored disabled", () => {
     const auto = emptyDraft("x");
     auto.targets = [{ provider: "a", model: "m1" }];
-    expect(toPutBody(auto).combo).not.toHaveProperty("imageInput");
+    expect(toPutBody(auto).combo.imageInput).toBe("auto");
     const disabled = { ...auto, imageInput: "disabled" as const };
     expect(toPutBody(disabled).combo.imageInput).toBe("disabled");
   });

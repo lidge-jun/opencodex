@@ -15,6 +15,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
  * 49 errors in run 33590540220 were before/after hooks failing on the same path.
  */
 let TEST_DIR = "";
+const previousHome = process.env.OPENCODEX_HOME;
 let ACCOUNTS_PATH = "";
 
 const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
@@ -33,7 +34,8 @@ async function removeScratchHome(): Promise<void> {
   await flushConfigDirHardeningForTests();
   setIcaclsRunnerForTests(null);
   setAsyncIcaclsRunnerForTests(null);
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
   if (TEST_DIR) removeTreeWithRetry(TEST_DIR);
   TEST_DIR = "";
 }

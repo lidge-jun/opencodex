@@ -54,9 +54,10 @@ HTTP 504 with an `upstream_no_response` error. A slow but alive origin therefore
 client's own deadline or for `connectTimeoutMs` (default 200s), whichever comes first; a
 connect timeout that fires after the create frame was sent settles as the same 504. A socket
 that closes or errors before the first Responses event settles as an HTTP 502 with
-`upstream_closed_before_response`. These statuses are never retried inside the proxy — the
-frame may already be executing upstream, so the client applies its own retry policy exactly as
-it would when connected to the backend directly. Once the response has started, a later drop
+`upstream_closed_before_response`. The proxy does not retry either status on its own: the frame
+may already be executing upstream, so the client applies its own retry policy exactly as it would
+when connected to the backend directly. The one exception is that 502 on a provider that opted
+into `retryOnReset`, described below. Once the response has started, a later drop
 surfaces inside the stream as before. `stallTimeoutSec` is unrelated to this window.
 
 An ordinary HTTP send has a third case. When the connection dies before any response header
@@ -76,9 +77,12 @@ requests such as vision and web search are replayed normally, because repeating 
 duplicate a turn.
 
 A native Responses provider can opt into replacing that send with
-[`retryOnReset`](providers.md#provider-entries-ocxproviderconfig). The same grant covers the
+[`retryOnReset`](/reference/configuration/providers/#provider-entries-ocxproviderconfig). The same grant covers the
 case where the connection survives the header and the SSE body then dies carrying only control
-events, because the caller has observed nothing in either one. A replacement happens only when
+events, because the caller has observed nothing in either one. It also covers the canonical
+ChatGPT WebSocket above: a socket that closes or errors before the first Responses event is
+replaced by one HTTP send, never by a second socket. A silent socket keeps its 504, and a native
+steering or injection turn is never replaced. A replacement happens only when
 the request is self-contained (`store: false`, complete input, client-executed tools only, no
 server-side continuation state), and one logical request gets the configured number of
 replacements in total — across every recovery leg and every combo child, not one each. The
@@ -496,9 +500,62 @@ shell-injection surface. Delivery is attempted once; there is no retry.
 
 Read recent detections with `ocx provider resets` or `GET /api/quota-resets`.
 
+## API surfaces (`apiSurfaces`)
+
+Responses (`/v1/responses`) and Chat Completions (`/v1/chat/completions`) are always served.
+The Messages API (`/v1/messages` and `/v1/messages/count_tokens`) can be closed on its own.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `apiSurfaces.messages.enabled?` | `boolean` | inherit | `true` serves the Messages API, `false` refuses both routes with 403. Unset inherits `claudeCode.enabled`, so a Claude integration that is off also closes Messages. |
+
+A present but malformed value (a non-object `apiSurfaces` or `messages`, or a non-boolean
+`enabled`) closes the Messages API rather than falling back to the inherited value. Both
+routes always agree.
+
+The dashboard's API page shows one card per API with the setting's source (explicit,
+inherited from Claude settings, or invalid) and a toggle for Messages. Turning Messages off
+there writes `apiSurfaces.messages.enabled: false` **and** `claudeCode.enabled: false` in the
+same save, so a proxy version older than this setting, which only reads `claudeCode.enabled`,
+keeps the endpoint closed after a downgrade. Turning it on writes only
+`apiSurfaces.messages.enabled: true`; an older version then still follows
+`claudeCode.enabled` and may keep Messages closed, which is the safe direction.
+
+## Protocol paths (`protocols`)
+
+How a Chat Completions or Messages request may reach a provider. Every value defaults to the
+behavior before these keys existed; see [Protocol paths](/guides/protocol-paths/) for the delivery
+modes, the preview, and the per-request trace.
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `protocols.unrepresentable?` | `"legacy" \| "reject"` | `"legacy"` | `legacy` sends a request whose path drops a feature and records the loss in the trace. `reject` refuses it with HTTP 400 before any send, naming only the feature keys. |
+| `protocols.rollout.nativeChatCombos?` | `boolean` | `false` | Send an eligible Chat candidate inside a combo natively from its own copy of the client body. |
+| `protocols.rollout.managedMessagesNative?` | `boolean` | `false` | Send Messages natively to a direct, key-authenticated Anthropic provider instead of through the internal Responses bridge. |
+| `protocols.rollout.managedMessagesNativeOAuth?` | `boolean` | `false` | Native Messages for the unpooled `anthropic` OAuth provider on `api.anthropic.com`. Read as off unless `managedMessagesNative` is on; a pooled account set stays on the bridge. |
+| `protocols.rollout.directEncoders?` | `boolean` | `false` | Encode Chat and Messages answers from a non-Responses upstream directly from adapter events. |
+| `protocols.rollout.shadowPlan?` | `boolean` | `false` | Compare each Chat or Messages request's path with the plan a preview predicts and mark a disagreement as `planMismatch` on its log row. Sends nothing extra. |
+
+A malformed `protocols` block is dropped to these defaults, because each default is the
+conservative one. Only `true` turns a switch on.
+
+```json
+{
+  "protocols": {
+    "unrepresentable": "legacy",
+    "rollout": { "shadowPlan": true }
+  }
+}
+```
+
+`ocx api policy` shows the resolved values and changes them through the running proxy
+(`--unrepresentable <legacy|reject>`, `--rollout <switch>=<on|off>`, `--messages <on|off>` for
+[`apiSurfaces`](#api-surfaces-apisurfaces)). It writes only when a setting flag is given. The
+dashboard's API page and `PATCH /api/protocols/settings` use the same validation.
+
 ## Claude Code (`claudeCode`)
 
-These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx claude` launcher, and the Claude dashboard page.
+These settings govern `/v1/messages`, `/v1/messages/count_tokens`, the `ocx claude` launcher, and the Claude dashboard page. Whether the Messages API is served at all is decided by [`apiSurfaces`](#api-surfaces-apisurfaces), which inherits `claudeCode.enabled` while unset.
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -601,7 +658,9 @@ input size and content. Restart the proxy after editing
 Codex uses small helper models for tasks such as titles and commit messages. Enable
 `shadowCallIntercept` to redirect recognized source-model prefixes to another configured model. The
 replacement keeps the request's configured reasoning effort. Set `sourceModels` only when a client
-uses different helper ids.
+uses different helper ids. A non-empty `sourceModels` replaces the default prefixes instead of
+extending them, so include `gpt-5.6-luna` in the list when current clients should still be
+intercepted.
 Interception is model-based: every request whose bare model id matches `sourceModels` can be
 redirected, including normal `request_kind: "turn"` requests. `x-codex-turn-metadata` does not exempt
 a matching request.
@@ -615,6 +674,24 @@ a matching request.
   }
 }
 ```
+
+### When the target is unavailable
+
+The replacement is the one destination the operator chose, so a target that stops resolving fails
+the helper call instead of sending it elsewhere. When the target's provider is disabled or deleted,
+or its combo no longer exists, an intercepted request returns `409` with error code
+`intercept_target_unavailable` before anything is sent upstream. The request log records the same
+code. The request is not passed through to the native helper model and does not fall back to the
+default provider, because either would change the destination, credentials and cost without your
+choice. A combo or routing-profile target still fails over among its own members. A qualified
+target such as `provider/model` whose provider segment names nothing configured is treated the same
+way, and the settings API refuses to save one. A bare model id that resolves through the default
+provider stays valid.
+
+Disabling (`PATCH /api/providers?name=<provider>` with `disabled: true`) or deleting a provider that the
+target resolves to still succeeds; the response adds `dependentShadowIntercept: { model, enabled }`
+and the dashboard shows a warning. Re-enabling the provider, or choosing another target, restores
+interception.
 
 ## Sidecars
 
@@ -633,7 +710,7 @@ Images API paths and response shape expected by Codex.
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `enabled?` | `boolean` | on when usable | Master switch. |
+| `enabled?` | `boolean` | on when usable | Master switch. When false, OpenCodex stops intercepting `web_search` AND the Codex integration writes `web_search = "disabled"` into `~/.codex/config.toml`. |
 | `backend?` | `"openai" \| "anthropic" \| "xai" \| "gemini" \| "exa"` | `openai` | Explicit wins; unset always resolves to `openai`. `anthropic` and `xai` run only when explicitly configured; `gemini` and `exa` remain reserved until their executors ship. |
 | `model?` | `string` | backend-dependent | `gpt-5.6-luna` for OpenAI, `claude-sonnet-5` for Anthropic, or `grok-4.6` for xAI. Legacy explicit `gpt-5.4-mini` migrates on start. |
 | `exaApiKey?` | `string` | none | Operator key for the `exa` backend. Write-only: management reads never return the stored value. |
@@ -714,6 +791,6 @@ wildcard `hostname`, where the public listener already holds `127.0.0.1:<port>`.
 
 `codexNativeSteering` and `codexNativeInjection` enable separate, default-off native
 WebSocket control paths. See the canonical guide for
-[supported steering routes and settings](../../guides/codex-integration.md#steering-continuation-settings-and-public-api),
-[typed result and approval continuations](../../guides/codex-integration.md#rich-tool-results-and-explicit-approvals-after-response-completion),
-and [confirmation deadlines and retained context](../../guides/codex-integration.md#steering-confirmation-deadlines-and-retained-context).
+[supported steering routes and settings](/guides/codex-integration/#steering-continuation-settings),
+[typed result and approval continuations](/guides/codex-integration/#rich-tool-results-and-explicit-approvals-after-response-completion),
+and [confirmation deadlines and retained context](/guides/codex-integration/#steering-confirmation-deadlines-and-retained-context).

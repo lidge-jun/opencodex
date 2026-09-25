@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex — Codex、Claude Code、Claude Desktop、Grok Build のための汎用プロバイダープロキシ" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>OpenAI Codex、Claude Code、Claude Desktop、Grok Build のための汎用プロバイダープロキシ</b><br>
 コマンド 2 つで、そのすべてが好きな LLM で動きます。</p>
@@ -13,6 +17,13 @@
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="macOS 版をダウンロード (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Windows 版をダウンロード (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Linux 版をダウンロード (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Linux 版をダウンロード (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -78,7 +89,7 @@ Desktop、Grok Build から使えます。Codex 認証用の **ChatGPT アカウ
 
 ## クイックスタート
 
-### 個人向けインストール
+### 個人向けインストール（CLI）
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18 以上。Bun ランタイムは自動で同梱されます
@@ -92,26 +103,27 @@ ocx start                         # プロキシとダッシュボードが loca
 `ocx gui` でいつでもダッシュボードを開き直せます。
 
 <details>
-<summary><b>デスクトップアプリと macOS ウィジェット — ベータ版</b></summary>
+<summary><b>デスクトップアプリ（ベータ版）</b></summary>
 
-同じダッシュボードを包むネイティブアプリに、ブラウザーを開かなくてもプロキシの状態、今日の使用量、
-プロバイダーのクォータを確認できる WidgetKit 拡張を加えたものです。プロキシ自体は変わりません。アプリは
-起動中のプロキシを見つけるか、同梱の `ocx` サイドカーを起動し、ダッシュボードは引き続き
-**http://localhost:10100** で開きます。
+デスクトップアプリは、同じプロキシとダッシュボードをネイティブウィンドウに収め、トレイと同梱の `ocx` を備えたものです。
+すでに起動しているプロキシに接続するか、同梱のプロキシを起動します。ダッシュボードはプロキシの
+ポートで開きます（別のポートを設定していなければ **http://localhost:10100**）。
+[最新リリース](https://github.com/lidge-jun/opencodex/releases/latest)から、お使いのプラットフォーム向けのファイルを選んでください。
 
-現在はベータ版です。ビルドは改ざん検知のため署名されていますが公証はされていないため、macOS では
-初回起動時に右クリックして「開く」を選ぶ必要があり、Windows ではインストーラーに SmartScreen の警告が
-表示されます。ウィジェットには macOS 14 以降が必要です。表示に使うスナップショットモデルは
-[`app/`](../app)（`MenuBarCore`）にあります。
+| プラットフォーム | ファイル | 備考 |
+|---|---|---|
+| macOS 13 以降（Apple Silicon と Intel） | `OpenCodex-<version>-macos.dmg` | ユニバーサルビルド。Developer ID で署名・公証済み |
+| Windows（x64） | `OpenCodex-<version>-windows-x64.msi` | まだコード署名なし。SmartScreen が一度だけ確認するので、**詳細情報 → 実行**を選択 |
+| Linux（x86_64） | `OpenCodex-<version>-linux-x86_64.AppImage` または `-linux-amd64.deb` | トレイには AppIndicator 対応のデスクトップが必要 |
 
-[最新リリース](https://github.com/lidge-jun/opencodex/releases)からダウンロードするか、
-`bun run prepare-sidecar && bun run prepare-widget && bunx tauri build` でローカルビルドできます。
-
-インストール先、サービスファイルなどディスクに書き込まれるものは
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) にまとめています。
-[デスクトップアプリガイド](https://lidge-jun.github.io/opencodex/guides/desktop-app/)と
-[macOS メニューバーアプリガイド](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)では、
-プラットフォーム別のインストール手順と Gatekeeper の確認画面を説明しています。
+リリースページでは各ファイルの横に `.sha256` があります。macOS 14 以降では、プロキシの状態、
+今日の使用量、プロバイダーのクォータを表示する WidgetKit 拡張も付属します。表示に使う
+スナップショットモデルは [`app/`](../app)（`MenuBarCore`）にあります。アプリを自分でビルドするには、
+リポジトリのルートで `bun install && bun run build:gui` を実行し、
+`desktop/` で macOS なら `bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local`、Windows と Linux なら `bun install && bun run prepare-sidecar && bun run build:local` を実行します（ウィジェットの手順は macOS 専用です）。
+[デスクトップアプリガイド](https://opencodex.me/ja/guides/desktop-app/)と
+[macOS メニューバーアプリガイド](https://opencodex.me/ja/guides/macos-menu-bar/)で初回起動について説明しています。
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) にはディスクに書き込まれるすべてのものをまとめています。
 
 </details>
 
@@ -209,8 +221,9 @@ services:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -218,8 +231,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -251,13 +265,13 @@ ocx init      # 対話式セットアップ: ~/.opencodex/config.json を書き�
 
 ## 対応プラットフォーム
 
-| OS | 状態 | サービスマネージャー |
-|---|---|---|
-| macOS (arm64 / x64) | 完全対応 | launchd |
-| Linux (x64 / arm64) | 完全対応 | systemd (user unit) |
-| Windows (x64) | 完全対応 | タスクスケジューラ（非表示）/ 任意のネイティブサービス（`--native`、WinSW） |
+| OS | 状態 | サービスマネージャー | デスクトップアプリ（ベータ版） |
+|---|---|---|---|
+| macOS (arm64 / x64) | 完全対応 | launchd | ユニバーサル `.dmg` |
+| Linux (x64 / arm64) | 完全対応 | systemd (user unit) | x86_64 `.AppImage` / `.deb` |
+| Windows (x64) | 完全対応 | タスクスケジューラ（非表示）/ 任意のネイティブサービス（`--native`、WinSW） | x64 `.msi` |
 
-[Node](https://nodejs.org) 18 以上が必要です。Bun ランタイムは `npm install` で同梱されるので、Bun を
+CLI インストールには [Node](https://nodejs.org) 18 以上が必要です。デスクトップアプリには Node も Bun も不要です。Bun ランタイムは `npm install` で同梱されるので、Bun を
 別途入れる必要も、Windows で WSL を使う必要もありません。npm が同梱ランタイムのインストールスクリプト
 をブロックした場合は[インストールドキュメント](https://opencodex.me/ja/getting-started/installation/)を
 参照してください。
@@ -295,14 +309,15 @@ ocx init      # 対話式セットアップ: ~/.opencodex/config.json を書き�
 <details>
 <summary>メモリ所有権の詳細</summary>
 
-OpenCodex はプロセスが保持する状態を 36 種類に分けて追跡し、それぞれに文書化された上限があります:
+OpenCodex はプロセスが保持する状態を以下のカテゴリで追跡し、それぞれに文書化された上限があります:
 
-- **保持ストア 12 個**（リクエストログ、デバッグリング、画像キャッシュ、モデルキャッシュ、ビジョンの
+- **保持ストア 14 個**（リクエストログ、デバッグリング、画像キャッシュ、モデルキャッシュ、ビジョンの
   説明、カーソル blob、responses の継続など）はバイト単位で集計され、アプリが持つメモリ予算
-  （既定 256 MiB）によって退避されます。
+  （既定 256 MiB）によって退避されます。ただしネイティブ制御のリプレイ用ストアは固定され、
+  退避されません。
 - **観測バッファ 4 個**（トランスレーターのアキュムレーター、画像・OAuth・Grok の tail）は処理中の
   バイト圧力を監視するだけで、退避はしません。
-- **state-store の登録 24 個**が期限切れの掃除（60 秒間隔）と config 世代の reconciliation を担い、
+- **state-store の登録 28 個**が期限切れの掃除（60 秒間隔）と config 世代の reconciliation を担い、
   古いプロバイダー／アカウントのキーを取り除きます。
 - **パスとフィンガープリントのメモ**（ワークスペースのメタデータ、hardened identity、インストール
   salt、mode-hint の capability）は挿入順の LRU 上限（8〜128 件）を使います。
@@ -330,6 +345,19 @@ codex -m "ollama/llama3" "この関数をリファクタリングして"
 `/` を含むプロバイダーのモデル ID は、内側のスラッシュを `-` に置き換えた別名で公開され、スラッシュ
 のままの完全形も引き続き使えます。詳細は
 [モデルルーティングのドキュメント](https://opencodex.me/ja/guides/model-routing/)を参照してください。
+
+### JEV Auto ルーティング（任意）
+
+TypeSafe JEV は、明示的に有効にした Combo の最初のモデルと推論エフォートを選べます。通常のモデル
+ピッカーと直接ルートは変わりません。認証情報は `ocx login jev`、**Providers → TypeSafe JEV → Add API key**、
+または `TYPESAFE_API_KEY`/`JEV_API_KEY` で追加します。次に **Models → Combos → Create JEV Auto** を開き、
+許可するターゲットモデルを選んで、ターゲットごとに JEV が選べるエフォートをチェックします。
+エフォート設定に触れていないターゲットは、そのモデルが現在公開しているすべてのエフォートを許可します。
+
+JEV は `jev-auto` でのみ、論理的なモデル呼び出しごとに一度だけ使われます。認証情報がない場合、
+ネットワーク障害、または不正な判定のときは、現在利用可能な最初のターゲットへフェイルオープンします。
+呼び出し元のキャンセルは引き続きリクエストをキャンセルします。自動テストは TypeSafe のモック
+エンドポイントを使い、実際の JEV アカウントは検証しません。
 
 ## プロバイダーとアダプター
 

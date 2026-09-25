@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { applyProfile as applyProfileProduction, handleClaudeDesktopCommand as handleClaudeDesktopCommandProduction, type ApplyProfileDeps } from "../../src/cli/claude-desktop";
 import * as managementApi from "../../src/server/management-api";
 import { buildClaudeDesktopState } from "../../src/server/management-api";
@@ -11,7 +11,12 @@ import { applyRemoteDesktopStore, restoreRemoteDesktopStore, writeDesktopDisconn
 import * as lifecycleLock from "../../src/client/lifecycle-lock";
 import { readClientConnectionState, clearClientConnection } from "../../src/client/state";
 import { HubClientError } from "../../src/client/hub-client";
+import { RuntimeApiError } from "../../src/cli/runtime-api";
+import type { DesktopPickerStatus } from "../../src/claude/desktop-picker";
+import { ensurePickerCa } from "../../src/claude/intercept/picker-ca";
 import { claudeDesktopIntegrationEnabledNow, setIntegrationEnabled } from "../../src/codex/desired-state";
+import { resetCodexRuntimeResolveCacheForTests, setCodexRuntimeResolveCacheForTests } from "../../src/codex/runtime";
+import { resetBundledCatalogCacheForTests, setBundledCatalogCacheForTests } from "../../src/codex/catalog/bundled";
 import { serviceApiTokenBackupPath, serviceApiTokenFilePath, writeServiceApiTokenFile } from "../../src/lib/service-secrets";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -27,13 +32,30 @@ const applyProfile = (profile: Parameters<typeof applyProfileProduction>[0], mod
 const handleClaudeDesktopCommand = (args: string[], deps: ApplyProfileDeps = {}) =>
   handleClaudeDesktopCommandProduction(args, { lifecycleLockDeps: fixtureLock(), ...deps });
 
+// Fixture-stage config placement only: the verified writers under test still run
+// saveConfig, but arranging a fixture through it pays the mutation-lock and ACL
+// subprocess cost (~0.5-1s on Windows) for state no assertion inspects.
+function writeFixtureConfig(config: OcxConfig): void {
+  const path = getConfigPath();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(config), { mode: 0o600 });
+}
+
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   previousDesktopDir = process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
   dir = mkdtempSync(join(tmpdir(), "ocx-desktop-cli-"));
   process.env.OPENCODEX_HOME = join(dir, "ocx");
   process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR = join(dir, "desktop");
-  saveConfig({
+  // Keep host Codex work out of the fixture: a real runtime probe plus the
+  // bundled-catalog subprocess cost ~1s per buildClaudeDesktopState call on this
+  // path, while the tests only need a deterministic catalog projection.
+  setCodexRuntimeResolveCacheForTests(
+    { runtime: { command: "codex", version: null, source: "fallback" }, failures: [] },
+    { discoverAlternatives: false },
+  );
+  setBundledCatalogCacheForTests({ command: "codex", version: null }, null);
+  writeFixtureConfig({
     port: 10100,
     defaultProvider: "mock",
     providers: {
@@ -45,6 +67,8 @@ beforeEach(() => {
 afterEach(() => {
   restoreLocalBuild?.();
   restoreLocalBuild = undefined;
+  resetBundledCatalogCacheForTests();
+  resetCodexRuntimeResolveCacheForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (previousDesktopDir === undefined) delete process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR;
@@ -66,7 +90,7 @@ function connectDesktopFixture(blockLocalBuild = true): void {
     selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "desktop-key",
     tokenFingerprint: fingerprint, protocolVersion: 1, connectedAt: "2026-09-06T00:00:00.000Z",
   };
-  saveConfig(config);
+  writeFixtureConfig(config);
   expect(readClientConnectionState().kind).toBe("connected");
   if (blockLocalBuild) {
     const spy = spyOn(managementApi, "buildClaudeDesktopState").mockImplementation(async () => {
@@ -91,7 +115,8 @@ test.each([
   ["--static", "static"], ["--hybrid", "hybrid"], ["--discovery-only", "discovery"],
 ] as const)("connected CLI %s applies exact hub IDs without local reconciliation", async (flag, mode) => {
   connectDesktopFixture();
-  setIntegrationEnabled("claude-desktop", false);
+  // Fixture placement of the disabled switch; apply itself must flip it back on.
+  writeFixtureConfig({ ...loadConfig(), clientIntegrations: { "claude-desktop": false } });
   const log = spyOn(console, "log").mockImplementation(() => {});
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   const error = spyOn(console, "error").mockImplementation(() => {});
@@ -507,14 +532,19 @@ test("apply writes locally only when no proxy is running", async () => {
   expect(existsSync(join(dir, "desktop"))).toBe(true);
 });
 
-test("no-arg and legacy mode flags apply Desktop config", async () => {
+test.each([{ args: [] as string[] }, { args: ["--static"] }])("no-arg and legacy mode flags apply Desktop config: $args", async ({ args }) => {
+  const config = loadConfig();
+  config.claudeCode = { intercept: { enabled: false } };
+  writeFixtureConfig(config);
   const log = spyOn(console, "log").mockImplementation(() => {});
   const error = spyOn(console, "error").mockImplementation(() => {});
   try {
     // Deterministic: no live proxy in the test environment, so apply writes locally.
     const noProxy = { findLiveProxyImpl: async () => null };
-    expect(await handleClaudeDesktopCommand([], noProxy)).toBe(0);
-    expect(await handleClaudeDesktopCommand(["--static"], noProxy)).toBe(0);
+    expect(await handleClaudeDesktopCommand(args, noProxy)).toBe(0);
+    if (args.length === 0) {
+      expect(log.mock.calls.flat().join(" ")).not.toContain("ocx claude desktop apply --first-party");
+    }
     expect(readFileSync(join(process.env.OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR!, "_meta.json"), "utf8")).toContain("opencodex");
     expect(error).not.toHaveBeenCalled();
   } finally {
@@ -533,8 +563,151 @@ test("usage errors on desktop verbs exit 2, not 1", async () => {
     expect(await handleClaudeDesktopCommand(["move"])).toBe(2);
     expect(await handleClaudeDesktopCommand(["nope"])).toBe(2);
     expect(await handleClaudeDesktopCommand(["apply", "--wat"])).toBe(2);
+    expect(await handleClaudeDesktopCommand(["picker"])).toBe(2);
+    expect(await handleClaudeDesktopCommand(["picker", "wat"])).toBe(2);
+    expect(await handleClaudeDesktopCommand(["picker", "on", "extra"])).toBe(2);
   } finally {
     log.mockRestore();
     error.mockRestore();
   }
+});
+
+function pickerStatus(reason: DesktopPickerStatus["reason"] = "restart_required"): DesktopPickerStatus {
+  return {
+    desired: true,
+    supported: true,
+    trust: "trusted",
+    profile: "applied",
+    listenerReady: true,
+    effective: false,
+    reason,
+    models: 1,
+    snapshotAt: 1,
+    lastBootstrapAt: null,
+  };
+}
+
+test("picker on refuses without a live proxy", async () => {
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await handleClaudeDesktopCommand(["picker", "on"], { findLiveProxyImpl: async () => null })).toBe(1);
+    expect(error.mock.calls.flat().join(" ")).toContain("proxy_unavailable");
+  } finally { error.mockRestore(); }
+});
+
+test("picker status uses the live management route", async () => {
+  const calls: string[] = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClaudeDesktopCommand(["picker", "status"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      runtimeRequestImpl: async path => { calls.push(path); return { ok: true, picker: pickerStatus("active") }; },
+    })).toBe(0);
+    expect(calls).toEqual(["/api/claude-desktop/picker"]);
+    expect(log.mock.calls.flat().join(" ")).toContain('"reason":"active"');
+  } finally { log.mockRestore(); }
+});
+
+test("picker on answers trust_pending by trusting locally and repeating the PUT", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const ca = ensurePickerCa(join(process.env.OPENCODEX_HOME!, "picker-pending-test"));
+  try {
+    expect(await handleClaudeDesktopCommand(["picker", "on"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      ensurePickerCaImpl: () => ca,
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async () => ({ ok: true }),
+      runtimeRequestImpl: async (_path, init) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return bodies.length === 1
+          ? { ok: true, picker: pickerStatus("trust_pending") }
+          : { ok: true, picker: pickerStatus("restart_required") };
+      },
+    })).toBe(0);
+    expect(bodies).toEqual([
+      { enabled: true, persist: true },
+      { enabled: true, persist: true, trustedLocally: true, callerAddedTrust: true },
+    ]);
+  } finally { log.mockRestore(); }
+});
+
+test("picker off offline persists the preference and removes local artifacts", async () => {
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const removed: string[] = [];
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "off"], {
+      findLiveProxyImpl: async () => null,
+      removeDesktopPickerArtifacts: async () => { removed.push("cleanup"); return { ok: true }; },
+    });
+    expect(result).toBe(0);
+    expect(loadConfig().claudeCode?.intercept?.picker).toBe(false);
+    expect(removed).toEqual(["cleanup"]);
+    expect(log.mock.calls.flat().join(" ")).toContain("picker:");
+  } finally { log.mockRestore(); }
+});
+
+test("picker trust forwards whether this run added trust", async () => {
+  const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  const ca = ensurePickerCa(join(process.env.OPENCODEX_HOME!, "picker-test"));
+  try {
+    const result = await handleClaudeDesktopCommand(["picker", "trust"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      ensurePickerCaImpl: () => ca,
+      inspectPickerTrustImpl: async () => "untrusted",
+      trustPickerCaImpl: async () => ({ ok: true }),
+      runtimeRequestImpl: async (path, init) => {
+        calls.push({ path, body: JSON.parse(String(init.body)) as Record<string, unknown> });
+        return { ok: true, picker: pickerStatus("restart_required") };
+      },
+    });
+    expect(result).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.body).toMatchObject({ enabled: true, persist: false, trustedLocally: true, callerAddedTrust: true });
+  } finally { log.mockRestore(); }
+});
+
+test("picker trust compensates only a connection refusal, while timeout leaves trust unknown", async () => {
+  const ca = ensurePickerCa(join(process.env.OPENCODEX_HOME!, "picker-test"));
+  const untrusted: string[] = [];
+  const baseDeps: ApplyProfileDeps = {
+    findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+    ensurePickerCaImpl: () => ca,
+    inspectPickerTrustImpl: async () => "untrusted",
+    trustPickerCaImpl: async () => ({ ok: true }),
+    untrustPickerCaImpl: async () => { untrusted.push("untrust"); return { ok: true }; },
+  };
+  const error = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await handleClaudeDesktopCommand(["picker", "trust"], {
+      ...baseDeps,
+      runtimeRequestImpl: async () => { throw new Error("ECONNREFUSED"); },
+    })).toBe(1);
+    expect(untrusted).toEqual(["untrust"]);
+
+    untrusted.length = 0;
+    expect(await handleClaudeDesktopCommand(["picker", "trust"], {
+      ...baseDeps,
+      runtimeRequestImpl: async () => { throw new RuntimeApiError("request timed out", 503, null); },
+    })).toBe(1);
+    expect(untrusted).toEqual([]);
+    expect(error.mock.calls.flat().join(" ")).toContain("state unknown - run ocx claude desktop picker status");
+  } finally { error.mockRestore(); }
+});
+
+test("first-party apply delegates to the live local hub and prints its picker state", async () => {
+  const posted: Record<string, unknown>[] = [];
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClaudeDesktopCommand(["apply", "--first-party"], {
+      findLiveProxyImpl: async () => ({ pid: 42, port: 10100, hostname: "127.0.0.1", source: "runtime" }),
+      runtimeRequestImpl: async (_path, init) => {
+        posted.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return { ok: true, path: "/daemon", picker: pickerStatus("restart_required") };
+      },
+    })).toBe(0);
+    expect(posted).toEqual([{ mode: "first-party" }]);
+    expect(log.mock.calls.flat().join(" ")).toContain('"reason":"restart_required"');
+  } finally { log.mockRestore(); }
 });

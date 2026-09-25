@@ -5,9 +5,10 @@
  * asked it for a connection that died before any head; #4989 asked it for an SSE body that
  * died after the head while carrying only control events. Both are the same row of the stage
  * table: a stage the caller observed nothing at, with a cause that cannot prove the origin did
- * not run the turn. `resendPermission` answers `refused-ambiguous` for both, and
- * request-failure-model.ts already names the only thing that may override that answer -- a
- * narrowly scoped recovery a maintainer opted into and bounded.
+ * not run the turn. A Codex WebSocket that dies under its create frame before any Responses
+ * event (#4191) is that row a third time. `resendPermission` answers `refused-ambiguous` for all
+ * of them, and request-failure-model.ts already names the only thing that may override that
+ * answer -- a narrowly scoped recovery a maintainer opted into and bounded.
  *
  * One override, not two. The reason this module exists rather than a boolean in each caller is
  * that a request which resets before the head and again after it would otherwise buy a

@@ -6,7 +6,7 @@
  * ever moves downward, so a test added to it after the cap was set fails the ratchet
  * for every later pull request rather than only its own. The case is unchanged.
  */
-import { describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { managementFetch as fetch } from "../helpers/management-auth";
 import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +20,7 @@ import type { OcxConfig } from "../../src/types";
 setDefaultTimeout(60_000);
 
 const TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-management-provider-proto-"));
+const previousHome = process.env.OPENCODEX_HOME;
 
 const canonicalDirect = {
   adapter: "openai-responses",
@@ -27,6 +28,11 @@ const canonicalDirect = {
   authMode: "forward",
   codexAccountMode: "direct",
 } as const;
+
+afterEach(() => {
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
+});
 
 describe("provider management validation", () => {
   // A "__proto__" model id is a legitimate override key once the GUI can draft it.

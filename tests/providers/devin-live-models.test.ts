@@ -48,9 +48,12 @@ function seedCatalog(...entries: Buffer[]): void {
 // A cache miss must fail the test, never dial Cognition: every case here is
 // supposed to be served by the seeded catalog, so the network is a bug.
 let realFetch: typeof globalThis.fetch;
+let networkCalls = 0;
 beforeEach(() => {
+  networkCalls = 0;
   realFetch = globalThis.fetch;
   globalThis.fetch = (() => {
+    networkCalls++;
     throw new Error("devin-live-models.test.ts reached the network — the seeded catalog cache missed");
   }) as typeof globalThis.fetch;
   setCachedCatalogForTests(null);
@@ -62,6 +65,7 @@ afterEach(() => {
   setCachedCatalogForTests(null);
   clearModelCache("devin-test");
   providerCacheGenerations.delete("devin-test");
+  expect(networkCalls).toBe(0);
 });
 
 describe("devin live model discovery", () => {
@@ -124,12 +128,14 @@ describe("devin live model discovery", () => {
 });
 
 describe("devin advertised catalog input modalities", () => {
-  // Devin is an oauth provider, so discovery resolves its bearer through
-  // resolveModelsAuthToken; the tests lend it a token rather than an account
-  // store (the same seam the Copilot oauth cases use).
+  // Devin discovery resolves token and tenant destination from one account
+  // snapshot. Keep that pair together rather than mocking the token-only seam.
+  const snapshot = (accessToken = KEY, apiBaseUrl = HOST, accountId = "fixture"): oauth.OAuthAccessSnapshot => ({
+    provider: "devin-test", accountId, generation: `generation-${accountId}`, accessToken, apiBaseUrl,
+  });
   let authSpy: ReturnType<typeof spyOn> | undefined;
   beforeEach(() => {
-    authSpy = spyOn(oauth, "resolveModelsAuthToken").mockResolvedValue(KEY);
+    authSpy = spyOn(oauth, "getValidAccessTokenSnapshot").mockResolvedValue(snapshot());
   });
   afterEach(() => {
     authSpy?.mockRestore();
@@ -191,17 +197,19 @@ describe("devin advertised catalog input modalities", () => {
     // credential must not be served to the next. Before the roster cache was
     // bound to the credential fingerprint, account B read account A's fresh
     // entry and never resolved its own token.
-    let token = "acct-a-key";
-    authSpy?.mockImplementation(async () => token);
-    setCachedCatalogForTests(parseCatalogBuffer(encodeMessage(1, catalogEntry("acct-a-model")), "acct-a-key", HOST));
+    const tenantHost = "https://eu.windsurf.com/_route/api_server";
+    let account = snapshot("acct-a-key", tenantHost, "account-a");
+    authSpy?.mockImplementation(async () => account);
+    setCachedCatalogForTests(parseCatalogBuffer(encodeMessage(1, catalogEntry("acct-a-model")), "acct-a-key", tenantHost));
     const accountA = await fetchProviderModels("devin-test", devinProvider(), 60_000);
 
-    token = "acct-b-key";
+    account = snapshot("acct-b-key", HOST, "account-b");
     setCachedCatalogForTests(parseCatalogBuffer(encodeMessage(1, catalogEntry("acct-b-model")), "acct-b-key", HOST));
     const accountB = await fetchProviderModels("devin-test", devinProvider(), 60_000);
 
     expect(accountA.map((model) => model.id)).toEqual(["acct-a-model"]);
     expect(accountB.map((model) => model.id)).toEqual(["acct-b-model"]);
     expect(authSpy?.mock.calls.length).toBe(2);
+    expect(authSpy?.mock.calls).toEqual([["devin-test"], ["devin-test"]]);
   });
 });

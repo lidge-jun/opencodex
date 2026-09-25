@@ -69,11 +69,13 @@ describe("ocx sync fans out to enabled native clients and owned file integration
     expect(fn).toContain("refreshOwnedCatalogIntegrations");
     // Native clients keep their catches; the owned catalog helper isolates file clients.
     expect(fn.match(/catch \(error\)/g)?.length).toBe(2);
-    // The Desktop write gets the native context limits, same as every other Desktop
-    // call site. 8b672205e threaded `nativeContextLimits` through those writers and
-    // left this assertion naming the retired `providerContextCap` spelling, so the
-    // source-shape check failed against the very change it is meant to pin.
     expect(fn).toContain("nativeContextLimits(latest)");
+    // Cleanup accepts only the fingerprint of the exact credential-bearing profile we wrote.
+    // Sync must durably advance that ownership marker rather than leaving the old value behind.
+    expect(fn).toContain("captureDesktopAppliedMarker(writtenProfile)");
+    expect(fn).toContain("commitDesktopAppliedMarker(markerBaseline, r.fingerprint)");
+    expect(fn.indexOf("captureDesktopAppliedMarker(writtenProfile)")).toBeLessThan(fn.indexOf("const r = (deps.writeDesktop3pConfig"));
+    expect(fn.indexOf("nativeContextLimits(latest)")).toBeLessThan(fn.indexOf("commitDesktopAppliedMarker(markerBaseline, r.fingerprint)"));
     // A client that is off is omitted rather than reported: the caller has to be able to
     // tell "left alone" from "tried and failed", so there is no skipped state to emit.
     expect(fn).not.toContain('"skipped"');
@@ -144,7 +146,7 @@ describe("Desktop sync rechecks persisted state after discovery", () => {
           writes.push(args);
           return outcome === "refusal"
             ? { written: false, path: "fixture", reason: "desktop_remote_store_active" }
-            : { written: true, path: "fixture" };
+            : { written: true, path: "fixture", fingerprint: "0123456789abcdef" };
         },
       });
       try {
@@ -201,6 +203,256 @@ describe("Desktop sync rechecks persisted state after discovery", () => {
       }
     });
   }
+  test("a desired-profile change during the Desktop write keeps the new profile without the old fingerprint", async () => {
+    // The marker commit must not stamp the fingerprint of the profile whose bytes were
+    // written (A) onto a different desired profile (B) saved by a concurrent writer while
+    // the Desktop write was in flight. B stays persisted and the sync reports the skip.
+    const profileA = {
+      version: 1 as const,
+      assignments: { "mock/hidden": { family: "opus" as const, alias: "claude-opus-4-8-20260201" } },
+      defaults: { opus: "mock/hidden", fable: null, sonnet: null, haiku: null },
+    };
+    const profileB = {
+      version: 1 as const,
+      assignments: { "mock/keep": { family: "sonnet" as const, alias: "claude-opus-4-8-20260202" } },
+      defaults: { opus: null, fable: null, sonnet: "mock/keep", haiku: null },
+    };
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "mock",
+      clientIntegrations: { grok: false },
+      providers: {
+        mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: ["keep", "hidden"] },
+        openai: { adapter: "openai-responses", baseUrl: "https://example.test/v1", contextWindow: 400_000 },
+      },
+      apiKeys: [{ id: "sync-key", name: "fixture", key: "ocx_old_sync_fixture", createdAt: "2026-01-01T00:00:00.000Z" }],
+      claudeCode: { desktopProfile: profileA },
+    };
+    writeFileSync(join(root, "config.json"), JSON.stringify(config));
+    const models: CatalogModel[] = [
+      { provider: "mock", id: "keep", contextWindow: 123_000 },
+      { provider: "mock", id: "hidden", contextWindow: 456_000 },
+    ];
+    const writes: Parameters<typeof writeDesktop3pConfig>[] = [];
+    const realRefresh = ownedRefresh.refreshOwnedIntegration;
+    const refresh = spyOn(ownedRefresh, "refreshOwnedIntegration").mockImplementation((input, options) =>
+      input.clientId === "mcode"
+        ? Promise.resolve({ client: "mcode", ok: true, changed: true })
+        : realRefresh(input, options));
+    const aside = spyOn(asideProfiles, "refreshAsideProfiles").mockResolvedValue([]);
+    try {
+      const results = await syncEnabledClientIntegrations(12345, config, {
+        fetchAllModels: async () => models,
+        writeDesktop3pConfig: (...args) => {
+          writes.push(args);
+          // A concurrent writer saves desired profile B while the Desktop write is in flight.
+          const drifted = structuredClone(config);
+          drifted.claudeCode = { desktopProfile: profileB };
+          writeFileSync(join(root, "config.json"), JSON.stringify(drifted));
+          return { written: true, path: "fixture", fingerprint: "0123456789abcdef" };
+        },
+      });
+      expect(writes).toHaveLength(1);
+      const outcome = results.find(result => result.client === "claude-desktop");
+      expect(outcome?.ok).toBe(false);
+      expect(outcome?.reason).toContain("desired profile changed during sync");
+      const persisted = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+      expect(persisted.claudeCode.desktopProfile).toEqual(profileB);
+    } finally {
+      refresh.mockRestore();
+      aside.mockRestore();
+    }
+  });
+
+  test("an unchanged desired profile still stores the written fingerprint", async () => {
+    const profileA = {
+      version: 1 as const,
+      assignments: { "mock/hidden": { family: "opus" as const, alias: "claude-opus-4-8-20260201" } },
+      defaults: { opus: "mock/hidden", fable: null, sonnet: null, haiku: null },
+    };
+    const config: OcxConfig = {
+      port: 10100,
+      defaultProvider: "mock",
+      clientIntegrations: { grok: false },
+      providers: {
+        mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: ["keep", "hidden"] },
+        openai: { adapter: "openai-responses", baseUrl: "https://example.test/v1", contextWindow: 400_000 },
+      },
+      apiKeys: [{ id: "sync-key", name: "fixture", key: "ocx_old_sync_fixture", createdAt: "2026-01-01T00:00:00.000Z" }],
+      claudeCode: { desktopProfile: profileA },
+    };
+    writeFileSync(join(root, "config.json"), JSON.stringify(config));
+    const models: CatalogModel[] = [
+      { provider: "mock", id: "keep", contextWindow: 123_000 },
+      { provider: "mock", id: "hidden", contextWindow: 456_000 },
+    ];
+    const realRefresh = ownedRefresh.refreshOwnedIntegration;
+    const refresh = spyOn(ownedRefresh, "refreshOwnedIntegration").mockImplementation((input, options) =>
+      input.clientId === "mcode"
+        ? Promise.resolve({ client: "mcode", ok: true, changed: true })
+        : realRefresh(input, options));
+    const aside = spyOn(asideProfiles, "refreshAsideProfiles").mockResolvedValue([]);
+    try {
+      const results = await syncEnabledClientIntegrations(12345, config, {
+        fetchAllModels: async () => models,
+        writeDesktop3pConfig: () => ({ written: true, path: "fixture", fingerprint: "0123456789abcdef" }),
+      });
+      expect(results.find(result => result.client === "claude-desktop")).toEqual({ client: "claude-desktop", ok: true, changed: true });
+      const persisted = JSON.parse(readFileSync(join(root, "config.json"), "utf8"));
+      expect(persisted.claudeCode.desktopProfile.appliedFingerprint).toBe("0123456789abcdef");
+      expect(persisted.claudeCode.desktopProfile.assignments).toEqual(profileA.assignments);
+    } finally {
+      refresh.mockRestore();
+      aside.mockRestore();
+    }
+  });
+
+  const runDesktopSyncWithDrift = async (
+    config: OcxConfig,
+    drift: ((persisted: OcxConfig) => void) | null,
+  ) => {
+    writeFileSync(join(root, "config.json"), JSON.stringify(config));
+    const models: CatalogModel[] = [
+      { provider: "mock", id: "keep", contextWindow: 123_000 },
+      { provider: "mock", id: "hidden", contextWindow: 456_000 },
+    ];
+    const realRefresh = ownedRefresh.refreshOwnedIntegration;
+    const refresh = spyOn(ownedRefresh, "refreshOwnedIntegration").mockImplementation((input, options) =>
+      input.clientId === "mcode"
+        ? Promise.resolve({ client: "mcode", ok: true, changed: true })
+        : realRefresh(input, options));
+    const aside = spyOn(asideProfiles, "refreshAsideProfiles").mockResolvedValue([]);
+    try {
+      const results = await syncEnabledClientIntegrations(12345, config, {
+        fetchAllModels: async () => models,
+        writeDesktop3pConfig: () => {
+          // A concurrent writer persists its own desired state while the Desktop
+          // write is in flight; the marker commit must not overwrite it.
+          if (drift) {
+            const drifted = structuredClone(config);
+            drift(drifted);
+            writeFileSync(join(root, "config.json"), JSON.stringify(drifted));
+          }
+          return { written: true, path: "fixture", fingerprint: "0123456789abcdef" };
+        },
+      });
+      return {
+        outcome: results.find(result => result.client === "claude-desktop"),
+        persisted: JSON.parse(readFileSync(join(root, "config.json"), "utf8")) as OcxConfig,
+      };
+    } finally {
+      refresh.mockRestore();
+      aside.mockRestore();
+    }
+  };
+
+  const driftProfileA = {
+    version: 1 as const,
+    assignments: { "mock/hidden": { family: "opus" as const, alias: "claude-opus-4-8-20260201" } },
+    defaults: { opus: "mock/hidden", fable: null, sonnet: null, haiku: null },
+  };
+  const driftBaseConfig = (claudeCode: OcxConfig["claudeCode"]): OcxConfig => ({
+    port: 10100,
+    defaultProvider: "mock",
+    clientIntegrations: { grok: false },
+    providers: {
+      mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: ["keep", "hidden"] },
+      openai: { adapter: "openai-responses", baseUrl: "https://example.test/v1", contextWindow: 400_000 },
+    },
+    apiKeys: [{ id: "sync-key", name: "fixture", key: "ocx_old_sync_fixture", createdAt: "2026-01-01T00:00:00.000Z" }],
+    claudeCode,
+  });
+
+  test.each([
+    { name: "newer fingerprint", fingerprint: "newer-fingerprint" },
+    { name: "newer timestamp only", fingerprint: "prior-fingerprint" },
+  ])("sync preserves a $name committed during the Desktop write", async ({ fingerprint }) => {
+    const initialProfile = {
+      ...driftProfileA,
+      appliedFingerprint: "prior-fingerprint",
+      appliedAt: "2026-09-23T00:00:00.000Z",
+    };
+    const newerProfile = {
+      ...initialProfile,
+      appliedFingerprint: fingerprint,
+      appliedAt: "2026-09-23T00:00:01.000Z",
+    };
+    const { outcome, persisted } = await runDesktopSyncWithDrift(
+      driftBaseConfig({ desktopProfile: initialProfile }),
+      concurrent => { concurrent.claudeCode!.desktopProfile = newerProfile; },
+    );
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.reason).toContain("applied marker skipped");
+    expect(persisted.claudeCode?.desktopProfile).toEqual(newerProfile);
+  });
+
+  test.each([
+    {
+      name: "a deleted desired profile",
+      claudeCode: { desktopProfile: driftProfileA, systemEnv: false } as OcxConfig["claudeCode"],
+      drift: (persisted: OcxConfig) => { delete persisted.claudeCode!.desktopProfile; },
+      expectPersisted: (persisted: OcxConfig) => {
+        expect(persisted.claudeCode).toEqual({ systemEnv: false });
+      },
+    },
+    {
+      name: "a deleted claudeCode subtree",
+      claudeCode: { desktopProfile: driftProfileA } as OcxConfig["claudeCode"],
+      drift: (persisted: OcxConfig) => { delete persisted.claudeCode; },
+      expectPersisted: (persisted: OcxConfig) => {
+        expect(persisted.claudeCode).toBeUndefined();
+      },
+    },
+    {
+      name: "a deleted explicit empty profile",
+      claudeCode: {
+        desktopProfile: {
+          version: 1 as const,
+          assignments: {},
+          defaults: { opus: null, fable: null, sonnet: null, haiku: null },
+        },
+      } as OcxConfig["claudeCode"],
+      drift: (persisted: OcxConfig) => { delete persisted.claudeCode!.desktopProfile; },
+      expectPersisted: (persisted: OcxConfig) => {
+        expect(persisted.claudeCode?.desktopProfile).toBeUndefined();
+      },
+    },
+  ])("sync does not resurrect $name removed during the Desktop write", async ({ claudeCode, drift, expectPersisted }) => {
+    const { outcome, persisted } = await runDesktopSyncWithDrift(driftBaseConfig(claudeCode), drift);
+    expect(outcome?.ok).toBe(false);
+    expect(outcome?.reason).toContain("desired profile changed during sync");
+    expectPersisted(persisted);
+  });
+
+  test("an initially absent desired profile still stores the written fingerprint", async () => {
+    const { outcome, persisted } = await runDesktopSyncWithDrift(
+      driftBaseConfig({ systemEnv: false }),
+      null,
+    );
+    expect(outcome).toEqual({ client: "claude-desktop", ok: true, changed: true });
+    expect(persisted.claudeCode?.desktopProfile?.appliedFingerprint).toBe("0123456789abcdef");
+    expect(persisted.claudeCode?.desktopProfile?.assignments).toEqual({});
+    expect(persisted.claudeCode?.systemEnv).toBe(false);
+  });
+
+  test("sync accepts unchanged defaults with reordered keys during the Desktop write", async () => {
+    const { outcome, persisted } = await runDesktopSyncWithDrift(
+      driftBaseConfig({ desktopProfile: driftProfileA }),
+      config => {
+        const defaults = config.claudeCode!.desktopProfile!.defaults;
+        config.claudeCode!.desktopProfile!.defaults = {
+          haiku: defaults.haiku,
+          sonnet: defaults.sonnet,
+          fable: defaults.fable,
+          opus: defaults.opus,
+        };
+      },
+    );
+    expect(outcome).toEqual({ client: "claude-desktop", ok: true, changed: true });
+    expect(persisted.claudeCode?.desktopProfile?.appliedFingerprint).toBe("0123456789abcdef");
+    expect(persisted.claudeCode?.desktopProfile?.defaults).toEqual(driftProfileA.defaults);
+  });
+
 });
 
 describe("ocx sync refreshes an already-owned MCode integration", () => {

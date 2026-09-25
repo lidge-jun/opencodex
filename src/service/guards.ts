@@ -1,7 +1,8 @@
 import { execSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { getConfigDir, loadConfig } from "../config";
-import { readServiceApiTokenState, serviceApiTokenFilePath } from "../lib/service-secrets";
+import { withConfigMutationLockSync } from "../config/mutation-lock";
+import { hardenReusedServiceApiToken, readServiceApiTokenState, serviceApiTokenFilePath } from "../lib/service-secrets";
 import { tokenCollidesWithAdmin } from "../lib/admin-secrets";
 import { randomBytes } from "node:crypto";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
@@ -9,8 +10,10 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { diagnoseService } from "./diagnostics";
 import type { ServiceDiagnostic } from "./diagnostics";
-import { currentCodexHome, currentOpenCodexHome, normalizePathForCompare, readServiceInstallState } from "./state";
+import { currentCodexHome, currentOpenCodexHome, normalizePathForCompare, resolveServiceState, serviceCodexHomeMatchesInstall } from "./state";
 import { resolveCodexSqliteHome } from "../codex/paths";
+import type { CodexHomeDeps } from "../codex/home";
+import { isLoopbackHostname } from "../codex/loopback-target";
 import { win32 } from "node:path";
 
 /**
@@ -42,16 +45,17 @@ export function serviceEnvironmentOwnedHere(): boolean {
   }
 }
 
-export function assertServiceEnvironmentMatchesInstall(): void {
-  const state = readServiceInstallState();
-  if (!state) return;
-  const actualCodexHome = currentCodexHome();
-  const expected = normalizePathForCompare(state.codexHome);
-  const actual = normalizePathForCompare(actualCodexHome);
-  if (expected !== actual) {
+export function assertServiceEnvironmentMatchesInstall(deps: CodexHomeDeps = {}): void {
+  const resolution = resolveServiceState();
+  // Unreadable state keeps its existing interactive semantics (see assertNativeTeardownOwned);
+  // unattended writes use the tri-state inspector, which reports it as unknown.
+  if (resolution.kind !== "state") return;
+  const state = resolution.state;
+  const actualCodexHome = currentCodexHome(deps);
+  if (!serviceCodexHomeMatchesInstall(state.codexHome, deps)) {
     throw new ServiceOwnershipError(
       `Service was installed with CODEX_HOME=${state.codexHome}, but current CODEX_HOME=${actualCodexHome}. ` +
-        "Run the service command from the same Codex home so native Codex restore updates the correct config.",
+        `Rerun with CODEX_HOME=${state.codexHome} so native Codex restore updates the recorded home.`,
     );
   }
   const expectedOpenCodexHome = normalizePathForCompare(state.opencodexHome);
@@ -71,11 +75,6 @@ export function assertServiceEnvironmentMatchesInstall(): void {
       );
     }
   }
-}
-
-function isLoopbackHostname(hostname: string | undefined): boolean {
-  const normalized = (hostname ?? "127.0.0.1").trim().toLowerCase();
-  return normalized === "" || normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
 }
 
 /**
@@ -228,42 +227,42 @@ function persistServiceApiToken(token: string): string {
  * connected to a hub the same file holds that hub's issued client key, which must not be
  * overwritten by a local install.
  *
+ * Provisioning runs inside the cross-process config mutation lock: client-key rotation
+ * replaces `service-api-token` and records the new fingerprint under the same lock, so a
+ * reuse republish or a fresh write here can never interleave with a committed rotation and
+ * silently roll its bytes back.
+ *
  * The PATH is logged; the value never is, and never reaches argv, a unit file or a plist.
  */
 export function writeServiceApiTokenFile(): ProvisionedServiceApiToken | null {
-  const token = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
-  if (token) {
-    // Last line of defence: every install/repair path funnels through here, so a
-    // collision cannot reach disk regardless of which caller ran (#2696).
-    assertNotAdminToken(token);
-    const path = persistServiceApiToken(token);
-    console.log(`🔐 Data-plane token taken from OPENCODEX_API_AUTH_TOKEN and stored at ${path} (owner-only).`);
-    return { path, origin: "env" };
-  }
-  if (isLoopbackHostname(loadConfig().hostname)) return null;
-  const existing = readServiceApiTokenState();
-  if (existing.kind === "present") {
-    // The collision check is NOT only for the env branch. A file that already holds the admin
-    // token -- hand-pasted before #2696, or written by the very incident this unit closes --
-    // was silently accepted here, so `ocx status` reported `present (file)` and the hub
-    // crash-looped at boot with no command pointing at the cause.
-    const path = serviceApiTokenFilePath();
-    assertNotAdminToken(existing.token, process.env, "file");
-    // `readServiceApiTokenState` accepts any bounded regular file, so a reused token may well
-    // be group- or world-readable. Tighten it on the way through rather than claiming
-    // "owner-only" about a mode nobody checked; best-effort, since a non-owner cannot chmod
-    // and failing the install over it would be worse than the loose mode.
-    try { chmodSync(path, 0o600); } catch { /* best-effort */ }
-    if (process.platform === "win32") hardenSecretPath(path, { required: false });
-    // No log line: repair/restart hit this on every run and an unconditional notice about a
-    // credential file trains operators to ignore the one that matters.
-    return { path, origin: "file" };
-  }
-  if (existing.kind === "unsafe") throw new Error(`${existing.reason}: ${serviceApiTokenFilePath()}`);
-  const path = persistServiceApiToken(randomBytes(32).toString("hex"));
-  console.log(`🔐 Provisioned an owner-only data-plane token at ${path}; nothing needs to be exported by hand.`);
-  console.log("   Remote machines get their own per-client key — run 'ocx hub invite' instead of copying this file.");
-  return { path, origin: "generated" };
+  return withConfigMutationLockSync(() => {
+    const token = process.env.OPENCODEX_API_AUTH_TOKEN?.trim();
+    if (token) {
+      // Last line of defence: every install/repair path funnels through here, so a
+      // collision cannot reach disk regardless of which caller ran (#2696).
+      assertNotAdminToken(token);
+      const path = persistServiceApiToken(token);
+      console.log(`🔐 Data-plane token taken from OPENCODEX_API_AUTH_TOKEN and stored at ${path} (owner-only).`);
+      return { path, origin: "env" };
+    }
+    if (isLoopbackHostname(loadConfig().hostname)) return null;
+    const existing = hardenReusedServiceApiToken(token => assertNotAdminToken(token, process.env, "file"));
+    if (existing.kind === "present") {
+      // The collision check is NOT only for the env branch. A file that already holds the admin
+      // token -- hand-pasted before #2696, or written by the very incident this unit closes --
+      // was silently accepted here, so `ocx status` reported `present (file)` and the hub
+      // crash-looped at boot with no command pointing at the cause.
+      const path = serviceApiTokenFilePath();
+      // No log line: repair/restart hit this on every run and an unconditional notice about a
+      // credential file trains operators to ignore the one that matters.
+      return { path, origin: "file" };
+    }
+    if (existing.kind === "unsafe") throw new Error(`${existing.reason}: ${serviceApiTokenFilePath()}`);
+    const path = persistServiceApiToken(randomBytes(32).toString("hex"));
+    console.log(`🔐 Provisioned an owner-only data-plane token at ${path}; nothing needs to be exported by hand.`);
+    console.log("   Remote machines get their own per-client key — run 'ocx hub invite' instead of copying this file.");
+    return { path, origin: "generated" };
+  });
 }
 
 export function sh(cmd: string): string {

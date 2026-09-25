@@ -278,6 +278,8 @@ describe("reset-credit auto-redeemer runtime (#822)", () => {
   test("two processes reserve one durable id before either consume settles", async () => {
     const journalFile = join(dir, "j.json");
     const moduleUrl = pathToFileURL(repoPath("src/codex/reset-credit-auto-redeem.ts")).href;
+    const aclUrl = pathToFileURL(repoPath("src/lib/windows-secret-acl.ts")).href;
+    const principalUrl = pathToFileURL(repoPath("src/lib/windows-user-principal.ts")).href;
     const deadline = performance.now() + 25_000;
     const markerPath = (name: string) => join(dir, name + ".json");
     const publish = (name: string) => {
@@ -291,6 +293,16 @@ describe("reset-credit auto-redeemer runtime (#822)", () => {
         import { existsSync, writeFileSync, renameSync } from "node:fs";
         import { join } from "node:path";
         import { createResetCreditAutoRedeemer } from ${JSON.stringify(moduleUrl)};
+        import { setIcaclsRunnerForTests } from ${JSON.stringify(aclUrl)};
+        import { setSyntheticWindowsPrincipalForTests } from ${JSON.stringify(principalUrl)};
+        // This case proves cross-process SQLite reservation and durable publication,
+        // not host ACL tools. Their 30s budget exceeds this fixture's 20s deadline.
+        // Keep real file/SQLite I/O; isolate only unrelated OS helper processes in
+        // these disposable children. Production hardening remains unchanged.
+        if (process.platform === "win32") {
+          setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001");
+          setIcaclsRunnerForTests(() => ({ success: true, exitCode: 0, timedOut: false, stdout: "" }));
+        }
         const home = ${JSON.stringify(dir)};
         const worker = ${JSON.stringify(worker)};
         const deadline = performance.now() + 20_000;
@@ -335,6 +347,7 @@ describe("reset-credit auto-redeemer runtime (#822)", () => {
           while (true) {
             if (performance.now() >= deadline) throw new Error("reservation contention deadline exceeded");
             scheduledMs = null;
+            publish(worker + "-tick", {});
             outcome = await redeemer.tick();
             if (outcome.kind === "dispatched") break;
             const contention = outcome.kind === "error" && (
@@ -384,7 +397,9 @@ describe("reset-credit auto-redeemer runtime (#822)", () => {
     const children: ReturnType<typeof launch>[] = [];
     const released = new Set<string>();
     const diagnostics = () => children.map(({ worker, child, output }) =>
-      `${worker} pid=${child.pid} exit=${child.exitCode}\nstdout: ${output.stdout}\nstderr: ${output.stderr}`).join("\n");
+      `${worker} pid=${child.pid} exit=${child.exitCode} phases=${JSON.stringify(
+        Object.fromEntries(["ready", "tick", "consume", "result"].map(phase => [phase, existsSync(markerPath(worker + "-" + phase))])),
+      )}\nstdout: ${output.stdout}\nstderr: ${output.stderr}`).join("\n");
     const waitUntil = async (label: string, ready: () => boolean) => {
       while (true) {
         for (const { worker, child } of children) {

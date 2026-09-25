@@ -28,6 +28,7 @@ import type { NormalizedObservation } from "../../src/lab/conformance/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const HOMES: string[] = [];
+const previousHome = process.env.OPENCODEX_HOME;
 function tempHome(): string {
   const dir = join(tmpdir(), `ocx-lab-sanitize-${process.pid}-${Math.random().toString(16).slice(2)}`);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -38,7 +39,8 @@ afterEach(() => {
   for (const dir of HOMES.splice(0)) {
     try { removeTreeWithRetry(dir); } catch { /* ignore */ }
   }
-  delete process.env.OPENCODEX_HOME;
+  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+  else process.env.OPENCODEX_HOME = previousHome;
 });
 
 function behavior(adapter: string, upstreamProtocol: string): LabBehaviorValues {
@@ -214,6 +216,10 @@ describe("SEC-02 sanitizer boundary", () => {
       .toBe("dial tcp [host]:443: connect: refused");
     expect(sanitizeDiagnostic("upstream api.us-east-1 unavailable"))
       .toBe("upstream [host] unavailable");
+    for (const host of ["internal.service1", "db.prod1", "api.v2"]) {
+      expect(sanitizeDiagnostic(`upstream ${host} unavailable`))
+        .toBe("upstream [host] unavailable");
+    }
     // Without such a marker they survive — a recorded limit, asserted so it
     // cannot drift silently in either direction.
     expect(sanitizeDiagnostic("db.prod-1")).toBe("db.prod-1");
@@ -232,14 +238,15 @@ describe("SEC-02 sanitizer boundary", () => {
   });
 
   test("marker confidence decides how much context is trusted", () => {
-    // STRONG markers — resolver and socket errors, `host=`, `connect to` —
-    // name a destination by construction, so even a bare word is a host.
+    // STRONG resolver and socket markers name a destination by construction,
+    // so even a bare word is a host.
     expect(sanitizeDiagnostic("dial tcp localhost:11434: connect: refused"))
       .toBe("dial tcp [host]:11434: connect: refused");
     expect(sanitizeDiagnostic("getaddrinfo ENOTFOUND redis")).toBe("getaddrinfo ENOTFOUND [host]");
-    // `connect to` was demoted to a weak marker: it reads as English too often
-    // (`Unable to connect to your account`). Without a port it no longer
-    // licenses a bare name — a documented limit, asserted below.
+    // Even a destination spelled like the marker resolves to the tail token.
+    expect(sanitizeDiagnostic("host host")).toBe("host [host]");
+    // `connect to` reads as English too often to license a bare word on its own
+    // (`Unable to connect to your account`); a failure term disambiguates it.
     // WEAK markers appear in prose, so a dotted namespace after one survives.
     expect(sanitizeDiagnostic("upstream provider.metric.p95 exceeded"))
       .toBe("upstream provider.metric.p95 exceeded");
@@ -290,18 +297,70 @@ describe("SEC-02 sanitizer boundary", () => {
       .toBe("Unable to connect to [host] on port 443: timed out");
     expect(sanitizeDiagnostic("connect to gateway port 8080 failed"))
       .toBe("connect to [host] port 8080 failed");
+    // Marker repetition does not move the redaction off the destination.
+    expect(sanitizeDiagnostic("connect to connect:443 refused"))
+      .toBe("connect to [host]:443 refused");
   });
 
-  test("natural-language connect-to prose is left alone", () => {
+  test("socket errors redact bare single-label destinations", () => {
+    expect(sanitizeDiagnostic("ECONNREFUSED redis")).toBe("ECONNREFUSED [host]");
+    expect(sanitizeDiagnostic("ETIMEDOUT gateway")).toBe("ETIMEDOUT [host]");
+    expect(sanitizeDiagnostic("EHOSTUNREACH backend")).toBe("EHOSTUNREACH [host]");
+    expect(sanitizeDiagnostic("dial tcp redis")).toBe("dial tcp [host]");
+    // `lookup` is the one mid-message position proven to carry the name: Go
+    // writes `dial tcp: lookup <name>: <reason>`.
+    expect(sanitizeDiagnostic("dial tcp: lookup redis")).toBe("dial tcp: lookup [host]");
+    expect(sanitizeDiagnostic("dial tcp: lookup redis: no such host"))
+      .toBe("dial tcp: lookup [host]: no such host");
+    // A sentence-final period rides with the token: it must not defeat host
+    // classification, and it stays outside the mask.
+    expect(sanitizeDiagnostic("ECONNREFUSED redis.")).toBe("ECONNREFUSED [host].");
+    expect(sanitizeDiagnostic("dial tcp db.prod1.")).toBe("dial tcp [host].");
+  });
+
+  test("timeout and socket prose after a marker survives", () => {
+    // A bare name is licensed only where the grammar proves it is the
+    // destination. Connective prose after a socket marker is not a host:
+    // redacting it destroys the diagnostic and hides nothing.
+    expect(sanitizeDiagnostic("ETIMEDOUT while waiting for response"))
+      .toBe("ETIMEDOUT while waiting for response");
+    expect(sanitizeDiagnostic("ETIMEDOUT operation timed out"))
+      .toBe("ETIMEDOUT operation timed out");
+    expect(sanitizeDiagnostic("ECONNREFUSED connection refused"))
+      .toBe("ECONNREFUSED connection refused");
+  });
+
+  test("direct resolver destinations stay masked before explanatory prose", () => {
+    expect(sanitizeDiagnostic("getaddrinfo ENOTFOUND redis: no such host"))
+      .toBe("getaddrinfo ENOTFOUND [host]: no such host");
+    expect(sanitizeDiagnostic("ENOTFOUND redis failed"))
+      .toBe("ENOTFOUND [host] failed");
+    expect(sanitizeDiagnostic("EAI_AGAIN redis temporary failure"))
+      .toBe("EAI_AGAIN [host] temporary failure");
+    expect(sanitizeDiagnostic("host=redis unavailable"))
+      .toBe("host=[host] unavailable");
+    expect(sanitizeDiagnostic("ENOTFOUND while waiting for response"))
+      .toBe("ENOTFOUND while waiting for response");
+  });
+
+  test("connect-to prose survives while real failures still redact", () => {
     // `connect to` reads as English far more often than as a destination, so
     // it no longer licenses a bare word. The cost is that `connect to gateway`
     // is not redacted; that limit is documented and asserted here so it cannot
     // change silently.
+    // A following failure term still supplies network context for a bare
+    // destination, so connective prose survives while real failures redact.
     expect(sanitizeDiagnostic("Unable to connect to your account. Please retry."))
       .toBe("Unable to connect to your account. Please retry.");
     expect(sanitizeDiagnostic("failed to connect to the upstream service"))
       .toBe("failed to connect to the upstream service");
-    expect(sanitizeDiagnostic("connect to gateway failed")).toBe("connect to gateway failed");
+    expect(sanitizeDiagnostic("connect to gateway failed")).toBe("connect to [host] failed");
+    expect(sanitizeDiagnostic("connecting to redis timed out")).toBe("connecting to [host] timed out");
+    // A destination that repeats the marker word is still the thing redacted:
+    // replacing across the whole match took the marker's `connect` instead.
+    expect(sanitizeDiagnostic("connect to connect failed")).toBe("connect to [host] failed");
+    expect(sanitizeDiagnostic("connecting to connecting timed out"))
+      .toBe("connecting to [host] timed out");
   });
 
   test("an internationalized domain does not preserve the address", () => {

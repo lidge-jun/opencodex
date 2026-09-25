@@ -118,6 +118,7 @@ export function effectiveBlockedSkillNames(cc?: Pick<OcxClaudeCodeConfig, "block
 /** Injected-skill payloads below this size are never stubbed (not worth it). */
 const SKILL_ELISION_MIN_CHARS = 10_000;
 const SKILL_TEXT_MARKER = "Base directory for this skill: ";
+const SKILL_TEXT_PATH_MAX_CHARS = 4_096;
 
 interface SkillElisionContext {
   /** Skill-tool call ids whose input names a blocked skill (result-body carrier). */
@@ -138,11 +139,15 @@ const NO_ELISION: SkillElisionContext = { callIds: new Set(), names: [] };
 function maybeElideSkillText(text: string, names: readonly string[]): string {
   if (names.length === 0 || text.length < SKILL_ELISION_MIN_CHARS) return text;
   if (!text.startsWith(SKILL_TEXT_MARKER)) return text;
-  const firstLineEnd = text.indexOf("\n");
-  const dir = text.slice(SKILL_TEXT_MARKER.length, firstLineEnd === -1 ? text.length : firstLineEnd).trim();
+  const pathStart = SKILL_TEXT_MARKER.length;
+  const pathPrefix = text.slice(pathStart, pathStart + SKILL_TEXT_PATH_MAX_CHARS + 1);
+  const firstLineEnd = pathPrefix.indexOf("\n");
+  if (firstLineEnd === -1 && pathPrefix.length > SKILL_TEXT_PATH_MAX_CHARS) return text;
+  const dir = pathPrefix.slice(0, firstLineEnd === -1 ? pathPrefix.length : firstLineEnd).trim();
   // Windows clients send `C:\Users\...\claude-api`; normalize separators before
   // basenaming (repo precedent: src/codex/inject.ts isOpencodexCatalogPath).
-  const base = dir.replace(/\\/g, "/").split("/").filter(Boolean).pop()?.toLowerCase() ?? "";
+  const normalizedDir = dir.replace(/\\/g, "/").replace(/\/+$/, "");
+  const base = normalizedDir.slice(normalizedDir.lastIndexOf("/") + 1).toLowerCase();
   if (!names.includes(base)) return text;
   return `[opencodex] '${base}' skill document bundle (${text.length} chars) elided for routed models `
     + "(claudeCode.blockedSkills). The skill is loaded; answer from general knowledge instead of citing the bundle.";
@@ -170,6 +175,28 @@ function blockedSkillCallIds(messages: readonly unknown[], blocked: readonly str
     }
   }
   return ids;
+}
+
+/**
+ * Whether translating this Messages body would elide a blocked skill bundle: a user text block
+ * `maybeElideSkillText` would stub, or a tool_result answering a blocked Skill call. Pure; the
+ * managed native Messages lane asks it so a request whose bundle the operator blocked keeps the
+ * translated path that applies the block.
+ */
+export function anthropicBodyElidesBlockedSkill(body: unknown, cc?: Pick<OcxClaudeCodeConfig, "blockedSkills">): boolean {
+  if (!isRec(body) || !Array.isArray(body.messages)) return false;
+  const names = effectiveBlockedSkillNames(cc);
+  if (names.length === 0) return false;
+  const callIds = blockedSkillCallIds(body.messages, names);
+  for (const msg of body.messages) {
+    if (!isRec(msg) || msg.role !== "user" || !Array.isArray(msg.content)) continue;
+    for (const block of msg.content) {
+      if (!isRec(block)) continue;
+      if (block.type === "text" && typeof block.text === "string" && maybeElideSkillText(block.text, names) !== block.text) return true;
+      if (block.type === "tool_result" && typeof block.tool_use_id === "string" && callIds.has(block.tool_use_id)) return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -437,13 +464,16 @@ function translateAnthropicRequest(
   if (outputConfigFormat) body.text = { format: outputConfigFormat };
   let cacheKeySource: ClaudeCacheKeySource = null;
   if (isRec(raw.metadata) && typeof raw.metadata.user_id === "string") {
-    body.user = raw.metadata.user_id;
+    const userIdHash = createHash("sha256").update(raw.metadata.user_id).digest("hex");
+    // OpenAI and Azure reject `user` longer than 64 chars, and Claude Code's metadata.user_id
+    // is a JSON blob well past that; send its 64-char hash instead of the raw value.
+    body.user = raw.metadata.user_id.length <= 64 ? raw.metadata.user_id : userIdHash;
     // OpenAI-side prompt caching is routed by prompt_cache_key (Codex clients send
     // their session id; without it consecutive /v1/messages turns reported
     // cached_tokens: 0 on the ChatGPT backend — devlog 090). Claude Code's
     // metadata.user_id embeds the session uuid, so hashing it yields a stable
     // per-session key with a bounded length/charset.
-    body.prompt_cache_key = createHash("sha256").update(raw.metadata.user_id).digest("hex").slice(0, 32);
+    body.prompt_cache_key = userIdHash.slice(0, 32);
     cacheKeySource = "metadata";
   } else if (systemParts.length > 0) {
     // Claude Desktop sends no metadata.user_id (H1, devlog 130): without any key the

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { randomBytes } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import net, { createConnection, createServer as createTcpServer, Socket, type Server as TcpServer } from "node:net";
 import type { AddressInfo } from "node:net";
@@ -223,7 +224,7 @@ describe("socks5Fetch", () => {
   // number and an SSE reader saw noise. These pin the decode, the headers that stop describing
   // the coded bytes, and the refusal to hand over a coding this transport cannot undo.
   describe("content-coding", () => {
-    function codedTarget(coding: string, payload: Uint8Array) {
+    function codedTarget(coding: string, payload: Uint8Array, contentType = "application/json") {
       let requestText = "";
       const server = createTcpServer(socket => {
         socket.once("error", () => undefined);
@@ -232,7 +233,7 @@ describe("socks5Fetch", () => {
           request = Buffer.concat([request, chunk]);
           requestText = request.toString("latin1");
           if (!requestText.includes("\r\n\r\n")) return;
-          const head = "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-encoding: "
+          const head = `HTTP/1.1 200 OK\r\ncontent-type: ${contentType}\r\ncontent-encoding: `
             + coding
             + "\r\ncontent-length: " + payload.byteLength + "\r\n\r\n";
           socket.write(Buffer.concat([Buffer.from(head, "latin1"), Buffer.from(payload)]));
@@ -276,6 +277,68 @@ describe("socks5Fetch", () => {
           `socks5://127.0.0.1:${proxyPort}`,
         );
         expect(await response.json()).toEqual({ ok: true });
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+      }
+    });
+
+    test("a compressed body cannot expand beyond the decoded response ceiling", async () => {
+      const payload = gzipSync(Buffer.alloc(32 * 1024 * 1024 + 1, 0x61));
+      const { server: target } = codedTarget("gzip", payload);
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/gzip-bomb`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        await expect(response.arrayBuffer()).rejects.toThrow(/decoded response exceeds .* byte cap/);
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+      }
+    });
+
+    test("a compressed event stream continues beyond 32 MiB in small frames", async () => {
+      const data = randomBytes(24 * 1024 * 1024 + 1024).toString("base64");
+      const frames = data.match(/.{1,1024}/g)!.map(chunk => `data: ${chunk}\n\n`).join("");
+      const body = Buffer.from(frames);
+      expect(body.byteLength).toBeGreaterThan(32 * 1024 * 1024);
+      const payload = gzipSync(body);
+      const { server: target } = codedTarget("gzip", payload, "text/event-stream; charset=utf-8");
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/compressed-events`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        const reader = response.body!.getReader();
+        let received = 0;
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          received += value.byteLength;
+        }
+        expect(received).toBe(body.byteLength);
+      } finally {
+        await Promise.all([close(proxy), close(target)]);
+      }
+    });
+
+    test("a compressed event-stream bomb still exceeds the expansion limit", async () => {
+      const payload = gzipSync(Buffer.alloc(32 * 1024 * 1024 + 1, 0x61));
+      const { server: target } = codedTarget("gzip", payload, "text/event-stream");
+      const proxy = socksProxy();
+      const [targetPort, proxyPort] = await Promise.all([listen(target), listen(proxy)]);
+      try {
+        const response = await socks5Fetch(
+          `http://provider.invalid:${targetPort}/compressed-events-bomb`,
+          undefined,
+          `socks5://127.0.0.1:${proxyPort}`,
+        );
+        await expect(response.arrayBuffer()).rejects.toThrow(/decoded event stream exceeds expansion limit/);
       } finally {
         await Promise.all([close(proxy), close(target)]);
       }

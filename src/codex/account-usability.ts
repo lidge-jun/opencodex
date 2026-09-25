@@ -39,6 +39,15 @@ export interface CodexAccountUsabilityOptions {
    * account can always become unable to serve.
    */
   retainAccountForUploadedFiles?: boolean;
+  /**
+   * Main is live for this request only because the request carries its own main bearer (#5019).
+   *
+   * Main may then win this request's selection, but that credential belongs to the request, not
+   * to the Pool: selecting it must never be written back as the shared active account. Persisting
+   * it made every later request -- including one whose caller identity is unreadable, or one that
+   * owns the cooled subscription -- follow a main the operator never chose.
+   */
+  requestOwnedMainCredential?: boolean;
 }
 
 /**

@@ -5,8 +5,12 @@ import { getConfigDir } from "../config";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
-import { sanitizeLogMetadataString } from "../lib/redact";
+import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import {
+  normalizePersistedJevDecision,
+  type PersistedJevDecisionV1,
+} from "./jev-stats";
 import { normalizeAttemptDeliverySummary } from "./attempt-delivery";
 import {
   isRequestCloseReason,
@@ -16,6 +20,7 @@ import {
 } from "./request-outcome";
 import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
+import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
 import type { CodexWsStageRecord } from "../server/responses/codex-ws-wire";
@@ -222,7 +227,38 @@ export interface PersistedRequestSpend extends RequestSpendTotals {
 }
 
 const MAX_PERSISTED_MOVE_REASONS = 8;
+// Model selectors are NOT length-bound at admission: configured and discovered
+// model ids reach MODEL_DISCOVERY_MAX_MODEL_ID_LENGTH, and the wire `model`
+// field is raw client input. Persisting a plain prefix would merge selectors
+// that share it, so over-long selectors persist as prefix + a digest of the
+// FULL selector — bounded, deterministic, and still exact-matchable.
+const MAX_PERSISTED_REQUESTED_MODEL_LEN = 130;
+const REQUESTED_MODEL_DIGEST_HEX_LEN = 16;
 const LOGICAL_REQUEST_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/**
+ * Persisted form of the wire model selector. Selectors within the bound persist
+ * verbatim; longer selectors persist as a prefix plus a short digest of the full
+ * value, so two distinct selectors that share the prefix never collapse into one
+ * persisted identity. Exact-match readers (`requested_model = ?`) must encode
+ * lookup input through this same function. Idempotent — encoded forms fit the
+ * bound — which matters because rows are normalized again on read.
+ *
+ * Idempotence has one cost: a literal selector that equals another selector's
+ * persisted form is indistinguishable from it, so both rows share one display
+ * value and one exact-match filter. Reaching that needs the caller to send the
+ * exact prefix-and-digest string; keeping them apart would need a separate
+ * full-selector digest column.
+ */
+export function encodePersistedRequestedModel(selector: string): string {
+  if (selector.length <= MAX_PERSISTED_REQUESTED_MODEL_LEN) return selector;
+  const digest = createHash("sha256")
+    .update(selector)
+    .digest("hex")
+    .slice(0, REQUESTED_MODEL_DIGEST_HEX_LEN);
+  const prefixLen = MAX_PERSISTED_REQUESTED_MODEL_LEN - REQUESTED_MODEL_DIGEST_HEX_LEN - 1;
+  return `${selector.slice(0, prefixLen)}~${digest}`;
+}
 
 export function isLogicalRequestId(value: unknown): value is string {
   return typeof value === "string" && LOGICAL_REQUEST_ID_RE.test(value);
@@ -284,6 +320,10 @@ export interface PersistedUsageEntry {
   /** Best-effort chat/session correlation for Logs grouping (#330). */
   conversationId?: string;
   resolvedModel?: string;
+  /** Model the upstream actually served (openai-model header or response body). */
+  servedModel?: string;
+  /** The exact model id sent upstream when it differs from the client-facing `model`. */
+  wireModel?: string;
   requestedModel?: string;
   /** Original bare helper model when the opt-in shadow-call route rewrote this request. */
   shadowCallRewrittenFrom?: string;
@@ -349,8 +389,15 @@ export interface PersistedUsageEntry {
    * contains prompts, credentials, or hidden reasoning.
    */
   routeDecision?: RouteDecisionTraceV1;
+  /** Privacy-bounded JEV selection metadata; model usage remains in attempts[]. */
+  jevDecision?: PersistedJevDecisionV1;
   /** Closed Claude protocol codes only; absent on older rows. */
   claudeCompatibility?: PersistedClaudeCompatibilityLog;
+  /**
+   * Observed protocol path (PF-02): fixed vocabulary only. Re-validated on every read; older
+   * rows and rows that fail validation carry none, and are never back-filled by guessing.
+   */
+  protocolTrace?: ProtocolTraceV1;
   /**
    * How far this request got and why it failed (#2366). Projected from the attempt that ended
    * the request so every surface reads the answer off the same row. Absent on a completed
@@ -755,6 +802,9 @@ function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undef
   }
   if (!(stage.requestBytes === null || isNonNegativeFiniteNumber(stage.requestBytes))) return undefined;
   if (!(stage.firstFrameMs === null || isNonNegativeFiniteNumber(stage.firstFrameMs))) return undefined;
+  // Records written before firstResponseMs existed omit it; read them as unmeasured.
+  const firstResponseMs = stage.firstResponseMs === undefined ? null : stage.firstResponseMs;
+  if (!(firstResponseMs === null || isNonNegativeFiniteNumber(firstResponseMs))) return undefined;
   if (!(stage.elapsedMs === null || isNonNegativeFiniteNumber(stage.elapsedMs))) return undefined;
   if (!(stage.closeCode === null || (typeof stage.closeCode === "number"
     && Number.isInteger(stage.closeCode) && stage.closeCode >= 1000 && stage.closeCode <= 4999))) {
@@ -770,6 +820,7 @@ function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undef
     controlFrames: stage.controlFrames as number,
     relayedEvents: stage.relayedEvents as number,
     firstFrameMs: stage.firstFrameMs as number | null,
+    firstResponseMs: firstResponseMs as number | null,
     elapsedMs: stage.elapsedMs as number | null,
     pings: stage.pings as number,
     pongs: stage.pongs as number,
@@ -806,6 +857,80 @@ function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
 }
 
+const MAX_SERVED_MODEL_LENGTH = 200;
+/**
+ * An upstream model is an identifier, never free-form text to truncate into one. A value the
+ * secret redactor would change is dropped rather than logged, because credential-shaped text can
+ * fit the identifier alphabet.
+ */
+export function sanitizeServedModel(value: unknown): string | undefined {
+  return typeof value === "string"
+    && value.length <= MAX_SERVED_MODEL_LENGTH
+    && /^[A-Za-z0-9._:/@+-]+$/.test(value)
+    && redactSecretString(value) === value
+    ? value
+    : undefined;
+}
+
+/** The identity fields that decide whether a response model is ocx's own echo. */
+export interface ServedModelEchoSource {
+  provider?: string;
+  model?: string;
+  wireModel?: string;
+  requestedAlias?: string;
+  requestedModel?: string;
+  /** Client-facing selector this proxy wrote into `response.model` (Anthropic routes keep it). */
+  responseModelEcho?: string;
+}
+
+/**
+ * True when `served` is the client's own selector echoed back rather than a model the upstream
+ * reported. Anthropic routes answer with the Codex-facing selector (`anthropic/claude-opus-5-5`),
+ * and recording that as the served model painted every such row as rerouted. A value equal to
+ * the wire model is never an echo. On adapter paths the upstream's real model is not observable
+ * at all, so this only removes a false signal; passthrough `openai-model` observations are kept.
+ */
+export function isClientSelectorEcho(source: ServedModelEchoSource, served: string | undefined): boolean {
+  if (served === undefined) return false;
+  const wire = source.wireModel ?? source.model;
+  if (served === wire) return false;
+  return served === source.responseModelEcho
+    || served === source.requestedAlias
+    || served === source.requestedModel
+    || (source.provider !== undefined && wire !== undefined && served === `${source.provider}/${wire}`);
+}
+
+/** Record a response-body model as the served model when it is a real upstream observation. */
+export function recordObservedServedModel(
+  target: ServedModelEchoSource & { servedModel?: string; resolvedModel?: string; preserveResolvedModelFromRoute?: boolean },
+  value: unknown,
+): void {
+  const servedModel = sanitizeServedModel(value);
+  if (!servedModel || isClientSelectorEcho(target, servedModel)) return;
+  target.servedModel = servedModel;
+  if (!target.preserveResolvedModelFromRoute) target.resolvedModel = servedModel;
+}
+
+/**
+ * Model identity fields for a log row. The served model is sanitized, and a resolvedModel that
+ * only echoed a dropped served model is dropped with it, so the rejected value cannot survive
+ * under the other name. A client-selector echo is dropped the same way, which also repairs
+ * rows persisted before the echo was filtered at capture.
+ */
+export function modelIdentityLogFields(source: ServedModelEchoSource & { resolvedModel?: string; servedModel?: unknown }): {
+  resolvedModel?: string; servedModel?: string; wireModel?: string;
+} {
+  const sanitized = sanitizeServedModel(source.servedModel);
+  const servedModel = isClientSelectorEcho(source, sanitized) ? undefined : sanitized;
+  const resolvedModel = source.servedModel !== undefined && source.resolvedModel === source.servedModel && !servedModel
+    ? undefined : source.resolvedModel;
+  return {
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
+    ...(source.wireModel ? { wireModel: source.wireModel } : {}),
+  };
+}
+
 /** Test seam: the normalization branch old rows take is worth asserting directly. */
 export function normalizeUsageEntryForTest(entry: PersistedUsageEntry): PersistedUsageEntry {
   return normalizeUsageEntry(entry);
@@ -817,6 +942,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const callerServiceTier = sanitizeLogMetadataString(entry.callerServiceTier);
   const responseServiceTier = sanitizeLogMetadataString(entry.responseServiceTier);
   const shadowCallRewrittenFrom = sanitizeLogMetadataString(entry.shadowCallRewrittenFrom);
+  const { servedModel, resolvedModel } = modelIdentityLogFields(entry);
   const claudeCompatibility = normalizeClaudeCompatibilityUsageLog(entry.claudeCompatibility);
   const transportPhase = isKnownTransportPhase(entry.transportPhase) ? entry.transportPhase : undefined;
   const terminalSource = isKnownTerminalSource(entry.terminalSource) ? entry.terminalSource : undefined;
@@ -832,7 +958,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
     : undefined;
+  const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
   const spend = normalizeRequestSpend(entry.spend);
+  const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
   return {
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
@@ -855,8 +983,12 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(typeof entry.conversationId === "string" && entry.conversationId.trim()
       ? { conversationId: entry.conversationId.trim().slice(0, 128) }
       : {}),
-    ...(entry.resolvedModel ? { resolvedModel: entry.resolvedModel } : {}),
-    ...(entry.requestedModel ? { requestedModel: entry.requestedModel } : {}),
+    ...(resolvedModel ? { resolvedModel } : {}),
+    ...(servedModel ? { servedModel } : {}),
+    ...(entry.wireModel ? { wireModel: entry.wireModel } : {}),
+    ...(typeof entry.requestedModel === "string" && entry.requestedModel
+      ? { requestedModel: encodePersistedRequestedModel(entry.requestedModel) }
+      : {}),
     ...(shadowCallRewrittenFrom ? { shadowCallRewrittenFrom } : {}),
     ...(typeof entry.requestedEffort === "string" && entry.requestedEffort
       ? { requestedEffort: capMetadataString(entry.requestedEffort) }
@@ -916,7 +1048,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(isRequestCloseReason(entry.closeReason) ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
+    ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...(protocolTrace ? { protocolTrace } : {}),
     ...normalizeRequestFailureAttribution(entry),
   };
 }

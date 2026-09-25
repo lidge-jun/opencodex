@@ -1,6 +1,6 @@
 ---
 title: CLI Agents, Routing, and Integrations
-description: Multi-agent, combo, observability, access, integration, system, and config commands.
+description: Multi-agent, combo, observability, access, protocol path, integration, system, and config commands.
 ---
 
 These commands control agent policy and routing, inspect the live proxy, and connect supported clients to opencodex.
@@ -31,7 +31,17 @@ stay writable).
 ```bash
 ocx agent sidecar web --list
 ocx agent sidecar web --model gpt-5.6-luna
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off` is the same switch as the Dashboard's Off row: OpenCodex stops running the
+sidecar and the Codex integration writes `web_search = "disabled"` into `~/.codex/config.toml`,
+which is what lets an MCP search server be the only search path. `--enabled on` removes that
+marker-owned line again. When the save actually moves the switch, the command reports the
+Codex-side write it triggered (`codexWebSearch` in `--json`, a trailing `Codex config:` line
+otherwise) and points at `ocx sync` when it could not happen; a save that leaves the switch
+where it was has nothing to report and prints no `Codex config:` line. The flag works for
+`vision` too.
 
 ### `ocx effort [status|set|clear]`
 
@@ -193,6 +203,39 @@ Manage OpenCodex admission API keys and inspect external endpoints and models. `
 ocx access key create deployment
 ```
 
+### `ocx api <protocols|explain|policy> ...`
+
+Inspect and set how requests travel between the client APIs and provider wires. See
+[Protocol paths](/guides/protocol-paths/) for the vocabulary.
+
+| Command | Route | Changes state |
+| --- | --- | --- |
+| `ocx api protocols [--provider <name>] [--json]` | `GET /api/protocols` | No |
+| `ocx api explain --model <id> --inbound <responses\|chat\|messages> [--feature <key>]... [--json]` | `POST /api/protocols/plan` | No |
+| `ocx api policy [--json]` | `GET /api/protocols` | No |
+| `ocx api policy [--messages <on\|off>] [--unrepresentable <legacy\|reject>] [--rollout <switch>=<on\|off>]... [--json]` | `PATCH /api/protocols/settings` | Yes |
+
+- `protocols` prints the contract version, whether each client API is served and why, the
+  unrepresentable policy, every rollout switch, and the policy revision. `--provider` adds the
+  upstream wire that provider receives, who decided it, and the models on another wire.
+- `explain` previews the path a model would take from one client API. `--feature` is repeatable
+  and accepts a comma-separated list; `ocx api protocols --json` lists the known feature keys. The
+  preview is computed from configuration: nothing is sent upstream, no combo rotation advances, and
+  the input is not logged.
+- `policy` without a setting flag only reads. With one it sends a single change to the running
+  proxy, which validates it, saves the configuration, and answers with the new policy.
+  `--messages off` also turns the Claude integration off, as the dashboard toggle does. Switch
+  names and combinations are validated by the proxy; for example
+  `--rollout managedMessagesNativeOAuth=on` is refused unless `managedMessagesNative` is
+  already on or turned on in the same command.
+
+```bash
+ocx api explain --model combo/main --inbound chat --feature request.seed,request.tools
+ocx api policy --rollout shadowPlan=on
+```
+
+Usage errors exit 2 before any request is sent. `--json` prints the management API body as is.
+
 ## Client integrations
 
 ### `ocx integration <claude|grok> ...`
@@ -331,7 +374,7 @@ No key is ever serialized. Configs carry either a documented environment referen
 non-secret loopback placeholder. A loopback proxy (`127.0.0.1`, the default) requires no
 admission key at all. Set a referenced variable only when the client schema supports it and
 the proxy binds beyond loopback; see
-[Remote access](/reference/configuration/#remote-access) for how admission keys are issued. Keys for
+[Remote access](/reference/configuration/server/#remote-access) for how admission keys are issued. Keys for
 the upstream providers themselves are a separate thing entirely, configured per
 [Providers](/guides/providers/).
 The generated gjc integration uses a non-secret loopback placeholder and needs no environment variable. It remains loopback-only; it does not configure remote admission credentials.
@@ -396,6 +439,10 @@ An observed identity or digest describes those files during this observation. It
 
 Inspect and safely modify validated OpenCodex configuration. `show` and `get` mask secrets. Import
 validates before writing and requires `--yes`.
+
+Display and mutation output strip credentials from proxy URLs while retaining the host and port.
+`direct` and credential-free proxy values stay readable. `export` preserves credentials so the
+backup can restore the configuration; store exported files as secrets.
 
 ### Usage from a connected client
 

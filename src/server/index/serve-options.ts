@@ -93,6 +93,7 @@ import {
   isAllowedRequestOrigin,
   isAllowedManagementOrigin,
   isApiAuthRequired,
+  isLoopbackHostname,
   jsonResponse,
   admissionFields,
   resolveApiAuth,
@@ -101,6 +102,7 @@ import {
   withCors,
   withManagementCors,
 } from "../auth-cors";
+import { managementSessionIssuance } from "../management-auth";
 import { resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import {
   disableResponsesRequestTimeout,
@@ -168,6 +170,7 @@ import {
 } from "../../lib/local-management-attestation";
 import { SYSTEM_RESTART_CAPABILITY_VERSION } from "../../lib/system-restart-contract";
 import { LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION } from "../../lib/local-provider-reload-contract";
+import { LOCAL_ASIDE_SYNC_CAPABILITY_VERSION } from "../../lib/local-aside-sync-contract";
 import {
   GUI_PAIR_BROWSER_ORIGIN_HEADER,
   GUI_PAIR_CAPABILITY_VERSION,
@@ -198,7 +201,12 @@ import { readyProtocolMetadata } from "../../remote/protocol";
 import { modelCapabilityFields } from "../models-capabilities";
 import { createWebsocketHandler } from "./websocket-handler";
 
-export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept";
+export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
+
+export function trustedLoopbackForIngress(ingress: ServerIngress, hostname: string): boolean {
+  return ingress === "unauthenticated-loopback"
+    || (ingress === "public" && isLoopbackHostname(hostname));
+}
 
 /**
  * Routes the Claude intercept TLS listener may reach. Everything else on that socket is relayed
@@ -218,6 +226,9 @@ export interface ServeOptionsContext {
   ingressForServer: (requestServer: Server<WsData>) => ServerIngress;
   loopbackRouteAllowed: (url: URL, req: Request) => boolean;
   managementIngressRouteAllowed: (url: URL, req: Request) => boolean;
+  linkRouteAllowed: (url: URL, req: Request) => boolean;
+  onAuthenticatedCatalog: (apiKeyId: string) => void;
+  linkPolicy: () => RequestPolicyView;
   packageTreeChangedResponse: (
     req: Request,
     policy: RequestPolicyView,
@@ -260,6 +271,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
     ingressForServer,
     loopbackRouteAllowed,
     managementIngressRouteAllowed,
+    linkRouteAllowed, onAuthenticatedCatalog,
+    linkPolicy,
     packageTreeChangedResponse,
     serverBusyResponse,
     runAdmittedHttpTurn,
@@ -292,6 +305,8 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       maxRequestBodySize: inboundBodyLimitBytes,
       async fetch(req: Request, requestServer: Server<WsData>): Promise<Response> {
       const ingress = ingressForServer(requestServer);
+      const requestUrl = codexCompatibleUrl(req.url);
+      const linkPolicyView = ingress === "hub-link" ? linkPolicy() : undefined;
       // The unauthenticated loopback listener (#1102) serves a fixed allowlist and nothing
       // else. Rejecting here, before any handler runs, is what keeps the surface from growing
       // silently when a route is added below.
@@ -300,6 +315,13 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
           req,
           loopbackPolicy(),
+        );
+      }
+      if (ingress === "hub-link" && !linkRouteAllowed(requestUrl, req)) {
+        return withCors(
+          formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${new URL(req.url).pathname}`),
+          req,
+          linkPolicyView!,
         );
       }
       // Tailscale Serve terminates only on this separately bound loopback socket. Reject before
@@ -326,10 +348,20 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       // The Claude intercept listener is loopback by construction (the CONNECT proxy binds
       // 127.0.0.1 and the request was rewritten onto a loopback origin), and its callers carry
       // Anthropic credentials, not opencodex admission tokens — so it takes the loopback view too.
-      const policy: RequestPolicyView = ingress === "unauthenticated-loopback" || ingress === "claude-intercept"
-        ? loopbackPolicy()
-        : config;
-      const url = codexCompatibleUrl(req.url);
+      const policy: RequestPolicyView = ingress === "hub-link"
+        ? linkPolicyView!
+        : ingress === "unauthenticated-loopback" || ingress === "claude-intercept"
+          ? loopbackPolicy()
+          : config;
+      if (ingress === "hub-link") {
+        const admission = resolveApiAuth(req, policy);
+        if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
+        if (requestUrl.pathname === "/v1/catalog" && requestUrl.search === ""
+          && (req.method === "GET" || req.method === "HEAD")
+          && admission.kind === "configured") onAuthenticatedCatalog(admission.keyId);
+      }
+      const url = requestUrl;
+      const admissionOptions = { linkIngress: policy.linkIngress?.allowedKeyIds };
       markActivity(`${req.method} ${url.pathname}`);
 
       // Readiness is exact-GET on the literal /readyz path. Compare the DECODED
@@ -350,20 +382,32 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         || readyzPath !== undefined
         || url.pathname.startsWith("/v1/")
       )) {
-        const message = "OpenCodex package files changed while this proxy was running; restart OpenCodex before retrying.";
-        const response = url.pathname === "/healthz" || readyzPath !== undefined
+        const message = "OpenCodex package files changed while this proxy was running; it restarts on its own, or run 'ocx restart' ('ocx service restart' for a background service).";
+        const fencedPort = ctx.boundPort ?? requestServer.port ?? listenPort;
+        const fencedHealth = url.pathname === "/healthz";
+        const response = fencedHealth || readyzPath !== undefined
           ? jsonResponse({
               status: "restart_required",
               service: "opencodex",
               version: VERSION,
               uptime: process.uptime(),
               pid: process.pid,
-              port: ctx.boundPort ?? requestServer.port ?? listenPort,
+              port: fencedPort,
+              // Identity stays attestable while readiness is fenced (#5496): the CLI can only
+              // restart or stop what it can prove it owns, and an unverified 503 body is not proof.
+              // installedVersion is what an in-place respawn will run from the replaced tree.
+              ...(fencedHealth ? {
+                restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION,
+                installedVersion: packageTreeIntegrity.installedVersion?.(),
+              } : {}),
               error: { code: "package_tree_changed", message },
             }, 503, req, policy)
           : packageTreeChangedResponse(req, policy, message);
         const headers = new Headers(response.headers);
         headers.set("Retry-After", "5");
+        const challenge = fencedHealth ? req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER) : null;
+        const proof = challenge ? createLocalAttestationProof(localAttestationSecret, challenge, process.pid, fencedPort) : null;
+        if (proof) headers.set(LOCAL_ATTESTATION_PROOF_HEADER, proof);
         return new Response(response.body, { status: 503, headers });
       }
 
@@ -565,6 +609,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           port: healthPort,
           restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION,
           providerReloadCapability: LOCAL_PROVIDER_RELOAD_CAPABILITY_VERSION,
+          asideSyncCapability: LOCAL_ASIDE_SYNC_CAPABILITY_VERSION,
           guiPairCapability: GUI_PAIR_CAPABILITY_VERSION,
         }, 200, req, policy);
         const challenge = req.headers.get(LOCAL_ATTESTATION_CHALLENGE_HEADER);
@@ -646,7 +691,10 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             }), req, config);
           }
         }
-        const mgmtResponse = await handleManagementAPI(req, url, config, requestManagementApiDeps, principal, managementSessionControl);
+        const mgmtResponse = await handleManagementAPI(req, url, config, requestManagementApiDeps, principal, managementSessionControl, {
+          trustedLoopback: trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1"),
+          guiSessionIssuance: managementSessionIssuance(req, managementAuth),
+        });
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);
         return withManagementCors(formatErrorResponse(404, "not_found", `Unknown endpoint: ${req.method} ${url.pathname}`), req, config);
       }
@@ -1461,7 +1509,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           return withCors(anthropicErrorResponse(403, "cross-origin data-plane request blocked", "permission_error"), req, policy);
         }
         return runAdmittedHttpTurn(req, policy, async () => withCors(
-          await handleClaudeCountTokens(req, config, policy),
+          await handleClaudeCountTokens(req, config, policy, { claudeIntercept: ingress === "claude-intercept" }),
           req,
           policy,
         ));
@@ -1492,7 +1540,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // pre-translation stream + native passthrough callbacks) — do not re-wrap the
         // translated Anthropic stream here.
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy),
+          await handleClaudeMessages(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }, policy, { claudeIntercept: ingress === "claude-intercept" }),
           req,
           policy,
         ), { requestId, start, logCtx });
@@ -1531,7 +1579,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
       if (url.pathname === "/v1/audio/transcriptions" && req.method === "POST") {
         disableResponsesRequestTimeout(req, requestServer);
         if (isDraining()) return drainingResponse(req, policy);
-        const admission = resolveAudioAdmission(req.headers, config);
+        const admission = resolveAudioAdmission(req.headers, config, admissionOptions);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
         if (!isAllowedRequestOrigin(req, policy)) {
           return withCors(formatErrorResponse(403, "origin_rejected", "cross-origin audio request blocked"), req, policy);
@@ -1562,7 +1610,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (isDraining()) {
           return drainingResponse(req, policy);
         }
-        const audioClient = resolveAudioClient(req, config);
+        const audioClient = resolveAudioClient(req, config, false, admissionOptions);
         if (audioClient instanceof Response) return withCors(audioClient, req, policy);
         const admission = audioClient?.admission ?? resolveApiAuth(req, policy);
         if (!admission) return withCors(formatErrorResponse(401, "authentication_error", "opencodex API key required"), req, policy);
@@ -1606,7 +1654,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         if (isDraining()) {
           return drainingResponse(req, policy);
         }
-        const audioClient = resolveAudioClient(req, config, dictationSocket);
+        const audioClient = resolveAudioClient(req, config, dictationSocket, admissionOptions);
         if (audioClient instanceof Response) return withCors(audioClient, req, policy);
         if (!audioClient && liveSidebandTarget && "callId" in liveSidebandTarget
           && liveSidebandTarget.callId.startsWith(EXTERNAL_CALL_PREFIX)) {
@@ -1854,7 +1902,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         undefined,
         guiSessionCandidate ?? undefined,
         config.runtimeRole ?? "standalone",
-        isApiAuthRequired(config),
+        isApiAuthRequired(policy),
       );
       if (guiFile) return guiFile;
       if (url.pathname === "/" && req.method === "GET") {

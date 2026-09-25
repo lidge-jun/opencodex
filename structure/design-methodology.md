@@ -14,10 +14,10 @@ This is a design-first rule for contributors, not a runtime feature: opencodex i
 plumbing, not a product-creation tool, so surface coherence is enforced by review rather than by an
 interview engine. The rule stands on its own; it does not depend on an external document.
 
-Native-main device cancellation, polling and restart follow the [flow-ownership contract](gui-and-management-api.md#dashboard-surfaces), including status-gated error DTO handling.
+Native-main device cancellation, polling and restart follow the [flow-ownership contract](dashboard-and-usage.md#dashboard-surfaces), including status-gated error DTO handling.
 
 Visible dashboard copy follows the total catalog contract in
-[`gui-and-management-api.md`](gui-and-management-api.md#dashboard-surfaces); Vietnamese is a
+[`gui-and-management-api.md`](dashboard-and-usage.md#dashboard-surfaces); Vietnamese is a
 first-class locale across page copy and auxiliary label maps.
 
 ## Existing surfaces and their design direction
@@ -48,15 +48,15 @@ surfaces, run through all 3 stages in order.
 - 6 design dials: mood, lightness, density, shape, typography, motion
 - 7 axes total: design → domain → feature/data/security/ops/cost (derived)
 
-The Codex account card separates automatic plan-policy exclusion from credential health and suppresses an unavailable next-session action; see the [account selection contract](providers/openai-tiers.md#automatic-pool-plan-exclusions).
+The Codex account card separates automatic plan-policy exclusion from credential health and suppresses an unavailable next-session action; see the [account selection contract](providers/openai-accounts.md#automatic-pool-plan-exclusions).
 
 Remote Workspace uses a separate, explicitly enabled server surface with structural WebSocket callbacks and awaited per-server cleanup; [its contract](remote-workspace.md) owns that integration.
 
-Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](gui-and-management-api.md#usage-accounting); readable totals are not represented as a complete ledger.
+Usage consumers preserve positive incomplete-history metadata as specified in [usage accounting](dashboard-and-usage.md#usage-accounting); readable totals are not represented as a complete ledger.
 The management quota DTO keeps Combo editing aligned with scoped inference evidence;
-see [Combo editor routing quota](gui-and-management-api.md#combo-editor-routing-quota).
+see [Combo editor routing quota](dashboard-and-usage.md#combo-editor-routing-quota).
 
-Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-tiers.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
+Codex pool settings and their consumers follow the [reset-first ordering contract](providers/openai-accounts.md#reset-first-account-ordering), including independent-quota fallback, preserved affinity, strategy-specific threshold summaries, and shared short-observation freshness for switch warnings.
 
 The pairing panel names the hub, offers an origin-specific command to run on that hub, and separates one-time codes from data/admin credentials. Copy outcomes and request failures use existing notice/button patterns. Failed authentication never masquerades as a stopped connected process.
 Cline uses the existing file-integration page, tabs, status badge and rollback dialogs. Its localized semantics identify both files and the required stop/restart boundary before users mutate them.

@@ -371,9 +371,15 @@ async function fetchDeepSeekQuota(provider: string, config: OcxProviderConfig): 
   const toppedUp = toFiniteNumber(preferred.topped_up_balance);
   const balance = totalBalance ?? grantedBalance ?? toppedUp;
   if (balance === undefined || balance < 0) return null;
+  // The rows are currency-scoped, so the symbol has to follow the row that was
+  // picked: the two glyph currencies keep their sign, any other ISO code
+  // prefixes the amount, and a row without one keeps the legacy dollar.
+  const currency = String(preferred.currency ?? "").trim().toUpperCase();
+  const sign = currency === "CNY" ? "¥" : currency === "" || currency === "USD" ? "$" : `${currency} `;
+  const amount = (value: number) => `${sign}${value.toFixed(2)}`;
   const label = grantedBalance !== undefined && grantedBalance > 0
-    ? `API balance ($${balance.toFixed(2)} total, $${grantedBalance.toFixed(2)} granted)`
-    : `API balance ($${balance.toFixed(2)})`;
+    ? `API balance (${amount(balance)} total, ${amount(grantedBalance)} granted)`
+    : `API balance (${amount(balance)})`;
   return report(provider, "deepseek:balance", {
     customWindows: [{ label, percent: 0 }],
     updatedAt: Date.now(),

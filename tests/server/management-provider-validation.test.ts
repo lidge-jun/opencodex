@@ -941,6 +941,8 @@ describe("provider management validation", () => {
   });
 
   test("provider management permits snapshot repair only on canonical OpenAI forward seeds", () => {
+    expect(providerManagementConfigError("openai", { ...canonicalDirect, upstreamWebsocket: false })).toBeNull();
+    expect(providerManagementConfigError("openai", { ...canonicalDirect, upstreamWebsocket: true })).toContain("must be false or omitted");
     for (const mode of ["pool", "direct"] as const) {
       expect(providerManagementConfigError("openai", {
         ...canonicalDirect,
@@ -3367,14 +3369,14 @@ describe("provider management validation", () => {
           createManagementConvergeCodex: catalogConvergenceFactory(),
         });
       };
-      const canonical = await post({ name: "openai", provider: canonicalDirect });
+      const canonical = await post({ name: "openai", provider: { ...canonicalDirect, upstreamWebsocket: false } });
       expect(canonical?.status).toBe(200);
+      expect(loadConfig().providers.openai?.upstreamWebsocket).toBe(false);
       expect(resolvedError).toHaveBeenCalledWith(
         "openai",
         expect.objectContaining({ baseUrl: canonicalDirect.baseUrl }),
         { allowBenchmarkAddresses: true },
       );
-
       resolvedError.mockResolvedValueOnce(
         "baseUrl hostname custom.example.test resolves to a benchmark address (198.18.0.30); set allowPrivateNetwork:true only for intentionally local/self-hosted providers",
       );

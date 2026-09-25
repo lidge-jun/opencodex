@@ -11,6 +11,7 @@
 import { hasHelpFlag, printSubcommandUsage, printUsage, printVersion } from "./help";
 import { parseReadyArgs, type ReadyArgs } from "./ready";
 import { parseResolveArgs, type ResolveArgs } from "./resolve";
+import { parseStopApproval } from "./stop-approval";
 import { maybeAutoRestoreCodexShim } from "./codex-shim-autorestore";
 
 export interface CliHead {
@@ -103,6 +104,10 @@ export async function runCli(argv: string[]): Promise<CliHead> {
       return head;
     }
     case "command":
+      if (head.command === "stop" && !parseStopApproval(head.args.slice(1)).ok) {
+        console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
+        process.exit(64);
+      }
       maybeAutoRestoreCodexShim(head.command, head.args);
       return head;
   }

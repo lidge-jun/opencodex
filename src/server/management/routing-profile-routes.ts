@@ -207,6 +207,15 @@ function migrateProfileModelReferences(
         ]),
       );
     }
+    if (claudeCode.intercept?.modelMap) {
+      // First-party picker bindings: keys are Anthropic picker ids, only the route follows the rename.
+      claudeCode.intercept = {
+        ...claudeCode.intercept,
+        modelMap: Object.fromEntries(
+          Object.entries(claudeCode.intercept.modelMap).map(([pickerId, route]) => [pickerId, migrateAgentReference(route)]),
+        ),
+      };
+    }
     config.claudeCode = claudeCode;
   }
   return shouldSyncClaudeAgentDefs;

@@ -163,8 +163,8 @@ describe("modelPickerOrder (#1649)", () => {
       multiAgentV2Enabled: false,
     });
     const p = Object.fromEntries((entries as Record<string, unknown>[]).map(e => [e.slug as string, e.priority as number]));
-    // Sol keeps its pinned native priority (1), untouched by modelPickerOrder.
-    expect(p["gpt-5.6-sol"]).toBe(1);
+    // Sol keeps its pinned native priority (4 since openai/codex #47085), untouched by modelPickerOrder.
+    expect(p["gpt-5.6-sol"]).toBe(4);
     // The routed row IS placed in the high picker tier.
     expect(p["jd-chat/glm-5.2"]).toBeGreaterThanOrEqual(1000);
   });

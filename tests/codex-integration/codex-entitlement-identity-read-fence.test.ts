@@ -33,6 +33,7 @@ const VERSION_B = "0.147.0";
 const NOW = 1_800_000_000_000;
 
 let TEST_DIR = "";
+const previousHome = process.env.OPENCODEX_HOME;
 
 const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 
@@ -83,7 +84,8 @@ describe("the denial pass resolves credential identity once, not once per cache 
     await flushConfigDirHardeningForTests();
     setIcaclsRunnerForTests(null);
     setAsyncIcaclsRunnerForTests(null);
-    delete process.env.OPENCODEX_HOME;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
     if (TEST_DIR) removeTreeWithRetry(TEST_DIR);
     TEST_DIR = "";
     resetCodexModelEntitlementCacheForTests();

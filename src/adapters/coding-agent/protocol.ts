@@ -138,23 +138,70 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** Extract OpenCodex usage from a `result` frame's Anthropic-shaped usage object. */
-export function usageFromResult(message: StreamMessage): OcxUsage | undefined {
-  const usage = asRecord(message.usage);
-  if (!usage) return undefined;
+/** Extract OpenCodex usage from the Anthropic-shaped usage record shared by frames and deltas. */
+function usageFromAnthropicShape(usage: Record<string, unknown>): OcxUsage | undefined {
   const inputTokens = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
   const outputTokens = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
   const cachedInputTokens = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : undefined;
   const cacheCreationInputTokens =
     typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : undefined;
-  if (inputTokens === 0 && outputTokens === 0 && cachedInputTokens === undefined) return undefined;
+  // A snapshot is zero-only when every counter is absent or zero. Testing only the cache-read
+  // field dropped a cache-creation-only snapshot (input/output 0 with, say, 200 cache-creation
+  // tokens), and a capture-only tool leg terminated at message_stop never sees a result frame
+  // that could carry those tokens instead, so the turn under-reported usage and cost.
+  const cacheReadTotal = cachedInputTokens ?? 0;
+  const cacheCreationTotal = cacheCreationInputTokens ?? 0;
+  if (inputTokens === 0 && outputTokens === 0 && cacheReadTotal === 0 && cacheCreationTotal === 0) {
+    return undefined;
+  }
   return {
     inputTokens,
     outputTokens,
     totalTokens: inputTokens + outputTokens,
-    ...(cachedInputTokens !== undefined ? { cachedInputTokens, cacheReadInputTokens: cachedInputTokens } : {}),
-    ...(cacheCreationInputTokens !== undefined ? { cacheCreationInputTokens } : {}),
+    ...(cacheReadTotal > 0 ? { cachedInputTokens: cacheReadTotal, cacheReadInputTokens: cacheReadTotal } : {}),
+    ...(cacheCreationTotal > 0 ? { cacheCreationInputTokens: cacheCreationTotal } : {}),
   };
+}
+
+/** Extract OpenCodex usage from a `result` frame's Anthropic-shaped usage object. */
+export function usageFromResult(message: StreamMessage): OcxUsage | undefined {
+  const usage = asRecord(message.usage);
+  return usage ? usageFromAnthropicShape(usage) : undefined;
+}
+
+/**
+ * Fold a pre-result usage snapshot into the running partial usage.
+ *
+ * `message_delta` and assistant-frame snapshots are cumulative per message, but a later snapshot
+ * can repeat or extend an earlier one, so each field keeps its maximum. The `result` frame stays
+ * authoritative for a text-only turn; partial state exists so a capture-only tool-bridge turn —
+ * which is terminated at `message_stop` before any result frame can arrive — still reports real
+ * token usage instead of zero.
+ */
+function mergePartialUsage(previous: OcxUsage | undefined, next: OcxUsage): OcxUsage {
+  if (!previous) return next;
+  const inputTokens = Math.max(previous.inputTokens, next.inputTokens);
+  const outputTokens = Math.max(previous.outputTokens, next.outputTokens);
+  const cacheRead = Math.max(
+    previous.cacheReadInputTokens ?? previous.cachedInputTokens ?? 0,
+    next.cacheReadInputTokens ?? next.cachedInputTokens ?? 0,
+  );
+  const cacheCreation = Math.max(previous.cacheCreationInputTokens ?? 0, next.cacheCreationInputTokens ?? 0);
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    ...(cacheRead > 0 ? { cachedInputTokens: cacheRead, cacheReadInputTokens: cacheRead } : {}),
+    ...(cacheCreation > 0 ? { cacheCreationInputTokens: cacheCreation } : {}),
+  };
+}
+
+/** Record one usage snapshot; absent, malformed, or zero-only snapshots leave state untouched. */
+function observePartialUsage(state: StreamParseState, value: unknown): void {
+  const usage = asRecord(value);
+  if (!usage) return;
+  const next = usageFromAnthropicShape(usage);
+  if (next) state.partialUsage = mergePartialUsage(state.partialUsage, next);
 }
 
 /**
@@ -166,6 +213,16 @@ export interface StreamParseState {
   sawPartialThinking: boolean;
   sawTerminalResult: boolean;
   openToolCallId?: string;
+  /** A `message_stop` stream event arrived: the assistant message is complete. */
+  sawMessageStop?: boolean;
+  /** Completed tool_use content blocks observed in this stream. */
+  completedToolCalls?: number;
+  /** Tool IDs already captured through partial events, for complete-assistant deduplication. */
+  partialToolCallIds?: Set<string>;
+  /** A complete assistant tool block had no matching partial capture. */
+  uncapturedToolUse?: boolean;
+  /** Highest-seen usage snapshot from `message_delta`/assistant frames before a terminal result. */
+  partialUsage?: OcxUsage;
 }
 
 /**
@@ -188,7 +245,8 @@ export function mapStreamMessageToEvents(message: StreamMessage, state: StreamPa
   if (type === "assistant") {
     // Fallback path: a complete assistant message. Surface text and thinking independently
     // only when the partial delta stream did not already carry them (§十二).
-    const content = asRecord(message.message)?.content;
+    const messageRecord = asRecord(message.message);
+    const content = messageRecord?.content;
     if (Array.isArray(content)) {
       for (const block of content) {
         const part = asRecord(block);
@@ -200,9 +258,13 @@ export function mapStreamMessageToEvents(message: StreamMessage, state: StreamPa
         } else if (blockType === "thinking" && !state.sawPartialThinking) {
           const thinking = asString(part.thinking);
           if (thinking) events.push({ type: "thinking_delta", thinking });
+        } else if (blockType === "tool_use") {
+          const id = asString(part.id);
+          if (!id || !state.partialToolCallIds?.has(id)) state.uncapturedToolUse = true;
         }
       }
     }
+    observePartialUsage(state, messageRecord?.usage);
     return events;
   }
 
@@ -281,8 +343,9 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
         events.push({ type: "thinking_delta", thinking });
       }
     } else if (deltaType === "input_json_delta") {
-      // Tool-input streaming. Inert while tools are disabled (Codex's catalog is not advertised),
-      // but parsed so the seam is ready and an unexpected frame never crashes.
+      // Tool-input streaming. Live for capture-only bridge turns, where the advertised MCP
+      // catalog makes the CLI emit real tool_use blocks; parsed unconditionally so a stray
+      // frame on a tools-disabled turn is ignored rather than crashing.
       const partial = asString(delta?.partial_json);
       if (partial && state.openToolCallId) events.push({ type: "tool_call_delta", arguments: partial });
     }
@@ -296,6 +359,7 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
       const name = asString(block?.name) ?? "tool";
       if (id) {
         state.openToolCallId = id;
+        state.partialToolCallIds?.add(id);
         events.push({ type: "tool_call_start", id, name });
       }
     }
@@ -305,12 +369,61 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
   if (eventType === "content_block_stop") {
     if (state.openToolCallId) {
       state.openToolCallId = undefined;
+      state.completedToolCalls = (state.completedToolCalls ?? 0) + 1;
       events.push({ type: "tool_call_end" });
     }
     return events;
   }
 
+  if (eventType === "message_stop") {
+    state.sawMessageStop = true;
+    return events;
+  }
+
+  if (eventType === "message_start") {
+    // Anthropic-shaped streams report input tokens on `message_start.message.usage` and output
+    // tokens later on `message_delta.usage`. A capture-only tool leg is terminated at
+    // `message_stop`, so without this branch the synthesized done(tool_use) undercounts input
+    // tokens whenever the CLI puts them here (and `message_stop` arrives before any assistant
+    // fallback frame that would otherwise carry them).
+    const messageRecord = asRecord(event.message);
+    observePartialUsage(state, messageRecord?.usage);
+    return events;
+  }
+
+  if (eventType === "message_delta") {
+    // Pre-result usage snapshots: a capture-only tool-bridge turn ends at message_stop with no
+    // result frame, so these snapshots are the only token accounting that leg will ever see.
+    observePartialUsage(state, event.usage);
+    return events;
+  }
+
   return events;
+}
+
+/**
+ * Validate a `system/init` frame against an active capture-only tool bridge.
+ *
+ * With the bridge armed, the CLI must report exactly the bridge's MCP server as connected: a
+ * missing or failed server means the model never saw the advertised catalog, so the turn fails
+ * closed instead of silently degrading to a text-only answer.
+ */
+export function toolBridgeInitError(message: StreamMessage, serverName: string): string | undefined {
+  if (message.type !== "system" || message.subtype !== "init") return undefined;
+  const servers = message.mcp_servers;
+  if (!Array.isArray(servers) || servers.length !== 1) {
+    return "Coding-agent system/init reported an unexpected MCP server set for the tool bridge.";
+  }
+  const server = servers[0];
+  if (
+    !server
+    || typeof server !== "object"
+    || server.name !== serverName
+    || server.status !== "connected"
+  ) {
+    return `Coding-agent system/init did not report the ${serverName} MCP server as connected.`;
+  }
+  return undefined;
 }
 
 /** One content part on the stream-json input wire (Anthropic message shape). */

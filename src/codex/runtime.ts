@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { atomicWriteFile, getConfigDir } from "../config";
 import { codexExecInvocation, isSpawnableCodexCandidate } from "./exec-invocation";
+import { resolveCodexHomeDir } from "./home";
 import { redactSecretString, redactUserPath } from "../lib/redact";
 
 export type CodexRuntimeSource =
@@ -508,16 +509,13 @@ function pathCandidates(deps: ResolveCodexRuntimeDeps): string[] {
 function installedCodexCandidates(deps: ResolveCodexRuntimeDeps): string[] {
   const platform = deps.platform ?? process.platform;
   const env = deps.env ?? process.env;
-  if (platform === "win32") {
-    const localAppData = env.LOCALAPPDATA?.trim();
-    if (!localAppData) return [];
-    const root = join(localAppData, "OpenAI", "Codex", "bin");
-    const readDir = deps.readdirSync ?? ((path: string) => readdirSync(path));
-    const stat = deps.statSync ?? ((path: string) => statSync(path));
+  const readDir = deps.readdirSync ?? ((path: string) => readdirSync(path));
+  const stat = deps.statSync ?? ((path: string) => statSync(path));
+  /** Version directories directly under root, newest first; unreadable roots yield nothing. */
+  const versionDirectories = (root: string): string[] => {
     try {
-      const names = readDir(root);
       const dirs: Array<{ name: string; directory: string; mtimeMs: number }> = [];
-      for (const name of names) {
+      for (const name of readDir(root)) {
         const directory = join(root, name);
         try {
           const st = stat(directory);
@@ -528,18 +526,39 @@ function installedCodexCandidates(deps: ResolveCodexRuntimeDeps): string[] {
         }
       }
       dirs.sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name));
-      return dirs.map(entry => join(entry.directory, "codex.exe"));
+      return dirs.map(entry => entry.directory);
     } catch {
       return [];
     }
+  };
+  if (platform === "win32") {
+    const localAppData = env.LOCALAPPDATA?.trim();
+    if (!localAppData) return [];
+    return versionDirectories(join(localAppData, "OpenAI", "Codex", "bin"))
+      .map(directory => join(directory, "codex.exe"));
   }
   const home = env.HOME?.trim() || env.USERPROFILE?.trim() || homedir();
-  return [
+  const posix = [
     join(home, ".codex", "packages", "standalone", "current", "bin", "codex"),
     join(home, ".local", "bin", "codex"),
     "/usr/local/bin/codex",
     "/opt/homebrew/bin/codex",
   ];
+  if (platform !== "linux") return posix;
+  // Windows Codex Desktop in WSL app-server mode ships its Linux binary under the
+  // effective Codex home as bin/wsl/<version-hash>/codex, and a Desktop update replaces
+  // that hash directory. The service PATH usually has no codex (issue 5635), so these
+  // rank after PATH and the ordinary locations and are re-enumerated on every resolve
+  // rather than trusted from a remembered hash.
+  let codexHome: string;
+  try {
+    codexHome = resolveCodexHomeDir({ env });
+  } catch {
+    return posix;
+  }
+  const desktopWsl = versionDirectories(join(codexHome, "bin", "wsl"))
+    .map(directory => join(directory, "codex"));
+  return [...posix, ...desktopWsl];
 }
 
 interface RankedCandidate {
@@ -735,6 +754,8 @@ function resolveCacheKey(deps: ResolveCodexRuntimeDeps): string | null {
     localAppData: env.LOCALAPPDATA?.trim() ?? "",
     homeDir: env.HOME?.trim() ?? "",
     userProfile: env.USERPROFILE?.trim() ?? "",
+    // Linux discovery enumerates <CODEX_HOME>/bin/wsl, so the home is part of the key.
+    codexHome: env.CODEX_HOME?.trim() ?? "",
     home: process.env.OPENCODEX_HOME ?? "",
     persisted: persistedRuntimeCacheStamp(deps),
   });

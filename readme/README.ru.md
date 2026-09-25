@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../assets/banner.png" alt="opencodex — универсальный прокси провайдеров для Codex, Claude Code, Claude Desktop и Grok Build" width="100%">
+</p>
+
 <h3 align="center">make codex open!</h3>
 <p align="center"><b>Универсальный прокси провайдеров для OpenAI Codex, Claude Code, Claude Desktop и Grok Build</b><br>
 Две команды — и каждый из них работает на любой LLM, которую вы укажете.</p>
@@ -13,6 +17,13 @@
 npm install -g @bitkyc08/opencodex
 ocx start
 ```
+
+<p align="center">
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/macOS-.dmg-24292f?logo=apple&logoColor=white" alt="Скачать для macOS (.dmg)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Windows-.msi-24292f?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0zIDNoOC41djguNUgzem05LjUgMEgyMXY4LjVoLTguNXpNMyAxMi41aDguNVYyMUgzem05LjUgMEgyMVYyMWgtOC41eiIvPjwvc3ZnPg==" alt="Скачать для Windows (.msi)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.AppImage-24292f?logo=linux&logoColor=white" alt="Скачать для Linux (.AppImage)"></a>
+  <a href="https://github.com/lidge-jun/opencodex/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb-24292f?logo=debian&logoColor=white" alt="Скачать для Linux (.deb)"></a>
+</p>
 
 <table>
 <tr>
@@ -80,7 +91,7 @@ Ollama или любую другую LLM с Codex, Claude Code, Claude Desktop 
 
 ## Быстрый старт
 
-### Личная установка
+### Личная установка (CLI)
 
 ```bash
 npm install -g @bitkyc08/opencodex   # Node 18+; рантайм Bun подключается автоматически
@@ -94,26 +105,31 @@ ocx start                         # прокси + панель управлен
 аккаунтами. `ocx gui` в любой момент снова откроет панель.
 
 <details>
-<summary><b>Настольное приложение и виджет macOS — бета-версия</b></summary>
+<summary><b>Настольное приложение (бета)</b></summary>
 
-Это нативная оболочка вокруг той же панели управления с расширением WidgetKit, которое
-показывает состояние прокси, расход за сегодня и квоты провайдеров без открытия браузера.
-Сам прокси не меняется: приложение находит уже запущенный экземпляр либо запускает встроенный
-сайдкар `ocx`, а панель по-прежнему доступна по адресу **http://localhost:10100**.
+Настольное приложение — это тот же прокси и та же панель управления в нативном окне,
+с иконкой в трее и встроенным `ocx`. Оно подключается к уже запущенному прокси либо
+запускает встроенный, а панель остаётся на порту прокси (**http://localhost:10100**,
+если вы не настроили другой). Выберите файл для своей платформы в
+[последнем релизе](https://github.com/lidge-jun/opencodex/releases/latest):
 
-Это бета-версия. Сборки подписаны для проверки целостности, но не нотариализованы, поэтому
-при первом запуске macOS просит нажать правой кнопкой мыши и выбрать **«Открыть»**, а Windows
-SmartScreen предупреждает об установщике. Для виджета нужна macOS 14 или новее; его модель
-снимков находится в [`app/`](../app) (`MenuBarCore`).
+| Платформа | Файл | Примечания |
+|---|---|---|
+| macOS 13+ (Apple Silicon и Intel) | `OpenCodex-<version>-macos.dmg` | Универсальная сборка, подписана Developer ID и нотариализована |
+| Windows (x64) | `OpenCodex-<version>-windows-x64.msi` | Пока без цифровой подписи: SmartScreen спросит один раз — выберите **Подробнее → Выполнить в любом случае** |
+| Linux (x86_64) | `OpenCodex-<version>-linux-x86_64.AppImage` или `-linux-amd64.deb` | Для трея нужен рабочий стол с поддержкой AppIndicator |
 
-Скачайте приложение из [последнего релиза](https://github.com/lidge-jun/opencodex/releases) или
-соберите локально командой `bun run prepare-sidecar && bun run prepare-widget && bunx tauri build`.
-
-Пути установки, файлы служб и всё остальное, что записывается на диск, перечислены в
-[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed). В
-[руководстве по настольному приложению](https://lidge-jun.github.io/opencodex/guides/desktop-app/) и
-[руководстве по приложению macOS в строке меню](https://lidge-jun.github.io/opencodex/guides/macos-menu-bar/)
-описаны установка на каждой платформе и запрос Gatekeeper.
+Рядом с каждым файлом на странице релиза есть `.sha256`. На macOS 14+ приложение также
+поставляется с расширением WidgetKit, которое показывает состояние прокси, расход за
+сегодня и квоты провайдеров; модель снимков, которую оно отображает, находится в
+[`app/`](../app) (`MenuBarCore`). Чтобы собрать приложение самостоятельно, выполните
+`bun install && bun run build:gui` в корне репозитория, затем в `desktop/` выполните
+`bun install && bun run prepare-sidecar && bun run prepare-widget && bun run build:local` на macOS
+или `bun install && bun run prepare-sidecar && bun run build:local` на Windows и Linux (шаг с виджетом
+работает только на macOS). В [руководстве по настольному приложению](https://opencodex.me/ru/guides/desktop-app/) и
+[руководстве по приложению macOS в строке меню](https://opencodex.me/ru/guides/macos-menu-bar/)
+описан первый запуск, а
+[`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md#where-things-are-installed) перечисляет всё, что записывается на диск.
 
 </details>
 
@@ -214,8 +230,9 @@ services:
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex && ~/.bun/bin/bun install
+~/.bun/bin/bun run build:gui
 ~/.bun/bin/bun run src/cli/index.ts start
 ```
 
@@ -223,8 +240,9 @@ cd opencodex && ~/.bun/bin/bun install
 
 ```powershell
 irm bun.sh/install.ps1 | iex
-git clone https://github.com/lidge-jun/opencodex.git
+git clone -b dev https://github.com/lidge-jun/opencodex.git
 cd opencodex; bun install
+bun run build:gui
 bun run src/cli/index.ts start
 ```
 
@@ -257,13 +275,13 @@ ocx init      # интерактивная настройка: пишет ~/.ope
 
 ## Поддерживаемые платформы
 
-| ОС | Статус | Менеджер служб |
-|---|---|---|
-| macOS (arm64 / x64) | Полная поддержка | launchd |
-| Linux (x64 / arm64) | Полная поддержка | systemd (пользовательский unit) |
-| Windows (x64) | Полная поддержка | Task Scheduler (скрыто) / опциональная нативная служба (`--native`, WinSW) |
+| ОС | Статус | Менеджер служб | Настольное приложение (бета) |
+|---|---|---|---|
+| macOS (arm64 / x64) | Полная поддержка | launchd | Универсальный `.dmg` |
+| Linux (x64 / arm64) | Полная поддержка | systemd (пользовательский unit) | `.AppImage` / `.deb` для x86_64 |
+| Windows (x64) | Полная поддержка | Task Scheduler (скрыто) / опциональная нативная служба (`--native`, WinSW) | `.msi` для x64 |
 
-Требуется [Node](https://nodejs.org) 18+. Рантайм Bun добавляется автоматически при `npm install` —
+Для установки CLI требуется [Node](https://nodejs.org) 18+; настольному приложению не нужны ни Node, ни Bun. Рантайм Bun добавляется автоматически при `npm install` —
 отдельно устанавливать Bun не нужно, WSL на Windows тоже не нужен. Если npm заблокировал
 скрипты установки встроенного рантайма, см. [документацию по установке](https://opencodex.me/ru/getting-started/installation/).
 
@@ -301,15 +319,16 @@ ocx init      # интерактивная настройка: пишет ~/.ope
 <details>
 <summary>Подробности владения памятью</summary>
 
-OpenCodex отслеживает 36 категорий состояния, удерживаемого процессом. У каждой есть
+OpenCodex отслеживает состояние, удерживаемое процессом, в категориях ниже. У каждой есть
 документированная граница:
 
-- **12 удерживаемых хранилищ** (журнал запросов, отладочные кольца, кэш изображений, кэш
+- **14 удерживаемых хранилищ** (журнал запросов, отладочные кольца, кэш изображений, кэш
   моделей, vision-описания, cursor-блобы, продолжение responses и т. д.) учитываются
-  в байтах и вытесняются бюджетом памяти приложения (по умолчанию 256 MiB).
+  в байтах и вытесняются бюджетом памяти приложения (по умолчанию 256 MiB), кроме
+  хранилища native control replay: оно закреплено и не вытесняется.
 - **4 наблюдаемых буфера** (аккумуляторы транслятора, хвосты image/OAuth/Grok)
   мониторятся по байтовому давлению in-flight без вытеснения.
-- **24 регистрации state-store** выполняют sweeps истечения (интервал 60 с) и сверку
+- **28 регистраций state-store** выполняют sweeps истечения (интервал 60 с) и сверку
   поколений конфигурации, чтобы удалять устаревшие ключи провайдеров и аккаунтов.
 - **Мемо пути и отпечатков** (метаданные рабочей области, усиленные идентификаторы,
   соли установки, возможности mode-hint) используют LRU-потолки в порядке вставки
@@ -338,6 +357,20 @@ codex -m "ollama/llama3" "Отрефакторьте эту функцию"
 подобрать его по шаблону имени модели. Id моделей провайдера, содержащие `/`,
 отдаются с внутренними слэшами, заменёнными на `-`; исходная форма со всеми слэшами
 тоже продолжает работать. Подробности: [документация по маршрутизации моделей](https://opencodex.me/ru/guides/model-routing/).
+
+### Маршрутизация JEV Auto (опционально)
+
+TypeSafe JEV может выбирать первую модель и уровень рассуждения для явно включённого Combo, не меняя
+обычный выбор модели и прямые маршруты. Добавьте ключ через `ocx login jev`, в
+**Providers → TypeSafe JEV → Add API key** или через `TYPESAFE_API_KEY`/`JEV_API_KEY`. Затем откройте
+**Models → Combos → Create JEV Auto**, выберите разрешённые целевые модели и отметьте, какие уровни
+рассуждения JEV может выбрать для каждой цели. Если настройку не трогать, цель разрешает все уровни,
+которые модель сейчас объявляет.
+
+JEV вызывается только для `jev-auto` и только один раз на логический вызов модели. При отсутствии ключа,
+сетевой ошибке или некорректном решении запрос уходит на первую доступную цель (fail-open); отмена
+со стороны клиента по-прежнему отменяет запрос. Автотесты используют имитацию TypeSafe и не проверяют
+настоящий аккаунт JEV.
 
 ## Провайдеры и адаптеры
 

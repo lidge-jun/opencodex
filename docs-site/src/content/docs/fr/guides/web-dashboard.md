@@ -37,6 +37,25 @@ remplissage automatique. Le tableau de bord lui-même ne conserve le jeton qu'en
 dans `localStorage` ni dans `sessionStorage` ; son enregistrement dépend entièrement du navigateur ou du
 gestionnaire de mots de passe.
 
+## Barre de résumé des quotas
+
+Une ligne de résumé en haut de chaque page, sauf la page Sécurité au démarrage, indique
+l'utilisation actuelle des quotas de chaque fournisseur, par exemple
+`OpenAI 31% | Claude 54% | xAI 12% | Google 8%`. Elle lit les mêmes rapports de quotas que l'espace
+fournisseur (`GET /api/provider-quotas`, toutes les 60 secondes tant que l'onglet est visible) et ne
+force jamais d'actualisation en amont.
+
+- Chaque étiquette affiche la fenêtre signalée prioritaire : d'abord hebdomadaire, puis mensuelle,
+  puis 5 heures, puis une fenêtre nommée par le fournisseur ou des crédits prépayés.
+- Une étiquette passe en ambre à 70 % d'utilisation et en rouge à 90 %.
+- Survolez une étiquette ou cliquez dessus pour voir toutes les fenêtres signalées avec leur heure de
+  réinitialisation et l'heure de la lecture. Appuyez sur Échap ou cliquez ailleurs pour fermer une
+  étiquette épinglée.
+- Les fournisseurs qui ne signalent aucune fenêtre de quota sont omis. La barre est masquée quand
+  aucun fournisseur n'en signale.
+- Le bord droit indique quand le tableau de bord a lu les rapports pour la dernière fois. Il passe en
+  ambre lorsque la dernière lecture a échoué et que la lecture précédente est encore affichée.
+
 ## Fonctions disponibles
 
 | Zone | Fonction |
@@ -44,7 +63,7 @@ gestionnaire de mots de passe.
 | **Résumé du tableau de bord** | Mode multi-agent, état en ligne, version, durée de fonctionnement, nombre de fournisseurs, total de jetons sur 30 jours, fournisseurs actifs et modèles natifs/routés disponibles. |
 | **Délégation de sous-agent** | Choisissez un modèle natif ou routé et, facultativement, un effort de raisonnement partagés entre les consignes de délégation OpenCodex et l'option distincte de valeurs par défaut natives. Il ne s'agit pas d'un routeur par création de sous-agent côté proxy ; voir ci-dessous. |
 | **Services auxiliaires** | Choisissez le modèle et l'effort de recherche web, ainsi que le modèle de description visuelle. Les modifications s'appliquent à la requête suivante. |
-| **Maintenance** | Resynchronisez le catalogue de modèles Codex, examinez les avertissements de contournement par une configuration locale au projet, recherchez la dernière version stable ou préliminaire et lancez une mise à jour avec redémarrage facultatif du proxy. |
+| **Maintenance** | Resynchronisez le catalogue de modèles Codex, examinez les avertissements de contournement par une configuration locale au projet, recherchez la dernière version stable ou préliminaire et lancez une mise à jour avec redémarrage facultatif du proxy. Dans le shell de bureau, son entrée de mise à jour ouvre la page de mise à jour native au lieu d’exécuter la mise à jour du paquet. |
 | **Sécurité au démarrage** | Vérifiez si le routage Codex injecté résiste à un redémarrage, avec des états distincts pour le service et le lanceur intermédiaire, ainsi que les commandes de réparation exactes. |
 | **Zone de notification Windows** | Installez au niveau de l'utilisateur un contrôleur lancé à la connexion pour démarrer, arrêter ou redémarrer le proxy en un clic, ouvrir le tableau de bord et consulter l'état. Ce contrôleur n'est pas un service de redémarrage du proxy. |
 | **Démarrage automatique de Codex** | Autorisez un lanceur intermédiaire Codex déjà installé à exécuter `ocx ensure`. Ce commutateur n'installe ni lanceur ni service d'arrière-plan. |

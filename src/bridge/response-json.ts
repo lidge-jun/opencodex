@@ -45,10 +45,17 @@ import { adapterFailureFromEvent, emptyChunks, joinChunks, responsesUsage, toolC
 import type { OutputItem, StringChunks } from "./internal";
 import { bridgeToResponsesSSE } from "./sse";
 
+/** Build a buffered Responses result within a caller-owned or temporary translator budget. */
 export function buildResponseJSON(
   events: AdapterEvent[],
   modelId: string,
-  options?: Parameters<typeof buildResponseJSONWithBudget>[2],
+  options?: Parameters<typeof buildResponseJSONWithBudget>[2] & {
+    /**
+     * False when the body is not what the client receives: a direct client encoder counts its
+     * own relayed frames and folds the same events here only for the completion effects.
+     */
+    recordBufferedDelivery?: boolean;
+  },
 ): Record<string, unknown> {
   // Default-budget safety net: a caller that omits the budget gets a bounded
   // default (disposed with the call), never the unbounded append path.
@@ -57,7 +64,9 @@ export function buildResponseJSON(
     // A buffered turn delivers its whole answer as one body, so nothing calls the per-frame
     // recorder on the SSE bridge. Without this the attempt would persist adapter events with
     // zero relayed ones, which is the loss signal -- raised on every non-streaming request.
-    attemptDeliveryRecorder(options.translatorBudget)?.noteBufferedDelivery(body);
+    if (options.recordBufferedDelivery !== false) {
+      attemptDeliveryRecorder(options.translatorBudget)?.noteBufferedDelivery(body);
+    }
     return body;
   }
   const budget = createTranslatorBudget();
@@ -68,13 +77,14 @@ export function buildResponseJSON(
   }
 }
 
+/** Fold adapter events into a Responses result while enforcing the requested tool boundary. */
 function buildResponseJSONWithBudget(
   events: AdapterEvent[],
   modelId: string,
   options?: {
     hideThinkingSummary?: boolean;
     toolNsMap?: Map<string, { namespace: string; name: string; freeform?: true }>;
-    /** Request-visible tool names. When present, an upstream call outside this set fails closed. */
+    /** Request-visible tool names. Required for client calls when enforcement is explicitly enabled. */
     declaredToolNames?: ReadonlySet<string>;
     /** See `bridgeToResponsesSSE`: enforcement is separate from normalization (#4735). */
     enforceDeclaredToolNames?: boolean;
@@ -443,9 +453,9 @@ function buildResponseJSONWithBudget(
         flushToolCall();
         const effectiveName = normalizeDeclaredToolName(e.name, options?.declaredToolNames);
         if (
-          options?.declaredToolNames
-          && options.enforceDeclaredToolNames !== false
-          && !options.declaredToolNames.has(effectiveName)
+          (options?.enforceDeclaredToolNames === true || options?.declaredToolNames != null)
+          && options?.enforceDeclaredToolNames !== false
+          && !options?.declaredToolNames?.has(effectiveName)
         ) {
           errorEvent = {
             type: "error",

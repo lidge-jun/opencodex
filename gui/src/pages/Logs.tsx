@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useI18n, LOCALES, type TFn } from "../i18n/shared";
 import { formatProviderDisplayName } from "../provider-icons";
@@ -13,12 +13,14 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { EmptyState, Notice } from "../ui";
 import Debug from "./Debug";
 import { LogsFilterBar } from "./logs-filter-bar";
+import { ProtocolBadge } from "../components/protocols/ProtocolBadge";
+import { ProtocolTracePanel } from "../components/protocols/ProtocolTracePanel";
 import { logsClockAnchor, logsClockNow, type LogsClockAnchor } from "./logs-clock";
 import { DEFAULT_LOG_FILTER_STATE, extractLogFilterOptions, filterLogs, hasActiveLogFilters, type LogFilterState } from "./logs-filter";
 
 import type { LogsTab } from "./logs-tab-keydown";
 import { logsTabKeyDown, readTabFromHash, selectLogsTab } from "./logs-tab-keydown";
-import { modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
+import { isModelRerouted, modelTitle, type ModelTitleTierOutcome } from "./logs-model-title";
 import { speedLabel } from "./logs-speed-label";
 import { formatEstimatedUsd, formatEstimatedUsdValue, summarizeEstimatedCosts } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
@@ -179,6 +181,8 @@ export interface LogEntry extends LogFailureAttribution {
   // cannot say whether Fast was granted on a backend whose echo is not authoritative.
   tierOutcome?: ModelTitleTierOutcome;
   resolvedModel?: string;
+  servedModel?: string;
+  wireModel?: string;
   modelSupportsServiceTier?: boolean;
   status: number;
   durationMs: number;
@@ -206,6 +210,8 @@ export interface LogEntry extends LogFailureAttribution {
     selected?: { provider?: string; model?: string; reason?: string };
     candidates?: Array<{ provider?: string; model?: string; eligible?: boolean; exclusions?: Array<{ code?: string }> }>;
   };
+  /** Observed protocol path (PF-02). Untrusted JSON; rendered only after `parseProtocolTraceV1`. */
+  protocolTrace?: unknown;
 }
 
 function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
@@ -276,6 +282,13 @@ function reasoningWireLabel(log: ReasoningLogFields): string | undefined {
   return `${log.reasoningWireField}=${log.reasoningWireValue}`;
 }
 
+function servedModelLabel(log: { model: string; resolvedModel?: string; servedModel?: string; wireModel?: string }): ReactNode {
+  if (isModelRerouted(log)) {
+    return <>{modelLabel(log.wireModel ?? log.model)}{" → "}{modelLabel(log.servedModel!)}</>;
+  }
+  return modelLabel(log.servedModel ?? log.resolvedModel ?? log.model);
+}
+
 function formatTokPerSecond(result: TokPerSecondResult | undefined, localeTag?: string): string {
   if (!result || result.kind === "unavailable" || !Number.isFinite(result.value) || result.value <= 0) return "\u2014";
   const digits = result.value >= 100 ? 0 : 1;
@@ -340,6 +353,7 @@ const RECOVERY_KIND_KEYS = {
   "console-go-upload-retry": "logs.detail.attempt.recovery.consoleGoUpload",
   "opaque-blob-rejection": "logs.detail.attempt.recovery.opaqueBlobRejection",
   "reasoning-effort-downgrade": "logs.detail.attempt.recovery.reasoningEffortDowngrade",
+  "anthropic-fast-downgrade": "logs.detail.attempt.recovery.anthropicFastDowngrade",
 } as const satisfies Record<AttemptRecoveryKind, string>;
 
 /** Map a metric-unavailable reason to its i18n key. */
@@ -954,7 +968,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   </td>
                  <td className="mono log-col-model" title={modelTitle(log, t)}>
                   <span className="logs-model-cell">
-                   <span>{modelLabel(log.resolvedModel ?? log.model)}</span>
+                   <span>{servedModelLabel(log)}</span>
                       {log.shadowCallRewrittenFrom && (
                         <span
                           className="badge badge-muted"
@@ -969,6 +983,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       )}
                       {log.surface === "grok" && <span className="badge badge-accent">{t("logs.badge.grok")}</span>}
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
+                      <ProtocolBadge trace={log.protocolTrace} t={t} />
                     </span>
                   </td>
                   {/* The wire field (reasoning_effort=high) stays in the title and the detail
@@ -1141,7 +1156,7 @@ function LogDetailDialog({
                 </span>
               </>
             )}
-            <span className="muted">{t("logs.col.model")}</span><span className="mono">{modelLabel(detail.resolvedModel ?? detail.model)}</span>
+            <span className="muted">{t("logs.col.model")}</span><span className="mono">{servedModelLabel(detail)}</span>
             <span className="muted">{t("logs.col.provider")}</span><span>{formatProviderDisplayName(detail.provider, t)}</span>
             {(detail.requestedEffort || detail.effectiveEffort) && (
               <><span className="muted">{t("logs.col.effort")}</span><span className="mono">{effortLabel(detail)}{reasoningWire ? ` (${reasoningWire})` : ""}</span></>
@@ -1189,6 +1204,8 @@ function LogDetailDialog({
             <p className="log-detail-notes-line muted">{t("logs.detail.route.unknown")}</p>
           )}
         </section>
+
+        <ProtocolTracePanel trace={detail.protocolTrace} t={t} />
 
         <section className="log-detail-section" aria-labelledby="log-detail-performance">
           <h4 id="log-detail-performance" className="log-detail-section-title">{t("logs.detail.section.performance")}</h4>

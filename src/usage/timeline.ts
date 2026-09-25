@@ -1,3 +1,4 @@
+import { baseProviderLabel } from "../providers/label";
 import { cacheTokensFromUsage, usageAttributions } from "./summary";
 import type { PersistedUsageEntry } from "./log";
 import { usageDisplayTotalTokens } from "./totals";
@@ -14,6 +15,7 @@ export interface TimelineQuery {
   aggregation: TimelineAggregation;
   grouping: TimelineGrouping;
   models: string[] | null;
+  hiddenProviders: string[];
   now: number;
 }
 
@@ -27,6 +29,7 @@ export interface TimelineSeries {
 }
 
 export interface UsageTimeline {
+  appliedFilters: { models: string[] | null; hiddenProviders: string[] };
   start: number;
   end: number;
   bucketSeconds: number;
@@ -49,11 +52,39 @@ function enumValue<T extends string>(value: string | null, values: readonly T[],
   return values.includes(value as T) ? value as T : { error: `invalid value for parameter: ${value}` };
 }
 
+export function isTimelineModelId(value: unknown): value is string {
+  return typeof value === "string" && /^[^/\s]+\/\S+$/.test(value);
+}
+
+/**
+ * Pool accounts log as `openai-p<hex6>` (and older rows as `openai-main`/`chatgpt`), so the raw
+ * provider would draw one line per account for the same model. The usage summary already folds these
+ * through `baseProviderLabel`; the timeline keys on the same label so both views agree.
+ */
+function timelineModelId(provider: string, model: string): string {
+  return `${baseProviderLabel(provider)}/${model}`;
+}
+
+/** A saved selection may still name a pool account (`openai-p6bc633/gpt-5`); it selects the merged row. */
+export function normalizeTimelineModelId(id: string): string {
+  const cut = id.indexOf("/");
+  return timelineModelId(id.slice(0, cut), id.slice(cut + 1));
+}
+
+/**
+ * In account grouping the pool suffix is the account when no explicit label was stamped. Codex pool
+ * accounts and Anthropic OAuth accounts (`formatAnthropicProviderForLog`) both log that way.
+ */
+function poolAccountLabel(provider: string): string | undefined {
+  if (baseProviderLabel(provider) === provider) return undefined;
+  return provider.match(/-(main|p[a-f0-9]{6})$/)?.[1];
+}
+
 function parseModels(raw: string | null): string[] | null | { error: string } {
   if (raw === null || raw.trim() === "") return null;
   const models = raw.split(",").map(model => model.trim());
   if (models.length > 100) return { error: "models must contain at most 100 identifiers" };
-  if (models.some(model => !/^[^/\s]+\/[^/\s]+$/.test(model))) {
+  if (models.some(model => !isTimelineModelId(model))) {
     return { error: "models must contain provider/model identifiers" };
   }
   return [...new Set(models)];
@@ -79,6 +110,10 @@ export function parseTimelineQuery(params: URLSearchParams, now: number): Timeli
   if (typeof grouping !== "string") return grouping;
   const models = parseModels(params.get("models"));
   if (typeof models === "object" && models !== null && "error" in models) return models;
+  const hiddenProviders = params.getAll("hiddenProvider");
+  if (hiddenProviders.length > 100 || hiddenProviders.some(value => !value || /\s/.test(value))) {
+    return { error: "hiddenProvider must contain at most 100 nonblank provider names" };
+  }
   if (!Number.isFinite(now)) return { error: "now must be finite" };
   return {
     hours: hoursNumber as TimelineQuery["hours"],
@@ -87,6 +122,7 @@ export function parseTimelineQuery(params: URLSearchParams, now: number): Timeli
     aggregation,
     grouping,
     models: models as string[] | null,
+    hiddenProviders: [...new Set(hiddenProviders)].sort(),
     now,
   };
 }
@@ -108,13 +144,15 @@ function metricValue(metric: TimelineMetric, attribution: ReturnType<typeof usag
 
 export function createTimelineAccumulator(query: TimelineQuery): { add(entry: PersistedUsageEntry): void; finish(): UsageTimeline } {
   const bucketSeconds = query.bucketMinutes * 60;
-  const start = Math.floor((query.now - query.hours * 3_600_000) / 1000 / bucketSeconds) * bucketSeconds;
   const buckets = Math.ceil(query.hours * 60 / query.bucketMinutes);
-  const end = start + buckets * bucketSeconds;
+  const end = (Math.floor(query.now / 1000 / bucketSeconds) + 1) * bucketSeconds;
+  const start = end - buckets * bucketSeconds;
   const startMs = start * 1000;
   const endMs = end * 1000;
   const series = new Map<string, SeriesState>();
   const availableModels = new Set<string>();
+  const hiddenProviders = new Set(query.hiddenProviders);
+  const selectedModels = query.models === null ? null : new Set(query.models.map(normalizeTimelineModelId));
   let missingMeasurements = 0;
 
   function add(entry: PersistedUsageEntry): void {
@@ -122,18 +160,21 @@ export function createTimelineAccumulator(query: TimelineQuery): { add(entry: Pe
     const bucket = Math.floor((entry.timestamp - startMs) / (bucketSeconds * 1000));
     if (bucket < 0 || bucket >= buckets) return;
     for (const attribution of usageAttributions(entry)) {
-      const modelId = `${attribution.provider}/${attribution.model}`;
+      const provider = baseProviderLabel(attribution.provider);
+      if (hiddenProviders.has(attribution.provider) || hiddenProviders.has(provider)) continue;
+      const modelId = timelineModelId(attribution.provider, attribution.model);
       availableModels.add(modelId);
-      if (query.models && !query.models.includes(modelId)) continue;
+      if (selectedModels && !selectedModels.has(modelId)) continue;
+      const accountLogLabel = attribution.accountLogLabel ?? poolAccountLabel(attribution.provider) ?? "unknown";
       const id = query.grouping === "model"
         ? modelId
-        : `${modelId} · ${attribution.accountLogLabel ?? "unknown"}`;
+        : `${modelId} · ${accountLogLabel}`;
       let state = series.get(id);
       if (!state) {
         state = {
-          provider: attribution.provider,
+          provider,
           model: attribution.model,
-          ...(query.grouping === "modelAccount" ? { accountLogLabel: attribution.accountLogLabel ?? "unknown" } : {}),
+          ...(query.grouping === "modelAccount" ? { accountLogLabel } : {}),
           points: Array<number>(buckets).fill(0),
           requests: new Map(),
         };
@@ -201,6 +242,10 @@ export function createTimelineAccumulator(query: TimelineQuery): { add(entry: Pe
       kept.push({ id: "other", provider: "", model: "other", total: otherPoints.reduce((sum, value) => sum + value, 0), points: otherPoints });
     }
     return {
+      appliedFilters: {
+        models: query.models === null ? null : [...new Set(query.models)].sort(),
+        hiddenProviders: [...hiddenProviders].sort(),
+      },
       start,
       end,
       bucketSeconds,

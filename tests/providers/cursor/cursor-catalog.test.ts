@@ -184,6 +184,12 @@ describe("cursor umbrella catalog (devlog 260828_cursor_umbrella_catalog)", () =
       expect(resolved.wireId).toBe("claude-opus-5-thinking-high");
     });
 
+    test("claude-opus-5-5 routes flat effort-suffixed wire ids without a thinking infix (#5722)", () => {
+      expect(resolveCursorSelection("claude-opus-5-5", "medium").wireId).toBe("claude-opus-5-5-medium");
+      expect(resolveCursorSelection("claude-opus-5-5", "high").wireId).toBe("claude-opus-5-5-high");
+      expect(resolveCursorSelection("claude-opus-5-5", "medium", undefined, { fast: true }).wireId).toBe("claude-opus-5-5-medium-fast");
+    });
+
     test("bare-thinking families ignore effort", () => {
       expect(resolveCursorSelection("claude-4-sonnet", "max").wireId).toBe("claude-4-sonnet-thinking");
     });

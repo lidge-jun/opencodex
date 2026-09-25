@@ -434,12 +434,6 @@
   margin-bottom: 18px;
 }
 
-.swi-save-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
 /* ── Detail view ──────────────────────────────────────── */
 
 .swi-detail {

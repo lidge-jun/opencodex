@@ -13,7 +13,7 @@ import {
  */
 export const BOUNDED_WS_RUNTIME = "1.4.0";
 
-export function shouldUseCodexWsUpstream(url: string, init?: RequestInit, upstreamWebsocket = false): boolean {
+export function shouldUseCodexWsUpstream(url: string, init?: RequestInit, upstreamWebsocket?: boolean): boolean {
   return rawShouldUseCodexWsUpstream(url, init, BOUNDED_WS_RUNTIME, upstreamWebsocket);
 }
 

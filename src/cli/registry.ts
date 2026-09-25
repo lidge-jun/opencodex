@@ -83,7 +83,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "service",
-    usage: "ocx service [install|repair|restart|start|stop|status|uninstall|remove]",
+    usage: "ocx service [install|repair|restart|start|stop|status|uninstall|remove|claim]",
     summary: "Run as a background service.",
     details: [
       "With no subcommand, installs when absent or repairs an existing service.",
@@ -128,6 +128,18 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "Machine resources: /api/machine/status, /api/machine/shim, /api/machine/clients, /api/machine/sync, /api/machine/disconnect, and the fixed /api/machine/hub-relay namespace.",
       "Remote browser self-logout uses /api/session/logout from the GUI; it is distinct from client disconnect and key revocation.",
       "Credentials are accepted only through stdin; argv and environment credential forms are not supported.",
+    ],
+  },
+  {
+    name: "link",
+    usage: "ocx link <port|issue|status|revoke>",
+    summary: "Allocate and manage a loopback remote home link.",
+    details: [
+      "Port: ocx link port [--json]",
+      "Issue: ocx link issue --alias <alias> --tunnel-port <port> [--json]",
+      "Status: ocx link status [--json]",
+      "Revoke: ocx link revoke --link-id <id> [--json]",
+      "Issue, status, and revoke use the running proxy's loopback management API and admin token.",
     ],
   },
   {
@@ -392,6 +404,17 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   { name: "api-key", usage: "ocx api-key <list|create|rotate|remove> ...", summary: "Alias of ocx access key." },
   {
+    name: "api",
+    usage: "ocx api <protocols|explain|policy> ...",
+    summary: "Inspect protocol paths, preview a request path, and read or change the protocol policy.",
+    details: [
+      "protocols [--provider <name>]   Contract version, API surfaces, protocol settings and feature vocabulary.",
+      "explain --model <id> --inbound <responses|chat|messages> [--feature <key>]...   Preview the request path; sends nothing upstream.",
+      "policy                          Read the protocol policy; with --messages, --unrepresentable or --rollout <switch>=<on|off> it changes config.",
+      "Every rollout switch defaults off. `ocx api policy` writes only when a setting flag is given.",
+    ],
+  },
+  {
     name: "export",
     usage: "ocx export --client <opencode|pi|omp|hermes|openclaw|kimi|gajae|dsh|mcode|zcode|prime|aside|raycast|omo|cline|droid> [--json] [--out <path>] [--force]",
     summary: "Print a client config (OpenCode, Pi, OMP, Hermes, OpenClaw, Kimi Code, gjc, DeepSeek Harness, MiniMax Code, ZCode, Prime Agent, Aside, Raycast, omo, Cline, Factory Droid) wired to the running proxy.",
@@ -451,6 +474,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
       "  ocx claude desktop [apply]                         Save and apply the four-family profile",
       "  ocx claude desktop show [--json]                   Show routes, families, and defaults",
       "  ocx claude desktop status [--json]                 Show applied state, drift, and health",
+      "  ocx claude desktop bind <picker-id> <route>        First-party: serve a Code tab picker model with a route",
+      "  ocx claude desktop unbind <picker-id>              Remove a first-party binding",
       "  ocx claude desktop move <route> <family> [--default]",
       "  ocx claude desktop default <family> <route|none>",
       "  ocx claude desktop export <path|->                 Export versioned JSON (`-` = stdout)",
@@ -590,6 +615,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     hidden: true,
     usage: "ocx __refresh-version [preview|latest]",
     summary: "Hidden detached helper: refresh the cached latest version.",
+  },
+  {
+    name: "__update-badge",
+    hidden: true,
+    usage: "ocx __update-badge",
+    summary: "Hidden internal: print cached package update badge JSON.",
   },
   {
     name: "__tray-start",

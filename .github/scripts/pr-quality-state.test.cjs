@@ -22,6 +22,11 @@ const {
   READINESS_LATEST_DEV_BEHIND_MAX,
   READINESS_STATE_VERSION
 } = require("./pr-quality-state.cjs");
+const {
+  advanceReattestation,
+  bodyDigest,
+  parsePendingReattestation,
+} = require("./pr-readiness-reattest.cjs");
 
 describe("enforcer state markers", () => {
   it("parses a valid enforcer state marker", () => {
@@ -504,6 +509,24 @@ describe("gate state", () => {
     assert.deepEqual(parseGateState(gateStateMarker(state)), state);
   });
 
+  it("round-trips the pending re-attestation field through the gate marker", () => {
+    const pendingReattestation = {
+      version: 1,
+      headSha: "a".repeat(40),
+      baseRef: "dev",
+      generation: 2,
+      phase: "await-check",
+      checkpointAt: "2026-09-22T01:00:00.000Z",
+    };
+    const state = { ...defaultGateState(), pendingReattestation };
+    const parsed = parseGateState(gateStateMarker(state));
+    assert.deepEqual(parsed, state);
+    assert.deepEqual(parsePendingReattestation(parsed.pendingReattestation), {
+      kind: "valid",
+      value: pendingReattestation,
+    });
+  });
+
   it("returns null for markerless or unreadable gate state and warns", () => {
     assert.equal(parseGateState("plain comment"), null);
     assert.equal(parseGateState(null), null);
@@ -526,6 +549,7 @@ describe("gate state", () => {
       maintainersPinged: false,
       completedAtHeadSha: null,
       reviewReadyLabeled: false,
+      pendingReattestation: null,
     });
   });
 
@@ -567,5 +591,435 @@ describe("gate state", () => {
     );
     assert.equal(onlyReadiness.active, false);
     assert.equal(onlyReadiness.maintainersPinged, true);
+  });
+});
+
+describe("durable readiness re-attestation", () => {
+  const HEAD_A = "a".repeat(40);
+  const HEAD_B = "b".repeat(40);
+  const CHECKPOINT = "2026-09-22T01:00:00.000Z";
+  const LIVE_TIME = "2026-09-22T01:00:01.000Z";
+  const body0 = "current checklist: 0/4";
+  const body4 = "current checklist: 4/4";
+
+  const readiness = checked => ({
+    present: true,
+    total: 4,
+    checked,
+    complete: checked === 4,
+  });
+  const live = (body, overrides = {}) => ({
+    headSha: HEAD_A,
+    baseRef: "dev",
+    body,
+    updatedAt: LIVE_TIME,
+    authorId: 42,
+    ...overrides,
+  });
+  const authorEdit = (body, previousBody, overrides = {}) => ({
+    name: "pull_request_target",
+    action: "edited",
+    senderId: 42,
+    senderType: "User",
+    headSha: HEAD_A,
+    body,
+    previousBody,
+    updatedAt: LIVE_TIME,
+    ...overrides,
+  });
+  const finalize = (pending, checkpointAt) => ({ ...pending, checkpointAt });
+
+  it("requires clear then recheck after a legacy 4/4 synchronize", () => {
+    const seeded = advanceReattestation({
+      pending: null,
+      legacy: true,
+      current: false,
+      readiness: readiness(4),
+      live: live("legacy checklist: 4/4"),
+      event: { name: "pull_request_target", action: "synchronize", headSha: HEAD_A },
+      checkpointAt: CHECKPOINT,
+    });
+    assert.deepEqual(seeded.pending, {
+      version: 1,
+      headSha: HEAD_A,
+      baseRef: "dev",
+      generation: 1,
+      phase: "await-clear",
+      checkpointAt: null,
+    });
+    assert.equal(seeded.canComplete, false);
+
+    const wordingOnly = advanceReattestation({
+      pending: finalize(seeded.pending, CHECKPOINT),
+      legacy: false,
+      current: true,
+      readiness: readiness(4),
+      live: live(body4),
+      event: authorEdit(body4, "legacy checklist: 4/4"),
+      checkpointAt: CHECKPOINT,
+    });
+    assert.equal(wordingOnly.pending.phase, "await-clear");
+    assert.equal(wordingOnly.canComplete, false);
+    assert.equal(wordingOnly.changed, false);
+
+    const cleared = advanceReattestation({
+      pending: finalize(wordingOnly.pending, CHECKPOINT),
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0),
+      event: authorEdit(body0, body4),
+      checkpointAt: CHECKPOINT,
+    });
+    assert.equal(cleared.pending.phase, "await-check");
+    assert.equal(cleared.pending.checkpointAt, null);
+    assert.equal(cleared.canComplete, false);
+
+    const attested = advanceReattestation({
+      pending: finalize(cleared.pending, "2026-09-22T01:00:02.000Z"),
+      legacy: false,
+      current: true,
+      readiness: readiness(4),
+      live: live(body4, { updatedAt: "2026-09-22T01:00:03.000Z" }),
+      event: authorEdit(body4, body0, { updatedAt: "2026-09-22T01:00:03.000Z" }),
+      checkpointAt: "2026-09-22T01:00:02.000Z",
+    });
+    assert.equal(attested.pending.phase, "attested");
+    assert.equal(attested.pending.attestedBodySha256, bodyDigest(body4));
+    assert.equal(attested.pending.checkpointAt, null);
+    assert.equal(attested.canComplete, false);
+    const replay = advanceReattestation({
+      pending: finalize(attested.pending, "2026-09-22T01:00:04.000Z"),
+      legacy: false,
+      current: true,
+      readiness: readiness(4),
+      live: live(body4, { updatedAt: "2026-09-22T01:00:03.000Z" }),
+      event: {},
+    });
+    assert.equal(replay.canComplete, true);
+  });
+
+  it("parses only the discriminated persisted schema", () => {
+    assert.deepEqual(parsePendingReattestation(null), { kind: "absent" });
+    const awaiting = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 1, phase: "await-clear", checkpointAt: CHECKPOINT };
+    assert.deepEqual(parsePendingReattestation(awaiting), { kind: "valid", value: awaiting });
+    const githubTimestamp = { ...awaiting, checkpointAt: "2026-09-22T01:00:00Z" };
+    assert.deepEqual(parsePendingReattestation(githubTimestamp), { kind: "valid", value: githubTimestamp });
+    const attested = { ...awaiting, phase: "attested", attestedBodySha256: bodyDigest(body4) };
+    assert.deepEqual(parsePendingReattestation(attested), { kind: "valid", value: attested });
+    for (const malformed of [
+      false,
+      {},
+      { ...awaiting, version: 2 },
+      { ...awaiting, headSha: "abc" },
+      { ...awaiting, baseRef: "" },
+      { ...awaiting, generation: 0 },
+      { ...awaiting, generation: 1.5 },
+      { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 1, phase: "await-clear" },
+      { ...awaiting, checkpointAt: "2026-9-22T01:00:00Z" },
+      { ...awaiting, checkpointAt: "not-a-time" },
+      { ...awaiting, phase: "unknown" },
+      { ...awaiting, attestedBodySha256: bodyDigest(body4) },
+      { ...awaiting, phase: "attested" },
+      { ...awaiting, phase: "attested", attestedBodySha256: "f".repeat(63) },
+      { ...awaiting, futureField: true },
+      { ...attested, futureField: true },
+    ]) assert.equal(parsePendingReattestation(malformed).kind, "invalid");
+  });
+
+  it("seeds malformed stored state without consuming the current author event", () => {
+    const result = advanceReattestation({
+      pending: { version: 1, phase: "attested" },
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0),
+      event: authorEdit(body0, body4),
+      checkpointAt: CHECKPOINT,
+    });
+    assert.equal(result.pending.phase, "await-clear");
+    assert.equal(result.pending.checkpointAt, null);
+    assert.equal(result.pending.generation, 1);
+    assert.equal(result.canComplete, false);
+  });
+
+  it("does not advance or complete any provisional phase", () => {
+    for (const pending of [
+      { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 1, phase: "await-clear", checkpointAt: null },
+      { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 1, phase: "await-check", checkpointAt: null },
+      {
+        version: 1,
+        headSha: HEAD_A,
+        baseRef: "dev",
+        generation: 1,
+        phase: "attested",
+        attestedBodySha256: bodyDigest(body4),
+        checkpointAt: null,
+      },
+    ]) {
+      const checked = pending.phase === "await-clear" ? 0 : 4;
+      const body = checked === 0 ? body0 : body4;
+      const result = advanceReattestation({
+        pending,
+        legacy: false,
+        current: true,
+        readiness: readiness(checked),
+        live: live(body),
+        event: authorEdit(body, checked === 0 ? body4 : body0),
+      });
+      assert.deepEqual(result.pending, pending);
+      assert.equal(result.canComplete, false);
+      assert.equal(result.changed, false);
+    }
+  });
+
+  it("uses the pending checkpoint and ignores an outer hygiene-comment timestamp", () => {
+    const pending = {
+      version: 1,
+      headSha: HEAD_A,
+      baseRef: "dev",
+      generation: 2,
+      phase: "await-clear",
+      checkpointAt: CHECKPOINT,
+    };
+    const result = advanceReattestation({
+      pending,
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0),
+      event: authorEdit(body0, body4),
+      checkpointAt: "2099-01-01T00:00:00.000Z",
+    });
+    assert.equal(result.pending.phase, "await-check");
+    assert.equal(result.pending.checkpointAt, null);
+  });
+
+  it("accepts a delayed author event when the live head and body remain unchanged", () => {
+    const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase: "await-clear", checkpointAt: CHECKPOINT };
+    const result = advanceReattestation({
+      pending,
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0, { updatedAt: "2026-09-22T09:00:01.000Z" }),
+      event: authorEdit(body0, body4),
+    });
+    assert.equal(result.pending.phase, "await-check");
+    assert.equal(result.pending.checkpointAt, null);
+  });
+
+  it("rejects future author events and missing or invalid live timestamps", () => {
+    const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase: "await-clear", checkpointAt: CHECKPOINT };
+    for (const [name, liveUpdatedAt, eventUpdatedAt] of [
+      ["future author event", LIVE_TIME, "2026-09-22T01:00:02.000Z"],
+      ["missing live timestamp", undefined, LIVE_TIME],
+      ["invalid live timestamp", "not-a-time", LIVE_TIME],
+    ]) {
+      const result = advanceReattestation({
+        pending,
+        legacy: false,
+        current: true,
+        readiness: readiness(0),
+        live: live(body0, { updatedAt: liveUpdatedAt }),
+        event: authorEdit(body0, body4, { updatedAt: eventUpdatedAt }),
+      });
+      assert.equal(result.pending.phase, "await-clear", name);
+      assert.equal(result.changed, false, name);
+      assert.equal(result.canComplete, false, name);
+    }
+  });
+
+  it("rejects equal timestamps, title-only edits, and stale or reordered payloads", () => {
+    const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase: "await-clear", checkpointAt: CHECKPOINT };
+    const cases = [
+      authorEdit(body0, body4, { updatedAt: CHECKPOINT }),
+      authorEdit(body0, undefined),
+      authorEdit(body0, body4, { body: "stale event body" }),
+      authorEdit(body0, body4, { headSha: HEAD_B }),
+      authorEdit(body0, body4, { senderId: 7 }),
+      authorEdit(body0, body4, { senderType: "Bot" }),
+      authorEdit(body0, body4, { name: "status" }),
+    ];
+    for (const event of cases) {
+      const result = advanceReattestation({
+        pending,
+        legacy: false,
+        current: true,
+        readiness: readiness(0),
+        live: live(body0, { updatedAt: event.updatedAt === CHECKPOINT ? CHECKPOINT : LIVE_TIME }),
+        event,
+        checkpointAt: CHECKPOINT,
+      });
+      assert.equal(result.pending.phase, "await-clear");
+      assert.equal(result.changed, false);
+      assert.equal(result.canComplete, false);
+    }
+  });
+
+  it("rotates generation on head/base drift and meaningful invalidation without replay churn", () => {
+    const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 3, phase: "await-check", checkpointAt: CHECKPOINT };
+    const moved = advanceReattestation({
+      pending,
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0, { headSha: HEAD_B }),
+      event: {},
+      checkpointAt: CHECKPOINT,
+    });
+    assert.equal(moved.pending.generation, 4);
+    assert.equal(moved.pending.phase, "await-clear");
+    assert.equal(moved.pending.checkpointAt, null);
+
+    const retargeted = advanceReattestation({
+      pending,
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0, { baseRef: "feature-parent" }),
+      event: {},
+      checkpointAt: CHECKPOINT,
+    });
+    assert.equal(retargeted.pending.generation, 4);
+    assert.equal(retargeted.pending.baseRef, "feature-parent");
+
+    const invalidated = advanceReattestation({
+      pending,
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0),
+      event: {},
+      checkpointAt: CHECKPOINT,
+      invalidate: true,
+    });
+    assert.equal(invalidated.pending.generation, 4);
+    assert.equal(invalidated.pending.checkpointAt, null);
+    const duplicate = advanceReattestation({
+      pending: invalidated.pending,
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0),
+      event: {},
+      checkpointAt: CHECKPOINT,
+      invalidate: true,
+    });
+    assert.equal(duplicate.pending.generation, 4);
+    assert.equal(duplicate.changed, false);
+  });
+
+  it("starts a conservative generation-one episode when the safe integer counter is exhausted", () => {
+    const pending = {
+      version: 1,
+      headSha: HEAD_A,
+      baseRef: "dev",
+      generation: Number.MAX_SAFE_INTEGER,
+      phase: "await-check",
+      checkpointAt: CHECKPOINT,
+    };
+    const result = advanceReattestation({
+      pending,
+      legacy: false,
+      current: true,
+      readiness: readiness(0),
+      live: live(body0, { headSha: HEAD_B }),
+      event: {},
+      checkpointAt: CHECKPOINT,
+    });
+    assert.equal(result.pending.phase, "await-clear");
+    assert.equal(result.pending.generation, 1);
+    assert.equal(result.pending.checkpointAt, null);
+    assert.equal(parsePendingReattestation(result.pending).kind, "valid");
+  });
+
+  it("leaves partial current checklists waiting in both author phases", () => {
+    for (const phase of ["await-clear", "await-check"]) {
+      const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase, checkpointAt: CHECKPOINT };
+      const result = advanceReattestation({
+        pending,
+        legacy: false,
+        current: true,
+        readiness: readiness(2),
+        live: live("current checklist: 2/4"),
+        event: authorEdit("current checklist: 2/4", body0),
+        checkpointAt: CHECKPOINT,
+      });
+      assert.equal(result.pending.phase, phase);
+      assert.equal(result.canComplete, false);
+      assert.equal(result.changed, false);
+    }
+  });
+
+  it("invalidates an await-check proof when the managed body becomes malformed", () => {
+    const pending = { version: 1, headSha: HEAD_A, baseRef: "dev", generation: 2, phase: "await-check", checkpointAt: CHECKPOINT };
+    const result = advanceReattestation({
+      pending,
+      legacy: false,
+      current: false,
+      readiness: { present: true, total: 3, checked: 0, complete: false },
+      live: live("malformed managed checklist"),
+      event: authorEdit("malformed managed checklist", body0),
+      checkpointAt: CHECKPOINT,
+    });
+    assert.equal(result.pending.phase, "await-clear");
+    assert.equal(result.pending.generation, 3);
+    assert.equal(result.canComplete, false);
+  });
+
+  it("accepts an attestation only for the exact current body and identity", () => {
+    const attested = {
+      version: 1,
+      headSha: HEAD_A,
+      baseRef: "dev",
+      generation: 5,
+      phase: "attested",
+      attestedBodySha256: bodyDigest(body4),
+      checkpointAt: CHECKPOINT,
+    };
+    const accepted = advanceReattestation({
+      pending: attested,
+      legacy: false,
+      current: true,
+      readiness: readiness(4),
+      live: live(body4),
+      event: {},
+      checkpointAt: CHECKPOINT,
+    });
+    assert.equal(accepted.canComplete, true);
+    assert.equal(accepted.changed, false);
+
+    const changed = advanceReattestation({
+      pending: attested,
+      legacy: false,
+      current: true,
+      readiness: readiness(4),
+      live: live(body4 + " edited"),
+      event: {},
+      checkpointAt: CHECKPOINT,
+    });
+    assert.equal(changed.canComplete, false);
+    assert.equal(changed.pending.phase, "await-clear");
+    assert.equal(changed.pending.generation, 6);
+  });
+
+  it("fails closed for invalid live identity and hashes UTF-8 bodies deterministically", () => {
+    assert.equal(bodyDigest("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    const result = advanceReattestation({
+      pending: null,
+      legacy: true,
+      current: false,
+      readiness: readiness(4),
+      live: live("legacy", { headSha: "not-a-real-head" }),
+      event: {},
+      checkpointAt: CHECKPOINT,
+    });
+    assert.deepEqual(result, {
+      pending: null,
+      canComplete: false,
+      changed: false,
+      invalidIdentity: true,
+    });
   });
 });

@@ -14,6 +14,7 @@ import { getConfigDir, getConfigPath, readConfigDiagnostics } from "../config";
 import { readPid } from "../config/process-state";
 import { probeUncleanExitState } from "./status";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
+import { directLocalHttpFetch } from "../server/direct-local-http";
 import { BUN_RUNTIME_SOURCES } from "../lib/bun-runtime";
 import type { BunRuntimeSource } from "../lib/bun-runtime";
 import { maskAccountId } from "../lib/privacy";
@@ -41,7 +42,9 @@ import {
 } from "../codex/coordinator-doctor";
 import {
   inspectAbandonedResponseStateTemps,
+  inspectResponseSpillStorage,
   reclaimAbandonedResponseStateTemps,
+  type ResponseSpillDirInspection,
   type ResponseStateTempRecoveryResult,
 } from "../responses/state";
 import {
@@ -860,6 +863,34 @@ export function formatResponseTempLines(
   return lines;
 }
 
+/**
+ * Render the response-state spill section (testable without console capture).
+ *
+ * Always dry-run: doctor reports what the disk looks like, it never unlinks
+ * spill files. "Owned" counts union the live store and the persisted snapshot,
+ * so a file a restart would re-own is never reported as garbage.
+ */
+export function formatResponseSpillLines(result: ResponseSpillDirInspection): string[] {
+  // A truncated scan saw only a prefix of the directory, so zero orphans there is
+  // not a clean bill of health: the unscanned tail may still hold them.
+  if (result.orphanFiles === 0 && result.truncated) {
+    return [
+      `  !!  No orphaned response-state spill files in the first ${result.scanned} entries (${result.files} file(s), ${mb(result.bytes)} scanned).`,
+      "      Scan stopped at its entry budget; the rest of the directory was not checked.",
+    ];
+  }
+  if (result.orphanFiles === 0) {
+    return [`  ok  No orphaned response-state spill files (${result.files} file(s), ${mb(result.bytes)} on disk).`];
+  }
+  const lines = [
+    `  !!  ${result.orphanFiles} unreferenced response-state spill file(s), ${mb(result.orphanBytes)} reclaimable.`,
+    `      ${result.ownedFiles} file(s), ${mb(result.ownedBytes)} still owned by the store or the persisted snapshot.`,
+    "      The running proxy reclaims orphans on its periodic sweep; do not delete spill files manually.",
+  ];
+  if (result.truncated) lines.push("      Scan stopped at its entry budget; the real total is higher.");
+  return lines;
+}
+
 export function formatCoordinatorDoctorLines(diagnostic: CodexCoordinatorDiagnostic): string[] {
   const pathLine = diagnostic.path ? [`       path: ${diagnostic.path}`] : [];
   const evidenceLines = "evidence" in diagnostic && diagnostic.evidence
@@ -1073,12 +1104,15 @@ export interface DefaultModelExposure {
 
 /** Exactly the catalog's own `RawEntry` shape, so an on-disk row needs no conversion. */
 type CatalogVisibilityRow = Record<string, unknown>;
+type ExposedModelsFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+const EXPOSED_MODELS_MAX_ROWS = 10_000;
+const EXPOSED_MODEL_ID_MAX_LENGTH = 1_024;
 
 export interface DefaultModelExposureDeps {
   readConfiguredModelFn?: () => string | null;
   /** The live proxy doctor already resolved, or null/absent when none is running. */
   live?: LiveProxy | null;
-  fetchFn?: typeof fetch;
+  fetchFn?: ExposedModelsFetch;
   readCatalogModelsFn?: () => readonly CatalogVisibilityRow[] | null;
 }
 
@@ -1091,18 +1125,24 @@ export interface DefaultModelExposureDeps {
  * data-plane admission on a non-loopback bind (`isApiAuthRequired`), and doctor deliberately
  * holds no data-plane key, so a remote-bound proxy always falls through to the catalog.
  */
-async function fetchExposedModelIds(live: LiveProxy, fetchFn: typeof fetch): Promise<Set<string> | null> {
+async function fetchExposedModelIds(live: LiveProxy, fetchFn: ExposedModelsFetch): Promise<Set<string> | null> {
   try {
+    // directLocalHttpFetch never follows redirects and aborts past its byte cap, so the
+    // unbounded-body and redirect cases are covered below the JSON parse, not by options here.
     const res = await fetchFn(`http://${probeHostname(live.hostname)}:${live.port}/v1/models`, {
       signal: AbortSignal.timeout(EXPOSED_MODELS_TIMEOUT_MS),
     });
     if (!res.ok) return null;
     const body = await res.json() as { data?: unknown };
     if (!Array.isArray(body?.data)) return null;
+    if (body.data.length > EXPOSED_MODELS_MAX_ROWS) return null;
     const ids = new Set<string>();
     for (const row of body.data) {
       const id = (row as { id?: unknown } | null)?.id;
-      if (typeof id === "string" && id.length > 0) ids.add(id);
+      if (typeof id !== "string") return null;
+      if (id.length === 0) continue;
+      if (id.length > EXPOSED_MODEL_ID_MAX_LENGTH) return null;
+      ids.add(id);
     }
     return ids;
   } catch {
@@ -1158,7 +1198,7 @@ export async function collectDefaultModelExposure(
   }
 
   const live = deps.live ?? null;
-  const proxyIds = live ? await fetchExposedModelIds(live, deps.fetchFn ?? fetch) : null;
+  const proxyIds = live ? await fetchExposedModelIds(live, deps.fetchFn ?? directLocalHttpFetch) : null;
   const catalogIds = catalogExposedModelIds((deps.readCatalogModelsFn ?? defaultCatalogModels)());
   if (proxyIds === null && catalogIds === null) {
     return {
@@ -1288,6 +1328,9 @@ export async function runDoctor(args: string[] = []): Promise<void> {
       : inspectAbandonedResponseStateTemps(),
     reclaimTemps,
   )) console.log(line);
+
+  console.log("\nResponse-state spill files");
+  for (const line of formatResponseSpillLines(inspectResponseSpillStorage())) console.log(line);
 
   const orcaHome = collectOrcaCodexHomeDiagnostic();
   console.log("\nCodex app home targeting");

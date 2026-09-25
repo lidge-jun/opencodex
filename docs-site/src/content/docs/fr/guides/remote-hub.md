@@ -3,6 +3,8 @@ title: Déploiement Remote Hub
 description: Déployer un hub opencodex avec une gestion locale, Tailscale Serve et OAuth sans interface locale.
 ---
 
+Pour les liaisons SSH entre machines, consultez [Liaison distante](/fr/guides/remote-link/).
+
 Un hub conserve les identifiants fournisseur, le catalogue et l’usage sur un hôte. Les clients authentifiés appellent directement son plan de données. Le plan de gestion est distinct : son écoute facultative reste sur `127.0.0.1` et ne sert que le tableau de bord et `/api/*`. Elle ne sert jamais `/v1/*`, `/healthz`, `/readyz` ni WebSocket. Ne publiez pas le port `10101` et n’utilisez pas Tailscale Funnel.
 
 ## Rôles, connexion et sécurité
@@ -18,6 +20,7 @@ ocx sync
 Les diagnostics de disponibilité lisibles par un humain affichent les caractères de contrôle des valeurs du catalogue sous forme d’échappements hexadécimaux visibles, aussi bien à la première connexion que lorsque `ocx sync` refuse un catalogue de hub actualisé. Le statut JSON conserve la valeur de diagnostic d’origine.
 
 La clé client est écrite dans le fichier privé `service-api-token`, jamais dans `config.json`. En mode connecté, l’usage provient du hub et est filtré par `apiKeyId`; après déconnexion, il provient du stockage local. Il n’existe aucune réplication entre les deux.
+`ocx service uninstall` supprime le service local mais conserve une clé existante lorsque le client est connecté, que ses métadonnées de connexion sont invalides ou non concordantes, ou qu’un marqueur de connexion en attente correspond à la clé actuelle. Un marqueur valide pour une clé plus ancienne ne conserve pas une clé de service sans rapport. Si un marqueur est peu sûr, malformé ou illisible, le nettoyage du jeton ne peut pas être vérifié ; la commande avertit au lieu d’affirmer que la clé a été conservée. Utilisez `ocx disconnect` pour supprimer la clé locale et l’état d’un client connecté.
 
 Le jeton admin permet la gestion ordinaire mais ne peut jamais créer une session de consentement. Les actions de consentement exigent une `gui-session`, une Origin correspondante et un jeton CSRF. `Tailscale-User-Login` n’est fiable que sur l’entrée de gestion dédiée; renseignez les identités exactes dans `remoteGui.allowedTailscaleUsers`.
 

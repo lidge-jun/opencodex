@@ -6,6 +6,7 @@
  */
 import { describe, expect, test } from "bun:test";
 import { CloudChatError, type CloudChatEvent, type CloudChatRequest } from "../../src/adapters/devin/cloud-direct";
+import { clearCachedCatalog } from "../../src/adapters/devin/cloud-direct/catalog";
 import { streamChatEventsWithResetRetry } from "../../src/adapters/devin/cloud-direct/stated-reset-retry";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 
@@ -25,6 +26,15 @@ async function drain(source: AsyncGenerator<CloudChatEvent>): Promise<CloudChatE
   const out: CloudChatEvent[] = [];
   for await (const event of source) out.push(event);
   return out;
+}
+
+function eosEnvelope(payload: object): Buffer {
+  const body = Buffer.from(JSON.stringify(payload));
+  const envelope = Buffer.alloc(5 + body.length);
+  envelope[0] = 0x02;
+  envelope.writeUInt32BE(body.length, 1);
+  body.copy(envelope, 5);
+  return envelope;
 }
 
 describe("streamChatEventsWithResetRetry", () => {
@@ -117,6 +127,44 @@ describe("streamChatEventsWithResetRetry", () => {
     expect(out.map(e => e.kind)).toEqual(["text", "finish"]);
   });
 
+  test("waits the generated approximate retry delay and replays", async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const stream = () => {
+      calls += 1;
+      return calls === 1
+        ? exhausting("Cognition chat failed (resource_exhausted); retry after ~180s")()
+        : events({ kind: "finish", reason: "stop" } as CloudChatEvent);
+    };
+    const out = await drain(streamChatEventsWithResetRetry(REQ, {
+      stream,
+      sleep: async (ms) => { waits.push(ms); },
+    }));
+    expect(calls).toBe(2);
+    expect(waits).toEqual([180_000]);
+    expect(out.map(e => e.kind)).toEqual(["finish"]);
+  });
+
+  test("re-evaluates the delay when retry failures use different wording", async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const stream = () => {
+      calls += 1;
+      if (calls === 1) return exhausting("Your limit will reset in 35 seconds")();
+      if (calls === 2) {
+        return exhausting("Cognition chat failed (resource_exhausted); retry after ~180s")();
+      }
+      return events({ kind: "finish", reason: "stop" } as CloudChatEvent);
+    };
+    const out = await drain(streamChatEventsWithResetRetry(REQ, {
+      stream,
+      sleep: async (ms) => { waits.push(ms); },
+    }));
+    expect(calls).toBe(3);
+    expect(waits).toEqual([35_000, 180_000]);
+    expect(out.map(e => e.kind)).toEqual(["finish"]);
+  });
+
   test("does not replay once any event was yielded", async () => {
     const stream = () => (async function* (): AsyncGenerator<CloudChatEvent> {
       yield { kind: "text", text: "partial" } as CloudChatEvent;
@@ -186,6 +234,20 @@ describe("streamChatEventsWithResetRetry", () => {
     expect(calls).toBe(1);
   });
 
+  test("a zero wait allowance surfaces a stated reset without sleeping", async () => {
+    let calls = 0;
+    const stream = () => {
+      calls += 1;
+      return exhausting("Your limit will reset in 21 minutes")();
+    };
+    await expect(drain(streamChatEventsWithResetRetry(REQ, {
+      stream,
+      sleep: async () => { throw new Error("sleep must not run"); },
+      maxWaitMs: 0,
+    }))).rejects.toThrow("21 minutes");
+    expect(calls).toBe(1);
+  });
+
   test("a 21-minute stated window replays under the default ceiling", async () => {
     // Observed upstream windows reach ~21 minutes; the default ceiling is 30.
     const waits: number[] = [];
@@ -246,5 +308,98 @@ describe("streamChatEventsWithResetRetry", () => {
       stream,
       sleep: async () => {},
     }))).rejects.toThrow("socket reset");
+  });
+
+  test("the stated delay survives the real content-free trailer error", async () => {
+    // The thrown trailer error no longer carries upstream text, so a fabricated
+    // CloudChatError cannot prove the contract: this drives the real stream
+    // through a Connect EOS trailer and expects the typed retryAfterSeconds the
+    // parser preserved to schedule the replay.
+    const credential = "devin-session-token$header.payload.signature";
+    const chatEnvelopes = [
+      eosEnvelope({
+        error: {
+          code: "resource_exhausted",
+          message: `Your limit will reset in 35 seconds. ${credential}`,
+        },
+      }),
+      eosEnvelope({}),
+    ];
+    let chatCalls = 0;
+    const originalFetch = globalThis.fetch;
+    clearCachedCatalog();
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      // Everything except the chat POST fails: the catalog pre-flight mints a
+      // user_jwt first, so gating on GetChatMessage keeps auxiliary RPCs from
+      // consuming a chat envelope.
+      if (!url.includes("GetChatMessage")) {
+        return new Response("catalog unavailable", { status: 503 });
+      }
+      const envelope = chatEnvelopes[Math.min(chatCalls, chatEnvelopes.length - 1)];
+      chatCalls += 1;
+      return new Response(envelope, { status: 200 });
+    }) as typeof fetch;
+    const waits: number[] = [];
+    try {
+      const out = await drain(streamChatEventsWithResetRetry(
+        { apiKey: "k", modelUid: "swe-2", messages: [] } as unknown as CloudChatRequest,
+        { sleep: async (ms) => { waits.push(ms); } },
+      ));
+      expect(chatCalls).toBe(2);
+      expect(waits).toEqual([35_000]);
+      expect(out).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearCachedCatalog();
+    }
+  });
+
+  test("a stated window beyond the ceiling still reports the wait outward", async () => {
+    // When the stated delay exceeds the local cap the original trailer error
+    // propagates. Its message must carry the seconds in our own words so the
+    // client can tell how long to wait — without the raw trailer text, which
+    // can reflect the request credential.
+    const credential = "devin-session-token$header.payload.signature";
+    const chatEnvelopes = [
+      eosEnvelope({
+        error: {
+          code: "resource_exhausted",
+          message: `Your limit will reset in 35 seconds. ${credential}`,
+        },
+      }),
+    ];
+    let chatCalls = 0;
+    const originalFetch = globalThis.fetch;
+    clearCachedCatalog();
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.includes("GetChatMessage")) {
+        return new Response("catalog unavailable", { status: 503 });
+      }
+      const envelope = chatEnvelopes[Math.min(chatCalls, chatEnvelopes.length - 1)];
+      chatCalls += 1;
+      return new Response(envelope, { status: 200 });
+    }) as typeof fetch;
+    try {
+      let caught: unknown;
+      try {
+        await drain(streamChatEventsWithResetRetry(
+          { apiKey: "k", modelUid: "swe-2", messages: [] } as unknown as CloudChatRequest,
+          { sleep: async () => {}, maxWaitMs: 10_000 },
+        ));
+      } catch (error) {
+        caught = error;
+      }
+      expect(chatCalls).toBe(1);
+      expect(caught).toBeInstanceOf(CloudChatError);
+      const message = (caught as Error).message;
+      expect(message).toContain("retry after ~35s");
+      expect(message).not.toContain(credential);
+      expect(message).not.toContain("Your limit will reset");
+    } finally {
+      globalThis.fetch = originalFetch;
+      clearCachedCatalog();
+    }
   });
 });

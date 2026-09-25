@@ -182,6 +182,12 @@ Windows 任务计划程序安装使用普通进程优先级（`Priority=4`）。
 可能在 CPU 竞争时延迟健康检查响应，导致进程仍存活时托盘显示 Offline。升级后运行 `ocx service repair`，
 即可迁移该注册优先级并重启服务；过程中可能需要批准 UAC 提示。已设为普通或高优先级时，不会仅因优先级而重新注册。
 
+在 Linux 上，systemd unit 调用安装时在 `PATH` 中找到的第一个常规可执行 `ocx` 文件，而不是已安装包目录内的 Bun 与 CLI 路径。**mise**、**asdf** 等版本管理器会安装到带版本号的目录并在升级时删除旧目录；其稳定的 shim 会让 unit 持续解析。没有 `ocx` 启动器的源码检出保留直接的 Bun + CLI 形式。Bun 启动前选定的可信 `OPENCODEX_BUN_PATH` 会透过 shim 保留；包内捆绑的 Bun 路径在升级后会被重新发现。
+
+在 macOS 上，launchd 则改用安装或修复时选定的包内 Bun 与 CLI 路径。这可防止可变的 PATH shim 在后续重启时获得服务 API 令牌和已配置的代理环境。升级版本管理器安装后，请在重启服务前运行 `ocx service repair` 刷新这些路径。
+
+在此变更之前安装的定义仍带有旧的带版本路径，无法自行迁移——一旦旧可执行文件被删除，就没有 opencodex 代码运行来修复它。升级后请运行一次 `ocx service repair`。之后 Linux 服务启动会跟随启动器；macOS 的 repair 会把新的包路径写入 launchd 定义。外部升级不会替换已在运行的代理：当已安装的 CLI 比运行中的代理更新时，运行 `ocx service restart` 让新构建提供服务。在 macOS 上，此处的 `repair` 并不够：定义没有变化，而不改变任何内容的 repair 不会重新加载任何内容。反之若代理更新，请按 [`ocx status`](#ocx-status---json) 中的说明检查 CLI 安装与 `PATH`。
+
 | 子命令 | 操作 |
 | --- | --- |
 | none | 服务不存在时安装并启动；已存在时执行 `repair`。正常的 Windows 任务计划程序定义会复用；过时定义可能会重新注册并需要提升权限。 |
@@ -260,6 +266,7 @@ ocx codex-shim uninstall
 
 安装并控制 Windows 状态托盘图标。它会在 Windows 登录时启动，并提供一键代理控制。`start` 和 `stop` 只控制图标本身；要控制代理，请使用其菜单。`--no-start` 适用于 `install`，会安装托盘但不会立即启动。
 已弃用：OpenCodex 桌面应用在 Windows、macOS 和 Linux 上提供托盘；没有桌面应用的安装仍可使用 `ocx tray`。
+当发现有更新的包版本时，托盘会在在线、警告或离线图标上显示蓝点，并显示 **Update available**。托盘大约每分钟检查一次本地缓存的徽标；结果过期或不可用时会移除蓝点。该菜单项会打开仪表板，你可以在那里启动包更新。它不会自动安装。
 
 ## 仪表盘
 
@@ -272,6 +279,8 @@ ocx codex-shim uninstall
 `ocx update` 更新的是 OpenCodex 本身，而不是 Codex CLI。请使用 [system 检查命令](/zh-cn/reference/cli/agents/)中的 `ocx system codex-cli-update check`，对已配置的 Codex CLI 候选项进行有界、只读的 provenance 检查。该命令不会查询 package registry，也不会安装更新。
 
 ### `ocx update [--tag latest|preview]`
+
+当 OpenCodex 由 mise 安装时，此命令会在停止代理或修改软件包文件之前以失败状态退出，并使用经过验证的本地 mise 别名显示 `mise upgrade <tool>`。更新检查仍然可用，并会报告该安装由外部管理。无法读取或不一致的 mise 所有权元数据也会阻止修改，且不会猜测工具名称；`--tag preview` 绝不会更改 mise 中配置的选择。
 
 从 npm 自更新 opencodex。稳定版安装使用 `@latest`；预览版安装保持在 `@preview`，除非你传入 `--tag latest|preview`。它会检测源码检出，并提示你改为运行 `git pull && bun install`；如果你已经是该标签的最新版本，则不会执行任何操作。对于 npm 安装，它会在停止任何进程之前，对 Unix 缓存的所有权和访问权限执行有界检查。嵌套符号链接会通过 `lstat` 检查但不会跟随；Windows 会明确跳过这项仅适用于 Unix 的检查。检查失败时，更新会在托盘和代理仍运行的情况下中止。随后才会在替换文件之前停止正在运行的代理；已安装的服务会自动重建并启动，而前台安装则会打印 `ocx start` 作为下一步。持久化前，仪表板更新记录会隐去用户配置文件/缓存路径以及 UID/GID 值。
 

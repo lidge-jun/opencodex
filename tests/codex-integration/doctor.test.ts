@@ -16,6 +16,7 @@ import {
   chatgptPublicEndpointHint,
   collectWslDualInstall,
   fetchServiceMemory,
+  formatResponseSpillLines,
   formatResponseTempLines,
   formatServiceMemoryLines,
   parseProcessEnvBlock,
@@ -822,6 +823,86 @@ describe("doctor abandoned response-state temps", () => {
   });
 });
 
+describe("doctor response-state spill report", () => {
+  const result = (over: Partial<Parameters<typeof formatResponseSpillLines>[0]> = {}) => ({
+    scanned: 0, truncated: false, files: 0, bytes: 0,
+    ownedFiles: 0, ownedBytes: 0, orphanFiles: 0, orphanBytes: 0, ...over,
+  });
+
+  test("a clean directory says so", () => {
+    expect(formatResponseSpillLines(result({ files: 5, bytes: 48 * 1024 * 1024 })))
+      .toEqual(["  ok  No orphaned response-state spill files (5 file(s), 48MB on disk)."]);
+  });
+
+  test("orphan candidates are reported as reclaimable, never deleted", () => {
+    const lines = formatResponseSpillLines(result({
+      files: 10, bytes: 96 * 1024 * 1024,
+      ownedFiles: 6, ownedBytes: 72 * 1024 * 1024,
+      orphanFiles: 4, orphanBytes: 24 * 1024 * 1024,
+    }));
+    expect(lines[0]).toContain("4 unreferenced response-state spill file(s)");
+    expect(lines[0]).toContain("24MB");
+    const body = lines.join("\n");
+    expect(body).toContain("6 file(s), 72MB still owned");
+    expect(body).toContain("do not delete spill files manually");
+  });
+
+  test("a truncated scan says the total is a floor", () => {
+    const lines = formatResponseSpillLines(result({
+      scanned: 4096, truncated: true, files: 4096, bytes: 512 * 1024 * 1024,
+      orphanFiles: 4000, orphanBytes: 500 * 1024 * 1024,
+    })).join("\n");
+    expect(lines).toContain("the real total is higher");
+  });
+
+  test("a truncated scan with no orphans in the prefix is not reported clean", () => {
+    const lines = formatResponseSpillLines(result({
+      scanned: 4096, truncated: true, files: 4096, bytes: 512 * 1024 * 1024,
+    }));
+    expect(lines[0]).toStartWith("  !!");
+    expect(lines[0]).toContain("in the first 4096 entries");
+    expect(lines.join("\n")).toContain("the rest of the directory was not checked");
+  });
+});
+
+describe("doctor spill report wiring (end to end)", () => {
+  // The formatter tests above cannot observe the directory. This covers the call site:
+  // runDoctor must report a seeded orphan and must never delete it.
+  let tempHome: string;
+  let previousHome: string | undefined;
+  let logged: string[];
+  const realLog = console.log;
+
+  beforeEach(() => {
+    previousHome = process.env.OPENCODEX_HOME;
+    tempHome = join(tmpdir(), `ocx-doctor-spill-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    mkdirSync(join(tempHome, "responses-state-spill"), { recursive: true });
+    process.env.OPENCODEX_HOME = tempHome;
+    logged = [];
+    console.log = (...parts: unknown[]) => { logged.push(parts.join(" ")); };
+  });
+  afterEach(() => {
+    console.log = realLog;
+    if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousHome;
+    removeTreeWithRetry(tempHome);
+  });
+
+  test("reports an unreferenced spill file and leaves it on disk", async () => {
+    const name = `resp-dead.${"a".repeat(12)}.${"b".repeat(24)}.1.1.spill.json`;
+    const path = join(tempHome, "responses-state-spill", name);
+    writeFileSync(path, "stale spill payload");
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1_000);
+    utimesSync(path, old, old);
+
+    await runDoctor([]);
+    expect(existsSync(path)).toBe(true);
+    const out = logged.join("\n");
+    expect(out).toContain("Response-state spill files");
+    expect(out).toContain("1 unreferenced response-state spill file(s)");
+  });
+});
+
 describe("doctor version skew projection", () => {
   test.each([
     ["2.42.0", "2.10.1-preview.20260805", "the running proxy is older"],
@@ -1131,6 +1212,71 @@ describe("doctor Codex default model exposure (#4646)", () => {
     expect(result.source).toBe("catalog");
   });
 
+  test("an implausibly large proxy model list falls back to the catalog", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live,
+      fetchFn: respondWith({ data: Array.from({ length: 10_001 }, () => ({ id: "gpt-5.6-sol" })) }),
+      readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+    });
+
+    expect(result.status).toBe("exposed");
+    expect(result.source).toBe("catalog");
+  });
+
+  test("an implausibly long proxy model id falls back to the catalog", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live,
+      fetchFn: respondWith({ data: [{ id: "x".repeat(1_025) }] }),
+      readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+    });
+
+    expect(result.status).toBe("exposed");
+    expect(result.source).toBe("catalog");
+  });
+
+  test("the row-count and model-id limits accept their exact boundaries", async () => {
+    const boundaryId = "x".repeat(1_024);
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => boundaryId,
+      live,
+      fetchFn: respondWith({
+        data: [{ id: boundaryId }, ...Array.from({ length: 9_999 }, () => ({ id: "" }))],
+      }),
+      readCatalogModelsFn: () => null,
+    });
+
+    expect(result.status).toBe("exposed");
+    expect(result.source).toBe("proxy");
+  });
+
+  test("a proxy row with a missing or non-string id makes the response unreadable", async () => {
+    for (const malformed of [{}, { id: 42 }]) {
+      const result = await collectDefaultModelExposure({
+        readConfiguredModelFn: () => "gpt-5.6-sol",
+        live,
+        fetchFn: respondWith({ data: [{ id: "gpt-5.6-sol" }, malformed] }),
+        readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+      });
+
+      expect(result.status).toBe("exposed");
+      expect(result.source).toBe("catalog");
+    }
+  });
+
+  test("a malformed proxy response with no catalog is undeterminable", async () => {
+    const result = await collectDefaultModelExposure({
+      readConfiguredModelFn: () => "gpt-5.6-sol",
+      live,
+      fetchFn: respondWith({ data: [{ id: "gpt-5.6-sol" }, {}] }),
+      readCatalogModelsFn: () => null,
+    });
+
+    expect(result.status).toBe("undeterminable");
+    expect(result.source).toBeNull();
+  });
+
   test("a retained hide row is not exposure: the pin Desktop can still show is still reported", async () => {
     const result = await collectDefaultModelExposure({
       readConfiguredModelFn: () => "gpt-5.6-terra",
@@ -1145,5 +1291,72 @@ describe("doctor Codex default model exposure (#4646)", () => {
     expect(result.status).toBe("not_exposed");
     expect(result.source).toBe("catalog");
     expect(result.detail).not.toContain("/v1/models");
+  });
+
+  test("the default live fetch reads locally and falls back when the response crosses its byte cap", async () => {
+    let requestCount = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        requestCount += 1;
+        if (requestCount === 1) return Response.json({ data: [{ id: "gpt-5.6-sol" }] });
+        return Response.json({
+          data: [{ id: "gpt-5.6-sol" }],
+          padding: "x".repeat(8 * 1024 * 1024),
+        });
+      },
+    });
+
+    try {
+      const liveServer = { pid: 4321, port: server.port, source: "config" as const };
+      const fromProxy = await collectDefaultModelExposure({
+        readConfiguredModelFn: () => "gpt-5.6-sol",
+        live: liveServer,
+        readCatalogModelsFn: () => null,
+      });
+      expect(fromProxy.status).toBe("exposed");
+      expect(fromProxy.source).toBe("proxy");
+
+      const fromCatalog = await collectDefaultModelExposure({
+        readConfiguredModelFn: () => "gpt-5.6-sol",
+        live: liveServer,
+        readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+      });
+      expect(fromCatalog.status).toBe("exposed");
+      expect(fromCatalog.source).toBe("catalog");
+      expect(requestCount).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("the default live fetch does not follow redirects", async () => {
+    let redirectedRequests = 0;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        if (new URL(request.url).pathname === "/redirected") {
+          redirectedRequests += 1;
+          return Response.json({ data: [{ id: "gpt-5.6-sol" }] });
+        }
+        return Response.redirect(new URL("/redirected", request.url), 302);
+      },
+    });
+
+    try {
+      const result = await collectDefaultModelExposure({
+        readConfiguredModelFn: () => "gpt-5.6-sol",
+        live: { pid: 4321, port: server.port, source: "config" },
+        readCatalogModelsFn: () => [{ slug: "gpt-5.6-sol", visibility: "list" }],
+      });
+
+      expect(result.status).toBe("exposed");
+      expect(result.source).toBe("catalog");
+      expect(redirectedRequests).toBe(0);
+    } finally {
+      await server.stop(true);
+    }
   });
 });

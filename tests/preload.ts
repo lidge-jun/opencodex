@@ -28,7 +28,7 @@
  */
 import { afterAll } from "bun:test";
 import { isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
-import { createIsolatedTestEnvironment } from "../scripts/test";
+import { createIsolatedTestEnvironment, LIVE_INSTALL_CREDENTIAL_ENV } from "../scripts/test";
 import {
   acquireTestRunLock,
   resolveBareTestRunIdentity,
@@ -47,6 +47,8 @@ const isolated = createIsolatedTestEnvironment();
 for (const [key, value] of Object.entries(isolated.env)) {
   if (value !== undefined) process.env[key] = value;
 }
+// The sandbox drops these from its env, but this process started with them, so remove them here.
+for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete process.env[name];
 
 // Arm the guard once the sandbox is in place, and BEFORE the run lock.
 //
@@ -72,6 +74,7 @@ for (const [key, value] of Object.entries(isolated.env)) {
 process.env.OCX_TEST_HOME_GUARD = "1";
 // Lets a test assert one preload per process rather than assuming Bun's scheduling.
 process.env.OCX_TEST_PRELOAD_PID = String(process.pid);
+process.env.OCX_DISABLE_UPDATE_CHECK = "1";
 
 if (!isTestHomeGuardArmed() || !protectedHomeForTests()) {
   throw new Error("test home guard failed to arm; refusing to run tests unprotected");
@@ -117,16 +120,24 @@ if (process.platform === "win32" && lockPath && runLock.owner) {
 
 // Clean up only the root this preload created. The `bun run test` wrapper owns its own.
 // Bun test workers do not reliably run process `exit` handlers, so the test lifecycle hook
-// is primary; the process hook remains a best-effort fallback for setup failures.
-let cleanupComplete = false;
-const cleanupIsolatedRoot = () => {
-  if (cleanupComplete) return;
-  try {
-    isolated.cleanup();
-    cleanupComplete = true;
-  } catch {
-    // The wrapper contains this root, and a later bare run reclaims it after the grace period.
-  }
-};
-afterAll(cleanupIsolatedRoot);
-process.on("exit", cleanupIsolatedRoot);
+// is primary; the process hook retries only an already-drained root. Setup failures
+// leave an ownership-marked root for stale recovery rather than blocking on child handles.
+// Load cleanup dependencies only AFTER home isolation, guard arming, and run-lock admission.
+const { createTestSandboxCleanup } = await import("./helpers/test-sandbox-cleanup");
+const { flushWindowsSecretAclReapsBeforeRemoval, windowsSecretAclReapPendingAtOrBelow } =
+  await import("../src/lib/windows-secret-acl");
+// Resolve cleanup owners during protected setup, not for the first time inside a timed
+// afterAll hook. Cleanup must drain existing producers rather than initialize their graph.
+const { flushConfigDirHardeningForTests } = await import("../src/config/paths");
+const { flushNativeMainStartupReleases } = await import("../src/codex/native-profile-startup");
+const cleanup = createTestSandboxCleanup({
+  drainProducers: async () => {
+    await flushNativeMainStartupReleases();
+    await flushConfigDirHardeningForTests();
+  },
+  waitForReaps: () => flushWindowsSecretAclReapsBeforeRemoval(isolated.root),
+  hasPendingReaps: () => windowsSecretAclReapPendingAtOrBelow(isolated.root),
+  remove: () => isolated.cleanup(),
+});
+afterAll(cleanup.afterAll);
+process.on("exit", cleanup.onExit);

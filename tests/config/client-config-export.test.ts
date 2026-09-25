@@ -320,6 +320,17 @@ describe("Pi serializer (accept criterion 2)", () => {
     expect(buildClientContribution("pi", ctx()).fragments[0]!.value).toEqual(provider);
   });
 
+  test("tells Pi to send system instead of developer, on export and contribution alike (#5664)", () => {
+    // Pi sends `developer` for reasoning models; the native Chat route forwards roles verbatim,
+    // and upstreams such as DashScope compatible-mode reject that role with a 400.
+    expect(piConfig().providers.opencodex!.compat).toEqual({
+      sendSessionAffinityHeaders: true,
+      supportsDeveloperRole: false,
+    });
+    expect(buildClientContribution("pi", ctx()).fragments[0]!.value)
+      .toHaveProperty("compat.supportsDeveloperRole", false);
+  });
+
   test("cost is omitted on every entry — zeros would assert routed models are free", () => {
     for (const model of piConfig().providers.opencodex!.models) {
       expect(model).not.toHaveProperty("cost");
@@ -941,7 +952,8 @@ describe("EXPORT_CLIENTS registry", () => {
       "api": "openai-completions",
       "apiKey": "opencodex-loopback",
       "compat": {
-        "sendSessionAffinityHeaders": true
+        "sendSessionAffinityHeaders": true,
+        "supportsDeveloperRole": false
       },
       "models": [
         {

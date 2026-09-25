@@ -8,6 +8,18 @@ is scoped to canonical ChatGPT Responses forwarding; other source-area behavior 
 The shared hosted-tool policy has no Codex Spark-specific branch. Kiro continues to use its
 provider capabilities below; see [Responses compatibility](../transports/responses.md#responses-httpsse).
 
+## Kiro CLI executable resolution
+
+Forced and add-account login spawn the local CLI, so `resolveKiroCliExecutable` in
+`src/oauth/kiro-credentials.ts` decides which file runs with credential-flow arguments. The
+canonical `kiro-cli` name is tried on `PATH` and then in the platform install locations. Only
+after every canonical candidate misses, and only on Windows, does the short `kiro.exe` name count,
+and only inside the two dedicated `Kiro-Cli` folders (`%LOCALAPPDATA%` and `Program Files`) when
+their base is a fully qualified drive path. A short name is never resolved from `PATH` or from the
+shared POSIX bin directories (`~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin`), where an
+unrelated `kiro` such as the Kiro IDE launcher can live. Coverage:
+`tests/providers/kiro/kiro-windows-cli-executable-path.test.ts`.
+
 ## Kiro client parallel-tool hint
 
 Kiro's wire remains serialized even when an OpenAI Responses client sends
@@ -26,7 +38,7 @@ reserves the private completion tool. Meta Muse 64-character MCP aliases live in
 
 Kiro shares the Responses freeform restoration boundary in
 `src/responses/apply-patch-envelope.ts`: contractual `input` wrappers are unwrapped, while alternate
-field and outer-fence recovery is limited to unambiguous bare `exec` and `apply_patch` bodies.
+field and outer-fence recovery is limited to unambiguous bare or `default.`-prefixed `exec` and `apply_patch` bodies.
 
 Kiro refuses structured output and tolerates every other Responses `text` member. `text.format`
 of type `json_schema` or `json_object` is a contract the CodeWhisperer wire cannot honour, so the
@@ -36,6 +48,14 @@ because `buildKiroPayload` composes `conversationState` from parsed fields and n
 raw body.
 
 > Decision record: [ADR-0061](../decisions/ADR-0061-kiro-responses-text-controls.md)
+
+## Bounded fallback HTTP errors
+
+When a first Kiro stream needs a completion fallback, the fallback response's non-success
+body is read through the shared display-safe bounded reader with the attempt's abort signal.
+The adapter emits an error with the upstream status and does not emit a successful completion.
+A body that exceeds the reader's limit is cancelled and cannot contribute unbounded text to
+the error message. Coverage: `tests/providers/kiro/kiro-fallback-error-body.test.ts`.
 
 ## Kiro reasoning round-trip (`signature`)
 

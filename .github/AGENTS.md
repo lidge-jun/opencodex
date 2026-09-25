@@ -22,5 +22,5 @@ change requires explicit security review under `MAINTAINERS.md`.
 
 - Inspect the complete workflow diff, including event triggers, permissions, conditions, interpolation, and shell behavior.
 - Run the local commands represented by changed workflow steps where possible.
-- Run `bun run prepush` for CI, release, dependency, packaging, or cross-platform workflow changes.
+- Follow the root validation policy: run the suite by default; if a full run is too costly, run at least focused regression tests and document the reason and remaining coverage. Required CI checks still apply before merge.
 - Do not claim the workflow itself passed until GitHub Actions reports success for the exact commit.

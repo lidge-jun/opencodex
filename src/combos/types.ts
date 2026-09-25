@@ -1,6 +1,6 @@
 import { isCodexReasoningEffort } from "../reasoning-effort";
 import { SUPPORTED_NATIVE_OPENAI_SLUGS } from "../codex/catalog/native-models";
-import type { OcxComboConfig, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
+import type { OcxComboConfig, OcxComboCooldownWaitPolicy, OcxComboDefaultEffort, OcxComboDefaultEffortMode, OcxComboReasoningEffortMode, OcxComboStrategy, OcxComboTarget, OcxProviderConfig } from "../types";
 import { COMBO_NAMESPACE, isValidComboId, targetKey } from "./identifiers";
 
 export const COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS = 0;
@@ -20,11 +20,22 @@ export interface ComboValidationIssue {
   message: string;
 }
 
+export interface NormalizedComboTarget {
+  provider: string;
+  model: string;
+  weight: number;
+  /** Emergency-only target, deferred under `cooldownWaitPolicy` (#5691). */
+  lastResort: boolean;
+  reasoningEfforts?: OcxComboDefaultEffort[];
+}
+
 export interface NormalizedComboConfig {
   strategy: OcxComboStrategy;
   stickyLimit: number;
   cooldownMs?: number;
   waitForCooldownMs: number;
+  /** `before-last-resort` defers lastResort targets while a normal one can be waited out (#5691). */
+  cooldownWaitPolicy: OcxComboCooldownWaitPolicy | null;
   defaultEffort: OcxComboDefaultEffort | null;
   /** Client-precedence policy; `fallback` preserves legacy behavior. */
   defaultEffortMode: OcxComboDefaultEffortMode;
@@ -38,7 +49,7 @@ export interface NormalizedComboConfig {
   nativeAlias: boolean;
   /** Display-only label for the catalog row, or null when unset. */
   displayName: string | null;
-  targets: Array<Required<OcxComboTarget>>;
+  targets: NormalizedComboTarget[];
 }
 
 /**
@@ -140,8 +151,9 @@ export function comboConfigIssues(
     && body.strategy !== "round-robin"
     && body.strategy !== "random"
     && body.strategy !== "least-used"
-    && body.strategy !== "reset-window") {
-    issues.push({ path: ["strategy"], message: 'strategy must be "failover", "round-robin", "random", "least-used", or "reset-window"' });
+    && body.strategy !== "reset-window"
+    && body.strategy !== "jev") {
+    issues.push({ path: ["strategy"], message: 'strategy must be "failover", "round-robin", "random", "least-used", "reset-window", or "jev"' });
   }
   if (body.stickyLimit !== undefined
     && (typeof body.stickyLimit !== "number" || !Number.isInteger(body.stickyLimit)
@@ -160,6 +172,13 @@ export function comboConfigIssues(
       || body.waitForCooldownMs < 0
       || body.waitForCooldownMs > 600_000)) {
     issues.push({ path: ["waitForCooldownMs"], message: "waitForCooldownMs must be an integer from 0 to 600000" });
+  }
+  if (body.cooldownWaitPolicy !== undefined && body.cooldownWaitPolicy !== null
+    && body.cooldownWaitPolicy !== "before-last-resort") {
+    issues.push({
+      path: ["cooldownWaitPolicy"],
+      message: 'cooldownWaitPolicy must be "before-last-resort" when set',
+    });
   }
   if (body.defaultEffort !== undefined
     && body.defaultEffort !== null
@@ -260,6 +279,11 @@ export function comboConfigIssues(
         path: ["targets", i, "provider"],
         message: `targets[${i}].provider "${provider}" is not configured`,
       });
+    } else if (providers[provider]?.adapter === "jev-decision") {
+      issues.push({
+        path: ["targets", i, "provider"],
+        message: `targets[${i}].provider "${provider}" is a decision service and cannot be a model target`,
+      });
     } else {
       configuredProviderCount += 1;
       if (providers[provider]?.disabled !== true) enabledProviderCount += 1;
@@ -275,6 +299,38 @@ export function comboConfigIssues(
       issues.push({
         path: ["targets", i, "weight"],
         message: `targets[${i}].weight must be an integer from 1 to 10000`,
+      });
+    }
+    if (target.reasoningEfforts !== undefined) {
+      if (!Array.isArray(target.reasoningEfforts) || target.reasoningEfforts.length === 0) {
+        issues.push({
+          path: ["targets", i, "reasoningEfforts"],
+          message: `targets[${i}].reasoningEfforts must be a non-empty array`,
+        });
+      } else {
+        const seenEfforts = new Set<OcxComboDefaultEffort>();
+        for (let effortIndex = 0; effortIndex < target.reasoningEfforts.length; effortIndex++) {
+          const effort = target.reasoningEfforts[effortIndex];
+          if (typeof effort !== "string" || !isCodexReasoningEffort(effort)) {
+            issues.push({
+              path: ["targets", i, "reasoningEfforts", effortIndex],
+              message: `targets[${i}].reasoningEfforts[${effortIndex}] must be one of: low, medium, high, xhigh, max, ultra`,
+            });
+          } else if (seenEfforts.has(effort as OcxComboDefaultEffort)) {
+            issues.push({
+              path: ["targets", i, "reasoningEfforts", effortIndex],
+              message: `targets[${i}].reasoningEfforts must not contain duplicates`,
+            });
+          } else {
+            seenEfforts.add(effort as OcxComboDefaultEffort);
+          }
+        }
+      }
+    }
+    if (target.lastResort !== undefined && typeof target.lastResort !== "boolean") {
+      issues.push({
+        path: ["targets", i, "lastResort"],
+        message: `targets[${i}].lastResort must be a boolean`,
       });
     }
 
@@ -318,6 +374,7 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
     stickyLimit: raw.stickyLimit ?? 1,
     cooldownMs: raw.cooldownMs,
     waitForCooldownMs: raw.waitForCooldownMs ?? COMBO_DEFAULT_WAIT_FOR_COOLDOWN_MS,
+    cooldownWaitPolicy: raw.cooldownWaitPolicy === "before-last-resort" ? "before-last-resort" : null,
     defaultEffort,
     defaultEffortMode: raw.defaultEffortMode === "force" && defaultEffort !== null ? "force" : "fallback",
     reasoningEffortMode: raw.reasoningEffortMode === "adaptive" ? "adaptive" : "strict",
@@ -329,6 +386,10 @@ export function normalizeComboConfig(raw: OcxComboConfig): NormalizedComboConfig
       provider: target.provider.trim(),
       model: target.model.trim(),
       weight: target.weight ?? 1,
+      ...(target.reasoningEfforts !== undefined
+        ? { reasoningEfforts: [...target.reasoningEfforts] }
+        : {}),
+      lastResort: target.lastResort === true,
     })),
   };
 }

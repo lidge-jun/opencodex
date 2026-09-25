@@ -9,6 +9,7 @@ import { isEagerRelaySseResponse } from "../../src/server/relay";
 import { isWin32EagerRewrite } from "../../src/lib/bun-stream-caps";
 import { fetchWithTransientRetry, isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import { codexWsExchange } from "../../src/server/responses/codex-ws-exchange";
+import { shouldRetryCodexPoolAccountModel400 } from "../../src/server/responses/core-codex-account";
 import { CodexWsSession } from "../../src/server/responses/codex-ws-session";
 import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
 import { readCodexWsStage } from "../../src/server/responses/codex-ws-wire";
@@ -132,8 +133,7 @@ describe("shouldUseCodexWsUpstream", () => {
   });
 
   test("keeps configured provider endpoints on bounded HTTP SSE", () => {
-    // The canonical backend ignores the flag.
-    expect(shouldUseCodexWsUpstream(CODEX_URL, streamingInit(), false)).toBe(true);
+    expect(shouldUseCodexWsUpstream(CODEX_URL, streamingInit(), false)).toBe(false);
     // Bun cannot reject oversized messages before assembling them, so even an
     // opted-in provider cannot join the WebSocket lane.
     expect(shouldUseCodexWsUpstream("https://sub2api.example.com/v1/responses", streamingInit(), true)).toBe(false);
@@ -273,19 +273,20 @@ describe("providerFetch routing", () => {
     } as unknown as OcxProviderConfig;
     const wrapped = providerFetch(provider, BOUNDED_WS_RUNTIME);
 
-    // Eligible: WS adapter serves it, base fetch untouched.
     const wsResponse = await wrapped(CODEX_URL, streamingInit());
     expect(wsResponse.headers.get("content-type")).toContain("text/event-stream");
     expect(baseCalls).toHaveLength(0);
     expect(FakeWebSocket.instances).toHaveLength(1);
 
-    // Non-streaming body: base fetch.
     await wrapped(CODEX_URL, { method: "POST", body: JSON.stringify({ model: "m" }) });
-    // Different host: base fetch.
     await wrapped("https://api.openai.com/v1/responses", streamingInit());
-    // Request-object input: base fetch (WS path only handles string URLs).
     await wrapped(new Request(CODEX_URL, streamingInit() as RequestInit));
     expect(baseCalls).toHaveLength(3);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    provider.upstreamWebsocket = false;
+    const httpOnly = providerFetch(provider, BOUNDED_WS_RUNTIME);
+    expect(await (await httpOnly(CODEX_URL, streamingInit())).text()).toBe("base");
+    expect(baseCalls).toHaveLength(4);
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
@@ -898,6 +899,14 @@ describe("codexWsUpstreamFetch", () => {
     }
 
     // Independent oracle: openai/codex d2d5b702, responses_websocket.rs:1016-1064
+    test("a wrapped Astra refusal reaches the alternate-account recovery predicate", async () => {
+      const message = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
+      const response = await receive({ type: "error", status_code: 400,
+        error: { type: "invalid_request_error", code: "invalid_request_error", message } });
+      expect(await shouldRetryCodexPoolAccountModel400(response, "gpt-6-astra")).toBe(true);
+      expect(await response.json()).toEqual({ error: { type: "invalid_request_error", code: "invalid_request_error", message } });
+    });
+
     // explicitly accepts numeric window-minutes as the HTTP header string "15".
     test.each(["status", "status_code"])("returns %s 429 as bounded HTTP JSON with scalar quota headers", async field => {
       const { status_code, ...frame } = refusal;
@@ -1920,6 +1929,7 @@ describe("oversized Codex create frames", () => {
     expect(stage?.requestBytes).toBeGreaterThan(0);
     expect(stage?.upstreamFrames).toBe(0);
     expect(stage?.firstFrameMs).toBeNull();
+    expect(stage?.firstResponseMs).toBeNull();
     expect(stage?.reused).toBe(false);
     expect(typeof stage?.ocxVersion).toBe("string");
     expect(stage?.bunVersion).toBe(BOUNDED_WS_RUNTIME);
@@ -1947,6 +1957,7 @@ describe("oversized Codex create frames", () => {
     expect(stage?.closeCode).toBeNull();
     expect(stage?.sent).toBe(true);
     expect(stage?.relayedEvents).toBeGreaterThan(0);
+    expect(typeof stage?.firstResponseMs).toBe("number");
   });
 
   test("falls back before dialing a custom upstream URL", async () => {

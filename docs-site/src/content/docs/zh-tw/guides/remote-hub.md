@@ -3,6 +3,8 @@ title: Remote Hub 部署
 description: 使用僅限迴路的管理入口、Tailscale Serve 與無頭 OAuth 執行 opencodex hub。
 ---
 
+如需 SSH 機器連結，請參閱[遠端連結](/zh-tw/guides/remote-link/)。
+
 Remote Hub 把供應商憑證、模型目錄與用量記錄保存在一台主機上，已驗證的用戶端直接連到資料平面。管理平面彼此分離：選用的管理監聽器只綁定 `127.0.0.1`，僅提供儀表板與 `/api/*`。它不提供 `/v1/*`、`/healthz`、`/readyz` 或 WebSocket。不要直接發布 `10101`，也不要使用 Tailscale Funnel。
 
 ## 角色與信任邊界
@@ -18,6 +20,7 @@ ocx sync
 供人閱讀的就緒診斷會把目錄值中的控制字元顯示為可見的十六進位逸出序列，首次連線時如此，`ocx sync` 拒絕重新取得的 hub 目錄時也一樣。JSON 狀態仍保留原始的診斷值。
 
 用戶端金鑰會寫入只有擁有者可讀的 `service-api-token`，絕不寫入 `config.json`。連線期間，用量來自 hub 並依穩定的 `apiKeyId` 篩選；中斷後則顯示本機記錄。兩者不會互相鏡像。
+`ocx service uninstall` 會移除本機服務，但在用戶端處於連線狀態、其連線中繼資料無效或不相符，或待處理的連線標記與目前金鑰一致時保留現有金鑰。舊金鑰的有效標記不會保留無關的服務金鑰。若標記不安全、格式錯誤或無法讀取，就無法驗證權杖是否已清理；此時命令會發出警告，而不會宣稱金鑰已保留。如要移除已連線用戶端的本機金鑰與狀態，請使用 `ocx disconnect`。
 
 Admin token 只能執行一般管理，永遠不能建立使用者同意工作階段。同意操作必須使用伺服器簽發的 `gui-session`、相符的 Origin 與 CSRF。`Tailscale-User-Login` 只在獨立管理入口可信；請在 `remoteGui.allowedTailscaleUsers` 填入完整且正確的登入名稱。
 

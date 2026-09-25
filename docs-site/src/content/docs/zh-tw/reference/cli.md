@@ -36,6 +36,12 @@ opencodex 的命令列工具是 `ocx`。它依第一個命令名稱分派，有�
 `ocx observe logs --follow --jsonl` 取得串流的請求 log feed。佈景主題、語言、導覽與
 其他純視覺的瀏覽器狀態沒有 CLI 對應；Cloudflare Tunnel 設定不在此命令集內。
 
+## 存活探測上限覆寫
+
+`ocx health`、`ocx status`、`ocx account *`、`ocx login codex` 與 `ocx ready` 透過短時存活探測尋找執行中的代理：預設每次 750 ms，停止與啟動判斷使用含重試的 1500 ms。若安全層（內容過濾器或 EDR 類網路擴充）替每個回送連線增加固定延遲，健康的代理可能來不及回應就已逾時。
+
+在這類主機上可設定 `OCX_PROBE_TIMEOUT_MS` 提高上限，例如 `OCX_PROBE_TIMEOUT_MS=5000 ocx status`。值為 1 到 30000 的整數毫秒。覆寫只會提高上限：750 ms 預設值與 1500 ms 停止／啟動預算保留下限，因此 `1000` 只會延長預設探測。未設定、空值、小數、負數、0 或更大的值都會被忽略。
+
 ## 離開碼與確認
 
 成功的命令離開 0。無效用法、未知命令或資源、失敗的 API 操作以及無法使用的必要服務

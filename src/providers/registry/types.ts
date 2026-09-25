@@ -112,6 +112,12 @@ export interface ProviderRegistryEntry {
   apiKeyTransport?: OcxProviderConfig["apiKeyTransport"];
   alias?: string;
   authKind: ProviderAuthKind;
+  /**
+   * Credential preset for an auxiliary service rather than a model transport.
+   * Its adapter is an identity marker and is intentionally absent from the
+   * routable adapter registry.
+   */
+  credentialOnly?: boolean;
   codexAccountMode?: CodexAccountMode;
   /** OAuth preset may explicitly honor a persisted API-key billing mode. */
   allowKeyAuthOverride?: boolean;
@@ -258,6 +264,11 @@ export interface ProviderRegistryEntry {
   /** Provider-specific copy for the Codex catalog's Fast tier. */
   fastTierDescription?: string;
   /**
+   * The Fast lane is billed beyond the plan, so it stays off until the operator sets
+   * `providers.<name>.fastEnabled: true` (see `providerFastSwitchOff`).
+   */
+  fastOptIn?: boolean;
+  /**
    * Registry-only destination guard for `modelSupportsServiceTier`. This scopes vendor evidence
    * without changing provider ownership, routing, authentication, or config validation.
    */
@@ -308,6 +319,7 @@ export interface ProviderRegistryEntry {
   noReasoningModels?: string[];
   noTemperatureModels?: string[];
   noTopPModels?: string[];
+  noStopModels?: string[];
   noPenaltyModels?: string[];
   /**
    * Registry-only seed for `OcxProviderConfig.noJsonSchemaModels`. Merged into the
@@ -335,6 +347,8 @@ export interface ProviderRegistryEntry {
    */
   showThinkingSummary?: boolean;
   reasoningSplitModels?: string[];
+  /** See OcxProviderConfig.inlineThinkTagModels. */
+  inlineThinkTagModels?: string[];
   reasoningDetailsModels?: string[];
   thinkingToggleModels?: string[];
   thinkingBudgetModels?: string[];
@@ -357,7 +371,7 @@ export type ProviderConfigSeed = Pick<
   | "modelDisplayNames"
   | "modelMaxInputTokens" | "defaultMaxOutputTokens" | "modelMaxOutputTokens"
   | "reasoningEfforts" | "modelReasoningEfforts" | "modelDefaultReasoningEfforts" | "reasoningEffortMap" | "modelReasoningEffortMap" | "reasoningWireFormat"
-  | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noPenaltyModels"
-  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "showThinkingSummary"
+  | "noVisionModels" | "noReasoningModels" | "noTemperatureModels" | "noTopPModels" | "noStopModels" | "noPenaltyModels"
+  | "autoToolChoiceOnlyModels" | "preserveReasoningContentModels" | "requiresReasoningPlaceholderModels" | "reasoningSplitModels" | "inlineThinkTagModels" | "reasoningDetailsModels" | "thinkingToggleModels" | "thinkingBudgetModels" | "escapeBuiltinToolNames" | "openaiChatEofTolerance" | "showThinkingSummary"
   | "googleMode" | "project" | "location" | "headers"
 >;

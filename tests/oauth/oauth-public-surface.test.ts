@@ -18,6 +18,8 @@ import type { OcxConfig } from "../../src/types";
 import type { OAuthController } from "../../src/oauth/types";
 import { getCredential } from "../../src/oauth/store";
 import * as oauthStore from "../../src/oauth/store";
+import * as oauth from "../../src/oauth";
+import { MuseDeviceLoginError, requestMuseDeviceAuthorization } from "../../src/oauth/meta-muse-device";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 
@@ -82,6 +84,133 @@ describe("legacy ChatGPT OAuth public-surface exclusion", () => {
     expect(listOAuthProviders()).toContain("xai");
     expect(listOAuthProviders()).toContain("github-copilot");
     expect(isPublicOAuthProvider("github-copilot")).toBe(true);
+  });
+
+  test("Meta Muse login requires a consent-bearing GUI session", async () => {
+    const cfg = config();
+    const request = () => new Request("http://localhost/api/oauth/login", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://localhost",
+        "x-opencodex-gui-origin": "http://localhost",
+        "x-opencodex-csrf-token": "forgeable-without-a-session",
+      },
+      // A missing account makes a correctly admitted request stop before the
+      // platform-specific import, while still proving it passed the consent gate.
+      body: JSON.stringify({ provider: "meta-muse", accountId: "missing-slot" }),
+    });
+
+    for (const principal of [undefined, "admin-token", "gui-pair-capability"] as const) {
+      const response = await handleManagementAPI(request(), new URL(request().url), cfg, {}, principal);
+      expect(response?.status).toBe(403);
+      expect(await response?.json()).toEqual({
+        error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
+        code: "oauth_consent_required",
+      });
+    }
+
+    const admitted = await handleManagementAPI(request(), new URL(request().url), cfg, {}, "gui-session");
+    expect(admitted?.status).toBe(404);
+    expect(await admitted?.json()).toEqual({ error: "Unknown account for reauth" });
+  });
+
+  test("Meta Muse manual code submission requires a GUI session", async () => {
+    const cfg = config();
+    const submit = spyOn(oauth, "submitManualLoginCode").mockReturnValue({ ok: true });
+    const request = (provider = "meta-muse") => new Request("http://localhost/api/oauth/login/code", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost" },
+      body: JSON.stringify({ provider, input: "synthetic-code" }),
+    });
+    try {
+      const denied = request();
+      const response = await handleManagementAPI(denied, new URL(denied.url), cfg, {}, "admin-token");
+      expect(response?.status).toBe(403);
+      expect(await response?.json()).toEqual({
+        error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
+        code: "oauth_consent_required",
+      });
+      expect(submit).not.toHaveBeenCalled();
+
+      const admitted = request();
+      expect((await handleManagementAPI(admitted, new URL(admitted.url), cfg, {}, "gui-session"))?.status).toBe(200);
+      expect(submit).toHaveBeenCalledWith("meta-muse", "synthetic-code");
+
+      const other = request("xai");
+      expect((await handleManagementAPI(other, new URL(other.url), cfg, {}, "admin-token"))?.status).toBe(200);
+      expect(submit).toHaveBeenLastCalledWith("xai", "synthetic-code");
+    } finally { submit.mockRestore(); }
+  });
+
+  test.each([
+    ["plain", {}, false],
+    ["add-account", { addAccount: true }, true],
+    ["reauth", { reauth: true }, true],
+  ] as const)("Muse %s admission precedes either credential-acquisition path", async (_mode, flags, forceLogin) => {
+    const cfg = config();
+    saveConfig(cfg);
+    const login = spyOn(oauth, "startLoginFlow").mockResolvedValue({ url: "" });
+    const request = (provider = "meta-muse") => new Request("http://localhost/api/oauth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "http://localhost",
+        "x-opencodex-gui-origin": "http://localhost", "x-opencodex-csrf-token": "forged" },
+      body: JSON.stringify({ provider, ...flags, openBrowser: false }),
+    });
+    try {
+      for (const principal of [undefined, "admin-token", "gui-pair-capability"] as const) {
+        const req = request();
+        const response = await handleManagementAPI(req, new URL(req.url), cfg, {}, principal);
+        expect(response?.status).toBe(403);
+        expect((await response?.json())?.code).toBe("oauth_consent_required");
+      }
+      expect(login).not.toHaveBeenCalled();
+      const admitted = request();
+      expect((await handleManagementAPI(admitted, new URL(admitted.url), cfg, {}, "gui-session"))?.status).toBe(200);
+      expect(login).toHaveBeenCalledWith("meta-muse", { forceLogin }, { onSettled: expect.any(Function) });
+      const other = request("xai");
+      expect((await handleManagementAPI(other, new URL(other.url), cfg, {}, "admin-token"))?.status).toBe(200);
+      expect(login).toHaveBeenLastCalledWith("xai", { forceLogin }, { onSettled: expect.any(Function) });
+    } finally { login.mockRestore(); }
+  });
+
+  test("admitted Muse device overflow stays behind the public OAuth error boundary", async () => {
+    const cfg = config();
+    saveConfig(cfg);
+    let fetches = 0;
+    let overflowObserved = false;
+    const login = spyOn(oauth, "startLoginFlow").mockImplementation(async () => {
+      try {
+        await requestMuseDeviceAuthorization({ fetchImpl: (async () => {
+          fetches++;
+          return new Response(JSON.stringify({ device_code: "private-device-canary", filler: "x".repeat(65_536) }));
+        }) as typeof fetch });
+      } catch (error) {
+        expect(error).toBeInstanceOf(MuseDeviceLoginError);
+        if (!(error instanceof MuseDeviceLoginError)) throw error;
+        expect(error.kind).toBe("device-authorization");
+        expect(error.message).toContain("exceeded the 65536-byte limit");
+        overflowObserved = true;
+        throw error;
+      }
+      throw new Error("oversized authorization must not succeed");
+    });
+    const request = () => new Request("http://localhost/api/oauth/login", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: "meta-muse", addAccount: true, openBrowser: false }),
+    });
+    try {
+      const denied = request();
+      expect((await handleManagementAPI(denied, new URL(denied.url), cfg, {}, "admin-token"))?.status).toBe(403);
+      expect(fetches).toBe(0);
+      const admitted = request();
+      const response = await handleManagementAPI(admitted, new URL(admitted.url), cfg, {}, "gui-session");
+      expect(response?.status).toBe(409);
+      expect(await response?.json()).toEqual({ error: PUBLIC_OAUTH_ERROR });
+      expect(fetches).toBe(1);
+      expect(overflowObserved).toBe(true);
+      expect(getCredential("meta-muse")).toBeNull();
+    } finally { login.mockRestore(); }
   });
 
   test("generic management OAuth endpoints reject chatgpt before touching login state", async () => {

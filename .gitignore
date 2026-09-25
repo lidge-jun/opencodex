@@ -68,6 +68,16 @@ tests/**/.tmp-*
 # tests/ci-workflows/repo-hygiene.test.ts, which fails if any path here becomes tracked again.
 go/
 
+# Retired root docs/ folder and the pull-request screenshot folders that used to
+# collect evidence images. Screenshots belong in the PR description or on the
+# orphan `pr-assets` branch; tests/ci-workflows/repo-hygiene.test.ts fails if any
+# path here becomes tracked again. Root-anchored so docs-site/src/content/docs/
+# is not caught by the docs/ rule.
+/docs/
+/.github/pr-assets/
+/assets/pr-screenshots/
+/docs-site/public/pr-screenshots/
+
 # Rust native helpers keep their reproducible sources and lockfile in git, never local artifacts.
 native/**/target/
 dist/macos/

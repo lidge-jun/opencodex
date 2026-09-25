@@ -123,10 +123,17 @@ function looksLikeUnknownOpaqueSlot(payload: string): boolean {
  */
 const FERNET_TOKEN_CANDIDATE = /g[A-Za-z0-9_-]{97,}={0,2}/g;
 const FERNET_TOKEN_BOUNDARY_CHAR = /[A-Za-z0-9_=-]/;
+// A normal mixed agent task contains one encrypted body. Keep pathological slots
+// from amplifying into an attacker-controlled number of request parts.
+const MAX_EMBEDDED_FERNET_RUNS_PER_SLOT = 64;
 
 interface FernetTokenRun {
   index: number;
   token: string;
+}
+interface FernetRunScan {
+  runs: FernetTokenRun[];
+  overflow: boolean;
 }
 
 /**
@@ -158,11 +165,11 @@ function isStructurallyValidFernetToken(token: string): boolean {
 }
 
 export function structurallyValidFernetTokens(payload: string): string[] {
-  return fernetTokenRuns(payload).map(run => run.token);
+  return fernetTokenRuns(payload).runs.map(run => run.token);
 }
 
 /** Maximal, boundary-delimited and structurally valid Fernet runs embedded in a slot. */
-function fernetTokenRuns(payload: string): FernetTokenRun[] {
+function fernetTokenRuns(payload: string): FernetRunScan {
   const runs: FernetTokenRun[] = [];
   for (const match of payload.matchAll(FERNET_TOKEN_CANDIDATE)) {
     const index = match.index ?? 0;
@@ -172,9 +179,10 @@ function fernetTokenRuns(payload: string): FernetTokenRun[] {
     if (before && FERNET_TOKEN_BOUNDARY_CHAR.test(before)) continue;
     if (after && FERNET_TOKEN_BOUNDARY_CHAR.test(after)) continue;
     if (!isStructurallyValidFernetToken(token)) continue;
+    if (runs.length === MAX_EMBEDDED_FERNET_RUNS_PER_SLOT) return { runs, overflow: true };
     runs.push({ index, token });
   }
-  return runs;
+  return { runs, overflow: false };
 }
 
 function textWithoutFernetRuns(payload: string, runs: readonly FernetTokenRun[]): string {
@@ -190,21 +198,21 @@ function textWithoutFernetRuns(payload: string, runs: readonly FernetTokenRun[])
 /**
  * The routing header codex-rs writes above a delegated agent payload.
  *
- * `MESSAGE` is matched as well as `NEW_TASK`, and only for the unreadability CHECK --
- * recovery stays NEW_TASK-only. #3021 reported a subagent `MESSAGE` arriving in the
- * parent conversation as raw `gAAAA...` ciphertext after an `adapter_eof`. The detector
- * decides "unreadable" by stripping the envelope and asking whether any plaintext
- * survives, so an envelope shape it does not recognise counts as surviving text: a
- * `MESSAGE` whose entire body is one Fernet token measured as READABLE and was forwarded
- * verbatim.
+ * All four codex-rs message types are recognised: NEW_TASK, MESSAGE, FOLLOWUP_TASK,
+ * and FINAL_ANSWER, whose Task name line is optional. #3021 reported a subagent
+ * `MESSAGE` arriving in the parent conversation as raw `gAAAA...` ciphertext after an
+ * `adapter_eof`. The detector decides "unreadable" by stripping the envelope and asking
+ * whether any plaintext survives, so an envelope shape it does not recognise counts as
+ * surviving text: an unrecognised type whose entire body is one Fernet token measured as
+ * READABLE and would be forwarded verbatim.
  *
- * Widening the strip is not the same as widening recovery. Recovery decrypts, and
- * decrypting a `MESSAGE` on the parent's behalf would build a plaintext oracle out of a
- * payload the parent's session may have no right to read. This only lets the proxy
- * NOTICE that what it is about to forward is unreadable ciphertext, which is what the
- * report asks for: fail closed with a structured error rather than paste the token.
+ * This strip must therefore stay in step with the message types the opt-in recovery
+ * recognises (see agent-task-recovery.ts). The strip itself is still only detection: it
+ * lets the proxy notice that what it is about to forward is unreadable ciphertext and
+ * fail closed with a structured error rather than paste the token. Recovery admission,
+ * not the strip, is the trust boundary for decryption.
  */
-export const AGENT_MESSAGE_ROUTING_ENVELOPE = /(?:^|\n)Message Type\s*:\s*(?:NEW_TASK|MESSAGE)[^\n]*\nTask name\s*:[^\n]*\nSender\s*:[^\n]*\nPayload\s*:\s*(?:\n|$)/gi;
+export const AGENT_MESSAGE_ROUTING_ENVELOPE = /(?:^|\n)Message Type\s*:\s*(?:NEW_TASK|MESSAGE|FOLLOWUP_TASK)[^\n]*\n\s*Task name\s*:[^\n]*\n\s*Sender\s*:[^\n]*\n\s*Payload\s*:\s*(?:\n|$)|(?:^|\n)Message Type\s*:\s*FINAL_ANSWER[^\n]*\n\s*(?:Task name\s*:[^\n]*\n\s*)?Sender\s*:[^\n]*\n\s*Payload\s*:\s*(?:\n|$)/gi;
 
 // CXC is the compatibility-hook control namespace. Strip only the tagged paragraph:
 // later untagged paragraphs may be genuine task text. Repeated CXC paragraphs are
@@ -254,7 +262,8 @@ function splitFernetParts(content: unknown[]): Set<object> {
 export function hasUnreadableEncryptedAgentTask(input: unknown): boolean {
   if (!Array.isArray(input)) return false;
 
-  // codex-rs appends one NEW_TASK agent_message at the current input tail. Historical
+  // codex-rs appends one agent_message (any of the four codex-rs message types) at the
+  // current input tail. Historical
   // agent messages may be adjacent in full-history bodies; they must not poison the
   // later task. compaction_trigger/additional_tools are trailing metadata rather than
   // a newer user turn.
@@ -291,7 +300,9 @@ export function hasUnreadableEncryptedAgentTask(input: unknown): boolean {
     }
 
     if (fragmentParts.has(part)) continue;
-    const runs = fernetTokenRuns(record.encrypted_content);
+    const scan = fernetTokenRuns(record.encrypted_content);
+    if (scan.overflow) return true;
+    const { runs } = scan;
     if (runs.length > 0) hasFernetTask = true;
     readableParts.push(textWithoutFernetRuns(record.encrypted_content, runs));
   }
@@ -308,9 +319,11 @@ export function hasUnreadableEncryptedAgentTask(input: unknown): boolean {
 
 
 export function encryptedSlotParts(payload: string): Array<Record<string, string>> {
+  const scan = fernetTokenRuns(payload);
+  if (scan.overflow) return [{ type: "input_text", text: OMITTED_ENCRYPTED_CONTENT_TEXT }];
   const parts: Array<Record<string, string>> = [];
   let last = 0;
-  for (const run of fernetTokenRuns(payload)) {
+  for (const run of scan.runs) {
     const before = payload.slice(last, run.index);
     if (before.trim().length > 0) parts.push({ type: "input_text", text: before });
     parts.push({ type: "encrypted_content", encrypted_content: run.token });
@@ -420,7 +433,9 @@ export function stripAgentMessageCiphertextInPlace(input: unknown): number {
 
 /** Free text: drop embedded token runs, and replace a slot that is nothing but a token. */
 function textWithoutCiphertext(text: string): string {
-  const runs = fernetTokenRuns(text);
+  const scan = fernetTokenRuns(text);
+  if (scan.overflow) return OMITTED_ENCRYPTED_CONTENT_TEXT;
+  const { runs } = scan;
   if (runs.length > 0) return textWithRunsOmitted(text, runs);
   return looksLikeFernetToken(text.trim()) ? OMITTED_ENCRYPTED_CONTENT_TEXT : text;
 }
@@ -473,11 +488,11 @@ function contentWithoutCiphertext(content: unknown[]): unknown[] {
       changed = true;
       // Keep whatever plaintext a recognizable slot carries around its token; a slot this
       // cannot parse is replaced whole rather than forwarded on the chance that it is benign.
-      const runs = fernetTokenRuns(record.encrypted_content);
+      const scan = fernetTokenRuns(record.encrypted_content);
       return {
         type: "input_text",
-        text: runs.length > 0
-          ? textWithRunsOmitted(record.encrypted_content, runs)
+        text: scan.overflow ? OMITTED_ENCRYPTED_CONTENT_TEXT : scan.runs.length > 0
+          ? textWithRunsOmitted(record.encrypted_content, scan.runs)
           : OMITTED_ENCRYPTED_CONTENT_TEXT,
       };
     }

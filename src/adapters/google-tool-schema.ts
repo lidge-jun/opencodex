@@ -604,6 +604,28 @@ function sanitizeProperties(
   return properties;
 }
 
+/**
+ * Gemini rejects an array declaration that carries no `items` (#5689), so no return from
+ * `sanitizeSchema` may leave an array incomplete. A string item keeps the declaration valid: it
+ * narrows an unconstrained item rather than widening a constraint, so the loss report, which counts
+ * widened or dropped constraints, does not record it. The synthesized node is part of the emitted
+ * tree and charges the node budget like any other, because a wide enough fan-out of `items`-less
+ * arrays otherwise pushed the output past MAX_SCHEMA_NODES. When the budget cannot pay for that
+ * item, the array is omitted (`BUDGET_EXHAUSTED`) for its caller to drop instead of being emitted
+ * bare, which Gemini would reject for the whole request. A parent whose own `items` came back
+ * exhausted reaches this same rule, so an incomplete array is never nested in a retained one.
+ */
+function completeArrayItems(out: Schema, state: SanitizeState): SanitizeResult {
+  if (out.type !== "array" || Object.hasOwn(out, "items")) return out;
+  if (state.remainingNodes <= 0) {
+    reportBudgetExhausted(state);
+    return BUDGET_EXHAUSTED;
+  }
+  state.remainingNodes -= 1;
+  out.items = { type: "string" };
+  return out;
+}
+
 function sanitizeSchema(
   node: unknown,
   defs: Map<string, unknown>,
@@ -725,7 +747,8 @@ function sanitizeSchema(
 
   if (state.remainingNodes <= 0) {
     if (Object.hasOwn(node, "items") || Object.hasOwn(node, "anyOf")) reportBudgetExhausted(state);
-    return out;
+    // An array that the budget stopped before its `items` traversal takes the same rule.
+    return completeArrayItems(out, state);
   }
 
   if (Array.isArray(node.items)) {
@@ -739,7 +762,7 @@ function sanitizeSchema(
 
   if (state.remainingNodes <= 0) {
     if (Object.hasOwn(node, "anyOf")) reportBudgetExhausted(state);
-    return out;
+    return completeArrayItems(out, state);
   }
   if (Object.hasOwn(node, "anyOf")) {
     const normalized = normalizeAnyOf(node.anyOf, defs, depth, refDepth, state);
@@ -753,7 +776,7 @@ function sanitizeSchema(
     }
     Object.assign(out, normalized);
   }
-  return out;
+  return completeArrayItems(out, state);
 }
 
 export function sanitizeGeminiToolParametersWithReport(

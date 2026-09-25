@@ -17,6 +17,8 @@ import {
 } from "../../src/providers/antigravity-models";
 import { getConfigPath, loadConfig, saveConfig, setPersistedConfigMutationBeforeCommitForTests } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
+import { routeModel } from "../../src/router";
+import { requestPacingIntervalMs } from "../../src/providers/request-pacing";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const INTL_BASE_URL = "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1";
@@ -46,6 +48,7 @@ function staleConfig(): OcxConfig {
         modelDefaultReasoningEfforts: { "qwen3.8-max-preview": "xhigh" },
         preserveReasoningContentModels: ["glm-5.2", "qwen3.8-max-preview", "qwen3.7-max"],
         thinkingBudgetModels: ["qwen3.8-max-preview", "qwen3.7-max"],
+        inlineThinkTagModels: ["qwen3.8-max-preview", "qwen3.7-max"],
         retainModels: ["qwen3.8-max-preview"],
       },
     },
@@ -69,6 +72,7 @@ describe("registry model rename migration (#1610)", () => {
     expect(prov.modelDefaultReasoningEfforts?.["qwen3.8-max"]).toBe("xhigh");
     expect(prov.preserveReasoningContentModels).toEqual(["glm-5.2", "qwen3.8-max", "qwen3.7-max"]);
     expect(prov.thinkingBudgetModels).toEqual(["qwen3.8-max", "qwen3.7-max"]);
+    expect(prov.inlineThinkTagModels).toEqual(["qwen3.8-max", "qwen3.7-max"]);
     expect(prov.retainModels).toEqual(["qwen3.8-max"]);
     expect(warnings.some(w => w.includes("qwen3.8-max"))).toBe(true);
   });
@@ -96,6 +100,7 @@ describe("registry model rename migration (#1610)", () => {
     prov.modelDefaultReasoningEfforts = {};
     prov.preserveReasoningContentModels = ["qwen3.8-max"];
     prov.thinkingBudgetModels = ["qwen3.7-max"];
+    prov.inlineThinkTagModels = ["qwen3.8-max"];
     prov.retainModels = ["qwen3.8-max"];
     clean.disabledModels = ["other/model"];
 
@@ -111,6 +116,21 @@ describe("registry model rename migration (#1610)", () => {
     const { config, changed } = projectModelRenames(custom, [RENAME]);
     expect(changed).toBe(false);
     expect(config.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max-preview");
+  });
+
+  test.each([
+    ` HTTPS://TOKEN-PLAN.AP-SOUTHEAST-1.MAAS.ALIYUNCS.COM/compatible-mode/v1`,
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com:443/compatible-mode/v1",
+  ])("migrates a row whose saved endpoint is URL-equivalent to the registry's: %s", baseUrl => {
+    // The stored baseUrl keeps its whitespace and port — only the endpoint
+    // comparison trims, lowercases the host, and drops default ports, so these
+    // rows still point at the registry destination.
+    const config = staleConfig();
+    config.providers["alibaba-token-plan-intl"]!.baseUrl = baseUrl;
+    const { config: migrated, changed } = projectModelRenames(config, [RENAME]);
+    expect(changed).toBe(true);
+    expect(migrated.providers["alibaba-token-plan-intl"]!.models).toContain("qwen3.8-max");
+    expect(migrated.providers["alibaba-token-plan-intl"]!.models).not.toContain("qwen3.8-max-preview");
   });
 
   test("refuses to write an id the registry does not seed", () => {
@@ -197,6 +217,51 @@ describe("registry model rename migration (#1610)", () => {
     expect(changed).toBe(true);
     expect(prov.defaultModel).toBe("kimi-for-coding");
     expect(prov.models).toEqual(["k3", "k3[1m]", "kimi-for-coding"]);
+  });
+
+  test("renamed operator aliases, wire policy and nested pacing remain effective", () => {
+    const from = "kimi-k2.7-code", to = "kimi-for-coding";
+    const stale = { defaultProvider: "kimi-code", providers: { "kimi-code": {
+      adapter: "openai-chat", baseUrl: "https://api.kimi.com/coding/v1", apiKey: "fixture-key",
+      models: [from], modelAliases: { [from]: "work" },
+      modelAdapters: { [from]: "openai-responses" }, modelCapabilities: { [from]: { inputModalities: ["text"] } },
+      modelMaxInputTokens: { [from]: 12345 }, modelPinnedReasoningEfforts: { [from]: "high" },
+      autoReviewModelOverrides: { [from]: "reviewer/model" },
+      requestPacing: { enabled: true, models: { [from]: { minIntervalMs: 125 } } },
+      noStructuredOutputModels: [from], requiresReasoningPlaceholderModels: [from],
+    } } } as unknown as OcxConfig;
+    const { config, changed } = projectModelRenames(stale);
+    expect(changed).toBe(true);
+    const prov = config.providers["kimi-code"]!;
+    const route = routeModel(config, "kimi-code/work");
+    expect(route.modelId).toBe(to);
+    expect(route.staticPolicy.model.adapter).toBe("openai-responses");
+    expect(route.staticPolicy.model.inputModalities).toEqual(["text"]);
+    expect(route.staticPolicy.model.maxInputTokens).toBe(12345);
+    expect(prov.modelPinnedReasoningEfforts).toEqual({ [to]: "high" });
+    expect(prov.autoReviewModelOverrides).toEqual({ [to]: "reviewer/model" });
+    expect(requestPacingIntervalMs(prov, to)).toBe(125);
+    expect(prov.requestPacing?.models?.[from]).toBeUndefined();
+    expect(prov.noStructuredOutputModels).toEqual([to]);
+    expect(prov.requiresReasoningPlaceholderModels).toEqual([to]);
+    expect(projectModelRenames(config).changed).toBe(false);
+  });
+
+  test("newer target alias and nested pacing win during a rename", () => {
+    const from = "kimi-k2.7-code", to = "kimi-for-coding";
+    const stale = { providers: { "kimi-code": {
+      adapter: "openai-chat", baseUrl: "https://api.kimi.com/coding/v1",
+      modelAliases: { [from]: "old", [to]: "new" },
+      autoReviewModelOverrides: { [from]: "reviewer/old", [to]: "reviewer/new" },
+      requestPacing: { enabled: true, minIntervalMs: 10, models: {
+        [from]: { minIntervalMs: 125 }, [to]: { minIntervalMs: 250 },
+      } },
+    } } } as unknown as OcxConfig;
+    const prov = projectModelRenames(stale).config.providers["kimi-code"]!;
+    expect(prov.modelAliases).toEqual({ [to]: "new" });
+    expect(prov.autoReviewModelOverrides).toEqual({ [to]: "reviewer/new" });
+    expect(prov.requestPacing?.minIntervalMs).toBe(10);
+    expect(prov.requestPacing?.models).toEqual({ [to]: { minIntervalMs: 250 } });
   });
 
   test("preserves explicit kimi-for-coding metadata while retiring old ids", () => {

@@ -39,8 +39,12 @@ function reserveRow(qualified: boolean, efforts = ["high", "xhigh"]): RawEntry {
   const pin = JSON.parse(readFileSync(repoPath("src/codex/data/upstream-models.json"), "utf8")) as RawCatalog;
   const luna = pin.models?.find(row => row.slug === "gpt-5.6-luna");
   if (!luna) throw new Error("Fixture requires the checked-in Luna source");
+  // Upstream rows no longer carry top-level base_instructions (openai/codex #43604); a genuine
+  // roster row does, so the fixture restores it from the template the pin still ships.
+  const template = (luna.model_messages as { instructions_template?: string } | undefined)?.instructions_template;
   return {
     ...structuredClone(luna),
+    base_instructions: typeof luna.base_instructions === "string" ? luna.base_instructions : template,
     slug: qualified ? SELECTOR : "gpt-reserve",
     display_name: qualified ? "personal / Genuine Reserve" : "Genuine Reserve",
     supported_in_api: qualified,

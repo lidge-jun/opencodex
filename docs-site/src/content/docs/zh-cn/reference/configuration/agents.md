@@ -10,7 +10,7 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
 | `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` 会把目录中的每个模型都标记为 v1；`v2` 会把每个模型都标记为 v2。`default` 会恢复上游固定值（Sol/Terra 为 v2，Luna 为 v1），否则遵循原生 `multi_agent_v2` 标志。适用于新会话。 |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5` | 最多五个裸原生 id、账户限定的 `<selector>/<native-openai-model>` id 或路由 `provider/model` id 会优先显示在子代理选择器中。Subagents 页面只提供裸原生和路由 id，保存时会省略精确的账户限定选项；如需精确选择，请使用 `ocx agent subagents set` 或直接编辑配置。[Astra 一次性升级](/reference/configuration/agents/#astra-roster-upgrade)后，显式空列表会被保留。 |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna` | 最多五个裸原生 id、账户限定的 `<selector>/<native-openai-model>` id 或路由 `provider/model` id 会优先显示在子代理选择器中。Subagents 页面只提供裸原生和路由 id，保存时会省略精确的账户限定选项；如需精确选择，请使用 `ocx agent subagents set` 或直接编辑配置。[Astra 一次性升级](/reference/configuration/agents/#astra-roster-upgrade)后，显式空列表会被保留。 |
 | `injectionModel?` | `string` | — | 在代理生成的 v2 委派引导中使用的首选原生或路由后的子代理模型。 |
 | `injectionEffort?` | `string` | — | 首选 effort（`low` 到 `ultra`），只有在 `injectionModel` 存在时才有意义。 |
 | `injectionPrompt?` | `string` | — | 替换内置 v2 指引正文。支持 `{{model}}`、`{{effort}}`、`{{roster}}` 和 `{{fallback}}`。只要配置了 `injectionModel`，自定义提示词就会触发。 |
@@ -88,8 +88,10 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
 `authMode: "forward"` 和准确的基础地址 `https://chatgpt.com/backend-api/codex`。OpenAI API key
 provider、自定义 OpenAI 兼容网关、最终发往其他 provider 的请求，以及非 Responses 调用都不会被改写。
 
-对于符合条件的 v2 请求，opencodex 只识别顶层 `collaboration` namespace，而且它必须直接包含
-`spawn_agent`。原生 ChatGPT 收到请求前，opencodex 会删除 `spawn_agent`、`send_message` 和
+对于符合条件的 v2 请求，opencodex 只识别工具目录顶层的 `collaboration` namespace，而且它必须直接包含
+`spawn_agent`。目录可以位于顶层 `tools`；如果该字段不存在，也可以位于首个输入项的 developer
+`additional_tools` 中（Responses Lite）。显式顶层目录优先，user 角色和后续历史目录不会启用转换。
+原生 ChatGPT 收到请求前，opencodex 会删除 `spawn_agent`、`send_message` 和
 `followup_task` 中已有的 `parameters.properties.message.encrypted: true`。ChatGPT 会按保留的
 `collaboration` namespace 和三个工具名处理消息，因此请求会给这四个名称使用固定的临时别名。
 修改前，opencodex 会检查顶层和 `additional_tools` 工具目录、嵌套 namespace、

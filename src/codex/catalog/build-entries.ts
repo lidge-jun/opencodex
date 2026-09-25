@@ -437,7 +437,8 @@ export interface ObservedCatalogMergePolicy {
 export const CANONICAL_NATIVE_CATALOG_CONTENT_POLICY: Readonly<
   Pick<ObservedCatalogMergePolicy, "nativeBackfillSlugs" | "unsupportedNativeEntries">
 > = Object.freeze({
-  nativeBackfillSlugs: Object.freeze([...NATIVE_OPENAI_MODELS]),
+  // A getter: configured natives join NATIVE_OPENAI_MODELS after this module loads.
+  get nativeBackfillSlugs() { return Object.freeze([...NATIVE_OPENAI_MODELS]); },
   unsupportedNativeEntries: "drop",
 });
 
@@ -782,6 +783,10 @@ export function mergeCatalogEntriesFromObservedState({
     }
     const slug = String(entry.slug);
     if (!isOcxAuthoredRoutedEntry(entry) || isNativeAliasCatalogEntry(entry)) continue;
+    // The builder no longer copies a template's comp_hash onto routed rows (#5796), but a row
+    // kept from disk may still carry one. Custom rows, Codex-forward aliases included, never
+    // reach this loop: they are rebuilt from config.
+    entry.comp_hash = "opencodex";
     const featuredRank = featuredRankOf(slug);
     entry.priority = featuredRank !== undefined
       ? featuredRank * priorityStride

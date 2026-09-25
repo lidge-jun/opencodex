@@ -120,10 +120,12 @@ export default function ProviderWorkspaceShell({
   /**
    * Called when a FORCED quota read settles, with whether it succeeded.
    *
-   * The shell owns the only `/api/provider-quotas` read, so it owns the only truthful
-   * completion signal. An operator-facing refresh button that resolved on its own would
-   * report success before the response landed — `fetchProviderQuotas(true)` is a
-   * synchronous state bump, not a request.
+   * The shell owns the only `/api/provider-quotas` read in this workspace, forced
+   * `?refresh=1` included — the header QuotaSummaryBar keeps a separate passive 60s read
+   * that never forces one — so the shell owns the only truthful completion signal for a
+   * forced refresh. An operator-facing refresh button that resolved on its own would report
+   * success before the response landed: `fetchProviderQuotas(true)` is a synchronous state
+   * bump, not a request.
    */
   onQuotaRefreshSettled?: (ok: boolean, epoch: number) => void;
   /** True when the bump came from a mutation that needs the server to bypass its TTL. */

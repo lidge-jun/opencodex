@@ -59,7 +59,7 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { OcxApiKeyEntry, OcxClaudeCodeConfig, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
@@ -147,8 +147,55 @@ function validateKeyName(
   return { value };
 }
 
+export type IssuedApiKey = Pick<OcxApiKeyEntry, "id" | "name" | "key" | "createdAt">;
+
+/** Shared one-time data-key issuance used by the dashboard and link transactions. */
+export function issueApiKeyInProcess(config: OcxConfig, name: string): IssuedApiKey {
+  const checked = validateKeyName(name, { required: true });
+  if ("error" in checked) throw new Error(checked.error);
+  const entry: IssuedApiKey = {
+    id: randomUUID(),
+    name: checked.value,
+    key: `ocx_data_${randomBytes(20).toString("hex")}`,
+    createdAt: new Date().toISOString(),
+  };
+  const previous = config.apiKeys;
+  config.apiKeys = [...(previous ?? []), entry];
+  try {
+    saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
+  } catch (error) {
+    config.apiKeys = previous;
+    throw error;
+  }
+  return entry;
+}
+
+/** Revoke and persist one data key; callers can retain their own record on false. */
+export function revokeApiKeyInProcess(config: OcxConfig, id: string): boolean {
+  const before = config.apiKeys ?? [];
+  if (!before.some(key => key.id === id)) return false;
+  config.apiKeys = before.filter(key => key.id !== id);
+  try {
+    saveConfigPreservingClaudeCode(config);
+    reconcileLiveStateStores();
+  } catch (error) {
+    config.apiKeys = before;
+    throw error;
+  }
+  return true;
+}
+
+function metaMuseConsentRequired(provider: string, principal: ManagementContext["principal"]): Response | null {
+  if (provider !== "meta-muse" || principal === "gui-session") return null;
+  return jsonResponse({
+    error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
+    code: "oauth_consent_required",
+  }, 403);
+}
+
 export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<Response | null> {
-  const { req, url, config, deps, syncClaudeAgentDefsBestEffort } = ctx;
+  const { req, url, config, deps, principal, syncClaudeAgentDefsBestEffort } = ctx;
 
   if (url.pathname === "/api/accounts/events" && req.method === "GET") {
     const { accountSelectionStream } = await import("./account-selection-stream");
@@ -172,6 +219,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    // Muse may import a local Keychain credential or start a device grant; add-account
+    // and reauth skip the import. All management login paths require the dashboard
+    // principal before credential acquisition. A raw token proves administration,
+    // not acknowledgement; caller-supplied headers are not consent evidence.
+    const consentRequired = metaMuseConsentRequired(provider, principal);
+    if (consentRequired) return consentRequired;
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
     if (namespaceCollision) return jsonResponse({ error: namespaceCollision }, 409);
     const accountId = body.accountId?.trim();
@@ -242,6 +295,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; input?: string; code?: string };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    const consentRequired = metaMuseConsentRequired(provider, principal);
+    if (consentRequired) return consentRequired;
     const input = typeof body.input === "string" ? body.input : typeof body.code === "string" ? body.code : "";
     // Authorization responses are measured in hundreds of bytes; never accept the
     // generic management-body allowance here.
@@ -939,16 +994,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const nameField = validateKeyName(body.name, { required: false });
     if ("error" in nameField) return jsonResponse({ error: nameField.error }, 400, req, config);
     const name = nameField.value || "default";
-    // A direct random draw. The previous derivation hashed every configured
-    // provider API key into the input, which was never needed for uniqueness and
-    // made this secret's safety argument depend on string concatenation rather
-    // than the RNG. 20 bytes is the same 40 hex characters as before, so nothing
-    // that pattern-matches the key shape changes.
-    const key = "ocx_data_" + randomBytes(20).toString("hex");
-    const entry = { id: randomUUID(), name, key, createdAt: new Date().toISOString() };
-    config.apiKeys = [...(config.apiKeys ?? []), entry];
-    saveConfigPreservingClaudeCode(config);
-    reconcileLiveStateStores();
+    const entry = issueApiKeyInProcess(config, name); // shared helper uses randomBytes(20)
     return jsonResponse({ id: entry.id, name: entry.name, key: entry.key, createdAt: entry.createdAt }, 201, req, config);
   }
 
@@ -956,8 +1002,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readJsonBody(req);
     if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
     if (typeof body.id !== "string" || !body.id) return jsonResponse({ error: "id required" }, 400, req, config);
-    const entry = (config.apiKeys ?? []).find(k => k.id === body.id);
-    if (!entry) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const existing = (config.apiKeys ?? []).find(k => k.id === body.id);
+    if (!existing) return jsonResponse({ error: "key not found" }, 404, req, config);
+    const entry = { ...existing };
     // Rename and scope are independent edits. A scope-only PATCH must not have
     // to restate the name, and a rename must not silently widen a scope, so
     // each field is applied only when the caller actually sent it.
@@ -986,6 +1033,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (normalized.length === 0) delete entry[field];
       else entry[field] = normalized;
     }
+    // Publish the validated replacement only after every field is accepted.
+    config.apiKeys = config.apiKeys!.map(key => key === existing ? entry : key);
     saveConfigPreservingClaudeCode(config);
     reconcileLiveStateStores();
     // Never echo key material from a rename.
@@ -1002,12 +1051,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readJsonBody(req);
     if (!body) return jsonResponse({ error: "invalid body" }, 400, req, config);
     if (typeof body.id !== "string" || !body.id) return jsonResponse({ error: "id required" }, 400, req, config);
-    const before = (config.apiKeys ?? []).length;
-    config.apiKeys = (config.apiKeys ?? []).filter(k => k.id !== body.id);
     // A stale id must not read as a successful revocation.
-    if (config.apiKeys.length === before) return jsonResponse({ error: "key not found" }, 404, req, config);
-    saveConfigPreservingClaudeCode(config);
-    reconcileLiveStateStores();
+    if (!revokeApiKeyInProcess(config, body.id)) return jsonResponse({ error: "key not found" }, 404, req, config);
     return jsonResponse({ success: true }, 200, req, config);
   }
   return null;

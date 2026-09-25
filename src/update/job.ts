@@ -24,27 +24,37 @@ import {
 import { stopWinswService } from "../lib/winsw";
 import { listListenPids, reclaimListenPort, scanListenPids, type ListenPidScan } from "../server/port-reclaim";
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
-import { isOpencodexHealthz, probeHostname, proxyIdentityAt, type HealthzIdentity } from "../server/proxy-liveness";
+import {
+  isHealthzVersion,
+  isOpencodexHealthz,
+  probeHostname,
+  proxyIdentityAt,
+  type HealthzIdentity,
+} from "../server/proxy-liveness";
 import { isServiceInstalled, isServiceViable, readServiceBackend, stopWindows } from "../service";
 import { runUpdateRestartWithOwnershipLease, type ServiceOwnershipResolution } from "./restart-ownership";
 import {
-  type Channel,
-  type Installer,
+  type Channel, type Installer,
   PKG,
   checkUpdatePackageIntegrity,
   currentVersion,
   defaultUpdateTag,
   detectInstall,
+  detectInstallOwnership,
   latestVersion,
+  miseUpdateCommand,
   updateCommand,
   updateCommandStr,
   resolveCurrentPnpmGlobalOwner,
   resolvePnpmActiveLauncher,
 } from "./index";
+import type { UpdateCheckDeps } from "./check-types";
+export type { UpdateCheckDeps } from "./check-types";
 import type { PnpmGlobalOwner } from "./pnpm-global-install.mjs";
 import { isNewer } from "./notify";
 import { isRealBunBinary } from "../lib/bun-binary-validator.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
+import { GUI_UPDATE_FAILURE_NEXT_STEP } from "./update-failure-guidance.mjs";
 import {
   npmCachePreflightFailureMessage,
   runNpmCachePreflight,
@@ -107,12 +117,6 @@ export class UpdateJobError extends Error {
   }
 }
 
-export interface UpdateCheckDeps {
-  currentVersion: () => string;
-  detectInstall: () => Installer;
-  latestVersion: (tag: Channel) => string | null;
-}
-
 interface UpdateWorkerProcess {
   pid?: number;
   unref(): void;
@@ -129,7 +133,9 @@ export interface StartUpdateJobDeps {
 const defaultCheckDeps: UpdateCheckDeps = {
   currentVersion,
   detectInstall,
+  detectInstallOwnership,
   latestVersion,
+  miseUpdateCommand,
 };
 
 function nodeBin(): string {
@@ -268,19 +274,6 @@ function ensureJobDir(): void {
  * TYPE and size — enough to tell a reader what class of failure occurred — and never its text,
  * which is where the paths and account names live.
  */
-/**
- * A version string we are willing to repeat in a persisted field.
- *
- * Semver plus an optional prerelease/build tail, capped in length. Anything else is dropped
- * rather than logged: `/healthz` is answered by whatever holds the port, so its `version` is
- * external input on the same footing as an error message.
- */
-function isVersionLike(value: unknown): value is string {
-  return typeof value === "string"
-    && value.length <= 64
-    && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(value);
-}
-
 function withheldSummary(error: unknown): string {
   // `error.name` is writable, so it is external text like the message. A fixed classification
   // is the only part of an unknown error we can state without repeating something we were
@@ -495,16 +488,22 @@ export function checkForUpdate(
   deps: UpdateCheckDeps = defaultCheckDeps,
 ): UpdateCheckResult {
   const current = deps.currentVersion();
-  const installer = deps.detectInstall();
+  const ownership = deps.detectInstallOwnership?.();
+  const installer = ownership?.installer ?? deps.detectInstall();
   const channel = requestedChannel ?? normalizeUpdateChannel(null, current);
   const latest = installer === "source" ? null : deps.latestVersion(channel);
   const updateAvailable = !!latest && isNewer(latest, current, channel);
   let reason: string | undefined;
-  let command = installer === "source" ? manualSourceCommand() : updateExecutionCommand(installer, channel).display;
+  let command = installer === "source"
+    ? manualSourceCommand()
+    : installer === "mise"
+      ? (ownership && deps.miseUpdateCommand?.(ownership)) ?? ""
+      : updateExecutionCommand(installer, channel).display;
 
   if (installer === "source") {
     reason = "source_checkout";
-    command = manualSourceCommand();
+  } else if (installer === "mise") {
+    reason = command ? "externally_managed" : "external_ownership_invalid";
   } else if (!latest) {
     reason = "latest_unavailable";
   } else if (!updateAvailable) {
@@ -517,7 +516,7 @@ export function checkForUpdate(
     channel,
     installer,
     updateAvailable,
-    canUpdate: installer !== "source" && updateAvailable,
+    canUpdate: installer !== "source" && installer !== "mise" && updateAvailable,
     command,
     releaseNotesUrl: RELEASE_NOTES_URL,
     ...(reason ? { reason } : {}),
@@ -1589,7 +1588,7 @@ async function defaultProbeProxyIdentity(
       // `/healthz` is answered by whatever is listening on that port, so a hostile or confused
       // responder can return any string here — and the restart-evidence reasons below
       // interpolate it into a persisted field. A version is a version or it is nothing.
-      ...(isVersionLike(body?.version) ? { version: body.version } : {}),
+      ...(isHealthzVersion(body?.version) ? { version: body.version } : {}),
     };
   } catch {
     return null;
@@ -1949,7 +1948,7 @@ export async function runGuiUpdateWorker(
         status: "failed",
         exitCode: result.status,
         signal: result.signal,
-        error: `update command failed (${result.status ?? "?"})`,
+        error: `update command failed (${result.status ?? "?"}). ${GUI_UPDATE_FAILURE_NEXT_STEP}`,
       });
       return;
     }

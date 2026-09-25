@@ -18,7 +18,16 @@ yüzeyleri](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ```bash
 ocx agent subagents set ark/model-a,openai/gpt-5.5
+ocx agent sidecar web --enabled off
 ```
+
+`--enabled off`, kontrol panelindeki **Kapalı (Off)** satırıyla aynı anahtardır: OpenCodex
+sidecar'ı çalıştırmayı bırakır ve Codex entegrasyonu `~/.codex/config.toml` dosyasına
+`web_search = "disabled"` yazar; tek arama yolu olarak bir MCP arama sunucusunun kullanılmasını bu
+sağlar. `--enabled on` bu satırı yeniden kaldırır. Kaydetme anahtarı gerçekten değiştirdiğinde
+komut tetiklediği Codex tarafı yazmayı bildirir (`--json` içinde `codexWebSearch`, aksi
+halde son satırda `Codex config:`) ve yazma yapılamadığında `ocx sync` adresini gösterir.
+Bayrak `vision` için de çalışır.
 
 ### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
 
@@ -271,7 +280,7 @@ referansı veya gizli olmayan bir geri döngü yer tutucusu taşır. Bir geri d�
 proxy'si (`127.0.0.1`, varsayılan) hiçbir kabul anahtarı gerektirmez. Referans
 verilen bir değişkeni yalnızca istemci şeması desteklediğinde ve proxy geri
 döngünün ötesine bağlandığında ayarlayın; kabul anahtarlarının nasıl verildiğini
-görmek için [Uzaktan erişim](/tr/reference/configuration/#remote-access)
+görmek için [Uzaktan erişim](/tr/reference/configuration/server/#uzaktan-erişim)
 bölümüne bakın. Yukarı akış sağlayıcılarının kendi anahtarları tamamen ayrı bir
 şeydir ve [Sağlayıcılar](/tr/guides/providers/) bölümüne göre yapılandırılır.
 Oluşturulan gjc entegrasyonu gizli olmayan bir loopback yer tutucusu kullanır; ortam değişkeni gerekmez. Yalnızca loopback desteklenir, uzak erişim kimlik bilgileri yapılandırılmaz.

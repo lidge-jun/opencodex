@@ -297,6 +297,62 @@ describe("upstream sends per logical request", () => {
     expect(sendCounts(logCtx)).toEqual([3]);
   });
 
+  test("a denied first combo reservation makes no upstream request", async () => {
+    const upstream = alwaysFailing(502, "upstream busy");
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const denied = createRequestExecutionBudget();
+    // Combo derives its own policy while sharing this counter; spend past that derived cap.
+    denied.used = comboExecutionBudgetPolicy(2).maxTotalModelSends;
+
+    takeSpendHome();
+    const response = await handleResponses(
+      responsesRequest("combo/fan"), comboOverTargets(2), logCtx, { sendBudget: denied },
+    );
+    const body = await response.text();
+    expect(response.status).toBe(429);
+    expect(body).toContain("request_send_budget_exhausted");
+    expect(upstream.authorizations).toHaveLength(0);
+    expect(totalSends(logCtx)).toBe(0);
+  });
+
+  test("a denied later combo reservation returns the prior upstream failure", async () => {
+    const budget = createRequestExecutionBudget();
+    const hits: string[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      hits.push(new Headers(init?.headers).get("authorization") ?? "");
+      budget.used = comboExecutionBudgetPolicy(2).maxTotalModelSends;
+      return Response.json({ error: { message: "first target busy", type: "rate_limit_error" } }, { status: 429 });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    takeSpendHome();
+    const response = await handleResponses(
+      responsesRequest("combo/fan"), comboOverTargets(2), logCtx, { sendBudget: budget },
+    );
+    expect(response.status).toBe(429);
+    expect(await response.text()).toContain("first target busy");
+    expect(hits).toEqual(["Bearer sk-t0"]);
+  });
+
+  test("a denied later combo reservation preserves a classified 413 response", async () => {
+    const budget = createRequestExecutionBudget();
+    const hits: string[] = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      hits.push(new Headers(init?.headers).get("authorization") ?? "");
+      budget.used = comboExecutionBudgetPolicy(2).maxTotalModelSends;
+      return Response.json({ error: { message: "maximum context length exceeded", type: "invalid_request_error" } }, { status: 413 });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+
+    takeSpendHome();
+    const response = await handleResponses(
+      responsesRequest("combo/fan"), comboOverTargets(2), logCtx, { sendBudget: budget },
+    );
+    expect(response.status).toBe(413);
+    expect(await response.text()).toContain("maximum context length exceeded");
+    expect(hits).toEqual(["Bearer sk-t0"]);
+  });
+
   test("a three-target combo fan-out gives every declared target a send and stays bounded", async () => {
     const upstream = alwaysFailing(502, "upstream busy");
     const logCtx: RequestLogContext = { model: "", provider: "" };
@@ -413,6 +469,27 @@ describe("ambiguous reset safety across Responses recovery", () => {
     }) as typeof fetch;
     takeSpendHome();
     const response = await handleResponses(responsesRequest("combo/fan"), config, { model: "", provider: "" });
+    expect(response.status).toBe(429);
+    expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
+    expect(sends).toBe(1);
+  });
+
+  test("an OpenCode Go destination refuses an ambiguous pre-answer reset instead of replaying", async () => {
+    // The removed replaySafe exception let the first send to this destination retry a
+    // dropped inference once. With it gone the destination behaves like every other:
+    // reset before the answer -> refusal 429, exactly one send on the wire.
+    const config = {
+      defaultProvider: "go",
+      providers: { go: transientChatProvider("go", { baseUrl: "https://opencode.ai/zen/go/v1" }) },
+    } as unknown as OcxConfig;
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      throw Object.assign(new Error("The socket connection was closed unexpectedly."), { code: "ECONNRESET" });
+    }) as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    takeSpendHome();
+    const response = await handleResponses(responsesRequest("go/model-go"), config, logCtx);
     expect(response.status).toBe(429);
     expect((await response.json()).error.code).toBe("upstream_reset_replay_refused");
     expect(sends).toBe(1);

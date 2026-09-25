@@ -39,6 +39,21 @@ attempt with tools removed and existing results retained. This can incur another
 request. A second empty answer fails; malformed calls and provider refusal or truncation
 outcomes are preserved without this retry.
 
+## xAI policy refusals
+
+Some xAI Chat Completions refusals arrive as HTTP 403 with an exact model-refusal
+sentence such as `I can't help with that request.` instead of HTTP 200 plus
+`finish_reason: content_filter`. Codex treats a 403 as a transport failure, so the
+user turn is never recorded and the same request is retried.
+
+On a non-combo Responses request, OpenCodex rewrites that allowlisted 403 to an
+HTTP 200 Responses payload with `status: "incomplete"` and
+`incomplete_details.reason: "content_filter"`. The rewrite runs on the openai-chat
+adapter path and on openai-responses passthrough (grok-4.6 / grok-4.5 OAuth).
+Streaming uses the same incomplete boundary. Empty or whitespace 403 bodies stay
+errors. Subscription, credit, entitlement, and `not allowed to use this
+model` 403s stay errors. Combo failover still sees the original HTTP 403.
+
 ## Cursor context overflow
 
 Cursor's first bare context overflow is surfaced to the client. Later eligible requests
@@ -177,6 +192,9 @@ top-level `instructions`, and `truncation` is removed because that destination r
 Responses shapes. Other Responses destinations preserve them.
 The same canonical boundary removes nested client-only `prompt_cache_breakpoint` markers and drops
 `item_reference` entries only on `store: false` continuations; tool call/result pairing is unchanged.
+`metadata` is removed on every forward route for compatibility with the canonical ChatGPT backend, which rejects it. `max_output_tokens`
+is removed only on that canonical route, which rejects the field outright; every other forward destination
+receives the caller's output cap unchanged, but the cap bounds the turn only when the destination enforces it.
 
 Image file IDs are provider-scoped references, not portable image bytes. Responses passthrough
 retains them; translating adapters receive an `[image: file_id]` text marker for file-only image
@@ -709,3 +727,25 @@ and can read those bytes; a `forward` provider pointed at any other origin is no
 Explicitly trusted `allowEncryptedV2AgentTasks` routes and translated Chat or Anthropic wires are
 unaffected, as are other item types such as reasoning and tool-output blobs, which keep their
 existing decrypt-failure recovery.
+
+### Switching providers in an existing conversation
+
+A replayed reasoning item carries `encrypted_content` that only the provider and credential that
+produced it can read. When opencodex knows the conversation was last served by a different
+provider, it removes that blob before sending and keeps the item's summary. If that provider also
+used a different endpoint or credential, the item's `rs_…` id is removed too, because it names an
+item the new destination cannot look up. When it cannot know,
+for example after a proxy restart, the new destination rejects the blob instead: OpenAI and Azure
+OpenAI answer `400 invalid_encrypted_content`. opencodex then resends the request once without the
+previous provider's reasoning state. The blob goes, and so does the reasoning item's `rs_…` id,
+because that id names an item the previous provider stored and the new destination would answer
+`Item with id 'rs_…' not found`.
+
+This recovery applies to every adapter that speaks the Responses wire, so `openai-responses` and
+`azure-openai` behave the same way. After a successful recovery, later turns of that conversation
+on the same destination drop the foreign state before the first send for the next five minutes,
+without another rejected round trip. The resend counts against the request's normal send budget.
+An ordinary 400 and a 429 are never retried this way, and neither is a 5xx, with one narrow
+exception: a 502 whose body is the exact encrypted tool-output decrypt rejection, sent for a request
+that carries encrypted tool output, gets the same single resend. A second rejection reaches the
+client unchanged. If that happens, start a new conversation on the destination provider.

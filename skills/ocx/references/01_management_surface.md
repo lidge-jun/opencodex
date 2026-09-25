@@ -28,6 +28,32 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 
 Safe to run at any time; none of these change state.
 
+### `ocx link port`
+
+Allocate a free loopback port for a remote home link.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the selected port as JSON. |
+
+JSON mode: `payload`.
+
+### `ocx link status`
+
+Read link listener and tunnel status.
+
+| Method | Route |
+|---|---|
+| GET | `/api/link/status` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the K16 status payload as JSON. |
+
+JSON mode: `payload`.
+
 ### `ocx remote-workspace status`
 
 Read local executor enrollment and available capabilities without printing credentials.
@@ -437,9 +463,90 @@ JSON mode: `payload`.
 
 - Distinct from `claude desktop show`, which reports what this machine WOULD write; this reports what is actually in effect, which only the running proxy knows.
 
+### `ocx claude desktop picker status`
+
+First-party picker mode: whether Claude Desktop's Code tab lists opencodex models, and what is missing if not.
+
+| Method | Route |
+|---|---|
+| GET | `/api/claude-desktop/picker` |
+
+JSON mode: `none`.
+
+- Reports desired, effective, keychain trust, the Desktop egress profile, the model count and a reason with the next command to run.
+
+### `ocx api protocols`
+
+Read the protocol contract version, API surfaces, protocol settings and feature vocabulary.
+
+| Method | Route |
+|---|---|
+| GET | `/api/protocols` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--provider` | string | Add one configured provider's upstream wire and who decided it. |
+| `--json` | boolean | Emit the GET /api/protocols body. |
+
+JSON mode: `payload`.
+
+### `ocx api explain`
+
+Preview the request path a model would take from one inbound API, computed from config.
+
+| Method | Route |
+|---|---|
+| POST | `/api/protocols/plan` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--model` | string | Model selector as a client would send it. |
+| `--inbound` | string | Inbound API: responses, chat or messages. |
+| `--feature` | string | Request feature key to judge; repeatable or comma-separated. |
+| `--json` | boolean | Emit the ProtocolPlanV1 preview. |
+
+JSON mode: `payload`.
+
+- A read-only POST: nothing is sent upstream, no combo state advances and the input is not logged.
+
 ## State-changing capabilities
 
 Each of these writes. Check the flags column before running one unattended.
+
+### `ocx link issue`
+
+Issue one link credential and record its tunnel metadata.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/issue` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--alias` | string | SSH host alias for the linked machine. |
+| `--tunnel-port` | number | Remote loopback port for the reverse tunnel. |
+| `--json` | boolean | Emit the issue result as JSON. |
+
+JSON mode: `payload`.
+
+- Requires the running proxy's admin token on loopback; the one-time data key is printed only on stdout.
+
+### `ocx link revoke`
+
+Revoke a link credential and remove its link record.
+
+| Method | Route |
+|---|---|
+| DELETE | `/api/link/{id}` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Link id to revoke. |
+| `--json` | boolean | Emit the revoked link id as JSON. |
+
+JSON mode: `payload`.
+
+- Requires the running proxy's admin token on loopback.
 
 ### `ocx remote-workspace pair`
 
@@ -834,14 +941,77 @@ Restart the Codex desktop app and app-servers.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--yes` | boolean | Required: fully quits and relaunches the operator's Codex desktop app and restarts its app-servers. |
+| `--yes` | boolean | Required: fully quits and relaunches the operator's Codex desktop app, which may discard unsaved composer drafts, model-picker selections, and pending approval prompts; also restarts its app-servers. |
 | `--json` | boolean | Emit the restart result as JSON. |
 
 JSON mode: `payload`.
 
 - `sync --restart-codex` is not a substitute: it restarts only as a side effect after a catalog or cache write, so it cannot restart a healthy install on request.
 - Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.
-- --yes is mandatory because this interrupts a running editor session, which must never happen because an agent guessed a subcommand.
+- --yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.
+
+### `ocx claude desktop bind`
+
+First-party: serve a Claude Desktop Code tab picker model with an opencodex route.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/first-party-bindings` |
+
+JSON mode: `none`.
+
+- Takes a picker model id (claude-sonnet-4-6) and a route in the Desktop route vocabulary (provider/model or native/<slug>); the route must be one the Desktop profile can offer.
+- Only Claude Code traffic that reaches the proxy through the first-party intercept (Desktop's Code tab, the claude CLI) honours it; ocx claude and the public Messages endpoint are unaffected.
+- The Desktop picker keeps Anthropic's label; the binding changes which model answers, starting with the next request.
+
+### `ocx claude desktop unbind`
+
+Remove a first-party Claude Desktop Code tab picker binding.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/first-party-bindings` |
+
+JSON mode: `none`.
+
+- Removing an id that is not bound is a no-op; the remaining bindings are printed.
+
+### `ocx claude desktop picker on`
+
+Turn first-party picker mode on and remember the choice.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/picker` |
+
+JSON mode: `none`.
+
+- Needs a running proxy, first-party mode and macOS. The first time, macOS asks to trust a local certificate authority limited to claude.ai; when the server cannot show that prompt the command runs the trust step in this terminal.
+- Claude Desktop then reaches the network through opencodex; fully quit and reopen Desktop afterwards.
+
+### `ocx claude desktop picker off`
+
+Turn first-party picker mode off, remove its Desktop egress profile and certificate trust, and remember the choice.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/picker` |
+
+JSON mode: `none`.
+
+- Works without a running proxy: the preference is saved and the picker profile and trust are removed locally.
+
+### `ocx claude desktop picker trust`
+
+Run the macOS keychain step for picker mode in this terminal, then ask the server to finish enabling it.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/claude-desktop/picker` |
+
+JSON mode: `none`.
+
+- The server removes trust this command added if the enable is refused; if the request is lost, trust is left alone and picker status tells what happened.
 
 ### `ocx integration native`
 
@@ -928,8 +1098,29 @@ JSON mode: `payload`.
 
 - A bare invocation reads and never writes.
 
+### `ocx api policy`
+
+Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.
+
+| Method | Route |
+|---|---|
+| GET | `/api/protocols` |
+| PATCH | `/api/protocols/settings` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--messages` | string | Open or close the Messages API: on or off. Off also turns the Claude integration off. |
+| `--unrepresentable` | string | legacy keeps today's behavior; reject refuses a request its path cannot carry. |
+| `--rollout` | string | One switch as name=on or name=off; repeatable. Every switch defaults off. |
+| `--json` | boolean | Emit the resulting GET /api/protocols body. |
+
+JSON mode: `payload`.
+
+- A bare invocation reads and never writes.
+- A setting flag changes the operator's config; run it only when the operator asks for that change.
+
 ## Counts
 
-- declared capabilities: 50
-- of those, state-changing: 25
+- declared capabilities: 63
+- of those, state-changing: 33
 - head-resolved invocations: 2

@@ -142,7 +142,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-在 WSL 中，如果未设置 `CODEX_HOME`，且 Linux 侧的 `~/.codex/config.toml` 不存在，opencodex 还会检查
+在 WSL 中，如果未设置 `CODEX_HOME`，且 Linux 侧的 `~/.codex` 目录不存在或不含任何 Codex 状态（`config.toml`, `auth.json`, `sessions`, `history.jsonl`），opencodex 还会检查
 `/mnt/c/Users/*/.codex/config.toml` 下是否存在单一的 Windows Codex Desktop home。只要候选项恰好只有一个，
 它就会使用那个目录，让 WSL app-server mode 和 Windows Codex Desktop 共享同一份 config 与 auth 文件。
 如需覆盖这一检测，请显式设置 `CODEX_HOME`。
@@ -201,6 +201,12 @@ Codex 显示的模型来自一个磁盘上的 catalog（默认是 `$CODEX_HOME/o
 命令通过 `write_stdin` 轮询。如果原生路由 Responses、Kiro 或 Cursor 路径上的 code-mode exec
 结果仍包含宿主的某条失败消息，opencodex 会追加一行提示，指出对应规则。此变更不会重写模型的
 代码或补丁文本。
+
+如果路由模型误把 `{"cmd":"git status --short"}` 这样的 shell 参数对象传给 code-mode `exec`，
+opencodex 会在确认工具目录为 code mode 且内容无歧义时，将它转换为调用
+`tools.exec_command(...)` 并通过 `text(...)` 返回结果的 JavaScript。shell 选项会保留，
+命令执行与权限检查仍由 Codex 处理。合法的 JavaScript 后备字段、歧义对象和其他工具命名空间
+不会被转换；这项兼容修复不会绕过提供方限流，也不改变配置的重试策略。
 
 所选 provider 必须支持 function/tool calling。不支持 tool call 的 text-only provider 无法使用 `exec`、
 Browser 或 Computer Use。原生 OpenAI 条目会保持其上游 tool mode 不变。
@@ -350,7 +356,7 @@ ocx restore    # restore without stopping  (alias: ocx eject)
 ocx restore back # point plain Codex at the running proxy again
 ```
 
-当 opencodex 作为受管的 [background service](/reference/cli/#ocx-service) 运行时，它会设置
+当 opencodex 作为受管的 [background service](/zh-cn/reference/cli/lifecycle/#ocx-service-installrepairrestartstartstopstatusuninstallremove) 运行时，它会设置
 `OCX_SERVICE=1`，这样由服务驱动的重启**不会**反复改写 Codex config——只有显式的
 `ocx stop` / `ocx service stop` 才会恢复原生 Codex。
 

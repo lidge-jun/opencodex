@@ -194,6 +194,8 @@ export const ROUTED_MODEL_COMPATIBILITY_EXCLUSIONS = new Set([
    * keep appearing with its capabilities broken. Excluding the slug is what actually takes
    * it out of the routed catalog.
    */
+  "deepseek/deepseek-v4-pro",
+  "opencode-go/deepseek-v4-pro",
   "command-code/deepseek-deepseek-v4-pro",
   "commandcode/deepseek-deepseek-v4-pro",
   "orcarouter/deepseek-deepseek-v4-pro",
@@ -729,6 +731,7 @@ export function applyMultiAgentMode(
 ): RawEntry[] {
   if (mode === "v2" && options.keepNativeChatGptOnV1 === true) {
     for (const entry of entries) {
+      recordMultiAgentOrigin(entry);
       entry.multi_agent_version = catalogEntryIsNativeChatGpt(entry) ? "v1" : "v2";
     }
     return entries;
@@ -737,6 +740,9 @@ export function applyMultiAgentMode(
     // Restore upstream defaults: clear any stale forced multi_agent_version and
     // re-apply upstream pins from the snapshot for native entries that have one.
     for (const entry of entries) {
+      // A forced mode recorded what this row carried before it was overwritten; returning
+      // to default consumes that record whichever branch below decides the row.
+      const origin = takeMultiAgentOrigin(entry);
       if (options.preserveDefaultMultiAgentVersion?.(entry)) continue;
       const slug = typeof entry.slug === "string" ? entry.slug : "";
       const nativeAlias = entry.opencodex_catalog_kind === CODEX_NATIVE_ALIAS_CATALOG_KIND;
@@ -775,7 +781,17 @@ export function applyMultiAgentMode(
         && isNativeCatalogEntry
         && !hasNativeDefault
         && typeof entry.multi_agent_version === "string") {
-        continue;
+        // The baseline predates this native row, so it cannot say whether the live pin
+        // is genuine. With a recorded origin it no longer has to guess: restore what the
+        // row carried before the first forced mode (issue 5636). A row without a record
+        // (older catalogs) keeps the non-destructive read.
+        if (origin === undefined) continue;
+        if (typeof origin === "string") {
+          entry.multi_agent_version = origin;
+          continue;
+        }
+        if (v2FeatureEnabled) entry.multi_agent_version = "v2";
+        else delete entry.multi_agent_version;
       } else if (v2FeatureEnabled) {
         entry.multi_agent_version = "v2";
       } else {
@@ -785,9 +801,33 @@ export function applyMultiAgentMode(
     return entries;
   }
   for (const entry of entries) {
+    recordMultiAgentOrigin(entry);
     entry.multi_agent_version = mode;
   }
   return entries;
+}
+
+/**
+ * Provenance for a forced multi-agent stamp: the value the row carried before the first
+ * forced v1/v2 pass, or null when it carried none. Repeated forced passes never replace it,
+ * so a v1 -> v2 -> default round trip still restores the original. Codex ignores unknown
+ * catalog fields, as it does opencodex_catalog_kind.
+ */
+export const MULTI_AGENT_ORIGIN_FIELD = "opencodex_multi_agent_version_origin";
+
+function recordMultiAgentOrigin(entry: RawEntry): void {
+  if (Object.hasOwn(entry, MULTI_AGENT_ORIGIN_FIELD)) return;
+  (entry as Record<string, unknown>)[MULTI_AGENT_ORIGIN_FIELD] = typeof entry.multi_agent_version === "string"
+    ? entry.multi_agent_version
+    : null;
+}
+
+/** Remove and return the recorded origin: a string pin, null for "no pin", undefined when unrecorded. */
+function takeMultiAgentOrigin(entry: RawEntry): string | null | undefined {
+  if (!Object.hasOwn(entry, MULTI_AGENT_ORIGIN_FIELD)) return undefined;
+  const raw = (entry as Record<string, unknown>)[MULTI_AGENT_ORIGIN_FIELD];
+  delete (entry as Record<string, unknown>)[MULTI_AGENT_ORIGIN_FIELD];
+  return typeof raw === "string" ? raw : raw === null ? null : undefined;
 }
 
 export function normalizeRoutedCatalogEntry(

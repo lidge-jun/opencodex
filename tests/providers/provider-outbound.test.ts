@@ -555,6 +555,8 @@ describe("provider outbound GET transport", () => {
       expect(result.providerRequests).toEqual(["/v1/models", "/v1/models", "/v1/models"]);
       expect(stderr).toContain("cannot be pinned locally");
     } finally {
+      if (child.exitCode === null) child.kill();
+      await child.exited;
       removeTreeWithRetry(childHome);
     }
   }, 15_000);

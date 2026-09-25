@@ -55,17 +55,27 @@ jobs:
       # Open the pull request.
       pull-requests: write
     steps:
-      - name: Checkout dev
+      # Keep every executable file in the privileged job pinned to the audited
+      # release revision. The later dev checkout is input data only: none of its
+      # actions, dependencies, scripts, or tests run with this job's token.
+      - name: Checkout trusted automation
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: dev
+          ref: ${{ github.sha }}
           # Tags are load-bearing, not decoration: the freeness gate below is a bun
           # test that reads the local tag set, and release-version-line.test.ts
           # returns EARLY on an empty set. A shallow checkout would make that gate
           # silently vacuous instead of failing loudly.
           fetch-depth: 0
-          # Do NOT set persist-credentials: false here as the read-only workflows do.
-          # This job has to push its bump branch.
+          persist-credentials: false
+
+      - name: Checkout dev as data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: dev
+          path: dev-tree
+          fetch-depth: 0
+          persist-credentials: false
 
       # The repository-owned composite action, not a hand-pinned setup-bun SHA: it
       # resolves the Bun version from package.json so the runtime SOT stays in one
@@ -108,7 +118,7 @@ jobs:
           RELEASED_VERSION: ${{ steps.target.outputs.version }}
         run: |
           set -euo pipefail
-          bun scripts/bump-dev-version.ts "${RELEASED_VERSION}" package.json
+          bun scripts/bump-dev-version.ts "${RELEASED_VERSION}" dev-tree/package.json
 
       - name: Prove the intended version is not already released
         if: ${{ steps.target.outputs.mode == 'pre-move' }}
@@ -128,15 +138,34 @@ jobs:
 
       - name: Prove the chosen version is unused
         if: ${{ steps.decide.outputs.changed == 'true' }}
+        env:
+          NEXT_VERSION: ${{ steps.decide.outputs.version }}
         # The script decides the candidate from the target version SHAPE, which is all
         # a pure function can see. Whether that candidate is actually FREE is a property
         # of the tag set, so it is settled here by the detector that already owns the
         # question. If this fails, no pull request is opened and the job goes red asking
         # for a human decision - which is the correct outcome, not a fallback.
-        run: bun test tests/ci-workflows/release-version-line.test.ts
+        #
+        # The release-commit exception does not apply here. release-version-line.test.ts
+        # lets an in-tree version equal the highest tag when that tag names HEAD, which
+        # is correct on the release commit itself. In this job HEAD is the workflow's own
+        # main checkout while only package.json came from dev, so a chosen version that
+        # already carries a v tag would pass the shared detector and open a pull request
+        # claiming a published version. Refuse that tag explicitly first.
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          if git rev-parse -q --verify "refs/tags/v${NEXT_VERSION#v}" >/dev/null; then
+            echo "::error::v${NEXT_VERSION#v} already exists; the chosen version needs a human decision"
+            exit 1
+          fi
+          # Exercise the trusted detector against the candidate package metadata.
+          cp dev-tree/package.json package.json
+          bun test tests/ci-workflows/release-version-line.test.ts
 
       - name: Open the bump pull request
         if: ${{ steps.decide.outputs.changed == 'true' }}
+        working-directory: dev-tree
         env:
           GH_TOKEN: ${{ github.token }}
           MODE: ${{ steps.target.outputs.mode }}
@@ -188,27 +217,58 @@ jobs:
             echo "::notice::${branch} exists without an open pull request; validating it"
             git fetch origin "${branch}"
 
-            # Fail closed on unexpected content. The branch carries the bot's own one-line
-            # bump, so anything else on it means a human or another job is using that name and
-            # this job must not push to it or open a pull request from it.
-            changed_files="$(git diff --name-only "origin/dev...origin/${branch}")"
-            if [ "${changed_files}" != "package.json" ]; then
-              echo "::error::${branch} touches unexpected files: ${changed_files:-<none>}"
+            # Fail closed on unexpected content. The branch carries the bot's own version move,
+            # which touches only the four version sources that scripts/release-version-sources.ts
+            # owns, and always package.json. Anything else on it means a human or another job is
+            # using that name and this job must not push to it or open a pull request from it.
+            # --no-renames lists a rename as its deletion plus its addition, so a file renamed onto
+            # an allowed name still shows the path it removed. The case arms are literal paths.
+            changed_files="$(git diff --no-renames --name-only "origin/dev...origin/${branch}")"
+            touches_package_json=false
+            while IFS= read -r changed_file; do
+              case "${changed_file}" in
+                package.json) touches_package_json=true ;;
+                desktop/src-tauri/tauri.conf.json|desktop/src-tauri/Cargo.toml|desktop/src-tauri/Cargo.lock) ;;
+                *)
+                  echo "::error::${branch} touches unexpected files: ${changed_files:-<none>}"
+                  exit 1
+                  ;;
+              esac
+            done <<< "${changed_files}"
+            if [ "${touches_package_json}" != "true" ]; then
+              echo "::error::${branch} does not move package.json: ${changed_files:-<none>}"
               exit 1
             fi
-            branch_version="$(git show "origin/${branch}:package.json" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).version")"
-            if [ "${branch_version}" != "${NEXT_VERSION}" ]; then
-              echo "::error::${branch} carries ${branch_version}, expected ${NEXT_VERSION}"
-              exit 1
-            fi
+            # The decide step already rewrote the version sources in this working tree. Put them
+            # back first: git refuses to switch over local edits, and the check below must read
+            # what the branch commits, not what this run wrote.
+            git checkout -- package.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
             git checkout -B "${branch}" "origin/${branch}"
+            # The diff above proved every other file matches the merge base with dev, so this is
+            # the merge base's checker reading the branch's four committed version sources.
+            (cd .. && env -u GH_TOKEN bun scripts/release-version-sources.ts check "${NEXT_VERSION}" --root dev-tree) || {
+              echo "::error::${branch} does not carry ${NEXT_VERSION} in every version source"
+              exit 1
+            }
           else
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git checkout -b "${branch}"
-            git add package.json
+            # The trusted checkout's checker reads this tree's four version sources.
+            (cd .. && env -u GH_TOKEN bun scripts/release-version-sources.ts check "${NEXT_VERSION}" --root dev-tree) || {
+              echo "::error::the bump did not move every version source to ${NEXT_VERSION}"
+              exit 1
+            }
+            git add -- package.json desktop/src-tauri/tauri.conf.json desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
             git commit -m "${subject}"
-            git push origin "${branch}"
+            # Supply the write credential only to this trusted push invocation. In
+            # particular, never persist it in the dev checkout while dev-controlled
+            # files could execute.
+            auth_header="$(printf 'x-access-token:%s' "${GH_TOKEN}" | base64 -w0)"
+            # The raw token is masked automatically; its base64 form is not. Mask it so a
+            # verbose git or curl trace cannot leak a usable credential into the log.
+            echo "::add-mask::${auth_header}"
+            git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" push origin "${branch}"
           fi
 
           gh pr create \
@@ -220,7 +280,8 @@ jobs:
 
           ${reason}
 
-          This moves \`dev\` to \`${NEXT_VERSION}\`.
+          This moves \`dev\` to \`${NEXT_VERSION}\` in \`package.json\` and the desktop version
+          sources (\`tauri.conf.json\`, \`Cargo.toml\`, and the \`opencodex-desktop\` entry of \`Cargo.lock\`).
 
           Opened automatically by \`.github/workflows/dev-version-bump.yml\`. The same
           version-line move was previously done by hand in 32529c2b2, e4a85d134, 076ad3036, and

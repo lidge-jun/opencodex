@@ -1,5 +1,6 @@
 import {
   CliUsageError,
+  desktopSwitchApplyReason,
   printData,
   rejectArgs,
   runCliAction,
@@ -54,15 +55,6 @@ function desktopSwitchInertReason(reason: unknown): string {
     return "a non-loopback bind requires an admission token, so this flag is inert";
   }
   return "the stored setting is not effective in the current runtime configuration";
-}
-
-function desktopSwitchApplyReason(reason: unknown): string {
-  if (reason === "not_requested") return "no desktop switch rewrite was requested";
-  if (reason === "proxy_not_running") return "the proxy is not running";
-  if (reason === "integration_disabled") return "Codex integration is disabled";
-  if (reason === "write_lock_busy") return "the Codex config write lock is busy";
-  if (reason === "injection_refused") return "Codex config injection was refused";
-  return "the rewrite could not be completed";
 }
 
 function settingsUpdateLines(
@@ -202,13 +194,20 @@ export async function handleSystemCommand(argv: string[], deps: RuntimeApiDeps =
       printData(await runtimeRequest("/api/system/codex-app-server", {}, deps), wantsJson);
     } else if (sub === "codex-restart") {
       // --yes required: this fully quits and relaunches the user's Codex desktop app as well as
-      // restarting app-servers; an agent guessing a subcommand must not interrupt that session.
+      // restarting app-servers, which can discard unsaved drafts, selections, and approval prompts.
       const args = [...rest];
       const wantsJson = takeFlag(args, "--json");
       const yes = takeFlag(args, "--yes");
-      if (!yes) throw new CliUsageError("system codex-restart requires --yes: this fully quits and relaunches the Codex desktop app and restarts its app-servers", USAGE);
+      if (!yes) throw new CliUsageError(
+        "system codex-restart requires --yes: this fully quits and relaunches the Codex desktop app, so unsaved composer drafts, model-picker selections, and pending approval prompts may be lost; it also restarts the app-servers",
+        USAGE,
+      );
       rejectArgs(args, USAGE);
-      printData(await runtimeRequest("/api/system/codex-restart", { method: "POST" }, deps), wantsJson, ["Codex desktop app and app-server restart requested."]);
+      printData(
+        await runtimeRequest("/api/system/codex-restart", { method: "POST" }, deps),
+        wantsJson,
+        ["Codex desktop app and app-server restart requested. Unsaved composer drafts, model-picker selections, and pending approval prompts may be lost."],
+      );
     } else if (sub === "update") await update(rest, deps);
     else throw new CliUsageError(`unknown system command ${sub}`, USAGE);
   });

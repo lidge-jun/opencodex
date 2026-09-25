@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
   copyFileSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   renameSync,
@@ -94,6 +95,66 @@ afterEach(() => {
 });
 
 describe("CodeRabbit Log Guard reclaim regressions", () => {
+  for (const [label, ino] of [
+    ["undefined", undefined],
+    ["null", null],
+    ["zero", 0n],
+  ] as const) {
+    test(`refuses reclaim when the filesystem reports an unavailable inode (${label})`, () => {
+      const { codexHome } = fixture();
+      let probed = false;
+      let opened = false;
+
+      const result = compactCodexLogs(deps(codexHome, {
+        statDatabasePath: path => {
+          probed = true;
+          const stat = lstatSync(path, { bigint: true });
+          return {
+            dev: stat.dev,
+            ino,
+            isFile: () => stat.isFile(),
+            isSymbolicLink: () => stat.isSymbolicLink(),
+          };
+        },
+        openDatabase: (path, flags) => {
+          opened = true;
+          return new Database(path, flags);
+        },
+      }));
+
+      expect(probed).toBe(true);
+      expect(opened).toBe(false);
+      expect(result).toEqual({ ok: false, error: "unsafe_path" });
+    });
+  }
+
+  test("refuses an unavailable inode on the post-open path observation", () => {
+    const { codexHome } = fixture();
+    let probes = 0;
+    let opened = false;
+
+    const result = compactCodexLogs(deps(codexHome, {
+      statDatabasePath: path => {
+        const stat = lstatSync(path, { bigint: true });
+        probes += 1;
+        return {
+          dev: stat.dev,
+          ino: probes === 3 ? undefined : stat.ino,
+          isFile: () => stat.isFile(),
+          isSymbolicLink: () => stat.isSymbolicLink(),
+        };
+      },
+      openDatabase: (path, flags) => {
+        opened = true;
+        return new Database(path, flags);
+      },
+    }));
+
+    expect(probes).toBe(3);
+    expect(opened).toBe(true);
+    expect(result).toEqual({ ok: false, error: "unsafe_path" });
+  });
+
   test("rejects a regular-file replacement between the pre-open check and SQLite open", () => {
     const { codexHome, databasePath } = fixture();
     const backup = `${databasePath}.original`;
