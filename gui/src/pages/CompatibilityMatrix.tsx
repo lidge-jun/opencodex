@@ -12,7 +12,8 @@ import {
   readCompatibilityPair,
   type ProtocolPairFilter,
 } from "../protocol-deep-links";
-import { ProtocolPairFilters, ProtocolPairStatus, useSubjectProtocolPairs } from "./compatibility-protocol-filter";
+import { ProtocolPairFilters, ProtocolPairStatus } from "./compatibility-protocol-filter";
+import { useSubjectProtocolPairs } from "./compatibility-protocol-pairs";
 import {
   fetchLabPageData,
   fetchMoreVerdicts,
