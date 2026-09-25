@@ -15,7 +15,9 @@ import {
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  SEND_BUDGET_EXHAUSTED_CODE,
 } from "../lib/errors";
+import type { RequestExecutionBudget } from "../lib/request-execution-budget";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
@@ -31,6 +33,8 @@ import {
   REPLAY_REFUSAL_CLIENT_HEADERS,
   REPLAY_REFUSED_STATUS,
   retainReplayRefusal,
+  SendBudgetExhaustedError,
+  TRANSIENT_RETRY_MAX_ATTEMPTS,
   UpstreamRetryEvidenceError,
   type UpstreamSendRecovery,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
@@ -180,6 +184,18 @@ export type NativeChatFinishLog = (
 
 export interface NativeChatExecution extends HandleNativeChatOptions {
   finishLog: NativeChatFinishLog;
+  /**
+   * A combo child's per-target budget (PF-07). With it the attempt opens no spend tracker of its
+   * own: the combo's hop reservation already booked the first send on the request's shared
+   * counter, and every later physical send is reported to that counter, whose observer is the
+   * request's one spend tracker. A second tracker would book each send twice and, merged into
+   * the parent row, replace the one the final log settles.
+   */
+  sendBudget?: RequestExecutionBudget;
+  /** Replaces the request-relative first-output mark; a combo child records its own. */
+  onFirstOutput?: () => void;
+  /** The lease a streamed body holds; defaults to `logIds.turnAdmissionLease`. */
+  turnAdmissionLease?: AdmissionLease;
 }
 
 /**
@@ -216,7 +232,10 @@ export async function runNativeChatAttempt(
   attemptHandle: InferenceAttempt,
 ): Promise<Response> {
   const { req, config, logCtx, logIds, route, requestedModel, requestedStream, translatorBudget, finishLog } = execution;
+  const { sendBudget } = execution;
   const { attempt } = attemptHandle;
+  const onFirstOutput = execution.onFirstOutput
+    ?? (logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined);
   const fail = (status: number, message: string, type?: string, code?: string | null): Response => {
     const safeMessage = redactSecretString(message);
     finishLog(status, safeMessage);
@@ -235,7 +254,7 @@ export async function runNativeChatAttempt(
   // of adding another trackStreamLifetime wrapper (unsafe on bundled Bun#32111).
   let streamTurnRegistered = false;
   const transferTurnToStream = () => {
-    const lease = logIds?.turnAdmissionLease;
+    const lease = execution.turnAdmissionLease ?? logIds?.turnAdmissionLease;
     if (!lease || typeof (lease as { bindAbortController?: unknown }).bindAbortController !== "function") return;
     registerTurn(upstream, lease);
     streamTurnRegistered = true;
@@ -256,7 +275,7 @@ export async function runNativeChatAttempt(
   if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
   let activeProvider: OcxProviderConfig = route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
-  const spendTracker = attachRequestSpendTracker(req, logCtx);
+  const spendTracker = sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
   let activeAdapter: ProviderAdapter = createOpenAIChatAdapter(activeProvider);
   let activeRequest: AdapterRequest;
   let retainedRequestBytes = 0;
@@ -298,9 +317,21 @@ export async function runNativeChatAttempt(
   // key rotation so recovery cannot replace the ceiling along with the active credential.
   const requestTransientPolicy = transientRetryPolicyFor(activeProvider);
   let transientSendsUsed = 0;
-  const remainingTransientSends = (): number => requestTransientPolicy
-    ? Math.max(0, requestTransientPolicy.attempts - transientSendsUsed)
-    : Number.POSITIVE_INFINITY;
+  // A combo child also answers to the request's shared base allowance, at the cap its own ladder
+  // uses. Its first send is exempt: the combo reserved it before dispatching this target.
+  const sharedSendCap = requestTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
+  let physicalSends = 0;
+  const remainingSharedSends = (): number => {
+    if (!sendBudget) return Number.POSITIVE_INFINITY;
+    const remaining = sendBudget.remainingBaseSends(sharedSendCap);
+    return physicalSends === 0 ? Math.max(1, remaining) : remaining;
+  };
+  const remainingTransientSends = (): number => Math.min(
+    requestTransientPolicy
+      ? Math.max(0, requestTransientPolicy.attempts - transientSendsUsed)
+      : Number.POSITIVE_INFINITY,
+    remainingSharedSends(),
+  );
   const transientSendAvailable = (): boolean => remainingTransientSends() > 0;
 
   const send = async (request: AdapterRequest, recovery?: "rate-limit-429" | "key-429"): Promise<Response> => {
@@ -308,6 +339,7 @@ export async function runNativeChatAttempt(
       // #2643: opted-in key-auth openai-chat providers retry pre-stream transient statuses on
       // the native chat lane too; everyone else keeps reset-only semantics.
       const remaining = remainingTransientSends();
+      if (sendBudget && remaining <= 0) throw new SendBudgetExhaustedError(safeHostLabel(request.url));
       if (requestTransientPolicy && remaining <= 0) {
         throw new Error("native Chat transient send budget exhausted before recovery dispatch");
       }
@@ -349,7 +381,15 @@ export async function runNativeChatAttempt(
                 const encoding = new Headers(init.headers).get("accept-encoding");
                 if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
                 if (init.signal?.aborted) throw init.signal.reason;
-                if (!spendTracker.charge()) throw new NativeChatSpendRefusal();
+                if (sendBudget) {
+                  // Backstop for sends the helper cannot see coming (a reset replay). The first
+                  // report settles the combo's booking; each later one is charged and booked.
+                  if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
+                    throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+                  }
+                  physicalSends += 1;
+                  sendBudget.used += 1;
+                } else if (!spendTracker?.charge()) throw new NativeChatSpendRefusal();
                 noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).
@@ -442,6 +482,10 @@ export async function runNativeChatAttempt(
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "client_cancelled");
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendBudget && sendError instanceof SendBudgetExhaustedError) {
+      // A decision this process made, answered as the Responses path answers it: 429, not 502.
+      return fail(429, sendError.message, SEND_BUDGET_EXHAUSTED_CODE, SEND_BUDGET_EXHAUSTED_CODE);
+    }
     if (sendError instanceof NativeChatSpendRefusal) {
       const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);
       finishLog(429);
@@ -556,7 +600,7 @@ export async function runNativeChatAttempt(
       translatorBudget,
       signal: upstream.signal,
       stallTimeoutSec: config.stallTimeoutSec,
-      onFirstOutput: logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined,
+      onFirstOutput,
       onUsage: usage => {
         if (!recordKeyWireAttemptUsage(logCtx, usage)) {
           logCtx.usage = usage;
@@ -656,7 +700,7 @@ export async function runNativeChatAttempt(
       attempt.usage = usage;
     }
   }
-  if (logIds) recordFirstOutput(logCtx, logIds.start);
+  onFirstOutput?.();
   try {
     const serialized = requestedStream
       ? jsonCompletionSse(completion, requestedModel, translatorBudget)
