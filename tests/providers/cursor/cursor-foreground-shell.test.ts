@@ -101,6 +101,8 @@ describe("Cursor foreground shell admission", () => {
     if (result.case !== "failure") throw new Error("missing typed failure");
     expect(result.value).toMatchObject({ aborted: true, stdout: "", exitCode: 1 });
     expect(result.value.stderr).toContain("kernel-backed descendant ownership");
+    // No catalog hint here, so the default bridge redirect (#604) must follow the reason.
+    expect(result.value.stderr).toContain("shell_command");
     expect(existsSync(path)).toBe(false);
   });
 

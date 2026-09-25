@@ -127,7 +127,8 @@ export function rejectShellExecForPolicy(execMsg: ExecServerMessage, hint?: stri
 export function shellExec(execMsg: ExecServerMessage, redirectHint?: string): Uint8Array {
   // Synchronous shellArgs needs the same admission fence as shellStreamArgs;
   // changing wire shape must not bypass the missing descendant owner.
-  return rejectShellExecForPolicy(execMsg, foregroundShellUnavailableMessage(redirectHint));
+  // Without a catalog hint, keep the default bridge redirect (#604) after the reason.
+  return rejectShellExecForPolicy(execMsg, foregroundShellUnavailableMessage(redirectHint ?? nativeShellDisabledMessage()));
 }
 
 export function rejectShellStreamExecForPolicy(execMsg: ExecServerMessage, hint?: string): Uint8Array[] {
@@ -165,7 +166,7 @@ export async function shellStreamExec(
       event: { case: "start", value: create(ShellStreamStartSchema, { sandboxPolicy: args.requestedSandboxPolicy }) },
     })),
   ];
-  const result = await runForegroundShell(args.command, cwd, args.hardTimeout ?? 120_000, owner, signal, redirectHint);
+  const result = await runForegroundShell(args.command, cwd, args.hardTimeout ?? 120_000, owner, signal, redirectHint ?? nativeShellDisabledMessage());
   if (result.stdout && !result.aborted) {
     replies.push(execBytes(execMsg, "shellStream", create(ShellStreamSchema, {
       event: { case: "stdout", value: create(ShellStreamStdoutSchema, { data: result.stdout }) },
