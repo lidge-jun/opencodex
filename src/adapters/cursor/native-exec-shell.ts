@@ -1,6 +1,6 @@
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { resolve } from "node:path";
-import { runForegroundShell, type CursorForegroundShellOwner } from "./native-foreground-shell";
+import { foregroundShellUnavailableMessage, runForegroundShell, type CursorForegroundShellOwner } from "./native-foreground-shell";
 import { create } from "@bufbuild/protobuf";
 import {
   BackgroundShellSpawnErrorSchema,
@@ -124,39 +124,10 @@ export function rejectShellExecForPolicy(execMsg: ExecServerMessage, hint?: stri
   return execBytes(execMsg, "shellResult", rejectedShellResult(args.command, resolve(args.workingDirectory || process.cwd()), Date.now(), hint));
 }
 
-export function shellExec(execMsg: ExecServerMessage): Uint8Array {
-  if (execMsg.message.case !== "shellArgs") throw new Error("invalid shell exec");
-  const args = execMsg.message.value;
-  const cwd = resolve(args.workingDirectory || process.cwd());
-  const started = Date.now();
-  const result = spawnSync(args.command, { cwd, shell: true, encoding: "utf8", timeout: args.hardTimeout || 120_000 });
-  const elapsed = Date.now() - started;
-  const stdout = String(result.stdout ?? "");
-  const stderr = String(result.stderr ?? "");
-  const code = typeof result.status === "number" ? result.status : 1;
-  if (code === 0) {
-    return execBytes(execMsg, "shellResult", create(ShellResultSchema, {
-      result: {
-        case: "success",
-        value: create(ShellSuccessSchema, { command: args.command, workingDirectory: cwd, exitCode: code, signal: "", stdout, stderr, executionTime: elapsed }),
-      },
-    }));
-  }
-  return execBytes(execMsg, "shellResult", create(ShellResultSchema, {
-    result: {
-      case: "failure",
-      value: create(ShellFailureSchema, {
-        command: args.command,
-        workingDirectory: cwd,
-        exitCode: code,
-        signal: String(result.signal ?? ""),
-        stdout,
-        stderr,
-        executionTime: elapsed,
-        aborted: !!result.error,
-      }),
-    },
-  }));
+export function shellExec(execMsg: ExecServerMessage, redirectHint?: string): Uint8Array {
+  // Synchronous shellArgs needs the same admission fence as shellStreamArgs;
+  // changing wire shape must not bypass the missing descendant owner.
+  return rejectShellExecForPolicy(execMsg, foregroundShellUnavailableMessage(redirectHint));
 }
 
 export function rejectShellStreamExecForPolicy(execMsg: ExecServerMessage, hint?: string): Uint8Array[] {
@@ -183,6 +154,7 @@ export async function shellStreamExec(
   execMsg: ExecServerMessage,
   owner?: CursorForegroundShellOwner,
   signal?: AbortSignal,
+  redirectHint?: string,
 ): Promise<Uint8Array[]> {
   if (execMsg.message.case !== "shellStreamArgs") throw new Error("invalid shell stream exec");
   const args = execMsg.message.value;
@@ -193,7 +165,7 @@ export async function shellStreamExec(
       event: { case: "start", value: create(ShellStreamStartSchema, { sandboxPolicy: args.requestedSandboxPolicy }) },
     })),
   ];
-  const result = await runForegroundShell(args.command, cwd, args.hardTimeout ?? 120_000, owner, signal);
+  const result = await runForegroundShell(args.command, cwd, args.hardTimeout ?? 120_000, owner, signal, redirectHint);
   if (result.stdout && !result.aborted) {
     replies.push(execBytes(execMsg, "shellStream", create(ShellStreamSchema, {
       event: { case: "stdout", value: create(ShellStreamStdoutSchema, { data: result.stdout }) },

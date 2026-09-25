@@ -20,16 +20,18 @@ approval and sandbox path. `nativeLocalExec: "on"` is the explicit config-owner 
 local experiments; `off` and the backwards-compatible `codex-sandbox` spelling both fail closed.
 MCP, screen recording, and computer-use stay on their separate explicit executor/MCP config paths.
 
-An opted-in foreground `shellStreamArgs` command belongs to exactly one live transport. On POSIX,
-the transport starts it in an owned process group, retains at most 1 MiB across raw stdout and
-stderr, and tears the group down on request abort, timeout, stream end/reset/error, or transport
-close. Teardown uses a bounded TERM-to-KILL ladder and drains or destroys pipes before settlement;
-aborted output is returned once as a bounded typed failure rather than duplicated into stream
-frames. Windows refuses this experimental foreground operation until a job-object owner can prove
-descendant cleanup. Background shell admission and its longer-lived registry remain separate.
+Foreground `shellArgs` and `shellStreamArgs` are unavailable on every platform, including with
+`nativeLocalExec: "on"`. `src/adapters/cursor/native-foreground-shell.ts` rejects them before spawn
+until a kernel-backed descendant owner exists; process-group disappearance is not cleanup proof.
+The streaming form still sends start, aborted exit, typed failure, and stream close, with no output
+frames. The synchronous form sends one typed failure. Both preserve catalog-specific client-tool
+redirects. Transport teardown seals the foreground owner, and queued frames then report cancellation.
+No child, output buffer, timer, or process-table scan is created. This does not change background
+shell admission, synchronous filesystem tools, or separately configured MCP/desktop executors.
 
 > Decision record: [ADR-0047](../decisions/ADR-0047-cursor-native-exec.md)
 > Decision record: [ADR-0105](../decisions/ADR-0105-cursor-foreground-shell-ownership.md)
+> Decision record: [ADR-0122](../decisions/ADR-0122-cursor-foreground-admission.md)
 
 Cursor's generic tool-use prompt filter must preserve every Responses-owned execution-path tool
 that survives the transport budget: unified Desktop `exec` as well as the legacy

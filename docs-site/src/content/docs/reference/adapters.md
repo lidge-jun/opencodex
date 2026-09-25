@@ -455,6 +455,9 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   and `desktopExecutor` integrations have separate opt-ins; `nativeLocalExec: "on"` enables the
   broader built-in executor and bypasses Codex approval/sandbox semantics, and legacy
   `unsafeAllowNativeLocalExec: true` remains equivalent only when `nativeLocalExec` is unset.
+  Foreground `shellArgs` and `shellStreamArgs` are an exception: both are rejected before spawn
+  on every platform until kernel-backed descendant ownership is available. Use client shell tools;
+  background-shell execution and other native operations retain their existing policy.
 - The denial reply is a silent redirect whose wording follows the request catalog. A catalog that
   carries `shell_command`/`exec_command` or a unified `exec` keeps the bridge wording; a catalog
   that carries neither — an orchestrator client exposing only its own Responses tools, for example —

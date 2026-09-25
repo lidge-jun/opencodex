@@ -709,8 +709,8 @@ export async function handleCursorNativeExec(execMsg: ExecServerMessage, deps: C
   if (execCase === "deleteArgs") return [deps.rejectNativeFileMutations ? rejectDeleteExecForApplyPatch(execMsg, deps.structuredEditAvailable === true) : deleteExec(execMsg)];
   if (execCase === "lsArgs") return [lsExec(execMsg)];
   if (execCase === "grepArgs") return [grepExec(execMsg)];
-  if (execCase === "shellArgs") return [shellExec(execMsg)];
-  if (execCase === "shellStreamArgs") return shellStreamExec(execMsg, deps.foregroundShellOwner, deps.signal);
+  if (execCase === "shellArgs") return [shellExec(execMsg, deps.nativeExecRedirectHint)];
+  if (execCase === "shellStreamArgs") return shellStreamExec(execMsg, deps.foregroundShellOwner, deps.signal, deps.nativeExecRedirectHint);
   if (execCase === "backgroundShellSpawnArgs") return [backgroundShellSpawnExec(execMsg, deps.sessionId ?? "")];
   if (execCase === "writeShellStdinArgs") return [writeShellStdinExec(execMsg, deps.sessionId ?? "")];
   if (execCase === "fetchArgs") return [await fetchExec(execMsg, deps)];
