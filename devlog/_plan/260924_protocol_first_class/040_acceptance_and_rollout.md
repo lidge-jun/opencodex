@@ -48,6 +48,6 @@ Kept current by each packet that migrates something.
 | Responses-only features on Chat/Messages | `previous_response_id`, `store`, `background`, compaction stay on the bridge |
 | Non-public-wire adapters (`other`) | translated through the IR; no feature claims |
 | OAuth native Chat | not planned in this unit |
-| Messages → key-auth Anthropic | native behind `managedMessagesNative` (PF-08); bridge while off. Caller `anthropic-beta` is not forwarded (PF-10 allowlist); top-level fields outside the allowlist are dropped with no feature effect; the response `model` is the upstream's wire id |
+| Messages → key-auth Anthropic | native behind `managedMessagesNative` (PF-08); bridge while off. Caller `anthropic-beta` is not forwarded (PF-10 allowlist); top-level fields outside the allowlist are dropped with no feature effect |
 | Messages → Anthropic OAuth | bridge until `managedMessagesNativeOAuth` (PF-10) |
-| Messages native lane, translated-only steps | skill elision, `stabilizePromptCache`, pinned route effort and the Claude web-search/vision sidecars run only on the bridge; routes needing vision preprocessing stay there |
+| Messages native lane, translated-only steps | a pinned route effort, blocked-skill elision, the web-search sidecar and vision preprocessing keep the request on the bridge (`bridge-only-policy` / `vision-preprocessing`); `stabilizePromptCache` is a recorded gap — the native lane does not apply it |
