@@ -466,11 +466,8 @@ Full `ocx uninstall` config cleanup is ownership-manifest based. A fresh config 
 root-bound owner marker and an uninstall manifest before its first atomic config write. Uninstall
 validates both bounded metadata files, rejects path traversal and a symlink/junction config root,
 and removes only normalized manifest entries. Manifest-owned directory links are unlinked without
-traversing their targets. Unknown files remain in place and make the command report a partial
-uninstall with their exact paths.
-
-Per-catalog hashed backups follow the [catalog ownership rules](catalog.md#shared-catalog):
-only new writes are registered; existing unrecorded files remain for manual review.
+traversing their targets. Unknown files, including unrecorded per-catalog hashed backups ([catalog ownership rules](catalog.md#shared-catalog)),
+remain in place and make the command report a partial uninstall with their exact paths.
 
 The newly created OAuth downgrade copy is registered after copying, so owned uninstall
 includes it. Destructive OAuth mutations rewrite that copy without the removed provider through the
