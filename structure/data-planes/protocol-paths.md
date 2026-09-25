@@ -25,11 +25,15 @@ reason codes, the first rule that keeps a Chat request off the native Chat lane;
 `isNativeChatRouteEligible` is defined as "no reason", so the lane decision and the reason a plan
 or trace reports cannot disagree.
 
-`contract.ts`, `src/protocols/features.ts`, `src/protocols/baseline.ts` and
-`src/protocols/dto.ts` are leaf modules: the dashboard imports them directly, so they import
+`contract.ts`, `src/protocols/features.ts`, `src/protocols/baseline.ts`,
+`src/protocols/path.ts` and `src/protocols/dto.ts` are leaf modules: the dashboard imports them directly, so they import
 nothing but each other and the type-only compatibility vocabulary in
 `src/compatibility/manifest.ts`. `tests/responses/protocol-contract.test.ts` reads their import
 specifiers and fails on anything else.
+
+`src/protocols/path.ts` turns an ingress lane (`native` or `bridge`) and the final adapter's
+upstream wire into the request and response paths. The observed trace and the planner both
+call it, so a preview and the log of the same request apply one rule.
 
 ## Feature dispositions
 
