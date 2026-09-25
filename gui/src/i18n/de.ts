@@ -3407,4 +3407,12 @@ export const de: Record<TKey, string> = {
   "pws.protocol.col.wire": "Protokoll",
   "pws.protocol.col.source": "Festgelegt durch",
   "pws.protocol.loadFailed": "Das Upstream-Protokoll konnte nicht geladen werden.",
+  "compatProtocol.filter.inbound": "Client-API",
+  "compatProtocol.filter.upstream": "Upstream-Protokoll",
+  "compatProtocol.anyProtocol": "beliebig",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "Protokollpaar jedes Subjekts wird gelesen…",
+  "compatProtocol.unverified": "Noch keine Lab-Nachweise für {pair}. Das Paar ist ungeprüft, nicht fehlgeschlagen.",
+  "compatProtocol.unresolved": "Das Protokollpaar von {count} Subjekten konnte nicht gelesen werden; sie sind in diesem Filter nicht enthalten.",
+  "compatProtocol.axisNote": "Dies sind nur Lab-Urteile. Wie eine Anfrage zugestellt wird (nativ oder übersetzt), zeigt die Anfragepfad-Vorschau auf der API-Seite.",
 };

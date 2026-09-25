@@ -3399,4 +3399,12 @@ export const vi: Record<TKey, string> = {
   "pws.protocol.col.wire": "Giao thức",
   "pws.protocol.col.source": "Do ai quyết định",
   "pws.protocol.loadFailed": "Không tải được giao thức upstream.",
+  "compatProtocol.filter.inbound": "API phía client",
+  "compatProtocol.filter.upstream": "Giao thức upstream",
+  "compatProtocol.anyProtocol": "bất kỳ",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "Đang đọc cặp giao thức của từng đối tượng…",
+  "compatProtocol.unverified": "Chưa có bằng chứng Lab cho {pair}. Cặp này chưa được xác minh, không phải thất bại.",
+  "compatProtocol.unresolved": "Không đọc được cặp giao thức của {count} đối tượng; chúng bị loại khỏi bộ lọc này.",
+  "compatProtocol.axisNote": "Đây chỉ là kết luận của Lab. Cách một request được chuyển đi (native hay được dịch) hiển thị trong phần xem trước đường đi request trên trang API.",
 };

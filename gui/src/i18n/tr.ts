@@ -3430,4 +3430,12 @@ export const tr: Record<TKey, string> = {
   "pws.protocol.col.wire": "Protokol",
   "pws.protocol.col.source": "Belirleyen",
   "pws.protocol.loadFailed": "Yukarı akış protokolü yüklenemedi.",
+  "compatProtocol.filter.inbound": "İstemci API'si",
+  "compatProtocol.filter.upstream": "Yukarı akış protokolü",
+  "compatProtocol.anyProtocol": "herhangi",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "Her öznenin protokol çifti okunuyor…",
+  "compatProtocol.unverified": "{pair} için henüz Lab kanıtı yok. Bu çift başarısız değil, doğrulanmamış.",
+  "compatProtocol.unresolved": "{count} öznenin protokol çifti okunamadı; bu filtrenin dışında bırakıldılar.",
+  "compatProtocol.axisNote": "Bunlar yalnızca Lab kararlarıdır. Bir isteğin nasıl iletildiği (yerel ya da çevrilmiş) API sayfasındaki istek yolu önizlemesinde gösterilir.",
 };

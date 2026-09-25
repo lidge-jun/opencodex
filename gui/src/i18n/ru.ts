@@ -3430,4 +3430,12 @@ export const ru: Record<TKey, string> = {
   "pws.protocol.col.wire": "Протокол",
   "pws.protocol.col.source": "Кем определено",
   "pws.protocol.loadFailed": "Не удалось загрузить протокол к провайдеру.",
+  "compatProtocol.filter.inbound": "Клиентский API",
+  "compatProtocol.filter.upstream": "Протокол к провайдеру",
+  "compatProtocol.anyProtocol": "любой",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "Чтение пары протоколов для каждого субъекта…",
+  "compatProtocol.unverified": "Для {pair} пока нет данных Lab. Пара не проверена, а не провалена.",
+  "compatProtocol.unresolved": "Не удалось прочитать пару протоколов для {count} субъектов; они не учитываются в этом фильтре.",
+  "compatProtocol.axisNote": "Здесь только вердикты Lab. Способ доставки запроса (нативно или с переводом) показывает предпросмотр пути запроса на странице API.",
 };

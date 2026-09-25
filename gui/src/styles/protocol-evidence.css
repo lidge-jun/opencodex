@@ -25,3 +25,11 @@
   .ppp-overrides tr { display: grid; grid-template-columns: 1fr; padding: 6px 0; border-bottom: 1px solid var(--border-soft); }
   .ppp-overrides td { padding: 2px 0; border-bottom: 0; }
 }
+
+/* ── Compatibility matrix: protocol pair filter ───────────── */
+.lab-protocol-status { display: flex; flex-direction: column; gap: 4px; margin: 0 0 12px; }
+.lab-protocol-status p { margin: 0; }
+.lab-protocol-unverified {
+  padding: 8px 10px; border: 1px dashed var(--border); border-radius: var(--radius-xs);
+  color: var(--text); font-size: var(--text-label);
+}

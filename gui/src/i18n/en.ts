@@ -3441,6 +3441,14 @@ export const en = {
   "pws.protocol.col.wire": "Wire",
   "pws.protocol.col.source": "Decided by",
   "pws.protocol.loadFailed": "The upstream wire could not be loaded.",
+  "compatProtocol.filter.inbound": "Client API",
+  "compatProtocol.filter.upstream": "Upstream wire",
+  "compatProtocol.anyProtocol": "any",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "Reading the protocol pair of each subject…",
+  "compatProtocol.unverified": "No Lab evidence for {pair} yet. The pair is unverified, not failed.",
+  "compatProtocol.unresolved": "The protocol pair of {count} subjects could not be read; they are left out of this filter.",
+  "compatProtocol.axisNote": "These are Lab verdicts only. How a request is delivered (native or translated) is shown by the request path preview on the API page.",
 } as const;
 
 export type TKey = keyof typeof en;

@@ -3393,4 +3393,12 @@ export const zhTW: Record<TKey, string> = {
   "pws.protocol.col.wire": "協定",
   "pws.protocol.col.source": "決定來源",
   "pws.protocol.loadFailed": "無法載入上游協定。",
+  "compatProtocol.filter.inbound": "用戶端 API",
+  "compatProtocol.filter.upstream": "上游協定",
+  "compatProtocol.anyProtocol": "任意",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "正在讀取每個主體的協定組合…",
+  "compatProtocol.unverified": "{pair} 尚無 Lab 證據。此組合是未驗證，而非失敗。",
+  "compatProtocol.unresolved": "無法讀取 {count} 個主體的協定組合，已從此篩選中排除。",
+  "compatProtocol.axisNote": "這裡只有 Lab 判定。請求如何傳遞（原生或轉譯）請見 API 頁面的請求路徑預覽。",
 };
