@@ -408,6 +408,13 @@ async function restoredStreamInput(adapterId: string, wire: AdapterWire): Promis
 describe("registry-derived routed tool conformance", () => {
   test("provider and model-wire configuration ids are registry members", () => {
     for (const provider of PROVIDER_REGISTRY) {
+      if (provider.credentialOnly) {
+        expect(getAdapterDefinition(provider.adapter), provider.id).toBeUndefined();
+        expect(provider.liveModels, provider.id).toBe(false);
+        expect(provider.models, provider.id).toBeUndefined();
+        expect(provider.defaultModel, provider.id).toBeUndefined();
+        continue;
+      }
       expect(getAdapterDefinition(provider.adapter), provider.id).toBeDefined();
       for (const value of Object.values(provider.modelWireDefaults ?? {})) {
         const adapterId = typeof value === "string" ? value : value.wire;

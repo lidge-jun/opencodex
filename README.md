@@ -345,6 +345,20 @@ Omit the `provider/` prefix to use the default provider or auto-match by model n
 Provider model ids containing `/` are exposed with inner slashes aliased to `-`; the raw
 full-slash form keeps working too. Details: [model routing docs](https://opencodex.me/guides/model-routing/).
 
+### JEV Auto routing (optional)
+
+TypeSafe JEV can choose the first model and reasoning effort for an opt-in Combo while the normal
+model picker and every direct route stay unchanged. Add the credential with `ocx login jev`, from
+**Providers → TypeSafe JEV → Add API key**, or through `TYPESAFE_API_KEY`/`JEV_API_KEY`. Then open
+**Models → Combos → Create JEV Auto**, choose the allowed target models, and check the exact efforts
+JEV may select for each target. Leaving a target's effort setting untouched allows all efforts that
+model currently advertises.
+
+JEV is consulted only for `jev-auto` and only once per logical model call. Missing credentials,
+network failures, or invalid decisions fail open to the first currently eligible target; caller
+cancellation still cancels the request. Automated tests use a mocked TypeSafe endpoint and do not
+validate a live JEV account.
+
 ## Providers & adapters
 
 <!-- sponsors:main-first-mention -->

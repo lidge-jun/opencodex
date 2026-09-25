@@ -1,6 +1,6 @@
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
-import { chatBodyCarriesImage, chatBodyCarriesToolResultImage } from "../chat/image-parts";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
+import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
   chatCompletionsErrorBody,
   chatCompletionsErrorResponse,
@@ -15,12 +15,13 @@ import {
   CYBER_POLICY_ERROR_CODE,
   isCyberPolicyCode,
   isCyberPolicyMessage,
+  SEND_BUDGET_EXHAUSTED_CODE,
 } from "../lib/errors";
+import type { RequestExecutionBudget } from "../lib/request-execution-budget";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
-import { isModelTextOnly, requiresVisionPreprocessing } from "../vision";
 import {
   applyUpstreamRecoveryInit,
   fetchWithResetRetry,
@@ -32,6 +33,8 @@ import {
   REPLAY_REFUSAL_CLIENT_HEADERS,
   REPLAY_REFUSED_STATUS,
   retainReplayRefusal,
+  SendBudgetExhaustedError,
+  TRANSIENT_RETRY_MAX_ATTEMPTS,
   UpstreamRetryEvidenceError,
   type UpstreamSendRecovery,
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
@@ -58,20 +61,23 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { linkAbortSignal } from "./responses";
 import {
-  addFinalRequestLog,
-  beginRequestAttempt,
   noteProviderAttemptSend,
   recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
   recordFirstOutput,
   recordAttemptCredentialSource,
-  sealRequestAttemptIdentity,
   type RequestLogContext,
 } from "./request-log";
 import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
+import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attempt";
+import { createFinalRequestLog } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
+import type { ComboProtocolSource } from "./responses/core-combo-native";
+import type { ProtocolEnvelope } from "../protocols/envelope";
+
+export { isNativeChatRouteEligible, nativeChatDeclineReason } from "./chat-native-eligibility";
 
 type Rec = Record<string, unknown>;
 
@@ -154,50 +160,12 @@ function isRec(value: unknown): value is Rec {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-export function isNativeChatRouteEligible(route: RouteResult, rawBody: Rec, config?: OcxConfig): boolean {
-  const provider = route.provider;
-  if (provider.adapter !== "openai-chat") return false;
-  if (provider.authMode !== undefined && provider.authMode !== "key" && provider.authMode !== "local") return false;
-  // Combo and policy execution own multi-candidate retries in the Responses pipeline.
-  if (route.combo || route.routeKind === "combo" || route.routeKind === "policy") return false;
-  if (rawBody.store === true || rawBody.background === true) return false;
-  if (typeof rawBody.previous_response_id === "string" && rawBody.previous_response_id.length > 0) return false;
-  if (rawBody.compaction_trigger !== undefined) return false;
-  // A standard Chat tool message accepts a string or text parts, not image_url, so
-  // normalizing a Pi/Anthropic tool image into image_url is not enough on its own —
-  // the part is still inside a tool message. The translated adapter already places
-  // tool-result images in a following user carrier after the complete paired batch
-  // (flushToolResultImages), so divert these requests there. Ordinary user images and
-  // text-only tool results keep the native fast path.
-  if (chatBodyCarriesToolResultImage(rawBody)) return false;
-  // Vision sidecar coverage (roadmap 180): a text-only routed model with an
-  // image-bearing body must go through the Responses pipeline, whose plan
-  // site describes or strips the image. The native fast path has no vision
-  // handling, so letting it keep such a request forwards raw pixels to a
-  // model the operator declared blind.
-  if (chatBodyCarriesImage(rawBody)) {
-    const needsVision = config
-      ? requiresVisionPreprocessing(config, provider, route.modelId, route.providerName)
-      : isModelTextOnly(provider, route.modelId);
-    if (needsVision) return false;
-  }
-  if (Array.isArray(rawBody.tools)) {
-    for (const tool of rawBody.tools) {
-      if (!isRec(tool)) continue;
-      if (tool.type === "web_search" || tool.type === "web_search_preview" || tool.type === "image_generation") {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 function chatCompletionJson(value: unknown): Rec | null {
   if (!isRec(value) || !Array.isArray(value.choices) || value.choices.length === 0) return null;
   return value;
 }
 
-interface HandleNativeChatOptions {
+export interface HandleNativeChatOptions {
   req: Request;
   config: OcxConfig;
   logCtx: RequestLogContext;
@@ -209,36 +177,108 @@ interface HandleNativeChatOptions {
   translatorBudget: TranslatorBudget;
 }
 
-export async function handleNativeChatCompletions(options: HandleNativeChatOptions): Promise<Response> {
-  const { req, config, logCtx, logIds, route, requestedModel, requestedStream, translatorBudget } = options;
-  logCtx.inboundProtocol = "chat";
-  const attempt = beginRequestAttempt(
-    (logCtx.attempts?.length ?? 0) + 1,
-    route.providerName,
-    route.modelId,
-    "openai-chat",
-  );
-  logCtx.activeAttempt = attempt;
-  logCtx.activeAttemptStartedAt = Date.now();
-  (logCtx.attempts ??= []).push(attempt);
-  sealRequestAttemptIdentity(attempt, route.providerName, "openai-chat", logCtx.accountLogLabel);
+/** Records the outcome on whichever final row owns this attempt; the first call wins. */
+export type NativeChatFinishLog = (
+  status: number,
+  message?: string,
+  closeReason?: "non_stream" | "terminal" | "client_cancel",
+) => void;
 
-  let logged = false;
-  const finishLog = (status: number, message?: string, closeReason: "non_stream" | "terminal" | "client_cancel" = "non_stream") => {
-    if (logged) return;
-    logged = true;
+export interface NativeChatExecution extends HandleNativeChatOptions {
+  finishLog: NativeChatFinishLog;
+  /**
+   * A combo child's per-target budget (PF-07). With it the attempt opens no spend tracker of its
+   * own: the combo's hop reservation already booked the first send on the request's shared
+   * counter, and every later physical send is reported to that counter, whose observer is the
+   * request's one spend tracker. A second tracker would book each send twice and, merged into
+   * the parent row, replace the one the final log settles.
+   */
+  sendBudget?: RequestExecutionBudget;
+  /** Replaces the request-relative first-output mark; a combo child records its own. */
+  onFirstOutput?: () => void;
+  /** The lease a streamed body holds; defaults to `logIds.turnAdmissionLease`. */
+  turnAdmissionLease?: AdmissionLease;
+}
+
+/**
+ * The native Chat ingress: opens the attempt on the request's log context and owns the
+ * request's final log row, then runs the attempt.
+ */
+export async function handleNativeChatCompletions(options: HandleNativeChatOptions): Promise<Response> {
+  const { logCtx, logIds, route } = options;
+  logCtx.inboundProtocol = "chat";
+  const attemptHandle = beginInferenceAttempt(logCtx, {
+    provider: route.providerName,
+    model: route.modelId,
+    adapter: "openai-chat",
+  });
+  attemptHandle.seal(logCtx.accountLogLabel);
+
+  const finalLog = createFinalRequestLog(logIds, logCtx);
+  const finishLog: NativeChatFinishLog = (status, message, closeReason = "non_stream") => {
+    if (finalLog.finished()) return;
+    // The failure text lands on the context before the row is written, and only once.
     if (message) logCtx.upstreamError = redactSecretString(message).slice(0, 500);
-    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason });
+    finalLog.finish(status, { closeReason });
   };
+  return runNativeChatAttempt({ ...options, finishLog }, attemptHandle);
+}
+
+/**
+ * The Chat source a combo hands its native children (PF-07). A child runs on the attempt the
+ * combo opened and reports through the combo's callbacks, so the final row stays the parent's.
+ */
+export function createNativeChatComboSource(input: {
+  req: Request;
+  config: OcxConfig;
+  envelope: ProtocolEnvelope;
+  requestedModel: string;
+  requestedStream: boolean;
+  translatorBudget: TranslatorBudget;
+}): ComboProtocolSource {
+  return {
+    inbound: "chat",
+    envelope: input.envelope,
+    dispatchNativeChild: child => runNativeChatAttempt({
+      req: input.req,
+      config: input.config,
+      logCtx: child.childLog,
+      route: child.route,
+      chatBody: child.body,
+      requestedModel: input.requestedModel,
+      requestedStream: input.requestedStream,
+      translatorBudget: input.translatorBudget,
+      finishLog: child.finishLog,
+      sendBudget: child.sendBudget,
+      onFirstOutput: child.onFirstOutput,
+      ...(child.turnAdmissionLease ? { turnAdmissionLease: child.turnAdmissionLease } : {}),
+    }, child.attemptHandle),
+  };
+}
+
+/**
+ * One native Chat attempt on an already-open attempt row: effort normalization, the send
+ * loop with key failover and 429 replay, relay and usage. Every outcome is reported through
+ * `execution.finishLog`, so the caller decides which final row it lands on.
+ */
+export async function runNativeChatAttempt(
+  execution: NativeChatExecution,
+  attemptHandle: InferenceAttempt,
+): Promise<Response> {
+  const { req, config, logCtx, logIds, route, requestedModel, requestedStream, translatorBudget, finishLog } = execution;
+  const { sendBudget } = execution;
+  const { attempt } = attemptHandle;
+  const onFirstOutput = execution.onFirstOutput
+    ?? (logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined);
   const fail = (status: number, message: string, type?: string, code?: string | null): Response => {
     const safeMessage = redactSecretString(message);
     finishLog(status, safeMessage);
     return chatCompletionsErrorResponse(status, safeMessage, type, code);
   };
 
-  normalizePinnedChatEffort(options);
-  logCtx.requestedServiceTier = typeof options.chatBody.service_tier === "string"
-    ? options.chatBody.service_tier
+  normalizePinnedChatEffort(execution);
+  logCtx.requestedServiceTier = typeof execution.chatBody.service_tier === "string"
+    ? execution.chatBody.service_tier
     : undefined;
 
   const upstream = new AbortController();
@@ -248,7 +288,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   // of adding another trackStreamLifetime wrapper (unsafe on bundled Bun#32111).
   let streamTurnRegistered = false;
   const transferTurnToStream = () => {
-    const lease = logIds?.turnAdmissionLease;
+    const lease = execution.turnAdmissionLease ?? logIds?.turnAdmissionLease;
     if (!lease || typeof (lease as { bindAbortController?: unknown }).bindAbortController !== "function") return;
     registerTurn(upstream, lease);
     streamTurnRegistered = true;
@@ -269,7 +309,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
   let activeProvider: OcxProviderConfig = route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
-  const spendTracker = attachRequestSpendTracker(req, logCtx);
+  const spendTracker = sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
   let activeAdapter: ProviderAdapter = createOpenAIChatAdapter(activeProvider);
   let activeRequest: AdapterRequest;
   let retainedRequestBytes = 0;
@@ -287,7 +327,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, activeAdapter.name);
     return buildOpenAIChatPassthroughRequest(
       activeProvider,
-      options.chatBody,
+      execution.chatBody,
       route.modelId,
       requestedStream,
       fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
@@ -311,9 +351,21 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   // key rotation so recovery cannot replace the ceiling along with the active credential.
   const requestTransientPolicy = transientRetryPolicyFor(activeProvider);
   let transientSendsUsed = 0;
-  const remainingTransientSends = (): number => requestTransientPolicy
-    ? Math.max(0, requestTransientPolicy.attempts - transientSendsUsed)
-    : Number.POSITIVE_INFINITY;
+  // A combo child also answers to the request's shared base allowance, at the cap its own ladder
+  // uses. Its first send is exempt: the combo reserved it before dispatching this target.
+  const sharedSendCap = requestTransientPolicy?.attempts ?? TRANSIENT_RETRY_MAX_ATTEMPTS;
+  let physicalSends = 0;
+  const remainingSharedSends = (): number => {
+    if (!sendBudget) return Number.POSITIVE_INFINITY;
+    const remaining = sendBudget.remainingBaseSends(sharedSendCap);
+    return physicalSends === 0 ? Math.max(1, remaining) : remaining;
+  };
+  const remainingTransientSends = (): number => Math.min(
+    requestTransientPolicy
+      ? Math.max(0, requestTransientPolicy.attempts - transientSendsUsed)
+      : Number.POSITIVE_INFINITY,
+    remainingSharedSends(),
+  );
   const transientSendAvailable = (): boolean => remainingTransientSends() > 0;
 
   const send = async (request: AdapterRequest, recovery?: "rate-limit-429" | "key-429"): Promise<Response> => {
@@ -321,6 +373,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       // #2643: opted-in key-auth openai-chat providers retry pre-stream transient statuses on
       // the native chat lane too; everyone else keeps reset-only semantics.
       const remaining = remainingTransientSends();
+      if (sendBudget && remaining <= 0) throw new SendBudgetExhaustedError(safeHostLabel(request.url));
       if (requestTransientPolicy && remaining <= 0) {
         throw new Error("native Chat transient send budget exhausted before recovery dispatch");
       }
@@ -343,7 +396,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
               dispatchOverride: async (_input, init, execute) => {
                 if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
                   const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
-                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, options.chatBody, config)) {
+                  if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, execution.chatBody, config)) {
                     throw new Error("Provider key selection is no longer available for native Chat");
                   }
                   activeProvider = current;
@@ -362,7 +415,15 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
                 const encoding = new Headers(init.headers).get("accept-encoding");
                 if (!headers.has("accept-encoding") && encoding) headers.set("accept-encoding", encoding);
                 if (init.signal?.aborted) throw init.signal.reason;
-                if (!spendTracker.charge()) throw new NativeChatSpendRefusal();
+                if (sendBudget) {
+                  // Backstop for sends the helper cannot see coming (a reset replay). The first
+                  // report settles the combo's booking; each later one is charged and booked.
+                  if (physicalSends > 0 && sendBudget.remainingBaseSends(sharedSendCap) <= 0) {
+                    throw new SendBudgetExhaustedError(safeHostLabel(request.url));
+                  }
+                  physicalSends += 1;
+                  sendBudget.used += 1;
+                } else if (!spendTracker?.charge()) throw new NativeChatSpendRefusal();
                 noteProviderAttemptSend(logCtx, route.providerName, activeProvider, logCtx.usageLogInputTokens, transportRecovery ?? recovery);
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).
@@ -433,7 +494,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
         now: Date.now(),
         attemptedKey: activeProvider.apiKey,
         attemptedSelection: activeProvider._apiKeyAttempt,
-        promptCacheKey: typeof options.chatBody.prompt_cache_key === "string" ? options.chatBody.prompt_cache_key : undefined,
+        promptCacheKey: typeof execution.chatBody.prompt_cache_key === "string" ? execution.chatBody.prompt_cache_key : undefined,
       });
       if (!rotated) break;
       // Rotation also records the failed key's cooldown and persists the next healthy key.
@@ -455,6 +516,10 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
     upstream.abort();
     if (req.signal.aborted) return fail(499, "Client cancelled request", "client_cancelled");
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendBudget && sendError instanceof SendBudgetExhaustedError) {
+      // A decision this process made, answered as the Responses path answers it: 429, not 502.
+      return fail(429, sendError.message, SEND_BUDGET_EXHAUSTED_CODE, SEND_BUDGET_EXHAUSTED_CODE);
+    }
     if (sendError instanceof NativeChatSpendRefusal) {
       const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);
       finishLog(429);
@@ -569,7 +634,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       translatorBudget,
       signal: upstream.signal,
       stallTimeoutSec: config.stallTimeoutSec,
-      onFirstOutput: logIds ? () => recordFirstOutput(logCtx, logIds.start) : undefined,
+      onFirstOutput,
       onUsage: usage => {
         if (!recordKeyWireAttemptUsage(logCtx, usage)) {
           logCtx.usage = usage;
@@ -669,7 +734,7 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
       attempt.usage = usage;
     }
   }
-  if (logIds) recordFirstOutput(logCtx, logIds.start);
+  onFirstOutput?.();
   try {
     const serialized = requestedStream
       ? jsonCompletionSse(completion, requestedModel, translatorBudget)

@@ -783,6 +783,10 @@ export function mergeCatalogEntriesFromObservedState({
     }
     const slug = String(entry.slug);
     if (!isOcxAuthoredRoutedEntry(entry) || isNativeAliasCatalogEntry(entry)) continue;
+    // The builder no longer copies a template's comp_hash onto routed rows (#5796), but a row
+    // kept from disk may still carry one. Custom rows, Codex-forward aliases included, never
+    // reach this loop: they are rebuilt from config.
+    entry.comp_hash = "opencodex";
     const featuredRank = featuredRankOf(slug);
     entry.priority = featuredRank !== undefined
       ? featuredRank * priorityStride

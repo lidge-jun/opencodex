@@ -24,6 +24,7 @@
  * gate accepts only after matching origin and the per-session CSRF token.
  */
 import { jsonResponse } from "../auth-cors";
+import { verifyLocalDesktopSnapshotBody } from "../local-desktop-snapshot-auth";
 import { agentDrivenMarkers } from "../../cli/agent-driven";
 import type { ManagementContext } from "./context";
 
@@ -102,8 +103,8 @@ export async function handleSidebarRoutes(ctx: ManagementContext): Promise<Respo
     if (req.headers.has("origin")) {
       return Response.json({ error: "desktop snapshot does not accept browser-origin requests" }, { status: 403 });
     }
-    if (ctx.principal !== "admin-token") {
-      return jsonResponse({ error: "desktop snapshot requires admin token" }, 403, req, ctx.config);
+    if (ctx.principal !== "admin-token" && ctx.principal !== "local-desktop-snapshot-capability") {
+      return jsonResponse({ error: "desktop snapshot requires admin token or snapshot capability" }, 403, req, ctx.config);
     }
     if (req.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") {
       return jsonResponse({ error: "invalid desktop snapshot" }, 400, req, ctx.config);
@@ -127,7 +128,11 @@ export async function handleSidebarRoutes(ctx: ManagementContext): Promise<Respo
         bytes.set(part.value, used);
         used += part.value.length;
       }
-      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, used));
+      const body = bytes.subarray(0, used);
+      if (ctx.principal === "local-desktop-snapshot-capability" && !verifyLocalDesktopSnapshotBody(req, body)) {
+        return jsonResponse({ error: "invalid desktop snapshot capability body" }, 403, req, ctx.config);
+      }
+      const decoded = new TextDecoder("utf-8", { fatal: true }).decode(body);
       const { desktopBadgeStore } = await import("../../update/desktop-badge");
       if (!desktopBadgeStore.put(JSON.parse(decoded))) {
         return jsonResponse({ error: "invalid desktop snapshot" }, 400, req, ctx.config);

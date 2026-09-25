@@ -79,6 +79,22 @@ export const configSchema = z.object({
   privacy: z.object({ maskEmails: z.boolean().optional() }).strict().optional().catch(undefined),
   // Malformed hand edits disable this opt-in exporter. Live writes reject them in diagnostics.ts.
   metricsExport: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
+  // Kept raw on purpose: `.catch(undefined)` would turn a mistyped `enabled` into "inherit",
+  // which can reopen a surface the operator meant to close. src/protocols/settings.ts parses it
+  // and fails closed instead.
+  apiSurfaces: z.unknown().optional(),
+  // Every protocol default is the conservative one (legacy policy, rollout off), so a malformed
+  // block dropping to undefined cannot widen behavior.
+  protocols: z.object({
+    unrepresentable: z.enum(["legacy", "reject"]).optional(),
+    rollout: z.object({
+      nativeChatCombos: z.boolean().optional(),
+      managedMessagesNative: z.boolean().optional(),
+      managedMessagesNativeOAuth: z.boolean().optional(),
+      directEncoders: z.boolean().optional(),
+      shadowPlan: z.boolean().optional(),
+    }).strict().optional(),
+  }).strict().optional().catch(undefined),
   // A malformed present client block must remain diagnosable from raw config and
   // fail closed through src/client/state.ts; unrelated provider state still loads.
   client: clientConnectionSchema.optional().catch(undefined),

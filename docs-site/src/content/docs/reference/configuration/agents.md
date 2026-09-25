@@ -275,8 +275,11 @@ Admission and retention are deliberately narrow:
 Recovery accepts one consecutive run of up to 32 complete Fernet-shaped encrypted parts, with
 at most 2 MiB of combined ciphertext. Parts retain their order and boundaries in one authenticated
 request. Cache identity includes the sequence; the original input is revalidated before assignment
-replacement. HTTP failures retain the existing bounded diagnostic reason and do not trigger an
-internal retry.
+replacement. HTTP failures retain the existing bounded diagnostic reason. They do not trigger an
+internal retry unless `retries` is set: with a value from 1 to 2, opencodex re-sends the same
+admitted request only on a transient upstream status (500/502/503/504/52x) or a transport
+failure, after a short jittered backoff, and still inside the same credential, deadline, and
+shared flight. Terminal statuses and invalid recovery output never retry.
 
 Split tokens are not reconstructed for recovery. A bounded run whose exact concatenation has
 Fernet structure stays classified as ciphertext through plaintext-slot normalization. If the task
@@ -305,7 +308,8 @@ model output rather than authenticated plaintext.
     "enabled": true,
     "model": "gpt-5.6-sol",
     "timeoutMs": 45000,
-    "cacheEntries": 200
+    "cacheEntries": 200,
+    "retries": 0
   }
 }
 ```

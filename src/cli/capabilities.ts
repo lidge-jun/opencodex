@@ -96,6 +96,47 @@ export const HEAD_CAPABILITIES: readonly HeadCapability[] = [
  */
 export const CAPABILITIES: readonly Capability[] = [
   {
+    command: ["link", "port"],
+    summary: "Allocate a free loopback port for a remote home link.",
+    routes: [],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the selected port as JSON." }],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["link", "issue"],
+    summary: "Issue one link credential and record its tunnel metadata.",
+    routes: [{ method: "POST", path: "/api/link/issue" }],
+    flags: [
+      { name: "--alias", value: "string", required: true, summary: "SSH host alias for the linked machine." },
+      { name: "--tunnel-port", value: "number", required: true, summary: "Remote loopback port for the reverse tunnel." },
+      { name: "--json", value: "boolean", summary: "Emit the issue result as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["Requires the running proxy's admin token on loopback; the one-time data key is printed only on stdout."],
+  },
+  {
+    command: ["link", "status"],
+    summary: "Read link listener and tunnel status.",
+    routes: [{ method: "GET", path: "/api/link/status" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the K16 status payload as JSON." }],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["link", "revoke"],
+    summary: "Revoke a link credential and remove its link record.",
+    routes: [{ method: "DELETE", path: "/api/link/{id}" }],
+    flags: [
+      { name: "--link-id", value: "string", required: true, summary: "Link id to revoke." },
+      { name: "--json", value: "boolean", summary: "Emit the revoked link id as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["Requires the running proxy's admin token on loopback."],
+  },
+  {
     "command": [
       "remote-workspace",
       "pair"
@@ -945,6 +986,51 @@ export const CAPABILITIES: readonly Capability[] = [
     mutates: true,
     json: "payload",
     details: ["A bare invocation reads and never writes."],
+  },
+  {
+    command: ["api", "protocols"],
+    summary: "Read the protocol contract version, API surfaces, protocol settings and feature vocabulary.",
+    routes: [{ method: "GET", path: "/api/protocols" }],
+    flags: [
+      { name: "--provider", value: "string", summary: "Add one configured provider's upstream wire and who decided it." },
+      { name: "--json", value: "boolean", summary: "Emit the GET /api/protocols body." },
+    ],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["api", "explain"],
+    summary: "Preview the request path a model would take from one inbound API, computed from config.",
+    routes: [{ method: "POST", path: "/api/protocols/plan" }],
+    flags: [
+      { name: "--model", value: "string", required: true, summary: "Model selector as a client would send it." },
+      { name: "--inbound", value: "string", required: true, summary: "Inbound API: responses, chat or messages." },
+      { name: "--feature", value: "string", summary: "Request feature key to judge; repeatable or comma-separated." },
+      { name: "--json", value: "boolean", summary: "Emit the ProtocolPlanV1 preview." },
+    ],
+    mutates: false,
+    json: "payload",
+    details: ["A read-only POST: nothing is sent upstream, no combo state advances and the input is not logged."],
+  },
+  {
+    command: ["api", "policy"],
+    summary: "Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.",
+    routes: [
+      { method: "GET", path: "/api/protocols" },
+      { method: "PATCH", path: "/api/protocols/settings" },
+    ],
+    flags: [
+      { name: "--messages", value: "string", summary: "Open or close the Messages API: on or off. Off also turns the Claude integration off." },
+      { name: "--unrepresentable", value: "string", summary: "legacy keeps today's behavior; reject refuses a request its path cannot carry." },
+      { name: "--rollout", value: "string", summary: "One switch as name=on or name=off; repeatable. Every switch defaults off." },
+      { name: "--json", value: "boolean", summary: "Emit the resulting GET /api/protocols body." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "A bare invocation reads and never writes.",
+      "A setting flag changes the operator's config; run it only when the operator asks for that change.",
+    ],
   },
 ];
 

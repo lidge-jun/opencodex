@@ -42,8 +42,8 @@ lists its required source/registry paths and preview/apply flags.
 
 Local validation follows [the contributor test policy](../../AGENTS.md#commands): run the
 suite by default, with a documented resource exception requiring focused regression tests.
-`scripts/setup-hooks.ts` installs the post-merge hook and retires only an exact match for
-the old managed pre-push shim; custom hooks are preserved. Required current-head CI and
+`scripts/setup-hooks.ts` retires only an exact match for the old managed pre-push and
+post-merge shims; custom hooks are preserved. Required current-head CI and
 security review remain merge requirements.
 
 The gate preserves legacy checklist bodies and asks the author to update the first item,
@@ -84,7 +84,7 @@ Manual navigation is defined in `docs-site/astro.config.mjs`. When adding a publ
 sidebar and either add localized copies or intentionally accept Starlight fallback behavior.
 
 Provider preset totals are recounted from the current registry when a preset lands. The
-documented split is 98 total: 81 key-based, 13 OAuth, three local, and one default
+documented split is 99 total: 82 key-based, 13 OAuth, three local, and one default
 ChatGPT-forward preset. The English provider guide, all seven translated copies, and all eight
 quickstarts carry the same counts.
 

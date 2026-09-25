@@ -3,6 +3,8 @@ title: Remote Hub 배포
 description: Linux, macOS, Docker에서 포트 하나로 동작하는 opencodex 허브를 구성합니다. 루프백 companion 리스너, 스스로 준비되는 데이터 토큰, ocx hub invite, 로컬 전용 관리 인그레스, Tailscale Serve, 헤드리스 OAuth를 다룹니다.
 ---
 
+SSH 머신 링크는 [Remote Link](/ko/guides/remote-link/)를 참조하세요.
+
 Remote Hub를 쓰면 프로바이더 인증 정보와 사용량 기록은 허브 한 곳에 두고, 인증된 클라이언트가 허브의 데이터 API를 직접 사용합니다. 브라우저용 관리 API는 별도입니다. 선택 사항인 관리 리스너는 `127.0.0.1`에만 열리며 대시보드와 `/api/*`만 제공합니다.
 
 데이터 플레인은 **포트 하나**입니다. 원격 컴퓨터는 `hostname:port`를 자기 전용 키로 호출하고, 허브 자신의 프로세스는 **같은 포트**의 `127.0.0.1`을 자격 증명 없이 호출합니다. 후자를 담당하는 것이 루프백 companion 리스너입니다. 아래 [설치 레시피](#systemd-또는-launchd)로 시작한 뒤, [`ocx hub invite`](#다른-컴퓨터-초대하기)로 다른 컴퓨터에 그대로 붙여 넣을 명령을 건네세요.

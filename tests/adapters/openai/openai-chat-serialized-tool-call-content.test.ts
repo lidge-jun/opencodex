@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
-import { SerializedToolCallContentBuffer } from "../../../src/adapters/openai-chat/serialized-tool-call-content";
+import { freeformToolsByWireName, SerializedToolCallContentBuffer } from "../../../src/adapters/openai-chat/serialized-tool-call-content";
 import type { AdapterEvent } from "../../../src/types";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../../helpers/translator-budget";
 
 const provider = { adapter: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", apiKey: "key" } as const;
+const execTool = { name: "exec", description: "Run JavaScript", parameters: { type: "object", properties: { input: { type: "string" } } }, freeform: true };
 
 test("buffered Chat responses reconcile matching serialized and structured tool calls", async () => {
   const script = "text('ok');";
@@ -75,6 +76,19 @@ test("buffered Chat responses suppress two echoed blocks when structured input i
     type: "tool_call_delta",
     arguments: JSON.stringify({ input: script }),
   });
+});
+
+test("buffered Chat responses suppress an empty repeated body with one empty input", async () => {
+  const argumentsText = JSON.stringify({ input: "" });
+  const block = "<tool_call><function=exec></parameter></function></tool_call>";
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{ message: { content: block + block, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: argumentsText } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.find(event => event.type === "tool_call_delta")).toEqual({ type: "tool_call_delta", arguments: argumentsText });
 });
 
 test("buffered Chat responses suppress two echoed blocks with a trailing newline", async () => {
@@ -188,6 +202,121 @@ test("buffered Chat responses preserve repeated markup when the structured input
   });
 });
 
+test("buffered Chat responses preserve a raw freeform block when arguments differ", async () => {
+  const content = "<tool_call><function=exec>text('example');</parameter></function></tool_call>";
+  const events = await createOpenAIChatAdapter(provider).parseResponse!(Response.json({
+    choices: [{ message: { content, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: "text('other');" } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
+  expect(events.find(event => event.type === "tool_call_delta")).toEqual({
+    type: "tool_call_delta", arguments: "text('other');",
+  });
+});
+
+test.each(["42", '["text(1)"]', '{"value":1}', '{"input":42}'])(
+  "buffered Chat responses suppress matching valid JSON freeform input %s",
+  async argumentsText => {
+    const block = `<tool_call><function=exec>${argumentsText}</parameter></function></tool_call>`;
+    const adapter = createOpenAIChatAdapter(provider);
+    adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+      messages: [{ role: "user", content: "ping", timestamp: 0 }], tools: [execTool],
+    } });
+    const events = await adapter.parseResponse!(Response.json({
+      choices: [{ message: { content: block, tool_calls: [
+        { id: "call_exec", function: { name: "exec", arguments: argumentsText } },
+      ] }, finish_reason: "tool_calls" }],
+    }), createTestTranslatorBudget());
+
+    expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+    expect(events.find(event => event.type === "tool_call_delta")).toEqual({ type: "tool_call_delta", arguments: argumentsText });
+  },
+);
+
+test("buffered Chat responses preserve JSON markup that the bridge unwraps to a different input", async () => {
+  const argumentsText = '{"cmd":"pwd"}';
+  const block = `<tool_call><function=exec>${argumentsText}</parameter></function></tool_call>`;
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "ping", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: block, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: argumentsText } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: block }]);
+});
+
+test.each(["buffered", "streamed"] as const)(
+  "%s Chat responses preserve namespaced JSON markup when exec dispatches its cmd field",
+  async mode => {
+    const argumentsText = '{"cmd":"pwd"}';
+    const name = "functions__exec";
+    const block = `<tool_call><function=${name}>${argumentsText}</parameter></function></tool_call>`;
+    const adapter = withTestTranslatorBudget(createOpenAIChatAdapter(provider));
+    adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: mode === "streamed", options: {}, context: {
+      messages: [{ role: "user", content: "ping", timestamp: 0 }],
+      tools: [{ ...execTool, namespace: "functions" }],
+    } });
+    const events: AdapterEvent[] = [];
+    if (mode === "buffered") {
+      events.push(...await adapter.parseResponse!(Response.json({
+        choices: [{ message: { content: block, tool_calls: [
+          { id: "call_exec", function: { name, arguments: argumentsText } },
+        ] }, finish_reason: "tool_calls" }],
+      }), createTestTranslatorBudget()));
+    } else {
+      const frames = [
+        { choices: [{ delta: { content: block } }] },
+        { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_exec", function: { name, arguments: argumentsText } }] } }] },
+        { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+      ];
+      const body = frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n";
+      for await (const event of adapter.parseStream(new Response(body))) if (event.type !== "heartbeat") events.push(event);
+    }
+    expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: block }]);
+    expect(events.filter(event => event.type === "tool_call_delta")).toEqual([{ type: "tool_call_delta", arguments: argumentsText }]);
+  },
+);
+
+test("buffered Chat responses keep matching text for malformed ordinary JSON arguments", async () => {
+  const malformed = '{"cmd":"pwd"';
+  const content = `<tool_call><function=exec>${malformed}</parameter></function></tool_call>`;
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "ping", timestamp: 0 }],
+    tools: [{ ...execTool, freeform: false }],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: malformed } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
+});
+
+test("buffered Chat responses keep valid JSON markup for an ordinary function", async () => {
+  const argumentsText = "42";
+  const block = `<tool_call><function=exec>${argumentsText}</parameter></function></tool_call>`;
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "ping", timestamp: 0 }],
+    tools: [{ ...execTool, freeform: false }],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content: block, tool_calls: [
+      { id: "call_exec", function: { name: "exec", arguments: argumentsText } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: block }]);
+});
+
 test("buffered Chat responses reduce a doubled input behind the MiMo wrapping newline", async () => {
   // The canonical MiMo layout puts one template newline after the function header, so the block
   // body and the doubled structured input only agree once both sides are freeform-normalized.
@@ -237,11 +366,34 @@ test("buffered Chat responses keep doubled input when two structured calls quali
   ]);
 });
 
-test("buffered Chat responses keep a doubled input when another call already agrees with the blocks", async () => {
+test("buffered Chat responses keep two competing doubled calls with a raw trailing newline", async () => {
+  const script = "text('ok');";
+  const content = `<tool_call><function=exec>${script}</parameter></function></tool_call>`.repeat(2);
+  const jsonArguments = JSON.stringify({ input: script + script });
+  const rawArguments = script + script + "\n";
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "ping", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content, tool_calls: [
+      { id: "call_json", function: { name: "exec", arguments: jsonArguments } },
+      { id: "call_raw", function: { name: "exec", arguments: rawArguments } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: jsonArguments },
+    { type: "tool_call_delta", arguments: rawArguments },
+  ]);
+});
+
+test("buffered Chat responses keep a doubled input and markup when another call already agrees with the blocks", async () => {
   // The single-input call explains the repeated pair on its own, so the doubled call beside it is a
   // competing reading rather than the unique one, and neither argument is rewritten. Exactly one
   // call still agrees with the blocks, so the range matcher suppresses the pair: the markup is
-  // settled, the doubled input is not.
+  // unsettled, the doubled input is not.
   const script = "text('ok');";
   const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
   const content = block + block;
@@ -257,10 +409,32 @@ test("buffered Chat responses keep a doubled input when another call already agr
     }],
   }), createTestTranslatorBudget());
 
-  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
   expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
     { type: "tool_call_delta", arguments: doubledArguments },
     { type: "tool_call_delta", arguments: singleArguments },
+  ]);
+});
+
+test.each(["json", "raw", "multi-key"] as const)("buffered Chat responses preserve markup when raw and %s doubled calls compete", async kind => {
+  const script = "text('ok');";
+  const content = `<tool_call><function=exec>${script}</parameter></function></tool_call>`.repeat(2);
+  const doubledArguments = kind === "raw" ? script + script : JSON.stringify({ input: script + script, ...(kind === "multi-key" ? { mode: "fast" } : {}) });
+  const adapter = createOpenAIChatAdapter(provider);
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: false, options: {}, context: {
+    messages: [{ role: "user", content: "ping", timestamp: 0 }], tools: [execTool],
+  } });
+  const events = await adapter.parseResponse!(Response.json({
+    choices: [{ message: { content, tool_calls: [
+      { id: "call_doubled", function: { name: "exec", arguments: doubledArguments } },
+      { id: "call_raw", function: { name: "exec", arguments: script } },
+    ] }, finish_reason: "tool_calls" }],
+  }), createTestTranslatorBudget());
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: doubledArguments },
+    { type: "tool_call_delta", arguments: script },
   ]);
 });
 
@@ -289,14 +463,42 @@ test("streamed Chat responses keep doubled input when two structured calls quali
   ]);
 });
 
-test("streamed Chat responses keep doubled input when another call already agrees with the blocks", async () => {
+test("streamed Chat responses keep two competing doubled calls with a raw trailing newline", async () => {
+  const script = "text('ok');";
+  const content = `<tool_call><function=exec>${script}</parameter></function></tool_call>`.repeat(2);
+  const jsonArguments = JSON.stringify({ input: script + script });
+  const rawArguments = script + script + "\n";
+  const adapter = withTestTranslatorBudget(createOpenAIChatAdapter(provider));
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {}, context: {
+    messages: [{ role: "user", content: "ping", timestamp: 0 }], tools: [execTool],
+  } });
+  const frames = [
+    { choices: [{ delta: { content: content.slice(0, 40) } }] },
+    { choices: [{ delta: { content: content.slice(40) } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: "call_json", function: { name: "exec", arguments: jsonArguments } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 1, id: "call_raw", function: { name: "exec", arguments: rawArguments } }] } }] },
+    { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+  ];
+  const events: AdapterEvent[] = [];
+  for await (const event of adapter.parseStream(new Response(frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("") + "data: [DONE]\n\n"))) {
+    if (event.type !== "heartbeat") events.push(event);
+  }
+
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
+  expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
+    { type: "tool_call_delta", arguments: jsonArguments },
+    { type: "tool_call_delta", arguments: rawArguments },
+  ]);
+});
+
+test.each([["json", "json"], ["raw", "json"], ["raw", "raw"], ["raw", "multi-key"]] as const)("streamed Chat responses keep markup beside a %s agreeing call and %s doubled input", async (agreeKind, doubledKind) => {
   const script = "text('ok');";
   const block = `<tool_call><function=exec>${script}</parameter></function></tool_call>`;
   const content = block + block;
-  const doubledArguments = `{"input":"${script}${script}"}`;
-  const singleArguments = `{"input":"${script}"}`;
+  const doubledArguments = doubledKind === "raw" ? script + script : JSON.stringify({ input: script + script, ...(doubledKind === "multi-key" ? { mode: "fast" } : {}) });
+  const singleArguments = agreeKind === "raw" ? script : `{"input":"${script}"}`;
   const adapter = withTestTranslatorBudget(createOpenAIChatAdapter(provider));
-  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {}, context: { messages: [{ role: "user", content: "ping", timestamp: 0 }] } });
+  adapter.buildRequest({ modelId: "mimo-v2.6-pro", stream: true, options: {}, context: { messages: [{ role: "user", content: "ping", timestamp: 0 }], tools: [execTool] } });
   const frames = [
     { choices: [{ delta: { content: content.slice(0, 40) } }] },
     { choices: [{ delta: { content: content.slice(40) } }] },
@@ -308,7 +510,7 @@ test("streamed Chat responses keep doubled input when another call already agree
   const events: AdapterEvent[] = [];
   for await (const event of adapter.parseStream(new Response(body))) if (event.type !== "heartbeat") events.push(event);
 
-  expect(events.filter(event => event.type === "text_delta")).toEqual([]);
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: content }]);
   expect(events.filter(event => event.type === "tool_call_delta")).toEqual([
     { type: "tool_call_delta", arguments: doubledArguments },
     { type: "tool_call_delta", arguments: singleArguments },
@@ -455,4 +657,18 @@ describe("MiMo echo variants (#5724)", () => {
     expect(visible(events)).toBe("\n");
     expect(events.filter(event => event.type === "tool_call_start")).toHaveLength(2);
   });
+});
+
+test("freeformToolsByWireName keys only freeform tools by their wire name and keeps the declared identity", () => {
+  const tools = [
+    { name: "exec", namespace: "functions", freeform: true },
+    { name: "read_file", freeform: false },
+    { name: "apply_patch", freeform: true },
+  ];
+  const map = freeformToolsByWireName(tools, tool => `wire_${tool.name}`);
+  expect([...map.entries()]).toEqual([
+    ["wire_exec", { name: "exec", namespace: "functions" }],
+    ["wire_apply_patch", { name: "apply_patch", namespace: undefined }],
+  ]);
+  expect(freeformToolsByWireName(undefined, () => "unused").size).toBe(0);
 });

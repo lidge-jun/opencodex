@@ -86,7 +86,7 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `targets` | `{ provider: string; model: string; weight?: number; lastResort?: boolean }[]` | required | Ordered concrete routes. `weight` is 1–10000 and defaults to `1`. `lastResort` marks an emergency-only target; see `cooldownWaitPolicy`. |
-| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape round-robin and random draws; least-used follows recorded successes; reset-window follows the soonest quota reset. |
+| `strategy?` | `"failover" \| "round-robin" \| "random" \| "least-used" \| "reset-window" \| "jev"` | `"failover"` | Selection strategy. Target order is failover priority; weights shape round-robin and random draws; least-used follows recorded successes; reset-window follows the soonest quota reset; JEV makes one bounded decision for the initial eligible target and effort, then uses ordinary ordered fallback. |
 | `stickyLimit?` | `number` | `1` | Successful requests retained in one round-robin batch. Range 1–100. Applies only to round-robin. |
 | `cooldownMs?` | `number` | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Range 1–600000. When set, applies whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. Upstream signals take precedence. An explicit upstream `Retry-After` is capped at 24 hours; reset-derived, configured, and fallback cooldowns are capped at 10 minutes. |
 | `waitForCooldownMs?` | `number` | `0` | Maximum wait for the earliest eligible cooling target on each selection attempt. Range 0–600000; an abort cancels the wait. A single-target combo with a nonzero wait holds the request up to this ceiling and retries the same target instead of failing immediately; if no target was ever dispatched the wait ends in `combo_unavailable`, otherwise the last upstream failure is returned. |
@@ -118,6 +118,14 @@ namespace, and cannot use reserved bare native families such as `gpt-*`, `o1-*`,
 
 For strategy behavior, retryable failures, cooldowns, encrypted v2 task limits, and management
 commands, see [Combos](/guides/combos/).
+
+The `jev` strategy is optional and requires the canonical `jev` provider credential. That provider
+is a decision service, publishes no directly routable model, and cannot be a Combo target. JEV sees
+only currently eligible members of `targets`; missing, failed, or invalid decisions use the first
+eligible member, while caller cancellation remains terminal. Adding the provider or Combo never
+changes `defaultProvider` or hides direct model rows. See
+[JEV: decision-guided first pick](/guides/combos/#jev-decision-guided-first-pick) for setup, privacy
+bounds, and the one-decision-per-call contract.
 
 ## Routing policy profiles (`config.routingProfiles`)
 
@@ -202,8 +210,8 @@ echoed as given. The CLI dry-run cannot supply these per-candidate account field
 ### Combos vs policy profiles
 
 - A **combo** is explicit target routing with a selectable strategy (ordered failover, smooth
-  weighted or random balancing, least-used, or reset-window): the configured strategy decides,
-  and retryable failures advance through the list.
+  weighted or random balancing, least-used, reset-window, or one bounded JEV first-pick decision):
+  the configured strategy decides, and retryable failures advance through the list.
 - A **policy profile** is evidence-based selection among configured candidates: hard capability
   requirements filter first, then deterministic scoring ranks the survivors.
 

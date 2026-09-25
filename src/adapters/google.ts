@@ -456,6 +456,18 @@ function messagesToGeminiFormat(
     }
   }
 
+  // A functionCall turn may not open the request: the upstream requires it to follow a user or
+  // function-response turn, and rejects with "function call turn comes immediately after a user
+  // turn or after a function response turn" (HTTP 400, #5008). Context compaction can truncate a
+  // long history so it opens on an assistant tool call. Prepend a user nudge, the same repair
+  // Kiro applies to assistant-head turns (src/adapters/kiro/payload.ts). A model head carrying
+  // only text is left alone: no upstream rule against it is demonstrated, and repairing it would
+  // inject a turn into valid requests.
+  const firstTurn = contents[0] as { role?: string; parts?: Array<{ functionCall?: unknown }> } | undefined;
+  if (firstTurn?.role === "model" && firstTurn.parts?.some(p => p.functionCall !== undefined)) {
+    contents.unshift({ role: "user", parts: [{ text: "(continue)" }] });
+  }
+
   // Gemini API and Claude-on-Antigravity reject assistant-tail (model-tail in Gemini terms)
   // histories. Gemini fails upstream with "Requests ending with a model turn are not supported"
   // (HTTP 400), while Claude fails with "This model does not support assistant message prefill.

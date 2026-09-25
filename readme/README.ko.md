@@ -333,6 +333,18 @@ codex -m "ollama/llama3" "이 함수를 리팩터링해 줘"
 프로바이더 모델 id는 안쪽 슬래시를 `-`로 alias해서 노출하고, 슬래시를 그대로 둔 원본 형태도 계속
 동작합니다. 자세한 내용은 [모델 라우팅 문서](https://opencodex.me/ko/guides/model-routing/)를 보세요.
 
+### JEV Auto 라우팅 (선택)
+
+TypeSafe JEV는 명시적으로 켠 Combo에서 첫 모델과 reasoning effort를 고를 수 있습니다. 일반 모델
+선택기와 직접 라우트는 그대로입니다. 자격 증명은 `ocx login jev`, **Providers → TypeSafe JEV → Add API key**,
+또는 `TYPESAFE_API_KEY`/`JEV_API_KEY`로 추가합니다. 그다음 **Models → Combos → Create JEV Auto**에서
+허용할 대상 모델을 고르고, 대상마다 JEV가 고를 수 있는 effort를 체크하세요. effort 설정을 건드리지
+않은 대상은 그 모델이 현재 광고하는 effort를 모두 허용합니다.
+
+JEV는 `jev-auto`에서만, 논리적 모델 호출당 한 번만 호출됩니다. 자격 증명이 없거나 네트워크가
+실패하거나 결정이 잘못되면 현재 적격인 첫 대상으로 fail-open하며, 호출자 취소는 여전히 요청을
+취소합니다. 자동 테스트는 모의 TypeSafe 엔드포인트를 쓰며 실제 JEV 계정은 검증하지 않습니다.
+
 ## 프로바이더 및 adapter
 
 <!-- sponsors:main-first-mention -->

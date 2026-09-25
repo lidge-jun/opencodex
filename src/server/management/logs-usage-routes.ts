@@ -84,7 +84,12 @@ import {
   getUsageSummaryCacheEntry,
   setUsageSummaryCacheEntry,
 } from "./usage-summary-cache";
-import { getFilteredUsageAggregate, getUsageAggregate } from "./usage-aggregate-cache";
+import {
+  getFilteredUsageAggregate,
+  getJevStatsAggregate,
+  getUsageAggregate,
+} from "./usage-aggregate-cache";
+import { normalizeJevStatsComboId } from "../../usage/jev-stats";
 
 function nextLocalMidnight(now: number): number {
   const next = new Date(now);
@@ -180,6 +185,31 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   }
 
   if (url.pathname === "/api/usage" && req.method === "GET") {
+    if (url.searchParams.get("jev") === "1") {
+      const range = parseRange(url.searchParams.get("range"));
+      const rawComboId = url.searchParams.get("comboId");
+      const comboId = rawComboId === null ? undefined : normalizeJevStatsComboId(rawComboId);
+      if (rawComboId !== null && (comboId === undefined || comboId !== rawComboId.trim())) {
+        return jsonResponse({ error: "invalid comboId" }, 400);
+      }
+      const now = Date.now();
+      const { since } = rangeWindow(range, now);
+      try {
+        const aggregate = await getJevStatsAggregate({ comboId, since });
+        return jsonResponse({
+          ...aggregate.accumulator.summarize(range, now),
+          ...(aggregate.usageIncomplete
+            ? { usageIncomplete: true as const, usageIncompleteReason: "oversized_rows" as const }
+            : {}),
+          historyTruncated: false,
+          truncatedPrefixBytes: 0,
+          entriesTruncated: false,
+          entriesDropped: 0,
+        });
+      } catch {
+        return jsonResponse({ error: "read_failed" }, 500);
+      }
+    }
     // A sub-resource on the same route rather than a route of its own. It answers a different
     // question -- which failures keep recurring, rather than what was spent -- and it costs a
     // ledger scan, so it is opt-in: a dashboard asking for the usage summary must not pay for

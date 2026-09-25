@@ -22,6 +22,18 @@ export interface IsolatedTestEnvironment {
   cleanup(): void;
 }
 
+/**
+ * Credentials of the developer's own OpenCodex install that the sandbox must not inherit. A
+ * Windows install stores its data-plane token as a user environment variable, so every shell on
+ * that machine carries it; a test that then builds a service definition or starts a proxy reads
+ * the live token instead of its fixture and fails only on a developer machine.
+ */
+export const LIVE_INSTALL_CREDENTIAL_ENV = [
+  "OPENCODEX_API_AUTH_TOKEN",
+  "OPENCODEX_ADMIN_AUTH_TOKEN",
+  "OCX_API_TOKEN_FILE",
+] as const;
+
 export function createIsolatedTestEnvironment(
   baseEnv: Record<string, string | undefined> = process.env,
 ): IsolatedTestEnvironment {
@@ -53,11 +65,13 @@ export function createIsolatedTestEnvironment(
     mkdirSync(join(root, "AppData", "Roaming"), { recursive: true });
   }
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
+  const inherited = { ...baseEnv };
+  for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete inherited[name];
 
   return {
     root,
     env: {
-      ...baseEnv,
+      ...inherited,
       // Captured BEFORE HOME is overwritten: once the child starts with a rewritten
       // HOME, `homedir()` returns the sandbox, so this hand-off is the only way the
       // real-home write guard can still know which path to protect.

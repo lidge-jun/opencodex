@@ -1,4 +1,8 @@
-import { isDeclaredReasoningEffort } from "../../reasoning-effort";
+import {
+  isCodexReasoningEffort,
+  isDeclaredReasoningEffort,
+  resolveEffortAtOrBelow,
+} from "../../reasoning-effort";
 import { recordAttemptRequestedEffort } from "../request-log";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
@@ -9,13 +13,14 @@ import type {
   RequestExecutionBudgetPolicy,
   RequestExecutionBudget,
 } from "../../lib/request-execution-budget";
-import type { OcxConfig } from "../../types";
+import type { OcxComboDefaultEffort, OcxConfig } from "../../types";
 import type { RequestLogContext } from "../request-log";
 import type { HandleResponsesOptions, ResponsesDispatchers, ConsumedComboFailure } from "./core-options";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import {
   getCombo,
   comboRequestHasImageInput,
+  pickComboTarget,
   pickComboTargetWithWait,
   targetKey,
   concreteComboRequestBody,
@@ -25,6 +30,11 @@ import {
   comboFailureDecision,
   advanceComboAfterFailure,
   comboFailureCooldownScope,
+  JEV_PROVIDER_ID,
+  resolveJevDecision,
+  type ComboPick,
+  type JevCandidate,
+  type JevDecision,
 } from "../../combos";
 import { formatErrorResponse } from "../../bridge";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
@@ -65,6 +75,7 @@ import type { ResponsesTerminalStatus } from "../../bridge";
 import { beginRequestAttempt, sealRequestAttemptIdentity, finishRequestAttempt } from "../request-log";
 import { rememberComboForLane } from "./combo-session-recall";
 import { runTurnAdapterSseResponses } from "./core-lifetime";
+import { normalizePersistedJevDecision } from "../../usage/jev-stats";
 import {
   isNativePassthroughSseResponse,
   isEagerRelaySseResponse,
@@ -75,6 +86,8 @@ import { preflightComboStreamResponse } from "./combo-stream-preflight";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
 import { settleOperatorReplacement } from "../../lib/upstream-retry";
+import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
+import { clientWireOf } from "../inference/client-wire";
 
 /**
  * Sends one combo target may run on its own before the ladder moves on. A target is a whole
@@ -166,6 +179,65 @@ export function comboTargetSendBudget(
   });
 }
 
+interface JevComboChoice {
+  pick: ComboPick;
+  candidate: JevCandidate;
+}
+
+/** Enumerate the current ordinary Combo eligibility set without retaining attempted picks. */
+function eligibleJevComboChoices(
+  config: OcxConfig,
+  comboId: string,
+  eligible: (target: NonNullable<ReturnType<typeof getCombo>>["targets"][number]) => boolean,
+  now: number,
+): JevComboChoice[] {
+  const combo = getCombo(config, comboId);
+  if (!combo) return [];
+  const excluded = new Set<string>();
+  const choices: JevComboChoice[] = [];
+  while (excluded.size < combo.targets.length) {
+    const pick = pickComboTarget(config, comboId, { exclude: excluded, eligible, now });
+    if (!pick) break;
+    const key = targetKey(pick.target);
+    excluded.add(key);
+    // The TypeSafe row owns a decision credential, not an inference transport.
+    if (pick.target.provider === JEV_PROVIDER_ID) continue;
+    let ladder: string[] | undefined;
+    try {
+      const route = routeConcreteModel(config, key);
+      ladder = supportedLadderFor({ provider: route.provider, modelId: route.modelId });
+    } catch {
+      // Preserve the existing routing-failure surface. Unknown capability becomes the explicit
+      // no-effort choice rather than broadening JEV's effort allowlist.
+      ladder = undefined;
+    }
+    const supportedEfforts = (ladder ?? []).filter(isCodexReasoningEffort) as OcxComboDefaultEffort[];
+    const configuredEfforts = pick.target.reasoningEfforts;
+    const reasoningEfforts = configuredEfforts === undefined
+      ? supportedEfforts
+      : configuredEfforts.filter(effort => supportedEfforts.includes(effort));
+    // An explicit allowlist is restrictive. If catalog capabilities drift until no configured
+    // effort remains supported, omit the target instead of silently broadening JEV's choices.
+    if (configuredEfforts !== undefined && reasoningEfforts.length === 0) continue;
+    choices.push({
+      pick: { ...pick, attempted: [key] },
+      candidate: {
+        key,
+        provider: pick.target.provider,
+        model: pick.target.model,
+        reasoningEfforts,
+      },
+    });
+  }
+  // #5691: the synchronous pick above does not defer emergency-only targets, so apply the
+  // same rule here — withhold them from JEV while any normal target is offered, never when
+  // they are all that remains.
+  if (combo.cooldownWaitPolicy === "before-last-resort" && choices.some(choice => !choice.pick.target.lastResort)) {
+    return choices.filter(choice => !choice.pick.target.lastResort);
+  }
+  return choices;
+}
+
 
 /** Dispatch a Responses combo within its shared send budget and preserve terminal child failures. */
 export async function executeComboResponses(
@@ -190,6 +262,17 @@ export async function executeComboResponses(
   if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
   }
+  // PF-07: present only for a Chat combo with `nativeChatCombos` on; otherwise every child
+  // takes the bridge below exactly as before.
+  const protocolLanes = createComboProtocolLanes({
+    source: options.protocolSource,
+    req,
+    config,
+    logCtx,
+    admission: options.admission,
+    comboId,
+    targets: combo.targets,
+  });
   // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
   // counter with the holder that arrived on options -- a combo child already inherited that
   // counter, but nothing read it as a limit across targets -- while its transition and
@@ -298,7 +381,10 @@ export async function executeComboResponses(
   const payloadEligible = (target: (typeof combo.targets)[number]): boolean =>
     comboPayloadReadable || !unreadableEncryptedAgentTask || canDecryptUnreadableAgentTask(target);
   const targetEligible = (target: (typeof combo.targets)[number]): boolean =>
-    payloadEligible(target) && reasoningReplayEligible(target);
+    (combo.strategy !== "jev" || target.provider !== JEV_PROVIDER_ID)
+    && payloadEligible(target)
+    && reasoningReplayEligible(target)
+    && (protocolLanes?.pickable(target) ?? true);
   const onlyReplayIncompatibleTargetsRemain = (excluded: Iterable<string> = []): boolean => {
     const excludedKeys = new Set(excluded);
     const remaining = combo.targets.filter(target => {
@@ -398,10 +484,77 @@ export async function executeComboResponses(
   }
 
   if (!pick) {
+    // Every enabled candidate skipped as unrepresentable: the ingress refusal, with no send.
+    const protocolRefusal = protocolLanes?.refusal();
+    if (protocolRefusal) return protocolRefusal;
     if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
     return options.abortSignal?.aborted
       ? clientCancelledResponse()
       : comboUnavailable(comboId);
+  }
+  let jevDecision: JevDecision | undefined;
+  if (combo.strategy === "jev") {
+    const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now());
+    const first = choices[0];
+    if (!first) return comboUnavailable(comboId);
+    const resolvedFailOpenEffort = resolveEffortAtOrBelow(
+      "medium",
+      first.candidate.reasoningEfforts,
+    );
+    const fallback: Pick<JevDecision, "targetKey" | "effort"> = {
+      targetKey: first.candidate.key,
+      effort: resolvedFailOpenEffort && isCodexReasoningEffort(resolvedFailOpenEffort)
+        ? resolvedFailOpenEffort as OcxComboDefaultEffort
+        : null,
+    };
+    const decisionStartedAt = Date.now();
+    let decision: JevDecision;
+    try {
+      decision = await resolveJevDecision({
+        body,
+        candidates: choices.map(choice => choice.candidate),
+        fallback,
+        config,
+        signal: options.abortSignal,
+      });
+    } catch (error) {
+      if (options.abortSignal?.aborted) return clientCancelledResponse();
+      decision = {
+        ...fallback,
+        gate: "network",
+        latencyMs: Math.max(0, Date.now() - decisionStartedAt),
+      };
+    }
+    jevDecision = decision;
+    const selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
+    pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
+    logCtx.jevDecision = normalizePersistedJevDecision({
+      version: 1,
+      comboId,
+      selected: {
+        provider: selected.pick.target.provider,
+        model: selected.pick.target.model,
+        effort: decision.effort,
+      },
+      gate: decision.gate,
+      latencyMs: decision.latencyMs,
+      ...(decision.confidence !== undefined ? { confidence: decision.confidence } : {}),
+      ...(decision.chosenProbability !== undefined
+        ? { chosenProbability: decision.chosenProbability }
+        : {}),
+      ...(decision.usage ? { usage: decision.usage } : {}),
+    });
+    console.debug("[combo] JEV decision", {
+      targetKey: decision.targetKey,
+      effort: decision.effort,
+      gate: decision.gate,
+      latencyMs: decision.latencyMs,
+      ...(decision.confidence !== undefined ? { confidence: decision.confidence } : {}),
+      ...(decision.chosenProbability !== undefined
+        ? { chosenProbability: decision.chosenProbability }
+        : {}),
+      ...(decision.usage ? { usage: decision.usage } : {}),
+    });
   }
   // One immutable combo selection trace, before any child dispatch; child
   // adoption below must never replace it with a concrete child route trace.
@@ -475,14 +628,32 @@ export async function executeComboResponses(
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };
     const targetRoute = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
+    const targetReasoningEfforts = supportedLadderFor({
+      provider: targetRoute.provider,
+      modelId: targetRoute.modelId,
+    });
+    const initialJevDecision = firstComboTarget ? jevDecision : undefined;
     const childBody = concreteComboRequestBody(
       body,
       pick.target,
-      comboDefaultEffort(config, comboId),
-      supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),
+      initialJevDecision ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
+      initialJevDecision?.effort === null ? [] : targetReasoningEfforts,
       combo.reasoningEffortMode,
-      combo.defaultEffortMode,
+      initialJevDecision !== undefined && initialJevDecision.effort !== null ? "force" : combo.defaultEffortMode,
     );
+    if (initialJevDecision) {
+      delete childBody.service_tier;
+      if (initialJevDecision.effort !== null) {
+        const childReasoning = childBody.reasoning;
+        const preservedReasoning = childReasoning && typeof childReasoning === "object" && !Array.isArray(childReasoning)
+          ? childReasoning as Record<string, unknown>
+          : {};
+        childBody.reasoning = { ...preservedReasoning, effort: initialJevDecision.effort };
+        delete childBody.reasoning_effort;
+        delete childBody.thinking_budget;
+        delete childBody.thinking;
+      }
+    }
     const childHeaders = buildComboChildHeaders(req.headers);
     const childRequest = new Request(req.url, {
       method: req.method,
@@ -550,14 +721,40 @@ export async function executeComboResponses(
     let response: Response;
     try {
       const currentTargetProvider = pick.target.provider;
-      const deferCodexResetDerivedCooldown = combo.strategy === "failover"
-        && combo.targets.slice(pick.targetIndex + 1).some(target =>
+      const remainingTargets = combo.strategy === "jev"
+        ? combo.targets.filter(target => !pick!.attempted.includes(targetKey(target)))
+        : combo.targets.slice(pick.targetIndex + 1);
+      const deferCodexResetDerivedCooldown = (combo.strategy === "failover" || combo.strategy === "jev")
+        && remainingTargets.some(target =>
           target.provider === currentTargetProvider
           && targetEligible(target)
           && !isComboTargetInCooldown(comboId, target),
         );
-      response = await requestDispatchers.handleResponses(childRequest, config, childLog, {
+      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget);
+      response = nativeChild ? await dispatchNativeComboChild({
+        source: options.protocolSource!,
+        plan: nativeChild,
+        logCtx,
+        childLog,
+        attempt,
+        startedAt: started,
+        ...(options.turnAdmissionLease ? { turnAdmissionLease: options.turnAdmissionLease } : {}),
+        // Attempt-relative TTFT, recorded here for the same reason as the bridge child below.
+        onFirstOutput: () => {
+          if (attempt.firstOutputMs === undefined) {
+            attempt.firstOutputMs = Math.max(0, Date.now() - started);
+          }
+          options.onFirstOutput?.();
+        },
+        callbacks: {
+          onTerminal: callbackGate.onTerminal,
+          onCancel: callbackGate.onCancel,
+          onResponseComplete: callbackGate.onResponseComplete,
+        },
+      }) : await requestDispatchers.handleResponses(childRequest, config, childLog, {
         ...options,
+        // A bridge child is a concrete route; the native source belongs to this loop only.
+        ...(options.protocolSource ? { protocolSource: undefined } : {}),
         // After the spread: the child must run on THIS target's ladder, not on the holder the
         // parent arrived with.
         sendBudget: targetSendBudget,
@@ -597,7 +794,9 @@ export async function executeComboResponses(
       return clientCancelledResponse();
     }
 
-    if (response.ok && !runTurnAdapterSseResponses.has(response)) {
+    // A native Chat child reports a pre-stream failure by status before any byte, so its body
+    // is never peeked; a non-OK one takes the ordinary failure path below.
+    if (response.ok && !runTurnAdapterSseResponses.has(response) && clientWireOf(response) !== "chat") {
       const nativePassthrough = isNativePassthroughSseResponse(response);
       const eagerRelay = isEagerRelaySseResponse(response);
       let preflight;

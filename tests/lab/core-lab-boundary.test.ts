@@ -599,6 +599,30 @@ export function inspectFunctionDeclaration(source: string, name: string): Functi
   return { found: true, async, awaitLines: bodyLevelAwaitLines(body) };
 }
 
+/** Inspect every concrete `start` implementation shape used by optional listener lifecycles. */
+export function inspectStartDefinitions(source: string): FunctionSyncInspection[] {
+  const code = blankCommentsAndStrings(source);
+  const found: FunctionSyncInspection[] = [];
+  const methodRe = /(?:^|[,{]\s*)(async\s+)?start\s*(?=\()/gm;
+  let match: RegExpExecArray | null;
+  while ((match = methodRe.exec(code)) !== null) {
+    const nameIndex = match.index + match[0].lastIndexOf("start");
+    const body = extractFunctionBody(code, nameIndex + "start".length);
+    if (body !== null) found.push({ found: true, async: Boolean(match[1]), awaitLines: bodyLevelAwaitLines(body) });
+  }
+  const arrowRe = /\bstart\s*:\s*(async\s+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>\s*/g;
+  while ((match = arrowRe.exec(code)) !== null) {
+    const bodyStart = code.indexOf("{", match.index + match[0].length);
+    if (bodyStart < 0) continue;
+    const end = matchPair(code, bodyStart, "{", "}");
+    if (end < 0) continue;
+    found.push({ found: true, async: Boolean(match[1]), awaitLines: bodyLevelAwaitLines(code.slice(bodyStart, end)) });
+  }
+  const declaration = inspectFunctionDeclaration(code, "start");
+  if (declaration.found) found.push(declaration);
+  return found;
+}
+
 type SpecBinding = { local: string; exported: string };
 
 function parseSpecList(inner: string): SpecBinding[] {
@@ -1021,7 +1045,7 @@ describe("activation window stays synchronous", () => {
     "(...).then()": "Promise.then on the fire-and-forget `import('../codex/plan-from-token')` chain. then() registers a callback and returns immediately; the callback is a nested function this scan skips. Awaiting the import would already fail Guard 3.",
     "(...).catch()": "Promise.catch on that same dynamic-import chain. Same fire-and-forget: it cannot suspend startServer.",
     "backgroundLifecycle.scheduleStartupRun()": "src/server/background-lifecycle.ts owns this object method. The call site cannot resolve the declaration statically; scheduleStartupRun is declared `(): void` and is documented as never blocking listen.",
-    "claudeIntercept.start()": "Instance method on the lifecycle from createClaudeInterceptLifecycle in src/server/index/claude-intercept-lifecycle.ts. Declared `(options): void`; it stores the fire-and-forget promise from startClaudeIntercept and never awaits it, so the intercept pair binding late (or failing) cannot suspend startServer. Its stop() runs inside the async stop wrapper, which this scan skips.",
+    "optionalListeners.start()": "Instance method on OptionalListenerSet. Declared `(ctx): void`; it binds the optional link listener synchronously and starts the existing Claude intercept fire-and-forget lifecycle. Its stop() runs inside the async stop wrapper, which this scan skips.",
     "spendLedgerLifecycle.track()": "Instance method on the lifecycle from acquireSpendLedgerServerLifecycle in src/server/index/spend-ledger-lifecycle.ts, called on each listener as it is created. It binds the listener's stop, records a rollback closure and returns the same server; it is declared `<T>(server: T): T` and contains no await. An `await spendLedgerLifecycle.track(...)` would already fail Guard 3. The lifecycle's release() is not here because it is called inside the async stop wrapper, which this scan skips as a nested function.",
   };
 
@@ -1158,6 +1182,17 @@ describe("activation window stays synchronous", () => {
 
     expect(unresolvedFound.sort()).toEqual([...unresolvedAllow].sort());
     expect(failures).toEqual([]);
+  });
+
+  test("optional listener start implementations stay synchronous", () => {
+    for (const relative of [
+      "src/server/index/optional-listeners.ts",
+      "src/server/index/link-listener.ts",
+    ]) {
+      const definitions = inspectStartDefinitions(readFileSync(resolve(repoRoot, relative), "utf8"));
+      expect(definitions.length, `${relative}: start definition not found`).toBeGreaterThan(0);
+      expect(definitions.every(definition => !definition.async && definition.awaitLines.length === 0), relative).toBe(true);
+    }
   });
 
   test("the callee scan is not vacuous", () => {
