@@ -338,6 +338,7 @@ export function advanceComboAfterFailure(
     cooldownMs?: number;
     eligible?: (target: Required<OcxComboTarget>) => boolean;
     cooldownScope?: ComboFailureCooldownScope;
+    onCooldownRecorded?: (target: Pick<OcxComboTarget, "provider" | "model">) => void;
     status?: number;
     code?: string | null;
     message?: string;
@@ -352,11 +353,12 @@ export function advanceComboAfterFailure(
       ? combo.targets.filter(target => target.provider === pick.target.provider)
       : [pick.target];
     for (const target of cooldownTargets) {
-      coolComboTarget(pick.comboId, target, {
+      const recorded = coolComboTarget(pick.comboId, target, {
         ...options,
         cooldownMs: options.cooldownMs ?? combo?.cooldownMs,
         writerGeneration: pick.writerGeneration,
       });
+      if (recorded) options.onCooldownRecorded?.(target);
     }
   }
   // #5691: under `cooldownWaitPolicy: "before-last-resort"` this final synchronous pick

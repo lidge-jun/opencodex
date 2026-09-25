@@ -1627,5 +1627,6 @@
   "mimo-token-plan-capacity.test.ts": "providers",
   "command-code-tool-text-prose-split.test.ts": "providers",
   "cli-effort-slug.test.ts": "cli",
-  "grok-47-build-fast-metadata.test.ts": "providers/xai"
+  "grok-47-build-fast-metadata.test.ts": "providers/xai",
+  "server-combo-cooldown-recording.test.ts": "server"
 }

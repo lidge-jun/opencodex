@@ -100,6 +100,13 @@ combo whose remaining eligible targets use other providers.
 
 > Decision record: [ADR-0070](../decisions/ADR-0070-same-provider-combo-quota-fallback.md)
 
+## Single-target cooldown retry ownership
+
+`src/combos/failover.ts` reports whether the current failure actually records a cooldown.
+`src/combos/resolve.ts` forwards that result for each target; `src/server/responses/core-combo.ts`
+permits its bounded same-target retry only when this failure records the failed target and its
+cooldown is live. A stale-generation refusal cannot borrow a sibling request's shared entry.
+
 ## Combo per-target reasoning controls
 
 `src/server/responses/core.ts` passes the combo's `reasoningEffortMode` and the final target's

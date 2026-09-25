@@ -1688,7 +1688,7 @@
     "url-normalization.test.ts": "config",
     "usage-aggregate-cache.test.ts": "usage",
     "usage-anthropic-fast-pricing.test.ts": "usage",
-  "usage-cursor-fast-pricing.test.ts": "usage",
+    "usage-cursor-fast-pricing.test.ts": "usage",
     "usage-attempt-delivery.test.ts": "usage",
     "usage-cost.test.ts": "usage",
     "usage-debug.test.ts": "usage",
@@ -1796,7 +1796,8 @@
     "zhipu-bigmodel-responses-quota.test.ts": "providers",
     "zz-ci-api-usage-isolation.test.ts": "ci-workflows",
     "zz-ci-storage-policy-isolation.test.ts": "ci-workflows",
-    "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows"
+    "zz-pr-coderabbit-readiness-revalidation.test.ts": "ci-workflows",
+    "server-combo-cooldown-recording.test.ts": "server"
   },
   "migrated": [
     "adapters",

@@ -757,6 +757,8 @@ export async function executeComboResponses(
     const failureCooldownScope = comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
     });
+    const failedTargetKey = targetKey(pick.target);
+    let failedTargetCooldownRecorded = false;
     const nextPick = advanceComboAfterFailure(config, pick, {
       retryAfter: failure.retryAfter,
       resetAt: failure.resetAt,
@@ -767,12 +769,14 @@ export async function executeComboResponses(
       status: failure.response.status,
       code: failure.upstreamCode,
       message: failure.classificationText,
+      onCooldownRecorded: target => {
+        failedTargetCooldownRecorded ||= targetKey(target) === failedTargetKey;
+      },
     });
-    // Cooldown state is shared by every request using this target, so a concurrent failure
-    // can put it in cooldown while THIS failure recorded none. Scope "none" means the
-    // refusal described this request's shape rather than the target's health — the retry
-    // arms on any live cooldown for this target, whoever recorded it.
+    // A sibling cooldown is not this failure's write: stale-generation removal can
+    // refuse recording even for a cooldown-producing classification. Require both.
     const failedTargetCooled = failureCooldownScope !== "none"
+      && failedTargetCooldownRecorded
       && isComboTargetInCooldown(comboId, pick.target, failureNow);
     // Same target selector as the exclusionary pick below, minus `exclude`: the only
     // difference is deliberate and is the whole point of the single-target retry.
