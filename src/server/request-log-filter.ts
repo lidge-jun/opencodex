@@ -4,9 +4,23 @@
  */
 import type { RequestLogEntry } from "./request-log";
 import { matchesLogConversationId } from "./request-log-conversation";
+import { isDeliveryMode } from "../protocols/contract";
 
 /** Capacity of the in-memory request log ring; also the upper bound of `tail` and `limit`. */
 export const MAX_LOG_SIZE = 2000;
+
+/** `protocolMode=none` selects rows with no observed protocol trace. */
+export const REQUEST_LOG_PROTOCOL_MODE_NONE = "none";
+
+/**
+ * Whether a row matches a `protocolMode` query value: the final trace mode, or `none` for a row
+ * without a trace. An unrecognised value matches nothing rather than being ignored, for the
+ * reason #2704 gives for `model`.
+ */
+export function matchesProtocolMode(entry: Pick<RequestLogEntry, "protocolTrace">, mode: string): boolean {
+  if (mode === REQUEST_LOG_PROTOCOL_MODE_NONE) return entry.protocolTrace === undefined;
+  return isDeliveryMode(mode) && entry.protocolTrace?.mode === mode;
+}
 
 export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchParams): RequestLogEntry[] {
   let filtered = logs;
@@ -38,6 +52,8 @@ export function filterRequestLogs(logs: RequestLogEntry[], params: URLSearchPara
     filtered = filtered.filter(entry => entry.accountLogLabel === account
       || entry.attempts?.some(attempt => attempt.accountLogLabel === account));
   }
+  const protocolMode = params.get("protocolMode")?.trim().toLowerCase();
+  if (protocolMode) filtered = filtered.filter(entry => matchesProtocolMode(entry, protocolMode));
   const status = params.get("status")?.trim().toLowerCase();
   if (status) {
     filtered = /^[1-5]xx$/.test(status)
