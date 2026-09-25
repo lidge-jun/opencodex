@@ -524,6 +524,7 @@ export default function ApiKeys({ apiBase, active = true }: { apiBase: string; a
         rotationSecret={rotationSecret}
         rotationCopied={rotationCopied}
         filteredModels={filteredModels}
+        previewModels={models}
         modelsLoading={modelsState.showSkeleton && !modelsState.data && !cachedModels}
         // Only announce progress on a retry after failure — quiet warm revisits stay silent.
         modelsRefreshing={modelsState.refreshing && modelsState.showError && (modelsState.data !== undefined || cachedModels !== null)}
