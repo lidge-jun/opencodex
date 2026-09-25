@@ -502,7 +502,7 @@ instead of `bridgeToResponsesSSE`, and preserves the bridge's effects:
   `onUsage` rules.
 - The body goes through `trackStreamLifetime` with the same cleanup and admission lease; the
   terminal and a client cancel call `cancelResponseCompletion` and abort the upstream once.
-- Client frames are counted with `noteRelayedEvent`.
+- Client frames are counted with `noteRelayedEvent`; wire-silence keepalives (the Chat `: opencodex heartbeat` comment, the Messages `ping`) are delivered as the converters deliver them but, like the bridge heartbeat, not counted.
 - The request log learns the bridge's `response.created` snapshot and a terminal payload with the
   bridge's usage presence rules through the client-wire log channel.
 
