@@ -5,7 +5,8 @@
  * the bridge produced: one role frame first, content and `reasoning_content` deltas, each
  * function call as ONE complete tool_call chunk at its completion (Chat tool-call fields are
  * append-only, so the converter never streamed partial arguments), a finish chunk carrying the
- * usage, then `[DONE]`; failures end with one `{error}` frame and no `[DONE]`. Ids, the finish
+ * usage, then `[DONE]`; failures end with one `{error}` frame and no `[DONE]`. Wire-silence
+ * heartbeats become `: opencodex heartbeat` SSE comments, as the converter relays them. Ids, the finish
  * and error mapping and the usage shape are the converter's own exported helpers.
  */
 import type { AdapterEvent } from "../../types";
@@ -122,7 +123,13 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string): Clien
 
   return {
     start: ensureRole,
-    heartbeat: ensureRole,
+    heartbeat() {
+      // The converter answers each typed heartbeat with the role frame (once) and then an SSE
+      // comment (#5805): transport liveness without a chunk a parser could count as output.
+      if (terminated) return;
+      ensureRole();
+      sink.emitKeepalive(": opencodex heartbeat\n\n");
+    },
     text(delta) {
       if (!delta) return;
       ensureRole();

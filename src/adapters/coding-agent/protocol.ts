@@ -80,14 +80,11 @@ export async function* readJsonLines(
   const maxLineBytes = limits.maxLineBytes ?? MAX_STREAM_LINE_BYTES;
   const maxTotalBytes = limits.maxTotalBytes ?? MAX_STREAM_TOTAL_BYTES;
   const decoder = new TextDecoder();
-  const encoder = new TextEncoder();
-  let buffer = "";
+  let parts: string[] = [];
+  let lineBytes = 0;
   let totalBytes = 0;
 
   const flushLine = function* (line: string): Generator<StreamMessage> {
-    if (encoder.encode(line).byteLength > maxLineBytes) {
-      throw new CodingAgentStreamLimitError("Coding-agent stream line exceeded the byte ceiling");
-    }
     const trimmed = line.trim();
     if (!trimmed) return; // Blank lines and whitespace-only lines are ignored as padding.
     let parsed: unknown;
@@ -108,26 +105,39 @@ export async function* readJsonLines(
     yield parsed as StreamMessage;
   };
 
+  // Decode continuously for split UTF-8/BOM semantics, but search and measure only new
+  // decoded segments. Joining once per frame avoids repeatedly flattening a growing rope.
+  const consume = function* (text: string): Generator<StreamMessage> {
+    let start = 0;
+    while (start < text.length) {
+      const newline = text.indexOf("\n", start);
+      const end = newline < 0 ? text.length : newline;
+      const part = text.slice(start, end);
+      lineBytes += Buffer.byteLength(part);
+      if (lineBytes > maxLineBytes) {
+        throw new CodingAgentStreamLimitError("Coding-agent stream line exceeded the byte ceiling");
+      }
+      if (part) parts.push(part);
+      if (newline < 0) break;
+      const line = parts.join("");
+      parts = [];
+      lineBytes = 0;
+      yield* flushLine(line);
+      start = newline + 1;
+    }
+  };
+
   for await (const chunk of chunks) {
     totalBytes += chunk.byteLength;
     if (totalBytes > maxTotalBytes) {
       throw new CodingAgentStreamLimitError("Coding-agent stream exceeded the total byte ceiling");
     }
-    buffer += decoder.decode(chunk, { stream: true });
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline);
-      buffer = buffer.slice(newline + 1);
-      yield* flushLine(line);
-      newline = buffer.indexOf("\n");
-    }
-    if (encoder.encode(buffer).byteLength > maxLineBytes) {
-      throw new CodingAgentStreamLimitError("Coding-agent stream line exceeded the byte ceiling");
-    }
+    yield* consume(decoder.decode(chunk, { stream: true }));
   }
-  // Flush the decoder's trailing bytes and any final line without a newline terminator.
-  buffer += decoder.decode();
-  if (buffer.trim()) yield* flushLine(buffer);
+  // Flush incomplete UTF-8 through the same decoded-byte accounting before parsing EOF.
+  yield* consume(decoder.decode());
+  const finalLine = parts.join("");
+  if (finalLine.trim()) yield* flushLine(finalLine);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

@@ -1289,7 +1289,13 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     // The status line is carried on the error. A cap or an expired credential
     // delivered instead as a Connect EOS trailer is mapped by
     // connectTrailerHttpStatus at the trailer sites below.
-    throw new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined, undefined, resp.status);
+    const error = new CloudChatError(`GetChatMessage failed (HTTP ${resp.status})`, undefined, undefined, resp.status);
+    // No consumer will drain this body. Cancellation must neither replace the
+    // status error nor delay it if a transport's cancel promise never settles.
+    try {
+      void resp.body?.cancel(error).catch(() => undefined);
+    } catch { /* Non-conforming streams can throw synchronously from cancel. */ }
+    throw error;
   }
   if (!resp.body) {
     throw new CloudChatError('GetChatMessage response had no body stream');

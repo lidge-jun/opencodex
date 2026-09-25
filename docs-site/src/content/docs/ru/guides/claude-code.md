@@ -24,7 +24,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Порог автосжатия контекста (по умолчанию `829800`); внедряется только при включённом автоконтексте |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (необязательно) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (необязательно; поддерживается и устаревшая `ANTHROPIC_SMALL_FAST_MODEL`) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (необязательно) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (при запуске по подписке, если не задано: нативные `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]`) |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1`, когда включён `alwaysEnableEffort` (условно) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`, когда задан (условно; по умолчанию выключено) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Устаревшее переопределение контекста, когда задан `maxContextTokens` (условно) |
@@ -341,6 +341,8 @@ Anthropic сохраняют канонические id в обоих инте�
 shell-файлом: `ANTHROPIC_MODEL`, четыре `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL` и
 устаревший `ANTHROPIC_SMALL_FAST_MODEL`. Эффективное значение Haiku — `tierModels.haiku ??
 smallFastModel`; оно подставляется в обе переменные Haiku.
+
+Когда `ocx claude` запускается в режиме подписки, собственный вход Claude Code отправляет голый идентификатор Claude, например `claude-sonnet-5`, прямо в Anthropic, поэтому контекстное окно для таких идентификаторов берётся из реестра провайдеров, что бы ни указывал другой провайдер для того же идентификатора. Незаданный слот Opus, Sonnet или Fable тогда получает нативный идентификатор, в который Claude Code разворачивает этот псевдоним, с маркером `[1m]`: за шлюзом Claude Code считает идентификатор без маркера равным 200k. Строка `anthropic` с ограничением ниже 1M или запись `claudeCode.modelMap` оставляет свой идентификатор без маркера, а Haiku никогда не заполняется и не помечается. При запуске с аутентификацией через прокси или с выключенным `nativePassthrough` решает маршрутизатор, и учитывается только окно маршрутизируемой строки. Системное окружение и shell-файл оставляют незаданные слоты пустыми, потому что их значения доходят и до запусков через хаб.
 
 Если отсутствуют и `tierModels.haiku`, и `smallFastModel`, OpenCodex оставляет обе переменные вспомогательной модели незаданными. Затем Claude Code выбирает нативную вспомогательную модель (сейчас Sonnet), что может привести к расходам у нативного провайдера.
 

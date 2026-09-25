@@ -1405,7 +1405,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const models = await fetchAllModels(config);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
-    const { buildClaudeContextWindows, effectiveModelEnv } = await import("../../claude/context-windows");
+    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
     const disabled = new Set(config.disabledModels ?? []);
     const isDisabled = (provider: string, id: string) =>
@@ -1432,9 +1432,6 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const listedId = (m.provider === "cursor" ? cursorFastIdFor?.(m.id) : undefined) ?? m.id;
       aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
     }
-    const contextWindows = buildClaudeContextWindows([...visibleNativeSlugs(config)], models, nativeContextLimits(config));
-    const webSearchOverride = config.claudeCode?.webSearchSidecar;
-    const visionOverride = config.claudeCode?.visionSidecar;
     // Auto is a RESOLUTION, recomputed per request — never stored state. Detection is
     // daemon-side, so it cannot see a key exported only in the user's terminal; the
     // GUI labels the badge with detectionScope for exactly that reason.
@@ -1442,6 +1439,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { authModeIntent, resolveClaudeAuthMode } = await import("../../claude/auth-mode");
     const authDetection = detectClaudeAuth(defaultAuthDetectDeps(process.env, ownAdmissionTokens(config)));
     const resolvedAuthMode = resolveClaudeAuthMode(config, authDetection);
+    const contextWindows = buildClaudeContextWindows(
+      [...visibleNativeSlugs(config)],
+      models,
+      nativeContextLimits(config),
+      nativeClaudePassthroughFor(config.claudeCode, resolvedAuthMode.markerMode),
+    );
+    const webSearchOverride = config.claudeCode?.webSearchSidecar;
+    const visionOverride = config.claudeCode?.visionSidecar;
     return jsonResponse({
       enabled: config.claudeCode?.enabled !== false,
       // Three-state intent (devlog 260726_claude_auth_auto): an absent key is AUTO, not

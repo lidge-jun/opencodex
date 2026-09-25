@@ -21,6 +21,12 @@ system prompt through its documented scoped `QODER_APPEND_SYSTEM_PROMPT` or
 `QODERCN_APPEND_SYSTEM_PROMPT` child environment,
 never through command-line arguments or inherited vendor variables.
 
+Coding-agent stdout is framed as bounded JSONL directly from decoded stream segments. The framer
+tracks the current line's UTF-8 byte count incrementally, searches each decoded segment once, and
+joins only when a newline or EOF completes the frame. This preserves split UTF-8, BOM, CRLF,
+blank-line, line-limit, and total-limit behavior without re-encoding the growing partial frame on
+every child stdout chunk. See [ADR-0102](decisions/ADR-0102-incremental-stream-accounting.md).
+
 Kimi Coding's Chat, API-key, and optional Responses presets consume the same model seeds in
 `src/providers/registry/model-seeds.ts`, including the native `k3-256k` ID. The Responses preset
 shares the `kimi` OAuth account and Coding endpoint, keeps Chat as the featured default, and
