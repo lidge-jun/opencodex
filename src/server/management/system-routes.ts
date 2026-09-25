@@ -26,7 +26,7 @@ import { selectEagerPath } from "../../lib/bun-stream-caps";
 import { reportedBunRuntimeSource } from "../../lib/bun-runtime";
 import { getActiveTurnCount, isDraining } from "../lifecycle";
 import { getActiveMemoryWatchdog, observedMemoryCounter } from "../memory-watchdog";
-import { responseStateMetrics } from "../../responses/state";
+import { inspectResponseSpillStorage, responseStateMetrics } from "../../responses/state";
 import { appOwnedBytesSnapshot } from "../../lib/app-owned-memory";
 import { readWindowsReplaceRetryCounters } from "../../lib/windows-atomic-replace";
 import {
@@ -121,6 +121,10 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
 	      observedMetric: observed.observedMetric,
 	      jscHeap,
       responseState: responseStateMetrics(),
+      // Dry-run spill-directory counters: owned vs orphan-candidate bytes, same
+      // predicate the startup reclaim uses. Sibling of responseState, not a field
+      // in it — that block's key count is pinned. Still scalar-only.
+      responseSpill: inspectResponseSpillStorage(),
       appOwnedBytes: appOwnedBytesSnapshot(),
       inspectionCounters: getInspectionCounters(),
       streamMode,

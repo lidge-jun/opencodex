@@ -42,7 +42,9 @@ import {
 } from "../codex/coordinator-doctor";
 import {
   inspectAbandonedResponseStateTemps,
+  inspectResponseSpillStorage,
   reclaimAbandonedResponseStateTemps,
+  type ResponseSpillDirInspection,
   type ResponseStateTempRecoveryResult,
 } from "../responses/state";
 import {
@@ -861,6 +863,26 @@ export function formatResponseTempLines(
   return lines;
 }
 
+/**
+ * Render the response-state spill section (testable without console capture).
+ *
+ * Always dry-run: doctor reports what the disk looks like, it never unlinks
+ * spill files. "Owned" counts union the live store and the persisted snapshot,
+ * so a file a restart would re-own is never reported as garbage.
+ */
+export function formatResponseSpillLines(result: ResponseSpillDirInspection): string[] {
+  if (result.orphanFiles === 0) {
+    return [`  ok  No orphaned response-state spill files (${result.files} file(s), ${mb(result.bytes)} on disk).`];
+  }
+  const lines = [
+    `  !!  ${result.orphanFiles} unreferenced response-state spill file(s), ${mb(result.orphanBytes)} reclaimable.`,
+    `      ${result.ownedFiles} file(s), ${mb(result.ownedBytes)} still owned by the store or the persisted snapshot.`,
+    "      Orphans are reaped automatically at proxy start; do not delete spill files manually.",
+  ];
+  if (result.truncated) lines.push("      Scan stopped at its entry budget; the real total is higher.");
+  return lines;
+}
+
 export function formatCoordinatorDoctorLines(diagnostic: CodexCoordinatorDiagnostic): string[] {
   const pathLine = diagnostic.path ? [`       path: ${diagnostic.path}`] : [];
   const evidenceLines = "evidence" in diagnostic && diagnostic.evidence
@@ -1298,6 +1320,9 @@ export async function runDoctor(args: string[] = []): Promise<void> {
       : inspectAbandonedResponseStateTemps(),
     reclaimTemps,
   )) console.log(line);
+
+  console.log("\nResponse-state spill files");
+  for (const line of formatResponseSpillLines(inspectResponseSpillStorage())) console.log(line);
 
   const orcaHome = collectOrcaCodexHomeDiagnostic();
   console.log("\nCodex app home targeting");
