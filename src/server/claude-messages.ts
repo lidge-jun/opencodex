@@ -61,8 +61,12 @@ import {
 } from "./request-log-conversation";
 import { responseWithDeferredRequestLog } from "./relay";
 import { handleResponses } from "./responses";
+import { upstreamWireForAdapter } from "../protocols/contract";
+import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
 import { featuresFromMessagesBody } from "../protocols/features";
-import { resolveApiSurfaceSettings } from "../protocols/settings";
+import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
+import { requestPathForLane } from "../protocols/path";
+import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
 import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
 import {
   isApiAuthRequired,
@@ -740,6 +744,8 @@ async function handleClaudeMessagesWithBudget(
   let effortRow: ParsedEffortRowId | null = null;
   let fastRow: ParsedFastRowId | null = null;
   let requestedModel = "";
+  // Built only under the reject policy; the legacy default leaves this request untouched.
+  let envelope: ProtocolEnvelope | undefined;
   try {
     anthropicBody = await readAnthropicBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
     // Defensive [1m] strip (devlog 138): clients normally remove the context-variant
@@ -807,7 +813,15 @@ async function handleClaudeMessagesWithBudget(
     // proxy-owned `speed` + beta (anthropic-speed wire) and its usage.speed observation would be
     // silently skipped. Translation reaches the adapter, which owns both.
     const messagesBody = anthropicBody;
-    const messagesFeatures = () => featuresFromMessagesBody(messagesBody);
+    if (isRec(messagesBody) && resolveProtocolSettings(config).unrepresentable === "reject") {
+      envelope = createProtocolEnvelope({ inbound: "messages", body: messagesBody, translatorBudget });
+    }
+    const sourceEnvelope = envelope;
+    // The bridge entry mark below reads these before an effort override rewrites `thinking`,
+    // which also fixes the envelope's cached features on the caller's own settings.
+    const messagesFeatures = sourceEnvelope
+      ? () => sourceEnvelope.features()
+      : () => featuresFromMessagesBody(messagesBody);
     if (!effortRow && !fastRow && isRec(anthropicBody) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
       markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
@@ -900,6 +914,7 @@ async function handleClaudeMessagesWithBudget(
   // Native ChatGPT passthrough (openai-responses forward) accepts only Codex-shaped
   // bodies: it 400s on sampling params ("Unsupported parameter: max_output_tokens",
   // verified live 2026-07-11). Strip them for that route; routed providers keep them.
+  let settledRoute: ReturnType<typeof routeModel> | undefined;
   try {
     const route = routeModel(config, internalBody.model as string, evidenceFromBody(internalBody));
     // Same reason as the native Chat lane: this route can be sent from here, so
@@ -916,6 +931,7 @@ async function handleClaudeMessagesWithBudget(
     );
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy);
     logCtx.routeDecision = route.routeDecision;
+    settledRoute = route;
     if (route.provider.adapter === "openai-responses") {
       delete internalBody.max_output_tokens;
       delete internalBody.temperature;
@@ -957,6 +973,22 @@ async function handleClaudeMessagesWithBudget(
       return anthropicErrorResponse(404, err.message, "invalid_request_error");
     }
     /* unknown model: let handleResponses shape the 404 */
+  }
+
+  // Combo and policy children are judged per candidate (PF-07); an unknown model has no route.
+  if (envelope && settledRoute && !settledRoute.combo && settledRoute.routeKind !== "policy") {
+    const verdict = checkRepresentable({
+      inbound: "messages",
+      requestPath: requestPathForLane("messages", "bridge", upstreamWireForAdapter(settledRoute.provider.adapter)),
+      features: envelope.features(),
+      policy: "reject",
+    });
+    if (!verdict.ok) {
+      markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: verdict.reasonCodes, features: verdict.features });
+      logCtx.errorCode = "unsupported_feature";
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return anthropicErrorResponse(400, unrepresentableMessage(verdict.features), "invalid_request_error");
+    }
   }
 
   const headers = new Headers({ "content-type": "application/json" });
