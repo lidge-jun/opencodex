@@ -3035,7 +3035,9 @@ describe("server local API auth", () => {
           model,
           headers: { "chatgpt-account-id": "acct-caller-main" },
         });
-        expect(response.status).toBe(200);
+        if (response.status !== 200) {
+          throw new Error(`caller-main retry returned ${response.status}: ${await response.text()}; dispatches=${JSON.stringify(harness.dispatches)}; observed=${JSON.stringify(observed)}`);
+        }
         expect((await response.json() as { id: string }).id).toBe("caller-main-success");
         expect(observed).toEqual([
           { authorization: "Bearer pool-a-token", accountId: "acct-pool-a" },
