@@ -43,8 +43,12 @@ export const PERIODIC_SPILL_SWEEP_OPTS = {
   deadlineMs: 25,
 } as const;
 
-/** Directory position the next liveness-tick sweep resumes from; 0 after a full pass. */
-let periodicSweepOffset = 0;
+/** Open directory iterator the next liveness-tick sweep resumes from; null
+ *  after a full pass, an iteration error, or a directory change. Holding the
+ *  real iterator (instead of an offset re-skipped from a fresh opendir) keeps
+ *  each tick's cost bounded by its own budget, so a slow enumeration cannot
+ *  pin the cursor at the same prefix forever. */
+let periodicSweepCursor: { dir: string; scan: SpillDirScan } | null = null;
 
 const RESPONSE_SPILL_PUBLISH_RETRIES = 64;
 const OWNED_SPILL_NAME = /^([A-Za-z0-9._-]{1,80})\.([0-9a-f]{12})\.([0-9a-f]{24})\.(\d+)\.(\d+)\.spill\.json$/;
@@ -770,7 +774,9 @@ type SpillDirNameKind = "spill" | "temp";
  *  (review C2-2: two duplicated loops let the test prove only its own copy).
  *  Callers must request the next name strictly AFTER their scan-cap check, so
  *  entry SCAN_MAX+1 is never requested from either source. */
-function openSpillDirScan(dir: string): { nextName: () => string | null; close: () => void } | null {
+interface SpillDirScan { nextName: () => string | null; close: () => void }
+
+function openSpillDirScan(dir: string): SpillDirScan | null {
   let handle: ReturnType<typeof opendirSync> | null = null;
   const injected = spillIoForTest?.readdirEntry;
   if (!injected) {
@@ -863,43 +869,51 @@ export function inspectResponseSpillDir(
 export function recoverOrphanedResponseSpills(
   referencedFileNames: ReadonlySet<string>,
   dir = responseSpillDirectory(),
-  opts?: { graceMs?: number; scanMax?: number; cleanupMax?: number; deadlineMs?: number; skip?: number },
+  opts?: { graceMs?: number; scanMax?: number; cleanupMax?: number; deadlineMs?: number },
+): ResponseSpillCleanupResult {
+  const scan = openSpillDirScan(dir);
+  if (!scan) return { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
+  try {
+    return reclaimFromSpillDirScan(scan, referencedFileNames, dir, opts);
+  } finally {
+    scan.close();
+  }
+}
+
+/** Reclaim loop over an already-open scan. It never reads a name it will not
+ *  process, so a caller that keeps the scan open resumes at the first entry the
+ *  previous call left untouched. Throws only if the iterator itself throws. */
+function reclaimFromSpillDirScan(
+  scan: SpillDirScan,
+  referencedFileNames: ReadonlySet<string>,
+  dir: string,
+  opts?: { graceMs?: number; scanMax?: number; cleanupMax?: number; deadlineMs?: number },
 ): ResponseSpillCleanupResult {
   const result: ResponseSpillCleanupResult = { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
   const graceMs = opts?.graceMs ?? RESPONSE_SPILL_ORPHAN_GRACE_MS;
   const scanMax = opts?.scanMax ?? RESPONSE_SPILL_SCAN_MAX;
   const cleanupMax = opts?.cleanupMax ?? RESPONSE_SPILL_CLEANUP_MAX;
   const deadline = opts?.deadlineMs === undefined ? Infinity : Date.now() + opts.deadlineMs;
-  const scan = openSpillDirScan(dir);
-  if (!scan) return result;
-  try {
-    for (let skipped = 0; skipped < (opts?.skip ?? 0); skipped += 1) {
-      if (scan.nextName() === null) { result.exhausted = true; return result; }
+  while (result.scanned < scanMax && result.removed + result.failed < cleanupMax && Date.now() < deadline) {
+    const name = scan.nextName();
+    if (name === null) { result.exhausted = true; break; }
+    result.scanned += 1;
+    const orphanKind = orphanSpillNameKind(name, referencedFileNames);
+    if (orphanKind === null) continue;
+    const path = join(dir, name);
+    let stat: Stats;
+    try { stat = lstatSync(path); } catch { continue; }
+    if (!spillEntryPastGrace(stat, graceMs)) continue;
+    try {
+      // Orphaned publish temps get the full ephemeral release; stable
+      // orphaned spills keep destination-keyed timeout memos.
+      if (orphanKind === "temp") unlinkEphemeral(path);
+      else unlink(path);
+      result.removed += 1;
+      result.bytesRemoved += stat.size;
+    } catch {
+      result.failed += 1;
     }
-    while (result.scanned < scanMax && Date.now() < deadline) {
-      const name = scan.nextName();
-      if (name === null) { result.exhausted = true; break; }
-      result.scanned += 1;
-      if (result.removed + result.failed >= cleanupMax) break;
-      const orphanKind = orphanSpillNameKind(name, referencedFileNames);
-      if (orphanKind === null) continue;
-      const path = join(dir, name);
-      let stat: Stats;
-      try { stat = lstatSync(path); } catch { continue; }
-      if (!spillEntryPastGrace(stat, graceMs)) continue;
-      try {
-        // Orphaned publish temps get the full ephemeral release; stable
-        // orphaned spills keep destination-keyed timeout memos.
-        if (orphanKind === "temp") unlinkEphemeral(path);
-        else unlink(path);
-        result.removed += 1;
-        result.bytesRemoved += stat.size;
-      } catch {
-        result.failed += 1;
-      }
-    }
-  } finally {
-    scan.close();
   }
   return result;
 }
@@ -910,21 +924,37 @@ export function responseSpillExistsForTests(ref: ResponseSpillRef): boolean {
 
 /**
  * Bounded liveness-tick reclaim that resumes where the previous tick stopped,
- * so orphans behind the first `scanMax` owned entries are still reached.
+ * so orphans behind the first `scanMax` owned entries are still reached. The
+ * directory iterator stays open between ticks; it is dropped at end of
+ * directory, on an iteration error, or when the spill directory changes.
  */
 export function sweepOrphanedResponseSpillsPeriodically(
   referencedFileNames: ReadonlySet<string>,
   dir = responseSpillDirectory(),
 ): ResponseSpillCleanupResult {
-  const result = recoverOrphanedResponseSpills(referencedFileNames, dir, {
-    ...PERIODIC_SPILL_SWEEP_OPTS,
-    skip: periodicSweepOffset,
-  });
-  // Removed entries leave the listing, so the next pass starts that much earlier.
-  periodicSweepOffset = result.exhausted ? 0 : periodicSweepOffset + result.scanned - result.removed;
+  if (periodicSweepCursor && periodicSweepCursor.dir !== dir) closePeriodicSweepCursor();
+  if (!periodicSweepCursor) {
+    const scan = openSpillDirScan(dir);
+    if (!scan) return { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
+    periodicSweepCursor = { dir, scan };
+  }
+  let result: ResponseSpillCleanupResult;
+  try {
+    result = reclaimFromSpillDirScan(periodicSweepCursor.scan, referencedFileNames, dir, PERIODIC_SPILL_SWEEP_OPTS);
+  } catch {
+    closePeriodicSweepCursor();
+    return { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
+  }
+  // A full pass restarts from a fresh listing so files created mid-pass are seen.
+  if (result.exhausted) closePeriodicSweepCursor();
   return result;
 }
 
+function closePeriodicSweepCursor(): void {
+  periodicSweepCursor?.scan.close();
+  periodicSweepCursor = null;
+}
+
 export function resetPeriodicSpillSweepCursorForTests(): void {
-  periodicSweepOffset = 0;
+  closePeriodicSweepCursor();
 }

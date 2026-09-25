@@ -2,7 +2,7 @@
 // that file sits at its file-size cap. These cases prove sweepOrphanedResponseSpills
 // reclaims crash/cleanup orphans while the process keeps running and never touches the
 // files any live ownership path still needs.
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { constants, copyFileSync, existsSync, mkdtempSync, readdirSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -211,5 +211,39 @@ describe("Periodic orphan response-spill sweep", () => {
     expect(removed).toBe(orphans.length);
     expect(orphans.filter(name => existsSync(join(dir, name)))).toEqual([]);
     expect(spillFileNames(home)).toHaveLength(owned.size);
+  });
+
+  test("keeps advancing when enumeration alone would exhaust the tick deadline", () => {
+    // Regression: the cursor used to be an offset re-skipped from a fresh
+    // opendir each tick, and that skip spent the deadline — so once
+    // enumeration got slow the cursor stopped moving and a trailing orphan
+    // was never reached. Every name read costs 10 ms here, so a tick can
+    // only process a handful of entries; progress must still accumulate.
+    const dir = responseSpillDirectory(home);
+    const orphan = writeResponseSpillDurably("resp_trailing_orphan", { createdAt: Date.now(), items: ["o"] });
+    agePastGrace(join(dir, orphan.fileName));
+    const names = Array.from({ length: PERIODIC_SPILL_SWEEP_OPTS.scanMax }, (_, i) => `owned-${i}.txt`);
+    names.push(orphan.fileName);
+    let clock = Date.now();
+    const nowSpy = spyOn(Date, "now").mockImplementation(() => clock);
+    let served = 0;
+    setSpillIoForTest({
+      readdirEntry() {
+        clock += 10;
+        return served < names.length ? names[served++]! : null;
+      },
+    });
+    try {
+      let ticks = 0;
+      while (existsSync(join(dir, orphan.fileName)) && ticks < names.length) {
+        sweepOrphanedResponseSpillsPeriodically(new Set(), dir);
+        ticks += 1;
+      }
+      expect(existsSync(join(dir, orphan.fileName))).toBe(false);
+      // Each name is read once: no tick re-walks the prefix.
+      expect(served).toBe(names.length);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
