@@ -3,12 +3,15 @@
  *
  * A Messages request whose settled route is a proxy-managed key on the `anthropic` adapter is
  * sent as Messages: the source body (after the ingress's managed-client steps) cut to a field
- * allowlist, the wire model, and the provider's own key. Modelled on the native Chat lane and
+ * allowlist, the wire model, and the provider's own key. With `managedMessagesNativeOAuth` on
+ * (PF-10), an unpooled Anthropic OAuth account is sent the same way with the access token the
+ * existing OAuth selection resolves at dispatch (`messages-native-oauth.ts`). Modelled on the native Chat lane and
  * built on the same shared pieces — attempt row, finish-once final log, spend tracker, proactive
  * key selection, key failover and 429 replay, connection policy — so nothing the Responses
  * pipeline enforces is bypassed.
  *
- * Authority. This lane never reads a caller header. The caller-forward passthrough in
+ * Authority. This lane reads no caller header. The ingress hands over one value, the caller's
+ * `anthropic-beta`, which the builder reduces to an allowlist. The caller-forward passthrough in
  * `claude-messages.ts` (the caller's own Anthropic credential) is a different branch decided
  * before this one, and nothing here can reach it or be reached from it.
  *
@@ -18,6 +21,7 @@ import { enforceAnthropicImageLimits } from "../adapters/anthropic-image-guard";
 import { normalizeAnthropicImages } from "../adapters/anthropic-image-normalize";
 import { formatAnthropicErrorBody } from "../adapters/anthropic";
 import {
+  anthropicMessagesNativeWireBody,
   buildAnthropicMessagesPassthroughRequest,
   type AnthropicMessagesPassthroughRequest,
 } from "../adapters/anthropic/passthrough";
@@ -54,7 +58,11 @@ import {
   selectProactiveApiKeyTransport,
   transientRetryPolicyFor,
 } from "../providers/key-failover";
-import { stampApiKeyAccountLabel } from "../providers/label";
+import { stampApiKeyAccountLabel, stampOAuthAccountLabel } from "../providers/label";
+import { publicOAuthAuthenticationErrorMessage } from "../oauth";
+import { hasAnthropicFailoverQuorum } from "../oauth/anthropic-routing";
+import { resolveProtocolSettings } from "../protocols/settings";
+import { addProtocolEntryReason, markProtocolBlocked } from "../protocols/trace";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import { preservesPhysicalComboProvider, resolveComboId } from "../combos";
 import { captureRouteStaticPolicy, routeModel, type RouteResult } from "../router";
@@ -72,6 +80,14 @@ import { beginInferenceAttempt } from "./inference/attempt";
 import { createFinalRequestLog, type FinalRequestLogMeta } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
+import {
+  nativeOAuthBindingIsCurrent,
+  NativeOAuthSelectionChangedError,
+  resolveNativeOAuthBinding,
+  restoreOAuthToolNamesInMessage,
+  restoreOAuthToolNamesInSse,
+  type NativeOAuthBinding,
+} from "./messages-native-oauth";
 import {
   noteProviderAttemptSend,
   recordAttemptCredentialSource,
@@ -99,6 +115,13 @@ const MAX_NATIVE_MESSAGES_ERROR_BYTES = 64 * 1024;
 
 class NativeMessagesSpendRefusal extends Error {}
 
+/** A rebuild for a destination that cannot carry the body's opaque state, under `reject`. */
+class NativeOpaqueStateRefusal extends Error {
+  constructor() {
+    super("The selected route cannot carry thinking signatures or redacted_thinking blocks");
+  }
+}
+
 function isRec(value: unknown): value is Rec {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -120,6 +143,11 @@ export interface HandleNativeMessagesOptions {
   translatorBudget: TranslatorBudget;
   /** The facts the ingress judged eligibility with; re-applied if key selection changes. */
   selector?: NativeMessagesSelector;
+  /**
+   * The caller's `anthropic-beta` header, handed over by the ingress. The builder keeps only
+   * allowlisted values; no other caller header reaches this lane.
+   */
+  callerAnthropicBeta?: string | null;
 }
 
 type FinishLog = (status: number, message?: string, closeReason?: FinalRequestLogMeta["closeReason"]) => void;
@@ -327,11 +355,28 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     unregisterTurn(upstream);
   };
   const connectMs = config.connectTimeoutMs ?? 200_000;
-  // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
-  const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
-  if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
-  let activeProvider: OcxProviderConfig = route.provider;
+  // An OAuth route is served by the account the existing OAuth selection commits now, at
+  // dispatch; the token lives on this lane's provider copy only, never on the shared route.
+  let oauthBinding: NativeOAuthBinding | undefined;
+  const oauthProvider = (binding: NativeOAuthBinding): OcxProviderConfig => ({ ...route.provider, apiKey: binding.snapshot.accessToken });
+  if (route.provider.authMode === "oauth") {
+    try {
+      oauthBinding = await resolveNativeOAuthBinding(config);
+    } catch (error) {
+      cleanupAbort();
+      upstream.abort();
+      if (req.signal.aborted) return fail(499, "Client cancelled request", "api_error");
+      if (error instanceof NativeOAuthSelectionChangedError) return fail(409, error.message, "api_error");
+      return fail(401, publicOAuthAuthenticationErrorMessage(error), "authentication_error");
+    }
+  } else {
+    // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
+    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+    if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+  }
+  let activeProvider: OcxProviderConfig = oauthBinding ? oauthProvider(oauthBinding) : route.provider;
   stampApiKeyAccountLabel(logCtx, route.providerName, activeProvider);
+  if (oauthBinding) stampOAuthAccountLabel(logCtx, route.providerName, activeProvider, oauthBinding.snapshot.accountId);
   const spendTracker = attachRequestSpendTracker(req, logCtx);
   let activeRequest: AnthropicMessagesPassthroughRequest;
   let retainedRequestBytes = 0;
@@ -345,11 +390,19 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     translatorBudget.chargeRetained(bytes, { kind: "request_copies" });
     retainedRequestBytes = bytes;
   };
-  // Every rebuild reads the same `body`; the builder copies, so no credential or header from an
-  // earlier key survives into the next request.
+  // Every rebuild reads the same `body`; the builder copies and never mutates it, so no
+  // credential, header or stripped block from an earlier build reaches the next one, and a build
+  // for another credential domain decides opaque state from the full source again.
+  const rejectUnrepresentable = resolveProtocolSettings(config).unrepresentable === "reject";
   const buildActiveRequest = () => {
     recordAttemptCredentialSource(attempt, route.providerName, activeProvider, "anthropic");
-    return buildAnthropicMessagesPassthroughRequest(activeProvider, route.modelId, body, config);
+    const built = buildAnthropicMessagesPassthroughRequest(activeProvider, route.modelId, body, config, {
+      callerAnthropicBeta: options.callerAnthropicBeta,
+    });
+    if (built.strippedOpaqueState && rejectUnrepresentable) throw new NativeOpaqueStateRefusal();
+    if (built.droppedBetas) addProtocolEntryReason(logCtx, "anthropic-beta-dropped");
+    if (built.strippedOpaqueState) addProtocolEntryReason(logCtx, "opaque-state-stripped");
+    return built;
   };
   const rebuildFor = (provider: OcxProviderConfig) => {
     activeProvider = provider;
@@ -367,6 +420,12 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     upstream.abort();
     if (isTranslatorBudgetExceededError(error)) {
       return fail(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
+    }
+    if (error instanceof NativeOpaqueStateRefusal) {
+      // Nothing was sent: this is a refusal before any upstream send.
+      markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: ["feature-unrepresentable", "opaque-state-stripped"] });
+      logCtx.errorCode = "unsupported_feature";
+      return fail(400, error.message, "invalid_request_error", "unsupported_feature");
     }
     return fail(400, error instanceof Error ? error.message : String(error), "invalid_request_error");
   }
@@ -398,7 +457,19 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
           providerName: route.providerName,
           modelId: route.modelId,
           dispatchOverride: async (_input, init, execute) => {
-            if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
+            if (oauthBinding) {
+              // The OAuth twin of the key check below: re-resolve through the same selection
+              // owner when the committed account or its credential moved since the build.
+              if (!nativeOAuthBindingIsCurrent(oauthBinding)) {
+                try {
+                  oauthBinding = await resolveNativeOAuthBinding(config);
+                } catch {
+                  throw new NativeOAuthSelectionChangedError();
+                }
+                rebuildFor(oauthProvider(oauthBinding));
+                stampOAuthAccountLabel(logCtx, route.providerName, activeProvider, oauthBinding.snapshot.accountId);
+              }
+            } else if (!providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider)) {
               const current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
               if (!current || nativeMessagesDeclineReason({ ...route, provider: current }, body, config, selector) !== undefined) {
                 throw new Error("Provider key selection is no longer available for native Messages");
@@ -498,6 +569,11 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       finishLog(429);
       return refusal;
     }
+    if (sendError instanceof NativeOAuthSelectionChangedError) return fail(409, sendError.message, "api_error");
+    if (sendError instanceof NativeOpaqueStateRefusal) {
+      logCtx.errorCode = "unsupported_feature";
+      return fail(400, sendError.message, "invalid_request_error", "unsupported_feature");
+    }
     if (isTranslatorBudgetExceededError(error)) {
       return fail(413, "request translation buffer exceeded the safe limit", "request_too_large", "translation_buffer_limit");
     }
@@ -523,7 +599,10 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   if (contentType.includes("text/event-stream") && response.body) {
     const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
     const observed = logIds ? observeFirstChunk(response.body, () => recordFirstOutput(logCtx, logIds.start)) : response.body;
-    const source = echoRequestedModel(observed, requestedModel);
+    const renamed = activeRequest.oauthToolNames
+      ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
+      : observed;
+    const source = echoRequestedModel(renamed, requestedModel);
     if (requestedStream) {
       transferTurnToStream();
       const relayed = tapAnthropicSseForLog(source, logCtx, (status, meta) => {
@@ -589,15 +668,18 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     upstream.abort();
     return fail(502, "upstream response exceeded the safe limit", "api_error", "translation_buffer_limit");
   }
-  let message: unknown;
+  let parsedMessage: unknown;
   try {
-    message = JSON.parse(read.text);
+    parsedMessage = JSON.parse(read.text);
   } catch {
     return fail(502, "upstream returned malformed Messages JSON", "api_error");
   }
-  if (!isRec(message) || message.type !== "message") {
+  if (!isRec(parsedMessage) || parsedMessage.type !== "message") {
     return fail(502, "upstream response was not a Messages result", "api_error");
   }
+  const message = activeRequest.oauthToolNames
+    ? restoreOAuthToolNamesInMessage(parsedMessage, activeRequest.oauthToolNames)
+    : parsedMessage;
   bindUsage(anthropicUsageToOcx(isRec(message.usage) ? message.usage : undefined));
   if (logIds) recordFirstOutput(logCtx, logIds.start);
   try {
@@ -693,9 +775,15 @@ export function nativeMessagesCountBody(
       route.providerName, route.modelId, route.provider, route.staticPolicy.effectiveAlias, "anthropic",
     );
     route.provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, "anthropic", route.staticPolicy);
-    const selector: NativeMessagesSelector = { ...rows, routeSelector: selectorId, claudeCode: cc };
+    const selector: NativeMessagesSelector = {
+      ...rows,
+      routeSelector: selectorId,
+      claudeCode: cc,
+      ...(route.provider.authMode === "oauth" ? { oauthFailoverQuorum: hasAnthropicFailoverQuorum() } : {}),
+    };
     if (nativeMessagesDeclineReason(route, body, config, selector) !== undefined) return undefined;
-    return buildAnthropicMessagesPassthroughRequest(route.provider, route.modelId, body, config).wireBody;
+    // The body without a credential: counting never resolves or refreshes an OAuth account.
+    return anthropicMessagesNativeWireBody(route.provider, route.modelId, body).wireBody;
   } catch {
     return undefined;
   }
