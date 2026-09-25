@@ -411,8 +411,9 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         outBody = rewritten.body;
         convertedRoutedNamespaceToolAliases = rewritten.aliases;
         // Preserve xAI's cached-only fail-closed semantics and image-search mapping before the
-        // generic capability fallback removes the private OpenAI fields.
-        outBody = normalizeXaiResponsesWebSearch(outBody, provider);
+        // generic capability fallback removes the private OpenAI fields. Grok relayed through
+        // OpenCode Go speaks the same dialect, which the final model id and URL identify.
+        outBody = normalizeXaiResponsesWebSearch(outBody, provider, { modelId: parsed.modelId, responseUrl: url });
         outBody = injectXaiResponsesXSearch(outBody, provider, parsed._replayPrefixLen);
         // xAI and explicitly classified compatible gateways reject these OpenAI web_search
         // extensions. Keep them for OpenAI API-key traffic and unclassified gateways.

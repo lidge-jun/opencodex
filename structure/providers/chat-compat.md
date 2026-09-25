@@ -279,9 +279,12 @@ but rejected hosted `web_search` with HTTP 400 `unsupported_request`, which mean
 prompt failed before the model answered, because Codex's hosted declaration travelled with it. A
 provider nobody has classified can now describe itself in config.
 
-The declaration is additive to that table, not a replacement for it. The table still covers
-destinations that reject a tool regardless of configuration, so an operator who never heard of the
-field stays protected; a declaration can only deny more, never re-enable a known-broken pairing.
+The declaration is additive to that table, not a replacement for it. The table is for destinations
+that reject a tool regardless of configuration, so an operator who never heard of the field stays
+protected; a declaration can only deny more, never re-enable a known-broken pairing. The table is
+currently empty: its only row removed hosted search for grok-4.6 on OpenCode Go, but that
+destination refuses two OpenAI-private fields rather than the tool, and
+`src/adapters/xai-web-search.ts` now normalizes those fields for every Grok model there.
 
 Two properties are deliberate. Spelling variants of one capability are aliased, so declaring
 `web_search` also denies `web_search_preview` — the rest of the proxy already folds that pair into

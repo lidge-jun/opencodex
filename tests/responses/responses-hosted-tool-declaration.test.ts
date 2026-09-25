@@ -127,17 +127,16 @@ describe("provider-declared unsupported hosted tools", () => {
     }, ["web_search"]).input).toEqual([{ type: "additional_tools", tools: [functionTool] }]);
   });
 
-  test("the declaration is additive to the built-in destination table, not a replacement", () => {
-    // An operator who declares only image_generation must still be protected from the
-    // known-broken grok-4.6 destination, and a declaration must not disable that table.
+  test("the declaration denies only what it names", () => {
+    // The built-in table is empty: OpenCode Go Grok, its former only row, accepts hosted
+    // web_search once the xAI-refused fields are normalized away (xai-web-search.ts), so
+    // neither an unrelated declaration nor the table may remove it there.
     const declaredImageOnly = declaredUnsupportedHostedTools({ unsupportedHostedTools: ["image_generation"] });
 
-    expect(isHostedToolUnsupportedForModel(
-      "grok-4.6",
-      "web_search",
-      "https://opencode.ai/zen/go/v1",
-      declaredImageOnly,
-    )).toBe(true);
+    for (const model of ["grok-4.6", "grok-4.7"]) {
+      expect(isHostedToolUnsupportedForModel(model, "web_search", "https://opencode.ai/zen/go/v1", declaredImageOnly))
+        .toBe(false);
+    }
     expect(isHostedToolUnsupportedForModel("grok-4.6", "web_search", GATEWAY_BASE_URL, declaredImageOnly))
       .toBe(false);
     expect(isHostedToolUnsupportedForModel(GATEWAY_MODEL, "image_gen", GATEWAY_BASE_URL, declaredImageOnly))

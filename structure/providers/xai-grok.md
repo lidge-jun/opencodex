@@ -82,6 +82,11 @@ the global subscription classifier is unchanged. The rewrite itself is owned by
 remain in either the top-level catalog or `additional_tools`. Cached-only search removal follows
 the same rule. When an omitted `none` selector stated the turn's only client-call prohibition,
 the explicit empty `tools` catalog preserves that denial. Available forced function selectors remain intact.
+The whole web-search normalization also runs for any `grok-*` model whose final request URL is
+exactly `https://opencode.ai/zen/go/v1/responses`: OpenCode Go relays Grok to xAI and returns xAI's
+schema errors verbatim (`external_web_access` and `search_context_size` -> 400,
+`web_search_preview` -> 422), while sibling Go models accept the OpenAI fields and keep them.
+Regression coverage: `tests/providers/opencode-go-grok46-responses.test.ts`.
 `src/adapters/openai-responses/request-strips.ts` preserves valid xAI custom-call item ids and
 repairs missing/invalid ids from a stable digest of the JSON-encoded `(call_id, name, input)`
 string tuple. Incomplete tuples remain unchanged, and call/result pairing uses the original call id.
