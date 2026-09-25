@@ -104,4 +104,53 @@ describe("adapter physical inference admission", () => {
     expect(sends).toBe(0);
     expect(budget.used).toBe(4);
   });
+
+  test("a pacing slot is released when the dispatched response body completes", async () => {
+    let releases = 0;
+    const slot = { leased: true, bodyTracked: false, release: () => { releases += 1; } };
+    const send = createAdapterPhysicalSend({},
+      Object.assign(async () => new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("ok"));
+          controller.close();
+        },
+      })), {
+        waitForPacing: async () => slot,
+      }) as typeof fetch);
+    const response = await send({ url, dispatch: physical => physical(url) });
+    expect(releases).toBe(0);
+    expect(await response.text()).toBe("ok");
+    expect(releases).toBe(1);
+  });
+
+  test("a pacing slot is released when the dispatch rejects", async () => {
+    let releases = 0;
+    const slot = { leased: true, bodyTracked: false, release: () => { releases += 1; } };
+    const send = createAdapterPhysicalSend({},
+      Object.assign(async () => { throw new Error("no route to provider"); }, {
+        waitForPacing: async () => slot,
+      }) as typeof fetch);
+    await expect(send({ url, dispatch: physical => physical(url) })).rejects.toThrow("no route to provider");
+    expect(releases).toBe(1);
+  });
+
+  test("a null-body dispatched response releases the pacing slot immediately", async () => {
+    let releases = 0;
+    const slot = { leased: true, bodyTracked: false, release: () => { releases += 1; } };
+    const send = createAdapterPhysicalSend({},
+      Object.assign(async () => new Response(null, { status: 204 }), {
+        waitForPacing: async () => slot,
+      }) as typeof fetch);
+    const response = await send({ url, dispatch: physical => physical(url) });
+    expect(response.status).toBe(204);
+    expect(releases).toBe(1);
+  });
+
+  test("the dispatched response keeps its identity when pacing returns no slot", async () => {
+    const original = new Response("ok");
+    const send = createAdapterPhysicalSend({},
+      Object.assign(async () => original, { waitForPacing: async () => undefined }) as typeof fetch);
+    const response = await send({ url, dispatch: physical => physical(url) });
+    expect(response).toBe(original);
+  });
 });

@@ -7,7 +7,7 @@ import type { OcxProviderConfig, OcxParsedRequest } from "../types";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import type { ProviderAdapter, AdapterRequest, IncomingMeta } from "./base";
 import { createAdapterPhysicalSend } from "./physical-send";
-import { SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { SendBudgetExhaustedError, cancelResponseBodyBestEffort } from "../lib/upstream-retry";
 
 const BOOTSTRAP_URL = "https://api.xiaomimimo.com/api/free-ai/bootstrap";
 export const MIMO_CHAT_URL = "https://api.xiaomimimo.com/api/free-ai/openai/chat";
@@ -285,12 +285,15 @@ export function createMimoFreeAdapter(provider: OcxProviderConfig): ProviderAdap
         let retryHeaders = request.headers;
         try {
           return await send({ url: request.url, sendClass: "auth-recovery", recovery: "oauth-401",
+            // Cancel the 401 body before the pacing wait: under a concurrency cap its
+            // tracked body holds a lease this replay would queue behind. The budget
+            // refusal fires before this hook, so a refused replay still returns the
+            // original response with its body intact.
+            beforeAdmission: () => { cancelResponseBodyBestEffort(response); },
             beforeDispatch: async () => {
-              // Drain the first response body and refresh the JWT only after admission: a
-              // refused replay still returns THIS response to the caller, body intact.
-              // Draining comes first within the block because getMimoJwt issues its own
-              // network call and may throw, and the 401 body would then never be released.
-              try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
+              // Refresh the JWT only after admission: getMimoJwt issues its own network
+              // call and may throw, and a failure there must not strand the freshly
+              // admitted lease — the executor's catch returns it on rethrow.
               resetMimoJwtCache();
               const freshJwt = await getMimoJwt(ctx?.abortSignal);
               retryHeaders = {

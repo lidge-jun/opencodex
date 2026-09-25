@@ -19,9 +19,15 @@ import { namespacedToolName, toolChoiceToolPredicate } from "../types";
 import { cloneProviderOpaqueToolCallMetadata } from "../responses/provider-opaque-metadata";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { bridgeToResponsesSSE } from "../bridge";
+import {
+  RequestPacingQueueOverloadError,
+  releaseProviderRequestSlot,
+  trackProviderRequestSlotBody,
+  type ProviderRequestSlot,
+} from "../providers/request-pacing";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
-import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
+import { applyUpstreamRecoveryInit, cancelResponseBodyBestEffort, fetchWithResetRetry, prepareSameTarget429Wait, UpstreamRetryEvidenceError } from "../lib/upstream-retry";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import {
   createTranslatorBudget,
@@ -309,7 +315,7 @@ export interface ImageBridgeDeps {
   /** Bind physical dispatch to this iteration's built request; pacing remains owned by the loop. */
   fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest) => typeof globalThis.fetch;
   /** Reserve the routed provider's next request-start slot before each adapter dispatch. */
-  waitForRequestSlot?: (signal?: AbortSignal) => Promise<void>;
+  waitForRequestSlot?: (signal?: AbortSignal) => Promise<ProviderRequestSlot | undefined>;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   /**
@@ -448,6 +454,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
    * restart) before the `on429` key rotation.
    */
   const prepareIterationEvents = async function* (forceFinal: boolean): AsyncGenerator<AdapterEvent, IterationResponse> {
+    // Lease for the pacing slot the current iteration holds between its wait and its
+    // response body lifecycle. Reset-retry and runTurn boundaries return it explicitly.
+    let pacingSlot: ProviderRequestSlot | undefined;
     const iterParsed: OcxParsedRequest = {
       ...parsed,
       stream: true,
@@ -459,104 +468,141 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     // expose buildRequest/fetchResponse/parseStream to the bridge, so collect their events through
     // an AdapterEventQueue and pass the bounded collection directly to the common scanner.
     if (adapter.runTurn) {
-      await deps.waitForRequestSlot?.(signal);
-      const queue = createAdapterEventQueue({
-        onBacklogExceeded: () => internalAbort.abort("runTurn backlog exceeded"),
-      });
-      const iterationBudget = createIterationEventBudget();
-      let accepting = true;
-      let collectionError: unknown;
-      const closeOnAbort = (): void => { accepting = false; queue.close(); };
-      signal.addEventListener("abort", closeOnAbort, { once: true });
-      const emit = (event: AdapterEvent): void => {
-        if (!accepting || signal.aborted) return;
-        try {
-          // Check at emission, before even a synchronous producer can fill the queue. push
-          // reports whether it merged this delta into the buffered tail, which is what the
-          // iteration actually retains once the consumer drains it.
-          iterationBudget.retain(event, queue.push(event));
-        } catch (error) {
-          collectionError = error;
-          closeOnAbort();
-          internalAbort.abort(error);
-          throw error;
-        }
-      };
-
-      // Bound collect with a real *idle* deadline that resets on each emitted event.
-      // A fixed wall-clock race would abort legitimate long Cursor turns that keep
-      // producing tokens. Do NOT manufacture adapter heartbeats here — bridgeToResponsesSSE
-      // treats those as upstream activity and would defeat the stall guard. SSE keepalives
-      // come from the bridge heartbeat interval instead.
-      //
-      // On idle expiry: abort the runTurn signal AND close the queue so the consumer
-      // unblocks even when adapter.runTurn ignores cancellation and never settles.
-      let timedOut = false;
-      const idle = idleDeadline(stallTimeoutMs, () => {
-        timedOut = true;
-        // Cancel the fire-and-forget runTurn so a well-behaved adapter can stop.
-        internalAbort.abort(`runTurn inactivity timeout after ${stallTimeoutMs}ms`);
-        // Independently unblock queue.stream() — do not wait for runTurn to observe abort.
-        queue.close();
-      });
-      const events: AdapterEvent[] = [];
       try {
-        // Attempt telemetry must fire at dispatch time, not after collection.
-        deps.onAttemptSend?.();
-        void adapter.runTurn(iterParsed, {
-          headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
-          abortSignal: signal,
-          translatorBudget,
-        }, emit).then(closeOnAbort).catch(err => {
-          if (accepting) {
-            collectionError = err;
-            if (isTranslatorBudgetExceededError(err)) internalAbort.abort(err);
-          }
-          closeOnAbort();
+        pacingSlot = await deps.waitForRequestSlot?.(signal);
+      } catch (error) {
+        // Same contract as the collectionError remap below: an admission refusal is a
+        // retryable 429, not a permanent-looking 502. Aborts still propagate raw.
+        if (error instanceof RequestPacingQueueOverloadError) throw new LoopError(429, error.message);
+        throw error;
+      }
+      try {
+        const queue = createAdapterEventQueue({
+          onBacklogExceeded: () => internalAbort.abort("runTurn backlog exceeded"),
         });
-        idle.reset();
-        for await (const event of queue.stream()) {
-          if (timedOut) break;
+        const iterationBudget = createIterationEventBudget();
+        let accepting = true;
+        let collectionError: unknown;
+        const closeOnAbort = (): void => { accepting = false; queue.close(); };
+        signal.addEventListener("abort", closeOnAbort, { once: true });
+        const emit = (event: AdapterEvent): void => {
+          if (!accepting || signal.aborted) return;
+          try {
+            // Check at emission, before even a synchronous producer can fill the queue. push
+            // reports whether it merged this delta into the buffered tail, which is what the
+            // iteration actually retains once the consumer drains it.
+            iterationBudget.retain(event, queue.push(event));
+          } catch (error) {
+            collectionError = error;
+            closeOnAbort();
+            internalAbort.abort(error);
+            throw error;
+          }
+        };
+
+        // Bound collect with a real *idle* deadline that resets on each emitted event.
+        // A fixed wall-clock race would abort legitimate long Cursor turns that keep
+        // producing tokens. Do NOT manufacture adapter heartbeats here — bridgeToResponsesSSE
+        // treats those as upstream activity and would defeat the stall guard. SSE keepalives
+        // come from the bridge heartbeat interval instead.
+        //
+        // On idle expiry: abort the runTurn signal AND close the queue so the consumer
+        // unblocks even when adapter.runTurn ignores cancellation and never settles.
+        let timedOut = false;
+        const idle = idleDeadline(stallTimeoutMs, () => {
+          timedOut = true;
+          // Cancel the fire-and-forget runTurn so a well-behaved adapter can stop.
+          internalAbort.abort(`runTurn inactivity timeout after ${stallTimeoutMs}ms`);
+          // Independently unblock queue.stream() — do not wait for runTurn to observe abort.
+          queue.close();
+        });
+        const events: AdapterEvent[] = [];
+        try {
+          // Attempt telemetry must fire at dispatch time, not after collection.
+          deps.onAttemptSend?.();
+          void adapter.runTurn(iterParsed, {
+            headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
+            abortSignal: signal,
+            translatorBudget,
+            // The iteration's lease, so a runTurn wrapper building its own providerFetch
+            // releases it on that first send's body close instead of only at iteration end.
+            pacingSlot,
+          }, emit).then(closeOnAbort).catch(err => {
+            if (accepting) {
+              collectionError = err;
+              if (isTranslatorBudgetExceededError(err)) internalAbort.abort(err);
+            }
+            closeOnAbort();
+          });
           idle.reset();
-          if (event.type !== "heartbeat") events.push(event);
+          for await (const event of queue.stream()) {
+            if (timedOut) break;
+            idle.reset();
+            if (event.type !== "heartbeat") events.push(event);
+          }
+        } finally {
+          accepting = false;
+          idle.cancel();
+          signal.removeEventListener("abort", closeOnAbort);
+          iterationBudget.dispose();
         }
+        if (collectionError) {
+          if (isTranslatorBudgetExceededError(collectionError)) throw collectionError;
+          // A saturated pacing queue is the provider's 429 by another route. The fetch
+          // path surfaces upstream 429s with their status, so the runTurn path must not
+          // flatten a retryable admission refusal into a permanent-looking 502.
+          if (collectionError instanceof RequestPacingQueueOverloadError) {
+            throw new LoopError(429, collectionError.message);
+          }
+          throw new LoopError(502, collectionError instanceof Error ? collectionError.message : String(collectionError));
+        }
+        if (timedOut) {
+          throw new LoopError(504, `runTurn inactivity timeout after ${stallTimeoutMs}ms during image-bridge`);
+        }
+
+        // Preserve Cursor conversation continuity across image-loop iterations. runTurn mutates
+        // iterParsed (shallow copy); copy the id back onto the shared parsed request.
+        if (iterParsed._cursorConversationId) {
+          parsed._cursorConversationId = iterParsed._cursorConversationId;
+        }
+
+        // runTurn adapters signal errors via {type:"error"} events, not HTTP status codes.
+        const errorEvent = events.find(e => e.type === "error");
+        if (errorEvent && errorEvent.type === "error") {
+          if (errorEvent.code === "translation_buffer_limit") {
+            throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
+          }
+          throw new LoopError(502, errorEvent.message);
+        }
+        if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
+
+        return { response: new Response(new Uint8Array(0), { status: 200 }), responseAdapter: adapter, collectedEvents: events };
       } finally {
-        accepting = false;
-        idle.cancel();
-        signal.removeEventListener("abort", closeOnAbort);
-        iterationBudget.dispose();
+        // The synthetic response carries no upstream bytes: the collected events were the
+        // exchange, so an unconsumed lease returns here rather than waiting for a turn
+        // nobody reads. A lease a tracked upstream body owns stays with that body.
+        releaseProviderRequestSlot(pacingSlot);
+        pacingSlot = undefined;
       }
-      if (collectionError) {
-        if (isTranslatorBudgetExceededError(collectionError)) throw collectionError;
-        throw new LoopError(502, collectionError instanceof Error ? collectionError.message : String(collectionError));
-      }
-      if (timedOut) {
-        throw new LoopError(504, `runTurn inactivity timeout after ${stallTimeoutMs}ms during image-bridge`);
-      }
-
-      // Preserve Cursor conversation continuity across image-loop iterations. runTurn mutates
-      // iterParsed (shallow copy); copy the id back onto the shared parsed request.
-      if (iterParsed._cursorConversationId) {
-        parsed._cursorConversationId = iterParsed._cursorConversationId;
-      }
-
-      // runTurn adapters signal errors via {type:"error"} events, not HTTP status codes.
-      const errorEvent = events.find(e => e.type === "error");
-      if (errorEvent && errorEvent.type === "error") {
-        if (errorEvent.code === "translation_buffer_limit") {
-          throw new TranslatorBudgetExceededError("retained_collectors", TRANSLATOR_MAX_TURN_BYTES);
-        }
-        throw new LoopError(502, errorEvent.message);
-      }
-      if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
-
-      return { response: new Response(new Uint8Array(0), { status: 200 }), responseAdapter: adapter, collectedEvents: events };
     }
 
     let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
     const paceThenResetHeaderDeadline = async (): Promise<void> => {
       headerDeadline.clear();
-      await deps.waitForRequestSlot?.(signal);
+      // The previous lease belongs to a request that already settled (a reset-retry replays
+      // only after the first send rejected), so returning it here cannot over-admit.
+      // Clear the stale handle before awaiting the next one so a failed acquisition
+      // cannot leave a second release path firing on an already-released slot.
+      releaseProviderRequestSlot(pacingSlot);
+      pacingSlot = undefined;
+      try {
+        pacingSlot = await deps.waitForRequestSlot?.(signal);
+      } catch (error) {
+        // An admission refusal is retryable locally; flattening it to the generic 502
+        // below would break the retryable-429 contract the runTurn remap keeps.
+        if (error instanceof RequestPacingQueueOverloadError) throw new LoopError(429, error.message);
+        throw error;
+      }
       headerDeadline = clearableDeadline(connectTimeoutMs, signal);
     };
     try {
@@ -623,10 +669,16 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
               { replaySafe: true, abortSignal: headerDeadline.signal, label: "image-bridge-loop" },
             );
           }
+        } catch (error) {
+          releaseProviderRequestSlot(pacingSlot);
+          pacingSlot = undefined;
+          throw error;
         } finally {
           request.releaseBodyObservation?.();
         }
-        return { response, responseAdapter: requestAdapter };
+        const slot = pacingSlot;
+        pacingSlot = undefined;
+        return { response: trackProviderRequestSlotBody(slot, response), responseAdapter: requestAdapter };
       };
 
       let prepared = await fetchOnce(adapter);
@@ -665,7 +717,15 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
       // 429 key-failover parity with web-search / normal routed path.
       while (prepared.response.status === 429 && deps.on429) {
-        const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers, iterParsed);
+        let rotated: ProviderAdapter | null;
+        try {
+          rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers, iterParsed);
+        } catch (error) {
+          // The rotation hook rejected before the body handoff below: cancel the tracked body
+          // so its pacing lease returns instead of leaking on the abandoned 429 response.
+          cancelResponseBodyBestEffort(prepared.response);
+          throw error;
+        }
         if (!rotated) break;
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* already closed */ }
         adapter = rotated;
@@ -704,6 +764,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       }
       if (signal.aborted) throw new LoopError(499, "client closed request during image-bridge");
       if (error instanceof LoopError) throw error;
+      // The reset-retry layer wraps a later callback rejection in evidence once a send's reset
+      // reached the origin (#914). A pacing refusal thrown while re-acquiring the replay's lease
+      // is still a local, retryable admission decision: unwrap it before the generic 502
+      // flattening so the 429 classification survives (same rule as the auth-context seam).
+      if (error instanceof UpstreamRetryEvidenceError && error.cause instanceof LoopError) {
+        throw error.cause;
+      }
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       headerDeadline.clear();

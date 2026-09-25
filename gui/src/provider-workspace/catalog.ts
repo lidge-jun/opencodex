@@ -51,7 +51,8 @@ export interface WorkspaceProvider {
     enabled?: boolean;
     requestsPerMinute?: number;
     minIntervalMs?: number;
-    models?: Record<string, { requestsPerMinute?: number; minIntervalMs?: number }>;
+    maxConcurrentRequests?: number;
+    models?: Record<string, { requestsPerMinute?: number; minIntervalMs?: number; maxConcurrentRequests?: number }>;
   };
   /** Codex account routing mode for the canonical `openai` forward provider. */
   codexAccountMode?: "direct" | "pool";

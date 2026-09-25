@@ -14,7 +14,7 @@ import {
   recordAttemptCredentialSource,
 } from "../request-log";
 import { noteAttemptRecoveryWithheld } from "../request-log";
-import { waitForProviderRequestSlot } from "../../providers/request-pacing";
+import { pacedAdapterDispatch } from "./adapter-dispatch";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import {
   transientRetryPolicyFor,
@@ -198,20 +198,25 @@ export function createAdapterContinuations(
       try {
         if (transportState.activeAdapter.fetchResponse) {
           transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
-          await waitForProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal);
-          return await transportState.activeAdapter.fetchResponse(builtContinuationRequest, {
-            abortSignal: upstream.signal,
-            timeoutMs: connectMs,
-              sendBudget: adapterDispatchBudget,
-            onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
-            onRecoveryWithheld: noteAdapterRecoveryWithheld,
+          const fetchResponse = transportState.activeAdapter.fetchResponse;
+          // A continuation that fails before its executor dispatches still returns its
+          // lease at this boundary (pacedAdapterDispatch); a dispatched send's tracked
+          // body keeps its own release.
+          return await pacedAdapterDispatch({
+            providerName: route.providerName,
+            provider: route.provider,
+            modelId: nextParsed.modelId,
+            signal: upstream.signal,
+            connectMs,
+            sendBudget: adapterDispatchBudget,
             stream: nextParsed.stream,
-            executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              pacingSlotAcquired: true,
-              dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
-              providerName: route.providerName,
-              modelId: nextParsed.modelId,
-            }),
+            request: builtContinuationRequest,
+            dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
+            codexWsRuntimeIdentity: options.codexWsRuntimeIdentity,
+            estimate: continuationEstimate,
+            fetchResponse,
+            noteAdapterPhysicalSend,
+            noteAdapterRecoveryWithheld,
           });
         }
         // Same #1851 scope guard as the initial send: transient-5xx retry only for direct

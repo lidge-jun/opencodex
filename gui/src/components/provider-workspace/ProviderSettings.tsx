@@ -28,7 +28,7 @@ const ADAPTERS = ["openai-responses", "openai-chat", "anthropic", "google", "azu
 const EMPTY_MODELS: string[] = [];
 
 type ChoicesStatus = "idle" | "loading" | "ready" | "error";
-type PacingRule = { requestsPerMinute?: number; minIntervalMs?: number };
+type PacingRule = { requestsPerMinute?: number; minIntervalMs?: number; maxConcurrentRequests?: number };
 type PacingStatus = { enabled: boolean; queued: number; nextSlotInMs: number; lastStartedAt?: number; lastModelId?: string };
 type CursorHttpVersion = "http2" | "http1.1";
 
@@ -50,11 +50,12 @@ function positiveInteger(value: string): number | undefined {
 function pacingSignature(value: WorkspaceItem["requestPacing"] | undefined): string {
   const models = Object.entries(value?.models ?? {})
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([model, rule]) => [model, rule.requestsPerMinute ?? null, rule.minIntervalMs ?? null]);
+    .map(([model, rule]) => [model, rule.requestsPerMinute ?? null, rule.minIntervalMs ?? null, rule.maxConcurrentRequests ?? null]);
   return JSON.stringify([
     value?.enabled === true,
     value?.requestsPerMinute ?? null,
     value?.minIntervalMs ?? null,
+    value?.maxConcurrentRequests ?? null,
     models,
   ]);
 }
@@ -96,6 +97,7 @@ export default function ProviderSettings({
   const [pacingEnabled, setPacingEnabled] = useState(item.requestPacing?.enabled === true);
   const [pacingRpm, setPacingRpm] = useState(() => numberDraft(item.requestPacing?.requestsPerMinute));
   const [pacingDelay, setPacingDelay] = useState(() => numberDraft(item.requestPacing?.minIntervalMs));
+  const [pacingConcurrency, setPacingConcurrency] = useState(() => numberDraft(item.requestPacing?.maxConcurrentRequests));
   const [pacingModels, setPacingModels] = useState<Record<string, PacingRule>>(() => ({ ...(item.requestPacing?.models ?? {}) }));
   const [pacingModelId, setPacingModelId] = useState("");
   const [pacingModelRpm, setPacingModelRpm] = useState("");
@@ -116,6 +118,7 @@ export default function ProviderSettings({
     setPacingEnabled(item.requestPacing?.enabled === true);
     setPacingRpm(numberDraft(item.requestPacing?.requestsPerMinute));
     setPacingDelay(numberDraft(item.requestPacing?.minIntervalMs));
+    setPacingConcurrency(numberDraft(item.requestPacing?.maxConcurrentRequests));
     setPacingModels({ ...(item.requestPacing?.models ?? {}) });
     setMsg(null);
     setModeMsg(null);
@@ -186,8 +189,9 @@ export default function ProviderSettings({
     enabled: pacingEnabled,
     ...(positiveRpm(pacingRpm) !== undefined ? { requestsPerMinute: positiveRpm(pacingRpm) } : {}),
     ...(positiveInteger(pacingDelay) !== undefined ? { minIntervalMs: positiveInteger(pacingDelay) } : {}),
+    ...(positiveInteger(pacingConcurrency) !== undefined ? { maxConcurrentRequests: positiveInteger(pacingConcurrency) } : {}),
     ...(Object.keys(pacingModels).length > 0 ? { models: pacingModels } : {}),
-  }), [pacingDelay, pacingEnabled, pacingModels, pacingRpm]);
+  }), [pacingConcurrency, pacingDelay, pacingEnabled, pacingModels, pacingRpm]);
 
   const dirty = adapter.trim() !== item.adapter
     || baseUrl.trim() !== item.baseUrl
@@ -235,7 +239,7 @@ export default function ProviderSettings({
     setSaving(true);
     setMsg(null);
     try {
-      if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.models) {
+      if (pacingEnabled && !pacingDraft.requestsPerMinute && !pacingDraft.minIntervalMs && !pacingDraft.maxConcurrentRequests && !pacingDraft.models) {
         setMsg({ ok: false, text: t("pws.pacingRuleRequired") }); return false;
       }
       const pacingOnly = pacingDirty && !dirty;
@@ -340,7 +344,16 @@ export default function ProviderSettings({
     const rpm = positiveRpm(pacingModelRpm);
     const delay = positiveInteger(pacingModelDelay);
     if (!modelId || (rpm === undefined && delay === undefined)) return;
-    setPacingModels(current => ({ ...current, [modelId]: { ...(rpm !== undefined ? { requestsPerMinute: rpm } : {}), ...(delay !== undefined ? { minIntervalMs: delay } : {}) } }));
+    // A re-added model row replaces only the fields this form edits; a pre-existing
+    // per-model concurrency cap survives an edit it cannot see.
+    setPacingModels(current => ({
+      ...current,
+      [modelId]: {
+        ...(current[modelId]?.maxConcurrentRequests !== undefined ? { maxConcurrentRequests: current[modelId].maxConcurrentRequests } : {}),
+        ...(rpm !== undefined ? { requestsPerMinute: rpm } : {}),
+        ...(delay !== undefined ? { minIntervalMs: delay } : {}),
+      },
+    }));
     setPacingModelId(""); setPacingModelRpm(""); setPacingModelDelay("");
   };
 
@@ -500,6 +513,7 @@ export default function ProviderSettings({
         <div className="pwi-pacing-grid">
           <label className="pwi-settings-field"><span className="pwi-settings-label">{t("pws.pacingRpm")}</span><input className="input" type="number" min="0.016667" step="any" value={pacingRpm} onChange={e => setPacingRpm(e.target.value)} placeholder="38" /></label>
           <label className="pwi-settings-field"><span className="pwi-settings-label">{t("pws.pacingDelay")}</span><input className="input" type="number" min="1" step="1" value={pacingDelay} onChange={e => setPacingDelay(e.target.value)} placeholder="1600" /></label>
+          <label className="pwi-settings-field"><span className="pwi-settings-label">{t("pws.pacingConcurrency")}</span><input className="input" type="number" min="1" step="1" value={pacingConcurrency} onChange={e => setPacingConcurrency(e.target.value)} placeholder="8" /></label>
         </div>
         <p className="pwi-settings-hint">{t("pws.pacingSlowerWins")}</p>
         <div className="pwi-pacing-status" aria-live="polite">
@@ -514,7 +528,11 @@ export default function ProviderSettings({
           <label className="pwi-settings-field"><span className="pwi-settings-label">{t("pws.pacingDelay")}</span><input className="input" type="number" min="1" step="1" value={pacingModelDelay} onChange={e => setPacingModelDelay(e.target.value)} /></label>
           <button type="button" className="btn btn-ghost btn-sm" onClick={addPacingModel}>{t("pws.pacingAdd")}</button>
         </div>
-        {Object.entries(pacingModels).length > 0 && <div className="pwi-pacing-overrides">{Object.entries(pacingModels).map(([model, rule]) => <div key={model} className="pwi-pacing-row"><code>{model}</code><span>{rule.requestsPerMinute !== undefined ? `${rule.requestsPerMinute} ${t("pws.pacingRpmUnit")}` : ""}{rule.requestsPerMinute !== undefined && rule.minIntervalMs !== undefined ? " · " : ""}{rule.minIntervalMs !== undefined ? `${rule.minIntervalMs} ms` : ""}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => setPacingModels(current => Object.fromEntries(Object.entries(current).filter(([id]) => id !== model)))} aria-label={t("pws.pacingRemoveModel", { model })}>{t("pws.pacingRemove")}</button></div>)}</div>}
+        {Object.entries(pacingModels).length > 0 && <div className="pwi-pacing-overrides">{Object.entries(pacingModels).map(([model, rule]) => <div key={model} className="pwi-pacing-row"><code>{model}</code><span>{[
+          rule.requestsPerMinute !== undefined ? `${rule.requestsPerMinute} ${t("pws.pacingRpmUnit")}` : undefined,
+          rule.minIntervalMs !== undefined ? `${rule.minIntervalMs} ms` : undefined,
+          rule.maxConcurrentRequests !== undefined ? `${rule.maxConcurrentRequests} ${t("pws.pacingCapUnit")}` : undefined,
+        ].filter(part => part !== undefined).join(" · ")}</span><button type="button" className="btn btn-ghost btn-sm" onClick={() => setPacingModels(current => Object.fromEntries(Object.entries(current).filter(([id]) => id !== model)))} aria-label={t("pws.pacingRemoveModel", { model })}>{t("pws.pacingRemove")}</button></div>)}</div>}
       </section>
       {formDirty && (
         <div className="pwi-settings-sticky-bar">

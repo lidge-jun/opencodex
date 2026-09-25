@@ -175,9 +175,11 @@ request-start slots before transport work begins, so a known RPM ceiling does no
 before the proxy reacts. One provider-wide lane enforces the aggregate ceiling. Exact model lanes
 may add a slower interval without lowering the provider-wide interval or blocking an otherwise
 eligible sibling model. Queue wait is abort-aware and happens before the response-header timeout is
-armed. The shared fetch boundary covers HTTP and Responses WebSocket sends; explicit adapter
-`fetchResponse` and `runTurn` dispatches reserve the same lane at their call sites. Image-bridge
-iterations reserve before arming their per-attempt response-header deadline.
+armed. The shared fetch boundary covers HTTP sends; a configured concurrency cap moves Responses
+WebSocket turns to the HTTP/SSE path (the fetch-helpers downgrade) because only a body lifecycle
+can return that lease, and explicit adapter `fetchResponse` and `runTurn` dispatches reserve the
+same lane at their call sites. Image-bridge iterations reserve before arming their per-attempt
+response-header deadline.
 
 > Decision record: [ADR-0050](../decisions/ADR-0050-heartbeat-and-stall-deadline.md)
 

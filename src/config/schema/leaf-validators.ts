@@ -93,22 +93,33 @@ export const retryOnResetPolicySchema = z.object({
   replacements: z.number().int().min(1).max(2).optional(),
 }).strict();
 
+// Provider and model-override caps share one bound so the two ceilings cannot drift
+// apart. A cap above ~1k in-flight requests is effectively unbounded for a client-side
+// pacer; the ceiling rejects absurd values instead of accepting config that silently
+// no-ops the feature.
+const maxConcurrentRequestsSchema = z.number().int().min(1).max(1_000).optional();
+
 const requestPacingRuleSchema = z.object({
   // Keep the RPM-derived timer within the same one-hour bound as minIntervalMs.
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
   minIntervalMs: z.number().int().min(1).max(3_600_000).optional(),
-}).strict().refine(value => value.requestsPerMinute !== undefined || value.minIntervalMs !== undefined, {
-  message: "request pacing rules need requestsPerMinute or minIntervalMs",
+  maxConcurrentRequests: maxConcurrentRequestsSchema,
+}).strict().refine(value => value.requestsPerMinute !== undefined
+  || value.minIntervalMs !== undefined
+  || value.maxConcurrentRequests !== undefined, {
+  message: "request pacing rules need requestsPerMinute, minIntervalMs, or maxConcurrentRequests",
 });
 
 const requestPacingSchema = z.object({
   enabled: z.boolean(),
   requestsPerMinute: z.number().min(1 / 60).max(60_000).optional(),
   minIntervalMs: z.number().int().min(1).max(3_600_000).optional(),
+  maxConcurrentRequests: maxConcurrentRequestsSchema,
   models: z.record(z.string().trim().min(1), requestPacingRuleSchema).optional(),
 }).strict().refine(value => value.enabled === false
   || value.requestsPerMinute !== undefined
   || value.minIntervalMs !== undefined
+  || value.maxConcurrentRequests !== undefined
   || (value.models !== undefined && Object.keys(value.models).length > 0), {
   message: "enabled request pacing needs a provider rule or model override",
 });
@@ -117,7 +128,7 @@ export function requestPacingConfigError(value: unknown): string | null {
   if (value === undefined) return null;
   const parsed = requestPacingSchema.safeParse(value);
   if (parsed.success) return null;
-  return "requestPacing must contain enabled and a valid requestsPerMinute/minIntervalMs provider rule or model overrides";
+  return "requestPacing must contain enabled and a valid requestsPerMinute/minIntervalMs/maxConcurrentRequests provider rule or model overrides";
 }
 
 /**

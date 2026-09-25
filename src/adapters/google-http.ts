@@ -64,10 +64,15 @@ export async function fetchGoogleWithRetry(
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     try {
       const res = await send({ url: activeRequest.url, sendClass, recovery,
-        beforeDispatch: async () => {
-          if (retryDelayMs > 0) await sleepWithAbort(retryDelayMs, ctx.abortSignal);
+        // The parked retryable response holds a tracked-body lease under a concurrency
+        // cap; dropping it before the pacing wait keeps the next attempt from queueing
+        // behind the very lease it is about to release.
+        beforeAdmission: () => {
           if (pendingResponse) cancelResponseBodyBestEffort(pendingResponse);
           pendingResponse = undefined;
+        },
+        beforeDispatch: async () => {
+          if (retryDelayMs > 0) await sleepWithAbort(retryDelayMs, ctx.abortSignal);
         },
         dispatch: executor => fetchWithAttemptDeadline(activeRequest.url, {
           method: activeRequest.method, headers: activeRequest.headers, body: activeRequest.body,

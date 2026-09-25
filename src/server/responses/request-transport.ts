@@ -34,6 +34,11 @@ import {
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
 import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label";
+import {
+  type ProviderRequestSlot,
+  releaseProviderRequestSlot,
+  waitForProviderRequestSlot,
+} from "../../providers/request-pacing";
 import { resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
@@ -374,24 +379,50 @@ export async function prepareResponsesTransport(
       if (!run) throw new Error("Selected provider no longer supports this turn transport");
       let sent = false;
       let refused = false;
-      // Both main and image-loop callers already acquired the initial pacing slot.
-      // Subsequent physical messages retain this adapter/credential and are paced normally.
-      const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-        providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
-        beforeDispatch: () => {
-          if (sent) return;
-          if (!selectionIsCurrent(binding)) {
-            refused = true;
-            throw new Error("Account selection changed before the first turn dispatch");
-          }
-          commitKeyAttemptSend();
-          sent = true;
-        },
-      });
+      // Both main and image-loop callers already acquired this logical turn's one pacing
+      // lease (IncomingMeta.pacingSlot). The first attempt's send releases it when that
+      // response body closes; subsequent physical messages pace by interval only through
+      // this stateful wrapper, so a follow-up never queues behind its own turn's lease.
+      // A refused dispatch releases the lease inside the executor's catch, so every retry
+      // acquires a fresh one instead of sending on the released handle: an uncounted send
+      // would push the provider past its concurrency cap by exactly one.
+      // A caller that arrives without its turn lease still gets counted: acquiring here
+      // keeps a configured cap from being bypassed by an unpaced, uncounted first send.
+      // An admission refusal (RequestPacingQueueOverloadError) escapes to the turn's
+      // callers, which map it to the same retryable-429 contract as a send-time refusal.
+      let attemptSlot: ProviderRequestSlot | undefined;
       try {
-        await run(requestParsed, { ...incoming, providerFetch: fetch }, event => { if (!refused) emit(event); });
+        // The acquire sits inside the try: the providerFetch construction below runs after
+        // it, and any throwing step between acquire and dispatch must land in this finally
+        // rather than stranding the just-acquired lease.
+        attemptSlot = attempt === 0
+          ? incoming.pacingSlot ?? await waitForProviderRequestSlot(
+            route.providerName, route.provider, route.modelId, incoming.abortSignal,
+          )
+          : await waitForProviderRequestSlot(
+            route.providerName, route.provider, route.modelId, incoming.abortSignal,
+          );
+        const fetch = providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+          providerName: route.providerName, modelId: route.modelId, pacingSlotAcquired: true,
+          pacingSlot: attemptSlot,
+          turnScopedPacing: true,
+          beforeDispatch: () => {
+            if (sent) return;
+            if (!selectionIsCurrent(binding)) {
+              refused = true;
+              throw new Error("Account selection changed before the first turn dispatch");
+            }
+            commitKeyAttemptSend();
+            sent = true;
+          },
+        });
+        await run(requestParsed, { ...incoming, pacingSlot: attemptSlot, providerFetch: fetch }, event => { if (!refused) emit(event); });
       } catch (error) {
         if (!refused) throw error;
+      } finally {
+        // A body-tracked send keeps its lease until the body closes; anything else
+        // (a refusal already released it, or the turn never reached HTTP) returns here.
+        releaseProviderRequestSlot(attemptSlot);
       }
       if (!refused) return;
       // The adapter may map the guard's exception to an error event. Neither that

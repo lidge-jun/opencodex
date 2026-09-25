@@ -7,6 +7,7 @@ import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { parseStreamWithProgress, type ParseStreamWithProgressOptions } from "../../src/web-search/progress-stream";
 import { TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TRANSLATOR_MAX_TURN_BYTES, translatorLiveBudgetCountForTests } from "../../src/lib/translator-budget";
 
@@ -486,6 +487,88 @@ describe("runWithImageBridge", () => {
     expect(buildRequestCalls).toBe(1);
   });
 
+  test("a pacing admission refusal before a runTurn iteration is a retryable 429, not a 502", async () => {
+    const runTurnAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: async () => {
+        throw new Error("unreached: admission refused before the turn ran");
+      },
+    };
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: runTurnAdapter,
+      plan,
+      waitForRequestSlot: async () => {
+        throw new RequestPacingQueueOverloadError("demo", "queue_full", 5);
+      },
+    });
+    // runTurn adapters skip the eager drain (SSE headers must not wait on queue.collect()),
+    // so the refusal surfaces in-stream, encoded as a retryable rate limit rather than a 502.
+    expect(response.status).toBe(200);
+    const sse = await response.text();
+    expect(sse).toContain("request pacing queue for provider 'demo' is full");
+    expect(sse).toContain("rate_limit_error");
+    expect(sse).not.toContain("response.completed");
+  });
+
+  test("a pacing admission refusal on a reset replay is a retryable 429, not a 502", async () => {
+    let sends = 0;
+    let admissions = 0;
+    const resetReplayAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      fetchResponse: undefined,
+      parseStream: async function* (): AsyncGenerator<AdapterEvent> {
+        yield { type: "done" };
+      },
+    };
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: resetReplayAdapter,
+      plan,
+      waitForRequestSlot: async () => {
+        admissions += 1;
+        if (admissions === 1) return { leased: false, bodyTracked: false, released: false, release: () => {} };
+        throw new RequestPacingQueueOverloadError("demo", "queue_expired", 5);
+      },
+      fetchForRequest: () => async () => {
+        sends += 1;
+        if (sends === 1) {
+          throw Object.assign(new Error("socket connection was closed unexpectedly"), { code: "ECONNRESET" });
+        }
+        throw new Error("unreached: the replay was refused before its send");
+      },
+    });
+    expect(sends).toBe(1);
+    expect(response.status).toBe(429);
+    expect(await response.text()).toContain("exceeded the maximum queued age");
+  });
+
+  test("a rejecting on429 hook cancels the tracked body so its pacing lease returns", async () => {
+    let releases = 0;
+    let sends = 0;
+    const rateLimitedAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      fetchResponse: async () => {
+        sends += 1;
+        return new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    };
+    streamQueue = [[{ type: "text_delta" as const, text: "unreached" }, { type: "done" as const }]];
+    const response = await runWithImageBridge({
+      parsed: makeParsed(),
+      adapter: rateLimitedAdapter,
+      plan,
+      waitForRequestSlot: async () => ({ leased: true, bodyTracked: false, released: false, release: () => { releases += 1; } }),
+      on429: () => { throw new Error("rotation exploded"); },
+    });
+    expect(response.ok).toBe(false);
+    expect(sends).toBe(1);
+    expect(releases).toBe(1);
+  });
+
   test("retry wait longer than the stall budget still succeeds (heartbeats feed the watchdog)", async () => {
     let sends = 0;
     const retryingAdapter: ProviderAdapter = {
@@ -946,6 +1029,27 @@ describe("runWithImageBridge", () => {
 // ---------------------------------------------------------------------------
 
 describe("runWithImageBridge — runTurn adapter", () => {
+  test("the runTurn adapter receives the iteration's pacing lease through its incoming meta", async () => {
+    let released = false;
+    const lease = { leased: true, bodyTracked: false, released: false, release: () => { released = true; } };
+    let received: unknown;
+    const adapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: async (_parsed, incoming, emit) => {
+        received = incoming.pacingSlot;
+        emit({ type: "text_delta", text: "paced" });
+        emit({ type: "done" });
+      },
+    };
+    const response = await runWithImageBridge({
+      parsed: makeParsed(), adapter, plan, waitForRequestSlot: async () => lease,
+    });
+    const sse = await response.text();
+    expect(received).toBe(lease);
+    expect(released).toBe(true);
+    expect(sse).toContain("event: response.completed");
+  });
+
   test("charges the queue's coalesced tail, not each delta it discarded", async () => {
     // createAdapterEventQueue merges adjacent text deltas into chunks while no reader is
     // scheduled, so a synchronous producer's one-character deltas survive as a handful of
@@ -1081,6 +1185,20 @@ describe("runWithImageBridge — runTurn adapter", () => {
     const response = await runWithImageBridge({ parsed: makeParsed(), adapter: runTurnAdapter, plan });
     const sse = await response.text();
     expect(sse).toContain("cursor blew up");
+  });
+
+  test("runTurn adapter → a pacing admission overload surfaces as a retryable 429", async () => {
+    const overloaded = new RequestPacingQueueOverloadError("demo", "queue_full", 1);
+    const rejectingAdapter: ProviderAdapter = {
+      ...mockAdapter,
+      runTurn: async () => { throw overloaded; },
+    };
+    const response = await runWithImageBridge({ parsed: makeParsed(), adapter: rejectingAdapter, plan });
+    const sse = await response.text();
+    expect(sse).toContain(overloaded.message);
+    // The bridge encodes the 429 as a rate_limit_error response failure, so a client
+    // sees a retryable rate limit rather than a permanent-looking 502.
+    expect(sse).toContain("rate_limit_error");
   });
 
   test("runTurn adapter → SSE headers return before slow collect completes", async () => {

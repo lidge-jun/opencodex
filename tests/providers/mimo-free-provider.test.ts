@@ -457,10 +457,11 @@ describe("mimo-free auth retry predicate", () => {
   });
 
   test("a rejected JWT refresh still releases the first 401 body", async () => {
-    // The drain belongs inside `beforeDispatch` so that a budget-refused replay can still hand
-    // the 401 back with a readable body. Within that block it has to come FIRST, because
-    // `getMimoJwt` issues its own bootstrap request and can reject -- and the 401 body would
-    // then never be released.
+    // The 401 body is cancelled in `beforeAdmission`, ahead of the pacing wait, so a
+    // concurrency cap never queues the replay behind the lease that body holds. A
+    // budget-refused replay fires even earlier, so it can still hand the 401 back with a
+    // readable body. The JWT refresh runs after admission and can reject on its own
+    // bootstrap request; by then the body is already released.
     const originalFetch = globalThis.fetch;
     let cancelled = false;
     globalThis.fetch = mock(async (url: string | URL | Request) => {

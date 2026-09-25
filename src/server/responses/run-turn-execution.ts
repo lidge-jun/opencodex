@@ -13,10 +13,14 @@ import {
   adapterResponseReachedServingTerminal,
 } from "./core-replay";
 import { noteAttemptRecoveryWithheld, sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
-import { waitForProviderRequestSlot, RequestPacingQueueOverloadError } from "../../providers/request-pacing";
+import {
+  releaseProviderRequestSlot,
+  waitForProviderRequestSlot,
+  RequestPacingQueueOverloadError,
+  type ProviderRequestSlot,
+} from "../../providers/request-pacing";
 import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
-import { providerFetch } from "./fetch-helpers";
 import { normalizeLogConversationId } from "../request-log-conversation";
 import { normalizeDeclaredToolName, type AdapterEvent, type OcxProviderContinuationState } from "../../types";
 import { adapterFailureFromMessage, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
@@ -135,8 +139,11 @@ export async function executeResponsesRunTurn(
     };
     // Initial admission must settle before the streaming Response commits HTTP 200.
     // Let the outer Responses facade preserve the local retryable-429 contract.
+    let initialPacingSlot: ProviderRequestSlot | undefined;
     try {
-      await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
+      initialPacingSlot = await waitForProviderRequestSlot(
+        route.providerName, route.provider, route.modelId, runTurnAbort.signal,
+      );
     } catch (error) {
       cleanupRunTurnAbort();
       queue.close();
@@ -151,10 +158,14 @@ export async function executeResponsesRunTurn(
       targetQueue: AdapterEventQueue,
       recovery?: AttemptRecoveryKind,
       pacingSlotAcquired = false,
+      preacquiredSlot?: ProviderRequestSlot,
     ): Promise<void> => {
+      let pacingSlot = preacquiredSlot;
       try {
         if (!pacingSlotAcquired) {
-          await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
+          pacingSlot = await waitForProviderRequestSlot(
+            route.providerName, route.provider, route.modelId, runTurnAbort.signal,
+          );
         }
         await refreshRunTurnSelection();
         // An adapter that reports its own sends accounts for the first one at the boundary that
@@ -162,25 +173,19 @@ export async function executeResponsesRunTurn(
         // refuse, which is exactly what happens once earlier recovery has spent the allowance.
         const reportsOwnSends = transportState.runTurnAdapter.reportsPhysicalSends === true;
         if (!reportsOwnSends) transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
-        const runTurnProviderFetch = providerFetch(
-          route.provider,
-          options.codexWsRuntimeIdentity,
-          {
-            providerName: route.providerName,
-            modelId: route.modelId,
-            // runTurnAttempt acquired this logical turn's first physical-request slot above.
-            // Cursor HTTP/1.1 consumes it for RunSSE; every BidiAppend and redial then waits on
-            // the same provider queue through this stateful wrapper.
-            pacingSlotAcquired: true,
-          },
-        );
         await transportState.runTurnAdapter.runTurn?.(
           parsed,
           {
             headers: requestState.selectedForwardHeaders,
             abortSignal: runTurnAbort.signal,
             translatorBudget,
-            providerFetch: runTurnProviderFetch,
+            // The turn's lease, acquired above. runSelectedTurn (request-transport.ts)
+            // wraps every runTurn and builds the stateful providerFetch that spends it:
+            // Cursor HTTP/1.1 takes it on RunSSE, and BidiAppend/redial follow-ups pace
+            // by interval only while that lease (or its tracked body) is still held. A
+            // providerFetch built here would be dead: runSelectedTurn overwrites
+            // meta.providerFetch with its own before the raw adapter sees it.
+            pacingSlot,
             // The only way the request budget reaches a transport the adapter owns. Without it
             // a Cursor turn's inner ladder was three physical sends the cap read as one.
             ...(adapterDispatchBudget ? { sendBudget: adapterDispatchBudget } : {}),
@@ -227,9 +232,14 @@ export async function executeResponsesRunTurn(
           logCtx.conversationId = normalizeLogConversationId(parsed._cursorConversationId);
         }
         targetQueue.close();
+        // The attempt owns its lease until a response body takes over: an HTTP transport
+        // releases it when the body closes (or the unconsumed-body deadline does), and a
+        // transport that never reached HTTP must not hold it past the turn. A lease a
+        // tracked body still owns stays with that body even if it outlives this function.
+        releaseProviderRequestSlot(pacingSlot);
       }
     };
-    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true);
+    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true, initialPacingSlot);
     const rotateRunTurnAdapterOnPreflight429 = async (
       error: Extract<AdapterEvent, { type: "error" }>,
     ): Promise<boolean> => {

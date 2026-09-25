@@ -5,7 +5,7 @@ import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { linkAbortSignal } from "./core-lifetime";
-import type { AdapterRequest } from "../../adapters/base";
+import type { AdapterRequest, AdapterFetchContext } from "../../adapters/base";
 import type { AdapterEvent } from "../../types";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "../../bridge";
 import { trackStreamLifetime } from "../lifecycle";
@@ -18,8 +18,14 @@ import {
 import { clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
-import { waitForProviderRequestSlot } from "../../providers/request-pacing";
-import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
+import { withProviderRequestSlot } from "../../providers/request-pacing";
+import {
+  providerFetch,
+  fetchWithHeaderTimeout,
+  safeHostLabel,
+  type CodexWsRuntimeIdentity,
+  type ProviderFetchOptions,
+} from "./fetch-helpers";
 import {
   transientRetryPolicyFor,
   rateLimitRetryPolicyFor,
@@ -39,7 +45,8 @@ import {
 } from "../../lib/upstream-retry";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
-import type { AttemptRecoveryKind } from "../../usage/log";
+import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
+import type { OcxProviderConfig } from "../../types";
 import type { OAuthAccessSnapshot } from "../../oauth";
 import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
@@ -84,6 +91,72 @@ import {
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
+
+/** Per-site inputs for a paced adapter fetchResponse dispatch. */
+export interface PacedAdapterDispatchInput {
+  providerName: string;
+  provider: OcxProviderConfig;
+  modelId: string | undefined;
+  signal: AbortSignal;
+  connectMs: number;
+  sendBudget: AdapterFetchContext["sendBudget"];
+  stream: boolean;
+  request: AdapterRequest;
+  dispatchOverride: ProviderFetchOptions["dispatchOverride"];
+  codexWsRuntimeIdentity: CodexWsRuntimeIdentity;
+  estimate: number | undefined;
+  fetchResponse: (request: AdapterRequest, ctx: AdapterFetchContext) => Promise<Response>;
+  noteAdapterPhysicalSend: (
+    inputTokens: number | undefined,
+    send: { ordinal: number; recovery?: AttemptRecoveryKind },
+  ) => void;
+  noteAdapterRecoveryWithheld: (withheld: { reason: AttemptRecoveryWithheld }) => void;
+  /** Fires inside the lease, immediately before the adapter dispatches. */
+  onDispatch?: () => void;
+  /** Per-site extra work in onPhysicalSend, e.g. charging a workflow budget. */
+  onPhysicalSendExtra?: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => void;
+}
+
+/**
+ * One paced adapter dispatch: acquire the pacing lease, run fetchResponse through a
+ * providerFetch executor bound to that lease, and release at this boundary unless a
+ * tracked response body took ownership. The initial send, the same-target retry, and the
+ * continuation site share this single copy so the lease lifecycle cannot fork between
+ * three blocks that would otherwise have to stay in sync by hand.
+ */
+export async function pacedAdapterDispatch(input: PacedAdapterDispatchInput): Promise<Response> {
+  return withProviderRequestSlot(
+    input.providerName,
+    input.provider,
+    input.modelId,
+    input.signal,
+    pacingSlot => {
+      // The dispatch boundary is HERE, not before the pacing wait: that wait can reject
+      // for an abort, a saturated queue, an expired slot or a removed provider, and none
+      // of those reach the wire. Confirming earlier would hold the charge for a send the
+      // pacer refused.
+      input.onDispatch?.();
+      return input.fetchResponse(input.request, {
+        abortSignal: input.signal,
+        timeoutMs: input.connectMs,
+        sendBudget: input.sendBudget,
+        onPhysicalSend: send => {
+          input.noteAdapterPhysicalSend(input.estimate, send);
+          input.onPhysicalSendExtra?.(send);
+        },
+        onRecoveryWithheld: input.noteAdapterRecoveryWithheld,
+        stream: input.stream,
+        executor: providerFetch(input.provider, input.codexWsRuntimeIdentity, {
+          pacingSlotAcquired: true,
+          pacingSlot,
+          dispatchOverride: input.dispatchOverride,
+          providerName: input.providerName,
+          modelId: input.modelId,
+        }),
+      });
+    },
+  );
+}
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
@@ -287,24 +360,28 @@ export async function prepareAdapterExchange(
    * is invisible to it and a missed bump would replay a request built with a stale key.
    */
 
-  let upstreamResponse: Response;
-  try {
-    if (transportState.activeAdapter.fetchResponse) {
-      transportState.noteRoutedAttemptSend(inputTokenEstimate);
-      await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
-      upstreamResponse = await transportState.activeAdapter.fetchResponse(builtInitialRequest, {
-        abortSignal: upstream.signal,
-        timeoutMs: connectMs,
+    let upstreamResponse: Response;
+    try {
+      if (transportState.activeAdapter.fetchResponse) {
+        transportState.noteRoutedAttemptSend(inputTokenEstimate);
+        const fetchResponse = transportState.activeAdapter.fetchResponse;
+        // The lease returns at this boundary unless the send's tracked body owns it
+        // (pacedAdapterDispatch); the acquire/release pairing lives in one place.
+        upstreamResponse = await pacedAdapterDispatch({
+        providerName: route.providerName,
+        provider: route.provider,
+        modelId: route.modelId,
+        signal: upstream.signal,
+        connectMs,
         sendBudget: adapterDispatchBudget,
-        onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
-        onRecoveryWithheld: noteAdapterRecoveryWithheld,
         stream: parsed.stream,
-        executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              pacingSlotAcquired: true,
-              dispatchOverride: oauthDispatch(builtInitialRequest),
-          providerName: route.providerName,
-          modelId: route.modelId,
-        }),
+        request: builtInitialRequest,
+        dispatchOverride: oauthDispatch(builtInitialRequest),
+        codexWsRuntimeIdentity: options.codexWsRuntimeIdentity,
+        estimate: inputTokenEstimate,
+        fetchResponse,
+        noteAdapterPhysicalSend,
+        noteAdapterRecoveryWithheld,
       });
     } else {
       // #1851 scope guard: transient-5xx retry on this generic adapter path is opt-in for
@@ -455,28 +532,24 @@ export async function prepareAdapterExchange(
         try {
           if (transportState.activeAdapter.fetchResponse) {
             transportState.noteRoutedAttemptSend(retryEstimate, recovery);
-            await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
-            // The dispatch boundary is HERE, not before the pacing wait: that wait can reject for
-            // an abort, a saturated queue, an expired slot or a removed provider, and none of
-            // those reach the wire. Confirming earlier would hold the charge for a send that the
-            // pacer refused.
-            onDispatch?.();
-            return await transportState.activeAdapter.fetchResponse(retryRequest, {
-              abortSignal: upstream.signal,
-              timeoutMs: connectMs,
-            sendBudget: adapterDispatchBudget,
-              onPhysicalSend: send => {
-                noteAdapterPhysicalSend(retryEstimate, send);
-                chargeFastDowngradeWorkflowSend();
-              },
-              onRecoveryWithheld: noteAdapterRecoveryWithheld,
+            const fetchResponse = transportState.activeAdapter.fetchResponse;
+            return await pacedAdapterDispatch({
+              providerName: route.providerName,
+              provider: route.provider,
+              modelId: route.modelId,
+              signal: upstream.signal,
+              connectMs,
+              sendBudget: adapterDispatchBudget,
               stream: parsed.stream,
-              executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-                pacingSlotAcquired: true,
+              request: retryRequest,
               dispatchOverride: oauthDispatch(retryRequest),
-                providerName: route.providerName,
-                modelId: route.modelId,
-              }),
+              codexWsRuntimeIdentity: options.codexWsRuntimeIdentity,
+              estimate: retryEstimate,
+              fetchResponse,
+              noteAdapterPhysicalSend,
+              noteAdapterRecoveryWithheld,
+              onDispatch,
+              onPhysicalSendExtra: chargeFastDowngradeWorkflowSend,
             });
           }
           // #2643 review: this leg used to call fetchWithHeaderTimeout directly, so an

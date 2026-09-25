@@ -180,6 +180,8 @@ export interface RequestPacingRule {
   requestsPerMinute?: number;
   /** Minimum delay between request starts. The slower configured value wins. */
   minIntervalMs?: number;
+  /** Ceiling on requests in flight at once. A model override tightens the provider ceiling. */
+  maxConcurrentRequests?: number;
 }
 
 export interface ProviderRequestPacingConfig extends RequestPacingRule {

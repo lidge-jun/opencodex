@@ -28,6 +28,7 @@ import {
   providerRelativeSendPathConfigError,
 } from "./leaf-validators";
 import { isValidProviderName, hasOwnProvider } from "../provider-name";
+import { requestPacingMaxConcurrentRequests } from "../../providers/request-pacing";
 import {
   apiKeyTransportConfigError,
   booleanRecordConfigError,
@@ -62,6 +63,23 @@ import { hasFastWireCapabilityConflict } from "../../providers/fastwire";
 import { parseDesktopProfile } from "../../claude/desktop-profile";
 import { isInterceptBindingId, isInterceptBindingRoute } from "../../claude/intercept/model-bindings";
 import { DEFAULT_APP_OWNED_MEMORY_BUDGET_BYTES, MAX_APP_OWNED_MEMORY_BUDGET_MB, MIN_APP_OWNED_MEMORY_BUDGET_MB } from "../../lib/app-owned-memory";
+
+const upstreamWebsocketPacingCapWarned = new Set<string>();
+/** Config-parse counterpart of the first-request downgrade notice in fetch-helpers: the
+ * upstreamWebsocket + requestPacing.maxConcurrentRequests combination is legal, but it
+ * permanently moves the provider off the WebSocket fast lane, and the operator should
+ * hear that where they configured it, not only when the first paced turn dispatches.
+ * Once per provider per process. */
+function warnUpstreamWebsocketPacingCapOnce(providerName: string): void {
+  if (upstreamWebsocketPacingCapWarned.has(providerName)) return;
+  upstreamWebsocketPacingCapWarned.add(providerName);
+  console.warn(
+    "[opencodex] providers." + JSON.stringify(redactSecretString(providerName))
+    + " enables upstreamWebsocket together with requestPacing.maxConcurrentRequests; "
+    + "paced turns are served over HTTP/SSE because a WebSocket upstream has no response "
+    + "body to release the concurrency lease.",
+  );
+}
 
 export const configSchema = z.object({
   codexNativeSteering: z.boolean().optional().catch(false),
@@ -153,7 +171,19 @@ export const configSchema = z.object({
     z.object({ enabled: z.literal(false) }),
     z.object({ enabled: z.literal(true), port: z.number().int().min(1).max(65535).optional() }),
   ]).optional().catch(undefined),
-  providers: z.record(z.string(), providerConfigSchema),
+  providers: z.record(z.string(), providerConfigSchema).superRefine(providers => {
+    for (const [name, provider] of Object.entries(providers)) {
+      if (provider.upstreamWebsocket !== true) continue;
+      const pacing = provider.requestPacing;
+      const capConfigured = pacing?.enabled === true && (
+        requestPacingMaxConcurrentRequests(provider as OcxProviderConfig) > 0
+        || Object.values(pacing?.models ?? {}).some(
+          rule => typeof rule.maxConcurrentRequests === "number" && rule.maxConcurrentRequests > 0,
+        )
+      );
+      if (capConfigured) warnUpstreamWebsocketPacingCapOnce(name);
+    }
+  }),
   modelPinnedEfforts: modelPinnedEffortsSchema.optional(),
   compactionRouting: compactionRoutingSchema.optional().catch(undefined),
   defaultProvider: z.string().min(1).default("openai"),

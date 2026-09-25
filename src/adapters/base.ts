@@ -3,6 +3,7 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../usage/log";
 import type { AdapterTierMetadata } from "../providers/fastwire";
+import type { ProviderRequestSlot } from "../providers/request-pacing";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
@@ -15,6 +16,13 @@ export interface IncomingMeta {
    * the same pacing queue and custom provider fetch seam.
    */
   providerFetch?: typeof globalThis.fetch;
+  /**
+   * The logical turn's pre-acquired request pacing lease. The router reserves it before the
+   * streaming response commits; a runTurn wrapper that builds its own providerFetch must
+   * thread this lease into that wrapper's first send so the lease follows the physical
+   * request's body lifecycle instead of only the turn function's lifetime.
+   */
+  pacingSlot?: ProviderRequestSlot;
   /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
    * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Consumed by
