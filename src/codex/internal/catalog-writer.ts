@@ -171,6 +171,7 @@ function scrubAndRemoveUnpublishedTemp(
 function publishCatalogBackup(
   prepared: PreparedCatalogFileWrite,
   suppliedIo?: CatalogBackupWriteIO,
+  onPublished?: () => void,
 ): CatalogBackupPublication {
   const io = suppliedIo ?? defaultBackupWriteIO(prepared.path);
   const target = io.resolveTarget(prepared.path);
@@ -189,7 +190,12 @@ function publishCatalogBackup(
     throw error;
   }
 
-  removePublishedTemp(tempPath, io);
+  try {
+    // Publication already succeeded; cleanup failure must not erase that ownership.
+    onPublished?.();
+  } finally {
+    removePublishedTemp(tempPath, io);
+  }
   return "written";
 }
 
@@ -213,11 +219,10 @@ export function publishHashedCodexCatalogBackup(
   io?: CatalogBackupWriteIO,
 ): CatalogBackupPublication {
   assertCatalogWritePermit(permit, owningCodexHome);
-  const publication = publishCatalogBackup(prepared, io);
-  // Only a new publication proves creation; preserving an existing name proves no provenance.
-  // Existing ownership entries remain valid without re-adopting a preserved file.
-  if (!io && publication === "written") recordOwnedConfigPath(getConfigDir(), prepared.path);
-  return publication;
+  return publishCatalogBackup(prepared, io, io ? undefined : () => {
+    // Called only after a new no-replace publication, never for preserved winners.
+    recordOwnedConfigPath(getConfigDir(), prepared.path);
+  });
 }
 
 /** Atomically publish the legacy immutable backup without clobbering. */

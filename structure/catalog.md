@@ -78,6 +78,8 @@ provider-wide fallback. Exact model output limits precede the provider default o
 Per-catalog hashed backups are recorded only after a new backup is successfully written by
 `src/codex/catalog/parsing.ts` or published by `src/codex/internal/catalog-writer.ts`.
 Preserving an existing file does not register it, even if its deterministic name or bytes match.
+Retained sync initializes metadata in an empty root before publication, without claiming the hashed path.
+Successful publication records ownership before temporary-file cleanup; cleanup errors remain visible.
 Previously recorded paths keep their ownership; unrecorded pre-ledger backups remain residuals.
 After stopping OpenCodex and completing any needed restore, review and archive those exact residual
 paths before manually removing only confirmed obsolete backups. Never infer ownership from a glob.

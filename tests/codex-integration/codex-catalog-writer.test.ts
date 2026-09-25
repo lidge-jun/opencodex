@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -15,9 +15,13 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import * as filesystem from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { AtomicWriteResidualTempError } from "../../src/config";
+import { syncCatalogModels } from "../../src/codex/catalog/retained-sync";
+import { catalogBackupPathFor } from "../../src/codex/catalog/parsing";
 import type { AtomicWriteIO } from "../../src/config";
 import {
   type CatalogWritePermit,
@@ -38,6 +42,8 @@ import {
 } from "../../src/codex/internal/catalog-writer";
 import {
   CONFIG_UNINSTALL_MANIFEST,
+  CONFIG_OWNER_FILE,
+  initializeConfigOwnership,
   recordOwnedConfigPath,
   removeOwnedConfigState,
 } from "../../src/lib/config-ownership";
@@ -373,4 +379,63 @@ test("failed hashed publication does not record an unwritten backup", () => {
   )).toThrow();
   expect(existsSync(path)).toBe(false);
   expect(manifestPaths(openCodexHome)).toEqual(before);
+});
+
+test("metadata-only initialization never claims a hashed backup candidate", () => {
+  const name = "catalog-backup-0123456789abcdef.json";
+  expect(initializeConfigOwnership(openCodexHome)).toBe(true);
+  expect(existsSync(join(openCodexHome, CONFIG_OWNER_FILE))).toBe(true);
+  expect(manifestPaths(openCodexHome)).not.toContain(name);
+  expect(initializeConfigOwnership(openCodexHome)).toBe(true);
+  expect(manifestPaths(openCodexHome)).not.toContain(name);
+});
+test("metadata initialization refuses a pre-existing unowned backup", () => {
+  const path = join(openCodexHome, "catalog-backup-0123456789abcdef.json");
+  writeFileSync(path, "user-owned\n");
+  expect(initializeConfigOwnership(openCodexHome)).toBe(false);
+  expect(existsSync(join(openCodexHome, CONFIG_OWNER_FILE))).toBe(false);
+  expect(removeOwnedConfigState(openCodexHome).status).toBe("refused");
+  expect(readFileSync(path, "utf8")).toBe("user-owned\n");
+});
+test("retained catalog sync initializes an empty home before publishing its backup", async () => {
+  const path = join(codexHome, "custom-catalog.json");
+  const pristine = JSON.stringify({ models: [{ slug: "user-native", display_name: "User model" }] }) + "\n";
+  writeFileSync(path, pristine);
+  writeFileSync(join(codexHome, "config.toml"), `model_catalog_json = ${JSON.stringify(path)}\n`);
+  expect(readdirSync(openCodexHome)).toEqual([]);
+  const result = await syncCatalogModels({ port: 10100, defaultProvider: "openai", providers: {}, subagentModels: [] }, { allowWhenDesiredDisabled: true });
+  expect(result.refreshOutcome).toBe("committed");
+  const backup = catalogBackupPathFor(path);
+  expect(readFileSync(backup, "utf8")).toBe(pristine);
+  expect(manifestPaths(openCodexHome)).toContain(backup.split(/[\\/]/).pop()!);
+  expect(removeOwnedConfigState(openCodexHome).status).toBe("removed");
+  expect(existsSync(backup)).toBe(false);
+}, 15000);
+test("a published backup is recorded even when both temporary unlink attempts fail", () => {
+  expect(initializeConfigOwnership(openCodexHome)).toBe(true);
+  const name = "catalog-backup-0123456789abcdef.json";
+  const path = join(openCodexHome, name);
+  const realUnlink = filesystem.unlinkSync;
+  let attempts = 0;
+  let residual = "";
+  const mock = spyOn(filesystem, "unlinkSync").mockImplementation(candidate => {
+    if (String(candidate).startsWith(path + ".ocx.") && String(candidate).endsWith(".tmp")) {
+      attempts += 1;
+      residual = String(candidate);
+      throw Object.assign(new Error("injected sharing violation"), { code: "EACCES" });
+    }
+    return realUnlink(candidate);
+  });
+  try {
+    expect(() => withLivePermit(permit => publishHashedCodexCatalogBackup(permit, codexHome, { path, content: "pristine\n" })))
+      .toThrow(AtomicWriteResidualTempError);
+    expect(attempts).toBe(2);
+    expect(readFileSync(path, "utf8")).toBe("pristine\n");
+    expect(manifestPaths(openCodexHome)).toContain(name);
+    expect(existsSync(residual)).toBe(true);
+  } finally { mock.mockRestore(); }
+  // The failed cleanup is reported, not silently treated as a clean publication.
+  unlinkSync(residual);
+  expect(removeOwnedConfigState(openCodexHome).status).toBe("removed");
+  expect(existsSync(path)).toBe(false);
 });

@@ -267,9 +267,8 @@ function removeOwnedEntry(root: string, path: string): void {
   rmdirSync(path);
 }
 
-export function recordOwnedConfigPath(configDir: string, candidatePath: string): boolean {
-  const rel = manifestRelativePath(configDir, candidatePath);
-  if (!rel) return false;
+/** Initialize only an empty or already-owned root; do not claim a candidate path. */
+export function initializeConfigOwnership(configDir: string): boolean {
   const cacheKey = ownershipCacheKey(configDir);
   if (!existsSync(configDir)) {
     ownershipCache.delete(cacheKey);
@@ -280,6 +279,15 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
     ownership = loadOwnership(configDir) ?? createOwnership(configDir);
     ownershipCache.set(cacheKey, ownership);
   }
+  return ownership !== null;
+}
+
+export function recordOwnedConfigPath(configDir: string, candidatePath: string): boolean {
+  const rel = manifestRelativePath(configDir, candidatePath);
+  if (!rel) return false;
+  if (!initializeConfigOwnership(configDir)) return false;
+  const cacheKey = ownershipCacheKey(configDir);
+  const ownership = ownershipCache.get(cacheKey);
   if (!ownership) return false;
   if (ownership.manifest.paths.includes(rel)) return true;
   const manifest = {
