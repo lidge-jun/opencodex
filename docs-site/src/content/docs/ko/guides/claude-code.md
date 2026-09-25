@@ -142,7 +142,10 @@ Anthropic이 이를 약관 위반으로 판단해 계정을 정지할 수 있어
 Desktop은 claude.ai에 로그인된 채로 남아 채팅, 커넥터, 원격 제어를 계속 사용할 수 있어요.
 OpenCodex는 `~/.claude/settings.json`(`CLAUDE_CONFIG_DIR` 지원)의 `env`에
 `HTTPS_PROXY`와 `NODE_EXTRA_CA_CERTS`만 써요. Code 탭이 실행한 Claude Code와 그
-서브에이전트, 터미널의 `claude` CLI만 로컬 프록시를 거쳐요. 그 밖의 `api.anthropic.com`
+서브에이전트, 터미널의 `claude` CLI만 로컬 프록시를 거쳐요. 프록시 주소는
+`http://opencodex:<설치별 토큰>@127.0.0.1:<포트>` 형태이고, 토큰은 소유자만 읽을 수 있는
+`~/.opencodex/claude-intercept/proxy-token`에 보관해요. 프록시는 모든 CONNECT를 이 토큰으로
+인증해요. 그 밖의 `api.anthropic.com`
 경로는 Anthropic으로 전달돼요. CA는 OS 신뢰 저장소에 설치하지 않고,
 `NODE_EXTRA_CA_CERTS`를 읽는 Node 프로세스만 신뢰해요.
 

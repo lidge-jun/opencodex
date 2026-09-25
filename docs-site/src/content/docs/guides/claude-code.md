@@ -176,7 +176,7 @@ working. OpenCodex only writes two variables into the `env` block of `~/.claude/
 ```json
 {
   "env": {
-    "HTTPS_PROXY": "http://127.0.0.1:10200",
+    "HTTPS_PROXY": "http://opencodex:<per-install token>@127.0.0.1:10200",
     "NODE_EXTRA_CA_CERTS": "<home>/.opencodex/claude-intercept/ca.pem"
   }
 }
@@ -187,7 +187,8 @@ standalone `claude` CLI — reads that env and sends its `api.anthropic.com` tra
 local intercept proxy. The proxy listens on the public port + 100 (`claudeCode.intercept.port`
 overrides it), terminates TLS with a per-install CA stored under `~/.opencodex/claude-intercept/`
 (never installed into the OS trust store; only Node processes that read `NODE_EXTRA_CA_CERTS`
-trust it), and hands `POST /v1/messages` and `POST /v1/messages/count_tokens` to the same
+trust it), authenticates every CONNECT against a per-install token kept owner-only at
+`~/.opencodex/claude-intercept/proxy-token`, and hands `POST /v1/messages` and `POST /v1/messages/count_tokens` to the same
 Messages handler `ocx claude` uses. Every other path on `api.anthropic.com` (OAuth, profile,
 usage) is relayed byte-for-byte to Anthropic, and unrelated hosts are tunnelled untouched, so your
 subscription login keeps working. Existing OpenCodex features — `modelMap`, aliases, native
@@ -886,3 +887,11 @@ and the turn never starts, so an unrecorded destination folds. This applies with
 reuse still requires stable session identity and upstream cache availability.
 Changes to earlier instructions or tools, and conversation compaction, can still
 affect cache hits; preserving reminder order alone does not guarantee reuse.
+
+### Intercept token recovery
+
+The running authenticated proxy validates the current token for each new CONNECT request.
+An explicit first-party apply recreates a missing token and refreshes the owned settings without
+requiring a proxy restart; existing tunnels are not revoked. Invalid, linked, oversized or
+non-token files are refused rather than overwritten. Inspect such an entry before removing only
+the confirmed obsolete token file and applying first-party mode again; never delete its link target.

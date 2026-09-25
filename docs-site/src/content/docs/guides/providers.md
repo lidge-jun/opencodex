@@ -1144,6 +1144,10 @@ model's documented API default. Cursor server-driven native read/write/delete/ls
 is disabled by default because it bypasses Codex's approval and sandbox path; set
 `unsafeAllowNativeLocalExec: true` on the `providers.cursor` object in `~/.opencodex/config.json`
 only for trusted local experiments (or via **Providers → Cursor → Edit JSON** in the dashboard).
+Foreground native shell requests (`shellArgs` and `shellStreamArgs`) remain unavailable on
+Windows, macOS, and Linux even with this opt-in: opencodex rejects them before starting a process
+until it has a kernel-backed descendant owner. Use the client's shell tool instead. No command
+output is collected; background shells and separately configured MCP/desktop executors are unchanged.
 See the [Configuration reference](/reference/configuration/providers/#cursor-provider-adapter-cursor)
 for a full example. MCP, screen recording, and computer-use are available as executor hooks; without a
 configured local executor, opencodex returns typed no-executor results instead of policy-blocking

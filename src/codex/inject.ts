@@ -133,6 +133,8 @@ function runClientWriteGuard(guard: InjectCodexOptions["beforeClientWrite"]): vo
 export interface CodexInjectResult {
   success: boolean;
   message: string;
+  /** False when injection intentionally preserves configuration owned by another provider. */
+  configApplied?: false;
   /**
    * Structured read-only history preflight refusal; never parsed from display text.
    *
@@ -240,6 +242,7 @@ async function injectCodexConfigImpl(
       : undefined;
     return {
       success: true,
+      configApplied: false,
       ...(nativeSubagentDefaultsWarning
         ? { nativeSubagentDefaultsWarning }
         : {}),

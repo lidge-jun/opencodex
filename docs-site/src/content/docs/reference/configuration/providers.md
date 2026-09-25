@@ -983,7 +983,8 @@ Cursor server-driven local tools are disabled by default. Codex continues using 
 
 - `"off"` (default) rejects Cursor-native `read`, `write`, `delete`, `ls`, `grep`, `shell`, and
   `fetch` execution.
-- `"on"` opts into trusted-local execution and bypasses Codex approval/sandbox semantics.
+- `"on"` opts into trusted-local execution and bypasses Codex approval/sandbox semantics,
+  except foreground native shell execution, which remains unavailable.
 - `"codex-sandbox"` is retained for compatibility but fails closed like `"off"`; request prose is
   not trustworthy sandbox attestation.
 
@@ -1005,6 +1006,13 @@ Set `nativeLocalExec` on `providers.cursor`, not at the top level. In the dashbo
 → Cursor → Edit JSON**, save, then restart. Legacy `unsafeAllowNativeLocalExec: true` equals
 `nativeLocalExec: "on"` only when `nativeLocalExec` is unset. MCP, screen recording, and computer use
 are controlled separately by `mcpServers` and `desktopExecutor`.
+
+Foreground `shellArgs` and `shellStreamArgs` requests are rejected before process creation on
+Windows, macOS, and Linux, including with `nativeLocalExec: "on"`. They require a kernel-backed
+descendant owner that this implementation does not provide; use the client's shell tool instead.
+The streaming form still returns start, aborted exit, a typed failure, and stream close so the
+Cursor turn can finish. It collects no stdout/stderr and has no active output-byte allowance.
+This restriction does not change background shell execution or the other explicit executor opt-ins.
 
 Each `mcpServers.<name>` accepts either `command` (stdio) or `url` (Streamable HTTP). Stdio also
 accepts `args`, `env`, and `cwd`; HTTP accepts `headers`. Both support `enabled` (default true) and

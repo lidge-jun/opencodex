@@ -56,6 +56,10 @@ lifecycle, cancellation races, protocol envelopes, and the real HTTP admission b
 
 ## Stream-buffer accounting
 
+`src/web-search/run-turn-loop.ts` charges retained iteration events and generated replay history to
+the request translator budget. Each owner releases its own reservations on completion, error,
+cancellation or consumer closure; a buffer-limit failure terminates without another search.
+
 `src/server/sse-payload-rewrite.ts` shares an incremental block buffer with native Chat. It scans
 only new input, counts consumed blocks rather than remaining suffixes, and preserves LF/CRLF,
 partial-event, injection/drop, and EOF behavior. Output admission precedes its single UTF-8 encoding;

@@ -143,7 +143,10 @@ le choix par défaut ; n'activez first-party que si vous acceptez ce risque.
 Desktop reste connecté à claude.ai : Chat, les connecteurs et le contrôle à distance continuent de
 fonctionner. OpenCodex écrit seulement `HTTPS_PROXY` et `NODE_EXTRA_CA_CERTS` dans le bloc `env` de
 `~/.claude/settings.json` (ou le répertoire `CLAUDE_CONFIG_DIR`). Le Claude Code lancé par l'onglet
-Code, ses sous-agents et la CLI `claude` passent par le proxy local ; les autres chemins de
+Code, ses sous-agents et la CLI `claude` passent par le proxy local. L'adresse du proxy est de
+la forme `http://opencodex:<jeton par installation>@127.0.0.1:<port>` ; le jeton est conservé
+dans `~/.opencodex/claude-intercept/proxy-token`, lisible uniquement par son propriétaire, et le
+proxy authentifie chaque CONNECT avec lui. Les autres chemins de
 `api.anthropic.com` sont relayés vers Anthropic. L'AC n'est jamais installée dans le magasin de
 confiance du système ; seuls les processus Node qui lisent `NODE_EXTRA_CA_CERTS` lui font confiance.
 

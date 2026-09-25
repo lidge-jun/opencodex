@@ -119,7 +119,10 @@ Anthropic がこれを利用規約違反とみなし、アカウントを停止�
 Desktop 本体は claude.ai に接続したままで、Chat、コネクタ、リモート操作も使えます。
 OpenCodex が書くのは `~/.claude/settings.json`（`CLAUDE_CONFIG_DIR` に対応）の `env` にある
 `HTTPS_PROXY` と `NODE_EXTRA_CA_CERTS` だけです。Code タブが起動する Claude Code、
-サブエージェント、ターミナルの `claude` CLI がローカルプロキシを通ります。その他の
+サブエージェント、ターミナルの `claude` CLI がローカルプロキシを通ります。プロキシのアドレスは
+`http://opencodex:<インストールごとのトークン>@127.0.0.1:<ポート>` の形で、トークンは
+所有者だけが読める `~/.opencodex/claude-intercept/proxy-token` に保管され、プロキシは
+すべての CONNECT をこのトークンで認証します。その他の
 `api.anthropic.com` パスは Anthropic に中継されます。CA は OS の信頼ストアに入れず、
 `NODE_EXTRA_CA_CERTS` を読む Node プロセスだけが信頼します。
 

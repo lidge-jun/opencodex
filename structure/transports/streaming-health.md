@@ -19,6 +19,8 @@ Shared parsing and streaming follow the [request-copy](byte-accounting.md#reques
 
 ## Heartbeat and stall deadline
 
+RunTurn search interception forwards adapter heartbeats immediately and emits progress for buffered semantic events. Its bridge uses the search plan's stall deadline so a bounded sidecar search fits the watchdog budget.
+
 Native Chat uses the same resolved `stallTimeoutSec` with a pending-upstream-read allowance that
 pauses under downstream backpressure. Its Chat error and cancellation contract is documented in
 [native Chat completion lifecycle](../data-planes/inbound-compat.md#native-chat-completion-lifecycle).
@@ -52,6 +54,8 @@ caps and emits liveness heartbeats while held. A second empty result or retry fa
 502 `empty_completion_retry_failed`; usage is merged across sends, and the Logs attempt records
 recovery kind `empty-completion`.
 
+The fetch and runTurn web-search loops honor `streamRoutedModelOutput`: leading text and reasoning
+stream live until the first tool boundary, and final replay omits already delivered events.
 The web-search loop requests `stream: true` for every routed-model iteration, but buffers the events
 needed to decide whether to intercept a synthetic search call. Text explicitly phased as
 `commentary` is safe to forward live because it cannot terminate the turn; this keeps Kiro's

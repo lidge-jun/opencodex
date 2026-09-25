@@ -464,6 +464,7 @@
     "claude-intercept-local-ca.test.ts": "claude-integration",
     "claude-intercept-model-bindings.test.ts": "claude-integration",
     "claude-intercept-proxy.test.ts": "claude-integration",
+    "claude-intercept-proxy-auth.test.ts": "claude-integration",
     "claude-intercept-settings.test.ts": "claude-integration",
     "claude-management-api.test.ts": "claude-integration",
     "claude-manual-env.test.ts": "gui",
@@ -819,6 +820,7 @@
     "cursor-native-exec-common.test.ts": "providers/cursor",
     "cursor-native-exec-policy.test.ts": "providers/cursor",
     "cursor-native-exec-shell.test.ts": "providers/cursor",
+    "cursor-foreground-shell.test.ts": "providers/cursor",
     "cursor-native-exec.test.ts": "providers/cursor",
     "cursor-oauth-shell.test.ts": "providers/cursor",
     "cursor-oauth.test.ts": "providers/cursor",
@@ -1157,6 +1159,7 @@
     "management-model-roster.test.ts": "server",
     "management-origin-tls.test.ts": "server",
     "management-provider-compat-carry.test.ts": "server",
+    "management-provider-atomicity.test.ts": "server",
     "management-provider-pinsless-validation.test.ts": "server",
     "management-provider-proto-override.test.ts": "server",
     "management-provider-reasoning-lists.test.ts": "server",
@@ -1907,6 +1910,8 @@
     "cli-link.test.ts": "cli",
     "link-management-routes.test.ts": "server",
     "link-compensation.test.ts": "clients",
+    "web-search-run-turn-loop.test.ts": "web-search",
+    "responses-run-turn-web-search.test.ts": "responses",
     "server-combo-cooldown-recording.test.ts": "server"
   },
   "migrated": [

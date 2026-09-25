@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { atomicWriteFile } from "../../config/atomic-write";
 import { claudeConfigDir } from "../auth-detect";
 
 /**
@@ -10,7 +11,7 @@ import { claudeConfigDir } from "../auth-detect";
  * call. Two keys make every Claude Code process route through the local CONNECT proxy while
  * the app itself stays a first-party install:
  *
- *   env.HTTPS_PROXY         = http://127.0.0.1:<proxy port>
+ *   env.HTTPS_PROXY         = http://opencodex:<token>@127.0.0.1:<proxy port>
  *   env.NODE_EXTRA_CA_CERTS = <configDir>/claude-intercept/ca.pem
  *
  * Ownership is tracked by value, never by a marker key. The CA path is the anchor: it lives
@@ -26,12 +27,12 @@ export interface ClaudeInterceptEnv {
   NODE_EXTRA_CA_CERTS: string;
 }
 
-export function claudeInterceptProxyUrl(port: number): string {
-  return `http://127.0.0.1:${port}`;
+export function claudeInterceptProxyUrl(port: number, authToken: string): string {
+  return `http://opencodex:${encodeURIComponent(authToken)}@127.0.0.1:${port}`;
 }
 
-export function buildClaudeInterceptEnv(proxyPort: number, caCertPath: string): ClaudeInterceptEnv {
-  return { HTTPS_PROXY: claudeInterceptProxyUrl(proxyPort), NODE_EXTRA_CA_CERTS: caCertPath };
+export function buildClaudeInterceptEnv(proxyPort: number, caCertPath: string, authToken: string): ClaudeInterceptEnv {
+  return { HTTPS_PROXY: claudeInterceptProxyUrl(proxyPort, authToken), NODE_EXTRA_CA_CERTS: caCertPath };
 }
 
 export type ClaudeInterceptSettingsState =
@@ -69,7 +70,7 @@ function envRecord(doc: SettingsDoc): Record<string, unknown> {
 
 /** Loopback proxy URLs are the only shape opencodex ever writes. */
 export function isClaudeInterceptProxyUrl(value: unknown): value is string {
-  return typeof value === "string" && /^http:\/\/127\.0\.0\.1:\d{1,5}\/?$/.test(value.trim());
+  return typeof value === "string" && /^http:\/\/(?:opencodex:[^@/]+@)?127\.0\.0\.1:\d{1,5}\/?$/.test(value.trim());
 }
 
 function isOwnedCaPath(value: unknown, ownedCaPath: string): value is string {
@@ -111,9 +112,9 @@ export function inspectClaudeInterceptSettings(
 
 function writeSettings(path: string, doc: SettingsDoc): void {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
-  renameSync(tmp, path);
+  // The managed env embeds the proxy token, so the file must stay owner-only:
+  // atomicWriteFile applies the real NTFS ACL on Windows where chmod is a no-op.
+  atomicWriteFile(path, `${JSON.stringify(doc, null, 2)}\n`);
 }
 
 export type ClaudeInterceptSettingsWrite =
@@ -123,7 +124,7 @@ export type ClaudeInterceptSettingsWrite =
 /** Capture only the managed keys. Rollback preserves unrelated edits and refuses
  * to overwrite a newer proxy/CA choice made after this apply. */
 export function captureClaudeInterceptSettingsRollback(
-  expected: ClaudeInterceptEnv,
+  expected: ClaudeInterceptEnv | (() => ClaudeInterceptEnv),
   configDir = claudeConfigDir(),
 ): () => boolean {
   const path = settingsPath(configDir);
@@ -132,10 +133,11 @@ export function captureClaudeInterceptSettingsRollback(
   const previous = "doc" in before ? { ...envRecord(before.doc) } : {};
   return () => {
     try {
+      const target = typeof expected === "function" ? expected() : expected;
       const current = readSettings(path);
       if (!("doc" in current)) return false;
       const env = envRecord(current.doc);
-      if (CLAUDE_INTERCEPT_MANAGED_ENV.some(key => env[key] !== expected[key])) return false;
+      if (CLAUDE_INTERCEPT_MANAGED_ENV.some(key => env[key] !== target[key])) return false;
       for (const key of CLAUDE_INTERCEPT_MANAGED_ENV) {
         if (previous[key] === undefined) delete env[key];
         else env[key] = previous[key];
@@ -166,6 +168,25 @@ export function applyClaudeInterceptSettings(
   doc.env = { ...envRecord(doc), ...env };
   writeSettings(path, doc);
   return { ok: true, changed: true, path };
+}
+
+/**
+ * Rewrite an env block opencodex already owns when it no longer matches what this run
+ * would write — a pre-auth `http://127.0.0.1:<port>` left behind by an upgrade would get
+ * a 407 from the now-authenticated proxy until `ocx ensure` or an apply ran. Unlike apply
+ * this never creates an absent env: only `stale` (owned) state is rewritten, so the
+ * runtime can call it on every start without enabling the integration for anyone else.
+ */
+export function migrateClaudeInterceptSettings(
+  env: ClaudeInterceptEnv,
+  configDir = claudeConfigDir(),
+): ClaudeInterceptSettingsWrite {
+  const path = settingsPath(configDir);
+  const state = inspectClaudeInterceptSettings(env, configDir);
+  if (state.kind === "unreadable") return { ok: false, reason: "unreadable", path };
+  if (state.kind === "foreign") return { ok: false, reason: "foreign_env", path };
+  if (state.kind !== "stale") return { ok: true, changed: false, path };
+  return applyClaudeInterceptSettings(env, configDir);
 }
 
 /** Remove the managed keys, but only the values opencodex owns. */

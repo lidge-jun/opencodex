@@ -25,3 +25,15 @@ The listener retains an awaited shutdown callback only after optional activation
 Hub runtime admission counts pending create/resume starts as well as live handles against global and per-device limits; every outcome releases its reservation. Stop and shutdown reclaim late resumed handles before clearing ownership. Coordinator result size limits normalize both response text and success, so bridge and MCP callers receive consistent errors.
 
 Prompt HTTP admission returns 202 with the existing session/event cursor; tracked operations publish terminal status for polling and attach a rejection observer immediately. Reconnect/resume cannot publish ready while a turn is active. The dashboard prefers newer local event cursors over stale polling, favors authoritative polling on ties, retains unconfirmed draft text with an uncertainty notice, and never retries prompt POSTs automatically.
+
+## Durable device revocation
+
+`RemoteWorkspaceHub.revokeDevice` persists a candidate enrollment list before publishing it
+or closing the executor connection. A failed save leaves the device listed, its token valid,
+and its connection unchanged, matching durable authority and allowing the same revoke to retry.
+Successful retry removes the enrollment before closing the connection; a freshly loaded Hub
+rejects the original token. Unknown/already removed devices return false without writing.
+`tests/clients/remote-workspace-hub.test.ts` injects a save failure and checks retry, reload,
+connection lifetime, and token admission.
+
+> Decision record: [Durable device revocation](decisions/ADR-0103-durable-device-revocation.md)

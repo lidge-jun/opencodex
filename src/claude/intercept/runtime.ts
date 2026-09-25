@@ -8,6 +8,8 @@ import { claudeInterceptCaCertPath, ensureLocalInterceptCaForStartup, issueLocal
 import type { PickerRouteInput } from "./picker-models";
 import { createPickerRuntime, type CreatePickerRuntimeOptions, type PickerRuntime } from "./picker-runtime";
 import type { SecurityRunner } from "./picker-trust";
+import { ensureClaudeInterceptProxyToken, readClaudeInterceptProxyToken } from "./proxy-auth";
+import { buildClaudeInterceptEnv, migrateClaudeInterceptSettings } from "./settings";
 
 /**
  * Lifecycle for the Claude intercept pair (CONNECT proxy + TLS listener).
@@ -126,7 +128,20 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   if (options.requestedPort === 0 && !explicitPort) return null;
   const configDir = options.configDir ?? getConfigDir();
   const ca = await ensureLocalInterceptCaForStartup(configDir);
+  const authToken = ensureClaudeInterceptProxyToken(configDir);
   const leaf = issueLocalInterceptLeaf(ca, CLAUDE_INTERCEPT_HOSTS);
+  // Refresh an env we already own (e.g. a pre-auth proxy URL left by an upgrade) before the
+  // authenticated proxy takes over the port — a plain `ocx start` after an update would
+  // otherwise 407 every CONNECT until the next `ocx ensure` or apply. Only `stale` state is
+  // rewritten, so installs that never applied first-party are untouched.
+  try {
+    const proxyPort = claudeInterceptProxyPort(options.config, options.publicPort);
+    migrateClaudeInterceptSettings(buildClaudeInterceptEnv(proxyPort, claudeInterceptCaCertPath(configDir), authToken));
+  } catch (error) {
+    // A skipped rewrite degrades to the pre-migration behaviour and ensure/apply retries it,
+    // but silence here leaves upgraded clients hitting 407 with no recorded cause.
+    console.warn(`[claude-intercept] settings migration skipped: ${error instanceof Error ? error.message : String(error)}`);
+  }
   const listener = startClaudeInterceptListener<T>({
     leaf,
     dispatch: options.dispatch,
@@ -137,6 +152,9 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
   try {
     proxy = await startConnectProxy(claudeInterceptProxyPort(options.config, options.publicPort), {
       interceptPort: listener.port!,
+      // A real apply may recreate a missing token while this listener remains live.
+      // Read current validated authority per CONNECT; absent/invalid means deny, not mint.
+      authToken: () => readClaudeInterceptProxyToken(configDir),
     });
   } catch (error) {
     await listener.stop(true);
@@ -165,6 +183,9 @@ export async function startClaudeIntercept<T>(options: StartClaudeInterceptOptio
       try {
         pickerProxy = await startConnectProxy(claudePickerProxyPort(options.config, options.publicPort), {
           interceptPort,
+          // No authToken: Desktop's egressProxyUrl cannot present proxy credentials, so this
+          // listener stays an unauthenticated loopback relay until the profile format can carry
+          // one. The intercept proxy above is the credential-bearing hop.
           // No host list here: the choice below depends on which client opened the tunnel.
           interceptHosts: [],
           selectTunnel: (host, port, request) => {
