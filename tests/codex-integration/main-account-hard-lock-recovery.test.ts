@@ -5,13 +5,14 @@ import { join } from "node:path";
 import {
   fetchMainAccountInfo, registerCodexCooldownRecoveryProbeWorker, runMainAccountHardLockRecovery,
 } from "../../src/codex/auth-api";
+import { fetchMainAccountInfoAttempt } from "../../src/codex/auth-api/main-account-probe";
 import { MAIN_CODEX_ACCOUNT_ID as MAIN } from "../../src/codex/account-id";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearAccountNeedsReauth, isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
-import { captureMainQuotaWriter, clearMainAccountInfoCache } from "../../src/codex/main-account-cache";
+import { captureMainQuotaWriter, clearMainAccountInfoCache, getMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { setMainAccountPlan } from "../../src/codex/main-account";
-import { clearAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearAccountQuota, getAccountQuota, getMainPolicyQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { clearCodexUpstreamHealth, getCodexQuotaHealthSnapshot, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
@@ -131,6 +132,73 @@ afterEach(async () => {
 });
 
 describe("main hard-lock background recovery", () => {
+  for (const phase of ["request", "body"] as const) {
+    test.each(["unchanged", "replaced", "restored"] as const)(`delayed ${phase} response respects %s same-account credentials`, async transition => {
+      const started = deferred<void>();
+      const finish = deferred<void>();
+      const authPath = join(home, "auth.json");
+      const originalAuth = readFileSync(authPath, "utf8");
+      const replacement = JSON.parse(originalAuth);
+      replacement.tokens.access_token += "-rotated";
+      const data = { plan_type: "prolite", rate_limit: {
+        allowed: true, limit_reached: false,
+        primary_window: { used_percent: 64, limit_window_seconds: 604_800 }, secondary_window: null,
+      }, rate_limit_reset_credits: { available_count: 2 } };
+      let reads = 0;
+      globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
+        expect(String(input)).toBe(whamUrl);
+        if (++reads > 1) return new Response(null, { status: 503 });
+        if (phase === "request") {
+          started.resolve();
+          await finish.promise;
+        }
+        const response = Response.json(data);
+        if (phase === "body") response.json = async () => {
+          started.resolve();
+          await finish.promise;
+          return data;
+        };
+        return response;
+      }, { preconnect: previousFetch.preconnect });
+      markAccountNeedsReauth(MAIN);
+      const pending = fetchMainAccountInfoAttempt(true, 0);
+      try {
+        await started.promise;
+        if (transition !== "unchanged") writeFileSync(authPath, JSON.stringify(replacement));
+        // A newer read observes the bearer but fails, so it cannot advance the publication fence.
+        expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
+        if (transition === "restored") {
+          writeFileSync(authPath, originalAuth);
+          expect((await fetchMainAccountInfoAttempt(true, 0)).quotaRefresh?.status).toBe("http_error");
+        }
+        const policy = getMainPolicyQuota();
+        const display = structuredClone(getAccountQuota(MAIN));
+        const info = structuredClone(getMainAccountInfoCache());
+        finish.resolve();
+        const result = await pending;
+        if (transition === "unchanged") {
+          expect(getMainAccountHardLockStatus(config()).state).toBe("ready");
+          expect(result.freshQuota?.weeklyPercent).toBe(64);
+          expect(result.resetRecoveryProof).toBeDefined();
+          expect(isAccountNeedsReauth(MAIN)).toBe(false);
+        } else {
+          expect(getMainPolicyQuota()).toEqual(policy);
+          expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+          expect(getAccountQuota(MAIN)).toEqual(display);
+          expect(getMainAccountInfoCache()).toEqual(info);
+          expect(isAccountNeedsReauth(MAIN)).toBe(true);
+          expect(result.freshQuota).toBeUndefined();
+          expect(result.freshResetCredits).toBeUndefined();
+          expect(result.resetRecoveryProof).toBeUndefined();
+          expect(result.quotaRefresh).toBeUndefined();
+        }
+      } finally {
+        finish.resolve();
+        await pending;
+      }
+    });
+  }
+
   test("owned metadata recovery replaces an obsolete short block with the current weekly window", async () => {
     const calls = fetchWith(async () => Response.json({ plan_type: "pro", rate_limit: {
       primary_window: { used_percent: 35, limit_window_seconds: 604_800 }, secondary_window: null, tertiary_window: null,

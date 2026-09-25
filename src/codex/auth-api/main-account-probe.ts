@@ -253,9 +253,12 @@ export async function fetchMainAccountInfoWhileOwned(
     if (data === null || typeof data !== "object" || Array.isArray(data)) {
       throw new Error("Invalid WHAM usage object");
     }
-    // Check after body/retry awaits and before any cache, credits, policy or
-    // Reserve publication. Returning cached state supplies no fresh recovery proof.
-    if (!isQuotaDispatchCurrent(dispatchSequence)) {
+    // Check after body/retry awaits and before any cache, credits, policy or Reserve publication.
+    // Same-account bearer replacement (including A→B→A) also retires the old response,
+    // even when the newer read failed without publishing. Cached state supplies no recovery proof.
+    if (!isQuotaDispatchCurrent(dispatchSequence) || (mainQuotaWriter
+      && (mainQuotaCredentialGeneration !== getMainQuotaCredentialGeneration()
+        || !matchesMainQuotaCredential(tokens.access_token, tokens.account_id)))) {
       return { info: getMainAccountInfoCache() ?? EMPTY_MAIN_ACCOUNT_INFO,
         credentialChecked: true, hasCredential: true };
     }
