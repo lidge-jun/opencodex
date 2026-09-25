@@ -235,6 +235,20 @@ export class SerializedToolCallContentBuffer {
 
   constructor(private readonly budget: TranslatorBudget) {}
 
+  /** Measures an append exactly even when the runtime prices isolated UTF-16 surrogates differently. */
+  private appendedByteLength(delta: string): number {
+    let bytes = Buffer.byteLength(delta);
+    if (this.text.length === 0 || delta.length === 0) return bytes;
+    const tail = this.text[this.text.length - 1]!;
+    const head = delta[0]!;
+    const tailCode = tail.charCodeAt(0);
+    const headCode = head.charCodeAt(0);
+    if (tailCode >= 0xd800 && tailCode <= 0xdbff && headCode >= 0xdc00 && headCode <= 0xdfff) {
+      bytes += Buffer.byteLength(tail + head) - Buffer.byteLength(tail) - Buffer.byteLength(head);
+    }
+    return bytes;
+  }
+
   /** Reserves the replacement before releasing the old text, preserving it if the budget rejects growth. */
   private replace(next: string, hasOpenTag: boolean): void {
     const nextBytes = Buffer.byteLength(next);
@@ -259,9 +273,7 @@ export class SerializedToolCallContentBuffer {
 
   /** Charges only the appended bytes, so holding an open block never needs twice its retained size. */
   private append(delta: string): void {
-    // Bun counts each isolated surrogate as two bytes, so split pairs sum to the same four-byte
-    // charge as the joined scalar. Measuring only the delta therefore preserves exact accounting.
-    const deltaBytes = Buffer.byteLength(delta);
+    const deltaBytes = this.appendedByteLength(delta);
     this.budget.reserveTransient(deltaBytes, { kind: "live_transient" }).commitRetained();
     if (this.hasOpenTag) this.observeDelimiters(delta);
     this.text += delta;
@@ -306,11 +318,11 @@ export class SerializedToolCallContentBuffer {
    * context. The size bound is checked before the delta is retained.
    */
   ingestStreaming(delta: string): AdapterEvent[] {
-    const deltaBytes = Buffer.byteLength(delta);
+    const deltaBytes = this.appendedByteLength(delta);
     if (this.hasOpenTag && this.bytes + deltaBytes > MAX_HELD_BYTES) {
       const released = this.drain([]);
       // A delta that alone passes the bound is delivered as text rather than retained.
-      if (deltaBytes > MAX_HELD_BYTES) {
+      if (Buffer.byteLength(delta) > MAX_HELD_BYTES) {
         this.context = contextAfter(delta, this.context);
         return [...released, ...textEvents(delta)];
       }

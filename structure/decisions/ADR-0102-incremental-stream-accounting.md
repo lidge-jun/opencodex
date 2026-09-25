@@ -1,8 +1,6 @@
-# ADR-0102 — Incremental stream accounting
+# ADR-0102 — decision recorded under "Usage accounting"
 
-- Contract owners: [Chat compatibility](../providers/chat-compat.md#serialized-tool-call-content),
-  [Providers and adapters](../providers-and-adapters.md), and
-  [Dashboard and usage](../dashboard-and-usage.md)
+- Contract owner: [Dashboard and usage](../dashboard-and-usage.md#usage-accounting)
 
 ## Decision Log
 
