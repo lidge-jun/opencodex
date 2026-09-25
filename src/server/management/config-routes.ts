@@ -122,7 +122,7 @@ import { applySystemEnvToggle } from "../system-env";
 import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
 import { runStartupInstallAction, type StartupInstallAction } from "../startup-action-control";
-import { displayCodexRuntimePath, effortClampAppliesToRuntime, liveRemovedEfforts, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
+import { displayCodexRuntimePath, effortClampAppliesToRuntime, getCodexRuntimeSnapshot, liveRemovedEfforts, loadLastEffortClamp } from "../../codex/runtime";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -304,10 +304,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/settings" && req.method === "GET") {
-    let resolved: ReturnType<typeof resolveCodexRuntime>;
+    let resolved: ReturnType<typeof getCodexRuntimeSnapshot>;
     try {
-      // Full alternative discovery (memoized) so newerAvailable warnings work.
-      resolved = resolveCodexRuntime();
+      // Full alternative discovery so newerAvailable warnings work, served stale-while-
+      // revalidate: the sync resolver ran `codex --version` per candidate on this request and
+      // froze the whole proxy for ~0.6s every memo expiry while the dashboard polled here.
+      resolved = getCodexRuntimeSnapshot();
     } catch {
       resolved = {
         runtime: { command: "codex", version: null, source: "fallback" },
