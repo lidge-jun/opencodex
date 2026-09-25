@@ -9,6 +9,12 @@
  * Every function here is side-effect free apart from its own WeakMap and never throws into the
  * request path: a trace is diagnostics, and a request must not fail because its trace could not
  * be recorded. Nothing conversation-derived is kept — only fixed vocabulary.
+ *
+ * Shadow plan (PF-12): when `protocols.rollout.shadowPlan` is on, the ingress records the
+ * dispatch-basis plan input for the request (`src/protocols/shadow-plan.ts`); at finalize the
+ * plan is computed with the pure planner and compared with the observed trace, and a
+ * disagreement sets `planMismatch`. Nothing is recorded with the switch off, so the trace is
+ * unchanged, and a failed comparison leaves the trace as observed.
  */
 import {
   PROTOCOL_CONTRACT_VERSION,
@@ -23,6 +29,8 @@ import {
 import { PROTOCOL_DTO_LIMITS, PROTOCOL_TRACE_SCHEMA_VERSION, type ProtocolAttemptTraceV1, type ProtocolTraceV1 } from "./dto";
 import { featureEffectsForPath, isProtocolFeature, type ProtocolFeature } from "./features";
 import { deliveryModeForLane, requestPathForLane, responsePathForLane, type ProtocolLane } from "./path";
+import { planProtocol, type ProtocolPlanInput } from "./plan";
+import { shadowPlanMismatch } from "./shadow";
 
 /** Features are computed inside the mark, so a thrown feature scan is contained there too. */
 export type ProtocolFeatureSource = Iterable<ProtocolFeature> | (() => Iterable<ProtocolFeature>);
@@ -56,6 +64,7 @@ export interface ProtocolTraceAttempt {
 
 const requestMarks = new WeakMap<object, EntryMark | BlockedMark>();
 const attemptMarks = new WeakMap<object, AttemptMark>();
+const shadowInputs = new WeakMap<object, ProtocolPlanInput>();
 
 function boundedReasons(codes: Iterable<ProtocolReasonCode>): ProtocolReasonCode[] {
   const out: ProtocolReasonCode[] = [];
@@ -94,6 +103,28 @@ export function markProtocolEntry(
       reasonCodes: boundedReasons(mark.reasonCodes ?? []),
       features: collectFeatures(mark.features),
     });
+  } catch {
+    /* a trace must never fail the request it describes */
+  }
+}
+
+/** Features the request's entry or blocked mark recorded, for the shadow plan input. */
+export function protocolMarkFeatures(logCtx: object): readonly ProtocolFeature[] | undefined {
+  try {
+    const mark = requestMarks.get(logCtx);
+    return mark ? [...mark.features] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Record the dispatch-basis plan input the shadow comparison runs at finalize. The input holds
+ * fixed vocabulary and the provider and model names the server already exposes, nothing else.
+ */
+export function markProtocolShadowPlanInput(logCtx: object, input: ProtocolPlanInput): void {
+  try {
+    shadowInputs.set(logCtx, input);
   } catch {
     /* a trace must never fail the request it describes */
   }
@@ -197,6 +228,9 @@ function pathReason(path: ResolvedPath): ProtocolReasonCode {
   return path.requestPath.includes("ir") ? "cross-wire-ir" : "cross-wire-codec";
 }
 
+/** The context fields the trace reads at finalize. */
+export type ProtocolTraceContext = object & { inboundProtocol?: Protocol; provider?: string; model?: string };
+
 /**
  * Derive the observed trace at finalize. `attempts` are the live attempt objects (the ones
  * `markAttemptProtocolPath` was keyed by), not detached copies.
@@ -205,9 +239,37 @@ function pathReason(path: ResolvedPath): ProtocolReasonCode {
  * - Responses inbound without a mark: the final adapter's wire decides the path.
  * - Chat or Messages: the entry lane decides, through `path.ts`.
  * - no attempt and no native or blocked mark: `undefined`; nothing is guessed.
+ *
+ * With a shadow plan input recorded, a disagreeing plan adds `planMismatch: true`.
  */
 export function protocolTraceForRequest(
-  logCtx: object & { inboundProtocol?: Protocol },
+  logCtx: ProtocolTraceContext,
+  attempts: readonly ProtocolTraceAttempt[] | undefined,
+): ProtocolTraceV1 | undefined {
+  const trace = observedTrace(logCtx, attempts);
+  return trace ? withShadowPlan(logCtx, trace) : undefined;
+}
+
+/**
+ * Compare the recorded dispatch plan with the observed trace. Pure and local: the planner reads
+ * only the recorded input. Any throw leaves the observed trace as it was.
+ */
+function withShadowPlan(logCtx: ProtocolTraceContext, trace: ProtocolTraceV1): ProtocolTraceV1 {
+  try {
+    const input = shadowInputs.get(logCtx);
+    if (!input) return trace;
+    const settled = {
+      ...(typeof logCtx.provider === "string" ? { provider: logCtx.provider } : {}),
+      ...(typeof logCtx.model === "string" ? { model: logCtx.model } : {}),
+    };
+    return shadowPlanMismatch(planProtocol(input), trace, settled) ? { ...trace, planMismatch: true } : trace;
+  } catch {
+    return trace;
+  }
+}
+
+function observedTrace(
+  logCtx: ProtocolTraceContext,
   attempts: readonly ProtocolTraceAttempt[] | undefined,
 ): ProtocolTraceV1 | undefined {
   try {

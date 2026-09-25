@@ -73,7 +73,7 @@ describe("path semantics", () => {
 });
 
 describe("leaf-module boundary", () => {
-  const LEAVES = ["contract.ts", "features.ts", "baseline.ts", "dto.ts", "path.ts", "plan.ts", "guard.ts"];
+  const LEAVES = ["contract.ts", "features.ts", "baseline.ts", "dto.ts", "path.ts", "plan.ts", "guard.ts", "shadow.ts"];
   const ALLOWED = new Set(["./contract", "./features", "./dto", "./path", "../compatibility/manifest"]);
 
   for (const file of LEAVES) {
