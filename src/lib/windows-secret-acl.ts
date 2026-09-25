@@ -1070,7 +1070,7 @@ async function hardenEntryAsync(
   if (effectivePlatform() !== "win32") return { ok: true };
   if (memoSatisfied(cache, targetPath)) return { ok: true };
   const deadline = nowFn() + resolveHardenDeadlineMs(opts.deadlineMs);
-  if (await existingAclAlreadyCompliantAsync(targetPath, directory, deadline)) return { ok: true };
+  if (extraReadAces.length === 0 && await existingAclAlreadyCompliantAsync(targetPath, directory, deadline)) return { ok: true };
   const memoKey = timeoutMemoKey(targetPath, opts);
   const timeoutMemoError = timeoutMemoErrorIfBlocked(memoKey, opts);
   if (timeoutMemoError) {
