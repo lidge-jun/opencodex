@@ -3343,6 +3343,10 @@ export const en = {
   "compatProtocol.axisNote": "These are Lab verdicts only. How a request is delivered (native or translated) is shown by the request path preview on the API page.",
   "protocolLinks.labEvidence": "Lab evidence for this pair",
   "protocolLinks.providerSettings": "Provider settings",
+  "cws.plan.title": "Candidate paths",
+  "cws.plan.description": "Asks the proxy how each target would carry a request with every feature the client API can express, and which features all targets keep. Nothing is sent upstream.",
+  "cws.plan.run": "Show candidate paths",
+  "cws.plan.savedOnly": "Shows the saved combo. Save your changes to preview them.",
 } as const;
 
 export type TKey = keyof typeof en;

@@ -37,3 +37,7 @@
 /* ── Deep links between protocol views ────────────────────── */
 .protocol-deep-link { align-self: flex-start; margin-top: 6px; }
 .protocol-plan-links { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ── Combo detail: candidate paths ────────────────────────── */
+.combo-protocol-plan { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.combo-protocol-plan p { margin: 0; }

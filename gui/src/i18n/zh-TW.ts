@@ -3295,4 +3295,8 @@ export const zhTW: Record<TKey, string> = {
   "compatProtocol.axisNote": "這裡只有 Lab 判定。請求如何傳遞（原生或轉譯）請見 API 頁面的請求路徑預覽。",
   "protocolLinks.labEvidence": "此組合的 Lab 證據",
   "protocolLinks.providerSettings": "供應商設定",
+  "cws.plan.title": "各目標的路徑",
+  "cws.plan.description": "詢問代理每個目標會如何傳遞帶有用戶端 API 所有可表達功能的請求，以及哪些功能所有目標都保留。不會向上游傳送任何內容。",
+  "cws.plan.run": "顯示路徑",
+  "cws.plan.savedOnly": "顯示的是已儲存的組合。請先儲存變更再預覽。",
 };

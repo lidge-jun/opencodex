@@ -3332,4 +3332,8 @@ export const tr: Record<TKey, string> = {
   "compatProtocol.axisNote": "Bunlar yalnızca Lab kararlarıdır. Bir isteğin nasıl iletildiği (yerel ya da çevrilmiş) API sayfasındaki istek yolu önizlemesinde gösterilir.",
   "protocolLinks.labEvidence": "Bu çift için Lab kanıtı",
   "protocolLinks.providerSettings": "Sağlayıcı ayarları",
+  "cws.plan.title": "Hedef yolları",
+  "cws.plan.description": "Proxy'ye her hedefin, istemci API'sinin ifade edebildiği tüm özellikleri içeren bir isteği nasıl taşıyacağını ve hangi özellikleri tüm hedeflerin koruduğunu sorar. Yukarı akışa hiçbir şey gönderilmez.",
+  "cws.plan.run": "Yolları göster",
+  "cws.plan.savedOnly": "Kaydedilmiş kombo gösteriliyor. Değişikliklerinizi önizlemek için kaydedin.",
 };
