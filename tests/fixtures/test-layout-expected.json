@@ -69,6 +69,8 @@
   "anthropic-thinking-signature.test.ts": "adapters/anthropic",
   "anthropic-tool-call-id.test.ts": "adapters/anthropic",
   "anthropic-messages-passthrough.test.ts": "adapters/anthropic",
+  "anthropic-beta-allowlist.test.ts": "adapters/anthropic",
+  "anthropic-messages-passthrough-oauth.test.ts": "adapters/anthropic",
   "anthropic-tool-declaration-constraints.test.ts": "adapters/anthropic",
   "anthropic-tool-schema.test.ts": "adapters/anthropic",
   "antigravity-baseurl-override.test.ts": "adapters/google",
