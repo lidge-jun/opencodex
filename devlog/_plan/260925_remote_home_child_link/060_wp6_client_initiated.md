@@ -417,3 +417,18 @@ GUI의 `gui/tests/remote-link-client.test.tsx`는 별도 GUI test runner 대상�
 - K12에 맞춰 local connect 실패 rollback을 Home SSH의 `ocx link revoke --link-id <id>` admin-token CLI 경로로 고정했다.
 - K16 status DTO의 `role`, `listener`, `links`, `child` 전체를 고정하고 GUI의 `home/child`와 `hub/client` 매핑을 명시했다.
 - K1에 맞춰 Home-side issue가 dashboard session이 아닌 Home 로컬 admin-token CLI 경로를 사용하도록 join 순서와 테스트 증거를 갱신했다.
+
+## wp6 P 재검증 (아키텍트 Confucius, gpt-6-sol high, 2026-09-25) — 이 절이 앞선 내용보다 우선한다
+
+| ID | 제안 | 처분 |
+|---|---|---|
+| W6-1 | `POST /api/link/join {alias}` 추가, 페어링 대시보드 세션 전용, standalone 전용, 인증 후 상태 해석, route-registry 등록 | 수용 |
+| W6-2 | 로컬 `ocx link port` 계약(`{"port":P}`)과 원격 `ocx link issue --alias <this-machine> --tunnel-port P`(buildExecArgv + SshRunner). P는 1024-65535로 통일(runPort 수정) | 수용. this-machine 별칭은 `os.hostname()`을 별칭 규칙에 맞게 정규화한 값, 규칙 위반이면 `client-<8hex>` |
+| W6-3 | 로컬 connect는 셸이 아니라 in-process `connectClient`(transport link, `http://127.0.0.1:P`), 실패 시 SSH로 `ocx link revoke --link-id <id>`, 회수 확인 후에만 sidecar 삭제 | 수용 |
+| W6-4 | `src/client/link-state.ts` 신설: K11 다섯 필드, 0600, 손상 거부, 소유 확인 삭제, 시작 시 fail-closed 복구 | 수용 |
+| W6-5 | 클라이언트 소유 `-L` supervisor: client 런타임(src/client/runtime.ts)이 시작·종료, 재시도·종결 실패, 한정 종료, 리스너보다 먼저 정지 | 수용. 기존 src/link/supervisor.ts 재사용(방향 L 레코드 추가 모드) 또는 같은 리듀서를 쓰는 작은 client supervisor 중 구현자가 선택하되 테스트는 동일 |
+| W6-6 | issue(관리자 토큰+신뢰 루프백)와 연결된 machine listener의 읽기 전용 규칙 유지 | 유지 |
+| W6-7 | GUI Child 역할은 standalone일 때만 활성(`isStandaloneRuntime` export), 서버는 hub/client에서 join 시 409 `standalone_required` | 수용. `standalone_required`는 LINK_ERROR_CODES에 추가되어 GUI parity 테스트가 따라온다 |
+| W6-8 | 키 zeroize 표현 제거(K18) | 수용 |
+| W6-9 | 8개 docs 가이드의 "coming soon" 문장을 실제 자식 시작 흐름으로 교체, 테스트 배치 등록, 줄 수 재측정 | 수용 |
+
