@@ -877,7 +877,7 @@ export function formatResponseSpillLines(result: ResponseSpillDirInspection): st
   const lines = [
     `  !!  ${result.orphanFiles} unreferenced response-state spill file(s), ${mb(result.orphanBytes)} reclaimable.`,
     `      ${result.ownedFiles} file(s), ${mb(result.ownedBytes)} still owned by the store or the persisted snapshot.`,
-    "      Orphans are reaped automatically at proxy start; do not delete spill files manually.",
+    "      The running proxy reclaims orphans on its periodic sweep; do not delete spill files manually.",
   ];
   if (result.truncated) lines.push("      Scan stopped at its entry budget; the real total is higher.");
   return lines;

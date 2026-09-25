@@ -661,17 +661,13 @@ function ensureLoaded(): void {
   } catch {
     /* missing/corrupt snapshot: start empty */
   }
-  try { recoverOrphanedResponseSpills(collectReferencedSpillFileNames()); } catch { /* best effort */ }
+  try { recoverOrphanedResponseSpills(ownedSpillFileNames()); } catch { /* best effort */ }
   pruneResponses();
 }
 
 /** Every file name the process still needs: live stubs, deferred unlinks, and queued publications. */
-function collectReferencedSpillFileNames(): Set<string> {
-  const referenced = new Set<string>();
-  for (const state of states.values()) {
-    if (state.kind === "spill") referenced.add(state.spill.fileName);
-  }
-  for (const ref of pendingSpillUnlinks) referenced.add(ref.fileName);
+function ownedSpillFileNames(): Set<string> {
+  const referenced = collectReferencedSpillFileNames(states.values(), pendingSpillUnlinks);
   for (const name of spillQueueReferencedSpillFileNames()) referenced.add(name);
   return referenced;
 }
@@ -681,7 +677,7 @@ export function sweepOrphanedResponseSpills(): number {
   if (!loaded) return 0;
   try {
     return recoverOrphanedResponseSpills(
-      collectReferencedSpillFileNames(),
+      ownedSpillFileNames(),
       responseSpillDirectory(),
       PERIODIC_SPILL_SWEEP_OPTS,
     ).removed;
@@ -1265,7 +1261,7 @@ export function responseStateMetrics(): ResponseStateMetrics {
  * cannot disagree; it never unlinks.
  */
 export function inspectResponseSpillStorage(): ResponseSpillDirInspection {
-  const referenced = collectReferencedSpillFileNames(states.values(), pendingSpillUnlinks);
+  const referenced = ownedSpillFileNames();
   for (const name of snapshotReferencedSpillFileNames(snapshotPath(), SNAPSHOT_FILE_MAX_BYTES)) {
     referenced.add(name);
   }
