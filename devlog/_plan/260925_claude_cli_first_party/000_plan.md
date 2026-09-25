@@ -287,3 +287,11 @@ G-contract (adds to the F-contract; classifier unchanged):
 
 ## Audit cycle 3 round 1 (security PASS, contract FAIL: routingOff copy named only one of three ineligibility causes) — H-fix: cause-neutral routingOff copy in ten locales + GET tests for intercept.enabled=false and runtimeRole client.
 - Audit cycle 3 round 2: security PASS (cycle 3 round 1), contract PASS; roadmap audit closed.
+
+## Maintainer directive (2026-09-26): no local test suites
+
+The maintainer asked that local test suites not be run. From wp4 on, local verification is limited to non-suite
+checks (`bun run typecheck`, `bun run structure:check`, `bun run privacy:scan`, `bun run skill:surface:check`,
+`bun run lint:gui`, GUI `tsc -p tsconfig.app.json --noEmit`); every test file named in 030/040/050 is verified by
+hosted CI on the PR head instead. The `test:changed` run for wp3 was stopped by this directive; wp2/wp3 focused
+receipts were recorded before it.
