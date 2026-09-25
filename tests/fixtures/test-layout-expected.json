@@ -254,6 +254,8 @@
   "claude-messages-endpoint.test.ts": "claude-integration",
   "messages-native.test.ts": "claude-integration",
   "messages-native-decline-trace.test.ts": "claude-integration",
+  "messages-native-oauth.test.ts": "claude-integration",
+  "messages-native-opaque-state.test.ts": "claude-integration",
   "messages-surface-matrix.test.ts": "claude-integration",
   "claude-model-info.test.ts": "claude-integration",
   "claude-models-discovery.test.ts": "claude-integration",
