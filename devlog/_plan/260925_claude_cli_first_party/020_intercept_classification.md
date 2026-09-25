@@ -563,3 +563,13 @@ lines 31-60); the gateway-only `native-claude-desktop-toggle.test.ts` keeps the 
 +  expect(firstPartyDesired(live).desktop).toBe(true);
 +});
 ```
+
+## As built (fb4712a2d9)
+
+- The lifecycle callback is the exported `buildInterceptDesiredClients(config, observed)` in
+  `src/server/index/claude-intercept-lifecycle.ts`, so the disabled-surface relay is unit-testable without a bound
+  listener; behaviour is the diff above.
+- Bun normalizes leading whitespace in request header values, so the "leading space" malformed User-Agent case is
+  covered only by the parser table in `tests/claude-integration/claude-intercept-client-class.test.ts`; the network
+  matrix keeps every other case.
+- Focused receipt before the no-local-suites directive: typecheck + 184 tests across 10 files, 0 fail.
