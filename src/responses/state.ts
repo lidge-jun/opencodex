@@ -707,28 +707,43 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
   try {
     for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
       const revision = stateRevision;
-      const entries: Array<[string, unknown]> = [];
+      // Bounded stubs and tombstones are selected before residents: they are
+      // the only durable references a spill file has, and demotion is
+      // oldest-first, so a single newest-first pass would let resident payloads
+      // consume the whole budget ahead of them.
+      const ordered = [...states].reverse();
+      const persisted = new Map<string, [string, unknown]>();
       let total = 0;
-      // Newest-first so the most recent chains survive both legacy snapshot caps.
-      for (const [id, state] of [...states].reverse()) {
-        let persistable: unknown;
-        if (state.kind === "resident") {
-          const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = state;
-          persistable = resident;
-        } else {
-          const { sizeBytes: _sizeBytes, ...smallState } = state;
-          persistable = smallState;
-        }
-        const persistEntry: [string, unknown] = [id, persistable];
+      for (const [id, state] of ordered) {
+        if (state.kind === "resident") continue;
+        const { sizeBytes: _sizeBytes, ...smallState } = state;
+        const persistEntry: [string, unknown] = [id, smallState];
         // UTF-8 bytes, not UTF-16 code units: multibyte items otherwise slip
         // past both snapshot caps at up to 2x the intended size.
         const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
-        if (state.kind === "resident" && size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
+        if (total + size > snapshotTotalBytes()) continue;
+        total += size;
+        persisted.set(id, persistEntry);
+      }
+      // Residents fill what remains, newest-first so the most recent chains
+      // survive both legacy snapshot caps.
+      for (const [id, state] of ordered) {
+        if (state.kind !== "resident") continue;
+        const { sizeBytes: _sizeBytes, kind: _kind, ...resident } = state;
+        const persistEntry: [string, unknown] = [id, resident];
+        const size = Buffer.byteLength(JSON.stringify(persistEntry), "utf8");
+        if (size > SNAPSHOT_ENTRY_MAX_BYTES) continue;
         if (total + size > snapshotTotalBytes()) break;
         total += size;
-        entries.push(persistEntry);
+        persisted.set(id, persistEntry);
       }
-      entries.reverse();
+      // Emit in map order so reload and count eviction keep the same relative
+      // order as `states`.
+      const entries: Array<[string, unknown]> = [];
+      for (const [id] of states) {
+        const kept = persisted.get(id);
+        if (kept) entries.push(kept);
+      }
       const payload = JSON.stringify({ version: 2, states: entries });
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const payloadDigest = Bun.hash(payload).toString(36);
