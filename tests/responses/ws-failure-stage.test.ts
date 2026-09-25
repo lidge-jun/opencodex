@@ -272,6 +272,43 @@ describe("codexWsUpstreamFetch failure reporting", () => {
     expect(message).toContain("frames=2 control=0 relayed=2");
   });
 
+  test("times the first response event, not only the first frame of any kind", async () => {
+    // #4191: a socket that carried quota frames then a response is "upstream alive
+    // and slow", and first-frame alone cannot separate it from a silent peer.
+    const message = await failureMessage(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({
+        type: "codex.rate_limits", rate_limits: { primary: { used_percent: 10, window_minutes: 10080 } },
+      }) });
+      ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "r1" } }) });
+      ws.emit("close", { code: 1006 });
+    });
+    expect(message).toContain("cause=after-response-started");
+    expect(message).toMatch(/first-frame=\d+ms first-response=\d+ms/);
+  });
+
+  test("a socket that carried only quota frames reports no response event", async () => {
+    installFake(ws => {
+      ws.emit("open", {});
+      ws.emit("message", { data: JSON.stringify({
+        type: "codex.rate_limits", rate_limits: { primary: { used_percent: 10, window_minutes: 10080 } },
+      }) });
+      ws.emit("close", { code: 1006 });
+    });
+    const response = await codexWsUpstreamFetch(
+      CODEX_URL,
+      streamingInit(),
+      noFallback as unknown as typeof fetch,
+      BOUNDED_WS_RUNTIME,
+    );
+    const record = JSON.parse(JSON.stringify(readCodexWsStage(response))) as Record<string, unknown>;
+    expect(typeof record.firstFrameMs).toBe("number");
+    expect(record.firstResponseMs).toBeNull();
+    const message = await failureMessageOf(response);
+    expect(message).toContain("cause=no-response-event");
+    expect(message).toContain("first-response=n/a");
+  });
+
   test("the prelude timeout says which stage ran out of budget", async () => {
     jest.useFakeTimers();
     const opened = Promise.withResolvers<void>();
