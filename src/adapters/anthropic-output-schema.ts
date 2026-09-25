@@ -135,3 +135,28 @@ export function isAnthropicOutputSchema(schema: Record<string, unknown>): boolea
     return false;
   }
 }
+
+/**
+ * Does every object in this schema list ALL of its properties as required?
+ *
+ * OpenAI's structured-output strict mode demands exactly that, and rejects anything else with
+ * `'required' is required to be supplied and to be an array including every key in properties`.
+ * Anthropic has no such rule, so a caller's legal optional field makes an otherwise identical
+ * schema a 400 on one vendor and fine on the other.
+ *
+ * A caller that marks a field optional means it. Rewriting `required` to satisfy strict mode
+ * would silently change the contract the caller asked for, so the only honest answer is to stop
+ * claiming strict for these schemas -- the schema is still sent and still honoured as guidance.
+ */
+export function satisfiesOpenAiStrictSchema(value: unknown): boolean {
+  if (Array.isArray(value)) return value.every(satisfiesOpenAiStrictSchema);
+  if (!value || typeof value !== "object") return true;
+  const node = value as Record<string, unknown>;
+  const properties = node.properties;
+  if (isRecord(properties)) {
+    const keys = Object.keys(properties);
+    const required = Array.isArray(node.required) ? node.required : [];
+    if (keys.some(key => !required.includes(key))) return false;
+  }
+  return Object.values(node).every(satisfiesOpenAiStrictSchema);
+}
