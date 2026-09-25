@@ -67,6 +67,8 @@ import { handleResponses } from "./responses";
 import { upstreamWireForAdapter } from "../protocols/contract";
 import { createProtocolEnvelope, type ProtocolEnvelope } from "../protocols/envelope";
 import { featuresFromMessagesBody, type ProtocolFeature } from "../protocols/features";
+import { credentialDomainFor, messagesBodyHasOpaqueState } from "../protocols/opaque-state";
+import { hasAnthropicFailoverQuorum } from "../oauth/anthropic-routing";
 import { checkRepresentable, unrepresentableMessage } from "../protocols/guard";
 import { requestPathForLane } from "../protocols/path";
 import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols/settings";
@@ -990,6 +992,8 @@ async function handleClaudeMessagesWithBudget(
   // passthrough above was decided on the caller's own credential and never reaches this point.
   const nativeSelector: NativeMessagesSelector = {
     effortRow: !!effortRow, fastRow: !!fastRow, routeSelector: String(internalBody.model ?? ""), claudeCode: cc,
+    // PF-10: a stored second OAuth account turns on the bridge's rotation, so it stays there.
+    ...(settledRoute?.provider.authMode === "oauth" ? { oauthFailoverQuorum: hasAnthropicFailoverQuorum() } : {}),
   };
   const nativeDecline = settledRoute && isRec(anthropicBody)
     ? nativeMessagesDeclineReason(settledRoute, anthropicBody, config, nativeSelector)
@@ -1019,6 +1023,15 @@ async function handleClaudeMessagesWithBudget(
       return anthropicErrorResponse(400, unrepresentableMessage(verdict.features), "invalid_request_error");
     }
   }
+  // PF-10: opaque thinking state reaches only first-party Anthropic; under `reject` a native
+  // route to anyone else refuses the request instead of sending it without that state.
+  if (envelope && nativeMessagesRoute && !credentialDomainFor(nativeMessagesRoute.provider)?.firstPartyAnthropic
+    && messagesBodyHasOpaqueState(anthropicBody as Rec)) {
+    markProtocolBlocked(logCtx, { inbound: "messages", reasonCodes: ["feature-unrepresentable", "opaque-state-stripped"], features: messagesFeatures });
+    logCtx.errorCode = "unsupported_feature";
+    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+    return anthropicErrorResponse(400, "The selected route cannot carry thinking signatures or redacted_thinking blocks", "invalid_request_error");
+  }
   if (nativeMessagesRoute) {
     markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
     let nativeBody: Rec;
@@ -1034,6 +1047,8 @@ async function handleClaudeMessagesWithBudget(
     return await handleNativeMessages({
       req, config, logCtx, ...(logIds ? { logIds } : {}),
       route: nativeMessagesRoute, body: nativeBody, requestedModel, translatorBudget, selector: nativeSelector,
+      // The one caller header the native lane is given; the builder allowlists it.
+      callerAnthropicBeta: req.headers.get("anthropic-beta"),
     });
   }
 
