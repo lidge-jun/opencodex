@@ -254,7 +254,7 @@ function uuidFromHex(hex32: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
 }
 
-function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined {
+export function anthropicUsageToOcx(usage: Rec | undefined): { inputTokens: number; outputTokens: number; cachedInputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number } | undefined {
   if (!usage) return undefined;
   const num = (v: unknown) => typeof v === "number" ? v : 0;
   const hasCache = usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined;
@@ -448,7 +448,7 @@ export function tapAnthropicSseForLog(
  * An empty id has no representable wire form, and forwarding `""` is what Anthropic
  * rejects (#1767), so the request fails locally with a 400 before any upstream fetch.
  */
-function sanitizePassthroughToolCallIds(messages: unknown[]): void {
+export function sanitizePassthroughToolCallIds(messages: unknown[]): void {
   const blocks: Rec[] = [];
   for (const message of messages) {
     if (!isRec(message) || !Array.isArray(message.content)) continue;
