@@ -1633,7 +1633,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.refreshQuota": "刷新额度",
   "codexAuth.ultraFastTitle": "Ultra Fast 服务层级",
   "codexAuth.mainHardLockTitle": "主账户用量达 98% 时阻止请求",
-  "codexAuth.mainHardLockDesc": "有 5 小时额度时以该额度为准，否则使用周额度（仅有月额度的账户使用月额度）。新用量重置为 0% 后会自动解除阻止，保护设置仍保持开启。默认开启。",
+  "codexAuth.mainHardLockDesc": "5 小时额度或周额度任一达到 98% 即阻止（仅有月额度的账户使用月额度）。所有触发阻止的额度都降到 98% 以下后自动解除，保护设置仍保持开启。默认开启。",
   "codexAuth.mainHardLockConfirmTitle": "开启主账户 98% 保护？",
   "codexAuth.mainHardLockConfirmBody": "阻止期间，主账户也无法使用 Luna Reserve。普通额度未耗尽时，Reserve 可能不会激活。附加账户和其他提供商仍可使用。正在进行的请求、无法匹配的钥匙串凭据以及此代理之外的流量不受此保护。",
   "codexAuth.mainHardLockConfirm": "开启保护",

@@ -1652,7 +1652,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.refreshQuota": "할당량 새로고침",
   "codexAuth.ultraFastTitle": "Ultra Fast 서비스 티어",
   "codexAuth.mainHardLockTitle": "메인 계정 98% 차단",
-  "codexAuth.mainHardLockDesc": "5h 창이 있으면 5h, 없으면 주간 사용률을 기준으로 합니다. 월간 전용 계정은 월간을 봅니다. 0%로 리셋되면 자동으로 풀리고 설정은 유지됩니다. 기본값으로 켜져 있습니다.",
+  "codexAuth.mainHardLockDesc": "5h 창이나 주간 창 중 하나라도 98%에 닿으면 차단합니다. 월간 전용 계정은 월간을 봅니다. 차단한 창이 모두 98% 아래로 내려오면 자동으로 풀리고 설정은 유지됩니다. 기본값으로 켜져 있습니다.",
   "codexAuth.mainHardLockConfirmTitle": "메인 계정 98% 차단을 켤까요?",
   "codexAuth.mainHardLockConfirmBody": "차단 중에는 메인 계정의 Luna Reserve도 사용할 수 없습니다. 일반 사용량이 소진되지 않으면 Reserve가 활성화되지 않을 수 있습니다. 추가 계정과 다른 공급자는 계속 사용할 수 있습니다. 진행 중 요청, 식별되지 않은 키링 계정, 프록시 밖 요청에는 적용되지 않습니다.",
   "codexAuth.mainHardLockConfirm": "확인하고 켜기",

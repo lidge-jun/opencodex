@@ -1590,7 +1590,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.refreshQuota": "重新整理額度",
   "codexAuth.ultraFastTitle": "Ultra Fast 服務層級",
   "codexAuth.mainHardLockTitle": "主帳戶用量達 98% 時阻擋請求",
-  "codexAuth.mainHardLockDesc": "有 5 小時額度時以該額度為準，否則使用週額度（僅有月額度的帳戶使用月額度）。新用量重設為 0% 後會自動解除阻擋，保護設定仍保持開啟。預設開啟。",
+  "codexAuth.mainHardLockDesc": "5 小時額度或週額度任一達到 98% 即阻擋（僅有月額度的帳戶使用月額度）。所有觸發阻擋的額度都降到 98% 以下後自動解除，保護設定仍保持開啟。預設開啟。",
   "codexAuth.mainHardLockConfirmTitle": "開啟主帳戶 98% 保護？",
   "codexAuth.mainHardLockConfirmBody": "阻擋期間，主帳戶也無法使用 Luna Reserve。一般額度未用盡時，Reserve 可能不會啟用。新增帳戶與其他供應商仍可使用。進行中的請求、無法比對的鑰匙圈憑證，以及此代理之外的流量不受此保護。",
   "codexAuth.mainHardLockConfirm": "開啟保護",

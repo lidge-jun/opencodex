@@ -150,10 +150,11 @@ account usable ([#5694](https://github.com/lidge-jun/opencodex/issues/5694)). Th
 Reserve: while the block is in force, Reserve on that main account cannot activate. To let the main
 account run to exhaustion and hand over to Reserve, turn the switch off.
 
-The policy uses the **5h window when present**, otherwise the weekly window. Monthly-only
-accounts use their monthly window. It does not take the highest percentage across windows.
-A fresh **0%** observation automatically releases the block while the switch stays on; the next
-98% observation blocks again. Unknown usage does not fabricate a zero, and a missing reading does
+The **5h window and the weekly window each block on their own**: either one reaching 98% blocks
+immediately, even while the other still has headroom. Monthly-only accounts use their monthly
+window. The block releases automatically, with the switch still on, once every blocking window
+reports a fresh reading below 98% (a 0% reset counts); the next 98% observation blocks again.
+An unreadable 5h reading cannot hide a weekly block. Unknown usage does not fabricate a zero, and a missing reading does
 not erase an already measured blocking tuple. A predicted reset time alone does not unlock it.
 While blocked, the existing once-per-minute background cycle checks fresh owned usage; failed or
 invalid readings retain the block. Other pause, reauthentication, and upstream limits remain independent.

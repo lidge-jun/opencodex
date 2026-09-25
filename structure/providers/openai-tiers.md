@@ -289,8 +289,12 @@ Regression coverage lives in `tests/codex-integration/codex-quota-parser-parity.
 `tests/usage/quota-reset-observation.test.ts`, and `tests/usage/quota-reset-seen-store.test.ts`.
 
 `codexMainAccountHardLock` is a local admission policy that is **on by default** since #5694, at
-`MAIN_ACCOUNT_HARD_LOCK_PERCENT` = 98% of the 5h/short window when present, otherwise the weekly
-window (monthly for monthly-only accounts). It does not take the maximum across those windows.
+`MAIN_ACCOUNT_HARD_LOCK_PERCENT` = 98%. The 5h/short window and the weekly window each govern on
+their own: either one at 98% blocks, and an unknown or invalid reading in one never hides a block
+in the other (unknown still admits). Monthly governs only a monthly-only account. A block holds
+until every blocking window reads lower, so its reported `resetAt` is the latest blocking reset,
+omitted when any blocking window has none. In the policy snapshot a reset-only weekly observation
+keeps a blocking weekly tuple, mirroring the short-window rule; monthly-primary evidence still replaces it.
 It blocks newly admitted identity-matched main-account requests. Pool alternatives remain eligible;
 explicit main selection and stored Direct substitution do not override it. It neither pauses the
 account nor clears upstream cooldown/reauth state, and management quota refresh remains available.

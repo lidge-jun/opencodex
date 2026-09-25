@@ -2059,7 +2059,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.refreshQuota": "クォータを更新",
   "codexAuth.ultraFastTitle": "Ultra Fast サービスティア",
   "codexAuth.mainHardLockTitle": "メインアカウントを98%で停止",
-  "codexAuth.mainHardLockDesc": "5時間枠があればその使用率、なければ週間使用率を使います（月間のみのアカウントは月間）。0%にリセットされると自動解除し、設定は有効のままです。既定でオンです。",
+  "codexAuth.mainHardLockDesc": "5時間枠と週間枠のどちらかが98%に達すると停止します（月間のみのアカウントは月間）。停止の原因になった枠がすべて98%未満になると自動解除し、設定は有効のままです。既定でオンです。",
   "codexAuth.mainHardLockConfirmTitle": "メインアカウントの98%保護を有効にしますか？",
   "codexAuth.mainHardLockConfirmBody": "停止中はメインアカウントのLuna Reserveも使えません。通常枠を使い切らない場合、Reserveが有効にならないことがあります。追加アカウントや他のプロバイダーは引き続き使えます。実行中のリクエスト、照合できないキーチェーン認証情報、このプロキシ外の通信は対象外です。",
   "codexAuth.mainHardLockConfirm": "保護を有効にする",

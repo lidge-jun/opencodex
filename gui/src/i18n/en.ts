@@ -2204,7 +2204,7 @@ export const en = {
   "codexAuth.refreshQuota": "Refresh quotas",
   "codexAuth.ultraFastTitle": "Ultra Fast service tier",
   "codexAuth.mainHardLockTitle": "Block main account at 98%",
-  "codexAuth.mainHardLockDesc": "Uses 5h usage when available, otherwise weekly (monthly for monthly-only accounts). A fresh 0% reading unlocks automatically; protection stays on. On by default.",
+  "codexAuth.mainHardLockDesc": "Blocks when either the 5h or the weekly window reaches 98% (monthly for monthly-only accounts). Unlocks automatically once every blocking window reads below 98%; protection stays on. On by default.",
   "codexAuth.mainHardLockConfirmTitle": "Enable the main account 98% lock?",
   "codexAuth.mainHardLockConfirmBody": "While blocked, the main account cannot use Luna Reserve. Keeping normal usage below exhaustion may prevent Reserve activation. Added accounts and other providers remain available. Running requests, unmatched keyring credentials, and traffic outside this proxy are not protected.",
   "codexAuth.mainHardLockConfirm": "Enable protection",

@@ -2136,7 +2136,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.refreshQuota": "Actualiser les quotas",
   "codexAuth.ultraFastTitle": "Niveau de service Ultra Fast",
   "codexAuth.mainHardLockTitle": "Bloquer le compte principal à 98 %",
-  "codexAuth.mainHardLockDesc": "Utilise la fenêtre de 5 h si elle existe, sinon la semaine (le mois pour les comptes mensuels uniquement). Une nouvelle mesure à 0 % lève le blocage automatiquement ; la protection reste active. Activé par défaut.",
+  "codexAuth.mainHardLockDesc": "Bloque dès que la fenêtre de 5 h ou la fenêtre hebdomadaire atteint 98 % (le mois pour les comptes mensuels uniquement). Le blocage se lève automatiquement quand toutes les fenêtres bloquantes repassent sous 98 % ; la protection reste active. Activé par défaut.",
   "codexAuth.mainHardLockConfirmTitle": "Activer la protection à 98 % du compte principal ?",
   "codexAuth.mainHardLockConfirmBody": "Pendant le blocage, Luna Reserve est également indisponible sur le compte principal. Ne pas épuiser le quota normal peut empêcher l’activation de Reserve. Les comptes ajoutés et les autres fournisseurs restent utilisables. Les requêtes en cours, les identifiants du trousseau non reconnus et le trafic hors de ce proxy ne sont pas protégés.",
   "codexAuth.mainHardLockConfirm": "Activer la protection",

@@ -2159,7 +2159,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.refreshQuota": "Làm mới quota",
   "codexAuth.ultraFastTitle": "Dịch vụ cấp độ Ultra Fast",
   "codexAuth.mainHardLockTitle": "Khóa tài khoản chính ở mức 98%",
-  "codexAuth.mainHardLockDesc": "Sử dụng mức 5h nếu có, nếu không thì dùng hàng tuần (hoặc hàng tháng đối với tài khoản chỉ có hàng tháng). Một kết quả đọc 0% mới sẽ tự động mở khóa; bảo vệ vẫn tiếp tục bật. Mặc định bật.",
+  "codexAuth.mainHardLockDesc": "Chặn khi mức 5h hoặc mức hàng tuần chạm 98% (hàng tháng đối với tài khoản chỉ có hàng tháng). Tự động mở khóa khi mọi mức đang chặn đều xuống dưới 98%; bảo vệ vẫn tiếp tục bật. Mặc định bật.",
   "codexAuth.mainHardLockConfirmTitle": "Bật khóa 98% tài khoản chính?",
   "codexAuth.mainHardLockConfirmBody": "Khi bị khóa, tài khoản chính không thể sử dụng Luna Reserve. Giữ lượng dùng dưới mức cạn kiệt có thể ngăn việc kích hoạt Reserve. Các tài khoản được thêm vào và provider khác vẫn khả dụng. Các request đang chạy, credential chưa khớp, và lưu lượng ngoài proxy này không được bảo vệ.",
   "codexAuth.mainHardLockConfirm": "Bật bảo vệ",

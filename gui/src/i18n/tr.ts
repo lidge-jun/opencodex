@@ -2161,7 +2161,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.refreshQuota": "Kotaları yenile",
   "codexAuth.ultraFastTitle": "Ultra Fast hizmet katmanı",
   "codexAuth.mainHardLockTitle": "Ana hesabı %98’de durdur",
-  "codexAuth.mainHardLockDesc": "Varsa 5 saatlik, yoksa haftalık kullanım esas alınır (yalnızca aylık hesaplarda aylık kullanım). Yeni %0 ölçümü engeli otomatik kaldırır; koruma açık kalır. Varsayılan olarak açık.",
+  "codexAuth.mainHardLockDesc": "5 saatlik veya haftalık pencereden biri %98'e ulaştığında engeller (yalnızca aylık hesaplarda aylık kullanım). Engelleyen tüm pencereler %98'in altına indiğinde engel otomatik kalkar; koruma açık kalır. Varsayılan olarak açık.",
   "codexAuth.mainHardLockConfirmTitle": "Ana hesap için %98 koruması açılsın mı?",
   "codexAuth.mainHardLockConfirmBody": "Engel sürerken ana hesabın Luna Reserve erişimi de kullanılamaz. Normal kotanın tükenmemesi Reserve’in etkinleşmesini önleyebilir. Ek hesaplar ve diğer sağlayıcılar kullanılmaya devam eder. Çalışan istekler, eşleştirilemeyen anahtarlık kimlik bilgileri ve bu proxy dışındaki trafik korunmaz.",
   "codexAuth.mainHardLockConfirm": "Korumayı aç",

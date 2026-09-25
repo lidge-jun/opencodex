@@ -1616,7 +1616,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.refreshQuota": "Kontingente aktualisieren",
   "codexAuth.ultraFastTitle": "Ultra-Fast-Diensttarif",
   "codexAuth.mainHardLockTitle": "Hauptkonto bei 98 % sperren",
-  "codexAuth.mainHardLockDesc": "Verwendet das 5-Stunden-Fenster, falls vorhanden, sonst das Wochenfenster (bei rein monatlichen Konten das Monatsfenster). Ein neuer Wert von 0 % hebt die Sperre automatisch auf; der Schutz bleibt aktiv. Standardmäßig aktiviert.",
+  "codexAuth.mainHardLockDesc": "Sperrt, sobald das 5-Stunden-Fenster oder das Wochenfenster 98 % erreicht (bei rein monatlichen Konten das Monatsfenster). Die Sperre hebt sich automatisch auf, wenn alle sperrenden Fenster unter 98 % liegen; der Schutz bleibt aktiv. Standardmäßig aktiviert.",
   "codexAuth.mainHardLockConfirmTitle": "98-%-Schutz für das Hauptkonto aktivieren?",
   "codexAuth.mainHardLockConfirmBody": "Während der Sperre ist auch Luna Reserve für das Hauptkonto nicht verfügbar. Ohne vollständigen Verbrauch des normalen Kontingents wird Reserve möglicherweise nicht aktiviert. Zusätzliche Konten und andere Anbieter bleiben nutzbar. Laufende Anfragen, nicht zugeordnete Schlüsselbund-Zugangsdaten und Anfragen außerhalb dieses Proxys sind nicht geschützt.",
   "codexAuth.mainHardLockConfirm": "Schutz aktivieren",
