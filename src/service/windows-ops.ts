@@ -200,11 +200,12 @@ export interface ElevatedSchedulerStagingDeps {
  *   is the atomic step here — there is no replace path to race, because every path is
  *   inside a directory that did not exist a moment ago. The explicit check is what keeps
  *   that guarantee from depending on a reading of `O_EXCL` semantics.
- * - **Tamper evidence.** The digest is taken over the exact bytes written, and the
- *   elevated script recomputes it over the bytes it reads. An ACL cannot cover this:
- *   a process running as the same user has the same SID and can rewrite the file, so
- *   the digest is the only thing that makes such a swap fail closed rather than
- *   silently register a different task definition.
+ * - **Pinned namespace and content.** Before UAC, the launcher opens every ancestor and
+ *   payload without following reparse points. Ancestor handles share read/write but
+ *   deny delete, so the namespace cannot be redirected while sibling payloads can
+ *   still be written; payload handles deny write/delete outright. Those handles stay
+ *   open until elevation exits. The digest then verifies the exact,
+ *   length-bounded bytes read by the elevated process.
  *
  * Payloads are UTF-16LE with no BOM, and the elevated process decodes them straight into
  * `Register-ScheduledTask`. What is hashed is therefore exactly what is registered, with
@@ -266,7 +267,7 @@ export function stageElevatedSchedulerRegistration(
         throw new Error(`Refusing to stage an elevated Task Scheduler payload through a redirected path: ${path}`);
       }
       hardenPath(path);
-      return { path, sha256: createHash("sha256").update(bytes).digest("hex") };
+      return { path, byteLength: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
     };
     return {
       xml: stage("register.xml", xml),

@@ -93,6 +93,7 @@ function canSerializeOpenAIChatServiceTier(
 
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
   let lastRequestedModelId: string | undefined;
+  let freeformToolsByWireName = new Map<string, { name: string; namespace?: string }>();
   return withOpenAIChatToolNames(toolNames => ({
     name: "openai-chat",
 
@@ -102,6 +103,8 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
       lastRequestedModelId = parsed.modelId;
       const { url, headers, hasCredential } = openAIChatTransport(provider);
       const messages = toolNames.messages(parsed, provider.baseUrl, messagesToChatFormat(parsed, provider));
+      freeformToolsByWireName = new Map(parsed.context.tools?.filter(tool => tool.freeform)
+        .map(tool => [toolNames.registry().alias(tool), { name: tool.name, namespace: tool.namespace }] as const) ?? []);
       const finish = (): AdapterRequest => {
         const tools = toolsToChatFormatForProvider(parsed, provider, toolNames.registry());
         const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools, provider, toolNames.registry());
@@ -338,7 +341,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           }
         }
         // Held markup is released only now, as one batch per response: the doubled-input repair needs every call.
-        const references = reconcileStructuredToolCalls(calls.map(call => ({ wireName: call.name, restoredName: toolNames.restore(call.name), argumentsText: call.args })), toolCallContent.current());
+        const references = reconcileStructuredToolCalls(calls.map(call => ({ wireName: call.name, restoredName: toolNames.restore(call.name), argumentsText: call.args, freeformTool: freeformToolsByWireName.get(call.name) })), toolCallContent.current());
         calls.forEach((call, index) => { call.args = references[index]!.argumentsText; });
         yield* toolCallContent.drain(references);
         for (const call of calls) {
@@ -773,7 +776,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
         const contentEnd = events.length;
         const answerText = events.slice(contentStart).map(event => (event.type === "text_delta" ? event.text : "")).join("");
         // Each call holds the delta event it emitted, so the batch repair sets its arguments later.
-        const structuredCalls: { wireName: string; restoredName: string; argumentsText: string; delta: Extract<AdapterEvent, { type: "tool_call_delta" }> }[] = [];
+        const structuredCalls: { wireName: string; restoredName: string; argumentsText: string; freeformTool?: { name: string; namespace?: string }; delta: Extract<AdapterEvent, { type: "tool_call_delta" }> }[] = [];
         const rawToolCalls = msg.tool_calls;
         if (rawToolCalls !== undefined && rawToolCalls !== null) {
           if (!Array.isArray(rawToolCalls)) {
@@ -797,7 +800,7 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
               return [invalidToolCallsEvent(rawToolCalls, "response", usage)];
             }
             const delta: Extract<AdapterEvent, { type: "tool_call_delta" }> = { type: "tool_call_delta", arguments: args };
-            structuredCalls.push({ wireName: name, restoredName: toolNames.restore(name), argumentsText: args, delta });
+            structuredCalls.push({ wireName: name, restoredName: toolNames.restore(name), argumentsText: args, freeformTool: freeformToolsByWireName.get(name), delta });
             events.push({ type: "tool_call_start", id, name: toolNames.restore(name) }, delta, { type: "tool_call_end" });
           }
         }

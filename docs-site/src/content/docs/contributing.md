@@ -12,19 +12,23 @@ Bun runtime for users, but this checkout's scripts run through your local Bun in
 git clone https://github.com/lidge-jun/opencodex.git
 cd opencodex
 bun install
-bun run setup:hooks  # install post-merge; retire the managed pre-push hook
+bun run setup:hooks  # retire the managed pre-push and post-merge hooks
 bun run dev:proxy    # proxy API in dev mode
 bun run dev:gui      # dashboard dev server (another terminal)
 bun run typecheck    # bun x tsc --noEmit
 bun run test        # full suite (default)
 ```
 
-`bun run setup:hooks` installs only `post-merge` and removes an unmodified retired managed
-`pre-push` hook, preserving custom hooks. A pre-push hook is no longer required.
+`bun run setup:hooks` removes an unmodified retired managed `pre-push` or `post-merge`
+hook, preserving custom hooks. A pre-push hook is no longer required.
 `bun run prepush` remains an optional manual check.
 
 `bun run dev` remains an alias for `bun run dev:proxy`. The dashboard dev server is `bun run dev:gui`;
 the packaged dashboard at `GET /` is produced by `bun run build:gui` (`gui/dist`).
+
+The retired `post-merge` hook used to rebuild `gui/dist` after every merge. With the hook gone,
+a merge that changes `gui/` leaves the packaged dashboard stale until you run `bun run postmerge`
+(or `bun run build:gui`) yourself — the dev server is unaffected because it rebuilds on demand.
 
 ## Build and test commands
 

@@ -96,6 +96,47 @@ export const HEAD_CAPABILITIES: readonly HeadCapability[] = [
  */
 export const CAPABILITIES: readonly Capability[] = [
   {
+    command: ["link", "port"],
+    summary: "Allocate a free loopback port for a remote home link.",
+    routes: [],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the selected port as JSON." }],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["link", "issue"],
+    summary: "Issue one link credential and record its tunnel metadata.",
+    routes: [{ method: "POST", path: "/api/link/issue" }],
+    flags: [
+      { name: "--alias", value: "string", required: true, summary: "SSH host alias for the linked machine." },
+      { name: "--tunnel-port", value: "number", required: true, summary: "Remote loopback port for the reverse tunnel." },
+      { name: "--json", value: "boolean", summary: "Emit the issue result as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["Requires the running proxy's admin token on loopback; the one-time data key is printed only on stdout."],
+  },
+  {
+    command: ["link", "status"],
+    summary: "Read link listener and tunnel status.",
+    routes: [{ method: "GET", path: "/api/link/status" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the K16 status payload as JSON." }],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["link", "revoke"],
+    summary: "Revoke a link credential and remove its link record.",
+    routes: [{ method: "DELETE", path: "/api/link/{id}" }],
+    flags: [
+      { name: "--link-id", value: "string", required: true, summary: "Link id to revoke." },
+      { name: "--json", value: "boolean", summary: "Emit the revoked link id as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["Requires the running proxy's admin token on loopback."],
+  },
+  {
     "command": [
       "remote-workspace",
       "pair"

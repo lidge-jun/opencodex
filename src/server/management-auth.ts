@@ -71,6 +71,7 @@ import {
   type GuiSessionRecord,
   type GuiSessionRequestContext,
 } from "./gui-session";
+import { hasLocalDesktopSnapshotCapability } from "./local-desktop-snapshot-auth";
 export type { GuiSessionBootstrap, GuiSessionRequestContext } from "./gui-session";
 
 const LOCAL_READ_REPLAY_LIMIT = 256;
@@ -260,6 +261,17 @@ export function issueGuiSession(
   return issueGuiSessionFromState(req, config, state, context);
 }
 
+/** Returns the recorded issuance for the session that authorized this request. */
+export function managementSessionIssuance(
+  req: Request,
+  state: ManagementAuthState,
+): import("./gui-session").GuiSessionIssuance | null {
+  if (!state.available) return null;
+  const credential = requestManagementCredential(req);
+  if (!credential || equalSecret(credential, state.token)) return null;
+  return state.sessions.get(credential)?.issuance ?? null;
+}
+
 export interface ManagementSessionControl {
   revokeCurrent(req: Request): boolean;
   /** Revalidate a long-lived request against current authority, without cached admission or renewal. */
@@ -315,8 +327,8 @@ export function createManagementSessionControl(state: ManagementAuthState): Mana
  * per-session CSRF token match. Consent-bearing routes must key off this value
  * rather than off request headers, which the token holder can forge freely.
  * The capability principals are process-scoped HMACs bound to the current process
- * PID and listening port. Local reads are accepted only for two exact GET paths;
- * restart and provider reload remain separate wire contracts for their exact POSTs.
+ * PID and listening port. Local reads are accepted only for allowlisted GET paths;
+ * snapshot, restart and provider reload use separate contracts for their exact POSTs.
  */
 export type ManagementPrincipal =
   | "admin-token"
@@ -324,6 +336,7 @@ export type ManagementPrincipal =
   | "gui-session"
   | "gui-pair-capability"
   | "local-read-capability"
+  | "local-desktop-snapshot-capability"
   | "local-provider-reload-capability"
   | "local-aside-sync-capability"
   | "system-restart-capability";
@@ -375,8 +388,6 @@ function hasLocalReadCapability(
   } catch {
     return false;
   }
-  // Do not let a future query-bearing variant silently inherit this narrow grant.
-  if (url.search !== "") return false;
   const expectedPid = parseExpectedLocalManagementPid(
     req.headers.get(LOCAL_MANAGEMENT_EXPECTED_PID_HEADER),
   );
@@ -391,7 +402,9 @@ function hasLocalReadCapability(
     local.attestationSecret,
     req.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER),
     req.method,
-    url.pathname,
+    // The query is signed into the capability, so a grant for one range cannot be replayed
+    // against another — the grant stays exactly as narrow as the request it was minted for.
+    url.pathname + url.search,
     local.pid,
     local.port,
     expiresAt,
@@ -550,6 +563,7 @@ function resolveManagementAdmission(
   if (hasSystemRestartCapability(req, local)) principal = "system-restart-capability";
   else if (hasLocalAsideSyncCapability(req, local)) principal = "local-aside-sync-capability";
   else if (hasLocalProviderReloadCapability(req, local)) principal = "local-provider-reload-capability";
+  else if (hasLocalDesktopSnapshotCapability(req, local)) principal = "local-desktop-snapshot-capability";
   else if (hasLocalReadCapability(req, local)) principal = "local-read-capability";
   else if (hasGuiPairCapability(req, local)) principal = "gui-pair-capability";
   else if (state.available) {

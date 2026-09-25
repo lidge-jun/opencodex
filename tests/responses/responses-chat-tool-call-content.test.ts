@@ -14,10 +14,11 @@ async function checkEchoedToolCall(
   repeated: boolean,
   trailingNewline = false,
   newlineJoinedInput = false,
+  rawFreeform = false,
 ): Promise<void> {
   const savedFetch = globalThis.fetch;
   const script = "const result = await tools.exec_command({cmd: \"pwd\"});\ntext(result.output);";
-  const leaked = `<tool_call><function=exec>${script}\n</parameter></function></tool_call>`;
+  const leaked = `<tool_call><function=exec>${script}${rawFreeform ? "" : "\n"}</parameter></function></tool_call>`;
   const commentary = "I'll run it now.\n";
   const content = commentary + leaked + (repeated ? leaked : "") + (trailingNewline ? "\n" : "");
   const split = commentary.length + 5;
@@ -32,7 +33,7 @@ async function checkEchoedToolCall(
             id: "call_exec",
             function: {
               name: "exec",
-              arguments: repeated
+              arguments: rawFreeform ? script : repeated
                 ? JSON.stringify({ input: script + (newlineJoinedInput ? "\n" : "") + script })
                 : script + JSON.stringify({ input: script }),
             },
@@ -97,6 +98,8 @@ async function checkEchoedToolCall(
 }
 
 test("/v1/responses suppresses one echoed block", () => checkEchoedToolCall(false));
+test("/v1/responses suppresses one echoed block with raw freeform arguments", () =>
+  checkEchoedToolCall(false, false, false, true));
 test("/v1/responses suppresses two echoed blocks with doubled input", () => checkEchoedToolCall(true));
 test("/v1/responses suppresses trailing newline and repairs newline-joined doubled input", () =>
   checkEchoedToolCall(true, true, true));

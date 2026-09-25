@@ -80,6 +80,7 @@ import { handleClaudeDesktopPickerRoutes } from "./management/claude-desktop-pic
 import { handleCursorIntegrationRoutes } from "./management/cursor-integration-routes";
 import type { ManagementContext } from "./management/context";
 import type { ManagementPrincipal, ManagementSessionControl } from "./management-auth";
+import type { ManagementRequestIngress } from "./management/context";
 export type { ManagementApiDeps } from "./management/context";
 import { fetchAllModels } from "./management/shared";
 import { CatalogGatherBusyError } from "../codex/catalog/provider-fetch";
@@ -184,6 +185,12 @@ async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Prom
   return handleRemoteWorkspaceRoutes(ctx);
 }
 
+async function handleLinkRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/link")) return null;
+  const { handleLinkRoutes } = await import("./management/link-routes");
+  return handleLinkRoutes(ctx);
+}
+
 export async function handleManagementAPI(
   req: Request,
   url: URL,
@@ -191,6 +198,7 @@ export async function handleManagementAPI(
   deps: ManagementApiDeps = {},
   principal?: ManagementPrincipal,
   sessionControl?: ManagementSessionControl,
+  requestIngress: ManagementRequestIngress = { trustedLoopback: false },
 ): Promise<Response | null> {
   if (!isAllowedManagementOrigin(req, config)) {
     return jsonResponse({ error: "cross-origin request blocked" }, 403, req, config);
@@ -273,10 +281,16 @@ export async function handleManagementAPI(
       }
     } catch { /* best-effort */ }
   }
-  const ctx: ManagementContext = { req, url, config, deps, version: VERSION, principal, sessionControl, convergeCodexCatalog, syncClaudeAgentDefsBestEffort };
+  const ctx: ManagementContext = {
+    req, url, config, deps, version: VERSION, principal, sessionControl,
+    trustedLoopbackIngress: requestIngress.trustedLoopback,
+    guiSessionIssuance: requestIngress.guiSessionIssuance ?? null,
+    convergeCodexCatalog, syncClaudeAgentDefsBestEffort,
+  };
   let routed: Response | null | undefined;
   try {
     routed = handleSessionRoutes(ctx)
+    ??     (await handleLinkRoutesOnDemand(ctx))
     ??     (await handleRemoteWorkspaceRoutesOnDemand(ctx))
     ??     (await handleConfigRoutes(ctx))
     ??     (await handleStorageLogGuardRoutes(ctx))

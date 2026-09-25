@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
 type WorkflowStep = {
@@ -38,6 +41,43 @@ function triggerPaths(workflowText: string, trigger: string, until: string): str
     .map(line => line.trim())
     .filter(line => line.startsWith('- "'))
     .map(line => line.slice(3, -1));
+}
+
+/** Keep credentials and shell startup hooks out of mocked release subprocesses. */
+function releaseTestEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env: Record<string, string> = { PATH: "", BASH_ENV: "", ENV: "" };
+  for (const key of ["SystemRoot", "WINDIR", "TEMP", "TMP"]) {
+    if (process.env[key]) env[key] = process.env[key]!;
+  }
+  return { ...env, ...extra };
+}
+
+/** Prefer native Git Bash on Windows; never invoke the System32 WSL launcher. */
+function releaseTestBash(): string | null {
+  const candidates: string[] = [];
+  if (process.platform === "win32") {
+    const git = Bun.which("git");
+    if (git) candidates.push(join(dirname(git), "..", "bin", "bash.exe"),
+      join(dirname(git), "..", "usr", "bin", "bash.exe"));
+    for (const root of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) {
+      if (root) candidates.push(join(root, "Git", "bin", "bash.exe"));
+    }
+    if (process.env.LOCALAPPDATA) candidates.push(
+      join(process.env.LOCALAPPDATA, "Programs", "Git", "bin", "bash.exe"));
+  }
+  const onPath = Bun.which("bash");
+  if (onPath && !/[\\/](?:system32|sysnative)[\\/]bash(?:\.exe)?$/i.test(onPath)) {
+    candidates.push(onPath);
+  }
+  for (const candidate of new Set(candidates)) {
+    if (!existsSync(candidate)) continue;
+    try {
+      const probe = Bun.spawnSync([candidate, "--noprofile", "--norc", "-c", 'printf "%s" "$BASH_VERSION"'],
+        { env: releaseTestEnv(), timeout: 2_000, maxBuffer: 4096 });
+      if (probe.exitCode === 0 && probe.stdout.toString().trim()) return candidate;
+    } catch { /* Try another native installation; no shell means an explicit local skip. */ }
+  }
+  return null;
 }
 
 /**
@@ -167,6 +207,71 @@ describe("release pipeline contract", () => {
       .find(run => run.includes("gh release upload")) ?? "";
     expect(attachRun).toContain("--draft=false");
     expect(attachRun.indexOf("gh release upload")).toBeLessThan(attachRun.indexOf("--draft=false"));
+  });
+
+  describe("draft publication shell behavior", () => {
+    const bash = releaseTestBash();
+    const shellTest = test.skipIf(bash === null);
+
+    test("CI and POSIX hosts must execute the Bash regressions", () => {
+      // A Windows workstation need not install Bash just to run static contracts.
+      // CI must never turn a missing/broken shell into a green skipped regression.
+      if (process.env.CI || process.platform !== "win32") expect(bash).not.toBeNull();
+    });
+
+    /** Run the actual YAML block with an allowlisted gh mock and no executable search path. */
+    function attach(env: Record<string, string> = {}) {
+      const run = release.jobs?.["attach-release"]?.steps
+        ?.find(step => step.run?.includes("gh release upload"))?.run;
+      expect(run).toBeDefined();
+      const cwd = mkdtempSync(join(tmpdir(), "ocx-release-contract-"));
+      try {
+        const result = Bun.spawnSync([bash!, "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", `
+          gh() {
+            printf 'gh:%s\\n' "$*" >&2
+            case "$1:$2" in
+              release:upload) return "$UPLOAD_STATUS" ;;
+              release:view) printf '%s\\n' "$DRAFT_STATE"; return "$VIEW_STATUS" ;;
+              release:edit) return "$EDIT_STATUS" ;;
+              *) return 97 ;;
+            esac
+          }
+          ${run}
+          printf 'attach-completed\\n'
+        `], { cwd, env: releaseTestEnv({ RELEASE_VERSION: "2.65.0", DRAFT_STATE: "true",
+          UPLOAD_STATUS: "0", VIEW_STATUS: "0", EDIT_STATUS: "0", ...env }),
+          timeout: 3_000, maxBuffer: 16_384 });
+        const calls = result.stderr.toString().split(/\r?\n/).filter(line => line.startsWith("gh:"));
+        return { code: result.exitCode, calls, completed: result.stdout.toString().includes("attach-completed") };
+      } finally {
+        removeTreeWithRetry(cwd);
+      }
+    }
+
+    const upload = "gh:release upload v2.65.0 dist/release/* --clobber";
+    const view = "gh:release view v2.65.0 --json isDraft --jq .isDraft";
+    const edit = "gh:release edit v2.65.0 --draft=false";
+
+    shellTest("lookup failure propagates even when stdout says true", () => {
+      expect(attach({ VIEW_STATUS: "41" })).toEqual({ code: 41, calls: [upload, view], completed: false });
+    });
+    for (const value of ["", "null", "TRUE", " true", "{}", "true\nfalse"]) {
+      shellTest(`unexpected draft state ${JSON.stringify(value)} never publishes`, () => {
+        expect(attach({ DRAFT_STATE: value })).toEqual({ code: 1, calls: [upload, view], completed: false });
+      });
+    }
+    shellTest("a draft is published exactly once, after upload and lookup", () => {
+      expect(attach()).toEqual({ code: 0, calls: [upload, view, edit], completed: true });
+    });
+    shellTest("an explicitly public release is not edited again", () => {
+      expect(attach({ DRAFT_STATE: "false" })).toEqual({ code: 0, calls: [upload, view], completed: true });
+    });
+    shellTest("upload failure prevents lookup and publication", () => {
+      expect(attach({ UPLOAD_STATUS: "42" })).toEqual({ code: 42, calls: [upload], completed: false });
+    });
+    shellTest("publication failure remains a failed step", () => {
+      expect(attach({ EDIT_STATUS: "43" })).toEqual({ code: 43, calls: [upload, view, edit], completed: false });
+    });
   });
 
   test("a partial publication has a recorded, explicit recovery path", () => {

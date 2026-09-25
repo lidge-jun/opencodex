@@ -562,6 +562,11 @@ configurations can set this option on their `opencodex` provider as well.
 Pi can omit session affinity when `cacheRetention` is `none`; enable cache retention
 when a stable upstream session is required.
 
+**MiMo tool-call echoes.** On OpenCode Go and other Chat Completions routes, a bare
+`<tool_call>` block is hidden when it duplicates one structured call to the same tool
+with the same effective input. If the input differs or several calls could explain
+the block, the markup remains visible. Tool execution still uses the structured call.
+
 **OpenCode Zen** (`opencode-zen`) and the keyless **OpenCode Free** preset share
 `https://opencode.ai/zen/v1`. Free models on that gateway often hit a short-window burst
 limit around 15–20 requests/minute (community-measured; OpenCode does not publish RPM).

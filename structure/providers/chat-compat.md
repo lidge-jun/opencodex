@@ -325,7 +325,11 @@ entry. `src/adapters/openai-chat/serialized-tool-call-content.ts` recognizes bar
 start of a line outside Markdown fences; inline, quoted and indented examples remain unchanged.
 It holds a possible serialized block, resumes ordinary text delivery when the header cannot match,
 and removes the block only when its function name and
-freeform body match a structured call's parsed `input` in the same response.
+freeform body match a structured call's parsed `input` or exact raw arguments from a declared
+freeform/custom tool in the same response. Valid JSON primitives, arrays, and objects can be raw
+freeform input too; the declared tool name and namespace determine whether the bridge would
+unwrap an alternate field, and JSON text that changes on dispatch is not treated as executed input.
+Malformed JSON on an ordinary function is not raw input.
 A block may close a freeform body with a stray `</parameter>` and may omit `</function>`, and one
 newline after the function header is template layout, so MiMo's echoes of those shapes match too
 (#5724). Blocks are read by delimiter scan in linear time: the first `</tool_call>` preceded by
@@ -336,10 +340,12 @@ arguments with the same freeform body, the adapter keeps the JSON suffix only wh
 prefix, and wrapper's `input` value all agree. Mismatched markup and arguments remain byte-exact.
 Two immediately adjacent identical bare blocks, with optional trailing whitespace after the pair,
 are suppressed only when exactly one structured call matches their function name and carries their
-body as `input`, either as one copy or as two copies joined directly or by one newline. Reducing a
-doubled `input` requires an arguments object with no keys besides `input`; extra keys leave it
-unchanged. Unrelated structured calls do not prevent suppression, and other repeated shapes remain
-unchanged.
+body as `input` or exact raw arguments, or when one doubled `input` can be reduced to that body.
+Reducing a doubled `input` requires an arguments object with no keys besides `input`; extra keys
+leave it unchanged. When another same-function call also matches or doubles the body, neither
+arguments nor markup are changed because the response is ambiguous. An empty block and its own
+empty-input call do not create a second explanation. Unrelated structured calls do not
+prevent suppression, and other repeated shapes remain unchanged.
 Silent held-content frames emit adapter heartbeats. Terminal errors and transport read failures
 drain all held text, including matching serialized blocks, because pending tools are not dispatched.
 The held bytes use the shared translator budget. The streaming hold is bounded (`ingestStreaming`): once a closed block is followed by more than 8 KiB of prose with no block open after it, or held text plus queued events would pass 4 MiB, everything held is released in order with nothing suppressed, so an unmatched block no longer delays the rest of the answer to the end of the turn. A duplicate is the tail of the content, so its reconciliation is unaffected; past either bound the stream prefers delivery (the pre-#5548 raw markup) over suppression. Buffered responses keep the unbounded `ingest` because their structured calls are already known (`tests/adapters/openai/openai-chat-serialized-tool-call-hold-bound.test.ts`). For a model opted into inline `<think>` splitting,
