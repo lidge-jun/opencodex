@@ -57,7 +57,6 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectionPolicy } from "./responses/fetch-helpers";
 import { linkAbortSignal } from "./responses";
 import {
-  addFinalRequestLog,
   noteProviderAttemptSend,
   recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
@@ -67,6 +66,7 @@ import {
 } from "./request-log";
 import { jsonCompletionSse, nativeChatSse, structuredError, usageFromChat } from "./chat-native-sse";
 import { beginInferenceAttempt } from "./inference/attempt";
+import { createFinalRequestLog } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
@@ -182,12 +182,12 @@ export async function handleNativeChatCompletions(options: HandleNativeChatOptio
   attemptHandle.seal(logCtx.accountLogLabel);
   const { attempt } = attemptHandle;
 
-  let logged = false;
+  const finalLog = createFinalRequestLog(logIds, logCtx);
   const finishLog = (status: number, message?: string, closeReason: "non_stream" | "terminal" | "client_cancel" = "non_stream") => {
-    if (logged) return;
-    logged = true;
+    if (finalLog.finished()) return;
+    // The failure text lands on the context before the row is written, and only once.
     if (message) logCtx.upstreamError = redactSecretString(message).slice(0, 500);
-    if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, status, { closeReason });
+    finalLog.finish(status, { closeReason });
   };
   const fail = (status: number, message: string, type?: string, code?: string | null): Response => {
     const safeMessage = redactSecretString(message);
