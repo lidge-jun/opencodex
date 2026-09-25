@@ -143,6 +143,9 @@ function candidateFor(
     // is exactly what it was before the managed native lane existed.
     // Pinned effort is judged from config and the route; blocked-skill elision and the web-search
     // sidecar depend on body content no feature describes, so a preview cannot predict them.
+    // Anthropic OAuth (PF-10) is judged from config alone: the rollout switch, the provider, its
+    // host and `anthropicAccountPool.enabled`. The stored-account quorum a sender supplies is
+    // never read here, so a preview selects, resolves and refreshes no account.
     const reason = nativeMessagesDeclineReason(settled, messagesBodyForFeatures(features), config, {
       ...rows,
       claudeCode: config.claudeCode,
