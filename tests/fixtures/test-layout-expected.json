@@ -281,6 +281,7 @@
   "cli-account-threshold.test.ts": "cli",
   "cli-account.test.ts": "cli",
   "cli-capabilities.test.ts": "cli",
+  "cli-api-protocols.test.ts": "cli",
   "cli-catalog-prewarm.test.ts": "cli",
   "cli-codex-cli-update.test.ts": "cli",
   "cli-codex-log-guard-compact.test.ts": "cli",
