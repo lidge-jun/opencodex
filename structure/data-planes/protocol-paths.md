@@ -26,7 +26,7 @@ reason codes, the first rule that keeps a Chat request off the native Chat lane;
 or trace reports cannot disagree.
 
 `contract.ts`, `src/protocols/features.ts`, `src/protocols/baseline.ts`,
-`src/protocols/path.ts`, `src/protocols/dto.ts` and `src/protocols/plan.ts` are leaf modules: the dashboard imports them directly, so they import
+`src/protocols/path.ts`, `src/protocols/dto.ts`, `src/protocols/plan.ts` and `src/protocols/guard.ts` are leaf modules: the dashboard imports them directly, so they import
 nothing but each other and the type-only compatibility vocabulary in
 `src/compatibility/manifest.ts`. `tests/responses/protocol-contract.test.ts` reads their import
 specifiers and fails on anything else.
@@ -116,6 +116,39 @@ caller-forward passthrough depends on the caller's own credential, so it is repo
 modelled. `tests/responses/protocol-plan-snapshot.test.ts` pins the no-side-effect property against
 combo selection state.
 
+## Source envelope, codecs and guard
+
+`src/protocols/envelope.ts` (server side; it charges the translator budget) wraps the body an
+ingress parsed. It keeps that body by reference for the request only, scans its features on the
+first `features()` call and caches them, and hands out `freshBody()` copies, each a
+`structuredClone` charged under `request_copies`, so a consumer that rewrites its body cannot
+leak the rewrite into another consumer's input.
+
+`src/protocols/codecs/{chat,messages,responses}.ts` are named entry points over the existing
+translators — `chatToResponsesBody` is `chatCompletionsToResponsesBody`,
+`messagesToResponsesTranslation` is `anthropicToResponsesTranslation`, `responsesToIr` is
+`parseRequest` — plus each protocol's feature scanner. They add no behavior; the Chat and
+Messages ingresses call the bridge through them.
+
+`checkRepresentable` in `src/protocols/guard.ts` judges a request path the caller computed with
+`path.ts`: under the `legacy` policy it always passes; under `reject` it refuses the features
+`featureEffectsForPath` finds `unsupported`, with reason `feature-unrepresentable`. A hop into
+`other` has no disposition and never refuses by itself, but a loss declared on an earlier known
+hop (the internal Responses body) still does.
+
+Only when `resolveProtocolSettings(config).unrepresentable === "reject"` do the Chat and Messages
+ingresses build an envelope and run the guard, after the route and its wire settle and before the
+request is sent: Chat on the native path when the native lane was chosen, otherwise on the
+bridge path to the settled adapter's wire; Messages on the bridge path. Combo and policy routes
+and an unroutable model are not judged at ingress. A refusal answers 400 in the ingress's own
+error shape (Chat `invalid_request_error` / `unsupported_feature`; Anthropic
+`invalid_request_error`) naming feature keys only, marks the trace blocked, and writes the
+final log row with no upstream send. Under the default `legacy` policy nothing is built and the
+would-be loss appears only as the trace's `featureEffects`. The Messages envelope's features are
+fixed at the bridge entry mark, before an effort override rewrites `thinking`.
+`tests/responses/protocol-envelope.test.ts`, `tests/responses/protocol-guard.test.ts` and
+`tests/responses/protocol-ingress-guard.test.ts` pin them.
+
 ## Settings
 
 `resolveApiSurfaceSettings` and `resolveProtocolSettings` in `src/protocols/settings.ts` are the
@@ -124,14 +157,15 @@ always served. The Messages surface uses an explicit `apiSurfaces.messages.enabl
 present, closes when that value is present but malformed, and otherwise inherits
 `claudeCode.enabled !== false`. The unrepresentable policy defaults to `legacy` and every
 `protocols.rollout` switch defaults off; the OAuth native-Messages switch is effective only with
-the key-auth one.
+the key-auth one. The Chat and Messages ingresses read the unrepresentable policy (above); no
+request path reads the rollout switches yet.
 
 `claudeInboundDisabled` in `src/server/claude-messages.ts` is the Messages ingress reader: both
 `/v1/messages` and `/v1/messages/count_tokens` call it, so the two routes cannot disagree, and a
 closed surface answers 403 before the body is read. `buildApiAccessEndpoints`
 (`src/server/management/api-access.ts`) reports the resolved `surfaces` in the keys payload and
 keeps `claudeCodeEnabled` for older dashboards, set from the resolved Messages state rather than
-from `claudeCode.enabled`. No other request path reads these settings yet.
+from `claudeCode.enabled`.
 
 `PATCH /api/protocols/settings` is the one writer. `src/server/management/protocol-settings-patch.ts`
 validates the body strictly and applies it in memory; the route persists through
