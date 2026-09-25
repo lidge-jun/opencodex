@@ -28,6 +28,8 @@ import { encodeChatCompletionSse, collectChatCompletionResponse } from "../../pr
 import { encodeAnthropicMessageSse, collectAnthropicMessageResponse } from "../../protocols/encoders/messages";
 import type { ClientEncodeHooks, EncodedTerminal } from "../../protocols/encoders/adapter-events";
 import { upstreamWireForAdapter } from "../../protocols/contract";
+import { markAttemptProtocolPath } from "../../protocols/trace";
+import { deliveryModeForLane, requestPathForLane } from "../../protocols/path";
 import { resolveProtocolSettings } from "../../protocols/settings";
 import { trackStreamLifetime } from "../lifecycle";
 import type { RequestLogContext } from "../request-log";
@@ -104,8 +106,25 @@ export interface ClientEncodedDelivery {
   bindUsage: (usage: OcxUsage | undefined) => void;
 }
 
+/**
+ * Record the attempt's observed path: the request still goes through the internal Responses
+ * bridge until the codecs decode to IR directly, so the request path and mode stay the bridge's;
+ * the response now reaches the client from the IR without the internal Responses hop.
+ */
+function markDirectEncoderPath(logCtx: RequestLogContext, encoder: ClientEncoderOption, adapter: string): void {
+  const attempt = logCtx.activeAttempt;
+  if (!attempt) return;
+  const upstream = upstreamWireForAdapter(attempt.adapter || adapter);
+  markAttemptProtocolPath(attempt, {
+    mode: deliveryModeForLane(encoder.protocol, "bridge", upstream),
+    requestPath: requestPathForLane(encoder.protocol, "bridge", upstream),
+    responsePath: [upstream, "ir", encoder.protocol],
+  });
+}
+
 export async function deliverClientEncodedResponse(input: ClientEncodedDelivery): Promise<Response> {
   const { encoder, logCtx, translatorBudget } = input;
+  markDirectEncoderPath(logCtx, encoder, input.adapterName);
   const log = createClientWireLog();
   const responseId = `resp_${uuid()}`;
   const createdAt = Math.floor(Date.now() / 1000);
