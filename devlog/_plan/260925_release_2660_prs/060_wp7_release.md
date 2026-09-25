@@ -101,3 +101,12 @@ PV="2.66.0-preview.$(TZ=Asia/Seoul date +%Y%m%d)"
 
 Every later command (version sync, check, release dispatch, verification) uses that recorded
 string, even if the publish crosses midnight KST.
+
+## wp7 P (2026-09-25 ~13:45Z)
+
+- `PV=2.66.0-preview.20260925` (fixed now; every later command reuses it).
+- Candidate `CAND=82cb66e82da2f4bbcd094086ad2970d19c1612cd` (`dev` after #5778, the last in-scope merge; #5754 from wp8
+  is already in it). lane=all run `36142367892` (`workflow_dispatch`, headSha = CAND).
+- No `v2.66*` tag and no npm `2.66.0` yet; `dev` carries 2.66.0; `main` `87a78e5f26`, `preview` `d4c26e2b09`.
+- #5839 now refuses Cursor foreground native shells for `nativeLocalExec` opt-in installs; its squash subject
+  ("fail closed without shell containment") carries that into the generated notes.
