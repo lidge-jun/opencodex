@@ -334,9 +334,11 @@ request-rate 429s. Numeric `Retry-After` seconds and HTTP-date values are accept
 server delays are capped at 24 hours; reset-derived, configured, and fallback cooldowns are capped
 at 10 minutes. The precedence is, from strongest to weakest, explicit
 `Retry-After` → Codex reset headers (`x-codex-primary-reset-at`, `x-codex-secondary-reset-at`, or
-`x-codex-tertiary-reset-at`) → the combo's `cooldownMs` (when set) → the 5-second request-rate
-fallback for upstream rate-limit codes `1302`/`1305` → the 10-minute hold for a spent usage window
-→ the 60-second default. A valid immediate
+`x-codex-tertiary-reset-at`) → the combo's `cooldownMs` (when set) → the
+10-minute hold for a spent usage window → the 5-second request-rate fallback for upstream
+rate-limit codes `1302`/`1305` → the 60-second default. The usage-window hold is tested first, so a
+failure that carries a request-rate code *and* usage-limit prose is held for ten minutes rather than
+five seconds. A valid immediate
 `Retry-After: 0` remains an immediate upstream directive rather than being replaced by a configured
 cooldown.
 
