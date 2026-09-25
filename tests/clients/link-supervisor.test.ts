@@ -150,6 +150,21 @@ test("reload stops a child whose link record was removed", async () => {
   await supervisor.stop();
 });
 
+test("reload kills the old child and respawns when a link tunnel port changes", async () => {
+  const fake = fakeRunner();
+  let store = baseStore(record("hub-initiated", "lnk_0123456789abcdef"));
+  const supervisor = createLinkSupervisor({ readStore: () => store, runner: fake.runner, pidfileDir: "/tmp/opencodex-link-supervisor-test" });
+  supervisor.start();
+  const oldChild = fake.children[0]!.child;
+  store = baseStore({ ...record("hub-initiated", "lnk_0123456789abcdef"), tunnelPort: 19003 });
+  await supervisor.reload();
+  expect(await oldChild.exited).toBe(143);
+  expect(fake.children).toHaveLength(2);
+  expect(fake.children[1]!.child.argv).toContain("127.0.0.1:19003:127.0.0.1:19001");
+  fake.children[1]!.resolve(143);
+  await supervisor.stop();
+});
+
 test("reload after stop is a no-op", async () => {
   const fake = fakeRunner();
   let store = baseStore();

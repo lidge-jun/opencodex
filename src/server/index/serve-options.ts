@@ -203,6 +203,11 @@ import { createWebsocketHandler } from "./websocket-handler";
 
 export type ServerIngress = "public" | "unauthenticated-loopback" | "hub-management" | "claude-intercept" | "hub-link";
 
+export function trustedLoopbackForIngress(ingress: ServerIngress, hostname: string): boolean {
+  return ingress === "unauthenticated-loopback"
+    || (ingress === "public" && isLoopbackHostname(hostname));
+}
+
 /**
  * Routes the Claude intercept TLS listener may reach. Everything else on that socket is relayed
  * to the real upstream by the listener itself, so a request that lands here with another path
@@ -687,8 +692,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           }
         }
         const mgmtResponse = await handleManagementAPI(req, url, config, requestManagementApiDeps, principal, managementSessionControl, {
-          trustedLoopback: ingress === "unauthenticated-loopback"
-            || (ingress === "public" && isLoopbackHostname(config.hostname ?? "127.0.0.1")),
+          trustedLoopback: trustedLoopbackForIngress(ingress, config.hostname ?? "127.0.0.1"),
           guiSessionIssuance: managementSessionIssuance(req, managementAuth),
         });
         if (mgmtResponse) return withManagementCors(mgmtResponse, req, config);

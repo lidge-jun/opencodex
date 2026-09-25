@@ -131,7 +131,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
 
   const pidfilePath = (linkId: string): string => join(storeDir, `${linkId}.pid`);
 
-  const recordInstance = (record: LinkRecord): string => JSON.stringify([
+  const recordInstance = (record: LinkRecord, listenerPort: number | null): string => JSON.stringify([
     record.id,
     record.alias,
     record.direction,
@@ -139,6 +139,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     record.tunnelPort,
     record.apiKeyId,
     record.createdAt,
+    listenerPort,
   ]);
 
   const conditionalRemovePidfile = (linkId: string, pid: number): void => {
@@ -243,7 +244,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     store = readStore();
     reapOrphans();
     started = true;
-    for (const record of store.links) recordInstances.set(record.id, recordInstance(record));
+    for (const record of store.links) recordInstances.set(record.id, recordInstance(record, store.listenerPort));
     for (const record of store.links) {
       if (record.direction === "hub-initiated") spawnFor(record);
     }
@@ -288,10 +289,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           return;
         }
         const nextStore = readStore();
-        const nextInstances = new Map(nextStore.links.map(record => [record.id, recordInstance(record)]));
+        const nextInstances = new Map(nextStore.links.map(record => [record.id, recordInstance(record, nextStore.listenerPort)]));
+        const changed = new Set<string>();
+        for (const record of nextStore.links) {
+          if (recordInstances.get(record.id) !== undefined && recordInstances.get(record.id) !== nextInstances.get(record.id)) {
+            changed.add(record.id);
+          }
+        }
         store = nextStore;
         for (const [linkId] of [...children]) {
-          if (nextInstances.has(linkId)) continue;
+          if (nextInstances.has(linkId) && !changed.has(linkId)) continue;
           await stopLink(linkId);
           states.delete(linkId);
           orphanUnverified.delete(linkId);
@@ -299,9 +306,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           if (stopping) return;
         }
         for (const record of nextStore.links) {
-          const previous = recordInstances.get(record.id);
-          const current = nextInstances.get(record.id);
-          if (previous !== undefined && previous !== current) {
+          if (changed.has(record.id)) {
             states.delete(record.id);
             orphanUnverified.delete(record.id);
           }

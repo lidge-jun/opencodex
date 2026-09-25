@@ -41,6 +41,7 @@ export interface LinkRouteListener {
 export interface LinkRouteState {
   pendingHosts: Map<string, PendingLinkHost>;
   confirmedHosts?: Map<string, ConfirmedLinkHost>;
+  compensationFailures?: Map<string, { since: string; reason: "compensation_failed" }>;
   supervisor: import("../../link/supervisor").LinkSupervisor;
   listener: LinkRouteListener;
 }
@@ -107,6 +108,7 @@ function stateFor(ctx: ManagementContext): LinkRouteState | null {
   const state: LinkRouteState = {
     pendingHosts: new Map(),
     confirmedHosts: new Map(),
+    compensationFailures: new Map(),
     supervisor,
     listener,
   };
@@ -144,13 +146,40 @@ function revokeKey(ctx: ManagementContext, id: string): boolean {
   return (ctx.deps.revokeApiKey ?? revokeApiKeyInProcess)(ctx.config, id);
 }
 
-async function rollbackNewLink(ctx: ManagementContext, state: LinkRouteState, id: string, apiKeyId: string): Promise<void> {
-  try { await state.supervisor.stopLink(id); } catch { /* continue compensation */ }
+function compensationFailure(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number], phase: string): Response {
+  (state.compensationFailures ??= new Map()).set(record.id, { since: new Date((ctx.deps.now ?? Date.now)()).toISOString(), reason: "compensation_failed" });
+  console.warn(`[link] compensation_failed linkId=${record.id} phase=${phase}`);
+  return fail("compensation_failed", "The link compensation could not be completed.", 500);
+}
+
+async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number]): Promise<Response | null> {
+  let revoked = false;
+  try { revoked = revokeKey(ctx, record.apiKeyId); } catch { revoked = false; }
+  if (!revoked) {
+    try { await state.supervisor.stopLink(record.id); } catch { /* retain the record and failure marker */ }
+    try {
+      const current = readStoreFor(ctx);
+      if (!current.links.some(link => link.id === record.id)) {
+        writeStoreFor(ctx, { ...current, links: [...current.links, record] });
+      }
+    } catch {
+      // The in-memory marker still makes the residual visible when persistence is unavailable.
+    }
+    return compensationFailure(ctx, state, record, "revoke");
+  }
+  try { await state.supervisor.stopLink(record.id); } catch { return compensationFailure(ctx, state, record, "stop"); }
   try {
     const current = readStoreFor(ctx);
-    writeStoreFor(ctx, { ...current, links: current.links.filter(link => link.id !== id) });
-  } catch { /* retain the original failure; the next status exposes the record */ }
-  try { revokeKey(ctx, apiKeyId); } catch { /* retain the original failure */ }
+    const next = { ...current, links: current.links.filter(link => link.id !== record.id) };
+    if (next.links.length !== current.links.length) {
+      writeStoreFor(ctx, next);
+    }
+    state.compensationFailures?.delete(record.id);
+    if (next.links.length === 0) await state.listener.close();
+    return null;
+  } catch {
+    return compensationFailure(ctx, state, record, "store");
+  }
 }
 
 async function candidates(ctx: ManagementContext): Promise<Response> {
@@ -231,20 +260,27 @@ async function apply(ctx: ManagementContext, state: LinkRouteState): Promise<Res
   try { issued = issueKey(ctx, `link:${body.alias}`); }
   catch { return fail("key_issue_failed", "The link key could not be issued.", 503); }
   const id = newLinkId();
+  const record = { id, alias: body.alias, direction: "hub-initiated" as const, hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date((ctx.deps.now ?? Date.now)()).toISOString() };
   let store: LinkStore;
   try {
     const current = readStoreFor(ctx);
     if (current.links.some(link => link.alias === body.alias && link.direction === "hub-initiated")) {
-      revokeKey(ctx, issued.id);
+      const compensation = await compensateNewLink(ctx, state, record);
+      if (compensation) return compensation;
       return fail("link_exists", "A link for this alias already exists.", 409);
     }
-    store = { ...current, links: [...current.links, { id, alias: body.alias, direction: "hub-initiated", hostKeyFingerprint: confirmed.fingerprint, tunnelPort: remotePort, apiKeyId: issued.id, createdAt: new Date((ctx.deps.now ?? Date.now)()).toISOString() }] };
+    store = { ...current, links: [...current.links, record] };
     writeStoreFor(ctx, store);
     await state.listener.ensureStarted();
+    if (state.listener.status().state !== "listening") {
+      const compensation = await compensateNewLink(ctx, state, record);
+      return compensation ?? fail("listener_unavailable", "The link listener is unavailable.", 503);
+    }
     await state.supervisor.ensureStarted();
     await state.supervisor.reload();
   } catch {
-    await rollbackNewLink(ctx, state, id, issued.id);
+    const compensation = await compensateNewLink(ctx, state, record);
+    if (compensation) return compensation;
     return fail("link_apply_failed", "The link could not be started.", 503);
   }
   const admission = awaitFirstAdmission(issued.id, APPLY_ADMISSION_TIMEOUT_MS, state.listener.onAuthenticatedCatalog);
@@ -253,20 +289,20 @@ async function apply(ctx: ManagementContext, state: LinkRouteState): Promise<Res
     const result = await runner.run(buildExecArgv({ alias: body.alias, argv: ["ocx", "connect", "--link", "--key-stdin", "--tunnel-port", String(remotePort), "--link-id", id], knownHostsFile: knownHosts }), { stdin: input, timeoutMs: APPLY_ADMISSION_TIMEOUT_MS });
     if (result.code !== 0) {
       void admission.catch(() => {});
-      await rollbackNewLink(ctx, state, id, issued.id);
-      return fail("remote_connect_failed", "The remote link connection failed.", 502);
+      const compensation = await compensateNewLink(ctx, state, record);
+      return compensation ?? fail("remote_connect_failed", "The remote link connection failed.", 502);
     }
     try {
       await admission;
     } catch {
-      await rollbackNewLink(ctx, state, id, issued.id);
-      return fail("admission_timeout", "The remote link did not authenticate a catalog request in time.", 502);
+      const compensation = await compensateNewLink(ctx, state, record);
+      return compensation ?? fail("admission_timeout", "The remote link did not authenticate a catalog request in time.", 502);
     }
     return Response.json({ linkId: id }, { status: 202 });
   } catch {
     void admission.catch(() => {});
-    await rollbackNewLink(ctx, state, id, issued.id);
-    return fail("remote_connect_failed", "The remote link connection failed.", 502);
+    const compensation = await compensateNewLink(ctx, state, record);
+    return compensation ?? fail("remote_connect_failed", "The remote link connection failed.", 502);
   } finally {
     input.fill(0);
   }
@@ -281,19 +317,27 @@ async function issue(ctx: ManagementContext): Promise<Response> {
   try { issued = issueKey(ctx, `link:${body.alias}`); }
   catch { return fail("key_issue_failed", "The link key could not be issued.", 503); }
   const id = newLinkId();
+  const state = stateFor(ctx);
+  if (!state) {
+    try { revokeKey(ctx, issued.id); } catch { /* no lifecycle state can retain a residual */ }
+    return fail("link_unavailable", "The link lifecycle is unavailable.", 503);
+  }
+  const record = { id, alias: body.alias, direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: body.tunnelPort, apiKeyId: issued.id, createdAt: new Date((ctx.deps.now ?? Date.now)()).toISOString() };
+  let failureCode = "link_issue_failed";
   try {
     if (before.links.some(link => link.id === id)) throw new Error("link id collision");
-    writeStoreFor(ctx, { ...before, links: [...before.links, { id, alias: body.alias, direction: "client-initiated", hostKeyFingerprint: null, tunnelPort: body.tunnelPort, apiKeyId: issued.id, createdAt: new Date((ctx.deps.now ?? Date.now)()).toISOString() }] });
-    const state = stateFor(ctx);
-    if (!state) throw new Error("link lifecycle unavailable");
+    writeStoreFor(ctx, { ...before, links: [...before.links, record] });
     await state.listener.ensureStarted();
+    if (state.listener.status().state !== "listening") {
+      failureCode = "listener_unavailable";
+      throw new Error("link listener unavailable");
+    }
     const current = readStoreFor(ctx);
     if (!port(current.listenerPort)) throw new Error("link listener did not bind");
     return Response.json({ linkId: id, apiKeyId: issued.id, key: issued.key, listenerPort: current.listenerPort });
   } catch {
-    try { writeStoreFor(ctx, before); } catch { /* preserve original failure */ }
-    try { revokeKey(ctx, issued.id); } catch { /* preserve original failure */ }
-    return fail("link_issue_failed", "The link could not be issued.", 503);
+    const compensation = await compensateNewLink(ctx, state, record);
+    return compensation ?? fail(failureCode, failureCode === "listener_unavailable" ? "The link listener is unavailable." : "The link could not be issued.", 503);
   }
 }
 
@@ -334,6 +378,14 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
     const store = readStoreFor(ctx);
     const listenerStatus = state.listener.status();
     const dto: LinkStatusDto = projectLinkStatus(store, state.supervisor.status(), listenerStatus, ctx.config);
+    for (const link of dto.links) {
+      const failure = state.compensationFailures?.get(link.id);
+      if (failure) Object.assign(link, { state: "failed" as const, since: failure.since, reason: failure.reason });
+    }
+    if (dto.child && store.links[0]) {
+      const failure = state.compensationFailures?.get(store.links[0].id);
+      if (failure) Object.assign(dto.child, { state: "failed" as const, since: failure.since, reason: failure.reason });
+    }
     return Response.json(dto, { headers: { "cache-control": "no-store" } });
   }
   if (url.pathname === "/api/link/candidates" && req.method === "GET") {
