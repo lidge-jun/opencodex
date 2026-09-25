@@ -22,6 +22,7 @@ import { captureRouteStaticPolicy, routeConcreteModel, routeModel, type RouteRes
 import { getRoutingProfile, POLICY_NAMESPACE, resolvePolicyProfileId } from "../routing/profile";
 import { resolveWireProtocolOverride } from "../server/adapter-resolve";
 import { nativeChatDeclineReason } from "../server/chat-native-eligibility";
+import { nativeMessagesDeclineReason } from "../server/messages-native-eligibility";
 import { parseSyntheticRowId } from "../server/fast-row";
 import type { OcxConfig } from "../types";
 import { inboundWireForProtocol, type Protocol, type ProtocolReasonCode } from "./contract";
@@ -90,13 +91,26 @@ function chatBodyForFeatures(features: ReadonlySet<ProtocolFeature>): Record<str
   };
 }
 
+/** The Messages counterpart of `chatBodyForFeatures`. */
+function messagesBodyForFeatures(features: ReadonlySet<ProtocolFeature>): Record<string, unknown> {
+  const content = features.has("request.images")
+    ? [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" } }]
+    : "";
+  return { messages: [{ role: "user", content }] };
+}
+
+interface SyntheticRows {
+  effortRow: boolean;
+  fastRow: boolean;
+}
+
 function candidateFor(
   config: OcxConfig,
   inbound: Protocol,
   route: RouteResult,
   routeKind: SettledRouteKind,
   features: ReadonlySet<ProtocolFeature>,
-  effortRow: boolean,
+  rows: SyntheticRows,
 ): ProtocolPlanCandidateInput {
   const wire = inboundWireForProtocol(inbound);
   // The same two steps every ingress runs: recapture static policy for the original inbound,
@@ -108,17 +122,24 @@ function candidateFor(
   const adapter = provider.adapter ?? "openai-responses";
   let declineReasons: ProtocolReasonCode[] = [];
   let nativeEligible = false;
+  // With `nativeChatCombos` on, the combo loop judges each Chat candidate as the concrete route it
+  // is (PF-07), so the preview must too; a policy still resolves one candidate on the bridge.
+  const comboChildNative = inbound === "chat" && routeKind === "combo"
+    && resolveProtocolSettings(config).rollout.nativeChatCombos;
+  const settled: RouteResult = {
+    ...route,
+    provider,
+    staticPolicy,
+    ...(routeKind === "direct" || comboChildNative ? {} : { routeKind }),
+  };
   if (inbound === "chat") {
-    // With `nativeChatCombos` on, the combo loop judges each candidate as the concrete route it
-    // is (PF-07), so the preview must too; a policy still resolves one candidate on the bridge.
-    const comboChildNative = routeKind === "combo" && resolveProtocolSettings(config).rollout.nativeChatCombos;
-    const settled: RouteResult = {
-      ...route,
-      provider,
-      staticPolicy,
-      ...(routeKind === "direct" || comboChildNative ? {} : { routeKind }),
-    };
-    const reason = effortRow ? "effort-row" : nativeChatDeclineReason(settled, chatBodyForFeatures(features), config);
+    const reason = rows.effortRow ? "effort-row" : nativeChatDeclineReason(settled, chatBodyForFeatures(features), config);
+    nativeEligible = reason === undefined;
+    if (reason) declineReasons = [reason];
+  } else if (inbound === "messages" && resolveProtocolSettings(config).rollout.managedMessagesNative) {
+    // The runtime rule itself. With the switch off nothing is judged, so the default preview
+    // is exactly what it was before the managed native lane existed.
+    const reason = nativeMessagesDeclineReason(settled, messagesBodyForFeatures(features), config, rows);
     nativeEligible = reason === undefined;
     if (reason) declineReasons = [reason];
   }
@@ -153,6 +174,7 @@ export function buildProtocolPlanSnapshot(
   const reasonCodes: ProtocolReasonCode[] = [];
   let routeKey = request.model;
   let effortRow = false;
+  let fastRow = false;
   let syntheticRow = false;
   try {
     const parsed = parseSyntheticRowId(request.model, config);
@@ -162,6 +184,7 @@ export function buildProtocolPlanSnapshot(
       syntheticRow = true;
     } else if (parsed.fastRow) {
       routeKey = parsed.fastRow.baseId;
+      fastRow = true;
       syntheticRow = true;
     }
   } catch {
@@ -182,7 +205,7 @@ export function buildProtocolPlanSnapshot(
   return {
     ...base,
     routeKind: settled.routeKind,
-    candidates: settled.routes.map(route => candidateFor(config, request.inbound, route, settled.routeKind, features, effortRow)),
+    candidates: settled.routes.map(route => candidateFor(config, request.inbound, route, settled.routeKind, features, { effortRow, fastRow })),
     reasonCodes,
   };
 }
