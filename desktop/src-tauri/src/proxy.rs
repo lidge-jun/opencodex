@@ -482,13 +482,18 @@ mod tests {
         );
         assert!(CapabilityHeaders::mint_snapshot(&recorded_runtime(), &[0; 1025]).is_none());
         let request = headers
-            .apply(reqwest::Client::new().post("http://127.0.0.1:10100/api/update/desktop-snapshot"))
+            .apply(
+                reqwest::Client::new().post("http://127.0.0.1:10100/api/update/desktop-snapshot"),
+            )
             .body(body.to_vec())
             .build()
             .unwrap();
         assert!(!request.headers().contains_key("x-opencodex-api-key"));
         assert!(!request.headers().contains_key("authorization"));
-        assert_eq!(request.headers()["x-opencodex-desktop-snapshot-sha256"], digest);
+        assert_eq!(
+            request.headers()["x-opencodex-desktop-snapshot-sha256"],
+            digest
+        );
         assert_eq!(request.body().unwrap().as_bytes(), Some(body.as_slice()));
     }
 

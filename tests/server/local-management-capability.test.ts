@@ -573,3 +573,84 @@ describe("desktop snapshot transport source", () => {
     expect(snapshot).not.toContain("identify()");
   });
 });
+
+describe("native tray provider account read grants", () => {
+  const local = { attestationSecret: "D".repeat(43), pid: 5759, port: 10100 };
+  const state: ManagementAuthState = {
+    available: true, token: "tray-read-test-admin", source: "environment",
+    sessions: new Map(), pairingGrants: new Map(),
+  };
+  const cases = [
+    [LOCAL_MANAGEMENT_READ_PATHS.oauthAccounts,
+      "/api/oauth/accounts?provider=anthropic&quota=1",
+      "/api/oauth/accounts?provider=xai&quota=1"],
+    [LOCAL_MANAGEMENT_READ_PATHS.providerKeys,
+      "/api/providers/keys?name=example&quota=1",
+      "/api/providers/keys?name=other&quota=1"],
+  ] as const;
+
+  /** Mint precisely the request target emitted by native_tray_accounts::query. */
+  function signed(target: string): Request {
+    const nonce = randomBytes(32).toString("base64url");
+    const expiresAt = Date.now() + LOCAL_MANAGEMENT_CAPABILITY_TTL_MS;
+    const proof = createLocalManagementReadCapability(
+      local.attestationSecret, nonce, "GET", target, local.pid, local.port, expiresAt,
+    );
+    expect(proof).not.toBeNull();
+    return new Request(`http://127.0.0.1:${local.port}${target}`, {
+      headers: {
+        [pidHeader]: String(local.pid), [nonceHeader]: nonce,
+        [expiryHeader]: String(expiresAt), [proofHeader]: proof!,
+      },
+    });
+  }
+
+  for (const [pathname, target, other] of cases) {
+    test(`${pathname}: admits its real query once without an admin token`, () => {
+      const req = signed(target);
+      const replay = req.clone();
+      expect(req.headers.has("x-opencodex-api-key")).toBe(false);
+      expect(requireManagementAuth(req, state, undefined, local)).toBeNull();
+      expect(managementPrincipal(req, state, undefined, local)).toBe("local-read-capability");
+      expect(requireManagementAuth(replay, state, undefined, local)?.status).toBe(401);
+    });
+
+    test(`${pathname}: unused proof cannot change selector, route or method`, () => {
+      // Never admit the original first: rejection must prove binding, not merely replay.
+      for (const altered of [other, `${pathname}/extra`, "/api/config"]) {
+        const original = signed(target);
+        const req = new Request(`http://127.0.0.1:${local.port}${altered}`, {
+          headers: original.headers,
+        });
+        expect(requireManagementAuth(req, state, undefined, local)?.status).toBe(401);
+      }
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+        const original = signed(target);
+        const req = new Request(original.url, { method, headers: original.headers });
+        expect(requireManagementAuth(req, state, undefined, local)?.status).toBe(401);
+        expect(createLocalManagementReadCapability(
+          local.attestationSecret, "A".repeat(43), method, target,
+          local.pid, local.port, Date.now() + LOCAL_MANAGEMENT_CAPABILITY_TTL_MS,
+        )).toBeNull();
+      }
+    });
+  }
+
+  test("every native account source is covered by the explicit read allowlist", () => {
+    const source = readFileSync(repoPath("desktop/src-tauri/src/native_tray_accounts.rs"), "utf8")
+      .split("#[cfg(test)]")[0]!;
+    const paths = new Set([...source.matchAll(/"(\/api\/[^"?]+)"/g)].map(match => match[1]!));
+    expect(paths.size).toBeGreaterThan(0);
+    for (const target of paths) {
+      expect(Object.values(LOCAL_MANAGEMENT_READ_PATHS) as string[]).toContain(target);
+    }
+  });
+
+  test("the desktop Auth no longer loads reusable admin credentials", () => {
+    const source = readFileSync(repoPath("desktop/src-tauri/src/auth.rs"), "utf8");
+    expect(source).not.toContain("OPENCODEX_ADMIN_AUTH_TOKEN");
+    expect(source).not.toContain("admin-api-token");
+    expect(source).not.toContain("pub fn token(");
+    expect(source).toContain("runtime-port.json");
+  });
+});
