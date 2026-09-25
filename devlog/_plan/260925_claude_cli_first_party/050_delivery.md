@@ -18,8 +18,7 @@ edits to the live `~/.claude` or `~/.opencodex`.
 | `bun run privacy:scan` | whole tree incl. devlog |
 | `bun run lint:gui` and `cd gui && bun test <each gui test file named in 040>` | direct file arguments; `bun run test` in gui expands to the whole `tests` directory |
 
-The full `bun run test` is the default before review readiness. If it is impractical (concurrent
-worktrees on this machine), record why, the exact focused commands and results, and what is left to CI.
+Superseded by the maintainer directive (see "wp6 P amendment"): no local test suite, including the full `bun run test`, is run for this unit; hosted CI owns test execution.
 
 ## Privacy self-check before the first push
 
@@ -53,7 +52,7 @@ Supersedes the local-gates table above where it names test runs:
    `bun run lint:gui`, `bun run skill:surface:check`, `bun run structure:check`, `bun run privacy:scan`,
    `git diff --check origin/dev..HEAD`, plus the account-identifier grep of the push range.
 3. Push, open the PR (template sections; Verification states plainly that local test suites were not run on the maintainer's
-   instruction and lists the static gates, the isolated-server render check, and the hosted CI runs), upload the screenshot
+   instruction and lists the static gates, the dashboard render check (wp5: the branch server started with `bun run src/cli/index.ts start` under an isolated temp HOME, driven by agbrowse — a manual render observation, not a test suite), and the hosted CI runs), upload the screenshot
    to the `pr-assets` branch and link it by commit SHA.
 4. Check = exact-head hosted CI: record run ids, events and conclusions; a failing test job is a real result to fix in a
    follow-up commit on this branch, never rerun blindly.
