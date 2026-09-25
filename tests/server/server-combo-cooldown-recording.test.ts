@@ -48,33 +48,6 @@ async function post(
   }), config, { model: "", provider: "" }, options));
 }
 
-function serve(handler: (request: Request) => Response | Promise<Response>) {
-  upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: handler });
-  return upstream;
-}
-function baseUrl(server: ReturnType<typeof Bun.serve>): string {
-  return `${server.url.toString().replace(/\/$/, "")}/v1`;
-}
-function comboConfig(
-  providers: OcxConfig["providers"],
-  targets = Object.keys(providers).map((name, index) => ({ provider: name, model: `m${index + 1}` })),
-  extra: Partial<NonNullable<OcxConfig["combos"]>[string]> = {},
-): OcxConfig {
-  return { port: 0, defaultProvider: Object.keys(providers)[0]!, providers, combos: { free: { strategy: "failover", targets, ...extra } } };
-}
-async function post(
-  config: OcxConfig,
-  raw: Record<string, unknown> = {},
-  options: HandleOptions = {},
-  headers: Record<string, string> = {},
-): Promise<Response> {
-  takeSpendHome();
-  return trackTurn(await handleResponses(new Request("http://localhost/v1/responses", {
-    method: "POST", headers: { "content-type": "application/json", ...headers },
-    body: JSON.stringify({ model: "combo/free", input: "hello", stream: false, ...raw }),
-  }), config, { model: "", provider: "" }, options));
-}
-
 let home = "";
 let previous: string | undefined;
 let codex: IsolatedCodexHome | undefined;
