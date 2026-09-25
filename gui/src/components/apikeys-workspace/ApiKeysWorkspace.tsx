@@ -27,6 +27,7 @@ import ApiKeysListPanel from "./ApiKeysListPanel";
 import type { UsageReadMetadata } from "../../usage-summary-resource";
 import { UsageIncompleteNotice } from "../usage-incomplete-notice";
 import { DictationPanel, LiveVoicePanel } from "./AudioApiPanel";
+import { ProtocolPlanPanel } from "../protocols/ProtocolPlanPanel";
 
 export interface ApiKeysWorkspaceProps {
   keys: ApiKeyEntry[];
@@ -51,6 +52,8 @@ export interface ApiKeysWorkspaceProps {
   rotationSecret?: { id: string; key: string; rotationId: string } | null;
   rotationCopied?: boolean;
   filteredModels: ExternalModelRow[];
+  /** Unfiltered catalog for the path preview picker; the model search must not narrow it. */
+  previewModels?: ExternalModelRow[];
   modelsLoading: boolean;
   /** Quiet revalidation / retry over rows already on screen — not a skeleton. */
   modelsRefreshing?: boolean;
@@ -100,6 +103,7 @@ export default function ApiKeysWorkspace({
   rotationSecret = null,
   rotationCopied = false,
   filteredModels,
+  previewModels,
   modelsLoading,
   modelsRefreshing = false,
   modelsLoadFailed,
@@ -203,6 +207,7 @@ export default function ApiKeysWorkspace({
     { id: "keys", label: t("api.section.keys"), meta: keysLoading ? undefined : String(keys.length) },
     { id: "connect", label: t("api.section.connect") },
     { id: "endpoints", label: t("api.section.endpoints") },
+    { id: "plan", label: t("api.section.plan") },
     { id: "dictation", label: t("audio.dictation") },
     { id: "live-voice", label: t("audio.liveVoice") },
     { id: "models", label: t("api.section.models"), meta: String(modelCount) },
@@ -535,6 +540,11 @@ export default function ApiKeysWorkspace({
                 </div>
                 <div id={sectionAnchorId("api", "endpoints")} className="awi-section-anchor">
                   <ApiKeysEndpointsPanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} authMatrix={authMatrix} />
+                </div>
+                {/* Reference, then prediction: which path a request would take through the
+                    endpoints above. Asked of the server on demand; it sends nothing upstream. */}
+                <div id={sectionAnchorId("api", "plan")} className="awi-section-anchor">
+                  <ProtocolPlanPanel key={apiBase} apiBase={apiBase} models={previewModels ?? filteredModels} protocolLabel={protocolLabel} />
                 </div>
                 <div id={sectionAnchorId("api", "dictation")} className="awi-section-anchor">
                   {active && <DictationPanel key={`${apiBase}:${JSON.stringify(endpoints.audio)}`} audio={endpoints.audio} />}
