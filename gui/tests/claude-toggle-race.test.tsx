@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 
 /**
  * Rapid clicks on the Claude connection switch must serialize to a single
@@ -80,6 +81,9 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   (globalThis as Record<string, unknown>).__APP_VERSION__ = "0.0.0-test";
 
+  // The resource store is module-level: without this, the previous test's Claude Code state
+  // seeds the next mount and its cold-start GET is skipped (staleAfterMs).
+  clearClientResourceStoresForTests();
   putBodies = [];
   claudeEnabled = false;
   cliFirstParty = false;
