@@ -180,8 +180,9 @@ ocx claude desktop import <path> [--apply]
 檔案，因此無效檔案不會改動目前設定檔。加上 `--apply` 可在匯入有效設定檔後立即寫入 Desktop。
 `none` 僅適用於空系列；每個非空系列都必須保留一個預設。
 
-非 Anthropic 路由會得到穩定別名，例如 `claude-opus-4-8-YYYYMMDD`，年份範圍為 2026 至 2035。看起來像日期的部分是合成的
-路由槽位，不是模型釋出日期。系統會先配置 2026 的槽位，因此既有別名的 id 不變；2026 用盡後才會用到後續年份。
+非 Anthropic 路由會得到穩定別名，例如 `claude-opus-4-8-p01q`，其後綴是以 `p` 開頭的四字元代碼。OpenCodex 仍會在內部保留合成日期槽位，
+以維持既有設定檔配置的穩定性，但不會把日期當成 Desktop 模型 ID；目前的 Desktop 版本在比較作用中工作階段的模型時會移除尾端日期，
+因而可能抑制模型切換。
 真正的 Anthropic Claude 路由保留真實 id。新路由預設落在 Opus
 系列，但移動路由不會改變它所呼叫的供應商或模型。舊版 apply 旗標 `--static`、`--hybrid` 與
 `--discovery-only` 仍可供既有腳本使用。
@@ -308,10 +309,10 @@ Claude Code 2.1.278 接受包含 `claude` 或 `anthropic` 的 ID。以 `claude-`
 | 介面 | 格式 | 示例 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>`（plain）或 `ocx-claude2-…`（escaped） | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-<code>`（3 字元 base36 雜湊） | `claude-opus-4-8-ncb` |
+| Claude Desktop 3P | `claude-opus-4-8-p<code>`（3 字元 base36 設定檔槽位） | `claude-opus-4-8-p01q` |
 
 代理會按請求選擇別名族：`?ids=cli` 或 `?ids=desktop` 優先；否則，`claude-code/*`
-user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 雜湊形式。兩種別名族都會永久
+user-agent 會獲得易讀的 CLI 形式，其他用戶端會獲得 Desktop 代碼形式。兩種別名族都會永久
 保持可解碼——以任一形式儲存在 `settings.json` 中的模型都能繼續工作。
 每個條目帶有誠實的顯示名（如 `gemini-3-pro (gemini)`），並以官方 ModelInfo 形態附帶完整模型
 能力（推理強度階梯、thinking 型別），使 Claude Desktop 的第三方閘道器模式能夠提供其推理強度

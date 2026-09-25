@@ -756,9 +756,14 @@ test("Claude Desktop profile GET, PUT and apply round-trip four-family assignmen
     expect(put.status).toBe(200);
     expect(loadConfig().claudeCode?.desktopProfile?.defaults.sonnet).toBe("mock/test-model");
 
-    const alias = loadConfig().claudeCode?.desktopProfile?.assignments["mock/test-model"]?.alias;
+    const savedProfile = loadConfig().claudeCode!.desktopProfile!;
+    const wireAlias = desktopProfiles.renderDesktopProfile(savedProfile, [{
+      route: "mock/test-model",
+      label: "test-model (mock)",
+    }])[0]!.name;
+    expect(wireAlias).not.toBe(savedProfile.assignments["mock/test-model"]!.alias);
     const discovery = await fetch(new URL("/v1/models?flavor=anthropic", server.url)).then(r => r.json()) as { data: Array<{ id: string }> };
-    expect(discovery.data.some(model => model.id === alias)).toBe(true);
+    expect(discovery.data.some(model => model.id === wireAlias)).toBe(true);
 
     const apply = await fetch(new URL("/api/claude-desktop/apply", server.url), {
       method: "POST",

@@ -210,16 +210,24 @@ writes the resulting local Desktop configuration. No admin token, hub-profile up
 alias regeneration is part of this flow. Unsupported old hubs, invalid snapshots and unavailable
 Desktop models fail apply without a local-catalog or loopback fallback.
 
-Managed-namespace date aliases occupy `claude-opus-4-8-YYYYMMDD` slots across 2026-2035, not 2026
+Managed profile assignments persist `claude-opus-4-8-YYYYMMDD` slots across 2026-2035, not 2026
 alone. The original 2026-only design held 365 slots and failed with "all 365 encoded date slots are
 occupied" once a catalog exceeded 365 routes, because stale assignments are retained by design and
-the set only grows. 2026 is still allocated first, so existing assignments keep their ids, and
+the set only grows. 2026 is still allocated first, so existing assignments keep their slots, and
 2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
 `claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
-distinction. Every emitted suffix stays eight digits so `modelMap` date-stripping keeps working.
-`src/claude/desktop-profile.ts` owns this range.
+distinction. At render time each stored slot becomes a unique `p`-prefixed four-character wire
+code, disjoint from the historical three-character hash namespace. Claude Desktop strips terminal
+dates when comparing active-session model identity, so writing
+the persisted date slots directly would collapse every managed route to `claude-opus-4-8` and
+suppress `set_model` between them (#3782). The registry accepts both forms during migration. If an
+active real Anthropic id claims a persisted date slot, reconciliation reallocates the non-Anthropic
+route before rendering. If any synthetic or compatibility alias matches an active real Anthropic id,
+the conflicting routed row or compatibility binding is omitted with a warning, and the real
+Anthropic identity remains unclaimed; a profile alias can never overwrite native routing.
+`src/claude/desktop-profile.ts` owns the slot range and wire conversion.
 
-Date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
+Persisted date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed
 `desktop_model_mapping_unavailable` error rather than classifying it as invalid. Unknown legacy hash aliases
 remain HTTP 400; neither case reaches date-stripping or fallback routing. Known/registered IDs,

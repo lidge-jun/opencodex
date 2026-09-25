@@ -232,10 +232,10 @@ Claude Code 2.1.278 接受包含 `claude` 或 `anthropic` 的 ID。以 `claude-`
 | 界面 | 格式 | 示例 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>`（plain）或 `ocx-claude2-…`（escaped） | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-<code>`（3 字符 base36 哈希） | `claude-opus-4-8-ncb` |
+| Claude Desktop 3P | `claude-opus-4-8-p<code>`（3 字符 base36 配置槽） | `claude-opus-4-8-p01q` |
 
 代理会按请求选择别名族：`?ids=cli` 或 `?ids=desktop` 优先；否则，`claude-code/*`
-user-agent 会获得易读的 CLI 形式，其他客户端会获得 Desktop 哈希形式。两种别名族都会永久
+user-agent 会获得易读的 CLI 形式，其他客户端会获得 Desktop 代码形式。两种别名族都会永久
 保持可解码——以任一形式保存在 `settings.json` 中的模型都能继续工作。
 
 如果 Claude Desktop 底部的选择器没有切换正在进行的 3P 对话的模型，可以尝试

@@ -324,10 +324,10 @@ Support/Claude/configLibrary` on macOS, `%APPDATA%\Claude\configLibrary` on Wind
 `CLAUDE_USER_DATA_DIR` for an alternate Desktop user-data root. The legacy `Claude-3p` directory is
 not read or deleted automatically.
 
-Non-Anthropic routes receive stable aliases such as `claude-opus-4-8-YYYYMMDD`, where the year runs
-from 2026 to 2035. The date-looking
-part is a synthetic route slot, not the model's release date. 2026 slots are allocated first, so
-existing aliases keep their ids; the later years are reached only once 2026 fills.
+Non-Anthropic routes receive stable aliases such as `claude-opus-4-8-p01q`, with a `p`-prefixed
+four-character code. OpenCodex keeps a separate synthetic date slot internally so existing profile
+assignments stay stable, but it does not expose that date as the Desktop model id: current Desktop
+builds strip terminal dates when comparing active-session models, which can suppress model changes.
 Real Anthropic Claude routes keep
 their real ids. New routes default to the Opus family, but moving a route does not change the
 provider or model it calls. The legacy apply flags `--static`, `--hybrid`, and `--discovery-only`
@@ -452,22 +452,22 @@ for every Claude Code CLI row (`Routed by OpenCodex to <provider>/<model>`; nati
 | Surface | Format | Example |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) or `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-<code>` (3-char base36 hash) | `claude-opus-4-8-ncb` |
+| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3-char base36 profile slot) | `claude-opus-4-8-p01q` |
 
 The proxy picks the family per request: `?ids=cli` or `?ids=desktop` wins; otherwise the
-`claude-code/*` user-agent gets the readable CLI form and other clients get the Desktop hash.
+`claude-code/*` user-agent gets the readable CLI form and other clients get the Desktop code.
 Both families decode forever — a model saved in `settings.json` under either form keeps working.
 Each entry carries an honest display name such as `gemini-3-pro (gemini)`, plus full model
 capabilities (reasoning-effort ladder, thinking types) in the official ModelInfo shape so Claude
 Desktop's third-party gateway mode can offer its effort selector. Real Anthropic models keep their
 canonical ids. The synthetic 2026 date is an internal slot, not a release date. Legacy hash aliases and `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` ids from older configs still resolve. A legacy id configured in an OpenCodex model slot (`claudeCode.model`, `tierModels`, `smallFastModel`) is sent to Claude Code in its current spelling automatically. A legacy id saved by Claude Code's own picker still routes, but Claude Code keeps its 200k accounting for that id. Pick `ocx-claude-` for a saved `claude-ocx-` id, and `ocx-claude2-` for a saved escaped `claude-ocx2-` id, so the real context window and compact both apply.
 
-If Claude Desktop's footer picker does not change the model for an already-running 3P
-conversation, you can try `/model <id>`, but this workaround may also fail on affected Desktop
-builds. [Issue #3782](https://github.com/lidge-jun/opencodex/issues/3782) reports that on Windows
-with Claude Desktop 1.46388.4, the conversation continues using its initial model after both
-footer-picker and `/model` changes. The report does not establish which client or routing
-component causes the behavior.
+Older managed profiles exposed their internal `YYYYMMDD` slots directly. Affected Desktop builds strip
+that terminal date when comparing active-session models, so two distinct routes can look identical
+and no `set_model` control request is sent ([#3782](https://github.com/lidge-jun/opencodex/issues/3782)).
+Current profiles expose non-date codes instead. After upgrading, reapply the Desktop profile and fully
+quit and reopen Desktop; an already-running worker can still retain its old date-shaped id. The proxy
+continues decoding those old ids for migration, but it cannot make Desktop emit a suppressed switch.
 
 You can also try selecting the intended default model in the OpenCodex Claude Desktop profile,
 reapplying the profile, and starting a new conversation. This is a troubleshooting step, not a

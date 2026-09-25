@@ -254,9 +254,9 @@ Support/Claude/configLibrary` sur macOS, `%APPDATA%\Claude\configLibrary` sur Wi
 `CLAUDE_USER_DATA_DIR` pour utiliser une autre racine de données Claude Desktop. L'ancien répertoire `Claude-3p` n'est
 ni lu ni supprimé automatiquement.
 
-Les routes non Anthropic reçoivent des alias stables comme `claude-opus-4-8-YYYYMMDD`, dont l'année va de 2026 à 2035. La partie qui ressemble à une date
-est un emplacement synthétique de route, et non la date de publication du modèle. Les emplacements de 2026 sont attribués en premier, de sorte que les alias
-existants conservent leur identifiant ; les années suivantes ne sont utilisées qu'une fois 2026 saturée. Les véritables routes Anthropic Claude conservent
+Les routes non Anthropic reçoivent des alias stables comme `claude-opus-4-8-p01q`, avec un code de quatre caractères préfixé par `p`. OpenCodex conserve
+un emplacement synthétique daté en interne pour stabiliser les affectations du profil, mais n'expose pas cette date comme identifiant Desktop : les versions
+actuelles de Desktop retirent les dates finales lors de la comparaison des modèles d'une session active, ce qui peut empêcher un changement. Les véritables routes Anthropic Claude conservent
 leur identité. Les nouvelles routes appartiennent par défaut à la famille Opus, mais déplacer une route ne change ni le
 fournisseur ni le modèle qu'elle appelle. Les anciens indicateurs `--static`, `--hybrid` et `--discovery-only`
 restent disponibles pour les scripts existants.
@@ -376,10 +376,10 @@ chaque ligne du CLI Claude Code (`Routed by OpenCodex to <provider>/<model>` ; l
 | Surface | Format | Exemple |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (simple) ou `ocx-claude2-…` (échappé) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-<code>` (hachage base36 de 3 caractères) | `claude-opus-4-8-ncb` |
+| Claude Desktop 3P | `claude-opus-4-8-p<code>` (emplacement base36 de 3 caractères) | `claude-opus-4-8-p01q` |
 
 Le proxy choisit la famille pour chaque requête : `?ids=cli` ou `?ids=desktop` est prioritaire ; à défaut, l'agent utilisateur
-`claude-code/*` reçoit la forme lisible de la CLI et les autres clients reçoivent la forme hachée de Claude Desktop.
+`claude-code/*` reçoit la forme lisible de la CLI et les autres clients reçoivent le code Claude Desktop.
 Les deux familles restent toujours décodables : un modèle enregistré sous l'une ou l'autre forme dans `settings.json` continue de fonctionner.
 Chaque entrée porte un nom d'affichage explicite, comme `gemini-3-pro (gemini)`, ainsi que toutes les capacités du modèle
 (échelle d'effort de raisonnement et types de réflexion) dans la structure officielle ModelInfo. Le mode passerelle tierce de Claude

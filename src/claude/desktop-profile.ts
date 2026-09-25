@@ -28,9 +28,11 @@ export interface RenderedDesktopModel extends DesktopProfileModel {
 // design, so the set only grows). Years before 2026 stay rejected: dated
 // ids like `claude-opus-4-8-20250201` are real model snapshot ids, not
 // managed aliases, and the inbound decoder relies on that distinction.
-// Every emitted suffix stays 8 digits so modelMap date-stripping keeps
-// working.
+// The persisted slot stays date-shaped for stable allocation and migration.
+// renderDesktopProfile() converts it to a letter-first wire id because current
+// Claude Desktop strips terminal dates before comparing model identities.
 const DATE_ALIAS = /^claude-opus-4-8-(202[6-9]\d{4}|203[0-5]\d{4})$/;
+const PROFILE_WIRE_PREFIX = "claude-opus-4-8-";
 const LEGACY_YEAR = 2026;
 const LEGACY_DAY_COUNT = 365;
 const ALIAS_FIRST_YEAR = 2026;
@@ -121,6 +123,24 @@ export function validDateAlias(alias: string): boolean {
   const day = Number(match[1]!.slice(6, 8));
   const date = new Date(Date.UTC(year, month - 1, day));
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+/**
+ * Turn a persisted date slot into a unique non-date Desktop wire id.
+ *
+ * The 2026-2035 namespace has fewer than 3,888 days, so a `p`-prefixed
+ * three-character base36 slot has ample room. The four-character suffix is
+ * disjoint from both terminal dates and the historical three-character hash
+ * namespace used by profiles written before this allocator existed.
+ */
+export function desktopProfileWireAlias(alias: string): string {
+  const match = DATE_ALIAS.exec(alias);
+  if (!match || !validDateAlias(alias)) return alias;
+  const year = Number(match[1]!.slice(0, 4));
+  const month = Number(match[1]!.slice(4, 6));
+  const day = Number(match[1]!.slice(6, 8));
+  const slot = Math.round((Date.UTC(year, month - 1, day) - Date.UTC(ALIAS_FIRST_YEAR, 0, 1)) / 86_400_000);
+  return `${PROFILE_WIRE_PREFIX}p${slot.toString(36).padStart(3, "0")}`;
 }
 
 export function parseDesktopProfile(value: unknown): DesktopProfile {
@@ -235,7 +255,24 @@ export function reconcileDesktopProfile(
   const assignments: DesktopProfile["assignments"] = Object.fromEntries(
     Object.entries(profile.assignments).map(([route, assignment]) => [route, { ...assignment }]),
   );
-  const used = new Set(Object.values(assignments).map(value => value.alias));
+  const activeRealAliases = new Set(models
+    .filter(model => isRealAnthropicRoute(model.route))
+    .map(model => routeModelId(model.route)));
+  const displacedRoutes = Object.entries(assignments)
+    .filter(([route, assignment]) => !isRealAnthropicRoute(route) && activeRealAliases.has(assignment.alias))
+    .map(([route]) => route)
+    .sort();
+  const displaced = new Set(displacedRoutes);
+  const used = new Set(Object.entries(assignments)
+    .filter(([route]) => !displaced.has(route))
+    .map(([, assignment]) => assignment.alias));
+  for (const alias of activeRealAliases) used.add(alias);
+  for (const route of displacedRoutes) {
+    const assignment = assignments[route]!;
+    const alias = allocateAlias(route, used);
+    used.add(alias);
+    assignments[route] = { ...assignment, alias };
+  }
   for (const model of [...models].sort((a, b) => a.route.localeCompare(b.route))) {
     if (assignments[model.route]) continue;
     const alias = allocateAlias(model.route, used);
@@ -319,7 +356,7 @@ export function renderDesktopProfile(
     const assignment = parsed.assignments[route]!;
     return {
       ...model,
-      name: assignment.alias,
+      name: isRealAnthropicRoute(route) ? assignment.alias : desktopProfileWireAlias(assignment.alias),
       family: assignment.family,
       isFamilyDefault: effectiveDefaults[assignment.family] === route,
       supports1m: typeof model.contextWindow === "number" && model.contextWindow >= 1_000_000,

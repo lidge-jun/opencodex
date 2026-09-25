@@ -244,10 +244,10 @@ Claude Code 2.1.129 以降は `GET /v1/models?limit=1000` でゲートウェイ�
 | 画面 | 形式 | 例 |
 | --- | --- | --- |
 | Claude Code CLI | `ocx-claude-<provider>--<model>` (plain) または `ocx-claude2-…` (escaped) | `ocx-claude-native--gpt-5.6-sol` |
-| Claude Desktop 3P | `claude-opus-4-8-<code>` (3 桁の base36 ハッシュ) | `claude-opus-4-8-ncb` |
+| Claude Desktop 3P | `claude-opus-4-8-p<code>` (3 桁の base36 プロファイルスロット) | `claude-opus-4-8-p01q` |
 
 プロキシはリクエストごとに系列を選びます。`?ids=cli` または `?ids=desktop` が優先し、指定しないと
-`claude-code/*` user-agent には読みやすい CLI 形式を、他のクライアントには Desktop ハッシュを
+`claude-code/*` user-agent には読みやすい CLI 形式を、他のクライアントには Desktop コードを
 提供します。両系列は継続してデコードできるため、どちらの形式でも `settings.json` に保存したモデルは
 引き続き動作します。古い設定の `claude-ocx-<provider>--<model>` / `claude-ocx2-<provider>--<model>` も
 引き続き解決されますが、保存済みの旧 ID はルーティングされても Claude Code 側では 200k として計算されます。
