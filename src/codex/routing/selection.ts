@@ -13,7 +13,7 @@ import {
   pickRoundRobinAccount,
   selectPriorityTier,
 } from "../pool-rotation";
-import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, resetAtToMs } from "../quota";
+import { CODEX_UNKNOWN_USAGE_SCORE, getAccountQuota, resetAtToMs, type StoredAccountQuota } from "../quota";
 import { codexPlanKey } from "../plan";
 import { MAIN_CODEX_ACCOUNT_ID, getMainAccountPlan, hasMainAccountRefreshGrant } from "../main-account";
 import type { OcxConfig } from "../../types";
@@ -655,6 +655,66 @@ export function peekAlternateCodexAccount(
 
 export function isUnknownUsage(usage: number): boolean {
   return usage >= CODEX_UNKNOWN_USAGE_SCORE;
+}
+
+/** Clock skew and header latency between the upstream reset and the local observation. */
+const UNSTARTED_WINDOW_TOLERANCE_MS = 60_000;
+/** Account -> end of the window this process already started for it. */
+const startedUnstartedWindowUntil = new Map<string, number>();
+
+/**
+ * The last observation showed a 5-hour window nobody has used: 0% and a reset a full window after
+ * the observation. An idle window's reset slides with the clock, so this is the only shape that
+ * separates it from a started one without sending anything.
+ */
+function isShortWindowUnstarted(
+  quota: StoredAccountQuota | null,
+): quota is StoredAccountQuota & { shortWindowSeconds: number } {
+  if (!quota || quota.shortPercent !== 0) return false;
+  const { shortResetAt, shortObservedAt, shortWindowSeconds } = quota;
+  if (
+    typeof shortResetAt !== "number" || !Number.isFinite(shortResetAt)
+    || typeof shortObservedAt !== "number" || !Number.isFinite(shortObservedAt)
+    || typeof shortWindowSeconds !== "number" || !Number.isFinite(shortWindowSeconds)
+    || shortWindowSeconds <= 0
+  ) return false;
+  return resetAtToMs(shortResetAt) - shortObservedAt
+    >= shortWindowSeconds * 1000 - UNSTARTED_WINDOW_TOLERANCE_MS;
+}
+
+/**
+ * `codexPool.startIdleWindows`: hand a never-bound request to an account whose 5-hour window has
+ * not started, so a real request starts its reset clock instead of a synthetic warmup.
+ *
+ * Each account is steered once per window this process started. The response to that request
+ * still looks unstarted (0%, reset a full window out), so without the marker every new
+ * conversation would keep landing on it. A pin is an explicit operator choice and wins.
+ */
+export function pickUnstartedWindowCodexAccount(
+  config: OcxConfig,
+  threadId: string | null,
+  now: number,
+  quotaScope: CodexQuotaScope | undefined,
+  selectionOptions: CodexAccountUsabilityOptions | undefined,
+  commit: boolean,
+): string | null {
+  if (config.codexPool?.startIdleWindows !== true || isIndependentCodexQuotaScope(quotaScope)) return null;
+  if (pinnedCodexAccountId(config) !== undefined) return null;
+  for (const id of listEligibleCodexAccountIds(config, now, quotaScope, selectionOptions)) {
+    if ((startedUnstartedWindowUntil.get(id) ?? 0) > now) continue;
+    const quota = getAccountQuota(id);
+    if (!isShortWindowUnstarted(quota) || !hasCodexQuotaHeadroom(config, id, selectionOptions, now)) continue;
+    if (commit) {
+      startedUnstartedWindowUntil.set(id, now + quota.shortWindowSeconds * 1000);
+      if (threadId) bindThreadAffinity(threadId, id, now, quotaScope);
+    }
+    return id;
+  }
+  return null;
+}
+
+export function clearUnstartedWindowStartsForTests(): void {
+  startedUnstartedWindowUntil.clear();
 }
 
 /**

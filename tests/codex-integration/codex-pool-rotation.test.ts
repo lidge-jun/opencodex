@@ -38,6 +38,7 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearUnstartedWindowStartsForTests } from "../../src/codex/routing/selection";
 import { getConfigPath } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -913,6 +914,57 @@ describe("accountPoolStrategy new-session routing", () => {
     recordCodexUpstreamOutcome(config, "a", 503);
     expect(getEffectiveActiveCodexAccountId(config)).toBe("b");
     expect(config.activeCodexAccountId).toBe("a");
+  });
+
+  describe("codexPool.startIdleWindows", () => {
+    beforeEach(() => clearUnstartedWindowStartsForTests());
+    afterEach(() => clearUnstartedWindowStartsForTests());
+
+    /** a is active and started, b has never been used this window, c is started. */
+    function seedIdleB(now: number): void {
+      const seconds = now / 1000;
+      setAccountQuotaFromParsed("a", { weeklyPercent: 10, shortPercent: 30, shortResetAt: seconds + 1_000, shortWindowSeconds: 18_000 });
+      setAccountQuotaFromParsed("b", { weeklyPercent: 50, shortPercent: 0, shortResetAt: seconds + 18_000, shortWindowSeconds: 18_000 });
+      setAccountQuotaFromParsed("c", { weeklyPercent: 20, shortPercent: 5, shortResetAt: seconds + 9_000, shortWindowSeconds: 18_000 });
+    }
+
+    test("off by default leaves new-session routing unchanged", () => {
+      const config = makeThreeAccountConfig();
+      const now = Date.now();
+      seedIdleB(now);
+      expect(resolveCodexAccountForThread("new", config, now)).toBe("a");
+    });
+
+    test("steers one never-bound request to the unstarted account, then routes normally", () => {
+      const config = makeThreeAccountConfig({ codexPool: { startIdleWindows: true } });
+      const now = Date.now();
+      seedIdleB(now);
+      expect(previewCodexAccountForRequest("first", config, now)).toBe("b");
+      expect(previewCodexAccountForRequest("first", config, now)).toBe("b");
+      expect(resolveCodexAccountForThread("first", config, now)).toBe("b");
+      // The starting response still reads 0% with a full window ahead; it must not attract more.
+      seedIdleB(now);
+      expect(previewCodexAccountForRequest("second", config, now + 1)).toBe("a");
+      expect(resolveCodexAccountForThread("second", config, now + 1)).toBe("a");
+      expect(resolveCodexAccountForThread("first", config, now + 2)).toBe("b");
+      expect(config.activeCodexAccountId).toBe("a");
+    });
+
+    test("never moves a bound conversation and yields to a pin or a started window", () => {
+      const config = makeThreeAccountConfig();
+      const now = Date.now();
+      seedIdleB(now);
+      expect(resolveCodexAccountForThread("bound", config, now)).toBe("a");
+      config.codexPool = { startIdleWindows: true };
+      expect(resolveCodexAccountForThread("bound", config, now)).toBe("a");
+
+      config.activeCodexAccountPinned = "a";
+      expect(resolveCodexAccountForThread("pinned", config, now)).toBe("a");
+      delete config.activeCodexAccountPinned;
+
+      setAccountQuotaFromParsed("b", { weeklyPercent: 50, shortPercent: 0, shortResetAt: now / 1000 + 9_000, shortWindowSeconds: 18_000 });
+      expect(resolveCodexAccountForThread("started", config, now)).toBe("a");
+    });
   });
 });
 

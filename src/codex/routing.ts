@@ -109,6 +109,7 @@ import {
   pickPriorityPreemption,
   pickResetFirstCodexAccount,
   pickUnboundStrategyAccount,
+  pickUnstartedWindowCodexAccount,
   preferModelEntitledAccount,
   sharedStateSelectionOptions,
   sharesActiveSelection,
@@ -786,6 +787,9 @@ export function previewCodexAccountForRequest(
     if (lineagePreview) return lineagePreview.accountId;
   }
 
+  const unstartedPreview = entry ? null : pickUnstartedWindowCodexAccount(config, threadId, now, quotaScope, selectionOptions, false);
+  if (unstartedPreview) return unstartedPreview;
+
   const strategyPick = pickUnboundStrategyAccount(
     config,
     threadId,
@@ -1087,6 +1091,10 @@ export function resolveCodexAccountForThreadDetailed(
       };
     }
   }
+
+  // Never-bound only: moving a live conversation pays a cold prompt cache for a window any new one could start.
+  const unstarted = entry === undefined ? pickUnstartedWindowCodexAccount(config, threadId, now, quotaScope, selectionOptions, true) : null;
+  if (unstarted) return { status: "selected", accountId: unstarted, affinity: affinityAfterRelease(threadId, releaseReason) };
 
   // A request-scoped roster may still contain unhealthy candidates. Non-quota strategies return
   // before the quota/failover helpers below, so prefer only shared-healthy roster members here;

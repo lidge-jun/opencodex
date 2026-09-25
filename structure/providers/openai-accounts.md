@@ -213,6 +213,8 @@ Listener startup diagnostics follow [the runtime lifecycle contract](../runtime.
 
 `src/codex/routing/selection.ts` applies optional `codexPool.excludedPlans` to both candidate selection and existing active/affined accounts. An all-excluded pool returns no automatic candidate, including preview and configured-account fallback. Native main remains exempt and unknown plans remain eligible. Explicit account-qualified routes retain pause, credential and entitlement checks while bypassing only this automatic policy.
 
+Optional `codexPool.startIdleWindows` is checked by resolve and preview before strategy selection, only for requests with no thread binding and only in the shared quota scope. It picks an eligible account whose recorded short window reads 0% with a reset at least one window (minus one minute) after the observation, marks it started in process memory for that window, and yields to a pin. It reads recorded quota only and never dispatches a request of its own.
+
 `src/codex/auth-api/account-list.ts` projects `selectionExcludedReason: "plan_excluded"` and `selectionExcludedPlan` from the routing config, even when a newer display-only WHAM plan could not be persisted. The dashboard and account CLI show the policy reason separately from credential health; renewal clears the derived fields. The automatic next-session action and badge are omitted for excluded rows.
 Paginated and migration-capable history follows the [authoritative writer contract](../codex-home.md#paginated-history-writer-boundary); this document adds no independent writer guarantee.
 

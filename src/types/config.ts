@@ -1506,6 +1506,13 @@ export interface OcxCodexPoolConfig {
    * operator never meant to exclude.
    */
   excludedPlans?: string[];
+  /**
+   * Send the next brand-new, never-bound conversation to a pool account whose 5-hour window was
+   * last observed as not yet started, so a real request starts its reset clock. Off by default.
+   * Nothing synthetic is sent: detection reads only quota evidence already recorded from
+   * ordinary responses and operator refreshes.
+   */
+  startIdleWindows?: boolean;
 }
 
 /**
