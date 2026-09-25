@@ -10,7 +10,7 @@
   merge, release, and edits to the live ~/.claude or ~/.opencodex are not). Tests use temp dirs only.
 - Write scope: src/claude/**, src/server/index/claude-intercept-lifecycle.ts, src/server/index/optional-listeners.ts,
   src/server/management/{agent-settings-routes,native-integration-routes,context}.ts, src/cli/{claude,claude-desktop,integrations,capabilities,ensure-desired-integrations}.ts,
-  src/types/config.ts, src/config/schema/**, gui/src/** (Claude pages, i18n), docs-site guides/claude-code.md ×8, structure/ docs named below,
+  src/types/config.ts, src/config/load-degrade.ts (src/config/schema/** unchanged), gui/src/** (Claude pages, i18n), docs-site guides/claude-code.md ×8, structure/ docs named below,
   skills/ocx generated surface, tests/** and gui/tests/** for the touched areas, this devlog unit.
 - Budget: no stated token bound; wall clock bounded by the host goal. Hitting a real bound reports BUDGET_EXHAUSTED.
 - Delegation: gpt-6-sol subagents (V1 family), read-only explorers/architect/reviewers; writers only with disjoint file scopes.

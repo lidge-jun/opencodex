@@ -9,7 +9,6 @@ Make `claudeCode.cliFirstParty` a durable, default-off intent and make the share
 | Path | Change | Purpose |
 |---|---|---|
 | `src/types/config.ts` | MODIFY | Persisted intent type |
-| `src/config/schema/config-schema.ts` | MODIFY | Reject malformed CLI intent on writes |
 | `src/config/load-degrade.ts` | MODIFY | Drop malformed hand edit without losing config |
 | `src/claude/first-party-settings.ts` | NEW | Pure two-client desire, owned settings reconciliation, and eight-state shared-proxy inspection |
 | `src/claude/desktop-first-party.ts` | MODIFY | Ignore CLI env for Desktop inference; retain env for CLI |
@@ -43,17 +42,13 @@ All anchors below are from base `9c28acf6a1` in this worktree. For NEW files, `N
     * Opt-in relocation of supported trailing Claude harness notices from system instructions
 ```
 
-### Schema — `src/config/schema/config-schema.ts:297` `const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown };`
+### Schema — no change (audit wp2-A)
 
-```diff
-@@
--    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown };
-+    const claude = claudeCode as { desktopProfile?: unknown; desktopMode?: unknown; intercept?: unknown; cliFirstParty?: unknown };
-+    if (claude.cliFirstParty !== undefined && typeof claude.cliFirstParty !== "boolean") {
-+      ctx.addIssue({ code: "custom", path: ["claudeCode", "cliFirstParty"], message: "cliFirstParty must be a boolean" });
-+    }
-     if (claude.desktopMode !== undefined && claude.desktopMode !== "first-party" && claude.desktopMode !== "gateway") {
-```
+`claudeCode` is `.passthrough()` (`src/config/schema/config-schema.ts:292`) and `loadConfig` / diagnostics parse the schema
+**before** `normalizePersistedClaudeCode` runs (`src/config.ts:230-252`, `src/config/diagnostics.ts:649-682`). A schema issue
+for a malformed `cliFirstParty` would therefore push a hand-edited config onto the fallback path. wp2 adds no schema
+rule: the load normalizer below drops a non-boolean value, and every consumer reads `=== true`, so any malformed
+value means off. Writes stay typed: `PUT /api/claude-code` (wp4) accepts only a boolean.
 
 ### Load degradation — `src/config/load-degrade.ts:546` `const normalized = { ...claudeCode } as Record<string, unknown>;`
 
@@ -347,6 +342,8 @@ The injected `removeDesktopFirstParty: () => ...` at `:481` remains valid becaus
 +import type { ClaudeInterceptSettingsState } from "../../src/claude/intercept/settings";
 +import { configSchema } from "../../src/config/schema/config-schema";
 +import { normalizePersistedClaudeCode } from "../../src/config/load-degrade";
++import { loadConfig } from "../../src/config";
++import { cliFirstPartyDesired } from "../../src/claude/first-party-settings";
 +import type { OcxConfig } from "../../src/types";
 +import { removeTreeWithRetry } from "../helpers/remove-tree";
 +
@@ -536,8 +533,24 @@ The injected `removeDesktopFirstParty: () => ...` at `:481` remains valid becaus
 +  expect(normalizePersistedClaudeCode({ cliFirstParty: "yes" })).toEqual({});
 +  expect(normalizePersistedClaudeCode({ cliFirstParty: true })).toEqual({ cliFirstParty: true });
 +  const base = { port: 0, defaultProvider: "openai", providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" } } };
++  // passthrough schema: a malformed value parses, so a hand-edited config never takes the fallback path
 +  expect(configSchema.safeParse({ ...base, claudeCode: { cliFirstParty: true } }).success).toBe(true);
-+  expect(configSchema.safeParse({ ...base, claudeCode: { cliFirstParty: "yes" } }).success).toBe(false);
++  expect(configSchema.safeParse({ ...base, claudeCode: { cliFirstParty: "yes" } }).success).toBe(true);
++});
++
++test("a malformed cliFirstParty in config.json loads as off and keeps the providers", () => {
++  // Real load path, same temp-home pattern as tests/server/config.test.ts:56-83.
++  const previousHome = process.env.OPENCODEX_HOME;
++  process.env.OPENCODEX_HOME = root;
++  const base = { port: 0, defaultProvider: "openai", providers: { openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward", codexAccountMode: "direct" } } };
++  writeFileSync(join(root, "config.json"), JSON.stringify({ ...base, claudeCode: { cliFirstParty: "yes" } }));
++  let loaded: OcxConfig;
++  try { loaded = loadConfig(); } finally {
++    if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome;
++  }
++  expect(Object.keys(loaded.providers)).toContain("openai");
++  expect(loaded.claudeCode?.cliFirstParty).toBeUndefined();
++  expect(cliFirstPartyDesired(loaded)).toBe(false);
 +});
 +
 +test.each([
