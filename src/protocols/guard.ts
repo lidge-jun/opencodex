@@ -26,3 +26,8 @@ export function checkRepresentable(input: {
   const features = unrepresentableFeatures(effects);
   return features.length === 0 ? { ok: true } : { ok: false, features, reasonCodes: ["feature-unrepresentable"] };
 }
+
+/** Client-facing refusal text. Names feature keys only, never request content. */
+export function unrepresentableMessage(features: readonly ProtocolFeature[]): string {
+  return `The selected route cannot carry these request features: ${features.join(", ")}`;
+}
