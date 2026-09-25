@@ -146,9 +146,16 @@ test("on touch the first tap shows the detail, the second follows the link, and 
   await tap("Kimi");
   expect(tooltip()).toBeNull();
 
-  // A keyboard Enter after touch contact follows the link instead of opening the detail.
-  await click(view.chip("OpenAI"));
-  expect(testWindow.location.hash).toBe("#providers?provider=openai&tab=accounts");
+  // A keyboard Enter on a chip that was just tapped (detail dismissed with Escape) follows the
+  // link instead of being read as a second tap that only reopens the detail.
+  await tap("xAI Grok");
+  expect(tooltip()?.textContent).toContain("xAI Grok");
+  await act(async () => {
+    document.dispatchEvent(new testWindow.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as Event);
+  });
+  expect(tooltip()).toBeNull();
+  await click(view.chip("xAI Grok"));
+  expect(testWindow.location.hash).toBe("#providers?provider=xai&tab=accounts");
   await view.unmount();
 });
 
