@@ -199,11 +199,18 @@ async function linkRequest<T>(path: string, init: RequestInit, deps: LinkCliDeps
     return await runtimeRequest<T>(path, requestInit, deps);
   } catch (error) {
     if (error instanceof RuntimeApiError) {
-      // Never echo an API error body: issue responses contain a one-time data key.
-      throw new RuntimeApiError(`Link management request failed (${error.status})`, error.status, null);
+      // Never echo an API error body: issue responses contain a one-time data key. Only the error
+      // code survives, because callers branch on it and a code is never secret.
+      throw new RuntimeApiError(`Link management request failed (${error.status})`, error.status, errorCodeBody(error.body));
     }
     throw error;
   }
+}
+
+function errorCodeBody(body: unknown): { error: { code: string } } | null {
+  if (!isRecord(body) || !isRecord(body.error)) return null;
+  const code = body.error.code;
+  return typeof code === "string" && /^[a-z_]{1,64}$/.test(code) ? { error: { code } } : null;
 }
 
 async function runPort(args: string[], deps: LinkCliDeps): Promise<void> {
@@ -255,8 +262,16 @@ async function runRevoke(args: string[], deps: LinkCliDeps): Promise<void> {
   const linkId = takeOption(args, "--link-id");
   if (!linkId || !LINK_ID.test(linkId)) throw new CliUsageError("revoke requires a valid --link-id", LINK_USAGE);
   rejectArgs(args, LINK_USAGE);
-  const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}`, { method: "DELETE" }, deps);
-  validateRevoke(response, linkId);
+  try {
+    const response = await linkRequest<unknown>(`/api/link/${encodeURIComponent(linkId)}`, { method: "DELETE" }, deps);
+    validateRevoke(response, linkId);
+  } catch (error) {
+    // Revoke is idempotent: a link the Home no longer has is already revoked, and a Child retrying
+    // a join rollback depends on that answer being success. A 404 without this code comes from a
+    // listener that does not serve the management API and stays a failure.
+    const code = error instanceof RuntimeApiError && error.status === 404 ? errorCodeBody(error.body)?.error.code : undefined;
+    if (code !== "link_not_found") throw error;
+  }
   console.log(JSON.stringify({ linkId }));
 }
 

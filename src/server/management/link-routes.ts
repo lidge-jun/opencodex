@@ -390,6 +390,11 @@ function joinFailure(error: unknown): Response {
     case "join_issue_failed": return fail("join_issue_failed", "The home could not issue a link.", 502);
     case "join_tunnel_failed": return fail("join_tunnel_failed", "The SSH tunnel to the home did not become ready.", 502);
     case "admission_failed": return fail("admission_failed", "The home refused the issued link key.", 502);
+    case "join_rollback_failed": {
+      const linkId = error && typeof error === "object" && "linkId" in error && typeof error.linkId === "string" ? error.linkId : "unknown";
+      return fail("join_rollback_failed", `The join failed and the home link could not be revoked; run ocx link revoke --link-id ${linkId} on the home.`, 502);
+    }
+    case "join_restart_failed": return fail("join_restart_failed", "The link is ready; restart OpenCodex to finish connecting as a Child.", 500);
     default: return fail("join_connect_failed", "The client link join could not be completed.", 502);
   }
 }

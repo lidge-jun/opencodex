@@ -1,5 +1,5 @@
 import { describe, expect, test, spyOn } from "bun:test";
-import { joinHome, type ClientLinkJoinDeps } from "../../src/client/link-join";
+import { ClientLinkJoinError, joinHome, type ClientLinkJoinDeps } from "../../src/client/link-join";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { SshRunner } from "../../src/link/ssh-runner";
@@ -47,6 +47,8 @@ function joinDeps(overrides: Partial<ClientLinkJoinDeps> = {}): ClientLinkJoinDe
     now: () => 1,
     sleep: async () => {},
     hostname: () => "client-host",
+    readSidecar: () => null,
+    readConnectionState: () => ({ kind: "disconnected" }),
     ...overrides,
   };
 }
@@ -228,5 +230,102 @@ describe("client initiated link join", () => {
     }
     expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
     expect(logs.mock.calls.flat().join(" ")).not.toContain(KEY);
+  });
+
+  test("keeps the sidecar and reports the link id when rollback revoke fails, then compensates before the next join", async () => {
+    const sidecar = {
+      linkId: LINK_ID,
+      alias: "home",
+      hubHostKeyFingerprint: FINGERPRINT,
+      peerListenerPort: 45678,
+      tunnelPort: 23456,
+    };
+    let sidecarPresent = false;
+    let revokeCount = 0;
+    const order: string[] = [];
+    const runner: SshRunner = {
+      run: async argv => {
+        if (argv.some(value => value.includes("issue"))) {
+          order.push("issue");
+          return { code: 0, stdout: JSON.stringify({ linkId: LINK_ID, apiKeyId: API_KEY_ID, key: KEY, listenerPort: 45678 }), stderr: "" };
+        }
+        if (argv.some(value => value.includes("revoke"))) {
+          revokeCount += 1;
+          order.push(`revoke-${revokeCount}`);
+          return { code: revokeCount === 1 ? 1 : 0, stdout: "", stderr: "failed" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill: () => {} }),
+    };
+    const base = joinDeps({
+      runner,
+      readSidecar: () => sidecarPresent ? sidecar : null,
+      writeState: value => { sidecarPresent = true; Object.assign(sidecar, value); },
+      clearState: () => { sidecarPresent = false; },
+      spawnTunnel: () => ({ pid: 1, exited: Promise.resolve(0), stop: async () => {} }),
+      fetchImpl: async () => new Response(null, { status: 200 }),
+      connect: (async () => { throw new Error("connect failed"); }) as typeof import("../../src/client/connect").connectClient,
+    });
+    await expect(joinHome(base, { alias: "home" })).rejects.toMatchObject({ code: "join_rollback_failed", linkId: LINK_ID });
+    expect(sidecarPresent).toBe(true);
+
+    const next = joinDeps({
+      ...base,
+      connect: (async () => {}) as typeof import("../../src/client/connect").connectClient,
+      scheduleRestart: () => {},
+    });
+    await expect(joinHome(next, { alias: "home" })).resolves.toEqual({ linkId: LINK_ID, apiKeyId: API_KEY_ID });
+    expect(order).toEqual(["issue", "revoke-1", "revoke-2", "issue"]);
+    expect(sidecarPresent).toBe(true);
+  });
+
+  test("maps a restart scheduling failure to 500 while retaining the committed connection and sidecar", async () => {
+    let connected = false;
+    let sidecar: Record<string, unknown> = {};
+    let cleared = false;
+    const response = await handleLinkRoutes(context({
+      principal: "gui-session",
+      paired: true,
+      deps: {
+        sshRunner: runnerFor([]),
+        joinHome: (async (deps, input) => joinHome({
+          ...deps,
+          readSidecar: () => null,
+          readConnectionState: () => ({ kind: "disconnected" }),
+          now: () => 1,
+          writeState: state => { sidecar = { ...state }; },
+          clearState: () => { cleared = true; },
+          spawnTunnel: () => tunnelFor([]),
+          fetchImpl: async () => new Response(null, { status: 200 }),
+          connect: (async () => { connected = true; }) as typeof import("../../src/client/connect").connectClient,
+          scheduleRestart: () => { throw new Error("restart unavailable"); },
+        }, input)) as typeof import("../../src/client/link-join").joinHome,
+      },
+    }), routeState());
+    expect(response?.status).toBe(500);
+    expect(await response?.json()).toEqual({
+      error: { code: "join_restart_failed", message: "The link is ready; restart OpenCodex to finish connecting as a Child." },
+    });
+    expect(connected).toBe(true);
+    expect(sidecar).toMatchObject({ linkId: LINK_ID });
+    expect(cleared).toBe(false);
+  });
+
+  test("maps rollback failure with its link id and preserves the remote compensation receipt", async () => {
+    const response = await handleLinkRoutes(context({
+      principal: "gui-session",
+      paired: true,
+      deps: {
+        joinHome: async () => { throw new ClientLinkJoinError("join_rollback_failed", LINK_ID); },
+      },
+    }), routeState());
+    expect(response?.status).toBe(502);
+    expect(await response?.json()).toEqual({
+      error: {
+        code: "join_rollback_failed",
+        message: `The join failed and the home link could not be revoked; run ocx link revoke --link-id ${LINK_ID} on the home.`,
+      },
+    });
   });
 });

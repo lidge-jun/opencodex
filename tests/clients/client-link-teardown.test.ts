@@ -66,7 +66,7 @@ test("teardown reports revoke failure and leaves a mismatched sidecar alone", as
     runner: { run: async () => { calls += 1; return { code: 0, stdout: "", stderr: "" }; } },
     knownHostsFile,
   });
-  expect(mismatch).toEqual({ linkId: null, homeRevoke: "not_applicable", tunnel: null });
+  expect(mismatch).toEqual({ linkId: null, homeRevoke: "not_applicable", tunnel: { tunnel: "reaped" } });
   expect(calls).toBe(1);
 });
 
@@ -128,16 +128,18 @@ test("disconnect output reports an unresolved tunnel", async () => {
 
 test("an unreadable sidecar skips the revoke but still reports the manual revoke for a link client", async () => {
   let calls = 0;
+  const order: string[] = [];
   const runner = { run: async () => { calls += 1; return { code: 0, stdout: "", stderr: "" }; } };
-  const unreadable = () => { throw new Error("client-link.json is not valid JSON"); };
+  const unreadable = () => { order.push("sidecar"); throw new Error("client-link.json is not valid JSON"); };
   const linked = await teardownClientLink({
     readSidecar: unreadable,
     connectedLinkId: () => linkId,
-    reapOrphanTunnel: async () => ({ tunnel: "absent" }),
+    reapOrphanTunnel: async () => { order.push("reap"); return { tunnel: "absent" }; },
     runner,
     knownHostsFile,
   });
-  expect(linked).toEqual({ linkId, homeRevoke: "failed", tunnel: null });
+  expect(linked).toEqual({ linkId, homeRevoke: "failed", tunnel: { tunnel: "absent" } });
+  expect(order).toEqual(["reap", "sidecar"]);
   const standalone = await teardownClientLink({
     readSidecar: unreadable,
     connectedLinkId: () => null,
@@ -145,6 +147,6 @@ test("an unreadable sidecar skips the revoke but still reports the manual revoke
     runner,
     knownHostsFile,
   });
-  expect(standalone).toEqual({ linkId: null, homeRevoke: "not_applicable", tunnel: null });
+  expect(standalone).toEqual({ linkId: null, homeRevoke: "not_applicable", tunnel: { tunnel: "absent" } });
   expect(calls).toBe(0);
 });

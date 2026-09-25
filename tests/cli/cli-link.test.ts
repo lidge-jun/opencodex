@@ -184,6 +184,34 @@ describe("ocx link", () => {
     }
   });
 
+  test("revoke of a link the Home no longer has succeeds, and any other 404 still fails", async () => {
+    const output = captureOutput();
+    try {
+      const gone = await runLinkCommand(["revoke", "--link-id", issueResponse.linkId, "--json"], {
+        baseUrl: "http://127.0.0.1:19101",
+        fetchImpl: fakeFetch({ error: { code: "link_not_found", message: "The link was not found." } }, [], 404),
+        readAdminToken: () => "ocx_admin_test-token",
+      });
+      expect(gone).toBe(0);
+      expect(JSON.parse(output.stdout[0]!)).toEqual({ linkId: issueResponse.linkId });
+      const unrouted = await runLinkCommand(["revoke", "--link-id", issueResponse.linkId, "--json"], {
+        baseUrl: "http://127.0.0.1:19101",
+        fetchImpl: fakeFetch({ error: { message: "not found" } }, [], 404),
+        readAdminToken: () => "ocx_admin_test-token",
+      });
+      expect(unrouted).not.toBe(0);
+      const refused = await runLinkCommand(["revoke", "--link-id", issueResponse.linkId, "--json"], {
+        baseUrl: "http://127.0.0.1:19101",
+        fetchImpl: fakeFetch({ error: { code: "key_revoke_failed" } }, [], 502),
+        readAdminToken: () => "ocx_admin_test-token",
+      });
+      expect(refused).not.toBe(0);
+      expect(output.stdout).toHaveLength(1);
+    } finally {
+      output.restore();
+    }
+  });
+
   test("rejects malformed status responses", async () => {
     const output = captureOutput();
     try {

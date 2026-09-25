@@ -24,6 +24,12 @@ export interface ClientLinkTeardownResult {
 export async function teardownClientLink(
   deps: ClientLinkTeardownDeps,
 ): Promise<ClientLinkTeardownResult> {
+  let tunnel: OrphanTunnelResult | null = null;
+  try {
+    tunnel = await deps.reapOrphanTunnel();
+  } catch {
+    // A reap failure must not prevent the one allowed Home revoke attempt.
+  }
   let sidecar: ClientLinkState | null;
   try {
     sidecar = deps.readSidecar();
@@ -31,17 +37,10 @@ export async function teardownClientLink(
     // An unreadable sidecar no longer names the Home alias, so the revoke cannot run here. The
     // disconnect still proceeds, and a link connection gets the manual revoke instruction.
     const linkId = deps.connectedLinkId();
-    return { linkId, homeRevoke: linkId ? "failed" : "not_applicable", tunnel: null };
+    return { linkId, homeRevoke: linkId ? "failed" : "not_applicable", tunnel };
   }
   if (!sidecar || sidecar.linkId !== deps.connectedLinkId()) {
-    return { linkId: null, homeRevoke: "not_applicable", tunnel: null };
-  }
-
-  let tunnel: OrphanTunnelResult | null = null;
-  try {
-    tunnel = await deps.reapOrphanTunnel();
-  } catch {
-    // A reap failure must not prevent the one allowed Home revoke attempt.
+    return { linkId: null, homeRevoke: "not_applicable", tunnel };
   }
 
   try {

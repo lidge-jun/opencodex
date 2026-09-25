@@ -8,9 +8,11 @@ import { connectClient, type ClientConnectDeps } from "./connect";
 import {
   clearClientLinkState,
   clientLinkStatePath,
+  readClientLinkState,
   writeClientLinkState,
   type ClientLinkState,
 } from "./link-state";
+import { isLinkConnection, readClientConnectionState, type ClientConnectionState } from "./state";
 import {
   spawnClientLinkTunnel,
   type ClientLinkTunnelDeps,
@@ -40,11 +42,13 @@ export type JoinFailureCode =
   | "join_issue_failed"
   | "join_tunnel_failed"
   | "admission_failed"
-  | "join_connect_failed";
+  | "join_connect_failed"
+  | "join_rollback_failed"
+  | "join_restart_failed";
 
 export class ClientLinkJoinError extends Error {
-  constructor(readonly code: JoinFailureCode) {
-    super(code);
+  constructor(readonly code: JoinFailureCode, readonly linkId?: string) {
+    super(linkId ? `${code}: ${linkId}` : code);
     this.name = "ClientLinkJoinError";
   }
 }
@@ -75,6 +79,8 @@ export interface ClientLinkJoinDeps {
   }, deps?: ClientLinkTunnelDeps) => ClientLinkTunnelHandle;
   writeState?: (state: ClientLinkState) => void;
   clearState?: (linkId: string) => void;
+  readSidecar?: () => ClientLinkState | null;
+  readConnectionState?: () => ClientConnectionState;
   connect?: typeof connectClient;
   connectDeps?: ClientConnectDeps;
   selectedClients?: OcxConnectedClientId[];
@@ -137,18 +143,20 @@ async function stopTunnel(tunnel: ClientLinkTunnelHandle | null): Promise<void> 
   }
 }
 
-async function revokeIssuedLink(deps: ClientLinkJoinDeps, linkId: string): Promise<void> {
+async function revokeIssuedLink(deps: ClientLinkJoinDeps, linkId: string, alias = deps.confirmedHost?.alias ?? ""): Promise<boolean> {
   try {
-    await deps.runner.run(
+    const result = await deps.runner.run(
       buildExecArgv({
-        alias: deps.confirmedHost?.alias ?? "",
+        alias,
         argv: ["ocx", "link", "revoke", "--link-id", linkId],
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
     );
+    return result.code === 0;
   } catch (error) {
     void error;
+    return false;
   }
 }
 
@@ -158,11 +166,38 @@ async function rollback(
   tunnel: ClientLinkTunnelHandle | null,
 ): Promise<void> {
   await stopTunnel(tunnel);
-  await revokeIssuedLink(deps, linkId);
+  if (!await revokeIssuedLink(deps, linkId)) throw new ClientLinkJoinError("join_rollback_failed", linkId);
   try {
     (deps.clearState ?? (id => defaultClearState(deps.configDir, id)))(linkId);
   } catch (error) {
     void error;
+  }
+}
+
+async function compensateStaleSidecar(deps: ClientLinkJoinDeps): Promise<void> {
+  let sidecar: ClientLinkState | null;
+  try {
+    sidecar = (deps.readSidecar ?? (() => readClientLinkState(clientLinkStatePath(deps.configDir))))();
+  } catch {
+    // A corrupt sidecar is overwritten by the next successful join.
+    return;
+  }
+  if (!sidecar) return;
+  let connection: ClientConnectionState;
+  try {
+    connection = (deps.readConnectionState ?? readClientConnectionState)();
+  } catch {
+    connection = { kind: "invalid", reason: "client connection state could not be read" };
+  }
+  if (connection.kind === "connected" && isLinkConnection(connection.value)
+    && connection.value.link?.linkId === sidecar.linkId) return;
+  if (!await revokeIssuedLink(deps, sidecar.linkId, sidecar.alias)) {
+    throw new ClientLinkJoinError("join_rollback_failed", sidecar.linkId);
+  }
+  try {
+    (deps.clearState ?? (linkId => defaultClearState(deps.configDir, linkId)))(sidecar.linkId);
+  } catch {
+    throw new ClientLinkJoinError("join_rollback_failed", sidecar.linkId);
   }
 }
 
@@ -202,6 +237,7 @@ function requireConfirmedHost(deps: ClientLinkJoinDeps, alias: string): JoinConf
 
 export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string }): Promise<{ linkId: string; apiKeyId: string }> {
   const confirmed = requireConfirmedHost(deps, input.alias);
+  await compensateStaleSidecar(deps);
   let tunnelPort: number;
   try {
     tunnelPort = await (deps.choosePort ?? (() => findAvailablePort(0, "127.0.0.1")))();
@@ -278,6 +314,10 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
   }
 
   await stopTunnel(tunnel);
-  deps.scheduleRestart();
+  try {
+    deps.scheduleRestart();
+  } catch {
+    throw new ClientLinkJoinError("join_restart_failed", issued.linkId);
+  }
   return { linkId: issued.linkId, apiKeyId: issued.apiKeyId };
 }
