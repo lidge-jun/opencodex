@@ -293,6 +293,7 @@
   "claude-intercept-local-ca.test.ts": "claude-integration",
   "claude-intercept-model-bindings.test.ts": "claude-integration",
   "claude-intercept-proxy.test.ts": "claude-integration",
+  "claude-intercept-client-class.test.ts": "claude-integration",
   "claude-intercept-proxy-auth.test.ts": "claude-integration",
   "claude-intercept-settings.test.ts": "claude-integration",
   "claude-management-api.test.ts": "claude-integration",

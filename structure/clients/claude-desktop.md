@@ -41,6 +41,10 @@ mutually exclusive on one machine:
   creating the local authority first. Only the Claude Code process Desktop spawns for the Code tab
   (and its subagents, and any standalone `claude` CLI) reads that env, so only their
   `api.anthropic.com` traffic reaches the [Claude intercept pair](../runtime.md#claude-intercept-pair).
+  The Desktop and standalone CLI first-party switches are independent intents. They share only the owned
+  settings env; it remains while either intent is desired. A client whose intent is off may still traverse
+  that proxy, but every path relays to real Anthropic when its intent is off. The account-risk warning applies
+  to either routed first-party client.
 - **gateway** (default for new installs): the existing third-party profile written by
   `src/claude/desktop-3p.ts`; the whole app switches to the local gateway. The dashboard,
   `--gateway`, and legacy `--static|--hybrid|--discovery-only` shape flags also select it.
