@@ -633,14 +633,21 @@ describe("combo target cooldowns", () => {
     expect(isComboTargetInCooldown("free", configuredPick.target, 1_000 + 7_000)).toBe(false);
   });
 
-  test("keeps the default cooldown for usage-window 1308", () => {
+  // Changed in #5860. This arrived as the negative control proving 1308 does NOT take the
+  // 5-second request-rate cooldown, so the 60-second value was a side effect of that contrast,
+  // not a position on exhaustion. 1308 IS a 5-hour usage window: a 60-second cooldown re-probes
+  // it about 300 times before it can possibly succeed. The contrast it was written to prove is
+  // preserved -- 1308 is still not COMBO_REQUEST_RATE_COOLDOWN_MS -- it now holds the full
+  // ten-minute exhaustion cooldown instead of the generic default.
+  test("holds the exhaustion cooldown for usage-window 1308", () => {
     coolComboTarget("free", target, {
       now: 1_000,
       code: "1308",
       message: "Usage limit reached for 5 hour",
     });
-    expect(isComboTargetInCooldown("free", target, 1_000 + 59_999)).toBe(true);
-    expect(isComboTargetInCooldown("free", target, 1_000 + 60_000)).toBe(false);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 60_000)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 10 * 60_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 10 * 60_000)).toBe(false);
   });
 
   test("honors explicit Retry-After over the request-rate default", () => {

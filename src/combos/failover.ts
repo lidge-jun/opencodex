@@ -230,11 +230,13 @@ export function coolComboTarget(
   const cooldownMs = serverDelayMs
     ?? parseResetCooldownMs(options?.resetAt, now)
     ?? options?.cooldownMs
-    ?? (isTransientRequestRateLimit({
-      status: options?.status,
-      code: options?.code,
-      message: options?.message,
-    }) ? COMBO_REQUEST_RATE_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
+    ?? (isAccountWindowExhausted(options?.message ?? "", options?.code)
+      ? MAX_COOLDOWN_MS
+      : isTransientRequestRateLimit({
+        status: options?.status,
+        code: options?.code,
+        message: options?.message,
+      }) ? COMBO_REQUEST_RATE_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
   targetCooldowns.set(cooldownMapKey(comboId, target), {
     // Local fallbacks are capped at ten minutes; explicit server delays at one day.
     cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
@@ -304,6 +306,23 @@ export type ComboFailureCooldownScope = "none" | "target" | "provider";
 
 function normalizedFailureCode(code?: string | null): string {
   return code?.trim().toLowerCase().replaceAll("-", "_") ?? "";
+}
+
+/**
+ * A spent account window, by structured code or upstream prose. Status is deliberately not
+ * consulted: the ChatGPT Codex backend reports a depleted plan window as HTTP 502
+ * `upstream_server_error` carrying `The usage limit has been reached`, never the documented 429,
+ * so any status gate misses it. Read in exactly ONE place -- the cooldown DURATION fallback. A
+ * status-blind prose match is safe for choosing how long to wait; it is not safe for choosing
+ * what to black out, so `isProviderScopedQuotaCap` and the scope/decision paths stay untouched
+ * and a Codex 502 still resolves `target` scope and `hop` through `status >= 500`.
+ */
+const ACCOUNT_EXHAUSTION_CODES = new Set(["usage_limit_exceeded", "usage_limit_reached"]);
+const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached/;
+
+function isAccountWindowExhausted(message: string, code?: string | null): boolean {
+  return ACCOUNT_EXHAUSTION_CODES.has(normalizedFailureCode(code))
+    || ACCOUNT_EXHAUSTION_TEXT.test(message.toLowerCase());
 }
 
 function isProviderScopedQuotaCap(
