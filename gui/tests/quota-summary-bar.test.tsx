@@ -101,19 +101,54 @@ test("the scroll buttons appear only when the chips overflow, and page the one r
   const [prev, next] = view.buttons();
   expect(prev?.textContent).toBe("«");
   expect(next?.textContent).toBe("»");
-  expect(prev?.disabled).toBe(true);
-  expect(next?.disabled).toBe(false);
+  // aria-disabled keeps a focused button focusable when it reaches its end.
+  expect(prev?.getAttribute("aria-disabled")).toBe("true");
+  expect(next?.getAttribute("aria-disabled")).toBe("false");
 
   const calls: ScrollToOptions[] = [];
   (view.list as unknown as { scrollBy: (options: ScrollToOptions) => void }).scrollBy = options => { calls.push(options); };
+  await click(prev!);
+  expect(calls).toHaveLength(0);
   await click(next!);
   expect(calls[0]?.left).toBe(240);
 
   await scrollMetrics(view.list, { scrollWidth: 1000, clientWidth: 300, scrollLeft: 700 });
-  expect(view.buttons()[0]?.disabled).toBe(false);
-  expect(view.buttons()[1]?.disabled).toBe(true);
+  expect(view.buttons()[0]?.getAttribute("aria-disabled")).toBe("false");
+  expect(view.buttons()[1]?.getAttribute("aria-disabled")).toBe("true");
   await click(view.buttons()[0]!);
   expect(calls[1]?.left).toBe(-240);
+  await view.unmount();
+});
+
+test("on touch the first tap shows the detail, the second follows the link, and the chip stays usable", async () => {
+  const view = await mount();
+  const tap = async (label: string) => {
+    const chip = view.chip(label);
+    await act(async () => {
+      chip.dispatchEvent(new testWindow.PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" } as never) as unknown as Event);
+    });
+    await click(chip);
+  };
+  const tooltip = () => view.container.querySelector("[role=tooltip]");
+
+  await tap("Kimi");
+  expect(tooltip()?.textContent).toContain("Kimi");
+  expect(testWindow.location.hash).toBe("#dashboard");
+  await tap("Kimi");
+  expect(tooltip()).toBeNull();
+  expect(testWindow.location.hash).toBe("#providers?provider=kimi&tab=accounts");
+
+  // Another round on another chip, and back on the first: nothing is left inert.
+  await tap("xAI Grok");
+  expect(tooltip()?.textContent).toContain("xAI Grok");
+  await tap("Kimi");
+  expect(tooltip()?.textContent).toContain("Kimi");
+  await tap("Kimi");
+  expect(tooltip()).toBeNull();
+
+  // A keyboard Enter after touch contact follows the link instead of opening the detail.
+  await click(view.chip("OpenAI"));
+  expect(testWindow.location.hash).toBe("#providers?provider=openai&tab=accounts");
   await view.unmount();
 });
 

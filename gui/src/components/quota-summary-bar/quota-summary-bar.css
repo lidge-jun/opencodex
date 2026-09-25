@@ -66,11 +66,11 @@
   cursor: pointer;
 }
 
-.quota-summary-scroll:hover:not(:disabled) {
+.quota-summary-scroll:hover:not([aria-disabled="true"]) {
   background: var(--bg);
 }
 
-.quota-summary-scroll:disabled {
+.quota-summary-scroll[aria-disabled="true"] {
   color: var(--muted);
   opacity: 0.45;
   cursor: default;
@@ -162,7 +162,8 @@
   left: calc(var(--qs-pop-left, 0) * 1px);
   z-index: var(--z-popover);
   min-width: 260px;
-  max-width: calc(100vw - 16px);
+  /* A fixed box resolves % against the viewport without its scrollbar; 100vw would include it. */
+  max-width: calc(100% - 16px);
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;

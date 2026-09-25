@@ -75,7 +75,9 @@ function usePopoverPlacement(open: boolean, anchorRef: RefObject<HTMLElement | n
       if (!anchor || !popover) return;
       const rect = anchor.getBoundingClientRect();
       const width = popover.offsetWidth;
-      const maxLeft = Math.max(VIEWPORT_MARGIN, window.innerWidth - width - VIEWPORT_MARGIN);
+      // clientWidth, not innerWidth: a classic vertical scrollbar would otherwise cover the edge.
+      const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+      const maxLeft = Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN);
       const left = Math.min(Math.max(rect.left, VIEWPORT_MARGIN), maxLeft);
       // Unitless: the stylesheet multiplies by 1px.
       popover.style.setProperty("--qs-pop-top", String(Math.round(rect.bottom + POPOVER_GAP)));
@@ -137,20 +139,24 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
     if (event.pointerType !== "touch") setHovered(true);
   };
   const onPointerLeave = (event: ReactPointerEvent) => {
-    if (event.pointerType === "touch") return;
-    setHovered(false);
+    if (event.pointerType !== "touch") setHovered(false);
     setSuppressed(false);
   };
   const onClick = (event: MouseEvent<HTMLAnchorElement>) => {
     // Modified and middle clicks keep the browser's own link behavior (new tab/window).
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
-    if (pointerTypeRef.current === "touch" && !open) {
+    // Read once and forget, so a later keyboard Enter is never mistaken for a tap.
+    const viaTouch = pointerTypeRef.current === "touch";
+    pointerTypeRef.current = "";
+    if (viaTouch && !open) {
       setTapped(true);
       return;
     }
     close();
-    setSuppressed(true);
+    // Only a resting mouse pointer needs the detail held shut; a finger has already lifted, and
+    // suppressing there would leave nothing to lift it, making the chip inert to later taps.
+    if (!viaTouch) setSuppressed(true);
     openProviderAccounts(row.provider);
   };
 
@@ -262,10 +268,13 @@ export function QuotaSummaryChips({ rows, t, locale }: { rows: QuotaSummaryRow[]
   const page = (direction: -1 | 1) => {
     const list = listRef.current;
     if (!list) return;
+    if (direction < 0 ? edges.atStart : edges.atEnd) return;
     const reduceMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     list.scrollBy({ left: direction * Math.max(list.clientWidth * PAGE_FRACTION, 80), behavior: reduceMotion ? "auto" : "smooth" });
   };
 
+  // aria-disabled, not disabled: a focused button that becomes disabled drops focus to <body>,
+  // so paging to the end with the keyboard would restart Tab order at the top of the page.
   return (
     <div className={`quota-summary-scroller${edges.overflow ? " quota-summary-scroller--overflow" : ""}`}>
       {edges.overflow && (
@@ -274,7 +283,7 @@ export function QuotaSummaryChips({ rows, t, locale }: { rows: QuotaSummaryRow[]
           className="quota-summary-scroll quota-summary-scroll--prev"
           aria-label={t("quotaSummary.scrollPrev")}
           title={t("quotaSummary.scrollPrev")}
-          disabled={edges.atStart}
+          aria-disabled={edges.atStart}
           onClick={() => page(-1)}
         >
           <span aria-hidden="true">«</span>
@@ -289,7 +298,7 @@ export function QuotaSummaryChips({ rows, t, locale }: { rows: QuotaSummaryRow[]
           className="quota-summary-scroll quota-summary-scroll--next"
           aria-label={t("quotaSummary.scrollNext")}
           title={t("quotaSummary.scrollNext")}
-          disabled={edges.atEnd}
+          aria-disabled={edges.atEnd}
           onClick={() => page(1)}
         >
           <span aria-hidden="true">»</span>
