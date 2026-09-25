@@ -187,8 +187,12 @@ export function normalizeXaiResponsesWebSearch(
   target?: { modelId?: unknown; responseUrl?: string },
 ): unknown {
   if (!isPlainObject(body)) return body;
-  if (!isXaiResponsesDestination(provider)
-    && !isOpenCodeGoGrokResponses(target?.modelId, target?.responseUrl)) return body;
+  const xaiDestination = isXaiResponsesDestination(provider);
+  if (!xaiDestination && !isOpenCodeGoGrokResponses(target?.modelId, target?.responseUrl)) return body;
+  // On Go, a wrapper emptied here stays in place: Go promotion (opencode-go-additional-tools.ts)
+  // removes every wrapper before the wire and splits them into history and current turn by
+  // index against _replayPrefixLen, so deleting one would shift the current turn into history.
+  const keepEmptiedWrappers = !xaiDestination;
 
   let next: Record<string, unknown> = body;
   if (Array.isArray(body.tools)) {
@@ -214,7 +218,7 @@ export function normalizeXaiResponsesWebSearch(
         continue;
       }
       inputChanged = true;
-      if (rewritten.tools.length > 0) input.push({ ...item, tools: rewritten.tools });
+      if (rewritten.tools.length > 0 || keepEmptiedWrappers) input.push({ ...item, tools: rewritten.tools });
     }
     if (inputChanged) next = { ...next, input };
   }

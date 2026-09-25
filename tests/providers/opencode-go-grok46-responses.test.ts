@@ -125,6 +125,27 @@ describe("OpenCode Go Grok Responses compatibility", () => {
     expect(body.tools).toEqual([{ type: "web_search" }, functionTool]);
   });
 
+  test("removing replayed cached-only search does not shift the current turn into history", () => {
+    // The replayed wrapper empties once its cached-only search is omitted. Dropping it would move
+    // the current-turn wrapper below _replayPrefixLen, and Go promotion would then discard it as
+    // history instead of promoting its live search.
+    const request = buildRequest("grok-4.7", {
+      input: [
+        { type: "additional_tools", tools: [{ type: "web_search", external_web_access: false }] },
+        { type: "message", role: "assistant", content: "history" },
+        { type: "additional_tools", tools: [{ type: "web_search", external_web_access: true }] },
+        { type: "message", role: "user", content: "search now" },
+      ],
+    }, provider(), 2);
+    const body = JSON.parse(request.body) as Record<string, unknown>;
+
+    expect(body.input).toEqual([
+      { type: "message", role: "assistant", content: "history" },
+      { type: "message", role: "user", content: "search now" },
+    ]);
+    expect(body.tools).toEqual([{ type: "web_search" }]);
+  });
+
   test("preserves hosted search for another model on OpenCode Go", () => {
     const webSearch = { type: "web_search", external_web_access: true, search_context_size: "medium" };
     const body = build("gpt-5.6-luna", { tools: [webSearch] });
