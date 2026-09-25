@@ -41,3 +41,12 @@
 /* ── Combo detail: candidate paths ────────────────────────── */
 .combo-protocol-plan { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 .combo-protocol-plan p { margin: 0; }
+
+/* Logs row badge: the model column is narrow, so a long path wraps inside the badge instead of
+   being clipped by the cell; the mode text must stay readable, not ellipsized away. */
+.protocol-path-badge {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  text-align: left;
+}

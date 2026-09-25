@@ -14,8 +14,7 @@ export function ProtocolBadge({ trace, t }: { trace: unknown; t: TFn }) {
   const mode = t(PROTOCOL_MODE_KEYS[parsed.mode]);
   return (
     <span
-      className="badge badge-muted"
-      style={{ whiteSpace: "nowrap" }}
+      className="badge badge-muted protocol-path-badge"
       title={t("logs.protocol.badgeTitle", { path, mode })}
       data-protocol-mode={parsed.mode}
     >
