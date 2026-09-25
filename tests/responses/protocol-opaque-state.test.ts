@@ -37,6 +37,14 @@ function body() {
   };
 }
 
+/** `https://api.anthropic.com` with userinfo, built so no literal credential URL sits in source. */
+function withUserinfo(): string {
+  const url = new URL("https://api.anthropic.com");
+  url.username = "fixture";
+  url.password = "fixture";
+  return url.href;
+}
+
 const FIRST_PARTY = credentialDomainFor({ baseUrl: "https://api.anthropic.com/v1", authMode: "key" });
 const COMPATIBLE = credentialDomainFor({ baseUrl: "https://compatible.example/anthropic", authMode: "key" });
 
@@ -48,7 +56,7 @@ describe("credential domains", () => {
       "https://api.anthropic.com:444",
       "https://api.anthropic.com.example",
       "https://proxy.example/api.anthropic.com",
-      "https://user:pass@api.anthropic.com",
+      withUserinfo(),
     ]) {
       expect(credentialDomainFor({ baseUrl, authMode: "key" })?.firstPartyAnthropic).toBe(false);
     }
