@@ -84,6 +84,17 @@ describe("buildProtocolPlanSnapshot", () => {
     expect(plan.candidates.map(c => c.mode)).toEqual(["legacy-bridge", "translated"]);
   });
 
+  test("with nativeChatCombos on, a combo's Chat candidate is judged as its concrete route", () => {
+    const config = baseConfig({ protocols: { rollout: { nativeChatCombos: true } } } as Partial<OcxConfig>);
+    const snapshot = buildProtocolPlanSnapshot(config, { model: "combo/mixed", inbound: "chat", features: [] });
+    expect(snapshot.candidates.map(c => [c.provider, c.nativeEligible, c.declineReasons])).toEqual([
+      ["a", true, []],
+      ["r", false, ["cross-wire-ir"]],
+    ]);
+    const plan = previewProtocolPlan(config, { model: "combo/mixed", inbound: "chat", features: [] });
+    expect(plan.candidates.map(c => c.mode)).toEqual(["native", "translated"]);
+  });
+
   test("a policy alias expands its configured candidates", () => {
     const snapshot = buildProtocolPlanSnapshot(baseConfig(), { model: "ocx/fast", inbound: "responses", features: [] });
     expect(snapshot.routeKind).toBe("policy");
