@@ -168,11 +168,11 @@ wry needs an http origin there. That is the one host and no port — not localho
 a widening of what the loopback dashboard may reach.
 
 `desktop/src-tauri/src/proxy.rs` is the local management client and has its own network policy,
-separate from the updater's download client. It refuses redirects and system proxies, and it will
-not send the management token until it has confirmed, from the unauthenticated health body, that the
-instance answering is the one the shell bound to: the marker, the pid, and the port it addressed.
-The binding carries a generation, so a request authorised under an earlier binding is not authorised
-after the shell rebinds.
+separate from the updater's download client. It refuses redirects and system proxies and never sends the reusable management token.
+Allowlisted GETs use the existing single-use read-v1 capability; the snapshot POST uses a separate body-bound capability for exactly `/api/update/desktop-snapshot` without a query.
+Both grants bind a fresh nonce, PID, port and ten-second expiry to the recorded runtime secret. The snapshot additionally signs the SHA-256 digest of the exact serialized JSON bytes.
+The server consumes the grant once and verifies the bounded body before parsing or storing it; the snapshot grant authorizes no other read or write. Existing admin-token publishers remain compatible, but GUI sessions and browser-origin writes are refused.
+The unauthenticated health body is only a discovery hint. Minting re-confirms the recorded runtime against the current identity and binding generation; an earlier binding does not authorize a request after the shell rebinds.
 
 `desktop/src-tauri/src/tray_availability.rs` asks the session bus whether
 `org.kde.StatusNotifierWatcher` reports a host registered; macOS and Windows answer yes without a

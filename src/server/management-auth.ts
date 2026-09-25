@@ -71,6 +71,7 @@ import {
   type GuiSessionRecord,
   type GuiSessionRequestContext,
 } from "./gui-session";
+import { hasLocalDesktopSnapshotCapability } from "./local-desktop-snapshot-auth";
 export type { GuiSessionBootstrap, GuiSessionRequestContext } from "./gui-session";
 
 const LOCAL_READ_REPLAY_LIMIT = 256;
@@ -315,8 +316,8 @@ export function createManagementSessionControl(state: ManagementAuthState): Mana
  * per-session CSRF token match. Consent-bearing routes must key off this value
  * rather than off request headers, which the token holder can forge freely.
  * The capability principals are process-scoped HMACs bound to the current process
- * PID and listening port. Local reads are accepted only for two exact GET paths;
- * restart and provider reload remain separate wire contracts for their exact POSTs.
+ * PID and listening port. Local reads are accepted only for allowlisted GET paths;
+ * snapshot, restart and provider reload use separate contracts for their exact POSTs.
  */
 export type ManagementPrincipal =
   | "admin-token"
@@ -324,6 +325,7 @@ export type ManagementPrincipal =
   | "gui-session"
   | "gui-pair-capability"
   | "local-read-capability"
+  | "local-desktop-snapshot-capability"
   | "local-provider-reload-capability"
   | "local-aside-sync-capability"
   | "system-restart-capability";
@@ -550,6 +552,7 @@ function resolveManagementAdmission(
   if (hasSystemRestartCapability(req, local)) principal = "system-restart-capability";
   else if (hasLocalAsideSyncCapability(req, local)) principal = "local-aside-sync-capability";
   else if (hasLocalProviderReloadCapability(req, local)) principal = "local-provider-reload-capability";
+  else if (hasLocalDesktopSnapshotCapability(req, local)) principal = "local-desktop-snapshot-capability";
   else if (hasLocalReadCapability(req, local)) principal = "local-read-capability";
   else if (hasGuiPairCapability(req, local)) principal = "gui-pair-capability";
   else if (state.available) {

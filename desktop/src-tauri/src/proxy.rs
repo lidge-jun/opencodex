@@ -4,21 +4,21 @@ use crate::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, Mac};
-use reqwest::{redirect, Client, Method, StatusCode};
+use reqwest::{redirect, Client, Method, RequestBuilder, StatusCode};
 use serde_json::Value;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError},
     time::Duration,
 };
 use tokio::time::{timeout_at, Instant};
 
+const DESKTOP_SNAPSHOT_PATH: &str = "/api/update/desktop-snapshot";
+
 /// Which instance answered, taken from the unauthenticated health body.
 ///
-/// The admin credential for this machine's proxy must never reach whatever holds the port,
-/// happens to hold the port is the thing to avoid, so identity is established first — from a
-/// response that needs no credential to read — and the credential follows only if the answer is the
-/// instance the shell decided to trust.
+/// This is a discovery hint, not cryptographic proof of who holds the port. Management requests
+/// carry a scoped capability keyed by the recorded runtime secret, never the reusable admin token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeIdentity {
     pub pid: u32,
@@ -184,22 +184,27 @@ impl ProxyClient {
         self.request(Method::GET, path).await
     }
 
+    /// Publish only these exact display-state bytes, without exposing the reusable admin token.
     pub async fn post_desktop_snapshot(&self, body: &Value) -> Result<(), ProxyError> {
-        let token = self.authorised_token().await?;
-        let response = self
+        let body =
+            serde_json::to_vec(body).map_err(|_| ProxyError::Http(StatusCode::BAD_REQUEST))?;
+        if body.len() > 1024 {
+            return Err(ProxyError::Http(StatusCode::PAYLOAD_TOO_LARGE));
+        }
+        let recorded = self.authorised_runtime()?;
+        let headers =
+            CapabilityHeaders::mint_snapshot(&recorded, &body).ok_or(ProxyError::Unauthorized)?;
+        // Serialize once: the bytes hashed by mint_snapshot are the bytes reqwest sends.
+        let request = self
             .client
-            .post(self.endpoint.url("/api/update/desktop-snapshot"))
-            .header("X-OpenCodex-API-Key", token)
-            .json(body)
+            .post(self.endpoint.url(DESKTOP_SNAPSHOT_PATH))
+            .header("content-type", "application/json")
+            .body(body);
+        let response = headers
+            .apply(request)
             .send()
             .await
-            .map_err(|error| {
-                if error.is_connect() {
-                    ProxyError::Unreachable
-                } else {
-                    ProxyError::Decode(error)
-                }
-            })?;
+            .map_err(map_request_error)?;
         let _ = decode(response).await?;
         Ok(())
     }
@@ -215,21 +220,22 @@ impl ProxyClient {
         decode(response).await
     }
 
-    /// A single-use capability for this request, minted only for the instance this client is
-    /// bound to.
-    ///
-    /// The binding is re-confirmed here rather than trusted from when it was made: between then and
-    /// now the child can have exited and something else can hold the port. The capability names the
-    /// recorded pid and port and is keyed by the attestation secret only the recorded runtime can
-    /// read, so a listener that took the port after the bound child exited cannot satisfy it — and
-    /// the credential never leaves the client: the request carries the proof, not the token. The
-    /// proof is bound to this exact method, path, query and a short expiry, so a captured one is
-    /// useless for any other request and expires before it can be replayed.
+    /// Mint one read grant, preserving the existing v1 method/path/query contract.
     fn authorised_capability(
         &self,
         method: &Method,
         path: &str,
     ) -> Result<CapabilityHeaders, ProxyError> {
+        let recorded = self.authorised_runtime()?;
+        CapabilityHeaders::mint(&recorded, method, path).ok_or(ProxyError::Unauthorized)
+    }
+
+    /// Re-confirm the recorded runtime for both read and snapshot grants.
+    ///
+    /// A replacement listener can observe only a short-lived proof, not the secret. The server
+    /// consumes each proof once; a captured, unused proof is limited to its exact signed request
+    /// until expiry. Snapshot grants additionally bind the body and cannot authorize other writes.
+    fn authorised_runtime(&self) -> Result<RecordedRuntime, ProxyError> {
         let Some(binding) = self.binding() else {
             return Err(ProxyError::Unauthorized);
         };
@@ -246,7 +252,7 @@ impl ProxyClient {
         if self.binding() != Some(binding) {
             return Err(ProxyError::Foreign);
         }
-        CapabilityHeaders::mint(&recorded, method, path).ok_or(ProxyError::Unauthorized)
+        Ok(recorded)
     }
 
     async fn send(
@@ -257,67 +263,81 @@ impl ProxyClient {
     ) -> Result<reqwest::Response, ProxyError> {
         let mut request = self.client.request(method.clone(), self.endpoint.url(path));
         if let Some(headers) = capability {
-            request = request
-                .header("x-opencodex-local-expected-pid", headers.expected_pid)
-                .header("x-opencodex-local-nonce", headers.nonce)
-                .header("x-opencodex-local-expires-at", headers.expires_at)
-                .header("x-opencodex-local-capability", headers.capability);
+            request = headers.apply(request);
         }
         request.send().await.map_err(map_request_error)
     }
-
-    /// The management token, but only for the instance this client is bound to.
-    ///
-    /// The snapshot publish path is the one call that still carries the credential: the server
-    /// accepts it only from the admin-token principal, and a capability cannot stand in for a
-    /// write. The binding is still re-confirmed here rather than trusted from when it was made,
-    /// so a listener that took the port after the bound child exited is refused the token.
-    async fn authorised_token(&self) -> Result<String, ProxyError> {
-        let Some(binding) = self.binding() else {
-            return Err(ProxyError::Unauthorized);
-        };
-        let identity = self.identify().await?;
-        if identity != binding.identity {
-            return Err(ProxyError::Foreign);
-        }
-        if self.binding() != Some(binding) {
-            return Err(ProxyError::Foreign);
-        }
-        self.auth.token().ok_or(ProxyError::Unauthorized)
-    }
 }
 
-/// The single-use local-read grant the server verifies against the recorded runtime: the same
-/// contract `local-management-capability.ts` defines, re-implemented here so the desktop never
-/// has to put the admin token on the wire. `None` means the inputs cannot form a valid grant.
+/// A single-use read or body-bound snapshot grant, never a reusable management credential.
 struct CapabilityHeaders {
     expected_pid: String,
     nonce: String,
     expires_at: String,
     capability: String,
+    body_digest: Option<String>,
 }
 
 impl CapabilityHeaders {
+    /// Mint a GET grant using the unchanged local-management-read-v1 wire format.
     fn mint(recorded: &RecordedRuntime, method: &Method, path: &str) -> Option<Self> {
         if method != Method::GET {
             return None;
         }
-        let mut nonce_bytes = [0_u8; 32];
-        nonce_bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-        nonce_bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-        let nonce = URL_SAFE_NO_PAD.encode(nonce_bytes);
-        let expires_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_millis() as u64
-            + 10_000;
+        let (nonce, expires_at) = fresh_capability_fields()?;
         Some(Self {
             expected_pid: recorded.pid.to_string(),
             capability: capability_mac(recorded, path, &nonce, expires_at)?,
             nonce,
             expires_at: expires_at.to_string(),
+            body_digest: None,
         })
     }
+
+    /// Mint only the bounded snapshot POST; its domain is distinct from every read grant.
+    fn mint_snapshot(recorded: &RecordedRuntime, body: &[u8]) -> Option<Self> {
+        if body.len() > 1024 {
+            return None;
+        }
+        let (nonce, expires_at) = fresh_capability_fields()?;
+        let body_digest = URL_SAFE_NO_PAD.encode(Sha256::digest(body));
+        Some(Self {
+            expected_pid: recorded.pid.to_string(),
+            capability: snapshot_capability_mac(recorded, &nonce, expires_at, &body_digest)?,
+            nonce,
+            expires_at: expires_at.to_string(),
+            body_digest: Some(body_digest),
+        })
+    }
+
+    /// Attach only scoped proof headers, shared by both transport paths.
+    fn apply(self, request: RequestBuilder) -> RequestBuilder {
+        let mut request = request
+            .header("x-opencodex-local-expected-pid", self.expected_pid)
+            .header("x-opencodex-local-nonce", self.nonce)
+            .header("x-opencodex-local-expires-at", self.expires_at)
+            .header("x-opencodex-local-capability", self.capability);
+        if let Some(digest) = self.body_digest {
+            request = request.header("x-opencodex-desktop-snapshot-sha256", digest);
+        }
+        request
+    }
+}
+
+/// Fresh randomness and a ten-second expiry for either scoped capability.
+fn fresh_capability_fields() -> Option<(String, u64)> {
+    let mut nonce_bytes = [0_u8; 32];
+    nonce_bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    nonce_bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+    let expires_at = u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_millis(),
+    )
+    .ok()?
+    .checked_add(10_000)?;
+    Some((URL_SAFE_NO_PAD.encode(nonce_bytes), expires_at))
 }
 
 /// The signed half of a capability, split out so the wire format can be tested against a fixed
@@ -333,6 +353,24 @@ fn capability_mac(
     mac.update(
         format!(
             "opencodex-local-management-read-v1\n{nonce}\nGET\n{path}\n{}\n{}\n{expires_at}",
+            recorded.pid, recorded.port
+        )
+        .as_bytes(),
+    );
+    Some(URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes()))
+}
+
+/// The snapshot wire contract includes the exact body's SHA-256 digest.
+fn snapshot_capability_mac(
+    recorded: &RecordedRuntime,
+    nonce: &str,
+    expires_at: u64,
+    body_digest: &str,
+) -> Option<String> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(recorded.attestation_secret.as_bytes()).ok()?;
+    mac.update(
+        format!(
+            "opencodex-local-desktop-snapshot-v1\n{nonce}\nPOST\n{DESKTOP_SNAPSHOT_PATH}\n{}\n{}\n{expires_at}\n{body_digest}",
             recorded.pid, recorded.port
         )
         .as_bytes(),
@@ -371,7 +409,10 @@ async fn decode(response: reqwest::Response) -> Result<Value, ProxyError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{capability_mac, identity_from, signed_target, CapabilityHeaders, RuntimeIdentity};
+    use super::{
+        capability_mac, identity_from, signed_target, snapshot_capability_mac, CapabilityHeaders,
+        RuntimeIdentity,
+    };
     use crate::auth::RecordedRuntime;
     use reqwest::Method;
     use serde_json::json;
@@ -420,6 +461,35 @@ mod tests {
             .as_deref(),
             Some("_a3HS292KKaMcXsDx0owmWr3zRFTYjH6vhUdpunRW28")
         );
+    }
+
+    #[test]
+    fn a_snapshot_grant_binds_the_body_and_matches_the_server_contract() {
+        let body = br#"{"sessionId":"test"}"#;
+        let headers = CapabilityHeaders::mint_snapshot(&recorded_runtime(), body).unwrap();
+        let digest = "5pREWDDMbj42QHj3DvVNrC54yVF7Vpd8cNj5c-z3rQ4";
+        assert_eq!(headers.body_digest.as_deref(), Some(digest));
+        assert_eq!(headers.expected_pid, "4242");
+        assert_eq!(
+            snapshot_capability_mac(
+                &recorded_runtime(),
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                1_700_000_010_000,
+                digest,
+            )
+            .as_deref(),
+            Some("yEkTQtyXzQsi_kJGmzmUO1wyJIjc_G4-iiNNoyB4Zcw")
+        );
+        assert!(CapabilityHeaders::mint_snapshot(&recorded_runtime(), &[0; 1025]).is_none());
+        let request = headers
+            .apply(reqwest::Client::new().post("http://127.0.0.1:10100/api/update/desktop-snapshot"))
+            .body(body.to_vec())
+            .build()
+            .unwrap();
+        assert!(!request.headers().contains_key("x-opencodex-api-key"));
+        assert!(!request.headers().contains_key("authorization"));
+        assert_eq!(request.headers()["x-opencodex-desktop-snapshot-sha256"], digest);
+        assert_eq!(request.body().unwrap().as_bytes(), Some(body.as_slice()));
     }
 
     #[test]
