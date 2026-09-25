@@ -9,8 +9,8 @@ import { FORWARD_HEADERS } from "../adapters/openai-responses";
 import {
   assertChatCompletionsRoutingBody,
   ChatCompletionsRequestError,
-  chatCompletionsToResponsesBody,
 } from "../chat/inbound";
+import { chatToResponsesBody } from "../protocols/codecs/chat";
 import { normalizeChatImageParts } from "../chat/image-parts";
 import {
   chatCompletionsErrorResponse,
@@ -264,7 +264,7 @@ async function handleChatCompletionsWithBudget(
   try {
     // Validate the full Chat boundary after routing. Native Chat keeps `chatBody` as
     // its wire source; this Responses projection is used only by the fallback path.
-    internalBody = chatCompletionsToResponsesBody(chatBody);
+    internalBody = chatToResponsesBody(chatBody);
     if (effortRow) {
       internalBody.reasoning = {
         ...(isRec(internalBody.reasoning) ? internalBody.reasoning : {}),
