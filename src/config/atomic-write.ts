@@ -73,6 +73,8 @@ export interface AtomicWriteHooks {
   afterTempWrite?: (tempPath: string, targetPath: string) => void;
   beforeRename?: (tempPath: string, targetPath: string) => void;
   validateBeforeRename?: (targetPath: string) => void;
+  /** Publication receipt; runs before any post-rename cleanup can fail. */
+  afterRename?: (targetPath: string) => void;
 }
 
 export class AtomicWriteResidualTempError extends Error {
@@ -314,6 +316,7 @@ function atomicWriteFileToTarget(
     hooks.beforeRename?.(tmp, target);
     hooks.validateBeforeRename?.(target);
     effective.rename(tmp, target);
+    hooks.afterRename?.(target);
     // The rename is only as durable as the directory entry recording it. Fsyncing the temp's
     // CONTENT and then losing the entry in a power cut leaves the old file in place, or the
     // directory in an indeterminate state, while the caller was told the replacement landed.

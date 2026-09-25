@@ -1,6 +1,7 @@
 import type { OcxConfig } from "../../types";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
+import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 
 /**
  * Persistence rebases nested records and arrays in place before writing. Keep their
@@ -25,8 +26,15 @@ function captureConfigGraphRollback(config: OcxConfig): () => void {
   const restoreProvenance = captureConfigTopLevelRollback(config, []);
   return () => {
     for (const [value, descriptors] of snapshots) {
-      for (const key of Reflect.ownKeys(value)) {
-        if (!Object.hasOwn(descriptors, key)) Reflect.deleteProperty(value, key);
+      const keys = Reflect.ownKeys(value);
+      const originalKeys = Reflect.ownKeys(descriptors);
+      // Re-defining a deleted provider appends it, changing route tie-breaking.
+      // Rebuild record properties in snapshot order; array indices/length retain
+      // their descriptor-based restoration and every container keeps its identity.
+      const reordered = !Array.isArray(value)
+        && (keys.length !== originalKeys.length || keys.some((key, index) => key !== originalKeys[index]));
+      for (const key of keys) {
+        if (reordered || !Object.hasOwn(descriptors, key)) Reflect.deleteProperty(value, key);
       }
       Object.defineProperties(value, descriptors);
     }
@@ -46,7 +54,7 @@ export function commitProviderPatch(
       mutate();
       save(config);
     } catch (error) {
-      rollback();
+      if (!(error instanceof ConfigWritePublishedError)) rollback();
       throw error;
     }
   });

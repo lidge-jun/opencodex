@@ -72,7 +72,8 @@ Replacing config and process-state writes use `src/config/atomic-write.ts`. The 
 process-wide temp sequence, symlink target resolution, no-follow directory-entry replacement for
 externally writable integration directories, real-home test guard, owner manifest,
 Windows ACL hardening, scrub-before-unlink failure path, and explicit residual-temp errors. A caller
-must not replace it with a local temp-and-rename shortcut.
+must not replace it with a local temp-and-rename shortcut. Publication failures in
+`src/config/persist-unlocked.ts` and `src/config/live-reconcile.ts` follow the [publication-aware rollback contract](gui-and-management-api.md#durable-provider-patch).
 
 Windows hardening there is applied once per write, not once per harden call. Both calls stay
 `required: true` and still fail the write closed, but the pre-rename call resolves through the

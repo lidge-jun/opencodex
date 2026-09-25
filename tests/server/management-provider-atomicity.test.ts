@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { armClaudeCodeBaseline, loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
 import * as atomicWrite from "../../src/config/atomic-write";
+import * as derivedRegistries from "../../src/config/derived-registries";
+import * as mutationLock from "../../src/config/mutation-lock";
+import * as catalogMigration from "../../src/codex/custom-model-catalog-migration";
 import {
   configRebaseDeletionKeys, deleteConfigObjectChildKey, deleteConfigTopLevelKey,
   prepareConfigObjectChildDeletionRebase,
@@ -233,6 +236,89 @@ describe("provider PATCH durable atomicity", () => {
     expect(Object.hasOwn(config, "fastRows")).toBe(false);
     expect(configRebaseDeletionKeys(config)).toEqual(new Set(["fastRows"]));
     expect(prepareConfigObjectChildDeletionRebase(config)).toEqual(new Map([["providerContextCaps", new Set(["relay"])]]));
+  });
+
+  test.each(["registry", "generation", "adoption"] as const)("%s failure after publication keeps live and persisted provider aligned", async stage => {
+    const config = fixture();
+    saveConfig(config);
+    armClaudeCodeBaseline(config);
+    const h = harness(config, saveConfigPreservingClaudeCode);
+    const failAfterWrite = () => { throw failure; };
+    const postWrite = stage === "registry"
+      ? spyOn(derivedRegistries, "refreshConfigDerivedRegistries").mockImplementation(failAfterWrite)
+      : stage === "generation"
+        ? spyOn(mutationLock, "bumpGenerationForCooperatingConfigWrite").mockImplementation(failAfterWrite)
+        : spyOn(catalogMigration, "adoptCustomModelCatalogMigration").mockImplementation(failAfterWrite);
+    const patch = { baseUrl: "https://published.example/v1" };
+
+    await expect(h.patch(patch)).rejects.toMatchObject({ name: "ConfigWritePublishedError", cause: failure });
+
+    const disk = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as OcxConfig;
+    expect(config.providers.relay).toMatchObject(patch);
+    expect(config.providers.relay).toEqual(disk.providers.relay);
+    expect(routeModel(config, "relay/relay-model").provider.baseUrl).toBe(patch.baseUrl);
+    expect(h.events).toEqual(["save"]);
+    postWrite.mockRestore();
+    expect((await h.patch(patch))?.status).toBe(200);
+    expect(loadConfig().providers.relay).toMatchObject(patch);
+  });
+
+  test("an identical persisted body still forbids rollback after registry refresh fails", async () => {
+    const config = fixture();
+    config.providers.relay.disabled = true;
+    saveConfig(config);
+    const provider = config.providers.relay;
+    const bytes = readFileSync(join(home, "config.json"), "utf8");
+    const h = harness(config, saveConfigPreservingClaudeCode);
+    const write = spyOn(atomicWrite, "atomicWriteFile");
+    spyOn(derivedRegistries, "refreshConfigDerivedRegistries").mockImplementation(() => { throw failure; });
+
+    await expect(h.patch({ disabled: true })).rejects.toMatchObject({ name: "ConfigWritePublishedError", cause: failure });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(config.providers.relay).not.toBe(provider);
+    expect(config.providers.relay.disabled).toBe(true);
+    expect(readFileSync(join(home, "config.json"), "utf8")).toBe(bytes);
+  });
+
+  test("post-rename failure carries publication through the atomic writer", async () => {
+    const config = fixture();
+    saveConfig(config);
+    const h = harness(config, saveConfigPreservingClaudeCode);
+    const write = atomicWrite.atomicWriteFile;
+    spyOn(atomicWrite, "atomicWriteFile").mockImplementation((path, bytes, io, hooks) => {
+      write(path, bytes, io, {
+        ...hooks,
+        afterRename: target => { hooks?.afterRename?.(target); throw failure; },
+      });
+    });
+
+    await expect(h.patch({ disabled: true })).rejects.toMatchObject({ name: "ConfigWritePublishedError", cause: failure });
+
+    const disk = JSON.parse(readFileSync(join(home, "config.json"), "utf8")) as OcxConfig;
+    expect(config.providers.relay.disabled).toBe(true);
+    expect(config.providers.relay).toEqual(disk.providers.relay);
+    expect(h.events).toEqual(["save"]);
+  });
+
+  test("rollback restores provider insertion order after persistence deletes and re-adds a key", async () => {
+    const config = fixture();
+    const providers = config.providers;
+    const keys = Object.keys(providers);
+    const original = structuredClone(config);
+    const h = harness(config, saved => {
+      const fallback = saved.providers.fallback;
+      delete saved.providers.fallback;
+      saved.providers.fallback = fallback;
+      expect(Object.keys(saved.providers)).not.toEqual(keys);
+      throw failure;
+    });
+
+    await expect(h.patch({ disabled: true })).rejects.toBe(failure);
+
+    expect(config.providers).toBe(providers);
+    expect(Object.keys(config.providers)).toEqual(keys);
+    expect(config).toEqual(original);
   });
 
   test.each([false, true])("concurrent field-mask replay preserves a committed sibling when failure is %s", async failDelayed => {
