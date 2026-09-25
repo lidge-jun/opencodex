@@ -18,14 +18,15 @@ every decision from the server.
 
 | Route | Packet | Mutates | CLI |
 |---|---|---|---|
-| `GET /api/protocols` | PF-03 | no | deferred verb (PF-12 owns `ocx api protocols`) |
-| `POST /api/protocols/plan` | PF-03 | no | deferred verb (PF-12 owns `ocx api explain`) |
-| `PATCH /api/protocols/settings` | PF-04 | yes | deferred verb (PF-12 owns `ocx api policy`) |
+| `GET /api/protocols` | PF-03 | no | `ocx api protocols`, bare `ocx api policy` (PF-12) |
+| `POST /api/protocols/plan` | PF-03 | no | `ocx api explain` (PF-12) |
+| `PATCH /api/protocols/settings` | PF-04 | yes | `ocx api policy` with a setting flag (PF-12) |
 
 All three live in `src/server/management/protocol-routes.ts`, are mounted lazily from
 `src/server/management-api.ts` under the `/api/protocols` namespace, and are declared in
-`src/server/management/route-registry.ts` with a `deferred-verb` exemption whose `ownerDoc` is
-this file. Existing `/api/providers`, `/api/logs`, `/api/request-history` and `/api/lab/*` are
+`src/server/management/route-registry.ts`. They carried a `deferred-verb` exemption owned by PF-12
+until PF-12 declared the three `api` capabilities in `src/cli/capabilities.ts`
+(`src/cli/api-protocols.ts`) and removed it. Existing `/api/providers`, `/api/logs`, `/api/request-history` and `/api/lab/*` are
 reused, not duplicated.
 
 ## PF-02 observed path trace
