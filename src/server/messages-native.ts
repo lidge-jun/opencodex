@@ -84,6 +84,7 @@ import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, sendWithConnectio
 import { linkAbortSignal } from "./responses/core-lifetime";
 import { attachRequestSpendTracker } from "./responses/request-spend";
 import { workflowRefusalResponse } from "./workflow-refusal";
+import { sseFieldValue } from "../lib/sse-decoder";
 
 export {
   isNativeMessagesRouteEligible,
@@ -139,6 +140,82 @@ function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void
         onFirst();
       }
       controller.enqueue(value);
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
+/** How far into a stream the `message_start` frame is looked for before relaying untouched. */
+const MODEL_ECHO_SCAN_BYTES = 64 * 1024;
+
+/** The `message_start` frame with `message.model` set to `model`, or undefined for any other frame. */
+function messageStartWithModel(frame: string, model: string): string | undefined {
+  const data = frame
+    .split("\n")
+    .map(line => sseFieldValue(line, "data"))
+    .filter((value): value is string => value !== null)
+    .join("");
+  if (!data) return undefined;
+  let parsed: unknown;
+  try { parsed = JSON.parse(data); } catch { return undefined; }
+  if (!isRec(parsed) || parsed.type !== "message_start" || !isRec(parsed.message)) return undefined;
+  parsed.message.model = model;
+  return `event: message_start\ndata: ${JSON.stringify(parsed)}\n\n`;
+}
+
+/**
+ * Echo the client's selector in `message_start.message.model`, as the translated lane does
+ * (`responsesSseToAnthropicSse` is given the requested model). Works on bytes: frames before and
+ * including `message_start` are split on the blank line, and everything after is relayed as is.
+ */
+function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let pending = new Uint8Array(0);
+  let scanning = true;
+  let scanned = 0;
+  const frameEnd = (bytes: Uint8Array): number => {
+    for (let i = 0; i + 1 < bytes.length; i++) if (bytes[i] === 10 && bytes[i + 1] === 10) return i + 2;
+    return -1;
+  };
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      const { done, value } = await reader.read();
+      if (done) {
+        if (pending.length > 0) controller.enqueue(pending);
+        pending = new Uint8Array(0);
+        controller.close();
+        return;
+      }
+      if (!scanning) {
+        controller.enqueue(value);
+        return;
+      }
+      scanned += value.byteLength;
+      const joined = new Uint8Array(pending.length + value.byteLength);
+      joined.set(pending);
+      joined.set(value, pending.length);
+      pending = joined;
+      let end: number;
+      while (scanning && (end = frameEnd(pending)) !== -1) {
+        const frame = pending.subarray(0, end);
+        pending = pending.subarray(end);
+        const rewritten = messageStartWithModel(decoder.decode(frame), model);
+        if (rewritten !== undefined) {
+          controller.enqueue(encoder.encode(rewritten));
+          scanning = false;
+        } else {
+          controller.enqueue(frame);
+        }
+      }
+      if (scanning && scanned > MODEL_ECHO_SCAN_BYTES) scanning = false;
+      if (!scanning && pending.length > 0) {
+        controller.enqueue(pending);
+        pending = new Uint8Array(0);
+      }
     },
     cancel(reason) {
       return reader.cancel(reason);
@@ -445,7 +522,8 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   if (contentType.includes("text/event-stream") && response.body) {
     const bodyGuard = resolvePassthroughBodyGuard(config, req.signal);
-    const source = logIds ? observeFirstChunk(response.body, () => recordFirstOutput(logCtx, logIds.start)) : response.body;
+    const observed = logIds ? observeFirstChunk(response.body, () => recordFirstOutput(logCtx, logIds.start)) : response.body;
+    const source = echoRequestedModel(observed, requestedModel);
     if (requestedStream) {
       transferTurnToStream();
       const relayed = tapAnthropicSseForLog(source, logCtx, (status, meta) => {
@@ -530,6 +608,9 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     }
     throw error;
   }
+  // The client's selector, not the wire id, as the translated lane answers.
+  message.model = requestedModel;
+  const serialized = JSON.stringify(message);
   finishLog(200);
   if (requestedStream) {
     return new Response(messageAsSse(message), {
@@ -537,7 +618,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
       headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache" },
     });
   }
-  return new Response(read.text, { status: 200, headers: { "Content-Type": "application/json" } });
+  return new Response(serialized, { status: 200, headers: { "Content-Type": "application/json" } });
 }
 
 /**
