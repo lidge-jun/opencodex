@@ -53,7 +53,7 @@ export interface ApiKeysWorkspaceProps {
   rotationCopied?: boolean;
   filteredModels: ExternalModelRow[];
   /** Unfiltered catalog for the path preview picker; the model search must not narrow it. */
-  previewModels?: ExternalModelRow[];
+  planModels?: ExternalModelRow[];
   modelsLoading: boolean;
   /** Quiet revalidation / retry over rows already on screen — not a skeleton. */
   modelsRefreshing?: boolean;
@@ -103,7 +103,7 @@ export default function ApiKeysWorkspace({
   rotationSecret = null,
   rotationCopied = false,
   filteredModels,
-  previewModels,
+  planModels,
   modelsLoading,
   modelsRefreshing = false,
   modelsLoadFailed,
@@ -503,7 +503,7 @@ export default function ApiKeysWorkspace({
                 {/* Reference, then prediction: which path a request would take through the
                     endpoints above. Asked of the server on demand; it sends nothing upstream. */}
                 <div id={sectionAnchorId("api", "plan")} className="awi-section-anchor">
-                  <ProtocolPlanPanel key={apiBase} apiBase={apiBase} models={previewModels ?? filteredModels} protocolLabel={protocolLabel} />
+                  <ProtocolPlanPanel key={apiBase} apiBase={apiBase} models={planModels ?? filteredModels} protocolLabel={protocolLabel} />
                 </div>
                 <div id={sectionAnchorId("api", "dictation")} className="awi-section-anchor">
                   {active && <DictationPanel key={`${apiBase}:${JSON.stringify(endpoints.audio)}`} audio={endpoints.audio} />}
