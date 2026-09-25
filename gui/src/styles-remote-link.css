@@ -50,8 +50,7 @@
 .remote-link-candidate { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); min-height: var(--control-touch); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); color: var(--text); cursor: pointer; text-align: left; }
 .remote-link-candidate:hover { background: var(--raised-hover); }
 .remote-link-form { display: grid; gap: var(--space-2); }
-.remote-link-form label { font-size: var(--text-label); font-weight: var(--weight-semibold); }
-.remote-link-form input { width: 100%; }
+.remote-link-form .field-label { margin-bottom: 0; }
 .remote-link-sheet-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
 .remote-link-confirm-dialog { width: min(460px, calc(100vw - var(--space-4))); margin: auto; padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); color: var(--text); box-shadow: var(--shadow); }
 .remote-link-confirm-dialog::backdrop { background: color-mix(in srgb, var(--text) 24%, transparent); }
