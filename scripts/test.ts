@@ -381,8 +381,10 @@ export const SERIAL_FULL_SUITE_FILES = [
   // changing. Quarantining it here is what keeps it a test of the relay instead of a test of
   // its neighbours.
   "server/server-live.test.ts",
-  // These exercise the default-home service authority, shared by parallel Bun workers.
-  // A fresh process/home prevents another file's authority from becoming this fixture's input.
+  // These exercise process-wide service-home and test-guard state. A fresh process/home
+  // prevents a parallel fixture from changing their authority or guard between assertions.
+  "service/service-claim.test.ts",
+  "service/service-wsl-home-ownership.test.ts",
   "service/service-ownership-state.test.ts",
   "service/service-sqlite-home.test.ts",
   "service/service.test.ts",

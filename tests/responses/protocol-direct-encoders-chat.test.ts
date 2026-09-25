@@ -55,7 +55,7 @@ function directOptions(options: ToolOptions = {}) {
 }
 
 function normalizeFrames(text: string): unknown[] {
-  return text.split("\n\n").filter(block => block.trim().length > 0).map(block => {
+  return text.split("\n\n").filter(block => block.split("\n").some(line => line.startsWith("data:"))).map(block => {
     const data = block.split("\n").filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("");
     if (data === "[DONE]") return "[DONE]";
     const parsed = JSON.parse(data) as Record<string, unknown>;

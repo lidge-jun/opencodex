@@ -1,5 +1,6 @@
 import { config, registerRelativeSendPathTests } from "../helpers/management-relative-send-paths";
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
+import * as dnsPromises from "node:dns/promises";
 import { managementFetch as fetch, ManagementRequest as Request } from "../helpers/management-auth";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -106,6 +107,18 @@ function stubModelDiscoveryFor(...origins: string[]): void {
     }
     return originalGlobalFetch(input, init);
   }) as typeof fetch;
+}
+
+function stubPublicDestinationDnsFor(...hostnames: string[]) {
+  const deterministicHosts = new Set(hostnames);
+  const originalLookup = dnsPromises.lookup;
+  return spyOn(dnsPromises, "lookup").mockImplementation(((hostname: string, options?: unknown) => {
+    if (deterministicHosts.has(hostname) && options && typeof options === "object"
+      && "all" in options && options.all === true) {
+      return Promise.resolve([{ address: "8.8.8.8", family: 4 }]);
+    }
+    return originalLookup(hostname, options as never);
+  }) as typeof dnsPromises.lookup);
 }
 
 beforeEach(() => {
@@ -2651,6 +2664,7 @@ describe("provider management validation", () => {
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
     stubModelDiscoveryFor("https://api.example.com", "http://127.0.0.1:11434");
+    const dnsLookup = stubPublicDestinationDnsFor("api.example.com");
 
     const server = startServer(0);
     try {
@@ -2688,6 +2702,7 @@ describe("provider management validation", () => {
       expect(saved.providers["patch-test"].allowPrivateNetwork).toBe(true);
       expect(saved.providers["patch-test"].baseUrl).toContain("127.0.0.1");
     } finally {
+      dnsLookup.mockRestore();
       await server.stop(true);
     }
   });
@@ -2731,6 +2746,8 @@ describe("provider management validation", () => {
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
+    stubModelDiscoveryFor("https://api.example.com");
+    const dnsLookup = stubPublicDestinationDnsFor("api.example.com");
 
     const server = startServer(0);
     try {
@@ -2780,6 +2797,7 @@ describe("provider management validation", () => {
       };
       expect(saved.providers["discovery-toggle"].liveModels).toBe(false);
     } finally {
+      dnsLookup.mockRestore();
       await server.stop(true);
     }
   });

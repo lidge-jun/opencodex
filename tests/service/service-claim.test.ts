@@ -147,8 +147,10 @@ describe("runServiceClaim", () => {
     const previousUserProfile = process.env.USERPROFILE;
     if (process.platform === "win32") process.env.USERPROFILE = home.root;
     try {
-      expect(serviceStatePaths().every(path => path.startsWith(home.root))).toBe(true);
-      mkdirSync(serviceStatePath());
+      const sandboxStatePath = serviceStatePath();
+      expect(sandboxStatePath).toBe(home.path("service-state.json"));
+      expect(serviceStatePaths()).toContain(sandboxStatePath);
+      mkdirSync(sandboxStatePath);
       const lines: string[] = [];
       const code = await runServiceClaim([...VALID, "--json"], {
         stdout: { log: value => lines.push(value) },
@@ -157,7 +159,7 @@ describe("runServiceClaim", () => {
       expect(JSON.parse(lines[0]!)).toMatchObject({
         schema: CLAIM_SCHEMA, ok: false, code: "service-ownership-subject-unknown",
       });
-      expect(statSync(serviceStatePath()).isDirectory()).toBe(true);
+      expect(statSync(sandboxStatePath).isDirectory()).toBe(true);
     } finally {
       if (process.platform === "win32") {
         if (previousUserProfile === undefined) delete process.env.USERPROFILE;
