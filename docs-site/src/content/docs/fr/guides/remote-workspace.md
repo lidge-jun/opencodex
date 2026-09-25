@@ -3,6 +3,8 @@ title: Espace de travail distant
 description: Conservez Codex, Claude Code, Pi et leurs connexions sur un même OCX Hub, tandis que des ordinateurs équipés seulement d'OCX fournissent l'espace de travail et l'environnement de compilation.
 ---
 
+Pour les liaisons SSH entre machines, consultez [Liaison distante](/fr/guides/remote-link/).
+
 Remote Workspace permet à un OpenCodex Hub d'exécuter vos agents de programmation tandis qu'un
 autre ordinateur fournit les fichiers du projet, les commandes, les tests et la puissance de
 calcul. Un téléphone ou un troisième ordinateur peut piloter la session depuis le tableau de

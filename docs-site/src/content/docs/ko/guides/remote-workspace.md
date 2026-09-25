@@ -3,6 +3,8 @@ title: 원격 작업 공간
 description: Codex, Claude Code, Pi와 로그인을 한 OCX Hub에 두고 OCX만 설치한 다른 컴퓨터에서 작업 공간과 빌드 환경을 제공합니다.
 ---
 
+SSH 머신 링크는 [Remote Link](/ko/guides/remote-link/)를 참조하세요.
+
 원격 작업 공간에서는 한 opencodex Hub가 코딩 에이전트를 실행하고 다른 컴퓨터가 프로젝트 파일, 명령, 테스트, 빌드 연산을 제공합니다. 휴대전화나 세 번째 컴퓨터에서도 Hub 대시보드로 세션을 제어할 수 있습니다.
 
 ```text

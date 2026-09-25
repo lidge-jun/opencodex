@@ -11,6 +11,7 @@ import CodexSet from "./pages/CodexSet";
 import Integrations from "./pages/Integrations";
 import Startup from "./pages/Startup";
 import RemoteWorkspace from "./pages/RemoteWorkspace";
+import RemoteLink from "./pages/RemoteLink";
 import ErrorBoundary from "./components/ErrorBoundary";
 import QuotaSummaryBar from "./components/quota-summary-bar/QuotaSummaryBar";
 import { SidebarGithubRow } from "./components/sidebar-github-row";
@@ -41,6 +42,7 @@ const PAGE_TKEY: Record<Page, TKey> = {
   usage: "nav.usage",
   storage: "nav.storage",
   remote: "nav.remote",
+  "remote-workspace": "nav.remoteWorkspace",
   "codex-set": "nav.codexSet",
   integrations: "nav.integrations",
 };
@@ -75,6 +77,7 @@ const NAV: NavEntry[] = [
   { id: "usage", tkey: "nav.usage", Icon: IconActivity },
   { id: "storage", tkey: "nav.storage", Icon: IconHardDrive },
   { id: "remote", tkey: "nav.remote", Icon: IconMonitor },
+  { id: "remote-workspace", tkey: "nav.remoteWorkspace", Icon: IconMonitor },
   { id: "integrations", tkey: "nav.integrations", Icon: IconGlobe },
 ];
 
@@ -119,6 +122,7 @@ export default function App() {
   const [targetError, setTargetError] = useState(false);
   const [sharedSessionReady, setSharedSessionReady] = useState(() => hasApiSession("shared"));
   const [sharedSessionEpoch, setSharedSessionEpoch] = useState(0);
+  const [remoteWorkspaceAvailable, setRemoteWorkspaceAvailable] = useState(false);
   const [sessionLoggingOut, setSessionLoggingOut] = useState(false);
   /*
    * Results from the two sidebar orbs used to be `alert()`, which the app's webview draws
@@ -170,6 +174,20 @@ export default function App() {
   }, []);
   const machineBase = apiBaseForPlane("machine", targets);
   const sharedBase = apiBaseForPlane("shared", targets);
+
+  useEffect(() => {
+    if (!sharedSessionReady) {
+      // oxlint-disable-next-line react/react-compiler -- logout must hide the capability immediately.
+      setRemoteWorkspaceAvailable(false);
+      return;
+    }
+    const controller = new AbortController();
+    void fetch(`${sharedBase}/api/remote-workspace`, { signal: controller.signal, cache: "no-store" })
+      .then(response => response.ok ? response.json() as Promise<{ available?: unknown }> : Promise.reject(new Error("unavailable")))
+      .then(value => { if (!controller.signal.aborted) setRemoteWorkspaceAvailable(value.available === true); })
+      .catch(() => { if (!controller.signal.aborted) setRemoteWorkspaceAvailable(false); });
+    return () => controller.abort();
+  }, [page, sharedSessionReady, sharedBase]);
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
@@ -394,6 +412,7 @@ export default function App() {
             ClaudeCode owns GET/PUT /api/claude-code now, and the row itself is gone.
           */}
           {NAV.map(entry => {
+            if (entry.id === "remote-workspace" && !remoteWorkspaceAvailable) return null;
             const { id, tkey, Icon } = entry;
             const active = id === page;
             return (
@@ -514,7 +533,8 @@ export default function App() {
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}
-                {page === "remote" && <RemoteWorkspace apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} />}
+                {page === "remote" && <RemoteLink apiBase={sharedBase} sessionReady={targets.connected && sharedSessionReady} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
+                {page === "remote-workspace" && <RemoteWorkspace apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
                 {page === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
               </>

@@ -8,8 +8,9 @@ const DEVICE_ID = "11111111-1111-4111-8111-111111111111";
 const ROOT_ID = "22222222-2222-4222-8222-222222222222";
 const SESSION_ID = "33333333-3333-4333-8333-333333333333";
 
-test("#remote resolves to the Remote Workspace page", () => {
+test("#remote resolves to the Remote Link page", () => {
   expect(readPageFromHash("#remote")).toBe("remote");
+  expect(readPageFromHash("#remote-workspace")).toBe("remote-workspace");
 });
 
 test("pairing commands use native POSIX and PowerShell syntax", () => {
