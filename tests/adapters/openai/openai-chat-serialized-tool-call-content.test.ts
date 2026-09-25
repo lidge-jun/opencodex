@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createOpenAIChatAdapter } from "../../../src/adapters/openai-chat";
-import { SerializedToolCallContentBuffer } from "../../../src/adapters/openai-chat/serialized-tool-call-content";
+import { freeformToolsByWireName, SerializedToolCallContentBuffer } from "../../../src/adapters/openai-chat/serialized-tool-call-content";
 import type { AdapterEvent } from "../../../src/types";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -657,4 +657,18 @@ describe("MiMo echo variants (#5724)", () => {
     expect(visible(events)).toBe("\n");
     expect(events.filter(event => event.type === "tool_call_start")).toHaveLength(2);
   });
+});
+
+test("freeformToolsByWireName keys only freeform tools by their wire name and keeps the declared identity", () => {
+  const tools = [
+    { name: "exec", namespace: "functions", freeform: true },
+    { name: "read_file", freeform: false },
+    { name: "apply_patch", freeform: true },
+  ];
+  const map = freeformToolsByWireName(tools, tool => `wire_${tool.name}`);
+  expect([...map.entries()]).toEqual([
+    ["wire_exec", { name: "exec", namespace: "functions" }],
+    ["wire_apply_patch", { name: "apply_patch", namespace: undefined }],
+  ]);
+  expect(freeformToolsByWireName(undefined, () => "unused").size).toBe(0);
 });

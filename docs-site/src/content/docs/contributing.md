@@ -27,8 +27,8 @@ hook, preserving custom hooks. A pre-push hook is no longer required.
 the packaged dashboard at `GET /` is produced by `bun run build:gui` (`gui/dist`).
 
 The retired `post-merge` hook used to rebuild `gui/dist` after every merge. With the hook gone,
-a merge that changes `gui/` leaves the packaged dashboard stale until you run `bun run postmerge`
-(or `bun run build:gui`) yourself — the dev server is unaffected because it rebuilds on demand.
+a merge that changes `gui/` leaves the packaged dashboard stale until you run `bun run build:gui`
+yourself — the dev server is unaffected because it rebuilds on demand.
 
 ## Build and test commands
 

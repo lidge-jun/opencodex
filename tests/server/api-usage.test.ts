@@ -109,6 +109,96 @@ afterEach(() => {
 });
 
 describe("GET /api/usage", () => {
+  test("projects JEV decisions, picks and physical model tokens for one combo", async () => {
+    const now = Date.now();
+    const decision = {
+      version: 1,
+      comboId: "jev-auto",
+      selected: { provider: "openai", model: "gpt-6-astra", effort: "high" },
+      gate: "apply",
+      latencyMs: 25,
+      confidence: 0.9,
+      usage: { inputTokens: 9, outputTokens: 2, totalTokens: 11 },
+    };
+    const rows = [
+      {
+        requestId: "jev-one",
+        timestamp: now - 1_000,
+        provider: "combo",
+        model: "jev-auto",
+        status: 200,
+        durationMs: 50,
+        usageStatus: "reported",
+        jevDecision: decision,
+        attempts: [{
+          ordinal: 1,
+          provider: "openai",
+          model: "gpt-6-astra",
+          adapter: "openai-responses",
+          status: 200,
+          durationMs: 40,
+          sendCount: 1,
+          recoveryKinds: [],
+          usageStatus: "reported",
+          usage: { inputTokens: 100, outputTokens: 20, reasoningOutputTokens: 7 },
+          totalTokens: 120,
+        }],
+      },
+      {
+        requestId: "other-combo",
+        timestamp: now - 500,
+        provider: "combo",
+        model: "other",
+        status: 200,
+        durationMs: 10,
+        usageStatus: "unreported",
+        jevDecision: { ...decision, comboId: "other" },
+      },
+    ];
+    writeFileSync(join(testDir, "usage.jsonl"), `${rows.map(row => JSON.stringify(row)).join("\n")}\n`);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/api/usage?jev=1&comboId=jev-auto&range=30d", server.url));
+      expect(response.status).toBe(200);
+      const stats = await response.json();
+      expect(stats).toMatchObject({
+        range: "30d",
+        comboId: "jev-auto",
+        summary: {
+          decisions: 1,
+          appliedDecisions: 1,
+          failOpenDecisions: 0,
+          modelAttempts: 1,
+          measuredModelAttempts: 1,
+          modelInputTokens: 100,
+          modelOutputTokens: 20,
+          modelReasoningTokens: 7,
+          modelTotalTokens: 120,
+          decisionInputTokens: 9,
+          decisionOutputTokens: 2,
+          decisionTotalTokens: 11,
+        },
+        gates: [{ gate: "apply", decisions: 1 }],
+        models: [{
+          provider: "openai",
+          model: "gpt-6-astra",
+          picks: 1,
+          attempts: 1,
+          totalTokens: 120,
+          efforts: [{ effort: "high", picks: 1 }],
+        }],
+        historyTruncated: false,
+        entriesTruncated: false,
+      });
+      expect(stats.generatedAt).toBeGreaterThanOrEqual(now);
+      const invalid = await fetch(new URL(`/api/usage?jev=1&comboId=${"x".repeat(129)}`, server.url));
+      expect(invalid.status).toBe(400);
+      expect(await invalid.json()).toEqual({ error: "invalid comboId" });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("custom bounds override presets while preserving surface, filters and accounts", async () => {
     const since = new Date(2026, 1, 10, 12).getTime();
     const until = since + 3_600_000;

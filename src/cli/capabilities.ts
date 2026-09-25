@@ -987,6 +987,51 @@ export const CAPABILITIES: readonly Capability[] = [
     json: "payload",
     details: ["A bare invocation reads and never writes."],
   },
+  {
+    command: ["api", "protocols"],
+    summary: "Read the protocol contract version, API surfaces, protocol settings and feature vocabulary.",
+    routes: [{ method: "GET", path: "/api/protocols" }],
+    flags: [
+      { name: "--provider", value: "string", summary: "Add one configured provider's upstream wire and who decided it." },
+      { name: "--json", value: "boolean", summary: "Emit the GET /api/protocols body." },
+    ],
+    mutates: false,
+    json: "payload",
+  },
+  {
+    command: ["api", "explain"],
+    summary: "Preview the request path a model would take from one inbound API, computed from config.",
+    routes: [{ method: "POST", path: "/api/protocols/plan" }],
+    flags: [
+      { name: "--model", value: "string", required: true, summary: "Model selector as a client would send it." },
+      { name: "--inbound", value: "string", required: true, summary: "Inbound API: responses, chat or messages." },
+      { name: "--feature", value: "string", summary: "Request feature key to judge; repeatable or comma-separated." },
+      { name: "--json", value: "boolean", summary: "Emit the ProtocolPlanV1 preview." },
+    ],
+    mutates: false,
+    json: "payload",
+    details: ["A read-only POST: nothing is sent upstream, no combo state advances and the input is not logged."],
+  },
+  {
+    command: ["api", "policy"],
+    summary: "Read the protocol policy, or change the Messages surface, unrepresentable policy and rollout switches.",
+    routes: [
+      { method: "GET", path: "/api/protocols" },
+      { method: "PATCH", path: "/api/protocols/settings" },
+    ],
+    flags: [
+      { name: "--messages", value: "string", summary: "Open or close the Messages API: on or off. Off also turns the Claude integration off." },
+      { name: "--unrepresentable", value: "string", summary: "legacy keeps today's behavior; reject refuses a request its path cannot carry." },
+      { name: "--rollout", value: "string", summary: "One switch as name=on or name=off; repeatable. Every switch defaults off." },
+      { name: "--json", value: "boolean", summary: "Emit the resulting GET /api/protocols body." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: [
+      "A bare invocation reads and never writes.",
+      "A setting flag changes the operator's config; run it only when the operator asks for that change.",
+    ],
+  },
 ];
 
 /** Capabilities that drive `route`, for `ocx capabilities --route`. */

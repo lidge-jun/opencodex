@@ -21,11 +21,12 @@ test("combo strategy selector exposes all runtime strategies", () => {
     </LanguageProvider>,
   );
   const radios = html.match(/<button[^>]*role="radio"[^>]*>/g) ?? [];
-  expect(radios).toHaveLength(5);
+  expect(radios).toHaveLength(6);
   expect(html).toContain("Failover");
   expect(html).toContain("Round-robin");
   expect(html).toContain("Random");
   expect(html).toContain("Least-used");
   expect(html).toContain("Reset-window");
+  expect(html).toContain("JEV");
   expect(radios.every((button) => !button.includes("disabled="))).toBe(true);
 });

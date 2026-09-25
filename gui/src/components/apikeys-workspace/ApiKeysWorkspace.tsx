@@ -14,6 +14,7 @@ import {
   type ApiAuthMatrixRow,
   type ApiEndpointInfo,
   type ApiKeyEntry,
+  type ApiSurfacesInfo,
   type ModelTests,
 } from "../../pages/api-keys-utils";
 import {
@@ -27,6 +28,7 @@ import ApiKeysListPanel from "./ApiKeysListPanel";
 import type { UsageReadMetadata } from "../../usage-summary-resource";
 import { UsageIncompleteNotice } from "../usage-incomplete-notice";
 import { DictationPanel, LiveVoicePanel } from "./AudioApiPanel";
+import { ProtocolPlanPanel } from "../protocols/ProtocolPlanPanel";
 
 export interface ApiKeysWorkspaceProps {
   keys: ApiKeyEntry[];
@@ -43,6 +45,10 @@ export interface ApiKeysWorkspaceProps {
   keysLoadFailed: boolean;
   endpoints: ApiEndpointInfo;
   claudeCodeEnabled: boolean;
+  /** Per-API state and source; absent from a server that predates surface settings. */
+  surfaces?: ApiSurfacesInfo;
+  /** Reload after the Messages toggle wrote a new setting. */
+  onSurfacesChanged?: () => void;
   localeTag?: string;
   newName: string;
   creating: boolean;
@@ -51,6 +57,8 @@ export interface ApiKeysWorkspaceProps {
   rotationSecret?: { id: string; key: string; rotationId: string } | null;
   rotationCopied?: boolean;
   filteredModels: ExternalModelRow[];
+  /** Unfiltered catalog for the path preview picker; the model search must not narrow it. */
+  planModels?: ExternalModelRow[];
   modelsLoading: boolean;
   /** Quiet revalidation / retry over rows already on screen — not a skeleton. */
   modelsRefreshing?: boolean;
@@ -92,6 +100,8 @@ export default function ApiKeysWorkspace({
   keysLoadFailed,
   endpoints,
   claudeCodeEnabled,
+  surfaces,
+  onSurfacesChanged,
   localeTag,
   newName,
   creating,
@@ -100,6 +110,7 @@ export default function ApiKeysWorkspace({
   rotationSecret = null,
   rotationCopied = false,
   filteredModels,
+  planModels,
   modelsLoading,
   modelsRefreshing = false,
   modelsLoadFailed,
@@ -203,6 +214,7 @@ export default function ApiKeysWorkspace({
     { id: "keys", label: t("api.section.keys"), meta: keysLoading ? undefined : String(keys.length) },
     { id: "connect", label: t("api.section.connect") },
     { id: "endpoints", label: t("api.section.endpoints") },
+    { id: "plan", label: t("api.section.plan") },
     { id: "dictation", label: t("audio.dictation") },
     { id: "live-voice", label: t("audio.liveVoice") },
     { id: "models", label: t("api.section.models"), meta: String(modelCount) },
@@ -534,7 +546,19 @@ export default function ApiKeysWorkspace({
                   <ClientConfigPanel apiBase={apiBase} baseUrl={endpoints.baseUrl} hasKeys={keys.length > 0} />
                 </div>
                 <div id={sectionAnchorId("api", "endpoints")} className="awi-section-anchor">
-                  <ApiKeysEndpointsPanel endpoints={endpoints} claudeCodeEnabled={claudeCodeEnabled} authMatrix={authMatrix} />
+                  <ApiKeysEndpointsPanel
+                    endpoints={endpoints}
+                    claudeCodeEnabled={claudeCodeEnabled}
+                    authMatrix={authMatrix}
+                    surfaces={surfaces}
+                    apiBase={apiBase}
+                    onSurfacesChanged={onSurfacesChanged}
+                  />
+                </div>
+                {/* Reference, then prediction: which path a request would take through the
+                    endpoints above. Asked of the server on demand; it sends nothing upstream. */}
+                <div id={sectionAnchorId("api", "plan")} className="awi-section-anchor">
+                  <ProtocolPlanPanel key={apiBase} apiBase={apiBase} models={planModels ?? filteredModels} protocolLabel={protocolLabel} />
                 </div>
                 <div id={sectionAnchorId("api", "dictation")} className="awi-section-anchor">
                   {active && <DictationPanel key={`${apiBase}:${JSON.stringify(endpoints.audio)}`} audio={endpoints.audio} />}

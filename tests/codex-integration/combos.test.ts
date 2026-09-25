@@ -1195,6 +1195,20 @@ describe("combo failure policy and advancement", () => {
 });
 
 describe("deterministic combo selection", () => {
+  test("jev is a valid persisted strategy and its synchronous fail-open is configured order", () => {
+    const raw = {
+      strategy: "jev",
+      targets: [
+        { provider: "a", model: "m1" },
+        { provider: "b", model: "m2" },
+      ],
+    } as unknown as OcxComboConfig;
+    expect(comboConfigIssues("auto", raw, baseConfig().providers)).toEqual([]);
+    expect(normalizeComboConfig(raw).strategy).toBe("jev");
+    const config = baseConfig({ combos: { auto: raw } });
+    expect(pickComboTarget(config, "auto")?.target.provider).toBe("a");
+  });
+
   test("replacing quota snapshots removes providers omitted from the refresh", () => {
     const now = Date.now();
     replaceCachedProviderQuotas([
@@ -1499,7 +1513,31 @@ describe("combo validation and normalization", () => {
       { raw: { targets: [null] }, path: ["targets", 0], message: "must be an object" },
       { raw: { targets: [{ provider: " ", model: "m1" }] }, path: ["targets", 0, "provider"], message: "is required" },
       { raw: { targets: [{ provider: "missing", model: "m1" }] }, path: ["targets", 0, "provider"], message: "not configured" },
+      {
+        raw: { targets: [{ provider: "jev", model: "jev-latest" }] },
+        providers: {
+          ...providers,
+          jev: { adapter: "jev-decision", baseUrl: "https://api.typesafe.ai/v1/systemone" },
+        },
+        path: ["targets", 0, "provider"],
+        message: "decision service and cannot be a model target",
+      },
       { raw: { targets: [{ provider: "a", model: " " }] }, path: ["targets", 0, "model"], message: "is required" },
+      {
+        raw: { targets: [{ provider: "a", model: "m1", reasoningEfforts: [] }] },
+        path: ["targets", 0, "reasoningEfforts"],
+        message: "non-empty array",
+      },
+      {
+        raw: { targets: [{ provider: "a", model: "m1", reasoningEfforts: ["turbo"] }] },
+        path: ["targets", 0, "reasoningEfforts", 0],
+        message: "low, medium, high, xhigh, max, ultra",
+      },
+      {
+        raw: { targets: [{ provider: "a", model: "m1", reasoningEfforts: ["low", "low"] }] },
+        path: ["targets", 0, "reasoningEfforts", 1],
+        message: "must not contain duplicates",
+      },
       {
         raw: VALID_COMBO,
         providers: { a: { ...providers.a!, disabled: true } },
@@ -1584,6 +1622,13 @@ describe("combo validation and normalization", () => {
       targets: [{ provider: "a", model: "m1", weight: 2, lastResort: false }],
     });
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
+    const targetReasoningEfforts: OcxComboDefaultEffort[] = ["low", "high"];
+    const normalizedTargetEfforts = normalizeComboConfig({
+      targets: [{ provider: "a", model: "m1", reasoningEfforts: targetReasoningEfforts }],
+    });
+    expect(normalizedTargetEfforts.targets[0]?.reasoningEfforts).toEqual(["low", "high"]);
+    targetReasoningEfforts.push("max");
+    expect(normalizedTargetEfforts.targets[0]?.reasoningEfforts).toEqual(["low", "high"]);
     // #5691: both new fields default to the inert value, and only the exact
     // literal opts in — the same rule reasoningEffortMode follows below.
     expect(normalizeComboConfig({

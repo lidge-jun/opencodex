@@ -7,6 +7,10 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import {
+  normalizePersistedJevDecision,
+  type PersistedJevDecisionV1,
+} from "./jev-stats";
 import { normalizeAttemptDeliverySummary } from "./attempt-delivery";
 import {
   isRequestCloseReason,
@@ -16,6 +20,7 @@ import {
 } from "./request-outcome";
 import type { AttemptTierOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
+import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
 import type { CodexWsStageRecord } from "../server/responses/codex-ws-wire";
@@ -384,8 +389,15 @@ export interface PersistedUsageEntry {
    * contains prompts, credentials, or hidden reasoning.
    */
   routeDecision?: RouteDecisionTraceV1;
+  /** Privacy-bounded JEV selection metadata; model usage remains in attempts[]. */
+  jevDecision?: PersistedJevDecisionV1;
   /** Closed Claude protocol codes only; absent on older rows. */
   claudeCompatibility?: PersistedClaudeCompatibilityLog;
+  /**
+   * Observed protocol path (PF-02): fixed vocabulary only. Re-validated on every read; older
+   * rows and rows that fail validation carry none, and are never back-filled by guessing.
+   */
+  protocolTrace?: ProtocolTraceV1;
   /**
    * How far this request got and why it failed (#2366). Projected from the attempt that ended
    * the request so every surface reads the answer off the same row. Absent on a completed
@@ -790,6 +802,9 @@ function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undef
   }
   if (!(stage.requestBytes === null || isNonNegativeFiniteNumber(stage.requestBytes))) return undefined;
   if (!(stage.firstFrameMs === null || isNonNegativeFiniteNumber(stage.firstFrameMs))) return undefined;
+  // Records written before firstResponseMs existed omit it; read them as unmeasured.
+  const firstResponseMs = stage.firstResponseMs === undefined ? null : stage.firstResponseMs;
+  if (!(firstResponseMs === null || isNonNegativeFiniteNumber(firstResponseMs))) return undefined;
   if (!(stage.elapsedMs === null || isNonNegativeFiniteNumber(stage.elapsedMs))) return undefined;
   if (!(stage.closeCode === null || (typeof stage.closeCode === "number"
     && Number.isInteger(stage.closeCode) && stage.closeCode >= 1000 && stage.closeCode <= 4999))) {
@@ -805,6 +820,7 @@ function normalizeCodexWsStageRecord(value: unknown): CodexWsStageRecord | undef
     controlFrames: stage.controlFrames as number,
     relayedEvents: stage.relayedEvents as number,
     firstFrameMs: stage.firstFrameMs as number | null,
+    firstResponseMs: firstResponseMs as number | null,
     elapsedMs: stage.elapsedMs as number | null,
     pings: stage.pings as number,
     pongs: stage.pongs as number,
@@ -942,7 +958,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const routeDecision = entry.routeDecision
     ? normalizeRouteDecisionTrace(entry.routeDecision)
     : undefined;
+  const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
   const spend = normalizeRequestSpend(entry.spend);
+  const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
   return {
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
@@ -1030,7 +1048,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(isRequestCloseReason(entry.closeReason) ? { closeReason: entry.closeReason } : {}),
     ...(entry.upstreamError ? { upstreamError: entry.upstreamError } : {}),
     ...(routeDecision ? { routeDecision } : {}),
+    ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
+    ...(protocolTrace ? { protocolTrace } : {}),
     ...normalizeRequestFailureAttribution(entry),
   };
 }
@@ -1639,9 +1659,10 @@ async function readUsageEntriesIncrementally(
       // would make a byte-truncated read claim rows were dropped when none were.
       entriesTruncated: entriesDropped > 0,
       entriesDropped,
-      // The digest must describe exactly the region the returned rows came from, which
-      // is the post-trim window, not the pre-trim one.
-      prefixDigest: usageRegionDigest(fd, rowsBeginAtBytes, size) ?? "",
+      // Reuse this read's verified digest only for identical bounds. Growth or trimming
+      // needs a new digest of the returned region; metadata alone never proves reuse.
+      prefixDigest: rowsBeginAtBytes === retained.rowsBeginAtBytes && size === retained.coveredThroughBytes
+        ? covered : usageRegionDigest(fd, rowsBeginAtBytes, size) ?? "",
       entryLengths: lengths,
       trailingSkippedBytes: appendedTrailingSkipped,
       rowsBeginAtBytes,

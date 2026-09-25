@@ -1405,7 +1405,7 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const models = await fetchAllModels(config);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
-    const { buildClaudeContextWindows, effectiveModelEnv } = await import("../../claude/context-windows");
+    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
     const disabled = new Set(config.disabledModels ?? []);
     const isDisabled = (provider: string, id: string) =>
@@ -1432,9 +1432,6 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       const listedId = (m.provider === "cursor" ? cursorFastIdFor?.(m.id) : undefined) ?? m.id;
       aliases.push({ id: claudeCodeAlias(m.provider, listedId), display_name: `${listedId} (${m.provider})` });
     }
-    const contextWindows = buildClaudeContextWindows([...visibleNativeSlugs(config)], models, nativeContextLimits(config));
-    const webSearchOverride = config.claudeCode?.webSearchSidecar;
-    const visionOverride = config.claudeCode?.visionSidecar;
     // Auto is a RESOLUTION, recomputed per request — never stored state. Detection is
     // daemon-side, so it cannot see a key exported only in the user's terminal; the
     // GUI labels the badge with detectionScope for exactly that reason.
@@ -1442,6 +1439,14 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
     const { authModeIntent, resolveClaudeAuthMode } = await import("../../claude/auth-mode");
     const authDetection = detectClaudeAuth(defaultAuthDetectDeps(process.env, ownAdmissionTokens(config)));
     const resolvedAuthMode = resolveClaudeAuthMode(config, authDetection);
+    const contextWindows = buildClaudeContextWindows(
+      [...visibleNativeSlugs(config)],
+      models,
+      nativeContextLimits(config),
+      nativeClaudePassthroughFor(config.claudeCode, resolvedAuthMode.markerMode),
+    );
+    const webSearchOverride = config.claudeCode?.webSearchSidecar;
+    const visionOverride = config.claudeCode?.visionSidecar;
     return jsonResponse({
       enabled: config.claudeCode?.enabled !== false,
       // Three-state intent (devlog 260726_claude_auth_auto): an absent key is AUTO, not
@@ -1740,15 +1745,12 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       }
     }
     if (body.fastMode !== undefined) config.fastMode = nextFastMode;
-    config.claudeCode = next;
-    // Stamp the migration sentinel on EVERY persist of this block. The migration reads
-    // "a claudeCode block with no authMode" as a pre-upgrade subscriber and pins it to
-    // literal subscription — correct for a config written before `auto` existed, fatal
-    // for one written after. Without this, choosing Auto (which DELETES authMode) or
-    // merely toggling Claude on (App.tsx PUTs `{enabled}` alone and creates the block)
-    // would be converted into a sticky manual subscription by the next startServer, and
-    // auto would survive exactly one proxy lifetime with no way back.
-    if (!next.authModeMigratedAt) next.authModeMigratedAt = new Date().toISOString();
+    // Stamps the auth-mode migration sentinel on EVERY persist of this block. Without it,
+    // choosing Auto (which DELETES authMode) or merely toggling Claude on (App.tsx PUTs
+    // `{enabled}` alone and creates the block) would be converted into a sticky manual
+    // subscription by the next startServer, with no way back.
+    const { commitClaudeCodeBlock } = await import("../../claude/claude-code-block");
+    commitClaudeCodeBlock(config, next);
     const { saveConfigPreservingClaudeCode: save } = await import("../../config");
     save(config);
     const warnings: string[] = [];

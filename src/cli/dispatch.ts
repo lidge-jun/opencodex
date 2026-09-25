@@ -896,6 +896,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleAccessCommand } = await import("./access");
     return await handleAccessCommand(["key", ...deps.args.slice(1)]);
   },
+  api: async deps => {
+    const { handleApiCommand } = await import("./api-protocols");
+    return await handleApiCommand(deps.args.slice(1));
+  },
   export: async deps => {
     const { handleExportCommand } = await import("./export-command");
     return await handleExportCommand(deps.args.slice(1));

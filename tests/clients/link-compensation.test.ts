@@ -19,7 +19,8 @@ test("persists strict compensation markers atomically with private permissions",
   const since = "2026-09-25T00:00:00.000Z";
   markCompensationFailed(linkId, since, path);
   expect(readCompensation(path)).toEqual({ version: 1, entries: { [linkId]: { reason: "compensation_failed", since } } });
-  expect(statSync(path).mode & 0o777).toBe(0o600);
+  // Windows has no POSIX mode bits; the file is protected by the NTFS ACL hardening instead.
+  if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
   expect(JSON.parse(readFileSync(path, "utf8"))).toEqual(readCompensation(path));
   clearCompensationFailed(linkId, path);
   expect(readCompensation(path)).toEqual({ version: 1, entries: {} });

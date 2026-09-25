@@ -13,6 +13,8 @@ import { DataSurfaceSkeleton } from "../components/data-surface";
 import { EmptyState, Notice } from "../ui";
 import Debug from "./Debug";
 import { LogsFilterBar } from "./logs-filter-bar";
+import { ProtocolBadge } from "../components/protocols/ProtocolBadge";
+import { ProtocolTracePanel } from "../components/protocols/ProtocolTracePanel";
 import { logsClockAnchor, logsClockNow, type LogsClockAnchor } from "./logs-clock";
 import { DEFAULT_LOG_FILTER_STATE, extractLogFilterOptions, filterLogs, hasActiveLogFilters, type LogFilterState } from "./logs-filter";
 
@@ -208,6 +210,8 @@ export interface LogEntry extends LogFailureAttribution {
     selected?: { provider?: string; model?: string; reason?: string };
     candidates?: Array<{ provider?: string; model?: string; eligible?: boolean; exclusions?: Array<{ code?: string }> }>;
   };
+  /** Observed protocol path (PF-02). Untrusted JSON; rendered only after `parseProtocolTraceV1`. */
+  protocolTrace?: unknown;
 }
 
 function validCachedLogs(cached: LogEntry[] | null): LogEntry[] | null {
@@ -979,6 +983,7 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                       )}
                       {log.surface === "grok" && <span className="badge badge-accent">{t("logs.badge.grok")}</span>}
                       {speedLabel(log) && <span className="badge badge-amber">{speedLabel(log)}</span>}
+                      <ProtocolBadge trace={log.protocolTrace} t={t} />
                     </span>
                   </td>
                   {/* The wire field (reasoning_effort=high) stays in the title and the detail
@@ -1199,6 +1204,8 @@ function LogDetailDialog({
             <p className="log-detail-notes-line muted">{t("logs.detail.route.unknown")}</p>
           )}
         </section>
+
+        <ProtocolTracePanel trace={detail.protocolTrace} t={t} />
 
         <section className="log-detail-section" aria-labelledby="log-detail-performance">
           <h4 id="log-detail-performance" className="log-detail-section-title">{t("logs.detail.section.performance")}</h4>

@@ -23,7 +23,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 自動コンテキスト圧縮のしきい値(デフォルト `829800`)。自動コンテキストがオンのときのみ注入します |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (任意) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (任意、従来の `ANTHROPIC_SMALL_FAST_MODEL` もサポート) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (任意) |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（サブスクリプション起動で未設定の場合はネイティブの `claude-opus-5-5[1m]` / `claude-sonnet-5[1m]` / `claude-fable-5-1[1m]`） |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort` がオンなら `1` (条件付き) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` が設定されている場合 (条件付き、既定はオフ) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `maxContextTokens` が設定された場合の従来コンテキスト上書き値 (条件付き) |
@@ -322,6 +322,8 @@ Claude ページで圧縮値を調整できます。**警告:** モデルの実�
 `ANTHROPIC_MODEL`、4 つの `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU,FABLE}_MODEL`、従来
 `ANTHROPIC_SMALL_FAST_MODEL` です。実際の Haiku 値は `tierModels.haiku ?? smallFastModel` で、
 両 Haiku 変数に入ります。
+
+`ocx claude` をサブスクリプションモードで起動すると、Claude Code 自身のログインが `claude-sonnet-5` のような素の Claude ID をそのまま Anthropic に送ります。そのため、これらの ID のコンテキストウィンドウは、別のプロバイダーが同じ ID に何を載せていてもプロバイダーレジストリから取ります。未設定の Opus / Sonnet / Fable スロットには、Claude Code がそのエイリアスを解決するネイティブ ID が `[1m]` マーカー付きで入ります。ゲートウェイ越しの Claude Code は、マーカーのない ID を 200k として数えるためです。1M 未満に上限を設定した `anthropic` 行や `claudeCode.modelMap` のエントリがある ID にはマーカーを付けず、Haiku は埋めることもマーカーを付けることもありません。プロキシ認証で起動した場合や `nativePassthrough` がオフの場合はルーターが決め、ルーティングされた行のウィンドウだけが使われます。システム環境とシェルファイルは、ハブ経由の起動にも値が届くため、未設定のスロットを空のままにします。
 
 `tierModels.haiku` と `smallFastModel` の両方がない場合、OpenCodex は 2 つのヘルパーモデル変数を未設定のままにします。その後 Claude Code がネイティブのヘルパーモデル（現在は Sonnet）を選択し、ネイティブプロバイダーで料金が発生する可能性があります。
 

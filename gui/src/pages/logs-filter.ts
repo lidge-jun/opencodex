@@ -1,9 +1,16 @@
 import { matchesLogConversationId } from "../log-conversation-id";
+import type { DeliveryMode } from "../../../src/protocols/contract";
+import { parseProtocolTraceV1 } from "../../../src/protocols/dto";
 import type { LogSurface, LogSurfaceFilter } from "./logs-surface-filter";
 import { logMatchesSurface } from "./logs-surface-filter";
 
 export type LogTimeWindow = "all" | "15m" | "1h" | "24h";
 export type LogStatusFilter = "all" | "success" | "errors";
+/** Final protocol delivery mode, or `none` for rows without an observed path (PF-02). */
+export type LogProtocolModeFilter = "all" | DeliveryMode | "none";
+export const LOG_PROTOCOL_MODE_FILTERS: readonly LogProtocolModeFilter[] = [
+  "all", "native", "translated", "legacy-bridge", "blocked", "none",
+];
 
 export interface LogFilterState {
   surface: LogSurfaceFilter;
@@ -16,6 +23,8 @@ export interface LogFilterState {
   interceptedOnly: boolean;
   conversationId: string;
   conversationQueryHash?: string;
+  /** Absent means "all", so filter states saved before this field existed stay valid. */
+  protocolMode?: LogProtocolModeFilter;
 }
 
 export const DEFAULT_LOG_FILTER_STATE: LogFilterState = {
@@ -44,6 +53,7 @@ export interface FilterableLogEntry {
   conversationId?: string;
   shadowCallRewrittenFrom?: unknown;
   attempts?: unknown;
+  protocolTrace?: unknown;
   displayMetrics?: {
     tokPerSecond?: { kind: "value"; value: number } | { kind: "unavailable" };
   };
@@ -59,7 +69,8 @@ export function hasActiveLogFilters(filters: LogFilterState): boolean {
     || filters.minTokPerSec !== undefined
     || filters.maxTokPerSec !== undefined
     || filters.interceptedOnly
-    || filters.conversationId.trim() !== "";
+    || filters.conversationId.trim() !== ""
+    || (filters.protocolMode ?? "all") !== "all";
 }
 
 /** Safely retain only object-shaped failover attempts from untrusted log data. */
@@ -95,10 +106,17 @@ export function filterLogs<T extends FilterableLogEntry>(
   const providerQuery = filters.provider.trim().toLowerCase();
   const conversationQuery = filters.conversationId.trim();
   const since = timeThreshold(filters.timeWindow, now);
+  const protocolMode = filters.protocolMode ?? "all";
 
   return logs.filter(log => {
     if (!logMatchesSurface(log, filters.surface)) return false;
     if (filters.interceptedOnly && typeof log.shadowCallRewrittenFrom !== "string") return false;
+    if (protocolMode !== "all") {
+      // Validated like the detail panel, so a row the panel reports as "no path data" is the
+      // row the `none` filter selects.
+      const traceMode = parseProtocolTraceV1(log.protocolTrace)?.mode;
+      if (protocolMode === "none" ? traceMode !== undefined : traceMode !== protocolMode) return false;
+    }
     if (conversationQuery && !matchesLogConversationId(
       log.conversationId,
       conversationQuery,

@@ -237,7 +237,7 @@ ocx combo remove <id> --yes
 | `targets` |はい | — |構成された `{ provider, model, weight? }` ターゲットの空でない順序付けされた配列。重複するプロバイダーとモデルのペアは拒否されます。 |
 | `targets[].weight` |いいえ | `1` | 1 ～ 10,000 の整数。`round-robin` と `random` で使用され、`failover`、`least-used`、`reset-window` では無視されます。 |
 | `targets[].lastResort` | いいえ | `false` | 緊急時専用のターゲットを示します。`cooldownWaitPolicy` を設定しない限り無効です。ターゲットを恒久的に除外することはありません。通常のターゲットに到達できない場合は通常どおりディスパッチされます。 |
-| `strategy` |いいえ | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、`"reset-window"`。 |
+| `strategy` |いいえ | `"failover"` | `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、`"reset-window"`、`"jev"`。JEV が決定するのは最初の適格なターゲットと effort だけで、それ以降の試行は通常の Combo フォールバックが処理します。 |
 | `stickyLimit` |いいえ | `1` | `round-robin` の 1 回の選択あたり、成功したリクエスト数を指定する 1 ～ 100 の整数。`round-robin` にのみ適用されます。 |
 | `cooldownMs` |いいえ | 未設定 → アップストリーム フォールバック（リクエストレート 429 コード `1302`/`1305` では 5 秒、それ以外では 60 秒） | 1 ～ 600000 の整数。設定時は、使用可能なアップストリーム `Retry-After` または Codex リセットシグナルがない場合に、リクエストレート 429 を含むターゲットごとのクールダウンとして適用されます。未設定時はアップストリーム フォールバックを使用します。 |
 | `waitForCooldownMs` |いいえ | `0` | 0 ～ 600000 の整数。最も早く利用可能になる冷却中のターゲットを待ってから `combo_unavailable` を返すまでの最大待機時間。中止すると待機はキャンセルされます。 |

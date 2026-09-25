@@ -26,7 +26,7 @@ import { selectEagerPath } from "../../lib/bun-stream-caps";
 import { reportedBunRuntimeSource } from "../../lib/bun-runtime";
 import { getActiveTurnCount, isDraining } from "../lifecycle";
 import { getActiveMemoryWatchdog, observedMemoryCounter } from "../memory-watchdog";
-import { responseStateMetrics } from "../../responses/state";
+import { inspectResponseSpillStorage, responseStateMetrics, type ResponseSpillDirInspection } from "../../responses/state";
 import { appOwnedBytesSnapshot } from "../../lib/app-owned-memory";
 import { readWindowsReplaceRetryCounters } from "../../lib/windows-atomic-replace";
 import {
@@ -48,6 +48,18 @@ import type { ManagementContext } from "./context";
 import { acceptSystemRestart } from "./system-restart";
 
 const ENDPOINT_SAMPLE_LIMIT = 60;
+// The spill report reads the snapshot and walks the spill directory synchronously,
+// so a polled memory endpoint reuses one result per window instead of rescanning.
+const RESPONSE_SPILL_REPORT_TTL_MS = 30_000;
+let responseSpillReport: { at: number; value: ResponseSpillDirInspection } | null = null;
+
+function cachedResponseSpillReport(): ResponseSpillDirInspection {
+  const now = Date.now();
+  if (!responseSpillReport || now - responseSpillReport.at >= RESPONSE_SPILL_REPORT_TTL_MS) {
+    responseSpillReport = { at: now, value: inspectResponseSpillStorage() };
+  }
+  return responseSpillReport.value;
+}
 
 export async function handleSystemRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, version } = ctx;
@@ -121,6 +133,11 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
 	      observedMetric: observed.observedMetric,
 	      jscHeap,
       responseState: responseStateMetrics(),
+      // Dry-run spill-directory counters: owned vs orphan-candidate bytes, same
+      // predicate the startup reclaim uses. Sibling of responseState, not a field
+      // in it — that block's key count is pinned. Still scalar-only. Cached for
+      // RESPONSE_SPILL_REPORT_TTL_MS.
+      responseSpill: cachedResponseSpillReport(),
       appOwnedBytes: appOwnedBytesSnapshot(),
       inspectionCounters: getInspectionCounters(),
       streamMode,
