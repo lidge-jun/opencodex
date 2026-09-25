@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { useKeyedClientResource } from "./client-resource";
 import Dashboard from "./pages/Dashboard";
 import Providers from "./pages/Providers";
@@ -18,7 +18,7 @@ import { SidebarGithubRow } from "./components/sidebar-github-row";
 import { DesktopStarOnboarding } from "./components/desktop-star-onboarding";
 import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconHardDrive, IconCodex, IconMenu, IconSun, IconMoon, IconMonitor, IconGlobe, IconPower, IconX, IconRefresh} from "./icons";
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
-import { Select, ToastNotice, type NoticeTone } from "./ui";
+import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
 import { apiBaseForPlane, discoverApiTargets, isConnectedRuntime, standaloneApiTargets, type ApiTargets } from "./api-targets";
 import { ConnectPairingForm } from "./connect-pairing";
@@ -83,6 +83,21 @@ const NAV: NavEntry[] = [
 
 const THEME_ICON = { light: IconSun, dark: IconMoon, system: IconMonitor } as const;
 const THEME_TKEY: Record<Theme, TKey> = { light: "theme.light", dark: "theme.dark", system: "theme.system" };
+
+export interface RemoteWorkspaceRouteProps {
+  available: boolean;
+  apiBase: string;
+  hubOrigin: string;
+  onOpenRemoteLink: () => void;
+}
+
+export function RemoteWorkspaceRoute({ available, apiBase, hubOrigin, onOpenRemoteLink }: RemoteWorkspaceRouteProps): ReactElement {
+  const t = useT();
+  if (!available) {
+    return <section className="panel"><h2>{t("nav.remoteWorkspace")}</h2><Notice tone="warn">{t("link.workspaceUnavailable")} <a href="#remote" onClick={event => { event.preventDefault(); onOpenRemoteLink(); }}>{t("nav.remote")}</a></Notice></section>;
+  }
+  return <RemoteWorkspace apiBase={apiBase} hubOrigin={hubOrigin} />;
+}
 
 function readRuntimeVersion(data: unknown): string | null {
   if (!data || typeof data !== "object" || !("version" in data)) return null;
@@ -534,7 +549,7 @@ export default function App() {
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected} apiKeyId={targets.apiKeyId} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}
                 {page === "remote" && <RemoteLink apiBase={sharedBase} sessionReady={targets.connected && sharedSessionReady} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
-                {page === "remote-workspace" && <RemoteWorkspace apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} />}
+                {page === "remote-workspace" && <RemoteWorkspaceRoute available={remoteWorkspaceAvailable} apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} onOpenRemoteLink={() => navigateToPage("remote")} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} />}
                 {page === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}
               </>

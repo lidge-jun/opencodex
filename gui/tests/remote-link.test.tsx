@@ -85,7 +85,7 @@ test("compensation failure is rendered with a removal action", async () => {
   const status = { ...baseStatus, links: [{ id: "link-1", alias: "child", direction: "hub-initiated" as const, state: "failed" as const, since: "now", reason: "compensation_failed", tunnelPort: 43110 }] };
   globalThis.fetch = (async () => response(status)) as typeof fetch;
   const host = await mount();
-  expect(host.querySelector(".remote-link-error")?.textContent).toBe("Remote link request could not be completed.");
+  expect(host.querySelector(".remote-link-error")?.textContent).toBe("Cleanup after linking failed.");
   expect(host.textContent).toContain("Disconnect");
 });
 
@@ -120,4 +120,128 @@ test("readLinkJson preserves unknown server codes and status", async () => {
   expect((caught as LinkApiError).code).toBe("future_code");
   expect((caught as LinkApiError).status).toBe(418);
   expect(LOCALES).toHaveLength(10);
+});
+
+test("probe failure stays visible and Retry probes the failed alias", async () => {
+  let probes = 0;
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/probe") { probes += 1; return response({ error: { code: "probe_failed" } }, 502); }
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh config" }] });
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
+  await flush();
+  expect(host.textContent).toContain("Remote link request could not be completed.");
+  expect(host.textContent).toContain("Retry");
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Retry"))?.click(); });
+  await flush();
+  expect(probes).toBe(2);
+});
+
+test("apply failure stays retryable and Retry reapplies the confirmed alias", async () => {
+  let applies = 0;
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh config" }] });
+    if (path === "/api/link/probe") return response({ alias: "child-one", fingerprint: "SHA256:test", keyType: "ed25519" });
+    if (path === "/api/link/confirm-host") return response({ alias: "child-one", fingerprint: "SHA256:test", ocxVersion: "2.0.0" });
+    if (path === "/api/link/apply") { applies += 1; return applies === 1 ? response({ error: { code: "link_apply_failed" } }, 502) : response({ linkId: "link-1" }, 202); }
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  await act(async () => { (host.querySelector(".btn-primary") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Add child"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector(".remote-link-candidate") as HTMLButtonElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Test connection"))?.click(); });
+  await flush();
+  await act(async () => { (host.querySelector('input[type="checkbox"]') as HTMLInputElement).click(); });
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Confirm host"))?.click(); });
+  await flush();
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Connect child"))?.click(); });
+  await flush();
+  expect(host.textContent).toContain("Retry");
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Retry"))?.click(); });
+  await flush();
+  expect(applies).toBe(2);
+});
+
+test("role radios use roving tabIndex and arrow, Home, and End keys", async () => {
+  globalThis.fetch = (async () => response(baseStatus)) as typeof fetch;
+  const host = await mount();
+  await act(async () => { (host.querySelector('[role="switch"]') as HTMLButtonElement).click(); });
+  const radios = () => [...host.querySelectorAll('[role="radio"]')] as HTMLButtonElement[];
+  expect(radios()[0]?.tabIndex).toBe(0);
+  expect(radios()[1]?.tabIndex).toBe(-1);
+  await act(async () => { radios()[0]?.dispatchEvent(new win.KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true })); });
+  expect(radios()[1]?.tabIndex).toBe(0);
+  expect(win.document.activeElement).toBe(radios()[1]);
+  await act(async () => { radios()[1]?.dispatchEvent(new win.KeyboardEvent("keydown", { key: "Home", bubbles: true })); });
+  expect(radios()[0]?.tabIndex).toBe(0);
+  await act(async () => { radios()[0]?.dispatchEvent(new win.KeyboardEvent("keydown", { key: "End", bubbles: true })); });
+  expect(radios()[1]?.tabIndex).toBe(0);
+});
+
+test("status polling ignores a delayed older response", async () => {
+  let releaseOld: (() => void) | null = null;
+  let oldSignal: AbortSignal | undefined;
+  const old = new Promise<Response>(resolve => { releaseOld = () => resolve(response(baseStatus)); });
+  let statusCalls = 0;
+  globalThis.fetch = (async (input, init) => {
+    if (new URL(String(input)).pathname !== "/api/link/status") return response(baseStatus);
+    statusCalls += 1;
+    if (statusCalls === 1) oldSignal = init?.signal;
+    return statusCalls === 1 ? old : response({ ...baseStatus, links: [{ id: "link-1", alias: "newer", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 43110 }] });
+  }) as typeof fetch;
+  const host = await mount();
+  await act(async () => { [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Refresh"))?.click(); });
+  await flush();
+  expect(oldSignal?.aborted).toBe(true);
+  expect(host.textContent).toContain("newer");
+  releaseOld?.();
+  await flush();
+  expect(host.textContent).toContain("newer");
+});
+
+test("disconnect confirmation restores focus on cancel, Escape, and completion", async () => {
+  globalThis.fetch = (async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    if (path === "/api/link/status") return response({ ...baseStatus, links: [{ id: "link-1", alias: "child", direction: "hub-initiated", state: "connected", since: "now", reason: null, tunnelPort: 43110 }] });
+    if (init?.method === "DELETE") return response({ linkId: "link-1" });
+    return response(baseStatus);
+  }) as typeof fetch;
+  const host = await mount();
+  const disconnect = [...host.querySelectorAll("button")].find(button => button.textContent?.includes("Disconnect")) as HTMLButtonElement;
+  await act(async () => { disconnect.click(); });
+  await act(async () => { (host.querySelector(".remote-link-confirm-dialog .btn-ghost") as HTMLButtonElement).click(); });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(win.document.activeElement).toBe(disconnect);
+  await act(async () => { disconnect.click(); });
+  await act(async () => { host.querySelector(".remote-link-confirm-dialog")?.dispatchEvent(new win.Event("cancel", { bubbles: true, cancelable: true })); });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(win.document.activeElement).toBe(disconnect);
+  await act(async () => { disconnect.click(); });
+  await act(async () => { (host.querySelector(".remote-link-confirm-dialog .btn-danger") as HTMLButtonElement).click(); });
+  await flush();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(win.document.activeElement).toBe(disconnect);
+});
+
+test("known and unknown status reasons remain understandable", async () => {
+  const status = { ...baseStatus, links: [
+    { id: "known", alias: "known", direction: "hub-initiated" as const, state: "failed" as const, since: "now", reason: "timeout", tunnelPort: 43110 },
+    { id: "unknown", alias: "unknown", direction: "hub-initiated" as const, state: "failed" as const, since: "now", reason: "future reason", tunnelPort: 43111 },
+  ] };
+  globalThis.fetch = (async () => response(status)) as typeof fetch;
+  const host = await mount();
+  expect(host.textContent).toContain("The connection timed out.");
+  expect(host.querySelector("code")?.textContent).toBe("future reason");
 });
