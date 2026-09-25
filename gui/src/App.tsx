@@ -94,7 +94,7 @@ export interface RemoteWorkspaceRouteProps {
 export function RemoteWorkspaceRoute({ available, apiBase, hubOrigin, onOpenRemoteLink }: RemoteWorkspaceRouteProps): ReactElement {
   const t = useT();
   if (!available) {
-    return <section className="panel"><h2>{t("nav.remoteWorkspace")}</h2><Notice tone="warn">{t("link.workspaceUnavailable")} <a href="#remote" onClick={event => { event.preventDefault(); onOpenRemoteLink(); }}>{t("nav.remote")}</a></Notice></section>;
+    return <section className="panel"><h2>{t("nav.remoteWorkspace")}</h2><Notice tone="warn">{t("link.workspaceUnavailable")} <button type="button" className="link-btn" onClick={onOpenRemoteLink}>{t("nav.remote")}</button></Notice></section>;
   }
   return <RemoteWorkspace apiBase={apiBase} hubOrigin={hubOrigin} />;
 }

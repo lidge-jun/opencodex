@@ -157,7 +157,7 @@ export default function RemoteLink({ apiBase, sessionReady, workspaceAvailable =
     const onVisibility = () => { if (document.visibilityState === "visible") refreshStatusOnEffect(); else abortStatusRequest(); };
     document.addEventListener("visibilitychange", onVisibility);
     return () => { window.clearInterval(poll); document.removeEventListener("visibilitychange", onVisibility); abortStatusRequest(); };
-  }, [abortStatusRequest, refreshStatus, sessionReady]);
+  }, [abortStatusRequest, sessionReady]);
 
   useEffect(() => {
     if (!sheetOpen) { sheetRef.current?.close?.(); return; }

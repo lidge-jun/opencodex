@@ -26,9 +26,9 @@ test("Remote Workspace route gates unavailable deep links and mounts when availa
     root.render(<LanguageProvider><RemoteWorkspaceRoute available={false} apiBase="" hubOrigin="https://hub.example.test" onOpenRemoteLink={() => { navigated = true; }} /></LanguageProvider>);
   });
   expect(host.textContent).toContain("Remote Workspace is unavailable");
-  expect(host.querySelector('a[href="#remote"]')?.textContent).toBe("Remote Link");
+  expect(host.querySelector("button.link-btn")?.textContent).toBe("Remote Link");
   expect(host.querySelector(".remote-workspace-page")).toBeNull();
-  await act(async () => { (host.querySelector('a[href="#remote"]') as HTMLAnchorElement).click(); });
+  await act(async () => { (host.querySelector("button.link-btn") as HTMLButtonElement).click(); });
   expect(navigated).toBe(true);
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => jsonResponse({ available: true, devices: [], runtimes: {}, sessions: [] }) });
   await act(async () => {

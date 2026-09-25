@@ -124,7 +124,7 @@ test("readLinkJson preserves unknown server codes and status", async () => {
 
 test("probe failure stays visible and Retry probes the failed alias", async () => {
   let probes = 0;
-  globalThis.fetch = (async (input, init) => {
+  globalThis.fetch = (async input => {
     const path = new URL(String(input)).pathname;
     if (path === "/api/link/probe") { probes += 1; return response({ error: { code: "probe_failed" } }, 502); }
     if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh config" }] });
@@ -147,7 +147,7 @@ test("probe failure stays visible and Retry probes the failed alias", async () =
 
 test("apply failure stays retryable and Retry reapplies the confirmed alias", async () => {
   let applies = 0;
-  globalThis.fetch = (async (input, init) => {
+  globalThis.fetch = (async input => {
     const path = new URL(String(input)).pathname;
     if (path === "/api/link/candidates") return response({ candidates: [{ alias: "child-one", source: "ssh config" }] });
     if (path === "/api/link/probe") return response({ alias: "child-one", fingerprint: "SHA256:test", keyType: "ed25519" });
