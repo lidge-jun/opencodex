@@ -110,3 +110,20 @@ string, even if the publish crosses midnight KST.
 - No `v2.66*` tag and no npm `2.66.0` yet; `dev` carries 2.66.0; `main` `87a78e5f26`, `preview` `d4c26e2b09`.
 - #5839 now refuses Cursor foreground native shells for `nativeLocalExec` opt-in installs; its squash subject
   ("fail closed without shell containment") carries that into the generated notes.
+
+## wp7 audit round 1 (gpt-6-sol, FAIL) — dispositions
+
+1. BLOCKER "candidate run still in progress": a sequencing gate the plan already has (section 1);
+   no dispatch happens before every job of `36142367892` concludes `success` and push-event CI plus
+   Service lifecycle succeed at each promotion SHA. Not a plan change.
+2. MAJOR "pre-move executes older automation": folded. `origin/main:.github/workflows/dev-version-bump.yml`
+   predates the #5786 hardening and runs `dev` code with a persisted write credential. The pre-move
+   is prepared by hand instead, reproducing the workflow's steps from a scratch worktree at the
+   candidate: `bun scripts/bump-dev-version.ts 2.66.0 package.json` (decides 2.67.0),
+   `bun scripts/release-version-sources.ts sync 2.67.0` then `check 2.67.0`, prove no `v2.66.0` /
+   `v2.67.0` tag and no npm `2.66.0`, `bun test tests/ci-workflows/release-version-line.test.ts`;
+   the diff must be exactly the four version sources. PR `codex/260925-dev-pre-move-2.67.0` to
+   `dev`, merged at a green exact head before the release dispatch. The workflow hardening reaches
+   `main` through this release's promotion.
+3. Commands for dispatch, `expected-sha` (the branch's merge commit, full 40 chars) and
+   preview-before-stable ordering confirmed as written.
