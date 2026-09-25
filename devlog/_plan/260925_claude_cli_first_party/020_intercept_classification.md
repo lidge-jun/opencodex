@@ -4,7 +4,7 @@
 
 After wp2 supplies `cliFirstParty`, `ClaudeFirstPartyDesired`, and `firstPartyDesired`, route only the opted-in Claude client's Messages requests through the router. An opted-out client relays every path to real Anthropic; an opted-in client's other paths retain the configured upstream relay. IN: HTTPS-request User-Agent classification, listener route seam, runtime/lifecycle wiring, live Desktop-intent propagation, tests. OUT: settings reconciliation, API flag validation/refusals, CLI, GUI, docs, picker trust, CONNECT classification, and A1 Desktop-only egress. This phase must not change any contract in `000_plan.md`.
 
-Build order: wp2 first; then classifier, listener, runtime, lifecycle, live-config propagation, tests. Run focused tests and typecheck after the implementation. `structure/runtime.md` and `structure/clients/claude-desktop.md` are the source-of-truth updates assigned to wp5; wp3's PR must keep that follow-up in the same final unit.
+Build order: wp2 first; then classifier, listener, runtime, lifecycle, live-config propagation, tests, and the structure docs below. Run focused tests and typecheck after the implementation. `src/AGENTS.md:11` requires the owning structure docs in the same change, so wp3 updates `structure/runtime.md`, `structure/clients/claude-desktop.md` and `structure/gui-and-management-api.md` itself (see "Revision 2" and the paragraph at the end).
 
 ## File change map
 
@@ -20,6 +20,9 @@ Build order: wp2 first; then classifier, listener, runtime, lifecycle, live-conf
 | `tests/codex-integration/native-claude-desktop-toggle.test.ts` | MODIFY | Assert successful native toggle updates the live object. |
 | `scripts/test-layout/layout.json` | MODIFY | Explicit new test ownership. |
 | `tests/fixtures/test-layout-expected.json` | MODIFY | Expected new test ownership. |
+| `structure/runtime.md` | MODIFY | Per-request classification and relay-native (paragraph in Revision 2) |
+| `structure/clients/claude-desktop.md` | MODIFY | Independent intents share one env; opted-out client relays (Revision 2) |
+| `structure/gui-and-management-api.md` | MODIFY | Native Desktop toggle publishes committed intent to the running config (paragraph below) |
 
 `src/server/index/optional-listeners.ts` needs no edit: `src/server/index/optional-listeners.ts:82` says `activeConfig = ctx.config;`, and line 88 passes `config: ctx.config` into the lifecycle. Preserve that object identity. The **native route edit is beyond the originally named wp3 source list**; main must assign it to wp3 (recommended) or establish an equivalent live adoption before claiming native-toggle coverage.
 
@@ -519,3 +522,13 @@ A4: the new SSE test uses a controlled 25 ms second-event delay. It checks `text
 Cross-phase audit handoff (A2, A3, A5, A6): superseded by Replan (000); the management and GUI contracts live in 030/040.
 
 Revision 5 planning checks (no wp3 implementation exists yet): `bun -e` exercised the exact anchored regex against one valid suffix and all five malformed UAs (exit 0); `bun test tests/claude-integration/claude-intercept-proxy.test.ts` passed 15/15 existing listener tests (exit 0); `git diff --check -- devlog/_plan/260925_claude_cli_first_party/020_intercept_classification.md` passed (exit 0). The regex check reads the proposed expression; the existing test reads the current listener; only manual staged-diff review reads this Markdown plan. None is evidence that the future A1/A4 implementation passes.
+
+
+## wp3 P amendment: structure/gui-and-management-api.md
+
+Append to the native-integrations row/paragraph of `structure/gui-and-management-api.md` (the one naming
+`PUT /api/native-integrations/claude-desktop`):
+
+> After `PUT /api/native-integrations/claude-desktop` persists its intent, and whenever the Desktop mode marker is
+> persisted, the route adopts the committed state into the running server config, because the Claude intercept's
+> per-request first-party callback reads that live object; a failed write leaves it unchanged.
