@@ -5,6 +5,7 @@ import {
   comboFailureDecision,
   coolComboTarget,
   isComboTargetInCooldown,
+  COMBO_REQUEST_RATE_COOLDOWN_MS,
 } from "../../src/combos/failover";
 
 /**
@@ -54,6 +55,16 @@ describe("a depleted Codex plan window", () => {
 
   test("a bare 1308 code with no prose still takes the exhaustion hold", () => {
     coolComboTarget(combo, target, { now, status: 429, code: "1308", message: "" });
+    expect(isComboTargetInCooldown(combo, target, now + 10 * 60_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown(combo, target, now + 10 * 60_000)).toBe(false);
+  });
+
+  test("a request-rate code carrying usage-limit prose takes the exhaustion hold, not 5 seconds", () => {
+    // The two predicates overlap: `1302` is a request-rate code, but the prose says the window is
+    // spent. `coolComboTarget` tests exhaustion first, so the longer hold wins -- this is the case
+    // the combos guide calls out, and it would silently regress if the arms were ever reordered.
+    coolComboTarget(combo, target, { now, status: 429, code: "1302", message: EXHAUSTED });
+    expect(isComboTargetInCooldown(combo, target, now + COMBO_REQUEST_RATE_COOLDOWN_MS)).toBe(true);
     expect(isComboTargetInCooldown(combo, target, now + 10 * 60_000 - 1)).toBe(true);
     expect(isComboTargetInCooldown(combo, target, now + 10 * 60_000)).toBe(false);
   });
