@@ -9,7 +9,7 @@
  */
 
 /** Bumped when a reason code, hop, mode, or feature disposition changes meaning. */
-export const PROTOCOL_CONTRACT_VERSION = "2026-09-24.1";
+export const PROTOCOL_CONTRACT_VERSION = "2026-09-25.1";
 
 export const PROTOCOLS = ["responses", "chat", "messages"] as const;
 /** A public inference API a client can speak to this proxy. */
@@ -72,6 +72,8 @@ export const PROTOCOL_REASON_CODES = [
   "unknown-model",
   "upstream-other",
   "rollout-disabled",
+  /** Operator policy that only the bridge applies (pinned effort, skill elision, a sidecar). */
+  "bridge-only-policy",
 ] as const;
 export type ProtocolReasonCode = (typeof PROTOCOL_REASON_CODES)[number];
 
