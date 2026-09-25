@@ -30,7 +30,6 @@ import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 
 /** Public Responses entry and compatibility exports. Implementations live with their owners. */
 
-
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -181,29 +180,19 @@ async function handleResponsesInner(
 const requestDispatchers: ResponsesDispatchers = { handleResponses, handleComboResponses };
 
 export { adapterNeedsForcedContinuation } from "./core-replay";
-export { sidecarOutcomeRecorder } from "./core-codex-account";
-export { codexLogAccountId } from "./core-codex-account";
+export {
+  sidecarOutcomeRecorder, codexLogAccountId, usesCodexForwardPoolAuth, preAuthUpstreamHostCircuitKey,
+  upstreamHostCircuitOpenResponse, shouldRetryCodexPoolAccountQuota, shouldRetryCodexScopedQuotaOnAlternate,
+  shouldRetryCodexPoolAccountTransient, codexAccountGatedCanonicalWireModel, codexForwardTerminalOutcomeRecorder,
+} from "./core-codex-account";
 export { shouldAttemptOpaqueBlobRecovery } from "./core-opaque-recovery";
-export { readDisplaySafeErrorText } from "./core-errors";
-export { usesCodexForwardPoolAuth } from "./core-codex-account";
-export { preAuthUpstreamHostCircuitKey } from "./core-codex-account";
-export { upstreamHostCircuitOpenResponse } from "./core-codex-account";
-export { shouldRetryCodexPoolAccountQuota, shouldRetryCodexScopedQuotaOnAlternate } from "./core-codex-account";
-export { shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
-export { codexAccountGatedCanonicalWireModel } from "./core-codex-account";
-export { codexForwardTerminalOutcomeRecorder } from "./core-codex-account";
-export { decodeRequestErrorResponse } from "./core-errors";
-export { comboUnavailableResponse } from "./core-errors";
-export type { ConsumedComboFailure } from "./core-options";
-export type { HandleResponsesOptions } from "./core-options";
-export { clientCancelledResponse } from "./core-errors";
-export { sanitizedRetryAfter } from "./core-combo-failure";
-export { consumeComboFailure } from "./core-combo-failure";
-export { usageFromComboFailureText } from "./core-combo-failure";
-export { createChildPassthroughCallbackGate } from "./core-combo-failure";
-export { buildComboChildHeaders } from "./core-combo-failure";
-export { UPSTREAM_JSON_BODY_READ_OPTIONS } from "./core-lifetime";
+export { readDisplaySafeErrorText, decodeRequestErrorResponse, comboUnavailableResponse, clientCancelledResponse } from "./core-errors";
+export type { ConsumedComboFailure, HandleResponsesOptions } from "./core-options";
+export {
+  sanitizedRetryAfter, consumeComboFailure, usageFromComboFailureText, createChildPassthroughCallbackGate,
+  buildComboChildHeaders,
+} from "./core-combo-failure";
+export { UPSTREAM_JSON_BODY_READ_OPTIONS, linkAbortSignal } from "./core-lifetime";
 export { poolCredentialRefreshIncompleteResponse } from "./core-auth";
 export { applyServiceTierGate } from "./core-normalize";
-export { linkAbortSignal } from "./core-lifetime";
 export { DEFAULT_SHADOW_SOURCE_MODELS, isShadowSourceModel, shadowSourceModels } from "../../lib/shadow-call";
