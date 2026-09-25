@@ -7,6 +7,7 @@ import type { OcxProviderContinuationState } from "../types";
 import {
   deleteResponseSpill,
   noteStubSwapForTest,
+  PERIODIC_SPILL_SWEEP_OPTS,
   readResponseSpill,
   recoverOrphanedResponseSpills,
   responseSpillDirectory,
@@ -36,6 +37,7 @@ import {
   spillQueueAccounting,
   spillQueueHoldsResidentCandidate,
   spillQueuePendingBytes,
+  spillQueueReferencedSpillFileNames,
   spillQueueResidentCandidates,
   spillQueueSupersededSpillFor,
 } from "./state/spill-queue";
@@ -655,12 +657,33 @@ function ensureLoaded(): void {
   } catch {
     /* missing/corrupt snapshot: start empty */
   }
+  try { recoverOrphanedResponseSpills(collectReferencedSpillFileNames()); } catch { /* best effort */ }
+  pruneResponses();
+}
+
+/** Every file name the process still needs: live stubs, deferred unlinks, and queued publications. */
+function collectReferencedSpillFileNames(): Set<string> {
   const referenced = new Set<string>();
   for (const state of states.values()) {
     if (state.kind === "spill") referenced.add(state.spill.fileName);
   }
-  try { recoverOrphanedResponseSpills(referenced); } catch { /* best effort */ }
-  pruneResponses();
+  for (const ref of pendingSpillUnlinks) referenced.add(ref.fileName);
+  for (const name of spillQueueReferencedSpillFileNames()) referenced.add(name);
+  return referenced;
+}
+
+/** Liveness-tick counterpart of the orphan GC in ensureLoaded; a no-op until first load. */
+export function sweepOrphanedResponseSpills(): number {
+  if (!loaded) return 0;
+  try {
+    return recoverOrphanedResponseSpills(
+      collectReferencedSpillFileNames(),
+      responseSpillDirectory(),
+      PERIODIC_SPILL_SWEEP_OPTS,
+    ).removed;
+  } catch {
+    return 0;
+  }
 }
 
 type SnapshotWriteOutcome = "stable" | "unstable" | "failed";

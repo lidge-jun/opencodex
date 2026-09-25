@@ -34,6 +34,13 @@ export const RESPONSE_SPILL_DIR_NAME = "responses-state-spill";
 export const RESPONSE_SPILL_ORPHAN_GRACE_MS = 15 * 60_000;
 export const RESPONSE_SPILL_SCAN_MAX = 4_096;
 export const RESPONSE_SPILL_CLEANUP_MAX = 512;
+// The liveness-tick sweep runs synchronously on the serving event loop every
+// 60 s, so it gets a tighter bound than the startup pass that blocks one call.
+export const PERIODIC_SPILL_SWEEP_OPTS = {
+  scanMax: 512,
+  cleanupMax: 64,
+  deadlineMs: 25,
+} as const;
 
 const RESPONSE_SPILL_PUBLISH_RETRIES = 64;
 const OWNED_SPILL_NAME = /^([A-Za-z0-9._-]{1,80})\.([0-9a-f]{12})\.([0-9a-f]{24})\.(\d+)\.(\d+)\.spill\.json$/;
@@ -753,10 +760,13 @@ export function deleteResponseSpill(ref: ResponseSpillRef): void {
 export function recoverOrphanedResponseSpills(
   referencedFileNames: ReadonlySet<string>,
   dir = responseSpillDirectory(),
-  opts?: { graceMs?: number },
+  opts?: { graceMs?: number; scanMax?: number; cleanupMax?: number; deadlineMs?: number },
 ): ResponseSpillCleanupResult {
   const result: ResponseSpillCleanupResult = { scanned: 0, removed: 0, failed: 0, bytesRemoved: 0 };
   const graceMs = opts?.graceMs ?? RESPONSE_SPILL_ORPHAN_GRACE_MS;
+  const scanMax = opts?.scanMax ?? RESPONSE_SPILL_SCAN_MAX;
+  const cleanupMax = opts?.cleanupMax ?? RESPONSE_SPILL_CLEANUP_MAX;
+  const deadline = opts?.deadlineMs === undefined ? Infinity : Date.now() + opts.deadlineMs;
   // ONE loop serves both the real directory handle and the injected test seam
   // (review C2-2: two duplicated loops let the test prove only its own copy).
   // The reader is called strictly AFTER the scan-cap check, so entry
@@ -772,11 +782,11 @@ export function recoverOrphanedResponseSpills(
     return entry ? entry.name : null;
   };
   try {
-    while (result.scanned < RESPONSE_SPILL_SCAN_MAX) {
+    while (result.scanned < scanMax && Date.now() < deadline) {
       const name = nextName();
       if (name === null) break;
       result.scanned += 1;
-      if (result.removed + result.failed >= RESPONSE_SPILL_CLEANUP_MAX) break;
+      if (result.removed + result.failed >= cleanupMax) break;
       const spillMatch = OWNED_SPILL_NAME.exec(name);
       const isOwnedTemp = OWNED_SPILL_TEMP_NAME.test(name);
       if ((!spillMatch && !isOwnedTemp) || referencedFileNames.has(name)) continue;
