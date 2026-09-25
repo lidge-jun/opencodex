@@ -108,3 +108,35 @@ so you can run it again.
 
 This covers response-state snapshot temps specifically. Other components write
 their own temp files with a similar name, and those are not touched here.
+
+## Spill files (`responses-state-spill/`)
+
+A sibling directory, `~/.opencodex/responses-state-spill/`, holds spilled
+conversation continuations. When the in-memory continuation cache outgrows its
+resident budget, opencodex moves the oldest payloads to these files and keeps
+only a small stub in `responses-state.json`. This is what keeps the snapshot
+small without dropping long `previous_response_id` chains.
+
+The store is bounded, so this directory cannot grow without limit while the
+proxy runs:
+
+- at most **1 GiB** of spilled payload total,
+- at most **1000** stored responses,
+- each entry expires **24 hours** after it was stored.
+
+When a bound is hit, the oldest entries are evicted and their spill files are
+removed with them.
+
+**Restart preserves every spill file the snapshot still references.** A restart
+reloads the stubs and re-owns the files behind them, so nothing needed is lost
+by rebooting. A file becomes garbage only when it is no longer referenced —
+crash leftovers and failed cleanups — and opencodex reclaims those itself after
+a 15-minute grace period.
+
+**Do not delete spill files manually.** Files still referenced are part of a
+live continuation chain, and the reclaim already handles the unreferenced ones.
+`ocx doctor` reports the split without touching anything: a "Response-state
+spill files" section shows total files and bytes on disk, how much is still
+owned by the store or the persisted snapshot, and how much sits as reclaimable
+orphan candidates. The same counts are on the management API at
+`/api/system/memory` under `responseSpill`.

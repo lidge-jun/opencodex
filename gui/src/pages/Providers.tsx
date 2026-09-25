@@ -23,6 +23,8 @@ import { buildAccountLoginStatus, buildAddModalAccountRows } from "./providers-p
 import type { CodexAccountMutationCompletion } from "../codex-account-mutation";
 import { useProviderModelsNotice } from "./use-provider-models-notice";
 import { navigateHash } from "../hash-routing";
+import { JEV_AUTO_CREATE_HASH } from "../app-routing";
+import { useProviderSettingsDeepLink } from "./providers-deep-link";
 
 /** The page's real refresh tickets: only the captured report epoch and account read can settle them. */
 // oxlint-disable-next-line react/only-export-components -- keep the page-owned coordinator and its direct race tests in the authorized owner.
@@ -286,6 +288,12 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     setAccountsFocus(previous => ({ token: previous.token + 1, provider }));
   }, []);
   // Providers hash sync is owned by App (passive replaceHash / deliberate navigateHash).
+  // The one query it keeps here, `#providers?provider=<name>`, opens that provider's settings.
+  const settingsFocus = useProviderSettingsDeepLink(
+    config ? Object.keys(config.providers) : null,
+    workspaceSelected,
+    setWorkspaceSelected,
+  );
 
   // Warm the Add Provider catalog cache while the page is open so opening the
   // modal does not wait on a cold /api/provider-presets round-trip (~same key as
@@ -612,6 +620,9 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             modelRevision={data.modelRevision}
             modelRowsReady={data.modelRowsReady}
             onOpenModels={() => navigateHash("models")}
+            onCreateJevAuto={item.adapter === "jev-decision" && item.hasApiKey
+              ? () => navigateHash(JEV_AUTO_CREATE_HASH)
+              : undefined}
             modelsLoading={data.modelsLoading}
             modelsLoadFailed={data.modelsLoadFailed}
             onRetryModels={data.onRetryModels}
@@ -624,6 +635,8 @@ export default function Providers({ apiBase }: { apiBase: string }) {
             accountLoadState={accountLoadStates[item.name] ?? (item.authMode === "oauth" ? "idle" : "ready")}
             accountsFocusToken={accountsFocus.token}
             accountsFocusProvider={accountsFocus.provider}
+            settingsFocusToken={settingsFocus.token}
+            settingsFocusProvider={settingsFocus.provider}
             switchingAccountId={switchingAccount?.provider === item.name ? switchingAccount.accountId : null}
             busyProvider={busy}
             loginHint={loginInfo}

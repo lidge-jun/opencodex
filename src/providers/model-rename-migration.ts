@@ -18,7 +18,7 @@
 // with nothing left to carry forward (see `isRegistryResidue`, issue #5066).
 // Everything else in the row is left alone.
 
-import { PROVIDER_REGISTRY } from "./registry";
+import { PROVIDER_REGISTRY, normalizedProviderEndpoint } from "./registry";
 import { MODEL_KEYED_RECORDS, MODEL_ID_LISTS, MODEL_ID_SCALARS, MODEL_NESTED_RECORDS } from "./model-rename-fields";
 import { providerConfigSeed } from "./derive";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -256,8 +256,8 @@ function providerStillMatchesRegistry(name: string, prov: OcxProviderConfig): bo
   const choices = entry.baseUrlChoices?.map(choice => choice.baseUrl) ?? [];
   const known = [entry.baseUrl, ...choices]
     .filter((url): url is string => typeof url === "string")
-    .map(url => url.replace(/\/+$/, ""));
-  return known.includes(prov.baseUrl.replace(/\/+$/, ""));
+    .map(normalizedProviderEndpoint);
+  return known.includes(normalizedProviderEndpoint(prov.baseUrl));
 }
 
 /** Guard against a stale rename: only apply when the registry actually seeds `to`. */

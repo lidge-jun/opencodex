@@ -87,6 +87,7 @@ export default defineConfig({
           translations: { fr: "Guides", ko: "가이드", "zh-CN": "指南", "zh-TW": "指南", ru: "Руководства", ja: "ガイド", tr: "Kılavuzlar" },
           items: [
             { label: "Remote Hub Deployment", translations: { fr: "Déploiement Remote Hub", ko: "Remote Hub 배포", "zh-CN": "Remote Hub 部署", "zh-TW": "Remote Hub 部署", ru: "Развёртывание Remote Hub", ja: "Remote Hub のデプロイ", tr: "Remote Hub Dağıtımı" }, slug: "guides/remote-hub" },
+            { label: "Remote Link", translations: { fr: "Liaison distante", ko: "Remote Link", "zh-CN": "远程链接", "zh-TW": "遠端連結", ru: "Удалённая связь", ja: "リモートリンク", tr: "Uzak Bağlantı" }, slug: "guides/remote-link" },
             { label: "Response Inspection", translations: { fr: "Inspection des réponses et réponses volumineuses", ko: "응답 검사와 대용량 응답", "zh-CN": "响应检查与大型响应", "zh-TW": "回應檢查與大型回應", ru: "Проверка ответов и большие ответы", ja: "レスポンスの検査と大きなレスポンス", tr: "Yanıt incelemesi ve büyük yanıtlar" }, slug: "guides/response-inspection" },
             { label: "Remote Workspace", translations: { fr: "Espace de travail distant", ko: "원격 워크스페이스", "zh-CN": "远程工作区", "zh-TW": "遠端工作區", ru: "Удалённая рабочая область", ja: "リモートワークスペース", tr: "Uzak Çalışma Alanı" }, slug: "guides/remote-workspace" },
             { label: "Providers", translations: { fr: "Fournisseurs", ko: "프로바이더", "zh-CN": "提供商", "zh-TW": "供應商", ru: "Провайдеры", ja: "プロバイダー", tr: "Sağlayıcılar" }, slug: "guides/providers" },
@@ -101,6 +102,7 @@ export default defineConfig({
             { label: "Desktop App", translations: { fr: "Application de bureau", ko: "데스크톱 앱", "zh-CN": "桌面应用", "zh-TW": "桌面 App", ru: "Настольное приложение", ja: "デスクトップアプリ", tr: "Masaüstü Uygulaması" }, slug: "guides/desktop-app" },
             { label: "Model Ordering", translations: { fr: "Ordre des modèles", ko: "모델 정렬에 관하여", "zh-CN": "模型排序", "zh-TW": "模型排序", ru: "Сортировка моделей", ja: "モデルの並び順", tr: "Model Sıralaması" }, slug: "guides/model-ordering" },
             { label: "Combos", translations: { fr: "Combinaisons", ko: "콤보", "zh-CN": "组合", "zh-TW": "組合", ru: "Комбо", ja: "コンボ", tr: "Kombolar" }, slug: "guides/combos" },
+            { label: "Protocol Paths", translations: { fr: "Chemins de protocole", ko: "프로토콜 경로", "zh-CN": "协议路径", "zh-TW": "協定路徑", ru: "Пути протоколов", ja: "プロトコル経路", tr: "Protokol Yolları" }, slug: "guides/protocol-paths" },
             { label: "Claude Code", translations: { fr: "Claude Code", ko: "Claude Code", "zh-CN": "Claude Code", "zh-TW": "Claude Code", ru: "Claude Code", ja: "Claude Code", tr: "Claude Code" }, slug: "guides/claude-code" },
             { label: "Grok Build", translations: { fr: "Grok Build", ko: "Grok Build", "zh-CN": "Grok Build", "zh-TW": "Grok Build", ru: "Grok Build", ja: "Grok Build", tr: "Grok Build" }, slug: "guides/grok-build" },
             { label: "opencode", translations: { fr: "opencode", ko: "opencode", "zh-CN": "opencode", "zh-TW": "opencode", ru: "opencode", ja: "opencode", tr: "opencode" }, slug: "guides/opencode" },

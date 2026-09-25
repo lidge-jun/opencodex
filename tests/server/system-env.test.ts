@@ -147,6 +147,57 @@ describe("system environment injection", () => {
     expect(launchctlCommands().some(command => command.includes("setenv"))).toBe(false);
   });
 
+  test("injectSystemEnv removes the legacy owned first-party override on upgrade", async () => {
+    trackingFile = JSON.stringify({
+      pid: 123,
+      port: 4567,
+      injectedAt: "2026-07-11T00:00:00.000Z",
+      injectedKeys: [
+        "ANTHROPIC_BASE_URL",
+        "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+        "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+      ],
+    });
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+    launchctlEnvValues["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] = "1";
+
+    expect(await injectSystemEnv(4567, baseConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain(
+      "launchctl unsetenv _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+    );
+    expect(JSON.parse(trackingFile!).injectedKeys).not.toContain(
+      "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+    );
+  });
+
+  test("injectSystemEnv clears the legacy first-party override absent from the record", async () => {
+    // Records written after the key left the tracking list no longer name it, so
+    // record membership cannot find the surviving launchctl value (#5792 review).
+    trackingFile = JSON.stringify({
+      pid: 123,
+      port: 4567,
+      injectedAt: "2026-07-11T00:00:00.000Z",
+      injectedKeys: ["ANTHROPIC_BASE_URL", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"],
+    });
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+    launchctlEnvValues["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] = "1";
+
+    expect(await injectSystemEnv(4567, baseConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).toContain(
+      "launchctl unsetenv _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+    );
+  });
+
+  test("injectSystemEnv preserves a legacy first-party override that is not 1", async () => {
+    launchctlBaseUrl = "http://127.0.0.1:4567";
+    launchctlEnvValues["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] = "custom";
+
+    expect(await injectSystemEnv(4567, baseConfig)).toEqual({ injected: true });
+    expect(launchctlCommands()).not.toContain(
+      "launchctl unsetenv _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+    );
+  });
+
   test("injectSystemEnv includes the first configured API key", async () => {
     const config: OcxConfig = {
       ...baseConfig,

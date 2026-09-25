@@ -32,6 +32,8 @@ import {
 } from "./sse-frame-buffer";
 import { replaceSseDataPayload, sseDataPayload } from "./sse-payload-rewrite";
 import { createBoundedResponseLogBody } from "./response-log-body";
+import { clientWireLogOf } from "./inference/client-wire";
+import { recordClientWireRequestLog } from "./inference/client-wire-log";
 
 const nativePassthroughSseResponses = new WeakSet<Response>();
 const eagerRelaySseResponses = new WeakSet<Response>();
@@ -815,6 +817,13 @@ export function responseWithDeferredRequestLog(
     logCtx.usageDebugContentType = contentType;
   }
   if (isNativePassthroughSseResponse(response)) {
+    return response;
+  }
+  // A body already in the client's wire is not Responses SSE or JSON; its producer reports the
+  // facts the tap below would read (PF-09 direct encoders).
+  const clientWireLog = clientWireLogOf(response);
+  if (clientWireLog) {
+    recordClientWireRequestLog(clientWireLog, requestId, start, logCtx, addLog);
     return response;
   }
   if (!response.body || !contentType.includes("text/event-stream")) {

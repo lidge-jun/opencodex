@@ -258,6 +258,15 @@
       ]
     },
     {
+      "path": "data-planes/protocol-paths.md",
+      "tier": 3,
+      "title": "Protocol Paths",
+      "scope": "Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings.",
+      "documents": [
+        "src/protocols/"
+      ]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",
@@ -477,6 +486,15 @@
       "scope": "Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration.",
       "documents": [
         "src/remote-control/"
+      ]
+    },
+    {
+      "path": "remote-link.md",
+      "tier": 3,
+      "title": "Remote Link",
+      "scope": "SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer and the private link store.",
+      "documents": [
+        "src/link/"
       ]
     },
     {

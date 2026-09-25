@@ -105,24 +105,35 @@ Répertoriez et changez de compte de fournisseur et de pools de clés API via le
 la surface est :
 
 ```text
-Usage: ocx account <list|current|use|refresh|auto-switch|priority|login|reauth|code|cancel|remove|add-key|reset-credits|grok-reset-coupons> ...
+Usage: ocx account <list|history|current|use|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
+history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
 current <provider>  Show the active account or key.
-use <provider> <id> Switch the active credential; 'main' selects the Codex App login.
+use <provider> <id|alias|main|auto> Switch the active credential; 'main' selects the Codex App login, 'auto' clears the selection.
 refresh <provider>  Force-refresh Codex or provider quota reports.
 auto-switch <provider> <on|off|status|threshold N>  Control the Codex pool threshold.
-priority <provider> <id|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
-remove <provider> <id> --yes  Remove a stored account or key after an existence check.
+alias <provider> <id|alias> <display-name|->  Set or clear an account's display name; '-' clears it.
+pause <provider> <id|alias|main>  Hold an account out of automatic selection.
+resume <provider> <id|alias|main>  Return a paused account to automatic selection.
+pause-exhausted <provider>  Pause every account whose quota is spent.
+clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
+priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
+remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
 add-key <provider> [--label <label>]  Add a key read only from piped stdin.
 login/reauth/code/cancel  Run browser or manual-code auth from a headless shell.
 reset-credits <id|main> [--consume --yes]  Inspect or consume Codex reset credits.
 grok-reset-coupons [<id>] [--consume --yes] [--token-id <token-id>] [--operation-id <uuid>]  Inspect or redeem Grok reset coupons.
+import <provider> --format <format> (--file <path>|--stdin)  Import credentials from a named external format.
+import-orca --source <dir> --registry <file> [--apply]  Preview or apply imports from Orca-managed Codex homes.
+main <doctor|list|register|add|reauth|switch|recover>  Manage the Codex App login the pool calls 'main'.
 Switching the active account takes effect immediately; running threads move on their next request, and in-flight requests keep the account they captured.
 A selection-order change applies from the next unbound request and never moves a bound thread.
 ```
 
-Toutes les sous-commandes nécessitent que le proxy soit en cours d'exécution ; le CLI résout automatiquement son port d'exécution enregistré.
+Les sous-commandes nécessitent que le proxy soit en cours d'exécution et résolvent automatiquement son port d'exécution enregistré, sauf `import-orca` : l'aperçu est purement local, et `import-orca --apply` exige que le proxy soit arrêté.
 Les opérations réussies se terminent 0. Utilisation invalide, un fournisseur ou un identifiant inconnu, un
 proxy, ou un échec API se termine 1. Les champs d'informations d'identification sont affichés exactement comme la gestion API
 les renvoie (y compris son masquage) ; Les clés API brutes et les jetons OAuth ne sont jamais restitués. Affichage
@@ -173,7 +184,9 @@ cet état et quitte toujours 0. `--json` renvoie :
 { provider, type, activeId: string | null, autoSwitchThreshold?: number, account: AccountRow | null }
 ```
 
-### `ocx account use <provider> <account-or-key-id|main> [--json]`
+### `ocx account use <provider> <account-or-key-id|alias|main|auto> [--json]`
+
+`auto` efface la sélection manuelle pour que le pool place à nouveau le travail selon sa propre stratégie. Un compte Codex peut être désigné par l'alias défini avec `ocx account alias` au lieu de son id ; cela vaut aussi pour `priority`, `pause`, `resume`, `clear-cooldown`, `remove` et `alias`. Pour les comptes Codex, `auto`, `main` et `__main__` sont réservés sans distinction de casse et ne peuvent pas être attribués comme alias. Les noms affichés des comptes OAuth et des clés API conservent leurs règles existantes.
 
 Sélectionne un compte Codex, un compte OAuth ou une clé API existant. Pour `openai`, `main` sélectionne la
 connexion Codex App. Une sélection en mode Codex Pool efface l'affinité locale du processus et s'applique à la requête suivante,
@@ -216,7 +229,7 @@ openai: { provider, autoSwitchThreshold: number, enabled: boolean }
 generic OAuth: { provider, autoSwitchThreshold: number | null, enabled: boolean, poolEnabled: boolean | null, inert: boolean | null }
 ```
 
-### `ocx account priority <provider> <account-id|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
+### `ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]`
 
 Lit ou définit l’ordre de sélection d’un compte du groupe Codex : **une priorité plus élevée est utilisée plus tôt**.
 La valeur par défaut est `0` et la plage va de `-100` à `100`. Seul le groupe Codex `openai` peut être ordonné ;
@@ -249,7 +262,7 @@ l'actualisation de son catalogue de modèles reste en attente, la sortie humaine
 `ocx sync` conseils de récupération sur stderr. `--json` garde la sortie standard analysable et transporte
 `catalogRefreshPending: true` dans l'état de connexion terminé sans avertissement humain.
 
-### `ocx account remove <provider> <id|main> --yes [--json]`
+### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
 Cette suppression gardée et non interactive nécessite `--yes`. Avant de supprimer, il vérifie que l'identifiant
 existe; un identifiant manquant quitte 1 sans envoyer DELETE. La connexion principale Codex App ne peut pas être supprimée, donc

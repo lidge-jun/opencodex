@@ -256,6 +256,13 @@ export async function injectSystemEnv(
   };
 
   try {
+    // Versions before 2.11 injected this key, which prevents Claude's gateway model
+    // discovery. Records written after it left the tracking list no longer name it,
+    // so membership cannot find it — clear it whenever the live value is the only
+    // one we ever injected. A user-set "1" is indistinguishable and is cleared too.
+    if (launchctlGetenv("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL") === "1") {
+      unsetLaunchctlEnv("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL");
+    }
     inject("ANTHROPIC_BASE_URL", destination.origin);
     inject("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY", "1");
     if (markerMode === "proxy") {

@@ -233,12 +233,20 @@ stay over it while idle.
 The ceiling bounds what the store can account for, which is every entry in the map plus the
 superseded generations queued for unlink, and deliberately not the directory as a whole. Spill files
 orphaned by a crash are absent from the map, so this accounting can neither see nor price them; they
-remain with the `recoverOrphanedResponseSpills` grace sweep described below, which is the only
-mechanism that reclaims them. A host that crashes repeatedly can therefore hold spill bytes above
+are reclaimed by `recoverOrphanedResponseSpills`, a bounded scan that unlinks owned names past
+`RESPONSE_SPILL_ORPHAN_GRACE_MS` unless the process still references them — referenced means a live
+spill stub, a superseded generation queued for unlink, or a queued or in-flight publication's temp,
+destination, or superseded file. The sweep runs once inside the lazy load and again on each liveness
+tick with the tighter `PERIODIC_SPILL_SWEEP_OPTS` bounds, so orphans created mid-run do not wait for a
+restart. A host that crashes repeatedly can therefore hold spill bytes above
 this ceiling for up to `RESPONSE_SPILL_ORPHAN_GRACE_MS` past each crash. Without that aggregate bound the
 directory was limited only per file (256 MiB) and per entry (1000) — a 250 GiB product — which
 left `RESPONSE_TTL_MS` as the only effective limit and made disk use a function of client
-request rate rather than of anything the process controls.
+request rate rather than of anything the process controls. The durable snapshot that
+re-establishes these references after a restart is budgeted too, and its bounded stub and
+tombstone rows are selected before resident payloads under that budget, so a full resident
+cohort cannot crowd a spill reference out of `responses-state.json` and strand a file the
+store still owns.
 
 > Decision record: [ADR-0013](decisions/ADR-0013-codex-home.md)
 

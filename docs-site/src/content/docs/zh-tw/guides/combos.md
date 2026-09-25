@@ -270,7 +270,7 @@ Combo 儲存於頂層 `combos` 物件中，以 combo id 為 key：
 | --- | --- | --- | --- |
 | `targets` | 是 | — | 已設定 `{ provider, model, weight? }` 目標的非空有序陣列。重複的供應商/模型對會被拒絕。 |
 | `targets[].weight` | 否 | `1` | 1 到 10,000 的整數。由 `round-robin` 與 `random` 使用；`failover`、`least-used` 與 `reset-window` 忽略。 |
-| `strategy` | 否 | `"failover"` | 可用值為 `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、`"reset-window"`。 |
+| `strategy` | 否 | `"failover"` | 可用值為 `"failover"`、`"round-robin"`、`"random"`、`"least-used"`、`"reset-window"`、`"jev"`。JEV 只決定第一個符合條件的目標與 effort；後續嘗試由一般 Combo fallback 處理。 |
 | `stickyLimit` | 否 | `1` | 僅適用於 `round-robin`：每次選擇的成功請求數，1 到 100 的整數。 |
 | `defaultEffort` | 否 | `null` | `low`、`medium`、`high`、`xhigh`、`max` 或 `ultra`；僅在呼叫者省略 effort 且目標宣告支援時套用。 |
 | `reasoningEffortMode` | 否 | `"strict"` | `strict` 或 `adaptive`；選擇混合能力交集及目標層級控制正規化。 |

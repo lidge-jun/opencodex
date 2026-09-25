@@ -539,6 +539,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleConnectCommand } = await import("./connect");
     return await handleConnectCommand(deps.args.slice(1));
   },
+  link: async deps => {
+    const { runLinkCommand } = await import("./link");
+    return await runLinkCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
+  },
   "remote-workspace": async deps => {
     const { runRemoteWorkspaceCommand } = await import("./remote-workspace");
     return await runRemoteWorkspaceCommand(deps.args.slice(1));
@@ -891,6 +895,10 @@ const commandRunners: Record<string, CommandRunner> = {
   "api-key": async deps => {
     const { handleAccessCommand } = await import("./access");
     return await handleAccessCommand(["key", ...deps.args.slice(1)]);
+  },
+  api: async deps => {
+    const { handleApiCommand } = await import("./api-protocols");
+    return await handleApiCommand(deps.args.slice(1));
   },
   export: async deps => {
     const { handleExportCommand } = await import("./export-command");

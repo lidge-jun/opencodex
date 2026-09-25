@@ -3,6 +3,8 @@ title: Remote Workspace
 description: Keep Codex, Claude Code, Pi, and their logins on one OCX Hub while OCX-only computers provide the workspace and build environment.
 ---
 
+For SSH machine links, see [Remote Link](/guides/remote-link/).
+
 Remote Workspace lets one OpenCodex Hub run your coding agents while another computer supplies the
 project files, commands, tests, and build compute. A phone or third computer can control the session
 through the Hub dashboard.

@@ -207,6 +207,105 @@ order. Weights and `stickyLimit` do not affect this strategy.
 
 This ranking and provider exclusion before dispatch require fresh model-inference limits that apply to the current single API key as a whole. OAuth/current-account summaries, caller-forward routes, multiple keys, and snapshots with changed credentials or destinations are display-only for this early decision. The same applies when `Authorization`, `x-api-key`, or `x-goog-api-key` headers override credentials; search-only and MCP-only windows are excluded. If no eligible target has an applicable reset, configuration order wins. Account selection and retries still enforce their normal limits.
 
+### JEV: decision-guided first pick
+
+`jev` asks [TypeSafe JEV](https://console.typesafe.ai) to choose the first eligible target and a
+compatible reasoning effort for the current request. It is opt-in: adding the TypeSafe credential
+does not change existing models, aliases, defaults, or Combo behavior. A JEV-backed model appears
+only after you create a Combo whose strategy is `jev`.
+
+The quickest setup is:
+
+1. Open **Providers**, add **TypeSafe JEV**, enter the TypeSafe API key, and test the connection.
+2. From that provider's Overview, choose **Create JEV Auto**. You can also use the same action under
+   **Models → Combos**.
+3. Review the prefilled Astra → Sol → Luna targets. Add, remove, reorder, or replace them before
+   creating the Combo. The first currently eligible row is marked as the fail-open target, and each
+   known reasoning ladder is shown beside its row.
+
+The template creates id and alias `jev-auto`, uses adaptive reasoning capability, and remains an
+ordinary editable Combo. It does not become the default model. Its targets are the complete
+allowlist: JEV can never select a provider/model pair outside that list, and the original target
+models remain available in their normal picker groups.
+
+For headless setup, store the key explicitly or reference the TypeSafe environment variable:
+
+```bash
+ocx provider add jev --api-key "${TYPESAFE_API_KEY}"
+```
+
+When the provider has no saved key, the decision client also accepts `TYPESAFE_API_KEY` directly and
+the standard provider-derived alias `JEV_API_KEY` printed by `ocx provider add`.
+
+```json
+{
+  "providers": {
+    "jev": {
+      "adapter": "jev-decision",
+      "baseUrl": "https://api.typesafe.ai/v1/systemone",
+      "authMode": "key",
+      "apiKey": "${TYPESAFE_API_KEY}",
+      "liveModels": false
+    }
+  },
+  "combos": {
+    "jev-auto": {
+      "alias": "jev-auto",
+      "strategy": "jev",
+      "reasoningEffortMode": "adaptive",
+      "targets": [
+        { "provider": "openai", "model": "gpt-6-astra" },
+        { "provider": "openai", "model": "gpt-5.6-sol" },
+        { "provider": "openai", "model": "gpt-5.6-luna" }
+      ]
+    }
+  }
+}
+```
+
+OpenCodex sends one bounded decision request to the fixed
+`https://api.typesafe.ai/v1/systemone` endpoint with model `jev-latest`. Only currently eligible
+configured targets are offered. JEV chooses the target and effort together; the effort is still
+constrained by that target's advertised ladder. JEV is not asked again if the selected target has a
+retryable failure—the existing Combo cooldown and fallback loop continues through the remaining
+configured targets.
+
+Each logical model call is decided on its own; there is no per-conversation pin. Consecutive turns of
+one session can therefore land on different targets, and every switch starts a cold provider prompt
+cache, so a mix of very different targets can cost more input tokens than it saves. Keep the
+allowlist to targets you are content to alternate between. Targets marked `lastResort` are withheld
+from JEV under `cooldownWaitPolicy: "before-last-resort"` while any normal target is offered, and
+offered only when nothing else is reachable.
+
+The decision boundary fails open when the key is missing, no safe task/tool/image decision state is
+available, the four-second decision deadline expires, the service redirects or returns an error, or
+the response is malformed or selects an unlisted choice. In those cases OpenCodex uses the first
+currently eligible target, preferring `medium` when that target supports it. Caller cancellation is
+different: it cancels the decision and the model request instead of dispatching the fail-open target.
+
+The decision state is deliberately bounded: up to 500 characters of the current user task, a
+240-character previous-assistant tail, a 520-character latest-tool-output tail, the tool name, and
+boolean image/tool signals may be sent to TypeSafe. It excludes the JEV credential, request headers,
+raw image bytes, tool arguments, encrypted reasoning, and full conversation history. Do not select
+`jev-auto` for content you do not want TypeSafe to process. Recognized OpenCodex machine-context
+envelopes are removed from all three text samples, but ordinary assistant and tool-output text is
+not a secret scanner and may still contain sensitive content. TypeSafe states that Jev is not
+trained on customer requests, but its terms set no fixed retention period for submitted state and
+offer zero data retention only on enterprise plans
+([models](https://docs.typesafe.ai/models), [legal](https://docs.typesafe.ai/legal)). TypeSafe
+also documents English as Jev's most accurate language, so check decisions on non-English work
+before relying on them. Logs contain only the selected
+target/effort, a coarse decision gate, latency, optional confidence/probability, and numeric usage.
+Automated tests use mocked TypeSafe responses plus a no-key fail-open smoke; a live TypeSafe decision
+requires an operator-supplied key and is not run implicitly.
+
+After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
+picks without replacing the normal model picker or Usage page. The tab separates TypeSafe decision
+tokens from tokens reported by physical model sends, and shows decision gates, fail-open picks,
+reasoning efforts, retries/fallbacks, cache tokens, latency, confidence, and per-model totals for 7
+days, 30 days, or all available history. Statistics come from the local append-only usage ledger;
+they contain the bounded decision metadata described above, not prompts or credentials.
+
 ## What happens when a target fails
 
 Combo failures are divided into **hop** failures and **terminal** failures.
@@ -401,7 +500,9 @@ task workflow.
 ### Dashboard
 
 Open the local dashboard and choose **Models → Combos**. The workspace creates, edits, renames, and removes
-combos, and its target picker excludes disabled models and nested combos.
+combos, and its target picker excludes disabled models, nested combos, and the credential-only JEV
+provider. **Create JEV Auto** opens the same Combo editor with an editable decision target template;
+an existing `jev-auto` id or alias is reported instead of creating a duplicate.
 
 Each target also shows a live quota badge: **Available**, **Out of quota**, or **Quota unknown**. The editor blocks Save and Create for quota only when every usable target has a current server-confirmed exhausted inference limit for its configured credential. Display-only account, model, search and MCP quota, or missing or expired routing evidence, does not cause this block. The block expires at the applicable reset or freshness boundary and is rechecked when the page becomes active or visible; Refresh reloads both Combo data and quota. The dashboard
 editor does not yet expose `cooldownMs` or `waitForCooldownMs`; use the configuration file or management
@@ -466,9 +567,9 @@ Combos are stored in the top-level `combos` object, keyed by combo id:
 | Field | Required | Default | Rules |
 | --- | --- | --- | --- |
 | `targets` | Yes | — | Non-empty ordered array of configured `{ provider, model, weight?, lastResort? }` targets. Duplicate provider/model pairs are rejected. |
-| `targets[].weight` | No | `1` | Integer from 1 to 10,000. Used by round-robin and random; ignored by failover, least-used, and reset-window. |
+| `targets[].weight` | No | `1` | Integer from 1 to 10,000. Used by round-robin and random; ignored by failover, least-used, reset-window, and JEV. |
 | `targets[].lastResort` | No | `false` | Marks an emergency-only target. Inert unless `cooldownWaitPolicy` is set. Never makes a target permanently ineligible: when no normal target can be reached it is dispatched as usual. |
-| `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, or `"reset-window"`. |
+| `strategy` | No | `"failover"` | `"failover"`, `"round-robin"`, `"random"`, `"least-used"`, `"reset-window"`, or `"jev"`. JEV decides only the initial eligible target and effort; ordinary Combo fallback owns later attempts. |
 | `stickyLimit` | No | `1` | Integer from 1 to 100 successful requests per round-robin selection. Applies only to round-robin. |
 | `cooldownMs` | No | unset → upstream fallback (5 s for request-rate 429 codes `1302`/`1305`, otherwise 60 s) | Integer from 1 to 600000. When set, applies as the per-target cooldown whenever no usable upstream `Retry-After` or Codex reset signal exists, including request-rate 429s; when unset, uses the upstream fallback. |
 | `waitForCooldownMs` | No | `0` | Integer from 0 to 600000. Maximum time to wait for the earliest eligible cooling target before returning `combo_unavailable`; abort cancels the wait. |

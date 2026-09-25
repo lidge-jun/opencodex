@@ -188,14 +188,31 @@ describe("scheduler hook keying", () => {
     }
   });
 
-  // An in-process restart (service restart, test suite) must re-arm the hook.
-  test("a scheduler restarted after shutdown is stoppable again", () => {
+  // The sweep is process-lifetime: drainAndShutdown callers exit afterwards, so a
+  // scheduler start arriving late (a policy PUT resuming past the snapshot) must be
+  // refused — not re-armed — or its timer would dispatch outside the completed sweep.
+  test("a scheduler start after the shutdown sweep is refused", () => {
+    resetOptionalShutdownHooksForTests();
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-shutdown-late-start-"));
+    try {
+      runOptionalShutdownHooks();
+      startLabAutomationScheduler(configDir);
+      expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+    } finally {
+      stopLabAutomationScheduler(configDir);
+    }
+  });
+
+  // An in-process restart exists only in tests, where the reset models a fresh process;
+  // with the latch cleared a new scheduler must re-arm its hook for the next sweep.
+  test("a scheduler restarted after a test reset is stoppable again", () => {
     resetOptionalShutdownHooksForTests();
     const configDir = mkdtempSync(join(tmpdir(), "ocx-shutdown-restart-"));
     try {
       startLabAutomationScheduler(configDir);
       runOptionalShutdownHooks();
       expect(isLabAutomationSchedulerRunning(configDir)).toBe(false);
+      resetOptionalShutdownHooksForTests();
       startLabAutomationScheduler(configDir);
       expect(isLabAutomationSchedulerRunning(configDir)).toBe(true);
       runOptionalShutdownHooks();

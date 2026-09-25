@@ -3,6 +3,8 @@ title: Remote Hub Deployment
 description: Run a one-port opencodex hub on Linux, macOS, or Docker with a loopback companion listener, a self-provisioned data token, ocx hub invite, a loopback-only management ingress, Tailscale Serve, and headless OAuth.
 ---
 
+For SSH machine links, see [Remote Link](/guides/remote-link/).
+
 An opencodex hub keeps provider credentials and usage state on one host while authenticated clients
 use its data plane remotely. The browser-facing management plane is separate: an optional listener
 binds only `127.0.0.1`, serves the dashboard and `/api/*`, and is intended to sit behind Tailscale

@@ -11,6 +11,37 @@ export function dropResponsesReasoningInputItems(body: unknown): unknown {
   return input.length === body.input.length ? body : { ...body, input };
 }
 
+/** Whether the item already carries a non-empty `reasoning_text` content part. */
+function hasPlaintextReasoningContent(content: unknown): boolean {
+  return Array.isArray(content) && content.some(part =>
+    isPlainObject(part)
+    && part.type === "reasoning_text"
+    && typeof part.text === "string"
+    && part.text.length > 0
+  );
+}
+
+/**
+ * Backfill for a reasoning item that would reach a plaintext-required wire with no
+ * `reasoning_text`: its text lived only in ciphertext the provider cannot read and was
+ * stripped, so replay the item's `summary_text` as `reasoning_text` — real model output,
+ * unlike a fabricated chain — and fall back to the same minimal placeholder the chat
+ * adapter emits for `requiresReasoningPlaceholderModels` (#5421). DeepSeek's thinking
+ * mode answers a bare emptied item with `The reasoning_text in the thinking mode must
+ * be passed back to the API` and aborts the turn.
+ */
+function plaintextReasoningBackfill(rec: Record<string, unknown>): unknown[] {
+  const fromSummary = Array.isArray(rec.summary)
+    ? rec.summary
+        .filter(part => isPlainObject(part)
+          && part.type === "summary_text"
+          && typeof part.text === "string"
+          && part.text.length > 0)
+        .map(part => ({ type: "reasoning_text", text: part.text }))
+    : [];
+  return fromSummary.length > 0 ? fromSummary : [{ type: "reasoning_text", text: " " }];
+}
+
 /**
  * Sanitize reasoning input by field policy, not by preserving each item's shape. Retaining a
  * native `encrypted_content` guarantees only that blob value: `status` is always removed;
@@ -40,6 +71,13 @@ export function sanitizeReasoningInputContent(
      * store this destination cannot read; see `OcxParsedRequest._dropForeignReasoningItemIds`.
      */
     dropForeignItemId?: boolean;
+    /**
+     * The destination documents a strict plaintext-replay contract (DeepSeek's Responses
+     * thinking mode): every reasoning input item must carry `reasoning_text` content.
+     * An item left with none is backfilled from its summary, or with a minimal
+     * placeholder, rather than emitted in the shape the upstream 400s on.
+     */
+    requirePlaintextReasoning?: boolean;
   },
 ): unknown {
   if (!body || typeof body !== "object" || Array.isArray(body)) return body;
@@ -85,9 +123,14 @@ export function sanitizeReasoningInputContent(
     const blankContent = !dropNullContentChannel
       && !opts?.preserveRawReasoningContent
       && (hasRawContent || hasOcxEnvelope);
+    // A strict plaintext-replay destination cannot consume a reasoning item emptied of its
+    // `reasoning_text` — the resumed-subagent shape (#5421), where the text lived only in
+    // ciphertext the provider cannot read. Backfill after every other strip has run.
+    const missingPlaintextReasoning = opts?.requirePlaintextReasoning === true
+      && !hasPlaintextReasoningContent(rec.content);
     if (
       !blankContent && !stripOutputStatus && !stripEncryptedContent && !dropNullContentChannel
-      && !missingSummary && !dropItemId
+      && !missingSummary && !dropItemId && !missingPlaintextReasoning
     ) {
       return item;
     }
@@ -106,6 +149,7 @@ export function sanitizeReasoningInputContent(
     // `preserveResponsesReasoningContent` keep it — deleting valid replay content there breaks
     // continuations after tool calls (issue #875 family).
     if (blankContent) next.content = [];
+    if (missingPlaintextReasoning) next.content = plaintextReasoningBackfill(next);
     return next;
   });
 
