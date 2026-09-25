@@ -192,11 +192,6 @@ export async function executeComboResponses(
   if (!combo) {
     return formatErrorResponse(404, "invalid_request_error", `Unknown combo: ${comboId}`);
   }
-  // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
-  // counter with the holder that arrived on options -- a combo child already inherited that
-  // counter, but nothing read it as a limit across targets -- while its transition and
-  // alternate-target ledgers come from the target list rather than from the single-target
-  // account-move profile (#4546).
   // PF-07: present only for a Chat combo with `nativeChatCombos` on; otherwise every child
   // takes the bridge below exactly as before.
   const protocolLanes = createComboProtocolLanes({
@@ -208,6 +203,11 @@ export async function executeComboResponses(
     comboId,
     targets: combo.targets,
   });
+  // The ladder's own scope, derived from what this combo DECLARES. It shares the request-wide
+  // counter with the holder that arrived on options -- a combo child already inherited that
+  // counter, but nothing read it as a limit across targets -- while its transition and
+  // alternate-target ledgers come from the target list rather than from the single-target
+  // account-move profile (#4546).
   const comboSendScope = isRequestExecutionBudget(options.sendBudget)
     ? deriveSendBudgetScope(options.sendBudget, comboExecutionBudgetPolicy(combo.targets.length))
     : undefined;
