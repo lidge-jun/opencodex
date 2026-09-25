@@ -1,5 +1,6 @@
 /**
- * Client for the protocol preview routes (`GET /api/protocols`, `POST /api/protocols/plan`).
+ * Client for the protocol routes (`GET /api/protocols`, `POST /api/protocols/plan`,
+ * `PATCH /api/protocols/settings`).
  *
  * The dashboard never computes a plan itself; it asks the server and validates the answer
  * with the shared leaf validator, so a record from an older or newer server is refused rather
@@ -105,6 +106,46 @@ export async function fetchProtocolPlan(
     if (!isProtocolPlanV1(plan)) return { kind: "error" };
     remember(protocolPlanCacheKey(apiBase, query, plan.policyRevision), plan);
     return { kind: "plan", plan };
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    return { kind: "error" };
+  }
+}
+
+export interface ProtocolSettingsPatchBody {
+  messagesEnabled?: boolean;
+}
+
+export type ProtocolSettingsPatchResult =
+  | { kind: "ok"; info: ProtocolInfo }
+  /** The server predates the settings route. */
+  | { kind: "unavailable" }
+  | { kind: "error"; code?: string };
+
+/**
+ * Change protocol settings on the target `apiBase` names (this machine or the shared hub). The
+ * server answers with the fresh `GET /api/protocols` shape, validated like any other read.
+ */
+export async function patchProtocolSettings(
+  apiBase: string,
+  body: ProtocolSettingsPatchBody,
+  signal?: AbortSignal,
+): Promise<ProtocolSettingsPatchResult> {
+  try {
+    const res = await fetch(`${apiBase}/api/protocols/settings`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (res.status === 404 || res.status === 405) return { kind: "unavailable" };
+    const payload: unknown = await res.json().catch(() => null);
+    if (!res.ok) {
+      const code = isRec(payload) && isRec(payload.error) && typeof payload.error.code === "string" ? payload.error.code : undefined;
+      return code ? { kind: "error", code } : { kind: "error" };
+    }
+    const info = parseProtocolInfo(payload);
+    return info ? { kind: "ok", info } : { kind: "error" };
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     return { kind: "error" };
