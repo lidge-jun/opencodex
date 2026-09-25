@@ -3320,4 +3320,12 @@ export const zh: Record<TKey, string> = {
   "pws.protocol.col.wire": "协议",
   "pws.protocol.col.source": "决定来源",
   "pws.protocol.loadFailed": "无法加载上游协议。",
+  "compatProtocol.filter.inbound": "客户端 API",
+  "compatProtocol.filter.upstream": "上游协议",
+  "compatProtocol.anyProtocol": "任意",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "正在读取每个主体的协议组合…",
+  "compatProtocol.unverified": "{pair} 尚无 Lab 证据。此组合是未验证，而非失败。",
+  "compatProtocol.unresolved": "无法读取 {count} 个主体的协议组合，已从此筛选中排除。",
+  "compatProtocol.axisNote": "这里只有 Lab 判定。请求如何传递（原生或转译）请见 API 页面的请求路径预览。",
 };

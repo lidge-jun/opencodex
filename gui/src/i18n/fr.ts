@@ -3288,4 +3288,12 @@ export const fr: Record<TKey, string> = {
   "pws.protocol.col.wire": "Protocole",
   "pws.protocol.col.source": "Décidé par",
   "pws.protocol.loadFailed": "Impossible de charger le protocole amont.",
+  "compatProtocol.filter.inbound": "API cliente",
+  "compatProtocol.filter.upstream": "Protocole amont",
+  "compatProtocol.anyProtocol": "tous",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "Lecture de la paire de protocoles de chaque sujet…",
+  "compatProtocol.unverified": "Aucune preuve Lab pour {pair} pour l'instant. La paire n'est pas vérifiée, elle n'a pas échoué.",
+  "compatProtocol.unresolved": "La paire de protocoles de {count} sujets n'a pas pu être lue ; ils sont exclus de ce filtre.",
+  "compatProtocol.axisNote": "Il s'agit uniquement de verdicts Lab. Le mode d'acheminement d'une requête (natif ou traduit) est affiché par l'aperçu du chemin de requête sur la page API.",
 };

@@ -3321,4 +3321,12 @@ export const ja: Record<TKey, string> = {
   "pws.protocol.col.wire": "ワイヤー形式",
   "pws.protocol.col.source": "決定元",
   "pws.protocol.loadFailed": "アップストリームのワイヤー形式を読み込めませんでした。",
+  "compatProtocol.filter.inbound": "クライアント API",
+  "compatProtocol.filter.upstream": "アップストリームのワイヤー形式",
+  "compatProtocol.anyProtocol": "任意",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "各サブジェクトのプロトコルの組を読み込み中…",
+  "compatProtocol.unverified": "{pair} の Lab エビデンスはまだありません。この組は未検証であり、失敗ではありません。",
+  "compatProtocol.unresolved": "{count} 件のサブジェクトはプロトコルの組を読み取れず、このフィルターから除外しています。",
+  "compatProtocol.axisNote": "これは Lab の判定のみです。リクエストの配送方法（ネイティブまたは変換）は API ページのリクエスト経路プレビューに表示されます。",
 };

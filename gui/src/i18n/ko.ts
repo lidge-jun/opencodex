@@ -3321,4 +3321,12 @@ export const ko: Record<TKey, string> = {
   "pws.protocol.col.wire": "와이어",
   "pws.protocol.col.source": "결정 주체",
   "pws.protocol.loadFailed": "업스트림 와이어를 불러오지 못했습니다.",
+  "compatProtocol.filter.inbound": "클라이언트 API",
+  "compatProtocol.filter.upstream": "업스트림 와이어",
+  "compatProtocol.anyProtocol": "모두",
+  "compatProtocol.pair": "{inbound} → {upstream}",
+  "compatProtocol.loading": "각 대상의 프로토콜 쌍을 읽는 중…",
+  "compatProtocol.unverified": "{pair}에 대한 Lab 근거가 아직 없습니다. 이 조합은 실패가 아니라 미검증 상태입니다.",
+  "compatProtocol.unresolved": "{count}개 대상의 프로토콜 쌍을 읽지 못해 이 필터에서 제외했습니다.",
+  "compatProtocol.axisNote": "Lab 판정만 표시합니다. 요청이 어떻게 전달되는지(네이티브 또는 변환)는 API 페이지의 요청 경로 미리보기에 나옵니다.",
 };
