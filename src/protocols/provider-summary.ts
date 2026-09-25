@@ -14,7 +14,7 @@
 import { PROVIDER_REGISTRY } from "../providers/registry";
 import type { StaticPolicySource } from "../providers/resolved-model-policy";
 import { captureRouteStaticPolicy } from "../router";
-import type { OcxConfig, OcxProviderConfig } from "../types";
+import { captureWireAdapterHardPins, type OcxConfig, type OcxProviderConfig } from "../types";
 import { upstreamWireForAdapter } from "./contract";
 import {
   PROTOCOL_DTO_LIMITS,
@@ -47,7 +47,11 @@ function usableModelId(model: unknown): model is string {
     && !/[\u0000-\u001f\u007f]/.test(model);
 }
 
-/** Model ids whose wire could differ from the provider's: explicit overrides, registry defaults, listed models. */
+/**
+ * Model ids whose wire could differ from the provider's: explicit overrides, registry wire
+ * defaults, exact-id hard pins and the listed models. Prefix pins cannot be enumerated; a
+ * listed model they match is still found.
+ */
 function candidateModelIds(name: string, provider: Readonly<OcxProviderConfig>): string[] {
   const registry = PROVIDER_REGISTRY.find(entry => entry.id === name);
   const ids = new Set<string>();
@@ -56,6 +60,7 @@ function candidateModelIds(name: string, provider: Readonly<OcxProviderConfig>):
   };
   for (const model of Object.keys(provider.modelAdapters ?? {})) add(model);
   for (const model of Object.keys(registry?.modelWireDefaults ?? {})) add(model);
+  for (const model of Object.keys(captureWireAdapterHardPins(name))) add(model);
   add(provider.defaultModel);
   for (const model of provider.models ?? []) add(model);
   return [...ids].sort((left, right) => left.localeCompare(right));
