@@ -29,7 +29,7 @@ frames. Windows refuses this experimental foreground operation until a job-objec
 descendant cleanup. Background shell admission and its longer-lived registry remain separate.
 
 > Decision record: [ADR-0047](../decisions/ADR-0047-cursor-native-exec.md)
-> Foreground ownership record: [ADR-0105](../decisions/ADR-0105-cursor-foreground-shell-ownership.md)
+> Decision record: [ADR-0105](../decisions/ADR-0105-cursor-foreground-shell-ownership.md)
 
 Cursor's generic tool-use prompt filter must preserve every Responses-owned execution-path tool
 that survives the transport budget: unified Desktop `exec` as well as the legacy

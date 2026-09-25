@@ -1,4 +1,4 @@
-# ADR-0105 — Cursor foreground shell ownership
+# ADR-0105 — decision recorded under "Cursor Native Exec"
 
 - Contract owner: [providers/cursor.md](../providers/cursor.md#cursor-native-exec)
 
