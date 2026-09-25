@@ -3425,6 +3425,22 @@ export const en = {
   "quotaSummary.critical": "90%+ used",
   "quotaSummary.credits": "Credits",
   "quotaSummary.refreshFailed": "Last refresh failed; showing the previous reading",
+  "pws.protocol.title": "Upstream wire",
+  "pws.protocol.note": "The API format opencodex speaks to this provider. It does not turn any client API on or off; the API page controls those.",
+  "pws.protocol.adapterLabel": "Upstream wire this provider receives",
+  "pws.protocol.source": "Decided by",
+  "pws.protocol.source.hardPin": "Fixed by opencodex for this model",
+  "pws.protocol.source.operator": "Your configuration",
+  "pws.protocol.source.registry": "Provider catalog",
+  "pws.protocol.source.providerDefault": "Provider default",
+  "pws.protocol.pending": "After you save, this provider receives {adapter}.",
+  "pws.protocol.overrides": "Models on another wire",
+  "pws.protocol.noOverrides": "Every model uses the provider wire.",
+  "pws.protocol.overridesTruncated": "Showing the first {count} models.",
+  "pws.protocol.col.model": "Model",
+  "pws.protocol.col.wire": "Wire",
+  "pws.protocol.col.source": "Decided by",
+  "pws.protocol.loadFailed": "The upstream wire could not be loaded.",
 } as const;
 
 export type TKey = keyof typeof en;
