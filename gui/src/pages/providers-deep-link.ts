@@ -18,6 +18,11 @@ export interface ProviderSettingsFocus {
   provider: string | null;
 }
 
+/**
+ * `select` must be a state setter of the component calling this hook: a matching link is
+ * applied while that component renders (React's "adjust state when a prop changes"), so the
+ * provider and its Settings tab appear in the same paint.
+ */
 export function useProviderSettingsDeepLink(
   providerNames: readonly string[] | null,
   selected: string | null,
@@ -25,10 +30,8 @@ export function useProviderSettingsDeepLink(
 ): ProviderSettingsFocus {
   // `seq` makes a repeated hash event for the same name a new request.
   const [request, setRequest] = useState(() => ({ name: readProviderSettingsTarget(), seq: 0 }));
-  const [focus, setFocus] = useState<ProviderSettingsFocus>({ token: 0, provider: null });
-  const appliedSeqRef = useRef(-1);
+  const [applied, setApplied] = useState<{ seq: number; provider: string } | null>(null);
   const previousSelectedRef = useRef<string | null>(selected);
-  const namesKey = providerNames ? providerNames.join("\n") : null;
 
   useEffect(() => {
     const sync = () => setRequest(current => ({ name: readProviderSettingsTarget(), seq: current.seq + 1 }));
@@ -40,25 +43,22 @@ export function useProviderSettingsDeepLink(
     };
   }, []);
 
-  useEffect(() => {
-    const { name, seq } = request;
-    if (!name || namesKey === null || appliedSeqRef.current === seq) return;
-    if (!namesKey.split("\n").includes(name)) return;
-    appliedSeqRef.current = seq;
-    select(name);
-    setFocus(current => ({ token: current.token + 1, provider: name }));
-  }, [namesKey, request, select]);
+  // A name that is not configured (yet) waits here until the provider list contains it.
+  if (request.name && applied?.seq !== request.seq && providerNames?.includes(request.name)) {
+    setApplied({ seq: request.seq, provider: request.name });
+    select(request.name);
+  }
 
   useEffect(() => {
     const previous = previousSelectedRef.current;
     previousSelectedRef.current = selected;
+    // Only a selection change can move away; a new request alone must not drop its own hash.
+    if (previous === selected) return;
     const linked = readProviderSettingsTarget();
-    if (!linked || appliedSeqRef.current !== request.seq || request.name !== linked) return;
+    if (!linked || applied?.seq !== request.seq || request.name !== linked) return;
     const movedAway = selected !== null ? selected !== linked : previous === linked;
     if (movedAway) replaceHash(PROVIDERS_HASH);
-    // `request` is deliberately not a dependency: only a selection change can move away.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected]);
+  }, [applied, request, selected]);
 
-  return focus;
+  return applied ? { token: applied.seq + 1, provider: applied.provider } : { token: 0, provider: null };
 }
