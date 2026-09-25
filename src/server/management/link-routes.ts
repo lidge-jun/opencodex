@@ -146,6 +146,18 @@ function revokeKey(ctx: ManagementContext, id: string): boolean {
   return (ctx.deps.revokeApiKey ?? revokeApiKeyInProcess)(ctx.config, id);
 }
 
+/**
+ * Revocation that a retry can repeat. A key that is no longer in the live config is already
+ * revoked, which is exactly the state a partially completed cleanup leaves behind; without this
+ * a retried DELETE would fail forever on the key it removed the first time.
+ */
+function revokeKeyIdempotent(ctx: ManagementContext, id: string): boolean {
+  let revoked = false;
+  try { revoked = revokeKey(ctx, id); } catch { revoked = false; }
+  if (revoked) return true;
+  return !(ctx.config.apiKeys ?? []).some(entry => entry.id === id);
+}
+
 function compensationFailure(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number], phase: string): Response {
   (state.compensationFailures ??= new Map()).set(record.id, { since: new Date((ctx.deps.now ?? Date.now)()).toISOString(), reason: "compensation_failed" });
   console.warn(`[link] compensation_failed linkId=${record.id} phase=${phase}`);
@@ -153,8 +165,7 @@ function compensationFailure(ctx: ManagementContext, state: LinkRouteState, reco
 }
 
 async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number]): Promise<Response | null> {
-  let revoked = false;
-  try { revoked = revokeKey(ctx, record.apiKeyId); } catch { revoked = false; }
+  const revoked = revokeKeyIdempotent(ctx, record.apiKeyId);
   if (!revoked) {
     try { await state.supervisor.stopLink(record.id); } catch { /* retain the record and failure marker */ }
     try {
@@ -319,7 +330,10 @@ async function issue(ctx: ManagementContext): Promise<Response> {
   const id = newLinkId();
   const state = stateFor(ctx);
   if (!state) {
-    try { revokeKey(ctx, issued.id); } catch { /* no lifecycle state can retain a residual */ }
+    if (!revokeKeyIdempotent(ctx, issued.id)) {
+      console.warn(`[link] compensation_failed apiKeyId=${issued.id} phase=revoke-without-lifecycle`);
+      return fail("compensation_failed", "The link compensation could not be completed.", 500);
+    }
     return fail("link_unavailable", "The link lifecycle is unavailable.", 503);
   }
   const record = { id, alias: body.alias, direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: body.tunnelPort, apiKeyId: issued.id, createdAt: new Date((ctx.deps.now ?? Date.now)()).toISOString() };
@@ -356,11 +370,10 @@ async function remove(ctx: ManagementContext, state: LinkRouteState, id: string)
       if (result.code !== 0) return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502);
     } catch { return fail("remote_disconnect_failed", "The remote client could not be disconnected.", 502); }
   }
-  let revoked = false;
-  try { revoked = revokeKey(ctx, record.apiKeyId); } catch { revoked = false; }
-  if (!revoked) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
+  if (!revokeKeyIdempotent(ctx, record.apiKeyId)) return fail("key_revoke_failed", "The link key could not be revoked.", 502);
   const next = { ...current, links: current.links.filter(link => link.id !== id) };
   try { writeStoreFor(ctx, next); } catch { return fail("link_remove_failed", "The link record could not be removed.", 503); }
+  state.compensationFailures?.delete(id);
   if (next.links.length === 0) await state.listener.close();
   return Response.json({ linkId: id });
 }

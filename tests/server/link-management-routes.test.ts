@@ -196,6 +196,13 @@ describe("link management routes", () => {
     expect(h.config.apiKeys).toEqual([]);
     const status = await call("/api/link/status", "GET", undefined, deps, "admin-token", true, null, true, h.config);
     expect((await status!.json()).links[0]).toMatchObject({ state: "failed", reason: "compensation_failed" });
+    // The key is already gone, so a retried removal must finish instead of failing on it forever.
+    const linkId = h.store.links[0]!.id;
+    const retry = await call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
+    expect(retry?.status).toBe(200);
+    expect(h.store.links).toEqual([]);
+    const after = await call("/api/link/status", "GET", undefined, h.deps, "admin-token", true, null, true, h.config);
+    expect((await after!.json()).links).toEqual([]);
   });
 
   test("returns compensation_failed and retains the record when duplicate revoke fails", async () => {
