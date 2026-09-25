@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { Server } from "bun";
 import { loadConfig } from "../config";
 import { removePid, removeRuntimePort, writePid, writeRuntimePort } from "../config/process-state";
@@ -6,11 +7,14 @@ import { installCrashGuards } from "../lib/crash-guard";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
 import { findAvailablePort, PortUnavailableError } from "../server/ports";
+import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tunnel";
+import { clientLinkStatePath } from "./link-state";
 import { startMachineListener } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState } from "./state";
 
 let activeServer: Server<unknown> | null = null;
 let activePort: number | null = null;
+let activeSupervisor: ClientLinkSupervisor | null = null;
 let recycleScheduled = false;
 
 function cleanup(): void {
@@ -45,38 +49,52 @@ export function scheduleStandaloneRecycle(disconnectedTokenFingerprint: string):
   if (recycleScheduled) return;
   recycleScheduled = true;
   const timer = setTimeout(() => {
-    const port = activePort;
-    try { activeServer?.stop(true); } catch { /* best effort */ }
-    cleanup();
-    // Recycling back to standalone after `ocx disconnect` must actually bring a standalone
-    // proxy back, under either launch shape.
-    //
-    // Unsupervised: spawn the replacement ourselves and exit 0.
-    //
-    // Supervised (`OCX_SERVICE=1`): do NOT spawn — the supervisor owns the process, and a
-    // second copy would fight it for the port. But exit 0 does not work either: the real
-    // supervisor configs are failure-only (systemd `Restart=on-failure`, WinSW
-    // `<onfailure action="restart"/>`, the Task Scheduler ERRORLEVEL loop), so a clean exit
-    // reads as "the service finished" and nothing restarts. The client stayed down until the
-    // operator noticed. Exit 1 is what those configs are watching for, and it is the same
-    // policy the dashboard recycle already uses (src/server/management/system-restart.ts).
-    //
-    // launchd's KeepAlive restarts on any exit, so it is correct under both branches.
-    if (process.env.OCX_SERVICE === "1") {
-      process.exit(1);
-    }
-    if (port) {
-      const child = spawn(process.execPath, selfLaunchArgv(["start", "--port", String(port)]), {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-        env: standaloneRecycleEnv(process.env, disconnectedTokenFingerprint),
-      });
-      child.unref();
-    }
-    process.exit(0);
+    void recycleStandalone(disconnectedTokenFingerprint);
   }, 50);
   if (typeof timer === "object" && "unref" in timer) timer.unref();
+}
+
+async function recycleStandalone(disconnectedTokenFingerprint: string): Promise<void> {
+  const port = activePort;
+  try {
+    await activeSupervisor?.stop();
+  } catch (error) {
+    console.warn(`[client] link supervisor stop failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  activeSupervisor = null;
+  try {
+    activeServer?.stop(true);
+  } catch (error) {
+    console.warn(`[client] listener stop failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  cleanup();
+  // Recycling back to standalone after `ocx disconnect` must actually bring a standalone
+  // proxy back, under either launch shape.
+  //
+  // Unsupervised: spawn the replacement ourselves and exit 0.
+  //
+  // Supervised (`OCX_SERVICE=1`): do NOT spawn — the supervisor owns the process, and a
+  // second copy would fight it for the port. But exit 0 does not work either: the real
+  // supervisor configs are failure-only (systemd `Restart=on-failure`, WinSW
+  // `<onfailure action="restart"/>`, the Task Scheduler ERRORLEVEL loop), so a clean exit
+  // reads as "the service finished" and nothing restarts. The client stayed down until the
+  // operator noticed. Exit 1 is what those configs are watching for, and it is the same
+  // policy the dashboard recycle already uses (src/server/management/system-restart.ts).
+  //
+  // launchd's KeepAlive restarts on any exit, so it is correct under both branches.
+  if (process.env.OCX_SERVICE === "1") {
+    process.exit(1);
+  }
+  if (port) {
+    const child = spawn(process.execPath, selfLaunchArgv(["start", "--port", String(port)]), {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: standaloneRecycleEnv(process.env, disconnectedTokenFingerprint),
+    });
+    child.unref();
+  }
+  process.exit(0);
 }
 
 export async function startClientRuntime(
@@ -107,6 +125,13 @@ export async function startClientRuntime(
   const boundPort = server.port ?? port;
   activeServer = server;
   activePort = boundPort;
+  const supervisor = linkMode && existsSync(clientLinkStatePath())
+    ? createClientLinkSupervisor({
+      onLinkEnded: () => scheduleStandaloneRecycle(state.value.tokenFingerprint),
+    })
+    : null;
+  activeSupervisor = supervisor;
+  supervisor?.start();
   installCrashGuards();
   writePid(process.pid);
   writeRuntimePort({ pid: process.pid, port: boundPort, hostname: "127.0.0.1" });
@@ -115,10 +140,22 @@ export async function startClientRuntime(
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    try { server.stop(true); } finally {
-      cleanup();
-      process.exit(0);
-    }
+    void (async () => {
+      try {
+        await supervisor?.stop();
+      } catch (error) {
+        console.warn(`[client] link supervisor stop failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      activeSupervisor = null;
+      try {
+        server.stop(true);
+      } catch (error) {
+        console.warn(`[client] listener stop failed: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        cleanup();
+        process.exit(0);
+      }
+    })();
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);

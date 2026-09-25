@@ -66,3 +66,13 @@ test("projects a persisted compensation failure across supervisor restarts", () 
   const dto = projectLinkStatus(store, [], { state: "listening", port: 19001 }, { runtimeRole: "hub" }, compensation);
   expect(dto.links[0]).toMatchObject({ state: "failed", since: "2026-09-25T00:02:00.000Z", reason: "compensation_failed" });
 });
+
+test("a client caller's invalid-sidecar child overrides the record, and only in the client role", () => {
+  const empty: CompensationStore = { version: 1, entries: {} };
+  const invalid = { alias: "unknown", state: "failed" as const, since: "2026-09-25T00:00:00.000Z", reason: "sidecar_invalid" };
+  const client = projectLinkStatus(store, [], { state: "off", port: null }, { runtimeRole: "client" }, empty, invalid);
+  expect(client.role).toBe("child");
+  expect(client.child).toEqual(invalid);
+  const hub = projectLinkStatus(store, [], { state: "listening", port: 19001 }, { runtimeRole: "hub" }, empty, invalid);
+  expect(hub.child).toBeNull();
+});

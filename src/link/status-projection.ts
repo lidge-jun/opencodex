@@ -58,13 +58,18 @@ function stateDetails(
   return { state: asWireState(tunnel), since, reason };
 }
 
-/** Project private link state into the exact K16 wire DTO. */
+/**
+ * Project private link state into the exact K16 wire DTO. `clientChild` lets a client-side caller
+ * report a child state this module cannot read itself (an invalid client sidecar); link code
+ * stays free of client imports, so the caller supplies it.
+ */
 export function projectLinkStatus(
   store: LinkStore,
   supervisorStates: readonly LinkTunnelStatus[],
   listenerStatus: LinkListenerStatusProjection,
   config: LinkStatusConfig,
   compensation: CompensationStore = readCompensation(),
+  clientChild: LinkStatusDto["child"] = null,
 ): LinkStatusDto {
   const byId = new Map(supervisorStates.map(status => [status.linkId, status]));
   const links = store.links.map(record => ({
@@ -75,6 +80,7 @@ export function projectLinkStatus(
     tunnelPort: record.tunnelPort,
   }));
   const childRecord = config.runtimeRole === "client" ? store.links[0] : undefined;
+  const invalidClientSidecar = config.runtimeRole === "client" ? clientChild : null;
   const childStatus = childRecord
     ? stateDetails(childRecord, byId.get(childRecord.id), compensation)
     : undefined;
@@ -85,6 +91,6 @@ export function projectLinkStatus(
     role,
     listener: { state: listenerStatus.state, port: listenerStatus.port },
     links,
-    child: childRecord && childStatus ? { alias: childRecord.alias, ...childStatus } : null,
+    child: invalidClientSidecar ?? (childRecord && childStatus ? { alias: childRecord.alias, ...childStatus } : null),
   };
 }
