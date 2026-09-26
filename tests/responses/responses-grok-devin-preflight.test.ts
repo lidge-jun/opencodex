@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
 import { saveCredential } from "../../src/oauth/store";
+import { clearGenericFailoverHealth } from "../../src/oauth/generic-account-failover";
 import { SEND_BUDGET_EXHAUSTED_CODE } from "../../src/lib/errors";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTempHome } from "../helpers/temp-home";
@@ -36,6 +37,7 @@ let release: (() => void) | undefined;
 beforeEach(async () => {
   home = createTempHome("ocx-grok-devin-preflight-");
   release = acquireOwnedSpendHome();
+  clearGenericFailoverHealth();
   calls = 0;
   events = [limit];
   blockedRun = undefined;
@@ -48,6 +50,7 @@ afterEach(() => {
   try {
     release?.();
   } finally {
+    clearGenericFailoverHealth();
     home.remove();
   }
 });
@@ -101,6 +104,106 @@ test.each([
     message: limit.message, type: "rate_limit_error", code: "rate_limit_exceeded",
   } });
   expect(calls).toBe(1);
+});
+
+test("buffered cooldown heartbeat keeps a final refusal as HTTP 429", async () => {
+  events = [{ type: "heartbeat", preflightReady: true }, limit];
+
+  const response = await run({ stream: false });
+
+  expect(response.status).toBe(429);
+  expect(response.headers.get("retry-after")).toBe("60");
+  expect(calls).toBe(1);
+});
+
+test.each(["codex", "grok"] as const)("%s cooldown starts SSE before a later 429 rotates to a second account", async surface => {
+  await saveCredential("devin", {
+    access: "synthetic-devin-preflight-spare", refresh: "synthetic-refresh-spare",
+    expires: Date.now() + 3_600_000, accountId: "fixture-spare",
+  });
+  const started = Promise.withResolvers<void>();
+  const continueTurn = Promise.withResolvers<void>();
+  blockedRun = async (_parsed, _incoming, emit) => {
+    if (calls === 1) {
+      emit({ type: "heartbeat", preflightReady: true });
+      started.resolve();
+      await continueTurn.promise;
+      emit(limit);
+      return;
+    }
+    emit({ type: "text_delta", text: "alternate answer" });
+    emit({ type: "done" });
+  };
+
+  const response = await waitForPreflightResponse(
+    run({ surface, oauthFailoverEnabled: true }), started.promise, () => continueTurn.resolve(),
+  );
+  const body = await response.text();
+
+  expect(response.status).toBe(200);
+  expect(calls).toBe(2);
+  expect(body).toContain("alternate answer");
+  expect(body).not.toContain("rate_limit_exceeded");
+  expect(body).toContain("response.completed");
+});
+
+test("a final cooldown refusal after SSE starts remains an in-stream error", async () => {
+  events = [{ type: "heartbeat", preflightReady: true }, limit];
+
+  const response = await run();
+  const body = await response.text();
+
+  expect(response.status).toBe(200);
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(body).toContain("response.failed");
+  expect(calls).toBe(1);
+});
+
+test("a replay-unsafe heartbeat after cooldown readiness forbids account rotation", async () => {
+  await saveCredential("devin", {
+    access: "synthetic-devin-preflight-spare", refresh: "synthetic-refresh-spare",
+    expires: Date.now() + 3_600_000, accountId: "fixture-spare",
+  });
+  events = [
+    { type: "heartbeat", preflightReady: true },
+    { type: "heartbeat", replayUnsafe: true },
+    limit,
+  ];
+
+  const response = await run({ surface: "codex", oauthFailoverEnabled: true });
+
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("response.failed");
+  expect(calls).toBe(1);
+});
+
+test("a timed-out preflight can rotate a later pre-output 429", async () => {
+  await saveCredential("devin", {
+    access: "synthetic-devin-preflight-spare", refresh: "synthetic-refresh-spare",
+    expires: Date.now() + 3_600_000, accountId: "fixture-spare",
+  });
+  const started = Promise.withResolvers<void>();
+  const continueTurn = Promise.withResolvers<void>();
+  blockedRun = async (_parsed, _incoming, emit) => {
+    if (calls === 1) {
+      started.resolve();
+      await continueTurn.promise;
+      emit(limit);
+      return;
+    }
+    emit({ type: "text_delta", text: "after timeout" });
+    emit({ type: "done" });
+  };
+
+  const response = await waitForPreflightResponse(
+    run({ stallTimeoutSec: 1, oauthFailoverEnabled: true }), started.promise, () => continueTurn.resolve(),
+  );
+  const body = await response.text();
+
+  expect(response.status).toBe(200);
+  expect(calls).toBe(2);
+  expect(body).toContain("after timeout");
+  expect(body).toContain("response.completed");
 });
 
 test.each([false, true])("first text is replayed once and later errors stay SSE (failure=%s)", async failure => {
