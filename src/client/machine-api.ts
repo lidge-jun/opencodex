@@ -3,6 +3,7 @@ import { diagnoseCodexShim, installCodexShim, uninstallCodexShim } from "../code
 import { readManagementJsonBody } from "../server/management/body";
 import type { OcxClientConnectionConfig } from "../types";
 import { disconnectClient, syncConnectedClient } from "./connect";
+import { isLinkConnection } from "./state";
 
 export type HubReachability = "unknown" | "online" | "offline" | "unauthorized";
 
@@ -50,14 +51,19 @@ async function jsonBody(req: Request): Promise<unknown | Response> {
 
 function statusPayload(req: Request, state: OcxClientConnectionConfig, deps: MachineApiDeps): MachineStatusV1 {
   const machineBase = new URL(req.url).origin;
+  // A link Child's management URL is the tunnel, whose hub-link ingress serves no /api/* and no
+  // session bootstrap. Its dashboard reads the Child's own listener instead (`/api/link/status`).
+  const linkMode = isLinkConnection(state);
   return {
     mode: "client",
     connected: true,
     machineBase,
-    sharedBase: state.managementTransport === "relay"
-      ? `${machineBase}/api/machine/hub-relay`
-      : state.managementUrl,
-    sharedServerOrigin: state.managementUrl,
+    sharedBase: linkMode
+      ? machineBase
+      : state.managementTransport === "relay"
+        ? `${machineBase}/api/machine/hub-relay`
+        : state.managementUrl,
+    sharedServerOrigin: linkMode ? machineBase : state.managementUrl,
     managementTransport: state.managementTransport,
     apiKeyId: state.apiKeyId,
     protocolVersion: state.protocolVersion,

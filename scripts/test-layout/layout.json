@@ -1927,6 +1927,7 @@
     "client-link-runtime.test.ts": "clients",
     "link-routes.test.ts": "clients",
     "client-link-state.test.ts": "clients",
+    "client-link-status.test.ts": "clients",
     "client-link-teardown.test.ts": "clients",
     "client-link-tunnel.test.ts": "clients",
     "link-ports.test.ts": "clients",

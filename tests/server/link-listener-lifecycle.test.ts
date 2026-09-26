@@ -279,4 +279,23 @@ describe("hub-link listener lifecycle", () => {
     await lifecycle.close();
     await expect(fetch(`http://127.0.0.1:${port}/`)).rejects.toThrow();
   });
+
+  test("binds with the public listener's 255-second idle limit so a held relayed turn is not cut", async () => {
+    tempHome = mkdtempSync(join(tmpdir(), "ocx-link-idle-"));
+    const current = { value: store() };
+    let options: Parameters<typeof Bun.serve>[0] | undefined;
+    const lifecycle = makeLifecycle(current, {
+      writeStore: (_path, next) => { current.value = next; },
+      serve: served => {
+        options = served;
+        const actual = Bun.serve(served);
+        servers.push(actual);
+        return actual;
+      },
+    });
+    lifecycle.start(context());
+    await lifecycle.ensureStarted();
+    expect((options as { idleTimeout?: number } | undefined)?.idleTimeout).toBe(255);
+    await lifecycle.stop();
+  });
 });

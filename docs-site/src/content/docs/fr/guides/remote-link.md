@@ -11,9 +11,9 @@ Une liaison entre machines connecte un ordinateur OpenCodex **Home** à un ordin
 - Pour une liaison initiée par Child, Child peut se connecter à Home avec une clé OpenSSH (la connexion par mot de passe n’est pas prise en charge).
 - OpenCodex 2.66.0 ou ultérieur est installé sur Child (et sur Home pour une liaison initiée par Child).
 - Les deux ordinateurs utilisent macOS ou Linux.
-- La liaison se lance depuis Home : son tableau de bord est ouvert sur l’ordinateur Home lui-même (navigateur ou application de bureau, installation autonome) ou via une session Hub appairée.
+- Le tableau de bord qui lance la liaison est ouvert sur cet ordinateur lui-même (navigateur ou application de bureau, installation autonome) ou via une session Hub appairée.
 
-SSH par mot de passe et Windows restent hors du flux actuel. Connecter un ordinateur comme Child depuis le tableau de bord (liaison initiée par Child) n’est pas disponible dans cette version : la jonction redémarre OpenCodex sur cet ordinateur, ce qui couperait les connexions Codex déjà ouvertes ; le tableau de bord affiche donc le rôle **Enfant** comme indisponible. La liaison initiée par Home est la voie prise en charge : sur l’ordinateur qui doit servir de Home, choisissez **Home** et ajoutez l’autre ordinateur comme Child, comme décrit ci-dessous.
+SSH par mot de passe et Windows restent hors du flux actuel. Une liaison peut être lancée des deux côtés : depuis Home, comme décrit ci-dessous, ou depuis Child, comme décrit dans la section « Connecter cet ordinateur comme Child ».
 
 ## Ajouter un Child depuis `#remote`
 
@@ -24,6 +24,19 @@ SSH par mot de passe et Windows restent hors du flux actuel. Connecter un ordina
 5. Confirmez l’empreinte, puis connectez Child.
 
 Le tableau de bord ne demande pas de saisir un jeton. Il sonde d’abord l’hôte et ne peut appliquer la liaison qu’après votre confirmation explicite de l’empreinte.
+
+## Connecter cet ordinateur comme Child
+
+Sur l’ordinateur qui doit utiliser les fournisseurs de Home :
+
+1. Ouvrez le tableau de bord sur `#remote` et activez Remote Link.
+2. Choisissez **Child**. La liste des hôtes SSH s’ouvre.
+3. Choisissez l’hôte SSH de Home, lancez le test de connexion, puis comparez et confirmez son empreinte d’hôte.
+4. Lisez l’avertissement et choisissez **Connect as Child**.
+
+La connexion redémarre OpenCodex sur cet ordinateur. Les tours Codex déjà en cours se terminent d’abord, et les nouvelles requêtes peuvent échouer pendant une minute au plus pendant le redémarrage. Le tableau de bord se recharge ensuite de lui-même et affiche la liaison Child. Codex continue d’utiliser `http://127.0.0.1:<port>/v1` sur cet ordinateur, sans jeton ni variable d’environnement à définir : l’OpenCodex local relaie chaque requête vers Home, qui y répond avec ses propres fournisseurs et comptes.
+
+Le rôle **Child** n’est disponible que lorsque OpenCodex tourne sur son port configuré, car Child redémarre exactement sur ce port. Si le tableau de bord indique qu’OpenCodex ne tourne pas sur son port configuré, redémarrez-le d’abord sur ce port.
 
 ## État de la liaison
 
@@ -47,7 +60,7 @@ Pour déconnecter une liaison initiée par Child, exécutez `ocx disconnect` sur
 
 ## Sécurité
 
-Child utilise les fournisseurs et les identifiants de fournisseur de l’ordinateur Home via la liaison. Home crée une clé distincte pour chaque Child ; la suppression de la liaison révoque cette clé. Comparez l’empreinte de l’hôte avant de confirmer afin de ne pas accepter par erreur une mauvaise machine ou une clé modifiée. Les sessions du tableau de bord émises depuis une identité Tailscale ne peuvent pas gérer les liaisons.
+Child utilise les fournisseurs et les identifiants de fournisseur de l’ordinateur Home via la liaison. Home crée une clé distincte pour chaque Child ; la suppression de la liaison révoque cette clé. Comparez l’empreinte de l’hôte avant de confirmer afin de ne pas accepter par erreur une mauvaise machine ou une clé modifiée. Les sessions du tableau de bord émises depuis une identité Tailscale ne peuvent pas gérer les liaisons. Sur Child, la clé reste dans OpenCodex : les identifiants que Codex ou Claude Code envoient sur Child ne sont pas transmis à Home, et tout programme de Child qui atteint `127.0.0.1:<port>` utilise Home sans clé, avec la même confiance locale qu’une installation autonome. Les pages web d’autres sites sont refusées.
 
 ## Référence CLI
 
