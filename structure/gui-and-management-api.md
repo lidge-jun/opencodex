@@ -188,7 +188,7 @@ state: `/api/sync`, `/api/client-integrations/*`, `/api/native-integrations/*`, 
 `/api/storage/trash/restore`. The refusal is 409 with code `sibling_instance`. Reads, `POST /api/stop`,
 `POST /api/system/restart` and own-home mutations stay open; the shared fan-out behind `PUT /api/settings`
 is gated in `syncEnabledClientIntegrations` instead, and the storage policy's startup and scheduled runs
-stand down in `maybeRequestStorageCleanupPolicyRun` (`src/storage/policy-job.ts`).
+stand down in `maybeRequestStorageCleanupPolicyRun` (`src/storage/policy-job.ts`). `PUT /api/subagent-models` can still save the sibling home's roster, but its `src/server/management/agent-settings-routes.ts` Desktop auto-apply refuses before model discovery and rechecks after awaits so it never rewrites the owner's profile.
 
 `GET /api/native-integrations` reads the Codex, Grok and Claude Desktop desired switch states from persisted configuration because those toggles write intent independently of the server's startup config snapshot; every other field still comes from that snapshot, and without a config file the snapshot's own intent stands. The dashboard can therefore refresh a switch immediately after a successful toggle while its routing badge remains based on observed routing. The Codex row reports the state its latest toggle in this process reported while the persisted intent still matches it, so a skipped or failed enable stays `absent` and an incomplete restore stays `unsafe` instead of being re-derived from intent alone.
 
