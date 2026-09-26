@@ -685,6 +685,7 @@
     "codex-pool-request-owned-main.test.ts": "codex-integration",
     "codex-pool-rotation.test.ts": "codex-integration",
     "codex-priority-failback.test.ts": "codex-integration",
+    "codex-idle-window.test.ts": "codex-integration",
     "codex-prompt-adopt.test.ts": "codex-integration",
     "codex-prompt-base-variants.test.ts": "codex-integration",
     "codex-prompt-journal.test.ts": "codex-integration",
