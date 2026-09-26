@@ -18,7 +18,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
  */
 export type PoolSettingsKind = "codex" | "anthropic" | "generic";
 
-export const GENERIC_POOL_STRATEGIES = ["quota", "round-robin", "fill-first"] as const;
+export const GENERIC_POOL_STRATEGIES = ["quota", "round-robin", "fill-first", "reset-first"] as const;
 export type GenericPoolStrategy = typeof GENERIC_POOL_STRATEGIES[number];
 
 export function poolSettingsCapability(name: string, provider: OcxProviderConfig | undefined): PoolSettingsKind | null {
@@ -29,6 +29,7 @@ export function poolSettingsCapability(name: string, provider: OcxProviderConfig
 }
 
 export function parseGenericPoolStrategy(value: unknown): GenericPoolStrategy | null {
+  if (value === "reset-first") return "reset-first";
   // Delegated, not re-implemented. Three pools accepting the same three names from three
   // private copies of the same check is how they drift apart: the Codex and Anthropic kinds
   // already shared this parser while the generic kind carried its own. The names and the
@@ -182,4 +183,3 @@ export function unifiedPoolSettingsDto(
     quotaWindow: null,
   };
 }
-

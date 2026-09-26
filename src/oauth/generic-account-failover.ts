@@ -23,6 +23,7 @@ import {
   hasHeadroomEvidence,
   isAccountQuotaExhausted,
   rankAccountsByHeadroom,
+  rankAccountsByResetFirst,
   classifyModelFamilyForQuota,
   type QuotaModelFamily,
 } from "./account-quota-rank";
@@ -250,7 +251,7 @@ export function hasEligibleGenericOAuthFailoverTarget(
 }
 
 /** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */
-type ActiveGenericStrategy = "round-robin" | "fill-first";
+type ActiveGenericStrategy = "round-robin" | "fill-first" | "reset-first";
 
 /** Matches the Codex and Anthropic pools; the DTO still reports `null` for "not stored". */
 const DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD = 80;
@@ -264,9 +265,12 @@ const DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD = 80;
  * branch instead of a four-way one.
  */
 function activeGenericStrategy(config: OcxConfig, providerName: string): ActiveGenericStrategy | null {
+  // All pool strategies run behind the kernel flag; `quota` is the pre-kernel path.
+  // Letting `reset-first` bypass it would change 429 selection for pools that never
+  // opted into kernel-gated strategies.
   if (config.pool?.kernel !== true) return null;
   const raw = config.providers?.[providerName]?.oauthAccountFailover?.strategy;
-  return raw === "round-robin" || raw === "fill-first" ? raw : null;
+  return raw === "round-robin" || raw === "fill-first" || raw === "reset-first" ? raw : null;
 }
 
 function genericStickyLimit(config: OcxConfig, providerName: string): number {
@@ -462,6 +466,9 @@ export function rotateGenericOAuthAccountOnRefusal(
     }
     return null;
   }
+  if (strategy === "reset-first") {
+    return rankAccountsByResetFirst(providerName, candidates, requestedModelId, now)[0] ?? null;
+  }
   // With no quota evidence this returns the ring untouched, so providers without
   // per-account quota keep exactly the traversal they have today.
   return rankAccountsByHeadroom(providerName, candidates, requestedModelId,
@@ -552,6 +559,14 @@ export function preferredInitialAccount(
   if (strategy === "fill-first") {
     const picked = pickFillFirstGenericAccount(config, providerName, active, now, requestedModelId, accountRows);
     return picked && picked !== active ? picked : null;
+  }
+  if (strategy === "reset-first") {
+    if (!hasHeadroomEvidence(providerName, order, requestedModelId)) return null;
+    const family = classifyModelFamilyForQuota(providerName, requestedModelId);
+    const eligible = order.filter(id => !isCooled(providerName, id, now, family));
+    if (eligible.length === 0) return null;
+    const best = rankAccountsByResetFirst(providerName, eligible, requestedModelId, now)[0] ?? null;
+    return best && best !== active ? best : null;
   }
 
   const activeRow = selected.accounts.find(account => account.id === active);

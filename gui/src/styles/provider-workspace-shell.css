@@ -1153,3 +1153,147 @@
     gap: 16px;
   }
 }
+
+
+/* Collapsed Rail (Icon-Only Mode) */
+.pws-root.pws-root--rail-collapsed {
+  grid-template-columns: 58px minmax(0, 1fr) !important;
+  transition: grid-template-columns var(--motion-fast) ease;
+}
+
+.pws-rail.pws-rail--collapsed {
+  width: 58px;
+  padding-right: 0;
+  align-items: center;
+  overflow: visible;
+}
+
+.pws-rail-collapsed-head {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  padding-bottom: var(--space-2);
+}
+
+.pws-rail-toggle-btn {
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--motion-fast);
+}
+
+.pws-rail-toggle-btn:hover {
+  color: var(--text);
+  border-color: var(--border-soft);
+  background: var(--raised);
+}
+
+.pws-rail--collapsed .pws-rail-group-head {
+  display: none;
+}
+
+.pws-rail--collapsed .providers-workspace-rail-copy,
+.pws-rail--collapsed .pws-rail-row-remove {
+  display: none;
+}
+
+.pws-rail--collapsed .pws-rail-group {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.pws-rail--collapsed .pws-rail-row-wrap {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.pws-rail--collapsed .pws-rail-row-wrap > button {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  margin: 2px auto;
+  border-radius: var(--radius-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.pws-rail--collapsed .providers-workspace-rail-icon {
+  margin: 0;
+}
+
+.pws-rail--collapsed .providers-workspace-rail-trail {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+.pws-rail--collapsed .pwi-default-star {
+  display: none;
+}
+
+
+/* On mobile (<=768px), collapsed rail is a clean horizontal icon bar, never a left-docked column */
+@media (max-width: 768px) {
+  .pws-root.pws-root--rail-collapsed {
+    grid-template-columns: 1fr !important;
+  }
+
+  .pws-rail.pws-rail--collapsed {
+    width: 100% !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--border) !important;
+    padding: 6px 8px !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 8px !important;
+    overflow-x: auto !important;
+    max-height: none !important;
+  }
+
+  .pws-rail--collapsed .pws-rail-collapsed-head {
+    width: auto !important;
+    padding-bottom: 0 !important;
+    flex-shrink: 0 !important;
+  }
+
+  .pws-rail--collapsed .pws-rail-list {
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 6px !important;
+    overflow-x: auto !important;
+    width: auto !important;
+    flex: 1 1 auto !important;
+  }
+
+  .pws-rail--collapsed .pws-rail-group {
+    flex-direction: row !important;
+    width: auto !important;
+    gap: 6px !important;
+  }
+
+  .pws-rail--collapsed .pws-rail-row-wrap {
+    width: auto !important;
+  }
+}

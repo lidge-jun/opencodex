@@ -25,6 +25,12 @@ export interface PoolSettings {
   supported: string[];
   enabled: boolean | null;
   enabledEffective: boolean;
+  /**
+   * True while strategy/threshold/sticky are persisted but not consumed by the
+   * selector (generic kind with `pool.kernel` off). The API computes it; the GUI
+   * only renders it, so a saved-but-inactive strategy is never presented as live.
+   */
+  inert: boolean;
   strategy: AccountPoolStrategy;
   stickyLimit: number;
   autoSwitchThreshold: number | null;
@@ -50,6 +56,7 @@ function toDto(json: unknown, provider: string, fallback?: PoolSettingsWrite): P
     supported: Array.isArray(raw.supported) ? raw.supported.filter((f): f is string => typeof f === "string") : [],
     enabled: typeof raw.enabled === "boolean" ? raw.enabled : null,
     enabledEffective: raw.enabledEffective === true,
+    inert: raw.inert === true,
     // Fall back to what was asked for when the response omits a field. A management write may
     // answer 204, and reporting the normalizer default there would silently show the operator
     // a different value than the one they just saved.

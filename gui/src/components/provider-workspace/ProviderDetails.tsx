@@ -114,7 +114,17 @@ export default function ProviderDetails({
   onRefreshQuota?: () => Promise<boolean>;
 }) {
   const t = useT();
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_provider_tab_" + item.name) || localStorage.getItem("ocx_provider_active_tab");
+      const valid = ["overview", "models", "usage", "accounts", "settings"];
+      if (saved && valid.includes(saved)) {
+        if (saved === "accounts" && providerAuthSurface(item) === null) return "overview";
+        return saved as Tab;
+      }
+    } catch { /* localStorage unavailable */ }
+    return "overview";
+  });
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [pendingLeave, setPendingLeave] = useState<Tab | "deselect" | null>(null);
   const [leaveSaving, setLeaveSaving] = useState(false);
@@ -151,13 +161,21 @@ export default function ProviderDetails({
     { id: "settings", label: t("pws.tab.settings") },
   ], [authSurface, t]);
 
+  const commitTab = useCallback((next: Tab) => {
+    setTab(next);
+    try {
+      localStorage.setItem("ocx_provider_tab_" + item.name, next);
+      localStorage.setItem("ocx_provider_active_tab", next);
+    } catch { /* ignore */ }
+  }, [item.name, setTab]);
+
   const switchTab = useCallback((next: Tab) => {
     if (settingsDirty && tab === "settings" && next !== "settings") {
       setPendingLeave(next);
       return;
     }
-    setTab(next);
-  }, [tab, settingsDirty]);
+    commitTab(next);
+  }, [tab, settingsDirty, commitTab, setPendingLeave]);
 
   // Adjust related state when accountsFocusToken changes during render (not in an
   // effect) so the Accounts tab is selected without a one-frame stale paint.
@@ -170,7 +188,7 @@ export default function ProviderDetails({
       if (settingsDirty && tab === "settings") {
         setPendingLeave("accounts");
       } else {
-        setTab("accounts");
+        commitTab("accounts");
       }
     }
   }
@@ -189,7 +207,7 @@ export default function ProviderDetails({
       return;
     }
     onDeselect();
-  }, [settingsDirty, tab, onDeselect]);
+  }, [settingsDirty, tab, onDeselect, setPendingLeave]);
 
   const onTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     let next: number;
@@ -387,7 +405,7 @@ export default function ProviderDetails({
             setPendingLeave(null);
             setSettingsDirty(false);
             if (next === "deselect") onDeselect();
-            else setTab(next);
+            else commitTab(next);
           }}
           onSave={() => {
             void (async () => {
@@ -400,7 +418,7 @@ export default function ProviderDetails({
                 setPendingLeave(null);
                 setSettingsDirty(false);
                 if (next === "deselect") onDeselect();
-                else if (next) setTab(next);
+                else if (next) commitTab(next);
               } finally {
                 setLeaveSaving(false);
               }

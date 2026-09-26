@@ -79,11 +79,11 @@ export function setCachedProviderApiKeyQuotaForTests(
   remember(identity(name, provider, keyId, resolved), { ts: Date.now(), quota, ...(unavailable ? { unavailable } : {}) });
 }
 
-/** Four workers per roster, not a process-wide network limit. */
+/** Parallel workers per roster (up to 10 concurrently to avoid queue starvation on multi-account pools). */
 export async function mapQuotaRoster<T, R>(rows: readonly T[], read: (row: T) => Promise<R>): Promise<R[]> {
   const out = new Array<R>(rows.length);
   let cursor = 0;
-  await Promise.all(Array.from({ length: Math.min(4, rows.length) }, async () => {
+  await Promise.all(Array.from({ length: Math.min(10, rows.length) }, async () => {
     while (cursor < rows.length) {
       const index = cursor++;
       out[index] = await read(rows[index]!);

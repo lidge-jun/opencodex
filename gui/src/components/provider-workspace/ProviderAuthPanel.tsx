@@ -1,28 +1,39 @@
+/* oxlint-disable react/react-compiler */
 /**
  * ProviderAuthPanel — OAuth accounts, API-key pool, and forward-auth
  * embedding for the workspace Settings tab (WP091). Consumes WP040+WP060
  * handlers via props-down; no internal auth machinery.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { IconLock, IconRefresh, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
-import { displayAccountId } from "../../lib/privacy";
 import {
-  formatOAuthHealthLabel,
-  formatOAuthHealthSummary,
-  oauthHealthBadgeClass,
-  oauthHealthIsCooldown,
   oauthHealthShowsReauth,
 } from "../../oauth-health-display";
 import CodexAccountPool from "../CodexAccountPool";
 import AnthropicAccountPoolSettings from "./AnthropicAccountPoolSettings";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
+import { getPoolSettings, putPoolSettings } from "../../pool-settings";
+import { normalizeAccountPoolStrategy, type AccountPoolStrategy } from "../../account-pool-strategy";
+import { DEFAULT_ACCOUNT_POOL_STRATEGY } from "../../account-pool-strategy";
 import ProviderAccountQuota from "./ProviderAccountQuota";
-import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
-import { AnthropicGrantBadge, AnthropicResetGrantModal } from "./AnthropicResetGrants";
+import { GrokResetCouponModal } from "./GrokResetCoupons";
+import { AnthropicResetGrantModal } from "./AnthropicResetGrants";
+import ProviderAccountsToolbar from "./ProviderAccountsToolbar";
+import ProviderAccountCard from "./ProviderAccountCard";
+import {
+  analyzeAccountQuota,
+  filterAccounts,
+  sortAccounts,
+  type AccountFilterKey,
+  type AccountSortKey,
+  type AccountDisplayKey,
+  type AccountViewModeKey,
+} from "./account-quota-analysis";
+import { RemoveAccountConfirmDialog } from "./ProviderDialogs";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
 import { useGrokResetCoupons } from "../../hooks/useGrokResetCoupons";
 import { useAnthropicResetGrants } from "../../hooks/useAnthropicResetGrants";
@@ -37,7 +48,6 @@ import type {
   ProviderUpdateResult,
 } from "./types";
 
-const COCKPIT_IMPORT_MAX_BYTES = 256 * 1024;
 const EMPTY_OAUTH_ACCOUNTS: OAuthAccountRow[] = [];
 const EMPTY_API_KEYS: ApiKeyRow[] = [];
 
@@ -108,73 +118,6 @@ function XaiChatOptInControl({
   );
 }
 
-type CockpitImportResult = {
-  importedCount: number;
-  updatedCount: number;
-  failedCount: number;
-  unsupportedCount: number;
-};
-
-const COCKPIT_RESULT_KEYS = new Set([
-  "totalCount", "importedCount", "updatedCount", "failedCount", "unsupportedCount", "results",
-]);
-const COCKPIT_RESULT_STATUSES = new Set(["imported", "updated", "failed", "unsupported"]);
-const COCKPIT_STATUS_CODES: Record<string, ReadonlySet<string>> = {
-  imported: new Set(["imported"]),
-  updated: new Set(["updated"]),
-  failed: new Set([
-    "invalid_record",
-    "credential_rejected",
-    "identity_mismatch",
-    "missing_project",
-    "persist_failed",
-  ]),
-  unsupported: new Set(["unsupported_provider", "unsupported_format"]),
-};
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function isSafeCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function safeCockpitImportResult(value: unknown): CockpitImportResult | null {
-  if (!isPlainObject(value) || Object.keys(value).some(key => !COCKPIT_RESULT_KEYS.has(key))) return null;
-  const { totalCount, importedCount, updatedCount, failedCount, unsupportedCount, results } = value;
-  if (
-    !isSafeCount(totalCount)
-    || !isSafeCount(importedCount)
-    || !isSafeCount(updatedCount)
-    || !isSafeCount(failedCount)
-    || !isSafeCount(unsupportedCount)
-    || !Array.isArray(results)
-    || results.length !== totalCount
-    || importedCount + updatedCount + failedCount + unsupportedCount !== totalCount
-  ) return null;
-
-  const observed = { imported: 0, updated: 0, failed: 0, unsupported: 0 };
-  for (const [index, result] of results.entries()) {
-    if (!isPlainObject(result) || Object.keys(result).some(key => !["index", "status", "code"].includes(key))) return null;
-    const status = String(result.status);
-    const code = String(result.code);
-    if (result.index !== index || !COCKPIT_RESULT_STATUSES.has(status)) return null;
-    const allowedCodes = COCKPIT_STATUS_CODES[status];
-    if (!allowedCodes?.has(code)) return null;
-    observed[status as keyof typeof observed] += 1;
-  }
-  if (
-    observed.imported !== importedCount
-    || observed.updated !== updatedCount
-    || observed.failed !== failedCount
-    || observed.unsupported !== unsupportedCount
-  ) return null;
-  return { importedCount, updatedCount, failedCount, unsupportedCount };
-}
-
 export default function ProviderAuthPanel({
   item, apiBase, oauth, accounts = EMPTY_OAUTH_ACCOUNTS, keys = EMPTY_API_KEYS, accountLoadState = "ready",
   switchingAccountId = null, busy = false, loginHint, authHandlers, onCodexActiveNeedsReauthChange,
@@ -199,10 +142,6 @@ export default function ProviderAuthPanel({
   const [addingKey, setAddingKey] = useState(false);
   const [newKey, setNewKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
-  const [importBusy, setImportBusy] = useState(false);
-  const [importStatus, setImportStatus] = useState<"idle" | "invalid" | "failed" | "complete">("idle");
-  const [importResult, setImportResult] = useState<CockpitImportResult | null>(null);
-  const importFileRef = useRef<HTMLInputElement>(null);
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
@@ -244,13 +183,176 @@ export default function ProviderAuthPanel({
   );
   const claudeGrants = useAnthropicResetGrants({ apiBase, accountIds: claudeAccountIds, enabled: claudeGrantsEnabled });
   const [grantAccount, setGrantAccount] = useState<OAuthAccountRow | null>(null);
-  const refreshQuota = async () => {
+  const [accountToRemove, setAccountToRemove] = useState<OAuthAccountRow | null>(null);
+  const [removingAccount, setRemovingAccount] = useState(false);
+  // The confirmation targets one provider's account. If the selected provider or
+  // API base changes while the dialog is open, dismiss it: confirming afterwards
+  // would remove an account the operator is no longer looking at.
+  useEffect(() => {
+    setAccountToRemove(null);
+    setRemovingAccount(false);
+  }, [item.name, apiBase]);
+  const [accountFilter, setAccountFilter] = useState<AccountFilterKey>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_account_filter");
+      const valid = ["with_limits", "with_limits_gemini", "with_limits_claude", "all", "gemini_exhausted", "claude_exhausted", "fully_exhausted"];
+      if (saved && valid.includes(saved)) return saved as AccountFilterKey;
+    } catch { /* localStorage unavailable */ }
+    return "with_limits";
+  });
+
+  const [accountSort, setAccountSort] = useState<AccountSortKey>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_account_sort");
+      const valid = ["more_headroom", "less_headroom", "reset_5h_soonest", "reset_7d_soonest"];
+      if (saved && valid.includes(saved)) return saved as AccountSortKey;
+    } catch { /* localStorage unavailable */ }
+    return "more_headroom";
+  });
+
+  const [accountTitleMode, setAccountTitleMode] = useState<AccountDisplayKey>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_account_title_mode");
+      const valid = ["login", "masked", "alias"];
+      if (saved && valid.includes(saved)) return saved as AccountDisplayKey;
+    } catch { /* localStorage unavailable */ }
+    return "login";
+  });
+
+  const [accountViewMode, setAccountViewMode] = useState<AccountViewModeKey>(() => {
+    try {
+      const saved = localStorage.getItem("ocx_account_view_mode");
+      const valid = ["cards", "compact"];
+      if (saved && valid.includes(saved)) return saved as AccountViewModeKey;
+    } catch { /* localStorage unavailable */ }
+    return "cards";
+  });
+
+  const handleFilterChange = (next: AccountFilterKey) => {
+    setAccountFilter(next);
+    try { localStorage.setItem("ocx_account_filter", next); } catch { /* ignore */ }
+  };
+
+  const handleSortChange = (next: AccountSortKey) => {
+    setAccountSort(next);
+    try { localStorage.setItem("ocx_account_sort", next); } catch { /* ignore */ }
+  };
+
+  const handleTitleModeChange = (next: AccountDisplayKey) => {
+    setAccountTitleMode(next);
+    try { localStorage.setItem("ocx_account_title_mode", next); } catch { /* ignore */ }
+  };
+
+  const handleViewModeChange = (next: AccountViewModeKey) => {
+    setAccountViewMode(next);
+    try { localStorage.setItem("ocx_account_view_mode", next); } catch { /* ignore */ }
+  };
+  const [accountSearch, setAccountSearch] = useState("");
+  const [refreshingAccountId, setRefreshingAccountId] = useState<string | null>(null);
+
+  const [genericPool, setGenericPool] = useState<{ enabled: boolean; strategy: AccountPoolStrategy } | null>(null);
+
+  const [poolSaveError, setPoolSaveError] = useState<string | null>(null);
+
+  // Serializes pool saves per panel: a stale toggle/strategy response must not
+  // overwrite newer state, and an in-flight save from a previous provider must
+  // not land after a provider/apiBase switch.
+  const poolSaveGeneration = useRef(0);
+  useEffect(() => { poolSaveGeneration.current += 1; }, [apiBase, item.name]);
+
+  useEffect(() => {
+    // The panel is not remounted per provider: without this, a failed read (or an
+    // empty roster) leaves the previous provider's strategy on screen, and the
+    // toggle would persist it under the new provider.
+    setGenericPool(null);
+    if (!isOauth || item.name === "openai" || item.name === "anthropic") return;
+    let cancelled = false;
+    void getPoolSettings(apiBase, item.name).then(res => {
+      if (cancelled || !res) return;
+      setGenericPool({
+        enabled: res.enabled === true || res.enabledEffective === true,
+        strategy: normalizeAccountPoolStrategy(res.strategy),
+      });
+    });
+    return () => { cancelled = true; };
+  }, [apiBase, isOauth, item.name]);
+
+  const handleTogglePoolEnabled = useCallback(() => {
+    if (!genericPool) return;
+    const prev = genericPool;
+    const nextEnabled = !prev.enabled;
+    const generation = ++poolSaveGeneration.current;
+    setGenericPool({ ...prev, enabled: nextEnabled });
+    setPoolSaveError(null);
+    void putPoolSettings(apiBase, item.name, {
+      enabled: nextEnabled,
+      strategy: prev.strategy,
+    }).then(saved => {
+      if (generation !== poolSaveGeneration.current) return;
+      if (!saved) {
+        setGenericPool(prev);
+        setPoolSaveError(t("prov.updateFail"));
+        return;
+      }
+      setGenericPool({
+        enabled: saved.enabled === true || saved.enabledEffective === true,
+        strategy: normalizeAccountPoolStrategy(saved.strategy),
+      });
+    });
+  }, [apiBase, genericPool, item.name]);
+
+  const handleSelectPoolStrategy = useCallback((nextStrategy: AccountPoolStrategy) => {
+    if (!genericPool) return;
+    const prev = genericPool;
+    const generation = ++poolSaveGeneration.current;
+    setGenericPool({ ...prev, strategy: nextStrategy });
+    setPoolSaveError(null);
+    void putPoolSettings(apiBase, item.name, {
+      enabled: prev.enabled,
+      strategy: nextStrategy,
+    }).then(saved => {
+      if (generation !== poolSaveGeneration.current) return;
+      if (!saved) {
+        setGenericPool(prev);
+        setPoolSaveError(t("prov.updateFail"));
+        return;
+      }
+      setGenericPool({
+        enabled: saved.enabled === true || saved.enabledEffective === true,
+        strategy: normalizeAccountPoolStrategy(saved.strategy),
+      });
+    });
+  }, [apiBase, genericPool, item.name]);
+
+  const showModelFamilies = item.name === "google-antigravity";
+
+  const effectiveAccountFilter = useMemo<AccountFilterKey>(() => {
+    if (!showModelFamilies && (
+      accountFilter === "with_limits_gemini"
+      || accountFilter === "with_limits_claude"
+      || accountFilter === "gemini_exhausted"
+      || accountFilter === "claude_exhausted"
+    )) {
+      return "with_limits";
+    }
+    return accountFilter;
+  }, [showModelFamilies, accountFilter]);
+
+  const analyzedAccounts = useMemo(() => {
+    return accounts.map(a => analyzeAccountQuota(a, item.name));
+  }, [accounts, item.name]);
+
+  const filteredAndSortedAccounts = useMemo(() => {
+    const filtered = filterAccounts(analyzedAccounts, effectiveAccountFilter, accountSearch);
+    return sortAccounts(filtered, accountSort, effectiveAccountFilter);
+  }, [analyzedAccounts, effectiveAccountFilter, accountSearch, accountSort]);
+  const refreshQuota = async (accountId?: string) => {
     if (!onRefreshQuota || refreshingQuota) return;
     const generation = ++quotaRefreshGeneration.current;
     // Cleared on click so a previous "refreshed" cannot sit under a later failure.
     setQuotaRefreshState({ identity: connectionIdentity, refreshing: true, result: null });
     try {
-      const ok = await onRefreshQuota(item.name);
+      const ok = await onRefreshQuota(item.name, accountId);
       if (quotaRefreshGeneration.current === generation) setQuotaRefreshState({ identity: connectionIdentity, refreshing: false,
         result: { ok, text: t(ok ? "pws.quotaCheckCompleted" : "codexAuth.quotaRefreshFailed") } });
     } catch {
@@ -258,6 +360,19 @@ export default function ProviderAuthPanel({
         result: { ok: false, text: t("codexAuth.quotaRefreshFailed") } });
     }
   };
+
+  const autoProbedKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${item.name}:${accounts.map(a => a.id).join(",")}`;
+    if (autoProbedKeyRef.current === key) return;
+    if (isOauth && accounts.length > 0 && accounts.some(a => !a.quota && a.quotaMode !== "unsupported") && onRefreshQuota) {
+      const timer = setTimeout(() => {
+        autoProbedKeyRef.current = key;
+        void onRefreshQuota(item.name);
+      }, 50);
+      return () => { clearTimeout(timer); };
+    }
+  }, [item.name, isOauth, accounts, onRefreshQuota]);
 
   if (surface === "codex-accounts") {
     return (
@@ -327,54 +442,6 @@ export default function ProviderAuthPanel({
     }
   };
 
-  const importCockpitFile = async (file: File | undefined) => {
-    if (!file || importBusy) return;
-    setImportBusy(true);
-    setImportStatus("idle");
-    setImportResult(null);
-    try {
-      if (!file.name.toLowerCase().endsWith(".json") || file.size > COCKPIT_IMPORT_MAX_BYTES) {
-        setImportStatus("invalid");
-        return;
-      }
-      let document: unknown;
-      try {
-        document = JSON.parse(await file.text()) as unknown;
-      } catch {
-        setImportStatus("invalid");
-        return;
-      }
-      const response = await fetch(`${apiBase}/api/oauth/accounts/import`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: "google-antigravity", format: "cockpit-tools", document }),
-      });
-      if (!response.ok) {
-        setImportStatus("failed");
-        return;
-      }
-      const result = safeCockpitImportResult(await response.json().catch(() => null));
-      if (!result) {
-        setImportStatus("failed");
-        return;
-      }
-      setImportResult(result);
-      setImportStatus("complete");
-      // The validated import is complete independently of the best-effort list refresh.
-      // The account-pool owner reports refresh failure through accountLoadState, which
-      // remains visible beside this completed import result.
-      try {
-        await authHandlers.onRetryAccounts?.(item.name);
-      } catch {
-        /* Preserve the completed import state; accountLoadState owns refresh errors. */
-      }
-    } catch {
-      setImportStatus("failed");
-    } finally {
-      if (importFileRef.current) importFileRef.current.value = "";
-      setImportBusy(false);
-    }
-  };
 
   return (
     <section className="pwi-section pwi-auth-section" aria-label={isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}>
@@ -418,65 +485,39 @@ export default function ProviderAuthPanel({
         {isOauth && (
           <>
             {item.name === "anthropic" && (
-              <AnthropicAccountPoolSettings apiBase={apiBase} accountCount={accounts.length} />
+              <AnthropicAccountPoolSettings
+                apiBase={apiBase}
+                accountCount={accounts.length}
+                provider={item.name}
+              />
             )}
-            {item.name === "google-antigravity" && (
-              <div className="pwi-auth-add-key">
-                <div>
-                  <div id="cockpit-import-description" className="pwi-auth-row-secondary">
-                    {t("pws.cockpitImportDescription")}
-                  </div>
-                  <label className="sr-only" htmlFor="cockpit-import-file">{t("pws.cockpitImportFileLabel")}</label>
-                  <input
-                    ref={importFileRef}
-                    id="cockpit-import-file"
-                    type="file"
-                    accept="application/json,.json"
-                    className="sr-only"
-                    aria-describedby="cockpit-import-description cockpit-import-status"
-                    disabled={importBusy}
-                    onChange={event => { void importCockpitFile(event.currentTarget.files?.[0]); }}
-                  />
-                </div>
-                <button type="button" className="btn btn-ghost btn-sm" disabled={importBusy}
-                  onClick={() => importFileRef.current?.click()}>
-                  {importBusy ? t("pws.cockpitImporting") : t("pws.cockpitImportChooseFile")}
-                </button>
-                <div id="cockpit-import-status" role="status" aria-live="polite">
-                  {importStatus === "invalid" && t("pws.cockpitImportInvalid")}
-                  {importStatus === "failed" && t("pws.cockpitImportFailed")}
-                  {importStatus === "complete" && importResult && t("pws.cockpitImportComplete", {
-                    imported: importResult.importedCount,
-                    updated: importResult.updatedCount,
-                    failed: importResult.failedCount,
-                    unsupported: importResult.unsupportedCount,
-                  })}
-                </div>
+
+            {/* Only show initial login row when no accounts exist yet */}
+            {accounts.length === 0 && (
+              <div className="pwi-auth-status-row">
+                <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
+                <span className="pwi-auth-status-text">
+                  {loggedIn
+                    ? (oauth?.email ?? t("pws.loggedInTitle"))
+                    : (oauth?.error || t("pws.notLoggedInTitle"))}
+                </span>
+                <span className="pwi-auth-actions">
+                  {activeReauthAccount && (
+                    <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void authHandlers.onReauth(item.name, activeReauthAccount.id)}>
+                      {t("pws.reauthenticate")}
+                    </button>
+                  )}
+                  {loggedIn ? (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onLogout(item.name)}>{t("prov.logout")}</button>
+                  ) : (
+                    <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void authHandlers.onLogin(item.name, false)}>
+                      {busy ? <span className="pwi-spin-inline" aria-hidden="true" /> : <IconLock style={{ width: 13, height: 13 }} aria-hidden="true" />}
+                      {busy ? t("prov.waitingBrowser") : t("prov.login")}
+                    </button>
+                  )}
+                </span>
               </div>
             )}
-            <div className="pwi-auth-status-row">
-              <span className={`pwi-auth-dot ${activeNeedsReauth ? "pwi-auth-dot--warn" : loggedIn ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
-              <span className="pwi-auth-status-text">
-                {loggedIn
-                  ? (accounts.length > 0 ? t("pws.loggedInTitle") : (oauth?.email ?? t("pws.loggedInTitle")))
-                  : (oauth?.error || t("pws.notLoggedInTitle"))}
-              </span>
-              <span className="pwi-auth-actions">
-                {activeReauthAccount && (
-                  <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void authHandlers.onReauth(item.name, activeReauthAccount.id)}>
-                    {t("pws.reauthenticate")}
-                  </button>
-                )}
-                {loggedIn ? (
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onLogout(item.name)}>{t("prov.logout")}</button>
-                ) : (
-                  <button type="button" className="btn btn-primary btn-sm" disabled={busy} onClick={() => void authHandlers.onLogin(item.name, false)}>
-                    {busy ? <span className="pwi-spin-inline" aria-hidden="true" /> : <IconLock style={{ width: 13, height: 13 }} aria-hidden="true" />}
-                    {busy ? t("prov.waitingBrowser") : t("prov.login")}
-                  </button>
-                )}
-              </span>
-            </div>
             {!busy && <OpenBrowserPrefToggle />}
             {busy && hintForThis && (
               <div className="pwi-auth-wait">
@@ -523,82 +564,95 @@ export default function ProviderAuthPanel({
               </div>
             )}
             {accounts.length > 0 && (
-              <ul className="pwi-auth-list">
-                {accounts.map(account => {
-                  const label = oauthAccountDisplayLabel(accounts, account, t);
-                  const switching = switchingAccountId === account.id;
-                  const healthStatus = account.health?.status;
-                  const showReauth = accountShowsReauth(account);
-                  const inCooldown = oauthHealthIsCooldown(healthStatus);
-                  const maskedId = displayAccountId(account.id);
-                  const healthLabel = formatOAuthHealthLabel(t, account.health);
-                  const healthSummary = formatOAuthHealthSummary(t, item.name, account.id, account.health);
-                  return (
-                  <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
-                    <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
-                    <button type="button" className="pwi-auth-row-main"
-                      onClick={() => { if (!account.active && !showReauth && !inCooldown && !switchingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
-                      aria-current={account.active ? "true" : undefined}
-                      aria-label={`${label}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
-                      disabled={Boolean(showReauth || inCooldown || (switchingAccountId && !switching))}>
-                      <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
-                      <span className="pwi-auth-row-copy">
-                        <span className="pwi-auth-row-label">{label}</span>
-                        <span className="pwi-auth-row-secondary">{[account.email, `${t("prov.accountId")}: ${maskedId}`].filter(Boolean).join(" · ")}</span>
-                        {healthSummary && (
-                          <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
-                        )}
-                        {inCooldown && (
-                          <span className="pwi-auth-row-secondary faint">{t("pws.healthCooldownHint")}</span>
-                        )}
-                      </span>
-                      {healthLabel && (
-                        <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
-                      )}
-                      {showReauth && !healthLabel && <span className="badge badge-amber">{t("pws.reauth")}</span>}
-                      {account.active && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                      {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
-                    </button>
-                    {showReauth && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={busy || Boolean(switchingAccountId)}
-                        onClick={() => void authHandlers.onReauth(item.name, account.id)}
-                      >
-                        {t("pws.reauthenticate")}
+              <>
+                <ProviderAccountsToolbar
+                  apiBase={apiBase}
+                  providerName={item.name}
+                  analyzedList={analyzedAccounts}
+                  showModelFamilies={showModelFamilies}
+                  filter={effectiveAccountFilter}
+                  onFilterChange={handleFilterChange}
+                  sortKey={accountSort}
+                  onSortChange={handleSortChange}
+                  titleMode={accountTitleMode}
+                  onTitleModeChange={handleTitleModeChange}
+                  viewMode={accountViewMode}
+                  onViewModeChange={handleViewModeChange}
+                  searchQuery={accountSearch}
+                  onSearchQueryChange={setAccountSearch}
+                  refreshingAll={refreshingQuota}
+                  onRefreshAll={canRefreshQuota ? () => { void refreshQuota(); } : undefined}
+                  quotaRefreshResultText={quotaRefreshResult?.text}
+                  quotaRefreshResultOk={quotaRefreshResult?.ok}
+                  poolSupported={genericPool !== null}
+                  poolEnabled={genericPool?.enabled ?? false}
+                  onTogglePoolEnabled={handleTogglePoolEnabled}
+                  poolStrategy={genericPool?.strategy ?? DEFAULT_ACCOUNT_POOL_STRATEGY}
+                  onSelectPoolStrategy={handleSelectPoolStrategy}
+                />
+                {poolSaveError && (
+                  <div className="pwi-auth-state pwi-auth-state--error" role="alert">
+                    <span>{poolSaveError}</span>
+                  </div>
+                )}
+
+                {filteredAndSortedAccounts.length > 0 ? (
+                  <div className={accountViewMode === "compact" ? "compact-dense-grid" : "pwi-accounts-grid-2col"}>
+                    {filteredAndSortedAccounts.map(analyzed => (
+                      <ProviderAccountCard
+                        key={analyzed.account.id}
+                        analyzed={analyzed}
+                        viewMode={accountViewMode}
+                        titleMode={accountTitleMode}
+                        switching={switchingAccountId === analyzed.account.id}
+                        disabled={busy || Boolean(switchingAccountId && switchingAccountId !== analyzed.account.id)}
+                        refreshing={refreshingQuota && (refreshingAccountId === analyzed.account.id || !refreshingAccountId)}
+                        onSwitch={acc => void authHandlers.onSwitchAccount(item.name, acc)}
+                        onRefreshSingle={canRefreshQuota ? acc => {
+                          setRefreshingAccountId(acc.id);
+                          void refreshQuota(acc.id).finally(() => setRefreshingAccountId(null));
+                        } : undefined}
+                        onEditAlias={acc => void authHandlers.onEditAlias(item.name, "oauth", acc.id, acc.alias)}
+                        onRemove={acc => setAccountToRemove(acc)}
+                        onReauth={acc => void authHandlers.onReauth(item.name, acc.id)}
+                        grokCouponEntry={grokCouponsEnabled ? grokCoupons.entries[analyzed.account.id] : undefined}
+                        onGrokCouponClick={grokCouponsEnabled ? acc => setCouponAccount(acc) : undefined}
+                        grantEntry={claudeGrantsEnabled ? claudeGrants.entries[analyzed.account.id] : undefined}
+                        onGrantClick={claudeGrantsEnabled ? acc => setGrantAccount(acc) : undefined}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="pwi-auth-state pwi-auth-state--empty" style={{ justifyContent: "center", gap: 12 }}>
+                    <span>{t("modal.noMatch")}</span>
+                    {effectiveAccountFilter !== "all" && (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleFilterChange("all")}>
+                        {t("pws.filterAllAccounts")}
                       </button>
                     )}
-                    {grokCouponsEnabled && !showReauth && (
-                      <GrokCouponBadge
-                        entry={grokCoupons.entries[account.id]}
-                        t={t}
-                        onClick={() => setCouponAccount(account)}
-                      />
-                    )}
-                    {claudeGrantsEnabled && !showReauth && (
-                      <AnthropicGrantBadge entry={claudeGrants.entries[account.id]} t={t} onClick={() => setGrantAccount(account)} />
-                    )}
-                    <button type="button" className="btn btn-ghost btn-sm"
-                      onClick={() => void authHandlers.onEditAlias(item.name, "oauth", account.id, account.alias)}>
-                      {t("prov.editAlias")}
-                    </button>
-                    <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
-                      aria-label={`${t("common.remove")} — ${label}`}
-                      title={`${t("common.remove")} — ${label}`}
-                      disabled={Boolean(switchingAccountId)}
-                      onClick={() => void authHandlers.onRemoveAccount(item.name, account)}>
-                      <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
-                    </button>
-                    </div>
-                    <div className="pwi-auth-acct-quota">
-                      <ProviderAccountQuota quotaMode={account.quotaMode} quota={account.quota}
-                        quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure} />
-                    </div>
-                  </li>
-                  );
-                })}
-              </ul>
+                  </div>
+                )}
+              </>
+            )}
+            {accountToRemove && (
+              <RemoveAccountConfirmDialog
+                accountLabel={oauthAccountDisplayLabel(accounts, accountToRemove, t)}
+                removing={removingAccount}
+                onCancel={() => { if (!removingAccount) setAccountToRemove(null); }}
+                onConfirm={async () => {
+                  if (removingAccount || !accountToRemove) return;
+                  setRemovingAccount(true);
+                  try {
+                    // The dialog already confirmed: skip the hook's own prompt and
+                    // keep the dialog open when the removal reports failure.
+                    const removed = await authHandlers.onRemoveAccount(item.name, accountToRemove, true);
+                    if (removed === false) return;
+                    setAccountToRemove(null);
+                  } finally {
+                    setRemovingAccount(false);
+                  }
+                }}
+              />
             )}
             {couponAccount && (
               <GrokResetCouponModal

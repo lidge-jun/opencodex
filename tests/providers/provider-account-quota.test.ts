@@ -103,6 +103,45 @@ describe("fetchProviderAccountQuotas", () => {
     expect(calls).toBe(4);
   });
 
+  test("a scoped forced refresh probes only the target account", async () => {
+    await seedTwoAccounts();
+    let fiveHour = 50;
+    let calls = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      calls += 1;
+      return new Response(usageBody(fiveHour, 10), { status: 200 });
+    }) as typeof fetch;
+
+    const primed = await fetchProviderAccountQuotas("anthropic");
+    expect(calls).toBe(2);
+    const target = primed[0]?.accountId;
+    expect(typeof target).toBe("string");
+    // New upstream numbers: only the force-probed target may observe them.
+    fiveHour = 70;
+    const rows = await fetchProviderAccountQuotas("anthropic", true, undefined, target);
+    expect(calls).toBe(3);
+    const byId = Object.fromEntries(rows.map(row => [row.accountId, row.quota?.fiveHourPercent]));
+    expect(byId[target]).toBe(70);
+    for (const [id, value] of Object.entries(byId)) {
+      if (id !== target) expect(value).toBe(50);
+    }
+  });
+
+  test("a stale scoped id falls back to force-all", async () => {
+    await seedTwoAccounts();
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(usageBody(50, 10), { status: 200 });
+    }) as typeof fetch;
+
+    await fetchProviderAccountQuotas("anthropic");
+    expect(calls).toBe(2);
+    // Unknown id must not leave every account unforced.
+    await fetchProviderAccountQuotas("anthropic", true, undefined, "acct-stale");
+    expect(calls).toBe(4);
+  });
+
   test("a failing probe is flagged unavailable without dropping the other account", async () => {
     await seedTwoAccounts();
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -603,30 +642,30 @@ describe("explicit OAuth account quota readers", () => {
     expect(calls).toBe(0);
   });
 
-  test("OAuth roster uses four workers and force joins same-identity work", async () => {
+  test("OAuth roster uses parallel workers and force joins same-identity work", async () => {
     for (let i = 0; i < 6; i++) {
       await saveCredential("cursor", { access: `cursor-${i}`, refresh: `refresh-${i}`, expires: Date.now() + 60 * 60_000, accountId: `user-${i}` });
     }
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    let fourStarted!: () => void;
-    const entered = new Promise<void>(resolve => { fourStarted = resolve; });
+    let rosterStarted!: () => void;
+    const entered = new Promise<void>(resolve => { rosterStarted = resolve; });
     let calls = 0;
     let active = 0;
     let peak = 0;
     globalThis.fetch = (async () => {
       calls++; active++; peak = Math.max(peak, active);
-      if (calls === 4) fourStarted();
+      if (calls === 6) rosterStarted();
       await gate;
       active--;
       return Response.json({ planUsage: { totalPercentUsed: 20 } });
     }) as typeof fetch;
     const pending = fetchProviderAccountQuotas("cursor");
     await entered;
-    expect(calls).toBe(4);
+    expect(calls).toBe(6);
     release();
     expect(await pending).toHaveLength(6);
-    expect(peak).toBe(4);
+    expect(peak).toBe(6);
     await fetchProviderAccountQuotas("cursor");
     expect(calls).toBe(6);
     await fetchProviderAccountQuotas("cursor", true);

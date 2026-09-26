@@ -380,18 +380,18 @@ describe("credential-scoped key quota", () => {
     expect(calls).toBe(4);
   });
 
-  test("four workers bound a key roster and late removed rows cannot publish", async () => {
+  test("roster workers cover the roster in parallel and late removed rows cannot publish", async () => {
     const config = quotaKeyConfig(7);
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    let fourStarted!: () => void;
-    const entered = new Promise<void>(resolve => { fourStarted = resolve; });
+    let rosterStarted!: () => void;
+    const entered = new Promise<void>(resolve => { rosterStarted = resolve; });
     let active = 0;
     let peak = 0;
     let calls = 0;
     globalThis.fetch = (async () => {
       active += 1; calls += 1; peak = Math.max(peak, active);
-      if (calls === 4) fourStarted();
+      if (calls === 7) rosterStarted();
       await gate;
       active -= 1;
       return keyQuotaResponse(33);
@@ -401,7 +401,7 @@ describe("credential-scoped key quota", () => {
     config.providers.openrouter!.apiKeyPool = config.providers.openrouter!.apiKeyPool!.filter(row => row.id !== "slot-0");
     release();
     const rows = await pending;
-    expect(peak).toBe(4);
+    expect(peak).toBe(7);
     expect(rows).toHaveLength(7);
     expect(rows[0]!.isCurrent()).toBe(false);
     expect(rows[0]!.quota).toBeNull();

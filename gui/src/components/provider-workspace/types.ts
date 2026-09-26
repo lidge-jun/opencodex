@@ -56,6 +56,10 @@ export type OAuthAccountRow = AccountQuotaReading & {
   id: string;
   alias?: string;
   email?: string;
+  rawEmail?: string;
+  maskedEmail?: string;
+  logLabel?: string;
+  plan?: string | null;
   active: boolean;
   needsReauth?: boolean;
   health?: { status: OAuthAccountHealthStatus; reason?: string; until?: string };
@@ -86,7 +90,13 @@ export interface ProviderAuthHandlers {
   onLogout: (provider: string) => void | Promise<void>;
   onReauth: (provider: string, accountId?: string) => void | Promise<void>;
   onSwitchAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;
-  onRemoveAccount: (provider: string, account: OAuthAccountRow) => void | Promise<void>;
+  /**
+   * Remove an OAuth account. `alreadyConfirmed` skips the hook's own prompt
+   * (the panel already confirmed via dialog). Returns false when the removal
+   * was cancelled or failed so the caller can keep the dialog open; void/true
+   * both mean "done, may close" for handlers that do not report a status.
+   */
+  onRemoveAccount: (provider: string, account: OAuthAccountRow, alreadyConfirmed?: boolean) => boolean | void | Promise<boolean | void>;
   onRetryAccounts?: (provider: string) => void | Promise<void>;
   onAddApiKey: (provider: string, key: string) => Promise<boolean>;
   onSwitchApiKey: (provider: string, entry: ApiKeyRow) => void | Promise<void>;
@@ -98,7 +108,7 @@ export interface ProviderAuthHandlers {
    * Optional: the Codex account pool owns its own refresh control, and a caller that
    * cannot force a read simply renders no button rather than one that does nothing.
    */
-  onRefreshQuota?: (provider: string) => Promise<boolean>;
+  onRefreshQuota?: (provider: string, accountId?: string) => Promise<boolean>;
 }
 
 export type ProviderUpdatePatch = {

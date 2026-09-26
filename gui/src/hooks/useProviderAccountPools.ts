@@ -1,3 +1,4 @@
+import { startVisibilityPoll } from "../visibility-poll";
 import { parseQuotaFailureCode } from "../../../src/providers/quota-types";
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import type { AccountLoadState, AccountQuotaReading } from "../components/provider-workspace/types";
@@ -118,6 +119,10 @@ export function useProviderAccountPools(deps: {
     fetchConfig, fetchOauth, fetchProviderQuotas, codexActiveNeedsReauth,
   } = deps;
   const [accountSets, setAccountSets] = useState<Record<string, { activeAccountId: string | null; accounts: OAuthAccount[] }>>({});
+  const accountSetsRef = useRef(accountSets);
+  useEffect(() => {
+    accountSetsRef.current = accountSets;
+  }, [accountSets]);
   const [accountLoadStates, setAccountLoadStates] = useState<Record<string, AccountLoadState>>({});
   const [switchingAccount, setSwitchingAccount] = useState<{ provider: string; accountId: string } | null>(null);
   const [openAccounts, setOpenAccounts] = useState<Record<string, boolean>>({});
@@ -127,6 +132,16 @@ export function useProviderAccountPools(deps: {
   const accountRequestGenerationRef = useRef<Record<string, number>>({});
   const rosterGenerationRef = useRef<Record<string, number>>({});
   const quotaGenerationRef = useRef<Record<string, number>>({});
+  // Newest generation whose QUOTA data was actually applied, per provider key. A
+  // request superseded mid-flight by a newer one reports success only when fresher
+  // quota already landed, so a manual refresh racing the visibility poll does not
+  // surface a "refresh failed" state for data that is already on screen — and a
+  // failed newer quota request still surfaces as failure.
+  const freshLandedRef = useRef<Record<string, number>>({});
+  const supersededByFresher = useCallback((key: string, generation: number): boolean => {
+    if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
+    return (freshLandedRef.current[key] ?? -1) > generation;
+  }, [aliveRef, apiBase]);
   const selectionMutationsRef = useRef(new Map<string, symbol>());
   const requestsRef = useRef(new Set<AbortController>());
   const mountedRef = useRef(true);
@@ -163,7 +178,8 @@ export function useProviderAccountPools(deps: {
   const switchingAccountRef = useRef<{ provider: string; accountId: string } | null>(null);
 
   const readRoster = useCallback(async <T,>(url: string, signal?: AbortSignal): Promise<T> => {
-    const bounded = createBoundedFetch(20_000);
+    const isQuotaRead = url.includes("quota=1");
+    const bounded = createBoundedFetch(isQuotaRead ? 60_000 : 20_000);
     const abort = () => bounded.controller.abort();
     if (signal?.aborted) abort();
     signal?.addEventListener("abort", abort, { once: true });
@@ -181,7 +197,7 @@ export function useProviderAccountPools(deps: {
     }
   }, []);
 
-  const fetchAccountSets = useCallback(async (providers: string[], refresh = false): Promise<boolean> => {
+  const fetchAccountSets = useCallback(async (providers: string[], refresh = false, targetAccountId?: string): Promise<boolean> => {
     if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
     const uniqueProviders = [...new Set(providers)];
     setAccountLoadStates(current => {
@@ -199,16 +215,20 @@ export function useProviderAccountPools(deps: {
       const currentRoster = () => currentRequest() && rosterGenerationRef.current[key] === rosterGeneration;
       const url = `${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}`;
       try {
+        const targetQuery = targetAccountId ? `&accountId=${encodeURIComponent(targetAccountId)}` : "";
         // Cheap local read first so account switch / reauth / remove controls appear
-        // even when Anthropic's usage endpoint is slow or timing out.
+        // even when Anthropic’s usage endpoint is slow or timing out.
         const data = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(url);
         if (!Array.isArray(data.accounts)) throw new Error("Invalid account roster");
-        if (!currentRequest()) return false;
+        if (!currentRequest()) return supersededByFresher(key, generation);
         const rows = selectionRows(data.accounts, data.activeAccountId);
         setAccountSets(current => currentRoster() ? { ...current, [provider]: {
           activeAccountId: data.activeAccountId ?? null,
           accounts: mergeQuotaRows(rows, current[provider]?.accounts ?? [], false),
         } } : current);
+        // NB: the cheap roster read is NOT recorded as fresh quota. A superseded
+        // manual refresh must report success only when a newer request actually
+        // landed quota, otherwise a failed newer quota request would read as success.
         setAccountLoadStates(current => currentRoster() ? { ...current, [provider]: "ready" } : current);
         if (!rows.some(supportsQuotaRead)) return true;
 
@@ -219,9 +239,9 @@ export function useProviderAccountPools(deps: {
           const currentQuota = () => aliveRef.current && mountedRef.current && serverRef.current === apiBase
             && quotaGenerationRef.current[key] === quotaGeneration;
           try {
-            const quotaData = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(`${url}&quota=1${refresh ? "&refresh=1" : ""}`);
+            const quotaData = await readRoster<{ activeAccountId?: string | null; accounts?: OAuthAccount[] }>(`${url}&quota=1${refresh ? "&refresh=1" : ""}${targetQuery}`);
             if (!Array.isArray(quotaData.accounts)) throw new Error("Invalid account quota roster");
-            if (!currentQuota()) return false;
+            if (!currentQuota()) return supersededByFresher(key, generation);
             const enriched = selectionRows(quotaData.accounts, quotaData.activeAccountId);
             setAccountSets(current => !currentQuota() ? current : !currentRoster() ? {
               ...current, [provider]: { ...current[provider], accounts: mergeLateQuotaRows(current[provider]?.accounts ?? [], enriched) },
@@ -232,9 +252,10 @@ export function useProviderAccountPools(deps: {
                 accounts: mergeQuotaRows(enriched, current[provider]?.accounts ?? [], true),
               },
             });
+            if (currentQuota()) freshLandedRef.current[key] = generation;
             return !enriched.some(row => row.quotaUnavailable === true);
           } catch {
-            if (!currentQuota()) return false;
+            if (!currentQuota()) return supersededByFresher(key, generation);
             setAccountSets(current => currentQuota() && current[provider] ? {
               ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts, rows) },
             } : current);
@@ -245,7 +266,7 @@ export function useProviderAccountPools(deps: {
         void enrich();
         return true;
       } catch {
-        if (!currentRoster()) return false;
+        if (!currentRoster()) return supersededByFresher(key, generation);
         setAccountLoadStates(current => currentRoster() ? { ...current, [provider]: "error" } : current);
         setAccountSets(current => currentRoster() && current[provider] ? {
           ...current, [provider]: { ...current[provider], accounts: unavailableQuotaRows(current[provider].accounts) },
@@ -254,7 +275,7 @@ export function useProviderAccountPools(deps: {
       }
     }));
     return results.every(Boolean);
-  }, [aliveRef, apiBase, readRoster]);
+  }, [aliveRef, apiBase, readRoster, supersededByFresher]);
 
   const fetchKeyPools = useCallback(async (providers: string[], refresh = false): Promise<boolean> => {
     if (!aliveRef.current || !mountedRef.current || serverRef.current !== apiBase) return false;
@@ -495,22 +516,26 @@ export function useProviderAccountPools(deps: {
     notify(t("prov.aliasSaved"), true);
   };
 
-  const removeAccount = async (provider: string, account: OAuthAccount) => {
+  const removeAccount = async (provider: string, account: OAuthAccount, alreadyConfirmed = false): Promise<boolean> => {
     const label = oauthAccountDisplayLabel(accountSets[provider]?.accounts ?? [account], account, t);
-    const consented = await confirmAction({
-      message: t("prov.accountRemoveConfirm", { email: label }),
-      confirmLabel: t("common.remove"),
-      tone: "danger",
-    });
-    if (!consented) return;
+    if (!alreadyConfirmed) {
+      const consented = await confirmAction({
+        message: t("prov.accountRemoveConfirm", { email: label }),
+        confirmLabel: t("common.remove"),
+        tone: "danger",
+      });
+      if (!consented) return false;
+    }
     try {
       const res = await fetch(`${apiBase}/api/oauth/accounts?provider=${encodeURIComponent(provider)}&id=${encodeURIComponent(account.id)}`, { method: "DELETE" });
-      if (!res.ok) { notify(t("prov.accountRemoveFail", { email: label }), false); return; }
+      if (!res.ok) { notify(t("prov.accountRemoveFail", { email: label }), false); return false; }
       notify(t("prov.accountRemoved", { email: label }), true);
       await fetchAccountSets([provider]);
       await Promise.all([fetchOauth(), fetchProviderQuotas(true)]);
+      return true;
     } catch {
       notify(t("prov.accountRemoveFail", { email: label }), false);
+      return false;
     }
   };
 
@@ -531,6 +556,22 @@ export function useProviderAccountPools(deps: {
     accountSetsKeyRef.current = key;
     void Promise.resolve().then(() => { void fetchAccountSets(oauthCardProviders); });
   }, [apiBase, fetchAccountSets, oauthCardProviders]);
+
+  useEffect(() => {
+    if (oauthCardProviders.length === 0) return;
+    return startVisibilityPoll(() => {
+      for (const provider of oauthCardProviders) {
+        const activeId = accountSetsRef.current[provider]?.activeAccountId;
+        if (activeId) {
+          // Force refresh ONLY for the active/selected account; inactive accounts read from cache (10m TTL)
+          void fetchAccountSets([provider], true, activeId);
+        } else {
+          void fetchAccountSets([provider], false);
+        }
+      }
+    }, 30_000);
+  }, [fetchAccountSets, oauthCardProviders]);
+
 
   const keyCardProviders = useMemo(
     () => config ? Object.entries(config.providers).filter(([, p]) => p.hasApiKey && p.authMode !== "oauth" && p.authMode !== "forward").map(([n]) => n) : [],

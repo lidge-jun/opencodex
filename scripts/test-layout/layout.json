@@ -1016,6 +1016,7 @@
     "grok-status.test.ts": "providers/xai",
     "grok-sync.test.ts": "providers/xai",
     "grok-writer-boundary.test.ts": "providers/xai",
+    "gui-account-quota-analysis.test.ts": "gui",
     "gui-api-error.test.ts": "gui",
     "html-lang-boot-script.test.ts": "gui",
     "gui-codex-usage-score-parity.test.ts": "gui",

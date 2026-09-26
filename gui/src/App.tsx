@@ -385,8 +385,7 @@ export default function App() {
     </ErrorBoundary>
   );
 
-  return (
-    <div ref={appRef} className={`app${desktopShell ? " app--desktop" : ""}${desktopMac ? " app--macos" : ""}${navCollapsed ? " app--nav-collapsed" : ""}`}>
+    return (
       <DesktopStarOnboarding apiBase={sharedBase} enabled={targetsSettled && !targets.connected} />
       {actionFeedback && (
         <ToastNotice tone={actionFeedback.tone} onDismiss={() => setActionFeedback(null)} dismissLabel={t("common.close")}>
@@ -458,8 +457,10 @@ export default function App() {
                     navigateToPage(id);
                     setNavOpen(false);
                   }}
+                  title={t(tkey)}
+                  aria-label={t(tkey)}
                   aria-current={active ? "page" : undefined}>
-                  <Icon /> {t(tkey)}
+                  <Icon /> <span className="nav-item-text">{t(tkey)}</span>
                 </button>
               </div>
             );

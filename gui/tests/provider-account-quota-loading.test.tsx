@@ -409,7 +409,7 @@ test("a hanging fetch reaches its deadline, preserves last-good and clears probe
     let result!: Promise<boolean>;
     await act(async () => { result = pools.fetchKeyPools(["keys"], true); await started.promise; });
     expect(pools.keyPools.keys[0].quotaPending).toBe(true);
-    await act(async () => { jest.advanceTimersByTime(20_000); expect(await result).toBe(false); });
+    await act(async () => { jest.advanceTimersByTime(60_000); expect(await result).toBe(false); });
     expect(pools.keyPools.keys[0]).toMatchObject({ quota: reading, quotaPending: false, quotaUnavailable: true });
   } finally {
     jest.useRealTimers();

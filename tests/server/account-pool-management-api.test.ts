@@ -703,7 +703,7 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
     if (dir) removeTreeWithRetry(dir);
   });
 
-  test("reset-first round-trips through canonical and legacy Codex settings only", async () => {
+  test("reset-first round-trips through codex settings and generic pools, never anthropic", async () => {
     const server = startServer(0);
     try {
       const write = async (provider: string, strategy: string) => fetch(new URL("/api/pool/settings", server.url), {
@@ -718,11 +718,19 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
       const legacy = new Request("http://localhost/api/codex-auth/active");
       const legacyRead = await handleCodexAuthAPI(legacy, new URL(legacy.url), loadConfig());
       expect(await legacyRead!.json()).toMatchObject({ accountPoolStrategy: "reset-first" });
-      for (const provider of ["anthropic", "google-antigravity"]) {
+      // The anthropic runtime only implements quota/round-robin/fill-first, so the
+      // anthropic kind rejects reset-first instead of storing an ignored value.
+      for (const provider of ["anthropic"]) {
         const rejected = await write(provider, "reset-first");
         expect(rejected.status).toBe(400);
         await rejected.text();
       }
+      // reset-first is a generic-pool strategy: Antigravity accepts and round-trips it.
+      const antigravityWrite = await write("google-antigravity", "reset-first");
+      expect(antigravityWrite.status).toBe(200);
+      expect(await antigravityWrite.json()).toMatchObject({ kind: "generic", strategy: "reset-first" });
+      const antigravityRead = await fetch(new URL("/api/pool/settings?provider=google-antigravity", server.url));
+      expect(await antigravityRead.json()).toMatchObject({ kind: "generic", strategy: "reset-first" });
       const compatibility = new Request("http://localhost/api/codex-auth/pool-strategy", {
         method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ strategy: "reset-first" }),
       });

@@ -20,6 +20,7 @@ import "./styles/anthropic-reset-grants.css";
 import "./styles/star-onboarding.css";
 import "./styles/protocol-evidence.css";
 import "./pages/tray.css";
+import "./styles/pool-followup.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
