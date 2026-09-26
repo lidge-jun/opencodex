@@ -52,7 +52,7 @@ const ACCOUNT_USAGE = `Usage:
   ocx account pause <provider> <account-id|alias|main> [--json]
   ocx account resume <provider> <account-id|alias|main> [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account remove <provider> <account-or-key-id|alias|main> --yes [--json]
   ocx account clear-cooldown <provider> <account-id|alias|main> [--json]

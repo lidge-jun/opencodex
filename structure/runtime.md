@@ -24,7 +24,7 @@ Native result continuations and function-result injection follow [the mode-speci
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Responses admission and finalization are composed through the
-[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+[core module ownership](transports/responses.md#core-module-ownership). Kiro's optional account-load admission is process-local and request-owned; its slot ends with the response body or cancellation. Other providers retain their admission path.
 
 Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
 

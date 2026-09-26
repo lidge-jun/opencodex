@@ -779,3 +779,156 @@ On the actual 040 branch, run the three new focused test files, the existing poo
 - **r2-R2-3 High → lines 305-313, 668, 676-677:** Initial full-cap returns `kiroAccountCapacityResponse()` with explicit JSON `error.code: "account_capacity"`, HTTP 503, and `Retry-After: 1`; the named full, singleton, and explicit-off tests assert the wire code.
 - **r2-R2-4 High → lines 384-432, 669:** `resolveInitialCandidate` catches removed/reauth sibling resolution, excludes that id from the bounded first and final sweeps, and continues to a free sibling. The named stale-first-sibling test covers throw and null variants.
 - **050 initial-ranking handoff → lines 302-304, 375-379, 660, 670:** `filterInitialKiroRankCandidates` is the named hook after 030 eligibility and before 040 load ranking. Its 040 identity test and 050 positive-model-membership acceptance test are specified above; rebase-verify at each layer's P.
+
+## wp5 P re-verification (2026-09-27, branch `codex/kiro-lb2-040-account-load` on dev `b29a029d8c`, which contains 010, 020, 030)
+
+Executable plan for the 040 build; **overrides** earlier sections where they conflict.
+
+| ID | Disposition |
+|---|---|
+| D040-S1–S10 | Accept all anchor corrections (base `b29a029d8c`; `eligibleIdsIn` 218-230; `activeGenericStrategy` 253/266-270; `rotateGenericOAuthAccountOnRefusal` 388-469 with the health write at 422-426, `candidates` 439, strategy branch 444; `preferredInitialAccount` 515+ with strategy at 538; `applyFailoverSnapshot` 217-257; route strategy parse 461-464, legacy route 549-584; drop the stale `overageEnabled` at ~510). The capacity loop plugs into the **landed** Kiro loops: adapter-dispatch 907-1015 (replace the single candidate at 946-968), adapter-continuation 429-530 (replace 460-486), sidecar 215-237, and the post-401 terminal alternate at adapter-dispatch 600-612. `admitInitialKiroWithLease` starts from the landed `resolved` in `request-transport.ts:523-584` and keeps the `refusalAwareId`, terminal-refresh alternate and `safetyAlternateId` guards. All run-turn hunks are removed (Kiro has no `runTurn`). |
+| Gate (replaces `kiroMayMove`/`kiroExplicitOff` and the Kiro override inside `isProactivePreferenceEnabled`) | `isProactivePreferenceEnabled` is exported **unchanged**. Least-loaded initial ranking uses it (plus `pool.kernel === true`). **Capacity-move decision (main):** a configured `maxConcurrentPerAccount` on the Kiro provider is itself the operator's consent to move a request off a full account; the move is declined only by an explicit `oauthAccountFailover.enabled: false` resolved narrow-over-broad (provider boolean wins, else global boolean). Reason: under the landed proactive default (unset = off) a configured cap would otherwise return 503 while a sibling sits idle, which defeats the setting. With the move declined, or a singleton, or every eligible account full, the cap waits up to its bounded wait (250 ms default) and returns the direct `503 account_capacity` with `Retry-After: 1`. Capacity exclusion inside the reactive refusal loop stays under `isGenericOAuthFailoverEnabled`. |
+| `maxCandidates` | `eligibleFailoverAccounts("kiro", now, family).filter(id => id !== failedId).length`, capped by `GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST`. |
+| Rotator | `activeGenericStrategy` returns `"least-loaded"` for Kiro when set; the rotator returns the load-sorted `candidates[0]` in that branch instead of falling through to the headroom re-rank at 467. The redundant second exhausted filter is dropped (`eligibleIdsIn` already applies `kiroAccountEvidence`). |
+| Lease lifecycle | Acquired at dispatch admission in `request-transport` (not per inner send; 020's alternate host and completion fallback reuse the account's lease); transferred in `applyFailoverSnapshot`; released by the body wrapper in `handleResponses` on end, read error or cancel, by `commitKiroWithLease`'s `finally` on failed admission, and by the `catch` for thrown errors. **Leak backstops:** (a) release when the request's `abortSignal` fires, covering ingress paths that drop a Response without cancelling it (`chat-completions.ts:426`, `claude-messages.ts:1157`, `websocket-handler.ts:333`, `serve-options.ts:1465`); (b) a hard lease TTL (`KIRO_LEASE_MAX_MS`, 15 min) after which the ledger reclaims the slot, so no path can hold capacity for the life of the process. Release is idempotent. `compact.ts:1026` sends outside the ledger and is recorded as not capacity-counted. Tests: `an abandoned response body releases its lease when the request aborts` and `a lease past its TTL is reclaimed`. |
+| Config / API / GUI | `src/config.ts` unchanged (it does not parse `oauthAccountFailover`). Type in `src/types/provider.ts:662-681`; parser, fields and DTO in `src/oauth/pool-settings-capability.ts` (31-37, 48-50, 116, 125-127, 163, 179) with a provider-aware `supported` override for Kiro-only fields. No GUI change: the pool panel serves only Codex and Anthropic, and `gui/src/account-pool-strategy.ts` does not gain `least-loaded` (recorded as out of scope). CLI usage strings at `src/cli/account.ts:55` and `account-extended.ts:48` list `least-loaded`. |
+| Docs | Rewrite for SD4'' plus the capacity decision above (no "unset is presence-is-consent" or "either explicit false wins" wording); the docs guard `tests/ci-workflows/docs-429-failover-claims.test.ts` runs in C. |
+| Tests | `tests/server/account-pool-management-api.test.ts:789-792` gains `maxConcurrentPerAccount` in the pinned DTO key set (hosted CI is its evidence; it fails locally under the `~/.codex` guard). The two planned SD4' tests are rewritten: unset or explicit false → no proactive least-loaded move; provider `true` overrides global `false`; a configured cap moves off a full account unless `enabled: false` is explicit. |
+| Registry | `kiro-account-load.test.ts` before `kiro-account-quota` (`layout.json:1070`, expected `:891`); `kiro-leased-responses.test.ts` between `kiro-images` and `kiro-oauth` (1078/1079; 899/900); `kiro-pool-load-settings.test.ts` between `kiro-oauth` and `kiro-pool-rank` (1079/1080; 900/901). |
+
+Verifier set for C: `bun run typecheck`; `bun test tests/providers/kiro/ tests/oauth/generic-oauth-failover.test.ts tests/oauth/oauth-store-multi.test.ts tests/server/server-kiro-refusal-e2e.test.ts tests/server/server-kiro-completion-e2e.test.ts tests/server/server-kiro-oauth-401-replay.test.ts tests/lib/credential-redirect-guard.test.ts tests/web-search/web-search-sidecar-429.test.ts tests/images/loop.test.ts tests/ci-workflows/docs-429-failover-claims.test.ts` plus `rg -l "pool-settings|accountPoolStrategy" tests`; layout, ratchet, lab-boundary; privacy; structure.
+
+
+### wp5 reflection fold (same architect: MISALIGNED → folded)
+
+1. **Capacity moves are request-scoped.** A move off a full account serves only the current
+   request: the sibling's snapshot is resolved (`getValidAccessSnapshotForAccount`) and applied to
+   this request the way `applyFailoverSnapshot` applies a rotation, but **without**
+   `commitResolvedOAuthSelection` / `commitOAuthAccountSelection`, so no `activeAccountId` write,
+   no `selectionRevision` bump and no auth.json rewrite (`src/oauth/store.ts:1123,1137-1140`). The
+   lease is taken on the sibling. If the builder finds `applyFailoverSnapshot` itself commits a
+   selection, it adds a request-scoped variant rather than committing. Test in
+   `kiro-account-load.test.ts`: `parallel requests with cap 1 and two accounts move without a 409
+   and without an auth.json write per move` (asserts the store file mtime and `selectionRevision`
+   are unchanged across the burst).
+2. **TTL mechanics.** Reclaim is lazy, performed inside `acquireAccountLease` and `accountInFlight`
+   (no timer). A reclaimed lease object is marked released, so the later body-end `release()` is a
+   no-op and the count is never decremented twice. Recorded limit: a single stream running longer
+   than `KIRO_LEASE_MAX_MS` (15 min) loses its slot, so the cap can be exceeded by that stream.
+   Test: `a reclaimed lease's late release does not double-decrement`.
+3. **One move predicate:** `isKiroCapacityMoveAllowed(config)` in `src/oauth/kiro-account-load.ts`
+   (provider boolean, else global boolean, else allowed), used by dispatch, continuation, sidecar and
+   initial admission.
+4. **Verifier list:** `bun test $(rg -l "pool-settings|accountPoolStrategy" tests)` and
+   `tests/cli/cli-account-pool-verbs.test.ts` join the C set.
+
+
+### wp5 A round 1 fold — simplification (reviewer 01a0defa: FAIL, 4 High → design narrowed)
+
+Three of the four findings came from one source: moving a request off a full account without
+committing a selection has to be threaded through the store's selection and revalidation
+machinery (`src/server/responses/request-transport.ts:177,217,349`, `src/oauth/store.ts:1123-1140`),
+and two alternate paths (sidecar single candidate, post-401 terminal alternate) would each need
+their own loop. That is the riskiest part of 040 for the least gain, so the design is narrowed.
+**This section supersedes the capacity-move rows of "## wp5 P re-verification" and items 1 and 3
+of "### wp5 reflection fold".**
+
+- **D040-1' (cap = bounded queue, no capacity moves).** `maxConcurrentPerAccount` bounds in-flight
+  requests per Kiro account. A lease is acquired on the account the existing selection path already
+  admitted (after its normal commit), and on the account a reactive rotation admits. If that
+  account is full, the request waits up to the bounded wait (250 ms default) for a slot, then
+  returns the direct `503 account_capacity` with `Retry-After: 1`. No path moves a request to a
+  different account *because of capacity*, so there is no request-scoped selection, no extra
+  store write, and no new 409 source. `isKiroCapacityMoveAllowed` is not added.
+- **D040-2' (spreading is a selection strategy).** `"least-loaded"` is a Kiro pool strategy handled
+  by the existing `preferredInitialAccount` strategy branch (the same machinery `round-robin` and
+  `fill-first` use today, `src/oauth/generic-account-failover.ts:538`): among accounts that
+  `eligibleIdsIn` already admits, it treats accounts at their cap as ineligible and picks the
+  fewest in flight, stable ring order breaking ties. It runs only when
+  `isProactivePreferenceEnabled(config, "kiro", now) && pool.kernel === true`.
+- **Rotator (finding 4).** In `rotateGenericOAuthAccountOnRefusal` the least-loaded return of
+  `candidates[0]` is gated on the same predicate and kernel; otherwise the existing headroom
+  ranking at 444-467 runs unchanged. Independently of strategy, when a cap is configured the
+  rotator drops siblings that are at their cap from `candidates` if at least one eligible sibling
+  has room (falls back to the unfiltered list otherwise), so reactive rotation prefers an account
+  that can take the request. This lives in the rotator, which every reactive loop (dispatch,
+  continuation, sidecar) already calls; the post-401 terminal alternate keeps its current selector
+  and simply waits/503s on a full account (recorded limitation).
+- **D040-3' (ledger with per-lease records, finding 2).** `src/oauth/kiro-account-load.ts` keeps,
+  per account key, a `Map<leaseId, { acquiredAt: number; released: boolean }>` and a FIFO of waiters.
+  `acquireAccountLease` and `accountInFlight` first reclaim records older than `KIRO_LEASE_MAX_MS`
+  (15 min): each reclaimed record is marked `released`, removed, and one waiter is woken.
+  `lease.release()` is idempotent: it looks up its record, returns if absent or already
+  released, otherwise marks it released, removes it, and wakes one waiter. A late release after a
+  reclaim is therefore a no-op, and the count is `records.size`, never a separate counter.
+  Recorded limit: a single stream longer than 15 min loses its slot.
+- **Lease lifecycle** stays as planned (acquire at admission, transfer in `applyFailoverSnapshot`,
+  release on body end/error/cancel, admission `finally`, `catch`, request-abort backstop).
+- **Removed tests:** the unreachable Kiro `runTurn` test (~683); the capacity-move tests. **New
+  tests:** `least-loaded skips an account at its cap and picks the fewest in flight`;
+  `least-loaded is inert when proactive preference is off` (rotator keeps headroom ranking);
+  `a full selected account waits then returns 503 account_capacity without a store write`;
+  `the rotator prefers a sibling with room when a cap is configured`; `a reclaimed lease's late
+  release does not double-decrement`; `an abandoned response body releases its lease when the
+  request aborts`.
+
+
+### wp5 architect recheck fold (MISALIGNED → folded)
+
+- **Reactive rotation onto a full account:** inside `applyFailoverSnapshot` the lease is acquired
+  immediately after the selection commit (`src/server/responses/request-transport.ts:222`) and
+  before any request-state rewrite (225-255), with **no wait**. If the target is full, the function
+  returns `null` before touching `route.provider`, `_kiroAuthContext`, `genericFailoverAccountId`
+  or `sentOAuthSnapshot`, and the landed Kiro loop delivers the original refusal (adapter-dispatch
+  965-968/995-999, continuation equivalents). The bounded wait and the `503 account_capacity`
+  apply only to initial admission and the post-401 alternate. A request whose held lease is
+  already on the target account does not re-acquire (continuation with cap 1). Test:
+  `a reactive rotation onto a full account returns the original refusal, not 503`.
+- **Kiro-only guards:** `activeGenericStrategy` returns `"least-loaded"` only for `kiro`; the
+  rotator's at-cap sibling filter requires `providerName === "kiro"` and a configured cap. Test:
+  `a non-Kiro 429 rotation's candidates are unchanged`.
+- **Waiter mechanics:** a released or reclaimed slot wakes the first *live* waiter (aborted and
+  timed-out waiters leave the FIFO first); a woken waiter that loses the slot re-queues within its
+  original deadline without resetting it; an account's record map is deleted when it empties.
+- **Superseded wording removed:** the "configured cap is consent to move" text in the wp5 Gate row,
+  the matching docs row, and the capacity-move tests do not apply; operator docs describe the cap
+  as a bounded per-account queue and least-loaded as an opt-in proactive strategy.
+
+
+### wp5 A round 2 fold (2 new High → folded)
+
+1. **Speculative lease before commit.** In `applyFailoverSnapshot` (and the post-401 alternate,
+   which goes through it) the target's lease is acquired with **no wait before**
+   `commitResolvedOAuthSelection` (`src/server/responses/request-transport.ts:151,222`). If the
+   target is full, the function returns `null` before the commit, so the store's active account,
+   `oauthSelection`, `servingOAuthSnapshot` and every request field stay on the refused account. If
+   the commit then fails, the speculative lease is released. Only after a successful commit does the
+   request's lease holder switch to it (releasing the previous account's lease). Test:
+   `a reactive rotation onto a full account leaves the store selection and request state unchanged`
+   (asserts `activeAccountId`, `selectionRevision` and `genericFailoverAccountId` before/after).
+2. **Post-401 alternate is reactive.** It follows the same rule as every reactive rotation: a full
+   alternate makes `applyFailoverSnapshot` return `null` and the original 401 reaches the client
+   (`src/server/responses/adapter-dispatch.ts:600-612`). The bounded wait and the direct
+   `503 account_capacity` apply **only at initial admission**. The earlier "post-401 waits/503s"
+   wording is superseded. Test: `a post-401 alternate at its cap returns the original 401`.
+
+
+### wp5 A round 3 fold
+
+1. **Lease/account match after commit.** After `commitResolvedOAuthSelection` returns, the lease is
+   transferred only if the committed account id equals the speculative lease's account id. If the
+   helper lost a selection race and committed a different account B
+   (`src/server/responses/request-transport.ts:166`), the speculative lease on A is released and a
+   **no-wait** lease is attempted on B; if B is full, the function returns `null` and the original
+   refusal is delivered (the selection has already moved to B through the existing race handling,
+   which is today's behaviour, not a new write). Test: `a selection race during rotation never sends
+   on an account whose lease it does not hold`.
+2. **Wording:** the post-401 fallback delivers the existing *formatted* 401
+   (`src/server/responses/adapter-dispatch.ts:639`); the upstream body is already cancelled there.
+
+## wp5 build notes
+
+- Implemented Kiro-only per-account leases, bounded first-admission wait and direct 503 `account_capacity`, opt-in least-loaded selection, speculative no-wait reactive lease transfer, settings/API/CLI, and operator/structure docs. Existing non-Kiro paths retain their admission behavior.
+- Local verification: `bun run typecheck` passed; the requested Kiro/OAuth/server/CLI regression process passed 867 tests across 37 files; layout, ratchet and Lab boundary passed 52 tests; privacy and structure checks passed; docs-site build completed (521 pages). Focused pool-settings plus CLI headless parity passed 94 tests across two files.
+- The requested `rg -l 'pool-settings|accountPoolStrategy'` broad test process reported 938 pass, one skip, 190 fail. The first failures are the existing test-home guard rejecting cleanup of `tests/server/.tmp-server-live-test` inside the real `/Users/jun/.codex` tree; this worktree cannot supply hosted CI evidence for those files. `tests/server/account-pool-management-api.test.ts` remains subject to the same local guard.
+- The lease ledger is process-local. A response stream exceeding the 15-minute lease TTL loses its slot through lazy reclamation; later release is idempotent.

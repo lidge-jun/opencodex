@@ -15,6 +15,7 @@
  * Both are excluded by `isGenericFailoverProvider`.
  */
 import { credentialGeneration, getAccountSet } from "./store";
+import { accountInFlight } from "./kiro-account-load";
 import type { ProviderAccount } from "./types";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
 import {
@@ -197,7 +198,7 @@ export function isGenericOAuthFailoverEnabled(
  * turns it off only when the provider has no override. A malformed value falls through rather
  * than taking a provider out of service.
  */
-function isProactivePreferenceEnabled(config: OcxConfig, providerName: string, now: number): boolean {
+export function isProactivePreferenceEnabled(config: OcxConfig, providerName: string, now: number): boolean {
   const provider = config.providers?.[providerName];
   if (!provider || !isGenericFailoverProvider(providerName, provider)) return false;
   const perProvider = provider.oauthAccountFailover?.enabled;
@@ -250,7 +251,7 @@ export function hasEligibleGenericOAuthFailoverTarget(
 }
 
 /** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */
-type ActiveGenericStrategy = "round-robin" | "fill-first";
+type ActiveGenericStrategy = "round-robin" | "fill-first" | "least-loaded";
 
 /** Matches the Codex and Anthropic pools; the DTO still reports `null` for "not stored". */
 const DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD = 80;
@@ -266,6 +267,7 @@ const DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD = 80;
 function activeGenericStrategy(config: OcxConfig, providerName: string): ActiveGenericStrategy | null {
   if (config.pool?.kernel !== true) return null;
   const raw = config.providers?.[providerName]?.oauthAccountFailover?.strategy;
+  if (providerName === "kiro" && raw === "least-loaded") return raw;
   return raw === "round-robin" || raw === "fill-first" ? raw : null;
 }
 
@@ -436,12 +438,20 @@ export function rotateGenericOAuthAccountOnRefusal(
   const order = set.accounts.map(account => account.id);
   const start = order.indexOf(failedAccountId);
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
-  const candidates = ring.filter(id => id !== failedAccountId && eligible.includes(id));
+  let candidates = ring.filter(id => id !== failedAccountId && eligible.includes(id));
   if (candidates.length === 0) return null;
+  const cap = providerName === "kiro" ? config.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount : undefined;
+  if (typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100) {
+    const withRoom = candidates.filter(id => accountInFlight("kiro", id) < cap);
+    if (withRoom.length > 0) candidates = withRoom;
+  }
   // The 429 path branches too. Leaving it on the quota ranking would make a configured
   // strategy inert in practice the moment anything actually failed, which is the case the
   // operator chose the strategy for.
   const strategy = activeGenericStrategy(config, providerName);
+  if (strategy === "least-loaded" && isProactivePreferenceEnabled(config, "kiro", now)) {
+    return candidates.sort((a, b) => accountInFlight("kiro", a) - accountInFlight("kiro", b))[0] ?? null;
+  }
   if (strategy === "round-robin") {
     // PICK here, not peek: the failure already happened and this answer is the one being used,
     // so the ring genuinely advances.
@@ -536,6 +546,16 @@ export function preferredInitialAccount(
   // healthy-active return fires before autoSwitchThreshold can ever be read, so fill-first
   // would never reach its own test. Cooldowns and reauth are still honoured inside each pick.
   const strategy = activeGenericStrategy(config, providerName);
+  if (strategy === "least-loaded" && providerName === "kiro") {
+    const family = classifyModelFamilyForQuota(providerName, requestedModelId);
+    let candidates = eligibleFailoverAccounts(providerName, now, family);
+    const cap = config.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount;
+    if (typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100) {
+      candidates = candidates.filter(id => accountInFlight("kiro", id) < cap);
+    }
+    const picked = candidates.sort((a, b) => accountInFlight("kiro", a) - accountInFlight("kiro", b))[0];
+    return picked && picked !== active ? picked : null;
+  }
   if (strategy === "round-robin") {
     const family = classifyModelFamilyForQuota(providerName, requestedModelId);
     const eligibleNow = eligibleFailoverAccounts(providerName, now, family);

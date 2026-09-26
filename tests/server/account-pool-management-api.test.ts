@@ -788,7 +788,7 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
         // which is the whole difference between a consolidation and a fourth contract.
         expect(Object.keys(dto).sort()).toEqual([
           "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "provider",
-          "quotaWindow", "stickyLimit", "strategy", "supported",
+          "maxConcurrentPerAccount", "quotaWindow", "stickyLimit", "strategy", "supported",
         ]);
         expect(dto.kind).toBe(kind);
         expect(dto.supported).toEqual([...supported]);

@@ -70,6 +70,9 @@ and process-local suspension by the live account identity before picking a repla
 The account actually sent supplies the generation fence; a rotated bearer always travels
 with its own profile ARN and region. Reactive rotation follows the stored two-account
 quorum, while refusal-aware first admission follows the proactive preference setting.
+Kiro's `least-loaded` strategy selects the fewest in-flight eligible requests under
+`pool.kernel` and proactive preference; unknown quota remains eligible. Its optional
+per-account cap is validated only for Kiro and never persists in-flight counts.
 
 The routed identity sentence a catalog row carries is model-neutral on disk: `base_instructions`,
 and a native capability alias's `model_messages.instructions_template`, hold `NEUTRAL_IDENTITY_LINE`

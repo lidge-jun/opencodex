@@ -34,6 +34,7 @@ import {
   eligibleFailoverAccounts,
   forgetGenericFailoverRoster,
   isGenericFailoverProvider,
+  isProactivePreferenceEnabled,
   preferredInitialAccount,
   refusalAwareInitialKiroAccount,
   noteGenericPoolSelection,
@@ -74,6 +75,8 @@ import {
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
+import { clientCancelledResponse } from "./core-errors";
+import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
 
 /** Owns live credential selection and adapter bindings for one request. */
 export async function prepareResponsesTransport(
@@ -90,6 +93,17 @@ export async function prepareResponsesTransport(
 ) {
   const { config, logCtx, options, req } = requestContext;
   const { route, parsed, inboundWire, translatorBudget } = requestState;
+  const rawKiroCap = route.providerName === "kiro" && route.provider.authMode === "oauth"
+    ? config.providers.kiro?.oauthAccountFailover?.maxConcurrentPerAccount : undefined;
+  const kiroCap = typeof rawKiroCap === "number" && Number.isInteger(rawKiroCap)
+    && rawKiroCap >= 1 && rawKiroCap <= 100 ? rawKiroCap : undefined;
+  const kiroLoadEnabled = route.providerName === "kiro" && route.provider.authMode === "oauth"
+    && (kiroCap !== undefined || (config.pool?.kernel === true
+      && config.providers.kiro?.oauthAccountFailover?.strategy === "least-loaded"
+      && isProactivePreferenceEnabled(config, "kiro", Date.now())));
+  const capacityResponse = () => new Response(JSON.stringify({ error: {
+    type: "server_error", code: "account_capacity", message: "Kiro account capacity is temporarily full; retry shortly.",
+  } }), { status: 503, headers: { "content-type": "application/json", "retry-after": "1" } });
 
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
@@ -219,8 +233,22 @@ export async function prepareResponsesTransport(
     retryParsed: OcxParsedRequest = parsed,
   ): Promise<OAuthAccessSnapshot | null> => {
     if (route.provider.googleMode === "cloud-code-assist" && !snapshot.projectId) return null;
-    const committed = await commitResolvedOAuthSelection(snapshot);
-    if (!committed) return null;
+    let speculative = kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId
+      ? await acquireAccountLease("kiro", snapshot.accountId, { maxConcurrentPerAccount: kiroCap }) : null;
+    if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId && !speculative) return null;
+    let committed: OAuthAccessSnapshot | null;
+    try { committed = await commitResolvedOAuthSelection(snapshot); }
+    catch (error) { speculative?.release(); throw error; }
+    if (!committed) { speculative?.release(); return null; }
+    if (kiroLoadEnabled && committed.accountId !== (speculative?.accountId ?? options.accountLoad?.lease?.accountId)) {
+      speculative?.release();
+      speculative = await acquireAccountLease("kiro", committed.accountId, { maxConcurrentPerAccount: kiroCap });
+      if (!speculative) return null;
+    }
+    if (speculative && options.accountLoad) {
+      options.accountLoad.lease?.release();
+      options.accountLoad.lease = speculative;
+    }
     snapshot = committed;
     let rotatedProvider: OcxProviderConfig = { ...route.provider, apiKey: snapshot.accessToken };
     if (route.providerName === "github-copilot") {
@@ -582,6 +610,15 @@ export async function prepareResponsesTransport(
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
         if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
           return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
+        if (kiroLoadEnabled) {
+          const lease = await acquireAccountLease("kiro", admitted.accountId, {
+            maxConcurrentPerAccount: kiroCap, waitMs: KIRO_ACCOUNT_WAIT_MS, signal: options.abortSignal ?? req.signal,
+          });
+          if (!lease) return (options.abortSignal ?? req.signal).aborted
+            ? clientCancelledResponse() : capacityResponse();
+          if (options.accountLoad) options.accountLoad.lease = lease;
+          else lease.release();
+        }
         if (admitted.accountId !== resolved.accountId) usedPreferredAccount = true;
         resolved = admitted;
         replayOAuthCredentialSnapshot = {
