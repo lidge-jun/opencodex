@@ -1,3 +1,4 @@
+import { clearIdleWindowSteering, pickIdleWindowAccount } from "./routing/idle-window";
 import { getEffectiveCodexAutoSwitchThreshold } from "./account-auto-switch";
 import { codexQuotaHasFreshUsage } from "./quota-observation-freshness";
 import { saveConfigPreservingClaudeCode } from "../config";
@@ -234,6 +235,7 @@ export function clearCodexUpstreamHealth(): void {
   // reset points. Leaving them behind lets a selection from one context suppress the
   // automatic cursor in the next one.
   clearAllManualPreferences();
+  clearIdleWindowSteering();
   clearUpstreamHealthState();
   forgetRuntimeActiveCodexAccount();
   // The reconcile watermark is part of this state, not something that outlives it. Keeping
@@ -786,6 +788,10 @@ export function previewCodexAccountForRequest(
     if (lineagePreview) return lineagePreview.accountId;
   }
 
+  const idlePick = !entry && !peekPendingReleaseReason(threadId)
+    && !(threadId && getModelDetourAffinity(threadId, modelId, quotaScope))
+    ? pickIdleWindowAccount(config, threadId, now, false, quotaScope, selectionOptions) : null;
+  if (idlePick) return idlePick;
   const strategyPick = pickUnboundStrategyAccount(
     config,
     threadId,
@@ -881,6 +887,7 @@ export function resolveCodexAccountForThreadDetailed(
   // cold one: every branch that follows -- detour reuse, transient hold, quota re-eval --
   // should treat it as the continuing conversation it is. No-op on a fresh process.
   if (threadId) adoptLegacyLineageAffinity(threadId, lineage, now, quotaScope, modelId);
+  const hadModelAffinity = !!(threadId && getModelDetourAffinity(threadId, modelId, quotaScope));
 
   if (threadId && modelScopedSelection) {
     const detourEntry = getModelDetourAffinity(threadId, modelId, quotaScope);
@@ -1088,6 +1095,9 @@ export function resolveCodexAccountForThreadDetailed(
     }
   }
 
+  const idlePick = !entry && !releaseReason && !hadModelAffinity
+    ? pickIdleWindowAccount(config, threadId, now, true, quotaScope, selectionOptions) : null;
+  if (idlePick) return { status: "selected", accountId: idlePick, affinity: affinityAfterRelease(threadId, releaseReason) };
   // A request-scoped roster may still contain unhealthy candidates. Non-quota strategies return
   // before the quota/failover helpers below, so prefer only shared-healthy roster members here;
   // otherwise RR/fill-first can immediately re-pick a known failing account even when another
