@@ -1141,6 +1141,7 @@
     "linux-desktop-packaged-e2e.test.ts": "ci-workflows",
     "local-aside-sync-capability.test.ts": "server",
     "local-account-switch-capability.test.ts": "server",
+    "local-account-switch-ingress.test.ts": "server",
     "local-destinations.test.ts": "lib",
     "local-management-attestation.test.ts": "server",
     "local-management-capability.test.ts": "server",
