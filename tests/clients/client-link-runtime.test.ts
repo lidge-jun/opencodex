@@ -74,7 +74,8 @@ test("link runtime refuses a busy configured port instead of selecting an epheme
       connectedAt: "2026-09-25T00:00:00.000Z",
     };
     saveConfig(config);
-    await expect(startClientRuntime({ block: false })).rejects.toThrow(`link mode needs port ${holder.port}`);
+    await expect(startClientRuntime({ block: false }, { portWaitMs: 300 }))
+      .rejects.toThrow(`link mode needs port ${holder.port}`);
   } finally {
     holder.stop(true);
     if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
