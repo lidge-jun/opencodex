@@ -380,7 +380,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     sawPartialText: false,
     sawPartialThinking: false,
     sawTerminalResult: false,
-    openToolCallId: undefined,
+    openToolBlocks: new Map(),
     partialToolCallIds: toolBridge ? new Set<string>() : undefined,
   };
 
@@ -527,8 +527,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             toolBridge
             && !terminalEmitted
             && event.type === "done"
-            && toolCallStarts > 0
-            && (state.completedToolCalls ?? 0) !== toolCallStarts
+            && (state.toolBlockStarts ?? 0) > 0
+            && (state.completedToolCalls ?? 0) !== (state.toolBlockStarts ?? 0)
           ) {
             // A terminal result that arrives while a captured tool call is still open must not
             // become a successful completion the client can accept. The message_stop check after
@@ -552,8 +552,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
             toolBridge
             && !terminalEmitted
             && event.type === "done"
-            && toolCallStarts > 0
-            && (state.completedToolCalls ?? 0) === toolCallStarts
+            && (state.toolBlockStarts ?? 0) > 0
+            && (state.completedToolCalls ?? 0) === (state.toolBlockStarts ?? 0)
           ) {
             // Every captured call completed and the CLI settled with a successful result before
             // message_stop (instead of parking on the never-answering capture server). Emitting
@@ -573,8 +573,8 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
           toolBridge
           && !terminalEmitted
           && state.sawMessageStop
-          && toolCallStarts > 0
-          && (state.completedToolCalls ?? 0) !== toolCallStarts
+          && (state.toolBlockStarts ?? 0) > 0
+          && (state.completedToolCalls ?? 0) !== (state.toolBlockStarts ?? 0)
         ) {
           emitOnce({
             type: "error",
