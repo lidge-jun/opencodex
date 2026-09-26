@@ -4,6 +4,8 @@ The coding-agent stream parser buffers each tool-use block by its content-block 
 and emits a complete start/delta/end sequence on closure. A new start on an occupied
 index closes the previous block; distinct indices can interleave. Turn completion
 requires every opened block to close, preserving the downstream single-open-call contract.
+The capture-only bridge checks each raw tool-use start against the init handshake before
+buffering; a later init cannot authorize a call that started earlier.
 
 RunTurn hosted search uses `src/web-search/run-turn-loop.ts`: synthetic calls remain private, progress reaches the bridge during collection, and a validated terminal precedes search execution. Complete search calls remain actionable at a truncated `done`; cancellation prevents subsequent queries and calls. OAuth preflight replay in `src/server/responses/run-turn-execution.ts` retains the synthetic tool while refreshing credential-scoped route state. In `src/server/responses/sidecar-execution.ts`, a search plan takes priority over image/video bridge execution for both transports; only fetch-capable adapters enter the fetch search loop.
 

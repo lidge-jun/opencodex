@@ -464,6 +464,28 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(events.some(e => e.type === "done")).toBe(false);
   });
 
+  test("a tool start before init stays invalid when the block stops after init", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const adapter = createCodeBuddyAdapter(provider(), {
+      spawn: () => fakeChild(frameLines([
+        toolUseStart(cliName),
+        INIT_OK,
+        BLOCK_STOP,
+        MESSAGE_STOP,
+      ])) as unknown as ChildProcess,
+      which: () => "/usr/bin/codebuddy",
+    });
+    const events = await run(adapter, p);
+    expect(events.at(-1)).toMatchObject({
+      type: "error",
+      code: "tool_bridge_init_missing",
+      status: 502,
+      retryable: false,
+    });
+    expect(events.some(e => e.type === "tool_call_start" || e.type === "done")).toBe(false);
+  });
+
   test("a result frame before message_stop defers to the synthesized tool_use done", async () => {
     const p = parsed([tool("exec")]);
     const bridge = buildCodeBuddyToolBridge(p);
