@@ -154,6 +154,8 @@ export interface ManagementApiDeps {
   issueApiKey?: (config: OcxConfig, name: string) => IssuedApiKey;
   revokeApiKey?: (config: OcxConfig, id: string) => boolean;
   loadLinkCandidates?: () => Array<{ alias: string; source: "ssh_config" | "tailscale" }>;
+  /** The port this runtime listens on; a join is refused unless it is the configured port. */
+  liveListenPort?: () => number | undefined;
   now?: () => number;
 }
 

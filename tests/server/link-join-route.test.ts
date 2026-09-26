@@ -75,12 +75,16 @@ function routeState(confirmed = true): LinkRouteState {
   };
 }
 
+const CONFIG_PORT = 10100;
+
 function context(options: {
   role?: "standalone" | "hub" | "client";
   principal?: ManagementContext["principal"];
   paired?: boolean;
+  current?: boolean;
   issuance?: ManagementContext["guiSessionIssuance"];
   trustedLoopback?: boolean;
+  livePort?: number;
   body?: unknown;
   deps?: Record<string, unknown>;
 } = {}): ManagementContext {
@@ -93,11 +97,11 @@ function context(options: {
   return {
     req,
     url: new URL(req.url),
-    config: { runtimeRole: options.role ?? "standalone" } as ManagementContext["config"],
-    deps: options.deps ?? {},
+    config: { runtimeRole: options.role ?? "standalone", port: CONFIG_PORT } as ManagementContext["config"],
+    deps: { liveListenPort: () => options.livePort ?? CONFIG_PORT, ...options.deps },
     version: "test",
     principal: options.principal,
-    sessionControl: { isPaired: () => options.paired === true, isCurrent: () => true, revokeCurrent: () => true },
+    sessionControl: { isPaired: () => options.paired === true, isCurrent: () => options.current ?? true, revokeCurrent: () => true },
     trustedLoopbackIngress: options.trustedLoopback ?? true,
     guiSessionIssuance: options.issuance ?? null,
     convergeCodexCatalog: async () => ({ status: "unchanged" } as never),
@@ -122,26 +126,54 @@ describe("client initiated link join", () => {
     }
   });
 
-  test("refuses every loopback dashboard session with 403 before a join starts", async () => {
-    // A join restarts this proxy and moves Codex routing to the Home, dropping live Codex
-    // connections, so the credentialless loopback session never reaches it; only pairing does.
+  test("admits the current loopback dashboard session of a standalone on trusted loopback ingress", async () => {
+    // Turning a Child on from its own dashboard: the local session joins, while stale sessions,
+    // untrusted ingress and other runtime roles are refused before a join starts.
     let joins = 0;
     const deps = { joinHome: async () => { joins += 1; return { linkId: LINK_ID, apiKeyId: API_KEY_ID }; } };
+    const loopback = { principal: "gui-session" as const, issuance: "loopback" as const, deps };
+    const joined = await handleLinkRoutes(context({ ...loopback, trustedLoopback: true }), routeState());
+    expect(joined?.status).toBe(202);
+    expect(await joined?.json()).toEqual({ linkId: LINK_ID, alias: "home", restarting: true });
+    expect(joins).toBe(1);
+
     for (const options of [
-      { role: "standalone" as const, trustedLoopback: true },
+      { role: "standalone" as const, trustedLoopback: true, current: false },
       { role: "standalone" as const, trustedLoopback: false },
       { role: "hub" as const, trustedLoopback: true },
       { role: "client" as const, trustedLoopback: true },
     ]) {
-      const response = await handleLinkRoutes(context({ ...options, principal: "gui-session", issuance: "loopback", deps }), routeState());
+      const response = await handleLinkRoutes(context({ ...loopback, ...options }), routeState());
       expect(response?.status).toBe(403);
       expect(await response?.json()).toMatchObject({ error: { code: "forbidden" } });
     }
-    expect(joins).toBe(0);
+    const tailscale = await handleLinkRoutes(context({ ...loopback, issuance: "tailscale-identity" }), routeState());
+    expect(tailscale?.status).toBe(403);
+    expect(await tailscale?.json()).toMatchObject({ error: { code: "tailscale_session_refused" } });
+    expect(joins).toBe(1);
 
     const paired = await handleLinkRoutes(context({ principal: "gui-session", issuance: "pairing", paired: true, deps }), routeState());
     expect(paired?.status).toBe(202);
-    expect(joins).toBe(1);
+    expect(joins).toBe(2);
+  });
+
+  test("refuses a join whose restart could not bind the configured port, before any SSH", async () => {
+    const calls: string[][] = [];
+    let joins = 0;
+    const deps = {
+      sshRunner: runnerFor(calls),
+      joinHome: async () => { joins += 1; return { linkId: LINK_ID, apiKeyId: API_KEY_ID }; },
+    };
+    for (const livePort of [CONFIG_PORT + 1, undefined]) {
+      const response = await handleLinkRoutes({
+        ...context({ principal: "gui-session", issuance: "loopback", deps }),
+        deps: { ...deps, liveListenPort: () => livePort },
+      }, routeState());
+      expect(response?.status).toBe(409);
+      expect(await response?.json()).toMatchObject({ error: { code: "join_port_mismatch" } });
+    }
+    expect(joins).toBe(0);
+    expect(calls).toEqual([]);
   });
 
   test("maps a missing ocx on Home to remote_ocx_missing with a redacted stderr hint", async () => {

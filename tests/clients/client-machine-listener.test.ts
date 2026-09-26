@@ -12,6 +12,8 @@ import { handleManagementAPI } from "../../src/server/management-api";
 import { createManagementSessionControl, type ManagementAuthState } from "../../src/server/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
+import type { ClientLinkSupervisorStatus } from "../../src/client/link-tunnel";
 
 let root = "";
 let previousHome: string | undefined;
@@ -305,5 +307,170 @@ describe("the served document states the client role", () => {
     const call = /serveGuiFile\(([^)]*)\)/.exec(source);
     expect(call, "machine-listener no longer calls serveGuiFile").not.toBeNull();
     expect(call![1]).toContain('"client"');
+  });
+});
+
+describe("client machine listener in link mode", () => {
+  const LINK_KEY = `ocx_data_${"e".repeat(40)}`;
+  const TUNNEL_PORT = 23456;
+  const linkConnection = (fingerprint = serviceApiTokenFingerprint(LINK_KEY)): OcxClientConnectionConfig => ({
+    serverUrl: `http://127.0.0.1:${TUNNEL_PORT}`,
+    managementUrl: `http://127.0.0.1:${TUNNEL_PORT}`,
+    managementTransport: "direct",
+    transport: "link",
+    link: { tunnelPort: TUNNEL_PORT, linkId: `lnk_${"b".repeat(16)}` },
+    selectedClients: ["codex"],
+    tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+    apiKeyId: "link-key-1",
+    tokenFingerprint: fingerprint,
+    protocolVersion: 1,
+    connectedAt: "2026-09-26T00:00:00.000Z",
+  });
+  const writeKey = () => writeFileSync(join(root, "service-api-token"), `${LINK_KEY}\n`, { mode: 0o600 });
+
+  function linkListener(options: {
+    fingerprint?: string;
+    linkStatus?: () => ClientLinkSupervisorStatus;
+    serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
+    reply?: () => Response;
+  } = {}) {
+    const upstream: Request[] = [];
+    const server = startMachineListener(0, {
+      state: linkConnection(options.fingerprint),
+      managementAuthState: authState(),
+      fetchImpl: (async (input, init) => {
+        upstream.push(new Request(String(input), init));
+        return options.reply?.() ?? Response.json({ relayed: true });
+      }) as typeof fetch,
+      readSidecar: () => ({
+        linkId: `lnk_${"b".repeat(16)}`, alias: "home-mac", hubHostKeyFingerprint: `SHA256:${"a".repeat(43)}`,
+        peerListenerPort: 45678, tunnelPort: TUNNEL_PORT,
+      }),
+      ...(options.linkStatus ? { linkStatus: options.linkStatus } : {}),
+      ...(options.serve ? { serve: options.serve } : {}),
+    });
+    servers.push(server);
+    return { server, upstream };
+  }
+
+  test("refuses a non-loopback Host or a foreign Origin before any upstream fetch", async () => {
+    writeKey();
+    const { server, upstream } = linkListener();
+    const url = new URL("/v1/responses", server.url);
+    const post = (headers: Record<string, string>) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: "{}" });
+    const rebinding = await post({ Host: "evil.example" });
+    expect(rebinding.status).toBe(403);
+    const crossSite = await post({ Origin: "https://evil.example" });
+    expect(crossSite.status).toBe(403);
+    expect(upstream).toHaveLength(0);
+    for (const refused of [rebinding, crossSite]) expect(await refused.text()).not.toContain(LINK_KEY);
+    const allowed = await post({ Origin: `http://127.0.0.1:${server.port}` });
+    expect(allowed.status).toBe(200);
+    expect(upstream).toHaveLength(1);
+    expect(upstream[0]!.headers.get("authorization")).toBe(`Bearer ${LINK_KEY}`);
+  });
+
+  test("answers a Responses WebSocket upgrade with 426 so Codex falls back to HTTP", async () => {
+    writeKey();
+    const { server, upstream } = linkListener();
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      headers: { Upgrade: "websocket", Connection: "Upgrade", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Version": "13" },
+    });
+    expect(response.status).toBe(426);
+    expect(JSON.stringify(await response.json())).toContain("upgrade_required");
+    expect(upstream).toHaveLength(0);
+  });
+
+  test("answers /readyz locally instead of relaying it to the Home", async () => {
+    writeKey();
+    const { server, upstream } = linkListener();
+    const response = await fetch(new URL("/readyz", server.url));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ role: "client", status: "ready", pid: process.pid });
+    expect(upstream).toHaveLength(0);
+  });
+
+  test("refuses to relay without the committed link key", async () => {
+    writeKey();
+    const { server, upstream } = linkListener({ fingerprint: "f".repeat(64) });
+    const response = await fetch(new URL("/v1/responses", server.url), { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBeNull();
+    expect(await response.json()).toEqual({ error: "link_credential_unavailable" });
+    expect(upstream).toHaveLength(0);
+  });
+
+  test("keeps the standalone idle limit and data-plane body limit on its socket", () => {
+    writeKey();
+    let captured: Parameters<typeof Bun.serve>[0] | undefined;
+    linkListener({ serve: options => { captured = options; return Bun.serve(options); } });
+    expect((captured as { idleTimeout?: number }).idleTimeout).toBe(255);
+    expect((captured as { maxRequestBodySize?: number }).maxRequestBodySize).toBe(256 * 1024 * 1024);
+  });
+
+  test("a relayed stream survives a quiet stretch longer than the listener's idle limit", async () => {
+    writeKey();
+    const encoder = new TextEncoder();
+    // Bun sweeps idle sockets every 4 s, so idleTimeout 1 cuts a socket within 4 s of its last
+    // byte. A 5 s gap between two SSE events stands in for a long reasoning pause at 255 s.
+    const { server, upstream } = linkListener({
+      serve: options => Bun.serve({ ...options, idleTimeout: 1 } as Parameters<typeof Bun.serve>[0]),
+      reply: () => new Response(new ReadableStream<Uint8Array>({
+        async start(controller) {
+          controller.enqueue(encoder.encode("data: first\n\n"));
+          await Bun.sleep(5_000);
+          controller.enqueue(encoder.encode("data: last\n\n"));
+          controller.close();
+        },
+      }), { headers: { "Content-Type": "text/event-stream" } }),
+    });
+    const response = await fetch(new URL("/v1/responses", server.url), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("data: first\n\ndata: last\n\n");
+    expect(upstream).toHaveLength(1);
+  }, 15_000);
+
+  test("hub transport keeps its management-relay socket bounds", () => {
+    let captured: Parameters<typeof Bun.serve>[0] | undefined;
+    servers.push(startMachineListener(0, {
+      state: connection(), managementAuthState: authState(),
+      serve: options => { captured = options; return Bun.serve(options); },
+    }));
+    expect((captured as { idleTimeout?: number }).idleTimeout).toBeUndefined();
+    expect((captured as { maxRequestBodySize?: number }).maxRequestBodySize).toBe(4 * 1024 * 1024);
+  });
+
+  test("serves the Child's own link status to a GUI session and nothing else", async () => {
+    writeKey();
+    const { server } = linkListener({
+      linkStatus: () => ({ kind: "tunnel", linkId: `lnk_${"b".repeat(16)}`, state: { kind: "connected", since: Date.parse("2026-09-26T01:00:00.000Z") }, pid: 4242 }),
+    });
+    const url = new URL("/api/link/status", server.url);
+    expect((await fetch(url)).status).toBe(401);
+    const headers = await guiHeaders(server);
+    const status = await fetch(url, { headers });
+    expect(status.status).toBe(200);
+    expect(await status.json()).toEqual({
+      role: "child",
+      listener: { state: "off", port: null },
+      links: [],
+      child: { alias: "home-mac", state: "connected", since: "2026-09-26T01:00:00.000Z", reason: null },
+      joinAvailable: false,
+    });
+    expect((await fetch(url, { method: "POST", headers: await guiHeaders(server, true), body: "{}" })).status).toBe(404);
+
+    const machine = await fetch(new URL("/api/machine/status", server.url), { headers });
+    const body = await machine.json() as { machineBase: string; sharedBase: string; sharedServerOrigin: string };
+    expect(body.sharedBase).toBe(body.machineBase);
+    expect(body.sharedServerOrigin).toBe(body.machineBase);
+    expect(body.machineBase).toBe(`http://127.0.0.1:${server.port}`);
+  });
+
+  test("a hub-transport client has no link status route", async () => {
+    const server = startMachineListener(0, { state: connection(), managementAuthState: authState() });
+    servers.push(server);
+    expect((await fetch(new URL("/api/link/status", server.url), { headers: await guiHeaders(server) })).status).toBe(404);
   });
 });
