@@ -139,6 +139,10 @@ OAuth presets resolve discovery against the same canonical registry transport as
 before any adapter-specific transport override, so a stale configured `baseUrl` cannot receive an
 OAuth bearer token.
 
+CodeBuddy discovery in `src/adapters/codebuddy/live-models.ts` reads the roster scoped to the
+configured key. Its failure result carries only a category and optional HTTP status; untrusted
+gateway messages and transport exceptions do not reach catalog warnings.
+
 Provider request pacing in `src/providers/request-pacing.ts` combines start intervals with optional
 `maxConcurrentRequests` limits. Provider capacity is shared across models; exact-model limits
 apply in addition to that capacity. Admission reserves both counters atomically, and eligible

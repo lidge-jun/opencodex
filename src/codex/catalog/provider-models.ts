@@ -288,7 +288,7 @@ export async function fetchProviderModelsWithAuth(
     if (isCurrentCacheGeneration()) {
       markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: "provider" });
-      console.warn(`[opencodex] CodeBuddy model discovery for "${name}" failed [${live.error}]${live.detail ? ": " + live.detail : ""}; using stale/static catalog degradation.`);
+      console.warn(`[opencodex] CodeBuddy model discovery failed [${live.error}]${live.status === undefined ? "" : ` status=${live.status}`}; using stale/static catalog degradation.`);
     }
     const stale = getStaleCached(name, authorityIdentity);
     return observed(withConfiguredRetention(

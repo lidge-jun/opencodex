@@ -212,7 +212,7 @@ destination is invalid, registered Devin discovery and routing use the registry'
 instead of a stale configured override. For Devin, the irreversible roster fingerprint covers
 both credential and validated destination, so switching either observes neither fresh nor stale
 data recorded under the previous pair.
-Entitlement-specific rosters (Qoder, Devin, Cursor) additionally bind their cache entry to an
+Entitlement-specific rosters (Qoder, Devin, Cursor, CodeBuddy) additionally bind their cache entry to an
 irreversible credential fingerprint: a credential switch observes neither the fresh nor the stale
 roster recorded under the previous credential, and a failed discovery's cooldown neither supplies
 the previous credential's stale roster nor suppresses the next credential's first discovery.

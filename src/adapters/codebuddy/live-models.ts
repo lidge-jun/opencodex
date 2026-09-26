@@ -3,11 +3,10 @@ import type { CodeBuddyProfile } from "./profiles";
 
 const MAX_CONFIG_BYTES = 512 * 1024;
 const MAX_MODELS = 128;
-const MAX_ERROR_BODY_BYTES = 4 * 1024;
 
 export type CodeBuddyModelsResult =
   | { ok: true; models: string[] }
-  | { ok: false; error: "http" | "timeout" | "invalid_output" | "empty" | "too_large"; detail?: string };
+  | { ok: false; error: "http" | "timeout" | "invalid_output" | "empty" | "too_large"; status?: number };
 
 export interface CodeBuddyConfigFetchDeps {
   /** Test seam for the outbound request; defaults to global fetch. */
@@ -43,7 +42,7 @@ const CLI_USER_AGENT = "CLI/2.126.0 CodeBuddy/2.126.0";
  */
 async function readBoundedBodyText(res: Response, cap: number): Promise<
   | { ok: true; text: string }
-  | { ok: false; reason: "exceeded" | "read"; detail?: string }
+  | { ok: false; reason: "exceeded" | "read" }
 > {
   if (!res.body) return { ok: true, text: "" };
   const reader = res.body.getReader();
@@ -64,8 +63,8 @@ async function readBoundedBodyText(res: Response, cap: number): Promise<
     }
     out += decoder.decode();
     return { ok: true, text: out };
-  } catch (error) {
-    return { ok: false, reason: "read", detail: String((error as Error)?.message ?? error).slice(0, 200) };
+  } catch {
+    return { ok: false, reason: "read" };
   }
 }
 
@@ -88,14 +87,14 @@ function declaredLengthExceeds(response: Response, cap: number): boolean {
  * not shared catalog rows, and are excluded.
  */
 export function parseCodeBuddyConfigRoster(body: unknown): CodeBuddyModelsResult {
-  if (!isPlainObject(body)) return { ok: false, error: "invalid_output", detail: "CodeBuddy config response is not an object" };
+  if (!isPlainObject(body)) return { ok: false, error: "invalid_output" };
   const data = body.data;
-  if (!isPlainObject(data)) return { ok: false, error: "invalid_output", detail: "CodeBuddy config envelope is missing its data object" };
+  if (!isPlainObject(data)) return { ok: false, error: "invalid_output" };
   const agents = data.agents;
   if (!Array.isArray(agents)) {
     // The authenticated envelope always carries an agents array; the anonymous one (absent or
     // invalid key) does not. Both fail closed here, but the distinction names the cause.
-    return { ok: false, error: "empty", detail: "CodeBuddy answered the anonymous config: the key did not authenticate" };
+    return { ok: false, error: "empty" };
   }
   // The catalog mirrors what the CLI itself accepts for --model: the default agent's models.
   // agents has carried exactly one entry named "cli" so far; prefer it by name and fall back to
@@ -113,7 +112,7 @@ export function parseCodeBuddyConfigRoster(body: unknown): CodeBuddyModelsResult
     models.push(id);
     if (models.length >= MAX_MODELS) break;
   }
-  return models.length > 0 ? { ok: true, models } : { ok: false, error: "empty", detail: "CodeBuddy config roster is empty" };
+  return models.length > 0 ? { ok: true, models } : { ok: false, error: "empty" };
 }
 
 /**
@@ -151,26 +150,14 @@ export async function fetchCodeBuddyModels(
   } catch (error) {
     const name = (error as { name?: string } | null)?.name ?? "";
     if (name === "TimeoutError" || name === "AbortError") {
-      return { ok: false, error: "timeout", detail: "CodeBuddy model discovery timed out" };
+      return { ok: false, error: "timeout" };
     }
-    return { ok: false, error: "http", detail: `CodeBuddy config request failed: ${String((error as Error)?.message ?? error).slice(0, 200)}` };
+    return { ok: false, error: "http" };
   }
   if (response.status !== 200) {
-    let detail = `HTTP ${response.status}`;
-    // The error envelope is untrusted upstream output too; read it bounded and skip the
-    // message entirely when it does not fit a small error-body cap.
-    const errorBody = await readBoundedBodyText(response, MAX_ERROR_BODY_BYTES);
-    if (errorBody.ok) {
-      try {
-        const envelope = JSON.parse(errorBody.text) as unknown;
-        if (isPlainObject(envelope) && typeof envelope.msg === "string") {
-          detail = `HTTP ${response.status} (${String(envelope.msg).slice(0, 120)})`;
-        }
-      } catch {
-        // The status line alone is enough when the body is not a JSON envelope.
-      }
-    }
-    return { ok: false, error: "http", detail };
+    try { void response.body?.cancel().catch(() => undefined); }
+    catch { /* best-effort body teardown */ }
+    return { ok: false, error: "http", status: response.status };
   }
   if (declaredLengthExceeds(response, MAX_CONFIG_BYTES)) {
     try { void response.body?.cancel("CodeBuddy config body byte limit reached").catch(() => undefined); }
@@ -181,11 +168,11 @@ export async function fetchCodeBuddyModels(
   if (!body.ok) {
     return body.reason === "exceeded"
       ? { ok: false, error: "too_large" }
-      : { ok: false, error: "http", detail: `CodeBuddy config body read failed${body.detail ? ": " + body.detail : ""}` };
+      : { ok: false, error: "http" };
   }
   try {
     return parseCodeBuddyConfigRoster(JSON.parse(body.text) as unknown);
   } catch {
-    return { ok: false, error: "invalid_output", detail: "CodeBuddy config response is not valid JSON" };
+    return { ok: false, error: "invalid_output" };
   }
 }

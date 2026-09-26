@@ -52,7 +52,6 @@ describe("CodeBuddy configuration-roster parser", () => {
   test("the anonymous envelope an invalid key receives fails closed as empty", () => {
     const result = parseCodeBuddyConfigRoster(ANONYMOUS_ENVELOPE);
     expect(result).toMatchObject({ ok: false, error: "empty" });
-    if (!result.ok) expect(result.detail).toContain("anonymous");
   });
 
   test("a missing data object fails closed", () => {
@@ -97,11 +96,10 @@ describe("CodeBuddy live model fetch", () => {
     expect(seen[0]!.url).toBe("https://www.codebuddy.ai/v3/config");
   });
 
-  test("a non-200 answer is a clear error carrying the gateway's message", async () => {
+  test("a non-200 answer reports only its status", async () => {
     const { fetchLike } = recordingFetch(400, { code: 12403, msg: "check ua, get coding copilot version error" });
     const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
-    expect(result).toMatchObject({ ok: false, error: "http" });
-    if (!result.ok) expect(result.detail).toContain("check ua");
+    expect(result).toEqual({ ok: false, error: "http", status: 400 });
   });
 
   test("a timed-out request is a timeout, never a crash", async () => {
@@ -110,6 +108,22 @@ describe("CodeBuddy live model fetch", () => {
     }) as typeof fetch;
     const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
     expect(result).toMatchObject({ ok: false, error: "timeout" });
+  });
+
+  test("credentialed HTTP failures expose status without the upstream message", async () => {
+    const marker = "private upstream message marker";
+    const { fetchLike } = recordingFetch(403, { msg: marker });
+    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
+    expect(result).toEqual({ ok: false, error: "http", status: 403 });
+    expect(JSON.stringify(result)).not.toContain(marker);
+  });
+
+  test("credentialed transport failures expose a category without exception text", async () => {
+    const marker = "private transport exception marker";
+    const fetchLike = (async () => { throw new Error(marker); }) as typeof fetch;
+    const result = await fetchCodeBuddyModels(CODEBUDDY_CN_PROFILE, "cb-cn-key", { fetch: fetchLike });
+    expect(result).toEqual({ ok: false, error: "http" });
+    expect(JSON.stringify(result)).not.toContain(marker);
   });
 
   test("a body that is not JSON fails closed as invalid output", async () => {
@@ -194,7 +208,7 @@ describe("CodeBuddy catalog cache isolation", () => {
     try {
       let keyBFetches = 0;
       setFetchCodeBuddyModelsForTests((_profile, apiKey) => {
-        if (apiKey === "cb-key-a") return { ok: false, error: "http", detail: "denied" };
+        if (apiKey === "cb-key-a") return { ok: false, error: "http" };
         keyBFetches += 1;
         return { ok: true, models: ["roster-b-model"] };
       });
@@ -222,7 +236,7 @@ describe("CodeBuddy catalog cache isolation", () => {
       setFetchCodeBuddyModelsForTests((_profile, apiKey) => (
         apiKey === "cb-key-a"
           ? { ok: true, models: ["roster-a-model"] }
-          : { ok: false, error: "http", detail: "denied" }
+          : { ok: false, error: "http" }
       ));
 
       const first = await gatherRoutedModels(codeBuddyConfig("cb-key-a"));
@@ -241,12 +255,27 @@ describe("CodeBuddy catalog cache isolation", () => {
       warn.mockRestore();
     }
   });
+
+  test("catalog failure logging omits any untrusted detail from a credentialed request", async () => {
+    const marker = "private catalog failure marker";
+    const untrustedFailure = { ok: false as const, error: "http" as const, detail: marker };
+    setFetchCodeBuddyModelsForTests(() => untrustedFailure);
+    const warnings: string[] = [];
+    const warn = spyOn(console, "warn").mockImplementation((...args) => { warnings.push(args.map(String).join(" ")); });
+    try {
+      await gatherRoutedModels(codeBuddyConfig("cb-key-a"));
+      expect(warnings.join(" ")).not.toContain(marker);
+      expect(warnings.join(" ")).toContain("http");
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });
 
 // The roster authority is the key on the request, so the cached roster can only ever be the
 // key's own answer. The remaining cross-key guard is the cooldown/fingerprint isolation above.
 test("an invalid key answers the anonymous envelope and never caches a roster", async () => {
-  setFetchCodeBuddyModelsForTests(() => ({ ok: false, error: "empty", detail: "anonymous" }));
+  setFetchCodeBuddyModelsForTests(() => ({ ok: false, error: "empty" }));
   const warn = spyOn(console, "warn").mockImplementation(() => {});
   try {
     clearModelCache();
