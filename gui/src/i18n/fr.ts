@@ -1879,6 +1879,8 @@ export const fr: Record<TKey, string> = {
   "nav.openMenu": "Ouvrir le menu",
   "nav.closeMenu": "Fermer le menu",
   "nav.goHome": "Aller au tableau de bord",
+  "nav.collapseSidebar": "Replier la barre latérale",
+  "nav.expandSidebar": "Déplier la barre latérale",
   "pws.refreshAllQuotas": "Actualiser tous les quotas",
   "pws.quotaRefreshDone": "Vérification des quotas terminée",
   "integrations.subtitle": "Connectez des clients à opencodex, gérez les identifiants et restaurez la configuration des clients.",

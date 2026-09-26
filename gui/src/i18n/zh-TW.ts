@@ -1566,6 +1566,8 @@ export const zhTW: Record<TKey, string> = {
   "nav.openMenu": "開啟選單",
   "nav.closeMenu": "關閉選單",
   "nav.goHome": "前往儀表板",
+  "nav.collapseSidebar": "收合側邊欄",
+  "nav.expandSidebar": "展開側邊欄",
   "pws.refreshAllQuotas": "重新整理所有額度",
   "pws.quotaRefreshDone": "額度檢查完成",
   "codexAuth.mainAccount": "主帳號",

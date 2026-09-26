@@ -1906,6 +1906,8 @@ export const en = {
   "nav.openMenu": "Open menu",
   "nav.closeMenu": "Close menu",
   "nav.goHome": "Go to dashboard",
+  "nav.collapseSidebar": "Collapse sidebar",
+  "nav.expandSidebar": "Expand sidebar",
   "pws.refreshAllQuotas": "Refresh all quotas",
   "pws.quotaRefreshDone": "Quota check complete",
   "integrations.subtitle": "Connect clients to opencodex, manage credentials, and restore client configuration.",

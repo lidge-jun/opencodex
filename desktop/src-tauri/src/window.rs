@@ -256,4 +256,41 @@ mod tests {
                 .expect("default capability is JSON");
         assert!(default.get("remote").is_none());
     }
+
+    /// The overlay title bar is moved and zoomed from the page: the dashboard's top strips call
+    /// `plugin:window|start_dragging` and `plugin:window|toggle_maximize` from the loopback
+    /// origin, and the bundled pages do the same from the app origin. The grants are pinned to
+    /// the `main` window and to exactly the two commands each origin needs.
+    #[test]
+    fn the_titlebar_commands_are_granted_on_each_origin() {
+        let titlebar: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/dashboard-titlebar.json"))
+                .expect("dashboard-titlebar capability is JSON");
+        assert_eq!(titlebar["windows"], serde_json::json!(["main"]));
+        assert_eq!(
+            titlebar["remote"]["urls"],
+            serde_json::json!(["http://127.0.0.1:*"])
+        );
+        assert_eq!(
+            titlebar["permissions"],
+            serde_json::json!([
+                "core:window:allow-start-dragging",
+                "core:window:allow-toggle-maximize"
+            ])
+        );
+
+        let default: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json"))
+                .expect("default capability is JSON");
+        let permissions = default["permissions"].as_array().expect("permissions list");
+        for permission in [
+            "core:window:allow-start-dragging",
+            "core:window:allow-toggle-maximize",
+        ] {
+            assert!(
+                permissions.contains(&serde_json::json!(permission)),
+                "default capability grants {permission}"
+            );
+        }
+    }
 }

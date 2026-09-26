@@ -27,6 +27,18 @@ on macOS and Linux Tauri injects a keydown polyfill that calls `set_webview_zoom
 is loaded, including the loopback dashboard. `capabilities/dashboard-zoom.json` grants that single
 command to the main window for `http://127.0.0.1:*`, and a test in `window.rs` pins its shape.
 
+The main window carries an integrated title bar on macOS: the builder sets
+`TitleBarStyle::Overlay` with `hidden_title`, so the webview draws to the top of the window and
+the traffic lights land inside it at a fixed `traffic_light_position`. The layout that receives
+them is the GUI's: the dashboard keeps a top strip across the sidebar and the main area, reserves
+the lights' inset on macOS only, and moves or zooms the window through `plugin:window` commands.
+`capabilities/dashboard-titlebar.json` grants `start_dragging` and `toggle_maximize` to `main`
+for the loopback origin, the same test pins it, and `capabilities/default.json` grants the pair
+on the app origin because the bundled bootstrap and update pages draw their own matching strip —
+a page with an overlay title bar and no strip cannot be dragged or zoomed at all. Windows and
+Linux keep the native title bar: the shell ships no min/max/close widgets of its own, and the
+sidebar-top layout applies unchanged beneath it.
+
 ## Startup, quit and the tray
 
 The window is created and shown before anything is registered, resolved, probed or started, and

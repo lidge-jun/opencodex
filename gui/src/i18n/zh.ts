@@ -1376,6 +1376,8 @@ export const zh: Record<TKey, string> = {
   "nav.openMenu": "打开菜单",
   "nav.closeMenu": "关闭菜单",
   "nav.goHome": "前往仪表板",
+  "nav.collapseSidebar": "收起侧边栏",
+  "nav.expandSidebar": "展开侧边栏",
   "pws.refreshAllQuotas": "刷新全部额度",
   "pws.quotaRefreshDone": "额度检查完成",
   "integrations.subtitle": "将客户端连接到 opencodex，管理凭据并恢复客户端配置。",
