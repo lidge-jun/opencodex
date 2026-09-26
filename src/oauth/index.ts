@@ -1764,7 +1764,7 @@ export interface OAuthAccountSummary {
  * the config at its request boundary and resolves the policy there with `emailMaskingEnabled`.
  * The default masks, so every existing caller keeps today's behaviour.
  */
-export function getLoginStatus(provider: string, maskEmails = true): { loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
+export function getLoginStatus(provider: string, maskEmails = true): { url?: string; deviceCode?: string; instructions?: string; loggedIn: boolean; email?: string; source?: OAuthCredentials["source"]; error?: string; done: boolean; activeAccountId?: string; accounts?: OAuthAccountSummary[] } {
   const cred = getCredential(provider);
   const st = loginState.get(provider);
   const set = getAccountSet(provider);
@@ -1795,6 +1795,7 @@ export function getLoginStatus(provider: string, maskEmails = true): { loggedIn:
     source: cred?.source,
     error: st?.error,
     done: st?.done ?? false,
+    ...(!st?.done ? st?.hint : undefined),
     ...(set ? { activeAccountId: set.activeAccountId, accounts } : {}),
   };
 }
@@ -1849,6 +1850,8 @@ export async function startLoginFlow(
     let urlResolved = false;
     const ctrl: OAuthController = {
       onAuth: ({ url, instructions, deviceCode }) => {
+        if (loginAbort.get(provider)?.controller !== abort) return;
+        loginState.set(provider, { done: false, hint: { url, instructions, deviceCode } });
         urlResolved = true;
         resolve({ url, instructions, deviceCode });
       },

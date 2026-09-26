@@ -3,7 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { LanguageProvider } from "../src/i18n/provider";
-import { LoginUrlBlock } from "../src/components/login-url-block";
+import { LoginHint, LoginUrlBlock } from "../src/components/login-url-block";
 
 /**
  * Contract for the shared OAuth login-URL block. It owns the copy state for
@@ -176,4 +176,19 @@ test("renders nothing without a URL", async () => {
 
   expect(host.querySelector(".login-url-block")).toBeNull();
   expect(host.textContent).not.toContain("Copy link");
+});
+
+test("device hints hide callback paste until the flow switches to manual input", async () => {
+  const { createRoot } = await import("react-dom/client");
+  const paste = { value: "", busy: false, message: "", ok: true, onChange: () => {}, onSubmit: () => {} };
+  for (const deviceCode of ["ABCD-EFGH", undefined]) {
+    await act(async () => {
+      root ??= createRoot(host);
+      root.render(<LanguageProvider><LoginHint hint={{ url: URL_A, deviceCode, instructions: "Approve in browser" }} paste={paste} /></LanguageProvider>);
+    });
+    expect(host.textContent).toContain(URL_A);
+    expect(host.textContent).toContain("Approve in browser");
+    expect(host.querySelector("input") !== null).toBe(!deviceCode);
+    if (deviceCode) expect(host.textContent).toContain(deviceCode);
+  }
 });

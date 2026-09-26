@@ -73,3 +73,32 @@ describe("POST /api/oauth/login browser opening", () => {
     expect(body.deviceCode).toBeUndefined();
   });
 });
+
+test("login status replaces live hints and ignores hints from cancelled flows", async () => {
+  const oauth = await import("../../src/oauth");
+  const controllers: import("../../src/oauth/types").OAuthController[] = [];
+  const pending = Promise.withResolvers<never>();
+  const first = { url: "https://example.test/device", deviceCode: "ABCD-EFGH", instructions: "Approve code" };
+  const login = spyOn(oauth.OAUTH_PROVIDERS["meta-muse"]!, "login").mockImplementation(async ctrl => {
+    controllers.push(ctrl);
+    ctrl.onAuth?.(first);
+    return pending.promise;
+  });
+  try {
+    await oauth.startLoginFlow("meta-muse");
+    expect(oauth.getLoginStatus("meta-muse")).toMatchObject(first);
+    controllers[0]!.onAuth?.({ url: "", instructions: "Paste the fallback key" });
+    expect(oauth.getLoginStatus("meta-muse")).toMatchObject({ url: "", instructions: "Paste the fallback key" });
+    expect(oauth.getLoginStatus("meta-muse").deviceCode).toBeUndefined();
+    oauth.cancelLoginFlow("meta-muse");
+    expect(oauth.getLoginStatus("meta-muse").instructions).toBeUndefined();
+    await oauth.startLoginFlow("meta-muse");
+    controllers[0]!.onAuth?.({ url: "https://example.test/stale" });
+    expect(oauth.getLoginStatus("meta-muse")).toMatchObject(first);
+  } finally {
+    oauth.clearLoginState("meta-muse");
+    pending.reject(new Error("test cleanup"));
+    login.mockRestore();
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+});

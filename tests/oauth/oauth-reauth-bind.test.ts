@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync} from "node:fs";
 import { join } from "node:path";
-import { OAUTH_PROVIDERS, runLogin } from "../../src/oauth";
+import { OAUTH_PROVIDERS, runLogin, startLoginFlow, getLoginStatus, clearLoginState } from "../../src/oauth";
 import { getAccountCredential, getAccountSet, saveCredential } from "../../src/oauth/store";
 import type { OAuthController, OAuthCredentials } from "../../src/oauth/types";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -309,3 +309,27 @@ describe("OAuth account-scoped reauth", () => {
   });
 });
 import { ManagementRequest as Request } from "../helpers/management-auth";
+
+test("device approval persists the account and clears its hint without callback input", async () => {
+  const original = OAUTH_PROVIDERS["meta-muse"]!.login;
+  const approved = Promise.withResolvers<OAuthCredentials>();
+  const settled = Promise.withResolvers<void>();
+  OAUTH_PROVIDERS["meta-muse"]!.login = async ctrl => {
+    ctrl.onAuth?.({ url: "https://example.test/device", deviceCode: "ABCD-EFGH", instructions: "Approve code" });
+    return approved.promise;
+  };
+  try {
+    await startLoginFlow("meta-muse", undefined, { onSettled: () => { settled.resolve(); } });
+    expect(getLoginStatus("meta-muse").done).toBe(false);
+    approved.resolve({ access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 3600000, source: "oauth", email: "device@example.test" });
+    await settled.promise;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(getLoginStatus("meta-muse")).toMatchObject({ done: true, loggedIn: true });
+    expect(getLoginStatus("meta-muse").deviceCode).toBeUndefined();
+    expect(getLoginStatus("meta-muse").url).toBeUndefined();
+    expect(getAccountSet("meta-muse")?.accounts).toHaveLength(1);
+  } finally {
+    clearLoginState("meta-muse");
+    OAUTH_PROVIDERS["meta-muse"]!.login = original;
+  }
+});

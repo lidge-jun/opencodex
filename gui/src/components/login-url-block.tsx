@@ -119,7 +119,7 @@ export function LoginHint({ hint, paste }: { hint: LoginHintData; paste?: LoginH
       )}
       <LoginUrlBlock url={url} />
       {hint.instructions && <div className="muted text-label">{hint.instructions}</div>}
-      {paste && (
+      {paste && !deviceCode && (
         <div className="login-hint-paste">
           <div className="muted text-label">{t("prov.pasteRedirectHint")}</div>
           <div className="login-hint-paste-row">

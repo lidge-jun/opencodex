@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { TFn } from "../i18n/shared";
+import type { LoginHintData } from "./login-url-block";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
@@ -123,15 +124,20 @@ export function useAddProviderOAuth({
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current || !isCurrent()) return;
         const sRes = await fetch(`${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
-        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string }>(sRes) : null;
+        const s = sRes ? await readJsonIfOk<LoginHintData & { loggedIn?: boolean; done?: boolean; error?: string }>(sRes) : null;
         if (!aliveRef.current || !isCurrent()) return;
+        if (s) {
+          setOauthUrl(s.url ?? "", providerId, s.deviceCode, s.instructions);
+          if (!s.done && !s.error) setOauthMsg(s.url || s.deviceCode
+            ? t("modal.waitingLogin") : (s.instructions || t("modal.loggingIn")));
+        }
         if (s?.error) {
           activeProvidersRef.current.delete(providerId);
           setOauthMsgTone("warn");
           setOauthMsg(t("modal.loginError", { error: s.error }));
           return;
         }
-        if (s?.loggedIn) {
+        if (s?.loggedIn && s.done !== false) {
           activeProvidersRef.current.delete(providerId);
           onAdded(providerId);
           return;
@@ -150,7 +156,10 @@ export function useAddProviderOAuth({
         setOauthMsg(t("modal.networkError"));
       }
     } finally {
-      if (aliveRef.current && isCurrent()) setOauthBusy(false);
+      if (aliveRef.current && isCurrent()) {
+        setOauthBusy(false);
+        setOauthUrl("", providerId);
+      }
     }
   }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, onAdded, t]);
 

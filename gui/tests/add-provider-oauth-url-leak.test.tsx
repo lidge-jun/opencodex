@@ -754,3 +754,30 @@ for (const surface of ["providers", "modal"] as const) {
     }
   });
 }
+
+test("modal polling replaces device hints, restores manual fallback, and settles automatically", async () => {
+  const server = raceServer();
+  const settled: string[] = [];
+  try {
+    await mountRaceSurface("modal", settled);
+    await act(async () => { server.logins[0]!.resolve(Response.json({ url: A_URL, deviceCode: "FIRST-CODE", instructions: "Approve first" })); });
+    expect(host.textContent).toContain("FIRST-CODE");
+    expect(host.querySelector(".login-hint-paste")).toBeNull();
+    server.holdStatus(Promise.resolve(Response.json({ loggedIn: true, done: false, url: B_URL, deviceCode: "NEXT-CODE", instructions: "Approve next" })));
+    await server.tick();
+    expect(settled).toEqual([]);
+    expect(host.textContent).toContain("NEXT-CODE");
+    expect(host.textContent).toContain("Approve next");
+    expect(host.textContent).not.toContain("FIRST-CODE");
+    expect(host.textContent).not.toContain(A_URL);
+    server.holdStatus(Promise.resolve(Response.json({ loggedIn: false, done: false, url: "", instructions: "Use manual fallback" })));
+    await server.tick();
+    expect(host.textContent).not.toContain("NEXT-CODE");
+    expect(host.textContent).not.toContain(B_URL);
+    expect(host.textContent).toContain("Use manual fallback");
+    expect(host.querySelector(".login-hint-paste")).not.toBeNull();
+    server.holdStatus(undefined);
+    await server.finish();
+    expect(settled).toEqual(["claude"]);
+  } finally { await server.dispose(); }
+});

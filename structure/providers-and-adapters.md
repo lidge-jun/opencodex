@@ -13,6 +13,10 @@ device login, add-account and reauthentication. This principal is not a checkbox
 forged GUI headers and raw management credentials do not substitute for it. Direct CLI login
 and other OAuth providers retain their existing policies. `src/oauth/meta-muse-device.ts`
 cancels unparsed authorization/mint failures, including mint429, without reflecting their bodies.
+`src/oauth/login-flow-state.ts` retains the current flow-owned `onAuth` hint;
+`getLoginStatus` in `src/oauth/index.ts` exposes its URL, human-readable device code and
+instructions only while active. Every hint replaces the previous one, and cancellation or
+settlement discards it. Late hints from a superseded flow cannot overwrite current state.
 
 The capture-only bridge in `src/adapters/coding-agent/turn.ts` reports staging failures with
 the fixed `tool_bridge_setup_failed` error, never an OS error carrying private file paths.

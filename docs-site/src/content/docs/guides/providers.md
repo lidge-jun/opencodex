@@ -755,7 +755,11 @@ material off it. Muse Spark is also reachable through resellers, with a narrower
 
 **Meta Muse Code (`meta-muse`).** A plain macOS login first tries the API key already
 stored by `muse login`. With no local credential, or on another platform, it starts the
-browser device-approval flow. Add-account and reauthentication skip local import to avoid
+browser device-approval flow. The dashboard shows the verification URL, human-readable
+device code, and current provider instructions. Approve the code in the browser; OpenCodex
+keeps polling and saves the account automatically, with no callback paste required.
+The paste field stays hidden while a device code is active, and cancellation clears the hint.
+Add-account and reauthentication skip local import to avoid
 reusing the account being replaced. OpenCodex never launches the Muse CLI. If device login
 fails without cancellation, an available manual-input surface can accept a pasted key;
 that key faces the same format and Model API validation as an imported key. See

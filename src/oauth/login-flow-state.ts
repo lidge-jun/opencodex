@@ -1,3 +1,4 @@
+import type { OAuthController } from "./types";
 import { parseCallbackInput } from "./callback-server";
 import { retainedUtf8Bytes } from "../lib/admission";
 import type { GenerationContext } from "../lib/state-store-sweeper";
@@ -10,7 +11,7 @@ import type { GenerationContext } from "../lib/state-store-sweeper";
  * a login that has started and not yet settled, and none of it reads or writes a stored
  * credential. `index.ts` re-exports the two public names, so existing importers are unaffected.
  */
-export const loginState = new Map<string, { error?: string; done: boolean }>();
+export const loginState = new Map<string, { error?: string; done: boolean; hint?: Parameters<NonNullable<OAuthController["onAuth"]>>[0] }>();
 export const loginAbort = new Map<string, { controller: AbortController; flowId?: string }>();
 export const kiroLoginSettling = new Set<string>();
 
