@@ -44,6 +44,7 @@ import {
 } from "../../responses/namespace-tool-compat";
 import { restoreRoutedCustomCalls, RoutedCustomToolCompatError } from "../../responses/custom-tool-compat";
 import { XaiToolSchemaCompatibilityError } from "../../adapters/xai-tool-schema";
+import { MuseToolChoiceCompatibilityError } from "../../adapters/openai-responses/muse-tool-choice";
 import { formatErrorResponse } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
 import {
@@ -337,6 +338,7 @@ export async function preparePassthroughExchange(
         error instanceof NamespaceToolCollisionError
         || error instanceof XaiToolSchemaCompatibilityError
         || error instanceof RoutedCustomToolCompatError
+        || error instanceof MuseToolChoiceCompatibilityError
       ) {
         return formatErrorResponse(400, "invalid_request_error", redactSecretString(error.message));
       }

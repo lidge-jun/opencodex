@@ -118,7 +118,7 @@ echoed bare name to its namespaced identity before authorizing anything
 echo is a guess rather than a nomination. The bridges check the declared set before consulting
 `toolNsMap`, so there a bare helper echo is refused either way. A genuine namespace-free
 declaration is untouched throughout: that is the caller declaring the tool, not a namespace being
-discarded to manufacture a bare name.
+discarded to manufacture a bare name. Meta Responses also applies [tool-selection compatibility](../providers-and-adapters.md#meta-responses-tool-selection).
 
 Function-call wrappers around freeform bodies are restored by
 `src/responses/apply-patch-envelope.ts`. The declared `input` field is authoritative. For bare

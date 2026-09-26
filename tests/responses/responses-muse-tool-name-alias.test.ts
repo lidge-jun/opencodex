@@ -281,7 +281,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       return [JSON.parse(data) as Record<string, unknown>];
     });
 
-  test("non-stream function_call and tool_choice restore the original MCP name", async () => {
+  test("non-stream function_call restores the original MCP name", async () => {
     const savedFetch = globalThis.fetch;
     let outbound: Record<string, unknown> | undefined;
     globalThis.fetch = (async (_input, init) => {
@@ -289,7 +289,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
       return new Response(JSON.stringify({
         id: "resp_json",
         status: "completed",
-        tool_choice: { type: "function", name: wire },
+        tool_choice: "auto",
         output: [{ type: "function_call", name: wire, call_id: "c1", arguments: "{\"q\":\"x\"}" }],
       }), { headers: { "content-type": "application/json" } });
     }) as typeof fetch;
@@ -303,14 +303,14 @@ describe("muse tool-name inbound restore through handleResponses", () => {
           stream: false,
           input: "search",
           tools: [{ type: "function", name: original, parameters: { type: "object" } }],
-          tool_choice: { type: "function", name: original },
+          tool_choice: "auto",
         }),
       }), config, { model: "", provider: "" });
-      const json = await response.json() as { output: Array<Record<string, unknown>>; tool_choice?: { name: string } };
+      const json = await response.json() as { output: Array<Record<string, unknown>>; tool_choice?: string };
       expect((outbound?.tools as Array<{ name: string }>)[0]!.name).toBe(wire);
-      expect((outbound?.tool_choice as { name: string }).name).toBe(wire);
+      expect(outbound?.tool_choice).toBe("auto");
       expect(json.output[0]).toMatchObject({ type: "function_call", name: original });
-      expect(json.tool_choice?.name).toBe(original);
+      expect(json.tool_choice).toBe("auto");
     } finally {
       globalThis.fetch = savedFetch;
     }
@@ -348,75 +348,75 @@ describe("muse tool-name inbound restore through handleResponses", () => {
     }
   });
 
-  for (const selectorKind of ["named", "allowed_tools"] as const) {
-    test(`sparse terminal reconstruction keeps the restored identity for ${selectorKind}`, async () => {
-      const savedFetch = globalThis.fetch;
-      let outbound: Record<string, unknown> | undefined;
-      const itemId = "fc_sparse";
-      const callId = "call_sparse";
-      globalThis.fetch = (async (_input, init) => {
-        outbound = JSON.parse(String(init?.body)) as Record<string, unknown>;
-        const choice = outbound.tool_choice as Record<string, unknown>;
-        const wireName = selectorKind === "named"
-          ? choice.name as string
-          : ((choice.tools as Array<{ name: string }>)[0]!.name);
-        const item = {
-          type: "function_call",
-          id: itemId,
-          call_id: callId,
-          name: wireName,
-          arguments: "{}",
-          status: "completed",
-        };
-        const upstream = [
-          frame("response.output_item.done", { output_index: 0, item }),
-          frame("response.completed", { response: { id: "resp_sparse", status: "completed", output: [] } }),
-          "data: [DONE]",
-        ].join("\n\n") + "\n\n";
-        return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
-      }) as typeof fetch;
-      try {
-        takeSpendHome();
-        const toolChoice = selectorKind === "named"
-          ? { type: "function", name: original }
-          : { type: "allowed_tools", mode: "required", tools: [{ type: "function", name: original }] };
-        const response = await handleResponses(new Request("http://localhost/v1/responses", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            model: "fixture/muse-spark-1.3",
-            stream: true,
-            input: "search",
-            tools: [{ type: "function", name: original, parameters: { type: "object" } }],
-            tool_choice: toolChoice,
-          }),
-        }), config, { model: "", provider: "", surface: "grok" });
-        const outboundChoice = outbound?.tool_choice as Record<string, unknown>;
-        const wireName = selectorKind === "named"
-          ? outboundChoice.name as string
-          : ((outboundChoice.tools as Array<{ name: string }>)[0]!.name);
-        expect(wireName).not.toBe(original);
-        expect((outbound?.tools as Array<{ name: string }>)[0]!.name).toBe(wireName);
+  test("sparse terminal reconstruction keeps the restored identity with auto selection", async () => {
+    const savedFetch = globalThis.fetch;
+    let outbound: Record<string, unknown> | undefined;
+    const itemId = "fc_sparse";
+    const callId = "call_sparse";
+    globalThis.fetch = (async (_input, init) => {
+      outbound = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      const wireName = (outbound.tools as Array<{ name: string }>)[0]!.name;
+      const item = {
+        type: "function_call",
+        id: itemId,
+        call_id: callId,
+        name: wireName,
+        arguments: "{}",
+        status: "completed",
+      };
+      const upstream = [
+        frame("response.output_item.done", { output_index: 0, item }),
+        frame("response.completed", { response: { id: "resp_sparse", status: "completed", output: [] } }),
+        "data: [DONE]",
+      ].join("\n\n") + "\n\n";
+      return new Response(upstream, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    try {
+      takeSpendHome();
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "fixture/muse-spark-1.3",
+          stream: true,
+          input: "search",
+          tools: [{ type: "function", name: original, parameters: { type: "object" } }],
+          tool_choice: "auto",
+        }),
+      }), config, { model: "", provider: "", surface: "grok" });
+      const wireName = (outbound?.tools as Array<{ name: string }>)[0]!.name;
+      expect(wireName).not.toBe(original);
+      expect((outbound?.tools as Array<{ name: string }>)[0]!.name).toBe(wireName);
 
-        const terminal = ssePayloads(await response.text())
-          .find(payload => payload.type === "response.completed");
-        expect(terminal).toBeDefined();
-        expect((terminal!.response as { output: unknown[] }).output).toEqual([expect.objectContaining({
-          type: "function_call",
-          id: itemId,
-          call_id: callId,
-          name: original,
-        })]);
-      } finally {
-        globalThis.fetch = savedFetch;
-      }
-    });
-  }
+      const terminal = ssePayloads(await response.text())
+        .find(payload => payload.type === "response.completed");
+      expect(terminal).toBeDefined();
+      expect((terminal!.response as { output: unknown[] }).output).toEqual([expect.objectContaining({
+        type: "function_call",
+        id: itemId,
+        call_id: callId,
+        name: original,
+      })]);
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
+  });
 
-  test("sparse terminal reconstruction still refuses an unselected aliased tool", async () => {
+  test("non-Meta named selection still refuses an unselected tool", async () => {
     const savedFetch = globalThis.fetch;
     const selected = original;
     const unselected = "mcp__plugin_android-emulator_android-emulator__android_install_app";
+    const nonMetaConfig = {
+      ...config,
+      providers: {
+        fixture: {
+          adapter: "openai-responses",
+          baseUrl: "https://api.x.ai/v1",
+          authMode: "key",
+          apiKey: "test-key",
+        },
+      },
+    } as OcxConfig;
     globalThis.fetch = (async (_input, init) => {
       const outbound = JSON.parse(String(init?.body)) as Record<string, unknown>;
       const selectedWire = (outbound.tool_choice as { name: string }).name;
@@ -452,7 +452,7 @@ describe("muse tool-name inbound restore through handleResponses", () => {
           ],
           tool_choice: { type: "function", name: selected },
         }),
-      }), config, { model: "", provider: "", surface: "grok" });
+      }), nonMetaConfig, { model: "", provider: "", surface: "grok" });
       const terminal = ssePayloads(await response.text())
         .find(payload => payload.type === GROK_REFUSED_TERMINAL_EVENT_TYPE);
       expect(terminal).toBeDefined();

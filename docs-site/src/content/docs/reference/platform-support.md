@@ -59,6 +59,12 @@ offers an input surface. Pasted keys use the same format and Model API validatio
 as imported ones. Management login requires a dashboard session before either
 credential-acquisition path; see the [provider guide](/guides/providers/).
 
+For Responses requests to Meta, omitted or `auto` tool selection is supported.
+Explicit `none` sends `tools: []` and removes `additional_tools` items from the
+input. Forced, named, and `allowed_tools` selections return HTTP 400 before the
+request reaches Meta because Muse accepts only `auto`. Other Responses
+destinations keep their existing tool-selection behavior.
+
 ## Windows notes
 
 The Windows service can run under Task Scheduler or as a native WinSW service,
