@@ -18,11 +18,12 @@ import type { NativeResponseControl } from "./native-response-control";
 import { compareBunVersions } from "../../lib/bun-stream-caps";
 import { resolveProxyRoute, socks5ProxyFromEnv } from "../../lib/proxy-env";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
-import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, prepareCodexHttpInit, prepareCodexWsRequest } from "./codex-ws-request";
+import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, CODEX_WS_FRAME_HEADERS, prepareCodexHttpInit, prepareCodexWsRequest } from "./codex-ws-request";
 import { codexWsExchange } from "./codex-ws-exchange";
 import { CodexWsSession } from "./codex-ws-session";
 import { codexWsPool, codexWsReuseIdentity } from "./codex-ws-pool";
 import { codexWsCreateFrameExceedsLimit } from "./codex-ws-wire";
+import { isLoopbackUrl, rewriteWebSocketDial } from "../../plugins/upstream-hooks";
 export { CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS, MAX_CODEX_WS_FRAME_BYTES, MAX_CODEX_WS_QUEUE_BYTES,
   MAX_CODEX_WS_CREATE_FRAME_BYTES, CODEX_WS_CREATE_FRAME_LIMIT_BYTES, codexWsCreateFrameExceedsLimit,
   isCodexWsQuotaObservedResponse, isCodexWsUpstreamResponse } from "./codex-ws-wire";
@@ -79,6 +80,40 @@ export function bunSupportsBoundedCodexWsRelay(
   if (/^\d+\.\d+\.\d+-/.test(version.trim())) return false;
   const comparison = compareBunVersions(version, MIN_BOUNDED_CODEX_WS_BUN_VERSION);
   return comparison !== null && comparison >= 0;
+}
+
+/**
+ * Apply plugin rewrites to one Codex WebSocket dial and settle its proxy. `proxy` was resolved
+ * for the canonical `wsUrl`. A loopback rewrite dials directly; any other rewrite gets its own
+ * route (scheme and `NO_PROXY` may differ). Null means the rewritten destination needs the SSE
+ * fallback, exactly as an unusable route for the canonical URL does.
+ */
+export function planCodexWsDial(
+  wsUrl: string,
+  headers: Record<string, string>,
+  proxy: string | undefined,
+  env: Parameters<typeof resolveProxyRoute>[1] = process.env,
+): { url: string; headers: Record<string, string>; proxy: string | undefined } | null {
+  const rewritten = rewriteWebSocketDial(wsUrl, headers, proxy);
+  // Per-turn headers ride in each frame's client_metadata, which was prepared before the rewrite
+  // and is authoritative; a pooled socket's upgrade copy is intentionally ignored. A rewriter
+  // therefore cannot change them here, and the upgrade keeps the values the frame carries.
+  const dialHeaders = { ...rewritten.headers };
+  for (const name of CODEX_WS_FRAME_HEADERS) {
+    if (Object.hasOwn(headers, name)) dialHeaders[name] = headers[name]!;
+    else delete dialHeaders[name];
+  }
+  const dial = { ...rewritten, headers: dialHeaders };
+  if (dial.url === wsUrl || isLoopbackUrl(dial.url)) return dial;
+  let destination: URL;
+  try {
+    destination = new URL(dial.url);
+  } catch {
+    return null;
+  }
+  const route = resolveProxyRoute(destination, env);
+  if (route.kind === "fallback") return null;
+  return { ...dial, proxy: route.kind === "proxy" ? route.proxy : undefined };
 }
 
 export function shouldUseCodexWsUpstream(
@@ -176,9 +211,14 @@ export function codexWsUpstreamFetch(
   try {
     // Steering keeps a private physical connection across successor responses; it
     // must never enter the idle-socket pool or move to a different credential.
-    const identity = control ? null : codexWsReuseIdentity(url, headers, frameText, proxy);
-    session = (identity ? codexWsPool.acquire(identity, wsUrl, headers, proxy) : null)
-      ?? new CodexWsSession(wsUrl, headers, false, undefined, proxy);
+    // Plugin rewrite runs per exchange, before the pool lookup. The dialled destination, its
+    // headers and its proxy are all part of the reuse identity, so a pooled socket is never
+    // reused for a different destination or with stale plugin headers.
+    const dial = planCodexWsDial(wsUrl, headers, proxy);
+    if (!dial) return sseFallback(url, init);
+    const identity = control ? null : codexWsReuseIdentity(url, dial.headers, frameText, dial.proxy, dial.url);
+    session = (identity ? codexWsPool.acquire(identity, dial.url, dial.headers, dial.proxy) : null)
+      ?? new CodexWsSession(dial.url, dial.headers, false, undefined, dial.proxy);
     if (!session.busy && !session.reserve()) {
       session.dispose();
       return sseFallback(url, init);
