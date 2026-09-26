@@ -12,6 +12,7 @@
  * the pool needs those two answers to decide how long to cool a 429'd account.
  */
 import { getValidAccessSnapshotForAccount } from "../oauth";
+import { KIRO_BUILDER_ID_SERVICE_PROFILE_ARN } from "../adapters/kiro-constants";
 import type { ProviderQuota, ProviderQuotaWindow } from "./quota-types";
 import {
   ACCOUNT_QUOTA_TTL_MS,
@@ -82,7 +83,10 @@ function safeRegion(value: string | undefined): string | undefined {
  * the SSO session that minted the token.
  */
 function usageRegion(ctx: KiroUsageContext): string {
-  return safeRegion(ctx.profileArn?.split(":")[3])
+  // The Builder ID service profile is Amazon's fixed us-east-1 ARN, not the account's own, so it
+  // must not pin the region the same way kiro-constants.ts forbids for the runtime path.
+  const arnRegion = ctx.profileArn === KIRO_BUILDER_ID_SERVICE_PROFILE_ARN ? undefined : ctx.profileArn?.split(":")[3];
+  return safeRegion(arnRegion)
     ?? safeRegion(ctx.apiRegion)
     ?? safeRegion(ctx.ssoRegion)
     ?? "us-east-1";
@@ -210,7 +214,14 @@ export async function kiroUsageContextForAccount(accountId: string): Promise<Kir
   return {
     accountId,
     access: snapshot.accessToken,
-    ...(snapshot.kiro?.profileArn ? { profileArn: snapshot.kiro.profileArn } : {}),
+    // Builder ID accounts never get an account-scoped ARN, and GetUsageLimits rejects a missing one
+    // with 400 "Invalid profileArn". Send the same request-scoped service profile the runtime path
+    // sends (resolveKiroRequestProfile), so pooled Builder ID accounts report usage at all.
+    ...(snapshot.kiro?.profileArn
+      ? { profileArn: snapshot.kiro.profileArn }
+      : snapshot.kiro?.authType === "aws_sso_oidc"
+        ? { profileArn: KIRO_BUILDER_ID_SERVICE_PROFILE_ARN }
+        : {}),
     ...(snapshot.kiro?.apiRegion ? { apiRegion: snapshot.kiro.apiRegion } : {}),
     ...(snapshot.kiro?.ssoRegion ? { ssoRegion: snapshot.kiro.ssoRegion } : {}),
   };
