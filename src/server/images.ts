@@ -746,7 +746,25 @@ export async function handleImages(
     for (const [name, value] of forward.headers) headers[name] = value;
     // The ChatGPT codex backend takes bare paths (matches the adapter's `${baseUrl}/responses`).
     url = `${provider.baseUrl}/images/${endpoint}`;
-    validateForwardAdmissionCredential(new Headers(headers), config);
+    try {
+      validateForwardAdmissionCredential(new Headers(headers), config);
+    } catch (err) {
+      try {
+        forward.releaseProbeLease?.();
+      } catch {}
+      if (err instanceof ForwardAdmissionCredentialError) {
+        return formatErrorResponse(
+          500,
+          "internal_error",
+          "proxy admission secret cannot be forwarded upstream",
+        );
+      }
+      return formatErrorResponse(
+        500,
+        "internal_error",
+        "image generation request failed forward credential validation",
+      );
+    }
   } else if (forwardAuthError) {
     // Before surfacing the OpenAI auth failure, try CCA — the user may have a
     // valid Google Antigravity login even though their OpenAI pool is broken.

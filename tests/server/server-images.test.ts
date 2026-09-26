@@ -8,7 +8,7 @@ import { existsSync, mkdirSync} from "node:fs";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { clearAccountNeedsReauth, clearAccountQuota } from "../../src/codex/auth-api";
-import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth } from "../../src/codex/routing";
+import { clearCodexUpstreamHealth, clearThreadAccountMap, getCodexUpstreamHealth, recordCodexUpstreamOutcome } from "../../src/codex/routing";
 import { loadConfig, saveConfig } from "../../src/config";
 import { clearKeyCooldowns, rotateKeyOn429 } from "../../src/providers/key-failover";
 import { selectImagesProvider } from "../../src/providers/openai-sidecar";
@@ -1731,38 +1731,41 @@ test("proxy admission bearer with pool forward candidate routes to OpenAI using 
   }
 });
 
-test("proxy admission bearer with only direct forward candidate skips forward and falls back safely", async () => {
-  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-secret-dir";
+test("proxy admission bearer with pool auth failure surfaces pool error without falling back to keyed provider", async () => {
+  process.env.OPENCODEX_API_AUTH_TOKEN = "proxy-secret-pool";
   const captured: CapturedRequest[] = [];
   const upstream = fakeImagesUpstream(captured);
-  // Default canonicalOpenAiProvider has accountMode direct and no pool accounts configured
   saveConfig({
     port: 0,
     hostname: "0.0.0.0",
     defaultProvider: "openai",
     openaiProviderTierVersion: 2,
     providers: {
-      openai: canonicalOpenAiProvider,
+      openai: { ...canonicalOpenAiProvider, codexAccountMode: "pool" },
       "openai-apikey": keyedProvider(upstream.url.toString().replace(/\/$/, "")),
     },
+    codexAccounts: [
+      { id: "main", email: "main@example.test", isMain: true },
+      { id: "pool-a", email: "pool@example.test", isMain: false, chatgptAccountId: "acct-pool-a" },
+    ],
+    // pool-a has NO stored credential, so forward-auth resolution throws CodexAuthContextError.
+    activeCodexAccountId: "pool-a",
   } as OcxConfig);
 
   const server = startServer(0);
   try {
-    // With direct candidate only, forwarding the proxy secret is prohibited, so forward is skipped
-    // and keyedProvider serves the request instead.
     const response = await fetch(`http://127.0.0.1:${server.port}/v1/images/generations`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        authorization: "Bearer proxy-secret-dir",
+        authorization: "Bearer proxy-secret-pool",
       },
       body: JSON.stringify({ prompt: "test prompt", model: "gpt-image-2" }),
     });
-    expect(response.status).toBe(200);
-    expect(captured).toHaveLength(1);
-    expect(captured[0].headers.get("authorization")).toBe("Bearer " + "sk-platform-key");
-    expect([...captured[0].headers.values()].some(v => v.includes("proxy-secret-dir"))).toBe(false);
+    expect(response.status).toBe(401);
+    expect(captured).toHaveLength(0);
+    const json = (await response.json()) as { error: { message: string } };
+    expect(json.error.message).toContain("reauthentication");
   } finally {
     await server.stop(true);
     await upstream.stop(true);
