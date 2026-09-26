@@ -7,7 +7,7 @@
  * backup-and-defaults repair path), and settable alone via PUT (legacy
  * codexAutoStart-only PUTs keep working).
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -307,7 +307,7 @@ describe("settings codexRuntime snapshot", () => {
       const path = join(TEST_DIR, "slow-bin", "codex.cmd");
       writeFileSync(
         path,
-        `@echo off\r\n"%SystemRoot%\System32\ping.exe" -n 3 127.0.0.1 >nul\r\necho codex-cli ${version}\r\n`,
+        `@echo off\r\n"%SystemRoot%\\System32\\ping.exe" -n 3 127.0.0.1 >nul\r\necho codex-cli ${version}\r\n`,
         "utf8",
       );
       return path;
@@ -361,6 +361,49 @@ describe("settings codexRuntime snapshot", () => {
         expect(warm.codexRuntime).toMatchObject({ version: "0.200.0", source: "environment" });
       });
     } finally {
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  }, 30_000);
+
+  test("an expired memo stays observable while its refresh runs, then gives way to the result", async () => {
+    // Catalog gather and convergence read the memo through peek. With the refresh off the
+    // event loop they can now read during it; an expired memo reported as unavailable there
+    // sent gather to the persisted runtime and got convergence's candidate rejected.
+    const {
+      peekCodexRuntimeProcessCache,
+      resetCodexRuntimeResolveCacheForTests,
+      resolveCodexRuntimeAsync,
+    } = await import("../../src/codex/runtime");
+    resetCodexRuntimeResolveCacheForTests();
+    const launcher = slowFakeCodex("0.200.0");
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const clock = spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+    try {
+      await withRuntimeEnv(launcher, async () => {
+        await resolveCodexRuntimeAsync();
+        const first = peekCodexRuntimeProcessCache();
+        expect(first.kind).toBe("available");
+
+        offset = 20_000;
+        expect(peekCodexRuntimeProcessCache().kind).toBe("unavailable");
+
+        const refresh = resolveCodexRuntimeAsync();
+        const during = peekCodexRuntimeProcessCache();
+        expect(during.kind).toBe("available");
+        if (during.kind === "available" && first.kind === "available") {
+          expect(during.valueIdentity).toBe(first.valueIdentity);
+        }
+
+        await refresh;
+        const after = peekCodexRuntimeProcessCache();
+        expect(after.kind).toBe("available");
+        if (after.kind === "available" && first.kind === "available") {
+          expect(after.valueIdentity).not.toBe(first.valueIdentity);
+        }
+      });
+    } finally {
+      clock.mockRestore();
       resetCodexRuntimeResolveCacheForTests();
     }
   }, 30_000);
