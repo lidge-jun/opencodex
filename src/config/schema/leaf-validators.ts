@@ -943,6 +943,7 @@ export const clientConnectionSchema = z.object({
  */
 export const codexPoolSchema = z.object({
   excludedPlans: z.array(z.string().trim().min(1)).optional(),
+  startIdleWindows: z.boolean().optional(),
 }).strict();
 
 /**

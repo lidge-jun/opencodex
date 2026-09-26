@@ -274,6 +274,7 @@ function childEnd(
       const nextSpaces = leadingSpaces(lines[ahead]!.body);
       if (nextSpaces === null) return null;
       if (nextSpaces <= indent) return index;
+      index = ahead - 1;
       continue;
     }
     if (quote === null && isComment(body)) return spaces <= indent ? index : null;

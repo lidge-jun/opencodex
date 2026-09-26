@@ -240,7 +240,7 @@ async function inspectEndpointHttpFailure(
   return { response: rebuilt, fallback: ENDPOINT_ERROR_MARKERS.some(marker => text.includes(marker)) };
 }
 
-async function normalizeFinalKiroHttpError(res: Response, signal?: AbortSignal): Promise<Response> {
+export async function normalizeFinalKiroHttpError(res: Response, signal?: AbortSignal): Promise<Response> {
   return normalizeUpstreamHttpErrorResponse(res, {
     signal,
     formatMessage: payloadText => safeKiroHttpErrorMessage(res.status, res.headers, payloadText),
@@ -339,6 +339,10 @@ export async function fetchKiroWithRetry(request: AdapterRequest, ctx: KiroFetch
 
       const response = await fetchKiroAttempt(request, ctx, timeoutMs, notePhysicalSend);
       const throttle = await inspectKiroThrottle(response, ctx.abortSignal);
+      if (throttle && ctx.kiroPreferAccountFailover) {
+        releaseKiroThrottleProbe(probeToken);
+        return throttle.response;
+      }
       if (!throttle || !throttle.transient) {
         releaseKiroThrottleProbe(probeToken);
         const finalResponse = throttle?.response ?? response;

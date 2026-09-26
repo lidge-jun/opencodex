@@ -10,7 +10,7 @@ import { createTranslatorBudget } from "../../lib/translator-budget";
 import { captureExplicitOpenAiCallerAuth } from "../../providers/openai-sidecar";
 import { captureCallerDirectAuth } from "../../providers/caller-authorization";
 import { createInferenceSendBudget } from "../inference/context";
-import { finalizeOwnedTranslatorBudget } from "./core-lifetime";
+import { finalizeOwnedTranslatorBudget, finalizeAccountLease } from "./core-lifetime";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { executeComboResponses } from "./core-combo";
 import { prepareResponsesRequest } from "./request-prepare";
@@ -43,6 +43,10 @@ export async function handleResponses(
 ): Promise<Response> {
   const ownsBudget = options.translatorBudget === undefined;
   const translatorBudget = options.translatorBudget ?? createTranslatorBudget();
+  const accountLoad = { lease: null as import("../../oauth/kiro-account-load").AccountLease | null };
+  const abortSignal = options.abortSignal ?? req.signal;
+  const release = () => { accountLoad.lease?.release(); accountLoad.lease = null; abortSignal.removeEventListener("abort", release); };
+  abortSignal.addEventListener("abort", release, { once: true });
   try {
     const response = await runWithCompactionRecovery(req, config, logCtx, {
       ...options,
@@ -56,11 +60,15 @@ export async function handleResponses(
       visionDescribeTerminal: options.visionDescribeTerminal === true
         || req.headers.get("x-opencodex-vision-describe") === "1",
       translatorBudget,
+      accountLoad,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
       sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
     }, handleResponsesInner);
-    return ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
+    const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
+    if (!accountLoad.lease) { release(); return finalResponse; }
+    return finalizeAccountLease(finalResponse, release);
   } catch (error) {
+    release();
     if (ownsBudget) translatorBudget.dispose();
     throw error;
   }

@@ -25,6 +25,7 @@ import {
   getValidAccessSnapshotForAccount,
   forceRefreshOAuthAccessSnapshot,
   getValidAccessTokenSnapshot,
+  OAuthLoginRequiredError,
   publicOAuthAuthenticationErrorMessage,
   UnsupportedOAuthProviderError,
 } from "../../oauth";
@@ -34,9 +35,12 @@ import {
   eligibleFailoverAccounts,
   forgetGenericFailoverRoster,
   isGenericFailoverProvider,
+  isProactivePreferenceEnabled,
   preferredInitialAccount,
+  refusalAwareInitialKiroAccount,
   noteGenericPoolSelection,
 } from "../../oauth/generic-account-failover";
+import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-failover";
 import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
 import { expandInferenceOAuthSendBudget } from "../inference/context";
 import { stampOAuthAccountLabel, usesApiKeyAccount } from "../../providers/label";
@@ -72,6 +76,8 @@ import {
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { bindAttemptDeliveryRecorder } from "../../usage/attempt-delivery";
 import { resolvePassiveRouteSubjectId } from "../passive-route-linker";
+import { clientCancelledResponse } from "./core-errors";
+import { acquireAccountLease, KIRO_ACCOUNT_WAIT_MS } from "../../oauth/kiro-account-load";
 
 /** Owns live credential selection and adapter bindings for one request. */
 export async function prepareResponsesTransport(
@@ -88,6 +94,17 @@ export async function prepareResponsesTransport(
 ) {
   const { config, logCtx, options, req } = requestContext;
   const { route, parsed, inboundWire, translatorBudget } = requestState;
+  const rawKiroCap = route.providerName === "kiro" && route.provider.authMode === "oauth"
+    ? config.providers.kiro?.oauthAccountFailover?.maxConcurrentPerAccount : undefined;
+  const kiroCap = typeof rawKiroCap === "number" && Number.isInteger(rawKiroCap)
+    && rawKiroCap >= 1 && rawKiroCap <= 100 ? rawKiroCap : undefined;
+  const kiroLoadEnabled = route.providerName === "kiro" && route.provider.authMode === "oauth"
+    && (kiroCap !== undefined || (config.pool?.kernel === true
+      && config.providers.kiro?.oauthAccountFailover?.strategy === "least-loaded"
+      && isProactivePreferenceEnabled(config, "kiro", Date.now())));
+  const capacityResponse = () => new Response(JSON.stringify({ error: {
+    type: "server_error", code: "account_capacity", message: "Kiro account capacity is temporarily full; retry shortly.",
+  } }), { status: 503, headers: { "content-type": "application/json", "retry-after": "1" } });
 
 
   // OAuth providers: swap in a fresh access token (auto-refreshed) as the Bearer key, so the
@@ -179,6 +196,15 @@ export async function prepareResponsesTransport(
     const candidate = unchanged ? await forceRefreshOAuthAccessSnapshot(sent) : sent;
     const admitted = await commitResolvedOAuthSelection(candidate);
     if (!admitted) throw new Error("OAuth selection changed during credential recovery");
+    if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== admitted.accountId) {
+      const replayLease = await acquireAccountLease("kiro", admitted.accountId, { maxConcurrentPerAccount: kiroCap });
+      if (!replayLease || !options.accountLoad) {
+        replayLease?.release();
+        throw new Error("Kiro replay account capacity is full");
+      }
+      options.accountLoad.lease?.release();
+      options.accountLoad.lease = replayLease;
+    }
     genericFailoverAccountId = admitted.accountId;
     stampOAuthAccountLabel(logCtx, route.providerName, route.provider, admitted.accountId);
     return admitted;
@@ -217,8 +243,22 @@ export async function prepareResponsesTransport(
     retryParsed: OcxParsedRequest = parsed,
   ): Promise<OAuthAccessSnapshot | null> => {
     if (route.provider.googleMode === "cloud-code-assist" && !snapshot.projectId) return null;
-    const committed = await commitResolvedOAuthSelection(snapshot);
-    if (!committed) return null;
+    let speculative = kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId
+      ? await acquireAccountLease("kiro", snapshot.accountId, { maxConcurrentPerAccount: kiroCap }) : null;
+    if (kiroLoadEnabled && options.accountLoad?.lease?.accountId !== snapshot.accountId && !speculative) return null;
+    let committed: OAuthAccessSnapshot | null;
+    try { committed = await commitResolvedOAuthSelection(snapshot); }
+    catch (error) { speculative?.release(); throw error; }
+    if (!committed) { speculative?.release(); return null; }
+    if (kiroLoadEnabled && committed.accountId !== (speculative?.accountId ?? options.accountLoad?.lease?.accountId)) {
+      speculative?.release();
+      speculative = await acquireAccountLease("kiro", committed.accountId, { maxConcurrentPerAccount: kiroCap });
+      if (!speculative) return null;
+    }
+    if (speculative && options.accountLoad) {
+      options.accountLoad.lease?.release();
+      options.accountLoad.lease = speculative;
+    }
     snapshot = committed;
     let rotatedProvider: OcxProviderConfig = { ...route.provider, apiKey: snapshot.accessToken };
     if (route.providerName === "github-copilot") {
@@ -526,9 +566,12 @@ export async function prepareResponsesTransport(
         // only reacts to a 429, so a turn could open on an account a previous probe already
         // measured as spent. A null answer means "use the active account", so every provider
         // without quota evidence keeps the resolution it has today.
-        const preferredAccountId = isGenericFailoverProvider(route.providerName, route.provider)
+        const refusalAwareId = route.providerName === "kiro" && oauthSelection?.accountId
+          ? refusalAwareInitialKiroAccount(config, oauthSelection.accountId, Date.now(), route.modelId) : null;
+        const preferredAccountId = refusalAwareId ?? (isGenericFailoverProvider(route.providerName, route.provider)
           ? preferredInitialAccount(config, route.providerName, Date.now(), route.modelId)
-          : null;
+          : null);
+        let safetyAlternateId: string | null = refusalAwareId;
         // Resolved account-scoped, NOT through failoverAccountSnapshot: that helper marks a
         // rotation site, and rotation sites must apply their credential through
         // applyFailoverSnapshot's pairing rules. This is initial resolution — the code below
@@ -555,10 +598,22 @@ export async function prepareResponsesTransport(
             // Drop the stale roster so the next request re-reads it, and carry on.
             forgetGenericFailoverRoster(route.providerName);
             usedPreferredAccount = false;
+            safetyAlternateId = null;
             resolved = await getValidAccessTokenSnapshot(route.providerName);
           }
         } else {
-          resolved = await getValidAccessTokenSnapshot(route.providerName);
+          const failedId = route.providerName === "kiro" ? oauthSelection?.accountId : undefined;
+          const failedRow = failedId ? getAccountCredentialWithStatus("kiro", failedId) : null;
+          const failedGeneration = failedRow ? credentialGeneration(failedRow.credential) : undefined;
+          try { resolved = await getValidAccessTokenSnapshot(route.providerName); }
+          catch (error) {
+            if (route.providerName !== "kiro" || !(error instanceof OAuthLoginRequiredError)
+              || !failedId || !failedGeneration) throw error;
+            const alternate = await tryKiroAlternateAfterTerminalRefresh(config, failedId, failedGeneration);
+            if (!alternate) throw error;
+            resolved = alternate;
+            safetyAlternateId = alternate.accountId;
+          }
         }
         // A Cloud Code Assist account needs its own project. Antigravity's refresh path
         // tolerates project discovery failing, so a stored account can legitimately have
@@ -569,8 +624,19 @@ export async function prepareResponsesTransport(
           resolved = await getValidAccessTokenSnapshot(route.providerName);
           usedPreferredAccount = false;
         }
-        const admitted = await commitResolvedOAuthSelection(resolved, true);
+        const admitted = await commitResolvedOAuthSelection(resolved, safetyAlternateId === null);
         if (!admitted) return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
+        if (safetyAlternateId && admitted.accountId !== safetyAlternateId)
+          return formatErrorResponse(409, "conflict_error", "OAuth account selection changed; retry the request");
+        if (kiroLoadEnabled) {
+          const lease = await acquireAccountLease("kiro", admitted.accountId, {
+            maxConcurrentPerAccount: kiroCap, waitMs: KIRO_ACCOUNT_WAIT_MS, signal: options.abortSignal ?? req.signal,
+          });
+          if (!lease) return (options.abortSignal ?? req.signal).aborted
+            ? clientCancelledResponse() : capacityResponse();
+          if (options.accountLoad) options.accountLoad.lease = lease;
+          else lease.release();
+        }
         if (admitted.accountId !== resolved.accountId) usedPreferredAccount = true;
         resolved = admitted;
         replayOAuthCredentialSnapshot = {

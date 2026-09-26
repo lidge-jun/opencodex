@@ -40,6 +40,11 @@ public upstreams too. A disabled budget resolves to `0`, and the watchdog kill i
 `> 0`, so a `0` never mis-arms a kill on the first beat; keep-alives keep flowing regardless, so a
 silent-but-healthy local model (CPU-bound thinking or a long time-to-first-token) stays connected.
 Adapter-yielded `{ type: "heartbeat" }` events DO reset the watchdog.
+During an opted-in standalone Devin stated-reset wait, `src/adapters/devin/cloud-direct/stated-reset-retry.ts`
+emits a safe adapter heartbeat immediately and schedules the next ones at intervals no greater than
+500 ms, below the shortest positive
+stall budget of one second. The cooldown-ready marker opens SSE before the wait ends; a later
+pre-output 429 still reaches the OAuth rotation check before any model output is committed.
 The Anthropic adapter maps both SSE comments and `ping` events to that heartbeat (#5707), so an
 upstream that only pings while a long thinking block is silent still counts as live.
 When the Responses-to-Chat converter receives that typed heartbeat, it emits the same bounded SSE
@@ -86,11 +91,14 @@ is emitted as `response.failed` SSE.
 ### Pending response-body reads
 
 `src/lib/response-body-inactivity.ts` bounds pending byte reads using the same resolved
-`stallTimeoutSec` budget (`resolveStallTimeoutMs`), so it inherits the same local-vs-public default
-and the `0`-disables rule: a disabled budget passes `0`, and the guard treats a non-positive budget
-as "arm no clock" rather than firing immediately. Connect/stall budgets and this body-silence budget
-therefore read the same setting in different phases: one bounds event stalls on the bridge, the
-other bounds pending raw byte reads. There is no separate body-inactivity setting.
+`stallTimeoutSec` budget (`resolveStallTimeoutMs`) and the `0`-disables rule: a disabled budget passes
+`0`, and the guard treats a non-positive budget as "arm no clock" rather than firing immediately.
+Most readers inherit the local-vs-public default. Compact responses are the bounded exception: they
+default to 300 s even for a local upstream because the route buffers the complete body while holding
+an active-turn lease; an explicit `stallTimeoutSec`, including `0`, still wins. Connect/stall budgets
+and this body-silence budget therefore read the same setting in different phases: one bounds event
+stalls on the bridge, the other bounds pending raw byte reads. There is no separate body-inactivity
+setting.
 The guard has no read-ahead queue: it starts a monotonic deadline only when its
 consumer asks for bytes, pauses on a non-empty chunk, and does not reset on empty
 chunks. Discarded empty chunks yield to the macrotask queue periodically, so a large

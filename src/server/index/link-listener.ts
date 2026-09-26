@@ -29,6 +29,10 @@ export type LinkListenerStatus = {
   reason: string | null;
 };
 
+export function linkListenerOwnsTarget(status: LinkListenerStatus): boolean {
+  return status.state === "listening" && status.port !== null;
+}
+
 export interface LinkListenerLifecycle<T> {
   ownsListener(server: Server<T>): boolean;
   start(ctx: LinkListenerStartContext<T>): void;

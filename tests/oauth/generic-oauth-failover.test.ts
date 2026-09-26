@@ -318,12 +318,12 @@ describe("sidecar on429 wiring", () => {
   const coreSource = readResponsesCoreSource();
 
   test("budget-withheld attribution proves a cooldown-eligible generic OAuth target", () => {
-    // Continuation, native passthrough and run-turn each have their own budget-denial branch.
+    // Kiro and non-Kiro continuation, native passthrough and run-turn have budget-denial branches.
     // A durable two-account quorum is insufficient because it intentionally ignores cooldowns.
-    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\(/g)).toHaveLength(3);
+    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\(/g)).toHaveLength(4);
     // The check must GATE the log, not merely run beside it: every call site wraps
     // noteAttemptRecoveryWithheld in the eligibility condition.
-    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\([\s\S]*?\)\s*\)\s*noteAttemptRecoveryWithheld/g)).toHaveLength(3);
+    expect(coreSource.match(/hasEligibleGenericOAuthFailoverTarget\([\s\S]*?\)\s*\)\s*noteAttemptRecoveryWithheld/g)).toHaveLength(4);
   });
 
   test("both sidecar loops receive the SAME hook, so neither can drift key-pool-only", () => {
@@ -402,9 +402,9 @@ describe("sidecar on429 wiring", () => {
     // bearer by hand would reintroduce the mixed-identity bug this helper exists to prevent.
     const snapshotUses = coreSource.match(/failoverAccountSnapshot\(/g) ?? [];
     const helperUses = coreSource.match(/applyFailoverSnapshot\(snapshot(?:, (?:next|retry)Parsed)?\)/g) ?? [];
-    // Five includes native Responses passthrough, which returns before the Chat bridge loop.
+    // Seven includes Kiro-specific adapter and continuation branches plus native passthrough.
     // The explicit count keeps a newly added rotation site from skipping identity pairing.
-    expect(snapshotUses.length).toBe(5);
+    expect(snapshotUses.length).toBe(7);
     expect(helperUses.length).toBe(snapshotUses.length);
     // The bearer is written in exactly one place — inside the helper. Any other occurrence is a
     // rotation site that skipped the pairing rules.
@@ -427,10 +427,10 @@ describe("sidecar on429 wiring", () => {
     const arm = coreSource.slice(armStart, armEnd);
 
     expect(arm).toContain("applyFailoverSnapshot(snapshot, nextParsed)");
-    expect(arm.match(/bindRouteReasoningReplayScope\(\{/g)).toHaveLength(2);
+    expect(arm.match(/bindRouteReasoningReplayScope\(\{/g)).toHaveLength(4);
     expect(arm).toContain("parsed: nextParsed");
     expect(arm).toMatch(/bindRouteReasoningReplayScope\(\{\s*parsed,/);
-    expect(arm.match(/oauthCredentialSnapshot: transportState\.replayOAuthCredentialSnapshot/g)).toHaveLength(2);
+    expect(arm.match(/oauthCredentialSnapshot: transportState\.replayOAuthCredentialSnapshot/g)).toHaveLength(4);
   });
 
   test("every 429 recovery loop carries all three rotators (#3495 follow-up)", () => {

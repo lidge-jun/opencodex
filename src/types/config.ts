@@ -1516,6 +1516,8 @@ export interface OcxWebSearchSidecarConfig {
  * explicit account selection. Only automatic rotation skips it.
  */
 export interface OcxCodexPoolConfig {
+  /** Start idle Codex windows when the pool is initialized. */
+  startIdleWindows?: boolean;
   /**
    * Plan keys ordinary rotation skips, matched case-insensitively against the plan stored on each
    * account. Absent or empty means no policy.

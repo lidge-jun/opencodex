@@ -513,7 +513,7 @@ function translateAnthropicRequest(
     // value, so do not attach the similarly named internal catalog sentinel.
     body.reasoning = { effort: "none" };
   } else if (isRec(thinking) || outputConfigEffort !== undefined) {
-    const reasoning: Rec = { summary: "auto" };
+    const reasoning: Rec = { summary: isRec(thinking) && thinking.display === "omitted" ? "none" : "auto" };
     if (outputConfigEffort !== undefined) {
       // Adaptive wire: /effort arrives as output_config.effort (devlog 080).
       reasoning.effort = outputConfigEffort;

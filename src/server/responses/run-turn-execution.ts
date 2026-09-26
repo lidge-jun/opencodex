@@ -260,6 +260,7 @@ export async function executeResponsesRunTurn(
           {
             headers: requestState.selectedForwardHeaders,
             abortSignal: runTurnAbort.signal,
+            comboAttempt: options.comboAttempt === true,
             translatorBudget,
             providerFetch: runTurnProviderFetch,
             pacingSlot,
@@ -446,6 +447,47 @@ export async function executeResponsesRunTurn(
         return false;
       }
     };
+    const streamAfterPreflight = (
+      initialSource: AsyncIterable<AdapterEvent>,
+      replayParsed: PreparedResponsesRequest["parsed"],
+      initiallyReplayUnsafe: boolean,
+    ): AsyncIterable<AdapterEvent> => (async function* () {
+      let source = initialSource;
+      let replayUnsafe = initiallyReplayUnsafe;
+      let firstMeaningfulSeen = false;
+      while (true) {
+        let rotated = false;
+        for await (const event of source) {
+          if (!firstMeaningfulSeen && event.type === "heartbeat") {
+            replayUnsafe ||= event.replayUnsafe === true;
+            yield event;
+            continue;
+          }
+          if (!firstMeaningfulSeen && !replayUnsafe && event.type === "error"
+            && await rotateRunTurnAdapterOnPreflight429(event)) {
+            const retryQueue = createAdapterEventQueue({
+              onBacklogExceeded: () => runTurnAbort.abort(),
+            });
+            const pendingPermit = sendBudgetState.pendingHopPermit;
+            const retryAttempt = runTurnAttempt(retryQueue, "oauth-account-429", false, replayParsed);
+            if (pendingPermit) {
+              const releaseIfUnclaimed = () => {
+                if (sendBudgetState.pendingHopPermit !== pendingPermit) return;
+                sendBudgetState.pendingHopPermit = undefined;
+                pendingPermit.release();
+              };
+              void retryAttempt.then(releaseIfUnclaimed, releaseIfUnclaimed);
+            }
+            source = retryQueue.stream();
+            rotated = true;
+            break;
+          }
+          firstMeaningfulSeen = true;
+          yield event;
+        }
+        if (!rotated) return;
+      }
+    })();
     const preflightRunTurnFailover = async (
       firstSource: AsyncIterable<AdapterEvent>,
       // LOCAL PATCH (runturn-websearch): replayed attempts re-dispatch this
@@ -459,9 +501,10 @@ export async function executeResponsesRunTurn(
       let deferPendingPermitCleanup = false;
       try {
         while (true) {
-          const preflight = await preflightAdapterEvents(source, undefined, deadlineAt === undefined
-            ? undefined
-            : { maxWaitMs: deadlineAt - Date.now() });
+          const preflight = await preflightAdapterEvents(source, undefined, {
+            ...(deadlineAt === undefined ? {} : { maxWaitMs: deadlineAt - Date.now() }),
+            honorReady: replayParsed.stream,
+          });
           if (preflight.timedOut) {
             const pendingPermit = sendBudgetState.pendingHopPermit;
             if (pendingPermit && latestRetryAttempt) {
@@ -476,8 +519,9 @@ export async function executeResponsesRunTurn(
               };
               void latestRetryAttempt.then(releaseIfUnclaimed, releaseIfUnclaimed);
             }
-            return preflight.stream;
+            return streamAfterPreflight(preflight.stream, replayParsed, preflight.replayUnsafe);
           }
+          if (preflight.ready) return streamAfterPreflight(preflight.stream, replayParsed, preflight.replayUnsafe);
           if (preflight.replayUnsafe
             || !preflight.error
             || !(await rotateRunTurnAdapterOnPreflight429(preflight.error))) {
@@ -564,7 +608,9 @@ export async function executeResponsesRunTurn(
         if (refusal) return refusal;
       }
       if (options.comboAttempt) {
-        const preflight = await preflightAdapterEvents(eventSource, classifyUndeclaredFirstTool);
+        const preflight = await preflightAdapterEvents(
+          eventSource, classifyUndeclaredFirstTool, { honorReady: false },
+        );
         if (preflight.error || preflight.empty) {
           runTurnAbort.abort();
           queue.close();
@@ -683,7 +729,9 @@ export async function executeResponsesRunTurn(
       )) runTurnEvents.push(event);
     }
     if (grokDevinPreflight) {
-      const preflight = await preflightAdapterEvents((async function* () { yield* runTurnEvents; })());
+      const preflight = await preflightAdapterEvents(
+        (async function* () { yield* runTurnEvents; })(), undefined, { honorReady: false },
+      );
       const refusal = grokRateLimitResponse(preflight);
       if (refusal) return refusal;
     }

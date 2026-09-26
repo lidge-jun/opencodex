@@ -163,6 +163,11 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 
 ## Usage accounting
 
+`OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
+through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
+is a measured value. Separate attempts add credits when usage is merged. The field is independent
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage.
+
 ### Upstream key account attribution
 
 API-key attempts in `src/usage/log.ts` carry `accountLogLabel` as `k` plus 32 lowercase
@@ -564,9 +569,7 @@ labels collapse for reporting; configured provider names ending in `-main` remai
 
 Rows also carry the observed protocol path (`protocolTrace`), persisted in `usage.jsonl` and
 re-validated on read; the Logs list shows it as a text badge, the detail dialog as a section, and
-`src/server/request-log-filter.ts` owns the `/api/logs` query filters including `protocolMode`.
-Its single-pass query applies provider, conversation, model, account, protocol mode and status
-before `tail`, then reports the pre-pagination count alongside the offset/limit page.
+`src/server/request-log-filter.ts` owns the `/api/logs` query filters including `protocolMode`; its single-pass query applies provider, conversation, model, account, protocol mode and status before `tail`, then reports the pre-pagination count alongside the offset/limit page.
 [Protocol Paths](data-planes/protocol-paths.md) owns its derivation.
 
 Request-history selectors longer than 130 characters persist as a prefix plus a digest of the complete

@@ -13,7 +13,7 @@
  */
 import { getValidAccessSnapshotForAccount } from "../oauth";
 import { resolveKiroRequestProfile } from "../oauth/kiro";
-import { getAccountSet } from "../oauth/store";
+import { credentialGeneration, getAccountSet } from "../oauth/store";
 import type { ProviderAccount } from "../oauth/types";
 import { hydrateKiroAccountState, kiroEvidenceIdentity, type KiroPersistedVerdict } from "./kiro-account-state-disk";
 import { accountCacheKey, accountQuotaCache } from "./quota/account-cache";
@@ -308,6 +308,36 @@ export function kiroAccountEvidence(account: ProviderAccount, now = Date.now()):
     ...(verdict?.nextResetAt !== undefined ? { resetAt: verdict.nextResetAt }
       : quota?.monthlyResetAt !== undefined ? { resetAt: quota.monthlyResetAt } : {}),
   };
+}
+
+/** A confirmed refusal supersedes only older evidence from the same login. */
+export function noteKiroMonthlyRefusal(accountId: string, generation: string, observedAt = Date.now()): number {
+  hydrateKiroAccountState();
+  const live = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
+  if (!live || credentialGeneration(live.credential) !== generation) return 0;
+  const key = accountCacheKey("kiro", accountId);
+  const identity = kiroEvidenceIdentity(live);
+  const old = usageState.get(key);
+  if (old?.identity === identity && old.observedAt >= observedAt)
+    return Math.max(0, (old.nextResetAt ?? observedAt) - observedAt);
+  const resetAt = kiroAccountEvidence(live, observedAt).resetAt;
+  const until = Math.min(resetAt ?? observedAt + ACCOUNT_QUOTA_TTL_MS, observedAt + ACCOUNT_QUOTA_TTL_MS);
+  usageState.set(key, { identity, exhausted: true, observedAt,
+    ...(resetAt !== undefined ? { nextResetAt: resetAt } : {}) });
+  return Math.max(0, until - observedAt);
+}
+
+/** Completion clears an older verdict only for the credential that actually served. */
+export function noteKiroServedSuccess(accountId: string, generation: string, observedAt = Date.now()): boolean {
+  hydrateKiroAccountState();
+  const live = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
+  if (!live || credentialGeneration(live.credential) !== generation) return false;
+  const key = accountCacheKey("kiro", accountId);
+  const old = usageState.get(key);
+  if (!old || old.identity !== kiroEvidenceIdentity(live) || old.observedAt >= observedAt || !old.exhausted)
+    return false;
+  usageState.set(key, { ...old, exhausted: false, observedAt });
+  return true;
 }
 
 /** Drop rows for one provider prefix, or all of them. Mirrors clearAccountQuotaCache. */

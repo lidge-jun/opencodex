@@ -36,6 +36,7 @@ $ast = [System.Management.Automation.Language.Parser]::ParseFile($TrayScriptPath
 if ($parseErrors.Count -gt 0) { throw "tray script parse failed: $($parseErrors[0].Message)" }
 $wanted = @(
   "Write-ActionLog",
+  "Get-TrayText",
   "Normalize-HomePath",
   "ConvertTo-NativeArgument",
   "Set-OcxChildEnvironment",

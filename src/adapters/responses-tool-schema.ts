@@ -97,8 +97,31 @@ function usesUnicodePropertyEscape(pattern: string): boolean {
 }
 
 /**
+ * Rewrite each unescaped `\0` not followed by a digit to the equivalent `\x00`. Both spell NUL
+ * in ECMAScript and Python `re`, but some destinations' schema validators refuse `\0` inside a
+ * character class: Meta's Responses API answers 400 "is not a \"regex\"" to Claude Code's
+ * Artifact tool, whose file-path parameters carry `^[^\0]*$`. `\0` followed by a digit is an
+ * octal escape in Python, so it is left alone. Returns the input when nothing changed.
+ */
+function rewriteNulEscapes(pattern: string): string {
+  let out: string | undefined;
+  let copied = 0;
+  for (let i = 0; i < pattern.length; i++) {
+    if (pattern[i] !== "\\") continue;
+    const next = pattern[i + 1];
+    if (next === "0" && !/[0-9]/.test(pattern[i + 2] ?? "")) {
+      out = (out ?? "") + pattern.slice(copied, i) + "\\x00";
+      copied = i + 2;
+    }
+    i++;
+  }
+  return out === undefined ? pattern : out + pattern.slice(copied);
+}
+
+/**
  * Remove unsupported Unicode property escapes from scalar `pattern` constraints in ordinary
- * positive schema positions. This keeps built-in Artifact tools usable on Python-re backends;
+ * positive schema positions, and spell `\0` as `\x00` (rewriteNulEscapes). This keeps built-in
+ * Artifact tools usable on Python-re backends and on Meta's Responses API;
  * the omitted constraint is not enforced by this proxy and tools must validate their inputs.
  *
  * Regex-keyed objects are preserved. Removing a matcher can lose evaluated-property annotations
@@ -181,8 +204,13 @@ export function stripUnicodePropertyPatterns(node: unknown, inNameBag = false): 
       continue;
     }
     const [key, value] = next.value;
-    if (!frame.inNameBag && key === "pattern" && typeof value === "string" && usesUnicodePropertyEscape(value)) {
-      delete (cloneContainer(frame) as Record<string, unknown>)[key];
+    if (!frame.inNameBag && key === "pattern" && typeof value === "string") {
+      if (usesUnicodePropertyEscape(value)) {
+        delete (cloneContainer(frame) as Record<string, unknown>)[key];
+        continue;
+      }
+      const rewritten = rewriteNulEscapes(value);
+      if (rewritten !== value) (cloneContainer(frame) as Record<string, unknown>)[key] = rewritten;
       continue;
     }
     if (!frame.inNameBag && (PRESERVED_PATTERN_SUBTREES.has(key) || SCHEMA_LITERAL_VALUE_KEYS.has(key))) {

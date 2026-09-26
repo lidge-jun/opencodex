@@ -166,7 +166,8 @@ export function satisfiesOpenAiStrictSchema(value: unknown): boolean {
     if (!Array.isArray(node.required)) return false;
     const keys = Object.keys(properties);
     const required: unknown[] = node.required;
-    if (keys.some(key => !required.includes(key))) return false;
+    const requiredKeys = new Set(required);
+    if (keys.some(key => !requiredKeys.has(key))) return false;
   }
   return Object.values(node).every(satisfiesOpenAiStrictSchema);
 }

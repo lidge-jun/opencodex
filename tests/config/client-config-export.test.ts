@@ -1138,7 +1138,9 @@ test("renamed CommandCode gathered effort tables reach DSH and ZCode exports", a
     const context = ctx({ models, config });
     const dshConfig = dsh.buildDshClientConfig(context);
     const dshModels = Object.values(dshConfig["llm-pi-ai"].providers).flatMap(provider => provider.models);
-    expect(dshModels.find(model => model.id === `CommandCode/${known}`)?.reasoningEfforts).toEqual({ high: "high", max: "max" });
+    expect(dshModels.find(model => model.id === `CommandCode/${known}`)?.reasoningEfforts).toEqual({
+      low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max",
+    });
     expect(dshModels.find(model => model.id === `CommandCode/${overridden}`)?.reasoningEfforts).toEqual({ low: "low" });
     expect(dshModels.find(model => model.id === "CommandCode/unknown-model")?.reasoningEfforts).toBeUndefined();
     for (const id of [known, overridden, "unknown-model"]) {
@@ -1146,7 +1148,7 @@ test("renamed CommandCode gathered effort tables reach DSH and ZCode exports", a
     }
     const zcodeModels = Object.assign({}, ...Object.values(zcode.buildZcodeClientConfig(context).provider).map(provider => provider.models)) as Record<string, zcode.ZcodeModelEntry>;
     expect(zcodeModels[`CommandCode/${known}`]).toBeDefined();
-    expect(zcodeModels[`CommandCode/${known}`]!.reasoning?.variants).toEqual(["high", "max"]);
+    expect(zcodeModels[`CommandCode/${known}`]!.reasoning?.variants).toEqual(["low", "medium", "high", "xhigh", "max"]);
     expect(zcodeModels[`CommandCode/${overridden}`]).toBeDefined();
     expect(zcodeModels[`CommandCode/${overridden}`]!.reasoning?.variants).toEqual(["low"]);
     expect(zcodeModels["CommandCode/unknown-model"]).toBeDefined();

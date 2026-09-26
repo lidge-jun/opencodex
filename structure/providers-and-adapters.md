@@ -65,6 +65,15 @@ probe keeps the same-login last-good display bar. The protected OAuth store rota
 `ProviderAccount.loginId` on every explicit login, preserves it across credential refresh,
 and uses `addedAt` for legacy rows without one.
 
+For Kiro, `src/oauth/generic-account-failover.ts` filters confirmed monthly exhaustion
+and process-local suspension by the live account identity before picking a replacement.
+The account actually sent supplies the generation fence; a rotated bearer always travels
+with its own profile ARN and region. Reactive rotation follows the stored two-account
+quorum, while refusal-aware first admission follows the proactive preference setting.
+Kiro's `least-loaded` strategy selects the fewest in-flight eligible requests under
+`pool.kernel` and proactive preference; unknown quota remains eligible. Its optional
+per-account cap is validated only for Kiro and never persists in-flight counts.
+
 The routed identity sentence a catalog row carries is model-neutral on disk: `base_instructions`,
 and a native capability alias's `model_messages.instructions_template`, hold `NEUTRAL_IDENTITY_LINE`
 rather than a model id, because Codex stores a session's instruction block once and replays it
@@ -102,7 +111,7 @@ rewrite rules and the routed-id settlement.
 | `src/adapters/declaration-carrier.ts`, `src/adapters/input-media-guard.ts` | Default-deny allowlists for constraints the normalized request carries but a wire may not be able to express: `tools[*].allowed_callers`, which fences a tool off from callers, and inline document bytes. Both are refused with a 400 at the single guard every registered adapter passes through, rather than left to each adapter, because an adapter that never learned about the carrier rebuilds without it and answers normally. `allowed_callers` reaches the `anthropic` wire; document bytes reach `anthropic`, `openai-chat` and `google`; the `openai-responses` wire is exempt from the whole guard because it forwards the original body. Adding an `AdapterWire` member makes the omission visible in these lists instead of at a customer's upstream. The unrestricted `["direct"]` caller default is not a restriction. |
 | `src/adapters/azure.ts` | Azure OpenAI bridge. |
 | `src/adapters/cursor.ts`, `src/adapters/cursor/` | Cursor protobuf transport: discovery, request builder, event decoding, MCP, thread continuity, native-exec policy. |
-| `src/adapters/devin.ts`, `src/adapters/devin/cloud-direct/` | Devin runTurn transport over Cognition Connect-RPC. `GetChatMessage` uses the Responses provider executor and shared physical-send budget; catalog, JWT, and `src/web-search/devin-executor.ts` native search support RPCs remain outside inference-send accounting. Provider-stated 429 reset delays are surfaced to the client rather than slept inside an admitted turn, so they cannot retain shared active-turn capacity. A recorded tenant host is used only for the stored account whose credential owns the transmitted key, searched in the configured provider id and then its deprecated alias; a configured, forwarded, or unmatched key uses the configured base URL or the US default. Native search previews the current route by effective adapter without mutating combo selection state, pins one admitted active-account snapshot for the request, and calls `GetWebSearchResults`, so it starts no CLI or second model. |
+| `src/adapters/devin.ts`, `src/adapters/devin/cloud-direct/` | Devin runTurn transport over Cognition Connect-RPC. `GetChatMessage` uses the Responses provider executor and shared physical-send budget; catalog, JWT, and `src/web-search/devin-executor.ts` native search support RPCs remain outside inference-send accounting. Provider-stated pre-output 429 reset delays are surfaced immediately by default, releasing shared active-turn capacity. A positive `OPENCODEX_DEVIN_STATED_RESET_WAIT_MS` explicitly enables bounded waiting and up to two replays on standalone turns, which hold that capacity until completion or cancellation. Combo children bypass that wait and surface a pre-output 429 so the next target can run. During an opted-in standalone wait, safe heartbeats commit the response preflight and keep the stream's stall watchdog fed. Invalid values fail closed to the immediate-refusal behavior. A recorded tenant host is used only for the stored account whose credential owns the transmitted key, searched in the configured provider id and then its deprecated alias; a configured, forwarded, or unmatched key uses the configured base URL or the US default. Native search previews the current route by effective adapter without mutating combo selection state, pins one admitted active-account snapshot for the request, and calls `GetWebSearchResults`, so it starts no CLI or second model. |
 | `src/adapters/kiro.ts` and `src/adapters/kiro/` | Kiro event/tool/thinking/truncation/retry handling, including an egress-aware completion fallback, fixed public HTTP 5xx text, and closed-set status/code diagnostics. The original path is a facade over leaves for wire identity, reasoning, conversation state, token estimation, payload assembly, streaming, and the adapter. |
 | `src/adapters/mimo-free.ts` | Mimo Free transport (client identity + JWT). Concurrent requests share one JWT bootstrap bound only to its timeout; each request stops waiting on its own abort without cancelling the others. |
 | `src/adapters/command-code.ts`, `src/adapters/command-code-tool-text.ts`, `src/adapters/command-code-restored-schema.ts` | Command Code OAuth NDJSON translation. For every `xiaomi/mimo-` model, text, native calls, reasoning, and terminal decisions share one byte-bounded queue with linear queue visits. Markup is deduplicated against matching native calls; text-only restoration requires one contiguous text run, a clean finish, a declared tool, and arguments validated against supported schema constraints. A parameter-free (freeform) block may omit `</function>` but must end with `</tool_call>`; parameter blocks keep the canonical close. Markup appended after prose in the same delta is split off at the marker and held like a block that opens with `<tool_call>`; a marker split across deltas after prose is still released as text. Native, reasoning, and other intervening events interrupt a still-probing block but leave a held block held in arrival order, and the queued byte bound still flushes an unresolved envelope as text. An envelope the strict parser rejects but that opens with `<tool_call>`, closes with `</tool_call>`, and names a declared function is dropped when a native call for that same function arrives and on a clean finish; markup that parses but fits no supported schema is still released as text. Regex patterns, other unsupported constraints, and abnormal finishes fail closed. `tests/providers/command-code-tool-text-prose-split.test.ts` covers the split, the interleaved-event hold, and both drop paths. |
@@ -112,6 +121,9 @@ rewrite rules and the routed-id settlement.
 Inline document admission shares one encoding predicate between its scanner and parser in
 `src/responses/inline-document.ts`: malformed base64 quantum/padding lengths are refused,
 and valid padded or unpadded payloads pass unchanged without a decoding allocation.
+
+Kiro metering uses the [provider credit contract](providers/kiro.md#kiro-reasoning-round-trip-signature);
+`src/types/request.ts` keeps reported credits separate from estimated token usage.
 
 Adapter output must stay in internal `AdapterEvent` form until `src/bridge/sse.ts` converts it back
 to Responses SSE or WebSocket frames, or `src/bridge/response-json.ts` buffers it into a JSON
@@ -157,6 +169,14 @@ turns wait at the cap. Follow-up sends still obey start intervals. The turn owne
 after `runTurn` settles, so RunSSE body completion cannot admit another turn early. A capped
 canonical Codex WebSocket turn uses HTTP/SSE because the socket has no response-body lifecycle.
 Capacity waits use the same bounded queue and retryable queue-overload errors as interval waits.
+
+Command Code effort defaults in `src/providers/command-code-efforts.ts` combine public-profile
+facts with the live API measurements from #5096. Both presets share the exact per-model rows;
+`xhigh` is preserved when accepted, and narrow ladders such as Laguna's `medium`-only row remain
+narrow. Rows without a verified profile URL still record rejected efforts but skip profile fetching.
+An explicit `modelReasoningEffortsAuthoritative` model row overrides the shipped ladder; seeded
+rows without that flag do not. `tests/providers/command-code-efforts.test.ts` covers the measured
+rows and wire values; `tests/providers/command-code-provider.test.ts` covers operator overrides.
 
 ## TypeSafe JEV decision provider
 
@@ -413,6 +433,18 @@ and `ocx config import` all reach `configSchema` only and never call
 this field in the tree, so a value that survives file load still cannot be spent. It refuses
 silently by design; config-time is where the operator is told why. The planner requires the
 provider name for that assessment, so `planPassthroughWebSearchBridge` takes it explicitly.
+
+## Meta Responses tool selection
+
+At the final request boundary for `api.meta.ai`, `src/adapters/openai-responses/passthrough.ts`
+uses `src/adapters/openai-responses/muse-tool-choice.ts` to normalize `tool_choice`. Omitted or
+`auto` selection keeps its meaning. Explicit `none` sets `tools` to an empty list, removes
+`additional_tools` items from `input`, and omits `tool_choice` and `parallel_tool_calls` from the
+outgoing body. Forced, named, and `allowed_tools` selections fail with HTTP 400 before the
+upstream send because Muse supports only `auto`. Filtering a required tool never changes the
+caller's obligation into `none` or `auto`. This rule applies only to the Meta Responses
+destination. The input body, historical tool calls and results, and non-Meta requests keep their
+existing meaning.
 
 ## Shared type declarations
 

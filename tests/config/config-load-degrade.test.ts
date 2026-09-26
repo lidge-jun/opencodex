@@ -84,6 +84,25 @@ test("config validation accepts only safe provider model display names", () => {
   if (!invalid.ok) expect(invalid.error).toContain("modelDisplayNames");
 });
 
+test("config validation accepts the optional codex pool idle-window setting", () => {
+  const defaults = getDefaultConfig();
+  const enabled = validateConfigCandidate({
+    ...defaults,
+    codexPool: { startIdleWindows: true },
+  });
+  expect(enabled).toMatchObject({
+    ok: true,
+    config: { codexPool: { startIdleWindows: true } },
+  });
+
+  const invalid = validateConfigCandidate({
+    ...defaults,
+    codexPool: { startIdleWindows: "true" },
+  });
+  expect(invalid.ok).toBe(false);
+  if (!invalid.ok) expect(invalid.error).toContain("codexPool.startIdleWindows");
+});
+
 test("load keeps a provider and valid labels when one hand edited label is invalid", () => {
   writeCandidate({
     "grok-4.6": "  Grok 4.6  ",

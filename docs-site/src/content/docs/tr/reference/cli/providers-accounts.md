@@ -126,7 +126,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <provider> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
-strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Havuz stratejisi; least-loaded yalnızca Kiro içindir.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.
@@ -178,10 +178,14 @@ Bir sağlayıcı ile yalnızca bu kimlik bilgisi ailesini listeler. İnsan çık
 `PROVIDER TYPE ID PLAN/LABEL PRIORITY STATUS` kullanır; manuel olarak seçilen
 bir Codex satırı `selected` olarak işaretlenir. `PRIORITY`, imzalı Codex seçim
 sırasıdır (ayarlanmadığında `0`) ve OAuth hesapları ve API anahtarları gibi
-sıralamanın geçerli olmadığı satırlar için `-` gösterir. İki veya daha fazla uygun Kiro hesabı
+sıralamanın geçerli olmadığı satırlar için `-` gösterir. İki veya daha fazla kayıtlı Kiro hesabı
 saklandığında, varsayılan olarak 429 yanıtı otomatik olarak başka bir hesaba geçer ve bilinen kalan
-kotası en yüksek hesabı tercih eder; rotasyon hesapların varlığıyla etkinleşir ve kapatılamaz — `oauthAccountFailover.enabled: false` gönderim öncesi hesap tercihini reddeder, 429 kurtarmasını değil; `ocx account login kiro` hesapları havuza teker teker ekler. Boş bir sonuç
-yine de başarıdır. `--json` şunu döndürür:
+kotası en yüksek hesabı tercih eder; rotasyon hesapların varlığıyla etkinleşir ve kapatılamaz — `oauthAccountFailover.enabled: false` gönderim öncesi hesap tercihini reddeder, 429 kurtarmasını değil; `ocx account login kiro` hesapları havuza teker teker ekler. Boş bir sonuç yine de başarıdır.
+
+Kiro için hız sınırı, doğrulanmış aylık kota ve doğrulanmış askıya alma retleri çıktıdan önce uygun başka bir hesaba geçebilir. Aylık kota yalnızca o hesabı sıfırlamaya veya kanıtın süresinin dolmasına kadar dışlar; aynı hesaptaki tamamlanmış yanıt eski kararı temizler. Proaktif tercih için sağlayıcı ayarı genel ayardan önceliklidir; reaktif hesap değişimi açık kalır.
+Kiro, `pool.kernel` ve proaktif tercih açıkken `least-loaded` stratejisini seçebilir. `maxConcurrentPerAccount` (1–100), süreç başına hesap kuyruğu sınırıdır: seçili hesap doluysa en çok 250 ms bekler, ardından `Retry-After: 1` ile 503 `account_capacity` döner. Sınır, isteği başka bir hesaba taşımaz.
+
+`--json` şunu döndürür:
 
 ```text
 { accounts: AccountRow[], notes: string[] }

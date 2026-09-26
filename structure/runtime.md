@@ -24,7 +24,7 @@ Native result continuations and function-result injection follow [the mode-speci
 Native steering follows [the shared WebSocket contract](transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Responses admission and finalization are composed through the
-[core module ownership](transports/responses.md#core-module-ownership). This surface retains its existing behavior.
+[core module ownership](transports/responses.md#core-module-ownership). Kiro's optional account-load admission is process-local and request-owned; its slot ends with the response body or cancellation. Other providers retain their admission path.
 
 Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-catalog-http-proxy-routing).
 
@@ -198,8 +198,8 @@ lost probe deletes this home's pid record and then binds a second listener that 
 records and re-points Codex at itself. `probePortOwner` in `src/server/proxy-liveness.ts` asks the
 busy port directly, on both loopback families, independent of the pid and runtime records; the
 outcome is the pure decision `decideBusyPreferredPort` in `src/cli/dispatch.ts`. An opencodex
-holder is refused with the same message the owner check prints (exit 0 instead under
-`OCX_SERVICE=1`, so the wrapper loop terminates), and a holder that does not identify as opencodex
+holder is refused with the same message the owner check prints (intentional stay-out under
+`OCX_SERVICE=1`, using the [Windows wrapper protocol](ops/docs-and-release.md#windows-service-wrapper-and-incomplete-updates)), and a holder that does not identify as opencodex
 is reported as such rather than called foreign, because an identity probe cannot distinguish a
 foreign server from an unreachable one. An explicit `--port` still never hops — it waits for the
 pin through `src/server/port-reclaim.ts` — and a configured `port: 0` still means "ask the OS".
@@ -232,7 +232,7 @@ GUI, session bootstrap/exchange, and `/api/*`.
 The `hub-link` socket is HTTP-only and default-denies all but the fixed data routes, catalog, hub-state,
 usage, and `GET /readyz`; every `Upgrade` header, management, GUI, session, health, and unknown
 `/v1/*` route is rejected before dispatch. Its `opencodex-link.invalid` policy admits only configured
-key ids recorded by `links.json`, never the environment token. `ensureStarted()` is single-flight,
+key ids recorded by `links.json`, never the environment token. Context relays rebuild that policy for their post-body admission check, so key revocation stops an in-flight request before dispatch. `ensureStarted()` is single-flight,
 final deletion closes the listener, and `src/server/index/optional-listeners.ts` runs supervisor teardown before closing this listener and the Claude intercept pair.
 ### Claude intercept pair
 
@@ -248,7 +248,7 @@ still believes it talks to Anthropic. The proxy splices `CONNECT api.anthropic.c
 listener, relays every other CONNECT target blind, and refuses unauthenticated clients, plain proxied HTTP, and loopback targets. The per-install proxy token is stored owner-only under `<OPENCODEX_HOME>/claude-intercept/` (0600 plus a real per-user NTFS ACL on Windows, via `src/lib/windows-secret-acl.ts`, and re-pinned on every read-through `ensure`), and the settings file carrying it is written through the same hardened atomic writer. Every start runs `migrateClaudeInterceptSettings` (`src/claude/intercept/settings.ts`), which rewrites an owned env that no longer matches — e.g. a pre-auth URL left by an upgrade — while never creating an absent env or touching a foreign one, so a service restart cannot strand clients on 407s. Status/inspection reads the token without minting it; only apply and intercept startup create it.
 The TLS listener rewrites `POST /v1/messages` and `POST /v1/messages/count_tokens` to a loopback origin and dispatches them under the `claude-intercept` ingress; other paths relay to the configured upstream.
 The pair is on by default on a hub (`claudeCode.intercept.enabled`); its proxy port defaults to public port + 100 (`claudeCode.intercept.port`). Bind failure warns, and stop joins both sockets. With an ephemeral public port (`startServer(0)`), an explicit intercept port is required.
-This ingress honours first-party model bindings (`claudeCode.intercept.modelMap`); see [Claude Desktop](clients/claude-desktop.md#first-party-model-bindings). Picker mode adds a second Desktop CONNECT proxy on the next port; see [Claude Desktop](clients/claude-desktop.md#picker-mode-the-desktop-egress-proxy).
+This ingress honours first-party model bindings (`claudeCode.intercept.modelMap`); see [Claude Desktop](clients/claude-desktop.md#first-party-model-bindings). Picker mode and the primitive's optional `allowedTargets` restriction are described under [Desktop egress proxy](clients/claude-desktop.md#picker-mode-the-desktop-egress-proxy).
 
 `src/claude/intercept/client-class.ts` classifies each request by its Claude Code `User-Agent` entrypoint: `claude-desktop`, `claude-desktop-3p`, and `local-agent` are Desktop; other well-formed `claude-cli/<v> (external, <entrypoint>)` values are CLI; absent or malformed values are unknown.
 Only a client with its own first-party intent enabled (Desktop mode or `claudeCode.cliFirstParty`) enters the router for Messages paths; other paths use the configured upstream relay.

@@ -42,8 +42,14 @@ import {
   hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
+  rotateGenericOAuthAccountOnRefusal,
+  quarantineKiroSuspendedAccount,
   failoverAccountSnapshot,
 } from "../../oauth/generic-account-failover";
+import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
+import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
+import { noteKiroMonthlyRefusal } from "../../providers/kiro-usage";
+import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { isCyberPolicyCode, CYBER_POLICY_FALLBACK_MESSAGE, CYBER_POLICY_ERROR_CODE } from "../../lib/errors";
@@ -152,6 +158,8 @@ export function createAdapterContinuations(
     initialRecoveryKind?: AttemptRecoveryKind,
   ): AsyncGenerator<AdapterEvent> {
     let response: Response | undefined;
+    let kiroRefusalPendingReplay: Response | undefined;
+    let kiroReplaySetupFailed = false;
     // One-shot recovery label for the next top-of-loop continuation send after a failover rotation.
     let nextContinuationRecoveryKind: AttemptRecoveryKind | undefined = initialRecoveryKind;
     /**
@@ -201,6 +209,7 @@ export function createAdapterContinuations(
           transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
           return await withProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal, pacingSlot =>
             transportState.activeAdapter.fetchResponse!(builtContinuationRequest, {
+              kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
               abortSignal: upstream.signal,
               timeoutMs: connectMs,
               sendBudget: adapterDispatchBudget,
@@ -265,13 +274,26 @@ export function createAdapterContinuations(
         const recoveryKind = nextContinuationRecoveryKind;
         nextContinuationRecoveryKind = undefined;
         response = await fetchContinuation(recoveryKind);
+        if (kiroRefusalPendingReplay) {
+          try { void kiroRefusalPendingReplay.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          kiroRefusalPendingReplay = undefined;
+          sendBudgetState.pendingHopPermit = undefined;
+        }
       } catch (error) {
+        if (kiroRefusalPendingReplay && !options.abortSignal?.aborted && !upstream.signal.aborted) {
+          sendBudgetState.pendingHopPermit?.release();
+          sendBudgetState.pendingHopPermit = undefined;
+          response = kiroRefusalPendingReplay;
+          kiroRefusalPendingReplay = undefined;
+          kiroReplaySetupFailed = true;
+        } else {
         if (options.abortSignal?.aborted || upstream.signal.aborted) {
           yield { type: "error", message: "client closed request during terminal continuation", status: 499 };
         } else {
           yield { type: "error", message: `Provider continuation failed: ${redactSecretString(error instanceof Error ? error.message : String(error))}` };
         }
         return;
+        }
       }
 
       // Same-target 429 wait-and-retry (opt-in `retryOn429`) before key/account failover:
@@ -279,6 +301,7 @@ export function createAdapterContinuations(
       // loop; only after the attempts are exhausted does the continuation fail over.
      while (
        response.status === 429
+        && !kiroReplaySetupFailed
         // A synthesized replay refusal is not a rate limit; replaying the continuation on
         // it would re-send a turn whose first send may already have been processed.
         && !isNonReplayableResponse(response)
@@ -404,6 +427,109 @@ export function createAdapterContinuations(
       // 429 stayed terminal even with failover fully active -- the same class of divergence the
       // two sidecars already produced once. Request-local state is shared with the other arms so
       // the per-request bound cannot be silently re-armed by reaching a different loop.
+      if (route.providerName === "kiro") {
+     if (
+       (response.status === 429 || response.status === 400 || response.status === 403)
+       && transportState.genericFailoverAccountId
+        && !isNonReplayableResponse(response)
+        && !kiroReplaySetupFailed
+      ) {
+        const refusal = classifyKiroRefusal(response.status,
+          await readDisplaySafeErrorText(response.clone(), upstream.signal, ""));
+        if (refusal.kind === "other") break;
+        const sent = transportState.replayOAuthCredentialSnapshot;
+        const monthlyCooldownMs = refusal.kind === "monthly_quota" && sent
+          ? noteKiroMonthlyRefusal(sent.accountId, sent.generation, Date.now()) : undefined;
+        if (monthlyCooldownMs !== undefined) persistKiroAccountState();
+        if (refusal.kind === "suspended")
+          quarantineKiroSuspendedAccount(transportState.genericFailoverAccountId, sent?.generation);
+        if (transportState.genericFailovers >= transportState.genericFailoverLimit
+          || !isGenericOAuthFailoverEnabled(config, "kiro")) break;
+        // Intersection with the shared request budget. The continuation loop re-sends the
+        // turn, so without this the per-request bound could be re-armed simply by reaching a
+        // different loop -- which is the divergence the comment above already warns about.
+        //
+        // Who settles the reservation depends on who sends the replay (#4709). An adapter that
+        // owns its ladder reserves once per physical send and would charge this replay twice;
+        // the helper path reports it back instead, which is what `countedExternally` names.
+        const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
+        const hop = reserveCredentialHop(
+          "auth-recovery",
+          `${route.providerName}|${route.modelId}|continuation-oauth-429`,
+          !adapterOwnsDispatch && transientRetryPolicyFor(route.provider) !== null,
+        );
+        const nextAccountId = hop.allowed
+          ? rotateGenericOAuthAccountOnRefusal(
+            config,
+            route.providerName,
+            transportState.genericFailoverAccountId,
+            refusal.kind,
+            response.headers.get("retry-after"),
+            Date.now(),
+            route.modelId,
+            monthlyCooldownMs,
+          )
+          : null;
+        // A roster quorum ignores cooldowns, so only attribute a budget refusal when the
+        // non-mutating selector confirms that an alternate account could serve this model now.
+        if (!hop.allowed && hasEligibleGenericOAuthFailoverTarget(
+          route.providerName, transportState.genericFailoverAccountId, Date.now(), route.modelId,
+        )) noteAttemptRecoveryWithheld(logCtx.activeAttempt, "rotation-send-budget");
+        if (!nextAccountId) hop.permit?.release();
+        if (nextAccountId) {
+          try {
+            // The FULL snapshot through the shared helper, never a bare bearer: Antigravity
+            // pairs an account-matched projectId with its token and Kiro carries routing
+            // metadata, so a token-only swap would mix one account's credential with another's
+            // routing data.
+            const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
+            const applied = await applyFailoverSnapshot(snapshot, nextParsed);
+            if (!applied) hop.permit?.release();
+            if (applied) {
+              transportState.genericFailovers += 1;
+              invalidateSameTargetRequest();
+              transportState.activeAdapter = resolveSelectionAdapter(
+                resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
+                config.cacheRetention,
+              );
+              bindRouteReasoningReplayScope({
+                parsed: nextParsed,
+                providerName: route.providerName,
+                provider: route.provider,
+                adapterName: transportState.activeAdapter.name,
+                oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+              });
+              // Response persistence closes over the outer parsed request; keep its owner binding in
+              // sync with the terminal-guard clone that builds the rotated continuation request.
+              bindRouteReasoningReplayScope({
+                parsed,
+                providerName: route.providerName,
+                provider: route.provider,
+                adapterName: transportState.activeAdapter.name,
+                oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
+              });
+              sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
+              recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
+              // The replay goes out on the next iteration. An adapter that owns its ladder
+              // reserves for that send itself, so hand this reservation down rather than let it
+              // take a second one for the same replay. A helper-routed replay needs no handoff:
+              // its reporter settles the booking made above.
+              if (adapterOwnsDispatch) sendBudgetState.pendingHopPermit = hop.permit;
+              nextContinuationRecoveryKind = "oauth-account-429";
+              kiroRefusalPendingReplay = response;
+              continue;
+            }
+          } catch {
+            // Everything in this try runs before the replay: the send happens on the next
+            // iteration, after `continue`. A throw here therefore leaves a reservation that
+            // never dispatched, and holding it would refuse a later recovery in this same
+            // request for a send that never left the process.
+            hop.permit?.release();
+            // fall through to emit continuation error below
+          }
+        }
+      }
+      } else {
      if (
        response.status === 429
        && transportState.genericFailoverAccountId
@@ -493,6 +619,7 @@ export function createAdapterContinuations(
           }
         }
       }
+      }
       if (shouldAttemptImageTierRetry({
         status: response.status,
         adapterName: transportState.activeAdapter.name,
@@ -509,6 +636,7 @@ export function createAdapterContinuations(
     }
 
     if (!response.ok) {
+      if (route.providerName === "kiro") response = await normalizeFinalKiroHttpError(response, upstream.signal);
       const errorText = await readDisplaySafeErrorText(response, upstream.signal, "unknown error");
       const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
       yield {

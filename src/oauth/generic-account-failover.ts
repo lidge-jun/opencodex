@@ -14,7 +14,8 @@
  * (`oauth/anthropic-routing.ts` owns affinity and a fail-closed local-cli credential rule).
  * Both are excluded by `isGenericFailoverProvider`.
  */
-import { getAccountSet } from "./store";
+import { credentialGeneration, getAccountSet } from "./store";
+import { accountInFlight } from "./kiro-account-load";
 import type { ProviderAccount } from "./types";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
 import {
@@ -35,6 +36,10 @@ import {
   seedPoolRotationAccount,
 } from "./pool-kernel";
 import { parseRetryAfterMs } from "../combos/failover";
+import type { KiroRefusalKind } from "../adapters/kiro-refusal";
+import { kiroAccountEvidence } from "../providers/kiro-usage";
+import { kiroEvidenceIdentity } from "../providers/kiro-account-state-disk";
+import { ACCOUNT_QUOTA_TTL_MS } from "../providers/quota-wire";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 
@@ -77,7 +82,8 @@ const EXCLUDED_PROVIDERS = new Set(["openai", "anthropic"]);
 
 interface AccountHealth {
   cooldownUntil: number;
-  cooldownSource: "retry-after" | "default";
+  cooldownSource: "retry-after" | "default" | "kiro-suspension";
+  identity?: string;
 }
 
 interface PresenceEntry {
@@ -94,9 +100,26 @@ const presence = new Map<string, PresenceEntry>();
 const healthKey = (provider: string, accountId: string, family?: QuotaModelFamily) =>
   family ? `${provider}\u0000${accountId}\u0000${family}` : `${provider}\u0000${accountId}`;
 
+export function quarantineKiroSuspendedAccount(accountId: string, generation?: string, now = Date.now()): void {
+  const live = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
+  if (!live || (generation && credentialGeneration(live.credential) !== generation)) return;
+  health.set(healthKey("kiro", accountId), {
+    cooldownUntil: now + 24 * 60 * 60_000, cooldownSource: "kiro-suspension",
+    identity: kiroEvidenceIdentity(live),
+  });
+  sweepExpiredOnWrite(now);
+}
+
 function isCooled(provider: string, accountId: string, now: number, family?: QuotaModelFamily): boolean {
   const entry = health.get(healthKey(provider, accountId, family));
   if (!entry) return false;
+  if (provider === "kiro" && entry.cooldownSource === "kiro-suspension") {
+    const live = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
+    if (!live || entry.identity !== kiroEvidenceIdentity(live)) {
+      health.delete(healthKey(provider, accountId, family));
+      return false;
+    }
+  }
   if (entry.cooldownUntil <= now) {
     health.delete(healthKey(provider, accountId, family));
     return false;
@@ -121,7 +144,10 @@ function eligibleAccountCount(providerName: string, now: number): number {
   const cached = presence.get(providerName);
   if (cached && now >= cached.readAt && now - cached.readAt < PRESENCE_CACHE_TTL_MS) return cached.eligible;
   const set = getAccountSet(providerName);
-  const eligible = set ? set.accounts.filter(account => account.needsReauth !== true).length : 0;
+  // Kiro terminal refresh marks the just-refused account needsReauth before the alternate
+  // selector runs. Both stored logins still express consent to recover through the survivor.
+  const eligible = set ? (providerName === "kiro" ? set.accounts.length
+    : set.accounts.filter(account => account.needsReauth !== true).length) : 0;
   presence.set(providerName, { eligible, readAt: now });
   return eligible;
 }
@@ -172,7 +198,7 @@ export function isGenericOAuthFailoverEnabled(
  * turns it off only when the provider has no override. A malformed value falls through rather
  * than taking a provider out of service.
  */
-function isProactivePreferenceEnabled(config: OcxConfig, providerName: string, now: number): boolean {
+export function isProactivePreferenceEnabled(config: OcxConfig, providerName: string, now: number): boolean {
   const provider = config.providers?.[providerName];
   if (!provider || !isGenericFailoverProvider(providerName, provider)) return false;
   const perProvider = provider.oauthAccountFailover?.enabled;
@@ -198,7 +224,9 @@ function eligibleIdsIn(
 ): string[] {
   if (!set) return [];
   return set.accounts
-    .filter(account => account.needsReauth !== true && !isCooled(providerName, account.id, now, family))
+    .filter(account => account.needsReauth !== true && !isCooled(providerName, account.id, now, family)
+      && (providerName !== "kiro" || (!isCooled("kiro", account.id, now)
+        && kiroAccountEvidence(account, now).exhausted !== true)))
     .map(account => account.id);
 }
 
@@ -223,7 +251,7 @@ export function hasEligibleGenericOAuthFailoverTarget(
 }
 
 /** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */
-type ActiveGenericStrategy = "round-robin" | "fill-first";
+type ActiveGenericStrategy = "round-robin" | "fill-first" | "least-loaded";
 
 /** Matches the Codex and Anthropic pools; the DTO still reports `null` for "not stored". */
 const DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD = 80;
@@ -239,6 +267,7 @@ const DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD = 80;
 function activeGenericStrategy(config: OcxConfig, providerName: string): ActiveGenericStrategy | null {
   if (config.pool?.kernel !== true) return null;
   const raw = config.providers?.[providerName]?.oauthAccountFailover?.strategy;
+  if (providerName === "kiro" && raw === "least-loaded") return raw;
   return raw === "round-robin" || raw === "fill-first" ? raw : null;
 }
 
@@ -353,6 +382,22 @@ export function rotateGenericOAuthAccountOn429(
   now = Date.now(),
   requestedModelId?: string | null,
 ): string | null {
+  return rotateGenericOAuthAccountOnRefusal(config, providerName, failedAccountId, "rate",
+    retryAfterHeader, now, requestedModelId);
+}
+
+/** Kiro adds account-scoped refusal classes; all other providers retain their 429 policy. */
+export function rotateGenericOAuthAccountOnRefusal(
+  config: OcxConfig,
+  providerName: string,
+  failedAccountId: string,
+  kind: KiroRefusalKind,
+  retryAfterHeader: string | null | undefined,
+  now = Date.now(),
+  requestedModelId?: string | null,
+  monthlyCooldownMs?: number,
+): string | null {
+  if (kind === "other" || (providerName !== "kiro" && kind !== "rate")) return null;
   if (!isGenericOAuthFailoverEnabled(config, providerName)) return null;
   const set = getAccountSet(providerName);
   // A single stored account has nowhere to go; rotating to itself would just replay the 429.
@@ -361,14 +406,22 @@ export function rotateGenericOAuthAccountOn429(
   // `preserveServerDelay` keeps the delay the server actually stated, bounded by the parser's
   // one-day ceiling, exactly as the combo path does. Truncating it locally only guarantees a
   // second 429 on an account we were told to leave alone.
-  const parsed = parseRetryAfterMs(retryAfterHeader, now, { preserveImmediate: true, preserveServerDelay: true });
+  const parsed = kind === "rate"
+    ? parseRetryAfterMs(retryAfterHeader, now, { preserveImmediate: true, preserveServerDelay: true })
+    : undefined;
   // An account whose allowance is provably spent gets a reset-aligned cooldown instead of
   // the default minute: retrying it every 60s until the window rolls over is pure waste.
   // A Retry-After from upstream still wins — it is the server's own instruction.
-  const exhausted = parsed === undefined ? exhaustedCooldownMs(providerName, failedAccountId, now, set.accounts.find(account => account.id === failedAccountId)) : null;
-  const cooldownMs = exhausted ?? parsed ?? DEFAULT_COOLDOWN_MS;
+  const exhausted = parsed === undefined && providerName !== "kiro"
+    ? exhaustedCooldownMs(providerName, failedAccountId, now, set.accounts.find(account => account.id === failedAccountId)) : null;
+  const cooldownMs = kind === "suspended" ? 24 * 60 * 60_000
+    : kind === "monthly_quota" ? (monthlyCooldownMs ?? ACCOUNT_QUOTA_TTL_MS)
+    : providerName === "kiro" ? (parsed ?? 10_000)
+    : (exhausted ?? parsed ?? DEFAULT_COOLDOWN_MS);
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
-  health.set(healthKey(providerName, failedAccountId, family), {
+  // Suspension is recorded by the caller with the sent generation before the quorum check.
+  // Rewriting it here would lose its login-identity fence.
+  if (kind !== "suspended") health.set(healthKey(providerName, failedAccountId, providerName === "kiro" ? undefined : family), {
     cooldownUntil: now + cooldownMs,
     cooldownSource: parsed ? "retry-after" : "default",
   });
@@ -385,12 +438,20 @@ export function rotateGenericOAuthAccountOn429(
   const order = set.accounts.map(account => account.id);
   const start = order.indexOf(failedAccountId);
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
-  const candidates = ring.filter(id => id !== failedAccountId && eligible.includes(id));
+  let candidates = ring.filter(id => id !== failedAccountId && eligible.includes(id));
   if (candidates.length === 0) return null;
+  const cap = providerName === "kiro" ? config.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount : undefined;
+  if (typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100) {
+    const withRoom = candidates.filter(id => accountInFlight("kiro", id) < cap);
+    if (withRoom.length > 0) candidates = withRoom;
+  }
   // The 429 path branches too. Leaving it on the quota ranking would make a configured
   // strategy inert in practice the moment anything actually failed, which is the case the
   // operator chose the strategy for.
   const strategy = activeGenericStrategy(config, providerName);
+  if (strategy === "least-loaded" && isProactivePreferenceEnabled(config, "kiro", now)) {
+    return candidates.sort((a, b) => accountInFlight("kiro", a) - accountInFlight("kiro", b))[0] ?? null;
+  }
   if (strategy === "round-robin") {
     // PICK here, not peek: the failure already happened and this answer is the one being used,
     // so the ring genuinely advances.
@@ -415,6 +476,24 @@ export function rotateGenericOAuthAccountOn429(
   // per-account quota keep exactly the traversal they have today.
   return rankAccountsByHeadroom(providerName, candidates, requestedModelId,
     new Map(set.accounts.map(account => [account.id, account])))[0] ?? null;
+}
+
+/** Known dead-account exclusion is a proactive choice with narrow-over-broad precedence. */
+export function refusalAwareInitialKiroAccount(
+  config: OcxConfig, activeId: string, now = Date.now(), requestedModelId?: string | null,
+): string | null {
+  if (!isProactivePreferenceEnabled(config, "kiro", now)) return null;
+  const set = getAccountSet("kiro");
+  if (!set || set.accounts.length < 2) return null;
+  const active = set.accounts.find(account => account.id === activeId);
+  if (!active || (!isCooled("kiro", activeId, now)
+    && kiroAccountEvidence(active, now).exhausted !== true)) return null;
+  const eligible = new Set(eligibleIdsIn(set, "kiro", now, classifyModelFamilyForQuota("kiro", requestedModelId)));
+  const start = set.accounts.findIndex(account => account.id === activeId);
+  for (const account of [...set.accounts.slice(start + 1), ...set.accounts.slice(0, start)]) {
+    if (eligible.has(account.id)) return account.id;
+  }
+  return null;
 }
 
 /**
@@ -467,6 +546,16 @@ export function preferredInitialAccount(
   // healthy-active return fires before autoSwitchThreshold can ever be read, so fill-first
   // would never reach its own test. Cooldowns and reauth are still honoured inside each pick.
   const strategy = activeGenericStrategy(config, providerName);
+  if (strategy === "least-loaded" && providerName === "kiro") {
+    const family = classifyModelFamilyForQuota(providerName, requestedModelId);
+    let candidates = eligibleFailoverAccounts(providerName, now, family);
+    const cap = config.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount;
+    if (typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100) {
+      candidates = candidates.filter(id => accountInFlight("kiro", id) < cap);
+    }
+    const picked = candidates.sort((a, b) => accountInFlight("kiro", a) - accountInFlight("kiro", b))[0];
+    return picked && picked !== active ? picked : null;
+  }
   if (strategy === "round-robin") {
     const family = classifyModelFamilyForQuota(providerName, requestedModelId);
     const eligibleNow = eligibleFailoverAccounts(providerName, now, family);

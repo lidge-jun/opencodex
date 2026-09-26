@@ -118,7 +118,7 @@ echoed bare name to its namespaced identity before authorizing anything
 echo is a guess rather than a nomination. The bridges check the declared set before consulting
 `toolNsMap`, so there a bare helper echo is refused either way. A genuine namespace-free
 declaration is untouched throughout: that is the caller declaring the tool, not a namespace being
-discarded to manufacture a bare name.
+discarded to manufacture a bare name. Meta Responses also applies [tool-selection compatibility](../providers-and-adapters.md#meta-responses-tool-selection).
 
 Function-call wrappers around freeform bodies are restored by
 `src/responses/apply-patch-envelope.ts`. The declared `input` field is authoritative. For bare
@@ -435,7 +435,7 @@ Reusable helpers live in `core-auth.ts`, `core-codex-account.ts`, `core-combo.ts
 `core-combo-failure.ts`, `core-combo-native.ts`, `core-errors.ts`, `core-lifetime.ts`, `core-normalize.ts`,
 `core-opaque-recovery.ts` and `core-replay.ts`. `core-options.ts` owns the public option types
 and small composition contracts. Existing public helper names are re-exported by `core.ts`.
-Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf.
+Adapter construction remains with the existing registry; `fetch-helpers.ts` remains a leaf. For Kiro OAuth with load settings, `request-transport.ts` acquires a lease on the admitted account and transfers it before a reactive replacement send; `core.ts` and `core-lifetime.ts` release it on returned-body completion, error, or cancellation, outside the inner admission `finally`.
 
 Mutable values are not copied across phases. A phase exposes only the values consumed by later
 phases, with getters/setters over the original local bindings where a retry or callback can
