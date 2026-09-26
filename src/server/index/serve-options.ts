@@ -115,6 +115,7 @@ import {
   handleClaudeMessages,
 } from "../claude-messages";
 import { handleChatCompletions } from "../chat-completions";
+import { withFirstOutputFailover } from "../first-output-failover";
 import { anthropicErrorResponse } from "../../claude/outbound";
 import {
   buildDesktop3pRegistry,
@@ -1572,7 +1573,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // listener too (#4236), and only the receiving listener's view produces CORS headers
         // that match the admission decision made above.
         return runAdmittedHttpTurn(req, policy, async turnAdmissionLease => withCors(
-          await handleChatCompletions(req, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+          await withFirstOutputFailover(
+            req,
+            config.firstOutputFailover,
+            r => handleChatCompletions(r, config, logCtx, { requestId, start, turnAdmissionLease, admission }),
+            (from, to, waitedMs) => console.log(`[opencodex] first-output failover ${from} -> ${to} after ${waitedMs}ms`),
+          ),
           req,
           policy,
         ), { requestId, start, logCtx });

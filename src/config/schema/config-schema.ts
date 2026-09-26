@@ -218,6 +218,11 @@ export const configSchema = z.object({
     z.string(),
     z.array(z.string().trim().min(1)).min(1),
   ).optional().catch(undefined),
+  // A malformed map degrades to undefined (feature off) rather than rejecting the whole config.
+  firstOutputFailover: z.record(
+    z.string().trim().min(1),
+    z.object({ to: z.string().trim().min(1), afterMs: z.number().int().min(1).max(600_000) }),
+  ).optional().catch(undefined),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
