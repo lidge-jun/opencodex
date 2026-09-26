@@ -344,7 +344,9 @@ MiMo model Command Code serves.
 - Reports per-account usage. `AmazonCodeWhispererService.GetUsageLimits` on
   `https://management.{region}.kiro.dev/` returns the plan allowance, which becomes the
   monthly quota window for that account; a free-trial balance is reported as its own window.
-  The region comes from the account's profile ARN, then its stored API/SSO region. An
+  The region comes from the account's profile ARN, then its stored API/SSO region. An AWS
+  Builder ID account has no profile ARN of its own, so the probe sends the same Builder ID
+  service profile that generation requests use; that fixed ARN never selects the region. An
   unreadable or unrecognised response is reported as unknown rather than as zero usage, and
   an account whose overage is enabled is not treated as exhausted merely for passing its
   limit. The operation is undocumented by AWS, so treat the numbers as best-effort.
