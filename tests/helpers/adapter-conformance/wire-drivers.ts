@@ -327,4 +327,9 @@ export const TOOL_WIRE_DRIVERS = {
       throw new Error("codebuddy forwards no client tool catalog in v1; excluded from tool conformance");
     },
   },
+  zed: {
+    async observeOutbound(): Promise<string> {
+      throw new Error("Zed uses a provider-owned hosted protocol; covered by focused Zed adapter tests");
+    },
+  },
 } satisfies Record<AdapterWire, ToolWireDriver>;

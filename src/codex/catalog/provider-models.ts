@@ -57,6 +57,7 @@ import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
 import { resolveDevinApiBaseUrl } from "../../oauth/devin/api-base";
+import { resolveZedModels } from "../../providers/zed";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -139,6 +140,7 @@ export function observedModelsAuthResolver(
       return {
         apiKey: observation.snapshot.accessToken,
         observed: true,
+        oauthAccountId: observation.snapshot.accountId,
         ...(observation.snapshot.apiBaseUrl ? { oauthApiBaseUrl: observation.snapshot.apiBaseUrl } : {}),
         ...(observation.snapshot.projectId ? { oauthProjectId: observation.snapshot.projectId } : {}),
       };
@@ -222,6 +224,7 @@ export async function fetchProviderModelsWithAuth(
         .then(snapshot => ({
           apiKey: snapshot.accessToken,
           observed: false,
+          oauthAccountId: snapshot.accountId,
           ...(snapshot.apiBaseUrl ? { oauthApiBaseUrl: snapshot.apiBaseUrl } : {}),
           ...(snapshot.projectId ? { oauthProjectId: snapshot.projectId } : {}),
         }))
@@ -245,6 +248,62 @@ export async function fetchProviderModelsWithAuth(
       ? [...models, vertexDefaultSeed]
       : models
   );
+  if (name === "zed" && prov.adapter === "zed") {
+    if (!apiKey || !auth.oauthAccountId) return observed(configured, "degraded");
+    // Zed's roster and short-lived inference token are both account-scoped. Keep the
+    // catalog cache bound to the same pair so a multi-account switch cannot reuse a stale
+    // roster even when the provider destination is unchanged.
+    const authorityIdentity = createHash("sha256")
+      .update(JSON.stringify([auth.oauthAccountId, apiKey])).digest("hex");
+    const cached = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
+    if (cached) {
+      return observed(
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, cached, contextCap, metadataModelIdCaseFold, captured.effectiveAlias)),
+        "authoritative",
+      );
+    }
+    const stale = getStaleCached(name, authorityIdentity);
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity) && stale) {
+      return observed(
+        withConfiguredRetention(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias)),
+        "degraded",
+      );
+    }
+    const zedFetch = (prov as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
+    try {
+      const live = await resolveZedModels(
+        { userId: auth.oauthAccountId, accessToken: apiKey },
+        zedFetch ? { fetchFn: zedFetch } : undefined,
+      );
+      const discovered = live.models.map(model => {
+        const reasoningEfforts = sanitizeCodexReasoningEfforts(model.supportedEffortLevels);
+        return {
+          id: model.id,
+          provider: name,
+          ...(model.contextLength ? { contextWindow: model.contextLength } : {}),
+          ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}),
+          ...(model.supportsImages ? { inputModalities: ["text", "image"] } : {}),
+          ...(reasoningEfforts?.length ? { reasoningEfforts } : {}),
+          ...catalogHintsFromProviderConfig(name, prov, model.id, contextCap, metadataModelIdCaseFold, captured.effectiveAlias),
+        } as CatalogModel;
+      });
+      const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, live.models.length);
+      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+    } catch {
+      if (isCurrentCacheGeneration()) {
+        markModelsFetchFailure(name, undefined, authorityIdentity);
+        markProviderDiscoveryFailed(name, { reason: "provider" });
+      }
+      return observed(
+        withConfiguredRetention(stale ? applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias) : configured),
+        "degraded",
+      );
+    }
+  }
   if (prov.adapter === "qoder") {
     if (!apiKey) return observed(configured, "degraded");
     const profile = resolveQoderProfile(prov.baseUrl);

@@ -157,6 +157,24 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     noVisionModels: [...CURSOR_NO_VISION_MODELS],
   },
   {
+    id: "zed",
+    label: "Zed Hosted AI (experimental)",
+    adapter: "zed",
+    baseUrl: "https://cloud.zed.dev",
+    authKind: "oauth",
+    featured: false,
+    dashboardPreset: true,
+    models: [],
+    liveModels: true,
+    defaultModel: "auto",
+    modelDiscovery: {
+      url: "https://cloud.zed.dev/models",
+      maxResponseBytes: 4 * 1024 * 1024,
+      maxModels: 2_000,
+    },
+    note: "Experimental Zed Hosted AI bridge. Login uses Zed's native-app RSA callback and consumes the signed-in Zed account's hosted-model entitlement. This route is unofficial and may be outside Zed's service terms; review before enabling.",
+  },
+  {
     // The canonical Cognition account provider, after absorbing `devin-cli`
     // (devlog/_plan/260913_devin_provider_merge). The two ids were the same
     // `devin` adapter, the same server.codeium.com api-server, and the same

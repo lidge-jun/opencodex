@@ -60,6 +60,7 @@ const RUNTURN_WS_ROUTE_STATE_KEYS = [
   "_cursorConversationId",
   "_cursorClientThreadId",
   "_kiroAuthContext",
+  "_zedAuthContext",
   "_providerContinuation",
   "_providerContinuationOwner",
   "_providerContinuationCandidate",

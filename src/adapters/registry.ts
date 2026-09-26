@@ -14,6 +14,7 @@ import { createMimoFreeAdapter } from "./mimo-free";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
+import { createZedAdapter } from "./zed";
 import type { OcxProviderConfig } from "../types";
 import { createAdapterTierMetadata } from "../providers/fastwire";
 import { withInputMediaGuard } from "./input-media-guard";
@@ -44,7 +45,8 @@ export type AdapterWire =
   | "google"
   | "kiro"
   | "cursor"
-  | "devin";
+  | "devin"
+  | "zed";
 
 export type AdapterMutationContract =
   | "codex-owned"
@@ -130,6 +132,11 @@ export const ADAPTER_REGISTRY = {
     wire: "devin",
     mutation: "codex-owned",
     create: (provider: OcxProviderConfig, context: AdapterFactoryContext) => createDevinAdapter(provider, context),
+  },
+  zed: {
+    wire: "zed",
+    mutation: "codex-owned",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createZedAdapter(provider),
   },
   "mimo-free": {
     contractParent: "openai-chat",
