@@ -370,7 +370,6 @@
   "cli-status-hub-state.test.ts": "cli",
   "cli-status-json.test.ts": "cli",
   "cli-status-oauth-health.test.ts": "cli",
-  "cli-status-startup-health.test.ts": "cli",
   "cli-stop-json.test.ts": "cli",
   "cli-storage-inspect.test.ts": "cli",
   "cli-transport-honesty.test.ts": "cli",

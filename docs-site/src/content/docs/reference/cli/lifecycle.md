@@ -164,11 +164,6 @@ default provider, Codex autostart setting, service state, shim state, and the re
 home. Only the explicit, high-confidence Windows Orca runtime-home signature adds an actionable App-home
 mismatch warning; it never changes `CODEX_HOME` automatically.
 
-When the running proxy is identity-verified, status reads its startup-safety verdict through a
-short-lived local capability. This keeps the service protection result accurate when a shell lacks
-the service manager's environment. If that read is unavailable or malformed, status uses the local
-diagnostic instead.
-
 Human output also includes an **OAuth health** block after the OAuth logins summary: `OAuth health:
 ok` when every known account is healthy, or `OAuth health: warning` with one redacted line per
 non-healthy account (provider, masked account id, status such as reauthentication required, rate or

@@ -260,27 +260,6 @@ export async function fetchLiveStartupHealth(
     && row.routingKind !== "custom-local" && row.routingKind !== "custom-remote" && row.routingKind !== "unknown") return null;
   if (row.shimCoverage !== "full" && row.shimCoverage !== "cli-only" && row.shimCoverage !== "none") return null;
   for (const key of STARTUP_HEALTH_BOOLEAN_FIELDS) if (typeof row[key] !== "boolean") return null;
-  if (typeof row.platform !== "string") return null;
-  if (row.recommendedCommand !== null && typeof row.recommendedCommand !== "string") return null;
-  if (!row.commands || typeof row.commands !== "object" || Array.isArray(row.commands)) return null;
-  const commands = row.commands as Record<string, unknown>;
-  for (const key of ["installService", "repairService", "installShim", "restoreNative"] as const) {
-    if (typeof commands[key] !== "string") return null;
-  }
-  if (row.routingAdoption !== undefined) {
-    if (!row.routingAdoption || typeof row.routingAdoption !== "object" || Array.isArray(row.routingAdoption)) return null;
-    const adoption = row.routingAdoption as Record<string, unknown>;
-    if (adoption.adoption !== "not-applicable" && adoption.adoption !== "adopted"
-      && adoption.adoption !== "pending-client-restart" && adoption.adoption !== "unknown") return null;
-    if (adoption.injectedAtMs !== null && (typeof adoption.injectedAtMs !== "number" || !Number.isFinite(adoption.injectedAtMs))) return null;
-    if (!Number.isSafeInteger(adoption.observedClients) || (adoption.observedClients as number) < 0) return null;
-    if (!Array.isArray(adoption.staleClients) || !adoption.staleClients.every((client: unknown) => {
-      if (!client || typeof client !== "object" || Array.isArray(client)) return false;
-      const row = client as Record<string, unknown>;
-      return Number.isSafeInteger(row.pid) && (row.pid as number) > 0
-        && typeof row.startedAtMs === "number" && Number.isFinite(row.startedAtMs);
-    })) return null;
-  }
   return payload as StartupHealth;
 }
 

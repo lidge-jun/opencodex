@@ -76,15 +76,6 @@ describe("ocx status live startup health", () => {
     expect(observed).toBeNull();
   });
 
-  test.each([
-    ["missing commands", { commands: undefined }],
-    ["non-string recovery command", { recommendedCommand: 42 }],
-    ["missing service log platform", { platform: undefined }],
-    ["malformed client adoption", { routingAdoption: { adoption: "pending-client-restart" } }],
-  ])("rejects %s rather than accepting an unusable live verdict", async (_label, changed) => {
-    expect(await fetchLiveStartupHealth(LIVE, deps({ ...startupPayload(), ...changed }))).toBeNull();
-  });
-
   test("fails closed when the runtime attestation cannot bind the live PID", async () => {
     const observed = await fetchLiveStartupHealth(LIVE, {
       ...deps(startupPayload()),

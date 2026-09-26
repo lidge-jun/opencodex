@@ -270,7 +270,6 @@ describe("membership oracle", () => {
   // it" and "the table says which domain owns it".
   test("the merged regression tests are classified explicitly, not by seed", () => {
     const owners = {
-      "cli-status-startup-health.test.ts": "cli",
       "ci-structure-gate.test.ts": "ci-workflows",
       "responses-code-mode-patch-compile.test.ts": "responses",
       "gui-codex-usage-score-parity.test.ts": "gui",

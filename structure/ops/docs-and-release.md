@@ -116,8 +116,6 @@ sharing a model-name fragment remain distinct from current Codex-native support.
 The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
 `tests/cli/cli-connect-readiness.test.ts` exercises that boundary and general status's single discovery pass with isolated executable fixtures.
 
-The CLI status reference follows `src/cli/status.ts`: after identity verification, status prefers the live proxy's `/api/startup-health` verdict through a PID/port-bound local read capability. It validates the returned shape and falls back to local service, shim, and routing diagnostics for unavailable or malformed responses. This avoids a shell-only service-manager environment changing the reported protection; no reusable management credential is copied into the CLI.
-
 The provider guide's OrcaRouter login section in English and all seven translated sources follows
 the [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
 64 KiB of valid UTF-8 JSON and one 30-second deadline covering headers and body. These are login
