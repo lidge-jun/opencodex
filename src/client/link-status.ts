@@ -31,6 +31,9 @@ function childState(sidecar: ClientLinkSidecarRead, supervisor: ClientLinkSuperv
     alias,
     state: tunnel.kind,
     since: new Date(tunnel.kind === "idle" ? now : tunnel.since).toISOString(),
-    reason: tunnel.kind === "failed" ? tunnel.reason : null,
+    // The keyed probe's finding (the Home refused the key, did not answer, or reports its own
+    // readiness as not ready) names the cause better than the tunnel state, so it wins; otherwise
+    // a failed tunnel shows its own reason.
+    reason: supervisor.probe ?? (tunnel.kind === "failed" ? tunnel.reason : null),
   };
 }

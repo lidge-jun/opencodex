@@ -22,6 +22,21 @@ export interface LinkRelayClock {
   clearTimeout: typeof clearTimeout;
 }
 
+/**
+ * The Child's tunnel as the relay sees it (the client link supervisor implements it). A request
+ * waits on it only while the tunnel is being (re)established; a connected tunnel costs one
+ * `pending()` call per request and nothing else.
+ */
+export interface LinkTunnelGate {
+  /** True while the tunnel is connecting or reconnecting. */
+  pending(): boolean;
+  /**
+   * Resolves true once the tunnel is connected, and false after `timeoutMs`, when `signal` aborts,
+   * when the tunnel stops being re-established (failed or stopped), or when too many requests wait.
+   */
+  waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
+}
+
 export interface LinkRelayDeps {
   fetchImpl?: typeof fetch;
   clock?: LinkRelayClock;
@@ -30,6 +45,11 @@ export interface LinkRelayDeps {
   sseIdleTimeoutMs?: number;
   /** Byte cap for the streamed request body and for a non-SSE response body. */
   bodyLimitBytes?: number;
+  /** The Child's tunnel; without one a request is forwarded at once, as before. */
+  tunnel?: LinkTunnelGate;
+  /** The longest a request waits for a reconnecting tunnel, from its first wait. */
+  holdMs?: number;
+  now?: () => number;
 }
 
 export const LINK_RELAY_RETRY_AFTER_SECONDS = 1;
@@ -41,6 +61,12 @@ export const LINK_RELAY_SSE_IDLE_TIMEOUT_MS = 300_000;
 export const LINK_RELAY_HEADER_TIMEOUT_MS = 300_000;
 /** The data-plane default: the same inbound limit a standalone listener admits. */
 export const LINK_RELAY_BODY_MAX_BYTES = resolveInboundBodyLimitBytes(undefined);
+/**
+ * How long a request waits for a tunnel that is connecting or reconnecting (right after the
+ * restart into a Child, after sleep, after an ssh exit) before it is answered 503. Codex's own
+ * retries cover only a few seconds.
+ */
+export const LINK_RELAY_HOLD_MS = 15_000;
 
 const defaultClock: LinkRelayClock = {
   setTimeout: globalThis.setTimeout,
@@ -126,6 +152,7 @@ function byteCappedRequestBody(
   body: ReadableStream<Uint8Array>,
   limit: number,
   onOverflow: () => void,
+  onCancel: () => void,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let bytes = 0;
@@ -151,9 +178,19 @@ function byteCappedRequestBody(
       }
     },
     async cancel(reason) {
+      onCancel();
       try { await reader.cancel(reason); } catch { /* best effort */ }
     },
   });
+}
+
+/**
+ * The connection itself was refused: nothing reached the Home, so the request may be sent again.
+ * Any other failure (a reset, a timeout, an error after the body started) may have reached it.
+ */
+function connectionRefused(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "ConnectionRefused" || code === "ECONNREFUSED";
 }
 
 function idleBoundedStream(
@@ -283,28 +320,52 @@ export async function relayLinkDataRequest(
   if (req.signal.aborted) onClientAbort();
 
   let bodyOverflow = false;
+  let bodyCancelled = false;
   const body = req.method === "GET" || req.method === "HEAD" || !req.body
     ? null
-    : byteCappedRequestBody(req.body, bodyLimit, () => { bodyOverflow = true; });
+    : byteCappedRequestBody(req.body, bodyLimit, () => { bodyOverflow = true; }, () => { bodyCancelled = true; });
   // A streamed body keeps the caller's Content-Length, so the Home sees the same framing a
   // buffered body produced instead of a chunked upload.
   if (body && declaredLength !== null) headers.set("content-length", declaredLength);
 
-  let upstream: Response;
-  try {
-    const init: RequestInit & { duplex?: "half" } = {
-      method: req.method,
-      headers,
-      redirect: "manual",
-      signal: relayAbort.signal,
-      ...(body ? { body, duplex: "half" } : {}),
-    };
-    upstream = await (deps.fetchImpl ?? fetch)(destination, init);
-  } catch {
+  // The hold: only while the tunnel is connecting or reconnecting, and at most `holdMs` from the
+  // first wait. A connected tunnel skips it after one `pending()` call.
+  const tunnel = deps.tunnel;
+  let holdUntil: number | undefined;
+  const holdForTunnel = async (gate: LinkTunnelGate): Promise<boolean> => {
+    const clockNow = deps.now ?? Date.now;
+    holdUntil ??= clockNow() + (positive(deps.holdMs) ?? LINK_RELAY_HOLD_MS);
+    const remaining = holdUntil - clockNow();
+    return remaining > 0 && await gate.waitForConnected(remaining, relayAbort.signal);
+  };
+  const tunnelUnavailable = async (): Promise<Response> => {
     cleanup();
-    return bodyOverflow
-      ? jsonError(413, "link relay request body too large")
-      : jsonError(503, "link tunnel unavailable", true);
+    try { await body?.cancel(); } catch { /* best effort */ }
+    return jsonError(503, "link tunnel unavailable", true);
+  };
+  if (tunnel?.pending() && !await holdForTunnel(tunnel)) return await tunnelUnavailable();
+
+  let upstream: Response | undefined;
+  while (!upstream) {
+    try {
+      const init: RequestInit & { duplex?: "half" } = {
+        method: req.method,
+        headers,
+        redirect: "manual",
+        signal: relayAbort.signal,
+        ...(body ? { body, duplex: "half" } : {}),
+      };
+      upstream = await (deps.fetchImpl ?? fetch)(destination, init);
+    } catch (error) {
+      if (bodyOverflow) {
+        cleanup();
+        return jsonError(413, "link relay request body too large");
+      }
+      // A refused connection sent nothing, and an untouched body can go again once the tunnel
+      // is back inside the same hold window. Anything else is never replayed.
+      const resendable = connectionRefused(error) && (body === null || (!body.locked && !bodyCancelled));
+      if (!tunnel || !resendable || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable();
+    }
   }
   if (relayAbort.signal.aborted) {
     cleanup();

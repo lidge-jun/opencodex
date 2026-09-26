@@ -41,8 +41,8 @@ The **Child** role is available only while OpenCodex runs on its configured port
 ## Link status
 
 - **Connected** means the SSH tunnel is ready and the Child can use the Home link.
-- **Reconnecting** means the tunnel is being retried. Requests can temporarily return `503` with `Retry-After` while the retry is in progress.
-- **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard.
+- **Reconnecting** means the tunnel is being retried. Requests can temporarily return `503` with `Retry-After` while the retry is in progress. On a Child that connected from its own dashboard, a request first waits up to 15 seconds for the tunnel to come back.
+- **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard. A Child that connected from its own dashboard keeps retrying by itself, after sleep, an outage or a restart: about once a minute after a timeout or forwarding error, and every five minutes after an authentication error. A changed host key is never retried.
 
 A failed link does not silently switch to a local provider.
 

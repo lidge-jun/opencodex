@@ -52,6 +52,18 @@ describe("a Child's own link status", () => {
       .toEqual({ ...invalid, alias: "home-mac" } as never);
   });
 
+  test("reports what the keyed probe found as the reason, whatever the tunnel state", () => {
+    const connected: ClientLinkSupervisorStatus = { ...tunnel({ kind: "connected", since: SINCE }), probe: "unauthorized" };
+    expect(projectClientLinkChild(sidecar, connected, NOW).child).toMatchObject({ state: "connected", reason: "unauthorized" });
+    const retrying: ClientLinkSupervisorStatus = {
+      ...tunnel({ kind: "failed", since: SINCE, reason: "timeout", retryAt: NOW + 60_000, inFlight: true }),
+      probe: "home_unreachable",
+    };
+    expect(projectClientLinkChild(sidecar, retrying, NOW).child).toEqual({
+      alias: "home-mac", state: "failed", since: new Date(SINCE).toISOString(), reason: "home_unreachable",
+    });
+  });
+
   test("a Home-initiated Child without a sidecar reports no child row", () => {
     expect(projectClientLinkChild(null, { kind: "stopped" }, NOW).child).toBeNull();
   });

@@ -7,10 +7,12 @@ import {
   forwardLinkRequestHeaders,
   LINK_RELAY_BODY_MAX_BYTES,
   LINK_RELAY_HEADER_TIMEOUT_MS,
+  LINK_RELAY_HOLD_MS,
   LINK_RELAY_SSE_IDLE_TIMEOUT_MS,
   relayLinkDataRequest,
   sanitizeLinkResponseHeaders,
   type LinkRelayClock,
+  type LinkTunnelGate,
 } from "../../src/client/link-relay";
 import { HUB_RELAY_REQUEST_BODY_MAX_BYTES } from "../../src/client/hub-relay";
 import { startMachineListener } from "../../src/client/machine-listener";
@@ -418,5 +420,203 @@ describe("client link HTTP relay", () => {
     } as RequestInit);
     expect(chunked.status).toBe(200);
     expect(received).toMatchObject({ authorization: `Bearer ${LINK_KEY}`, contentLength: null, transferEncoding: "chunked", body: '{"input":"chunked"}' });
+  });
+});
+
+/** A tunnel gate the test opens by hand. */
+function manualGate(initiallyPending = true) {
+  const waits: number[] = [];
+  const state = { pending: initiallyPending };
+  let open: (connected: boolean) => void = () => {};
+  const tunnel: LinkTunnelGate = {
+    pending: () => state.pending,
+    waitForConnected: timeoutMs => {
+      waits.push(timeoutMs);
+      return new Promise<boolean>(resolve => { open = resolve; });
+    },
+  };
+  return {
+    tunnel,
+    waits,
+    state,
+    release(connected: boolean) {
+      state.pending = false;
+      open(connected);
+    },
+  };
+}
+
+describe("client link relay while the tunnel reconnects", () => {
+  test("holds a request while the tunnel reconnects and forwards it once when it connects", async () => {
+    const gate = manualGate();
+    const sent: string[] = [];
+    const pending = relayLinkDataRequest(relayRequest({
+      method: "POST", headers: { "Content-Type": "application/json" }, body: '{"input":"held"}',
+    }), target, {
+      tunnel: gate.tunnel,
+      fetchImpl: (async (_input, init) => {
+        sent.push(await new Response(init!.body).text());
+        return Response.json({ ok: true });
+      }) as typeof fetch,
+    });
+    await Bun.sleep(5);
+    expect(sent).toEqual([]);
+    expect(gate.waits).toEqual([LINK_RELAY_HOLD_MS]);
+    gate.release(true);
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(sent).toEqual(['{"input":"held"}']);
+  });
+
+  test("answers 503 with Retry-After when the hold ends without a tunnel", async () => {
+    const gate = manualGate();
+    let calls = 0;
+    const pending = relayLinkDataRequest(relayRequest({ method: "POST", body: "{}" }), target, {
+      tunnel: gate.tunnel,
+      fetchImpl: (async () => { calls += 1; return new Response(); }) as typeof fetch,
+    });
+    await Bun.sleep(1);
+    gate.release(false);
+    const response = await pending;
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(await response.json()).toEqual({ error: "link tunnel unavailable" });
+    expect(calls).toBe(0);
+  });
+
+  test("a connected tunnel adds no wait", async () => {
+    let waited = 0;
+    const tunnel: LinkTunnelGate = { pending: () => false, waitForConnected: async () => { waited += 1; return true; } };
+    const response = await relayLinkDataRequest(relayRequest({ method: "POST", body: "{}" }), target, {
+      tunnel,
+      fetchImpl: (async () => Response.json({ ok: true })) as typeof fetch,
+    });
+    expect(response.status).toBe(200);
+    expect(waited).toBe(0);
+  });
+
+  test("never replays a request after a reset, even while the tunnel reconnects", async () => {
+    let pending = false;
+    let calls = 0;
+    let waited = 0;
+    const tunnel: LinkTunnelGate = { pending: () => pending, waitForConnected: async () => { waited += 1; return true; } };
+    const response = await relayLinkDataRequest(relayRequest({ method: "POST", body: '{"input":"once"}' }), target, {
+      tunnel,
+      fetchImpl: (async (_input, init) => {
+        calls += 1;
+        await new Response(init!.body).text();
+        pending = true;
+        throw Object.assign(new Error("socket reset"), { code: "ECONNRESET" });
+      }) as typeof fetch,
+    });
+    expect(response.status).toBe(503);
+    expect(response.headers.get("retry-after")).toBe("1");
+    expect(calls).toBe(1);
+    expect(waited).toBe(0);
+  });
+
+  test("resends a refused request once the tunnel is back, inside the same hold window", async () => {
+    let pending = false;
+    let calls = 0;
+    let clock = 1_000;
+    const waits: number[] = [];
+    const tunnel: LinkTunnelGate = {
+      pending: () => pending,
+      waitForConnected: async timeoutMs => {
+        waits.push(timeoutMs);
+        clock += 14_000;
+        pending = false;
+        return true;
+      },
+    };
+    const bodies: string[] = [];
+    const response = await relayLinkDataRequest(relayRequest({
+      method: "POST", headers: { "Content-Type": "application/json" }, body: '{"input":"again"}',
+    }), target, {
+      tunnel,
+      now: () => clock,
+      fetchImpl: (async (_input, init) => {
+        calls += 1;
+        // Refused twice: the second refusal finds the 15 s window spent and gets 503.
+        if (calls <= 2) {
+          pending = true;
+          throw Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" });
+        }
+        bodies.push(await new Response(init!.body).text());
+        return Response.json({ ok: true });
+      }) as typeof fetch,
+    });
+    expect(waits).toEqual([LINK_RELAY_HOLD_MS, LINK_RELAY_HOLD_MS - 14_000]);
+    expect(calls).toBe(3);
+    expect(response.status).toBe(200);
+    expect(bodies).toEqual(['{"input":"again"}']);
+
+    clock = 0;
+    calls = 0;
+    const spent = await relayLinkDataRequest(relayRequest({ method: "POST", body: "{}" }), target, {
+      tunnel: { pending: () => true, waitForConnected: async () => { clock += LINK_RELAY_HOLD_MS; return true; } },
+      now: () => clock,
+      fetchImpl: (async () => {
+        calls += 1;
+        throw Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" });
+      }) as typeof fetch,
+    });
+    expect(spent.status).toBe(503);
+    expect(calls).toBe(1);
+  });
+
+  test("a refused connection to a real closed port leaves the streamed body intact for the resend", async () => {
+    const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+    const port = probe.port!;
+    probe.stop(true);
+    let pending = false;
+    let home: Server<unknown> | undefined;
+    const received: string[] = [];
+    try {
+      const response = await relayLinkDataRequest(relayRequest({
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ input: "x".repeat(100_000) }),
+      }), { tunnelPort: port, admissionKey: LINK_KEY }, {
+        tunnel: {
+          pending: () => pending,
+          waitForConnected: async () => {
+            home = Bun.serve({ hostname: "127.0.0.1", port, async fetch(req) { received.push(await req.text()); return Response.json({ ok: true }); } });
+            pending = false;
+            return true;
+          },
+        },
+        fetchImpl: (async (input, init) => {
+          try {
+            return await fetch(input, init);
+          } catch (error) {
+            pending = true;
+            throw error;
+          }
+        }) as typeof fetch,
+      });
+      expect(response.status).toBe(200);
+      expect(received).toEqual([JSON.stringify({ input: "x".repeat(100_000) })]);
+    } finally {
+      home?.stop(true);
+    }
+  });
+
+  test("the Child's listener holds a relayed request on its tunnel gate", async () => {
+    writeFileSync(join(root, "service-api-token"), `${LINK_KEY}\n`, { mode: 0o600 });
+    const hub = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ relayed: true }) });
+    servers.push(hub);
+    const gate = manualGate();
+    const machine = startMachineListener(0, { state: linkConnection(hub.port!), linkTunnel: gate.tunnel });
+    servers.push(machine);
+    let settled = false;
+    const pending = fetch(new URL("/v1/responses", machine.url), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+    }).then(response => { settled = true; return response; });
+    await Bun.sleep(50);
+    expect(settled).toBe(false);
+    expect(gate.waits).toEqual([LINK_RELAY_HOLD_MS]);
+    gate.release(true);
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ relayed: true });
   });
 });

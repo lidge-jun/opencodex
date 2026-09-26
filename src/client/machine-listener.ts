@@ -17,6 +17,7 @@ import { handleMachineApi, type HubReachability, type MachineApiDeps } from "./m
 import { MACHINE_GUI_ORIGIN_HEADER, requireMachineAuth } from "./machine-auth";
 import { HUB_RELAY_REQUEST_BODY_MAX_BYTES, relayHubManagementRequest } from "./hub-relay";
 import { createLinkKeySource, handleLinkIngress, type LinkIngress, type LinkKeySourceDeps } from "./link-ingress";
+import type { LinkTunnelGate } from "./link-relay";
 import { readClientLinkState, type ClientLinkState } from "./link-state";
 import { projectClientLinkChild, type ClientLinkSidecarRead } from "./link-status";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
@@ -42,6 +43,10 @@ export interface MachineListenerDeps {
   readSidecar?: () => ClientLinkState | null;
   /** Link mode: how the link key is read; the listener reads it once and caches it. */
   linkKey?: LinkKeySourceDeps;
+  /** Link mode: a key source the runtime already holds (shared with the tunnel supervisor). */
+  linkKeySource?: () => string | null;
+  /** Link mode: the tunnel supervisor; relayed requests wait on it while it reconnects. */
+  linkTunnel?: LinkTunnelGate;
   /** Link mode: relay seams (deadline clock and byte cap). */
   linkRelay?: LinkIngress["relay"];
   serve?: (options: Parameters<typeof Bun.serve>[0]) => Server<unknown>;
@@ -112,8 +117,8 @@ export function startMachineListener(
     ? {
       tunnelPort: connection.link!.tunnelPort,
       policy: requestPolicyView(config, "127.0.0.1"),
-      linkKey: createLinkKeySource(connection.tokenFingerprint, deps.linkKey),
-      relay: { fetchImpl: deps.fetchImpl, bodyLimitBytes: inboundBodyLimit, ...deps.linkRelay },
+      linkKey: deps.linkKeySource ?? createLinkKeySource(connection.tokenFingerprint, deps.linkKey),
+      relay: { fetchImpl: deps.fetchImpl, bodyLimitBytes: inboundBodyLimit, tunnel: deps.linkTunnel, ...deps.linkRelay },
     }
     : null;
   const readSidecar = deps.readSidecar ?? (() => readClientLinkState());

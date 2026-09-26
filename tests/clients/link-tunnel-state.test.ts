@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   classifySshStderr,
+  CLIENT_TUNNEL_RETRY_POLICY,
   dueForSpawn,
   FAILED_AFTER_MS,
   IDLE,
@@ -8,6 +9,9 @@ import {
   reduceTunnel,
   type TunnelState,
 } from "../../src/link/tunnel-state";
+
+const POLICY = CLIENT_TUNNEL_RETRY_POLICY;
+const HOUR_MS = 60 * 60_000;
 
 test("tunnel lifecycle reaches connected from idle", () => {
   let state = IDLE;
@@ -87,4 +91,68 @@ test("ssh stderr is classified by its retry policy", () => {
     ["unexpected diagnostic", "unknown"],
   ] as const;
   for (const [stderr, expected] of cases) expect(classifySshStderr(stderr)).toBe(expected);
+});
+
+test("the client policy retries timeout and forward after a minute and auth after five minutes, never a host key", () => {
+  const forward = reduceTunnel({ kind: "connected", since: 0 }, { type: "exit", now: 1_000, stderrClass: "forward" }, () => 0.5, POLICY);
+  expect(forward).toEqual({ kind: "failed", since: 1_000, reason: "forward", retryAt: 61_000, inFlight: false });
+  expect(dueForSpawn(forward, 60_999)).toBe(false);
+  expect(dueForSpawn(forward, 61_000)).toBe(true);
+
+  const reconnecting = reduceTunnel({ kind: "connected", since: 0 }, { type: "exit", now: 0, stderrClass: "network" }, () => 0.5, POLICY);
+  const timeout = reduceTunnel(reconnecting, { type: "tick", now: FAILED_AFTER_MS }, () => 0.5, POLICY);
+  expect(timeout).toEqual({ kind: "failed", since: FAILED_AFTER_MS, reason: "timeout", retryAt: FAILED_AFTER_MS + 60_000, inFlight: false });
+  expect(dueForSpawn(timeout, FAILED_AFTER_MS + 60_000)).toBe(true);
+
+  const auth = reduceTunnel({ kind: "connecting", since: 0 }, { type: "exit", now: 2_000, stderrClass: "auth" }, () => 0.5, POLICY);
+  expect(auth).toMatchObject({ kind: "failed", reason: "auth", retryAt: 302_000 });
+  expect(dueForSpawn(auth, 301_999)).toBe(false);
+  expect(dueForSpawn(auth, 302_000)).toBe(true);
+
+  const hostkey = reduceTunnel({ kind: "connected", since: 0 }, { type: "exit", now: 3_000, stderrClass: "hostkey" }, () => 0.5, POLICY);
+  expect(hostkey).toEqual({ kind: "failed", since: 3_000, reason: "hostkey" });
+  expect(dueForSpawn(hostkey, 3_000 + 24 * HOUR_MS)).toBe(false);
+});
+
+test("a retry runs while the link still reads failed, connects on ready and falls back to the slow cadence", () => {
+  const failed: TunnelState = { kind: "failed", since: 100, reason: "timeout", retryAt: 60_100, inFlight: false };
+  let state = reduceTunnel(failed, { type: "spawn", now: 60_100 }, () => 0.5, POLICY);
+  expect(state).toEqual({ ...failed, inFlight: true });
+  expect(dueForSpawn(state, 10 * HOUR_MS)).toBe(false);
+  // A transient exit of the retry keeps the original failure time and waits another minute.
+  state = reduceTunnel(state, { type: "exit", now: 61_000, stderrClass: "network" }, () => 0.5, POLICY);
+  expect(state).toEqual({ kind: "failed", since: 100, reason: "timeout", retryAt: 121_000, inFlight: false });
+  // A hung retry is not timed out by the reducer; ssh's own keepalive bounds it.
+  state = reduceTunnel(state, { type: "spawn", now: 121_000 }, () => 0.5, POLICY);
+  expect(reduceTunnel(state, { type: "tick", now: 121_000 + 10 * FAILED_AFTER_MS }, () => 0.5, POLICY)).toBe(state);
+  expect(reduceTunnel(state, { type: "ready", now: 122_000 }, () => 0.5, POLICY)).toEqual({ kind: "connected", since: 122_000 });
+  // A retry that meets a changed host key stops retrying.
+  expect(reduceTunnel(state, { type: "exit", now: 122_000, stderrClass: "hostkey" }, () => 0.5, POLICY))
+    .toEqual({ kind: "failed", since: 100, reason: "hostkey" });
+});
+
+test("auth retries reach the Home's sshd at most 12 times in any hour", () => {
+  let state: TunnelState = reduceTunnel({ kind: "connecting", since: 0 }, { type: "exit", now: 0, stderrClass: "auth" }, () => 0.5, POLICY);
+  const attempts: number[] = [];
+  for (let now = 0; now <= 3 * HOUR_MS; now += 1_000) {
+    if (!dueForSpawn(state, now)) continue;
+    state = reduceTunnel(state, { type: "spawn", now }, () => 0.5, POLICY);
+    attempts.push(now);
+    state = reduceTunnel(state, { type: "exit", now: now + 50, stderrClass: "auth" }, () => 0.5, POLICY);
+  }
+  expect(attempts.length).toBeGreaterThan(30);
+  for (const start of attempts) {
+    expect(attempts.filter(at => at >= start && at < start + HOUR_MS).length).toBeLessThanOrEqual(12);
+  }
+});
+
+test("without a retry policy (the Home's -R supervisor) a failed tunnel is never due", () => {
+  for (const stderrClass of ["auth", "forward"] as const) {
+    const state = reduceTunnel({ kind: "connected", since: 0 }, { type: "exit", now: 5, stderrClass });
+    expect(state).toEqual({ kind: "failed", since: 5, reason: stderrClass });
+    expect(dueForSpawn(state, 24 * HOUR_MS)).toBe(false);
+  }
+  const timeout = reduceTunnel({ kind: "connecting", since: 0 }, { type: "tick", now: FAILED_AFTER_MS });
+  expect(timeout).toEqual({ kind: "failed", since: FAILED_AFTER_MS, reason: "timeout" });
+  expect(dueForSpawn(timeout, 24 * HOUR_MS)).toBe(false);
 });
