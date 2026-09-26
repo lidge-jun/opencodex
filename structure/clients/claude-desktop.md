@@ -137,6 +137,11 @@ event loop. Injected probes may return a state or a promise, so isolated callers
 
 ### Picker mode: the Desktop egress proxy
 
+The shared CONNECT primitive accepts optional `allowedTargets` authorities. It snapshots and
+normalizes that list at startup; an empty list denies all, and other host/port pairs receive 403
+before tunnel selection or dialing. Authentication and loopback refusal remain in force.
+Existing Claude consumers omit this option and retain blind forwarding; it enables no new integration or certificate trust.
+
 When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` also
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
 port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
