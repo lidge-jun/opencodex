@@ -121,15 +121,20 @@ export async function startClientRuntime(
     }
     throw error;
   }
-  const server = startMachineListener(port, { state: state.value });
-  const boundPort = server.port ?? port;
-  activeServer = server;
-  activePort = boundPort;
+  // Created before the listener so its status route can read the tunnel state; it starts no
+  // process and no timer until start().
   const supervisor = linkMode && existsSync(clientLinkStatePath())
     ? createClientLinkSupervisor({
       onLinkEnded: () => scheduleStandaloneRecycle(state.value.tokenFingerprint),
     })
     : null;
+  const server = startMachineListener(port, {
+    state: state.value,
+    ...(linkMode ? { linkStatus: () => supervisor?.status() ?? { kind: "stopped" as const } } : {}),
+  });
+  const boundPort = server.port ?? port;
+  activeServer = server;
+  activePort = boundPort;
   activeSupervisor = supervisor;
   supervisor?.start();
   installCrashGuards();

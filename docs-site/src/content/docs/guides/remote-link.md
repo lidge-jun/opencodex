@@ -11,9 +11,9 @@ A machine link connects an OpenCodex **Home** computer to a **Child** computer o
 - For a Child-initiated link, the Child can log in to Home with an OpenSSH key (password login is not supported).
 - OpenCodex 2.66.0 or later is installed on the Child computer, and on Home for a Child-initiated link.
 - Both computers run macOS or Linux.
-- Links are started from the Home: its dashboard is opened on the Home computer itself (browser or desktop app, standalone install) or through a paired Hub session.
+- The dashboard that starts the link is opened on that computer itself (browser or desktop app, standalone install) or through a paired Hub session.
 
-Password SSH and Windows are outside the current flow. Connecting a computer as a Child from the dashboard (a Child-initiated link) is not available in this release: joining restarts OpenCodex on that computer, which would drop the Codex connections already running there, so the dashboard shows the **Child** role as unavailable. Home-initiated linking is the supported path: on the computer that should be Home, choose **Home** and add the other computer as a Child, as described below.
+Password SSH and Windows are outside the current flow. A link can be started from either side: from the Home, as described next, or from the Child, as described in [Connect this computer as a Child](#connect-this-computer-as-a-child).
 
 ## Add a Child from `#remote`
 
@@ -24,6 +24,19 @@ Password SSH and Windows are outside the current flow. Connecting a computer as 
 5. Confirm the fingerprint, then connect the Child.
 
 The dashboard does not ask you to enter a token. It probes the host first, and it cannot apply the link until you explicitly confirm the fingerprint.
+
+## Connect this computer as a Child
+
+On the computer that should use the Home's providers:
+
+1. Open the dashboard at `#remote` and switch Remote Link on.
+2. Choose **Child**. The SSH host list opens.
+3. Choose the Home's SSH host, run the connection test, then compare and confirm its host fingerprint.
+4. Read the notice and choose **Connect as Child**.
+
+Connecting restarts OpenCodex on this computer. Codex turns that are already running finish first, and new requests can fail for up to a minute while it restarts. The dashboard then reloads by itself and shows the Child link. Codex keeps using `http://127.0.0.1:<port>/v1` on this computer, with no token and no environment variable to set: the local OpenCodex relays each request to the Home, which serves it with its own providers and accounts.
+
+The **Child** role is available only while OpenCodex runs on its configured port, because the Child restarts on exactly that port. If the dashboard says OpenCodex is not running on its configured port, restart it there first.
 
 ## Link status
 
@@ -56,7 +69,7 @@ When a step fails, the dashboard shows the reason and, when SSH reported one, th
 
 ## Security
 
-The Child uses the Home computer's providers and provider credentials through the link. The Home creates a separate link key for each Child; removing the link revokes that key. Compare the host fingerprint before confirmation so a wrong machine or changed host key is not accepted by mistake. Dashboard sessions issued from a Tailscale identity cannot manage machine links.
+The Child uses the Home computer's providers and provider credentials through the link. The Home creates a separate link key for each Child; removing the link revokes that key. On the Child, the key stays inside OpenCodex: credentials that Codex or Claude Code send there are not forwarded to the Home, and any program on the Child that reaches `127.0.0.1:<port>` uses the Home without a key, the same local trust a standalone install gives. Web pages from other sites are refused. Compare the host fingerprint before confirmation so a wrong machine or changed host key is not accepted by mistake. Dashboard sessions issued from a Tailscale identity cannot manage machine links.
 
 ## CLI reference
 

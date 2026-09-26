@@ -17,7 +17,7 @@ import { clientLinkTunnelStatus } from "../../client/link-tunnel";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { issueApiKeyInProcess, revokeApiKeyInProcess, type IssuedApiKey } from "./oauth-account-routes";
-import { acceptSystemRestart } from "./system-restart";
+import { acceptSystemRestart, resolveListenPort } from "./system-restart";
 
 const PROBE_TTL_MS = 5 * 60_000;
 const APPLY_ADMISSION_TIMEOUT_MS = 15_000;
@@ -86,7 +86,7 @@ function port(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
 }
 
-/** A paired GUI session. `POST /api/link/join` admits only this. */
+/** A paired GUI session. Only hub runtimes issue these. */
 function pairedSession(ctx: ManagementContext): boolean {
   return ctx.principal === "gui-session"
     && ctx.sessionControl?.isPaired(ctx.req, ctx.config) === true;
@@ -96,8 +96,9 @@ function pairedSession(ctx: ManagementContext): boolean {
  * A paired session, or on a standalone runtime the current loopback-issued session that reached
  * the public listener bound to a loopback hostname. The loopback bootstrap mints that session
  * without a credential, so this is casual-path protection like POST /api/github/star, not a
- * secret-backed boundary like the admin token. Hubs keep the paired-only rule, and so does join:
- * a join restarts this runtime and moves Codex routing to the Home, which drops live connections.
+ * secret-backed boundary like the admin token. Hubs keep the paired-only rule. Join admits this
+ * session too: turning a Child on from its own dashboard is the point of the route, and the
+ * dashboard warns first that the restart briefly interrupts running Codex turns.
  */
 function dashboardSession(ctx: ManagementContext): boolean {
   if (pairedSession(ctx)) return true;
@@ -112,18 +113,27 @@ function adminLoopback(ctx: ManagementContext): boolean {
   return ctx.principal === "admin-token" && ctx.trustedLoopbackIngress;
 }
 
-function auth(ctx: ManagementContext, kind: "paired" | "dashboard" | "admin" | "either"): Response | null {
+function auth(ctx: ManagementContext, kind: "dashboard" | "admin" | "either"): Response | null {
   if (ctx.guiSessionIssuance === "tailscale-identity") return fail("tailscale_session_refused", "Tailscale identity sessions cannot use link routes.", 403);
-  const allowed = kind === "paired" ? pairedSession(ctx)
-    : kind === "dashboard" ? dashboardSession(ctx)
-      : kind === "admin" ? adminLoopback(ctx)
-        : dashboardSession(ctx) || adminLoopback(ctx);
+  const allowed = kind === "dashboard" ? dashboardSession(ctx)
+    : kind === "admin" ? adminLoopback(ctx)
+      : dashboardSession(ctx) || adminLoopback(ctx);
   return allowed ? null : fail("forbidden", "The required link authorization was not present.", 403);
 }
 
-/** Whether `POST /api/link/join` would pass its admission and role gates for this caller. */
+/**
+ * The client runtime a join restarts into binds exactly the configured port, with no fallback.
+ * A standalone that runs elsewhere (`ocx start --port`, or a port fallback) would restart into a
+ * proxy that cannot bind where Codex is routed, so it may not join.
+ */
+function joinPortMatches(ctx: ManagementContext): boolean {
+  const live = (ctx.deps.liveListenPort ?? resolveListenPort)();
+  return live !== undefined && live === ctx.config.port;
+}
+
+/** Whether `POST /api/link/join` would pass its admission, role and port gates for this caller. */
 function joinAvailable(ctx: ManagementContext): boolean {
-  return pairedSession(ctx) && (ctx.config.runtimeRole ?? "standalone") === "standalone";
+  return dashboardSession(ctx) && (ctx.config.runtimeRole ?? "standalone") === "standalone" && joinPortMatches(ctx);
 }
 
 function runnerFor(ctx: ManagementContext): SshRunner {
@@ -538,10 +548,12 @@ export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: L
   if (!isLinkPath(path)) return null;
   if (ctx.guiSessionIssuance === "tailscale-identity") return fail("tailscale_session_refused", "Tailscale identity sessions cannot use link routes.", 403);
   if (url.pathname === "/api/link/join" && req.method === "POST") {
-    // Paired only: a loopback dashboard session may run the Home side, never this restart.
-    const denied = auth(ctx, "paired");
+    // The same dashboard admission as the Home side. Every refusal below runs before link state
+    // is read and before any SSH.
+    const denied = auth(ctx, "dashboard");
     if (denied) return denied;
     if ((ctx.config.runtimeRole ?? "standalone") !== "standalone") return fail("standalone_required", "Client initiated links require standalone runtime mode.", 409);
+    if (!joinPortMatches(ctx)) return fail("join_port_mismatch", "OpenCodex is not running on its configured port, so it cannot restart as a Child.", 409);
     const state = suppliedState ?? stateFor(ctx);
     if (!state) return fail("link_unavailable", "The link lifecycle is unavailable.", 503);
     return handleJoin(ctx, state);

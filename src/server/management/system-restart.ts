@@ -161,7 +161,8 @@ export function setSystemRestartIoForTests(io: SystemRestartIo = {}): void {
   explicitShutdownRequested = false;
 }
 
-function resolveListenPort(): number | undefined {
+/** The port this process is listening on, or undefined when that cannot be established. */
+export function resolveListenPort(): number | undefined {
   const live = getServerListenPort();
   if (live) return live;
   const runtime = readRuntimePort(process.pid);
