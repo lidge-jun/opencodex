@@ -47,6 +47,7 @@ The **Child** role is available only while OpenCodex runs on its configured port
 - **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard. A Child that connected from its own dashboard keeps retrying by itself, after sleep, an outage or a restart: about once a minute after a timeout or forwarding error, and every five minutes after an authentication error. A changed host key is never retried.
 
 A failed link does not silently switch to a local provider.
+The Child returns a retryable `503` without forwarding the link key or request when its tunnel is failed, stopped, or not supervised.
 
 ## Remove a Child
 

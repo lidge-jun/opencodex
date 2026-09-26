@@ -502,6 +502,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   /** The tunnel is being (re)established, so a request may wait for it instead of failing. */
   const pending = (): boolean => !stopping && failure === undefined
     && ((started && !initialized) || state.kind === "connecting" || state.kind === "reconnecting");
+  const connected = (): boolean => started && !stopping && failure === undefined
+    && state.kind === "connected" && linkId !== null && (child !== undefined || adopted !== null);
 
   const settleWaiters = (): void => {
     if (waiters.size === 0) return;
@@ -800,8 +802,9 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       };
     },
     pending,
+    connected,
     waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
-      if (!stopping && failure === undefined && state.kind === "connected") return Promise.resolve(true);
+      if (connected()) return Promise.resolve(true);
       if (!pending() || waiters.size >= CLIENT_LINK_MAX_HOLDS || signal?.aborted || !(timeoutMs > 0)) {
         return Promise.resolve(false);
       }

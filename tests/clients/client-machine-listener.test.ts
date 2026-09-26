@@ -338,6 +338,7 @@ describe("client machine listener in link mode", () => {
     const server = startMachineListener(0, {
       state: linkConnection(options.fingerprint),
       managementAuthState: authState(),
+      linkTunnel: { connected: () => true, pending: () => false, waitForConnected: async () => true },
       fetchImpl: (async (input, init) => {
         upstream.push(new Request(String(input), init));
         return options.reply?.() ?? Response.json({ relayed: true });

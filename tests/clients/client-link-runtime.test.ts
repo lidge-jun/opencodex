@@ -168,7 +168,7 @@ describe("link runtime waits for its configured port like a hard-pinned start", 
     const port = freePort();
     const linkStatus = () => ({ kind: "stopped" as const });
     const linkKeySource = () => "link-key";
-    const linkTunnel = { pending: () => true, waitForConnected: async () => true };
+    const linkTunnel = { connected: () => false, pending: () => true, waitForConnected: async () => true };
     const request = {
       state: linkClientState(), linkMode: true, preferred: port,
       explicitPort: true, configuredPort: port,

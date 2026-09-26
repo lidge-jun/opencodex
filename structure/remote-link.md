@@ -44,6 +44,8 @@ Applying a link probes the host key into a temporary file, waits for the operato
 
 ## Client link transport
 
+The Child relay requires a positive `connected()` verdict from `src/client/link-tunnel.ts` before every fetch. A missing supervisor, or a failed or stopped tunnel, returns a retryable 503 without sending the link key or body to the persisted loopback port. A held request rechecks the verdict after its wait and before each retry.
+
 A client connected with `transport: "link"` reaches its hub through an SSH tunnel instead of a public origin. Its `serverUrl` and `managementUrl` are both `http://127.0.0.1:<link.tunnelPort>`, and `ocx connect --link --key-stdin` accepts the data key on bounded standard input instead of issuing one over HTTP. The key is stored only in the service token file and is sent on readiness, catalog, hub-state and usage reads.
 
 Codex keeps the standalone loopback routing: `routingTarget` in `src/client/connect.ts` returns the `standaloneCodexRoutingTarget` form for the configured port, root `openai_base_url = "http://127.0.0.1:<port>/v1"` plus the realtime override, with no provider table and no `env_key`. For the same port the join therefore writes the bytes the standalone injection wrote, and a Codex app launched without the shim's environment keeps working; an earlier `env_key` table is rebuilt into this form on the next sync.

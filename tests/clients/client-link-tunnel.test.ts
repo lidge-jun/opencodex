@@ -781,16 +781,19 @@ test("an unreadable read does not end the link; three in a row or an explicit di
 test("requests wait on a reconnect only while it lasts and are released when it connects or fails", async () => {
   const h = supervisorHarness();
   try {
+    expect(h.supervisor.connected()).toBe(false);
     expect(h.supervisor.pending()).toBe(false);
     await h.start();
     expect(h.supervisor.pending()).toBe(true);
     await h.step();
+    expect(h.supervisor.connected()).toBe(true);
     expect(h.supervisor.pending()).toBe(false);
     expect(await h.supervisor.waitForConnected(15_000)).toBe(true);
 
     h.view.readyz = "refused";
     h.ssh.children[0]!.exit(255, "Connection reset by peer");
     await h.settle();
+    expect(h.supervisor.connected()).toBe(false);
     expect(h.supervisor.pending()).toBe(true);
     let released: boolean | undefined;
     const waiting = h.supervisor.waitForConnected(15_000).then(value => { released = value; return value; });
@@ -800,6 +803,7 @@ test("requests wait on a reconnect only while it lasts and are released when it 
     h.view.readyz = 200;
     await h.step();
     expect(await waiting).toBe(true);
+    expect(h.supervisor.connected()).toBe(true);
 
     h.ssh.children[1]!.exit(255, "Connection reset by peer");
     await h.settle();
@@ -809,6 +813,7 @@ test("requests wait on a reconnect only while it lasts and are released when it 
     await h.settle();
     expect(await failing).toBe(false);
     expect(h.supervisor.status()).toMatchObject({ state: { kind: "failed", reason: "hostkey" } });
+    expect(h.supervisor.connected()).toBe(false);
     expect(h.supervisor.pending()).toBe(false);
     expect(await h.supervisor.waitForConnected(15_000)).toBe(false);
   } finally {

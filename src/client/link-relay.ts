@@ -28,6 +28,8 @@ export interface LinkRelayClock {
  * `pending()` call per request and nothing else.
  */
 export interface LinkTunnelGate {
+  /** True only while a keyed probe has established this live tunnel. */
+  connected(): boolean;
   /** True while the tunnel is connecting or reconnecting. */
   pending(): boolean;
   /**
@@ -45,7 +47,7 @@ export interface LinkRelayDeps {
   sseIdleTimeoutMs?: number;
   /** Byte cap for the streamed request body and for a non-SSE response body. */
   bodyLimitBytes?: number;
-  /** The Child's tunnel; without one a request is forwarded at once, as before. */
+  /** The Child's tunnel; without positive connected proof a request is refused. */
   tunnel?: LinkTunnelGate;
   /** The longest a request waits for a reconnecting tunnel, from its first wait. */
   holdMs?: number;
@@ -329,7 +331,7 @@ export async function relayLinkDataRequest(
   if (body && declaredLength !== null) headers.set("content-length", declaredLength);
 
   // The hold: only while the tunnel is connecting or reconnecting, and at most `holdMs` from the
-  // first wait. A connected tunnel skips it after one `pending()` call.
+  // first wait. A positive connected verdict is required again before every fetch.
   const tunnel = deps.tunnel;
   let holdUntil: number | undefined;
   const holdForTunnel = async (gate: LinkTunnelGate): Promise<boolean> => {
@@ -343,10 +345,15 @@ export async function relayLinkDataRequest(
     try { await body?.cancel(); } catch { /* best effort */ }
     return jsonError(503, "link tunnel unavailable", true);
   };
-  if (tunnel?.pending() && !await holdForTunnel(tunnel)) return await tunnelUnavailable();
+  const readyForFetch = async (): Promise<boolean> => {
+    if (!tunnel) return false;
+    if (tunnel.connected()) return true;
+    return tunnel.pending() && await holdForTunnel(tunnel) && tunnel.connected();
+  };
 
   let upstream: Response | undefined;
   while (!upstream) {
+    if (!await readyForFetch()) return await tunnelUnavailable();
     try {
       const init: RequestInit & { duplex?: "half" } = {
         method: req.method,
