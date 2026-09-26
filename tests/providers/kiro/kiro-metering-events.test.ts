@@ -131,7 +131,7 @@ describe("parseKiroEvent - unknown event diagnostics", () => {
     resetDebugLogBufferForTests();
   });
 
-  test("unknown event type calls debugProviderDiagnostic with { eventType } and does not log/parse payload when debug enabled", () => {
+  test("unknown event diagnostics omit upstream-controlled header and payload bytes", () => {
     setDebugSettings({ debug: true });
     const error = spyOn(console, "error").mockImplementation(() => {});
 
@@ -144,7 +144,8 @@ describe("parseKiroEvent - unknown event diagnostics", () => {
 
       const line = String(error.mock.calls[0]?.[0] ?? "");
       expect(line).toContain("[ocx:kiro:unknown_event]");
-      expect(line).toContain('"eventType":"someUnknownFutureEvent"');
+      expect(line).toContain('"eventTypeLength":22');
+      expect(line).not.toContain("someUnknownFutureEvent");
       expect(line).not.toContain("sensitive-payload");
 
       const logEntries = getDebugLogEntries();

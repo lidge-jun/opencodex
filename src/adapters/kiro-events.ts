@@ -116,7 +116,8 @@ function parseTokenUsage(eventType: string, value: unknown): OcxUsage | undefine
 export function parseKiroEvent(eventType: string, payload: Uint8Array): ParsedKiroEvent | null {
   // Unknown event types are intentionally ignored without parsing or logging their payload.
   if (!KNOWN_EVENT_TYPES.has(eventType)) {
-    debugProviderDiagnostic("kiro", "unknown_event", { eventType });
+    // The Smithy header is upstream-controlled too; a raw value can contain private data.
+    debugProviderDiagnostic("kiro", "unknown_event", { eventTypeLength: eventType.length });
     return null;
   }
   const parsed = parseObject(eventType, payload);

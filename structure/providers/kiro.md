@@ -138,7 +138,7 @@ Spend arrives in `meteringEvent` as **credits, not tokens**. No captured respons
 is a snapshot; separate completion-fallback responses add their credits. Missing metering stays
 absent and measured zero stays zero. `initial-response` carries `conversationId` through the same
 validated provider-state path as `messageMetadataEvent`. Unknown event types produce opt-in
-`debugProviderDiagnostic` entries containing only the event type, never the payload.
+`debugProviderDiagnostic` entries containing only the event-type length, never the raw header or payload.
 Coverage: `tests/providers/kiro/kiro-metering-events.test.ts`,
 `tests/providers/kiro/kiro-metering-usage.test.ts`, and
 `tests/server/server-kiro-completion-e2e.test.ts`.
