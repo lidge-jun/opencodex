@@ -308,7 +308,7 @@ export async function refreshCommandCodeReasoningEfforts(
     rejected.add(rejectedEffort);
     rejectedEfforts.set(key, rejected);
   }
-  if (!profile.profileUrl) return undefined;
+  if (!profile.profileUrl) return commandCodeReasoningEfforts(modelId, destination);
   try {
     const response = await fetchFn(profile.profileUrl, {
       headers: { Accept: "text/html" },

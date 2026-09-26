@@ -67,9 +67,30 @@ test("a measured row without a profile remembers rejections without guessing a U
   const model = "moonshotai/Kimi-K3";
   let calls = 0;
   const fetch = async () => { calls++; return new Response("", { status: 404 }); };
-  expect(await refreshCommandCodeReasoningEfforts(model, fetch, "max")).toBeUndefined();
+  expect(await refreshCommandCodeReasoningEfforts(model, fetch, "max")).toEqual(["low", "medium", "high", "xhigh"]);
   expect(calls).toBe(0);
   expect(commandCodeReasoningEfforts(model)).toEqual(["low", "medium", "high", "xhigh"]);
   const built = await adapter.buildRequest(request(model, "max"));
   expect(JSON.parse(built.body).params).not.toHaveProperty("reasoning_effort");
+});
+
+test("the first rejected send for a measured row retries without its effort", async () => {
+  const sends: Array<{ url: string; body: string }> = [];
+  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    sends.push({ url, body: String(init?.body ?? "") });
+    return sends.length === 1
+      ? new Response(JSON.stringify({ error: "unsupported reasoning_effort" }), { status: 400 })
+      : new Response("{}", { status: 200 });
+  }) as typeof globalThis.fetch;
+  const sendingAdapter = createCommandCodeAdapter({ adapter: "command-code", baseUrl: "https://api.commandcode.ai",
+    apiKey: "synthetic-command-key", fetch } as Parameters<typeof createCommandCodeAdapter>[0] & { fetch: typeof globalThis.fetch });
+  const built = await sendingAdapter.buildRequest(request("moonshotai/Kimi-K3", "max"));
+  expect(JSON.parse(built.body).params.reasoning_effort).toBe("max");
+  const response = await sendingAdapter.fetchResponse(built);
+  expect(response.status).toBe(200);
+  expect(sends).toHaveLength(2);
+  expect(sends.every(send => send.url.endsWith("/alpha/generate"))).toBe(true);
+  expect(JSON.parse(sends[1]!.body).params).not.toHaveProperty("reasoning_effort");
+  expect(commandCodeReasoningEfforts("moonshotai/Kimi-K3")).toEqual(["low", "medium", "high", "xhigh"]);
 });
