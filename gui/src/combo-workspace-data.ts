@@ -91,7 +91,7 @@ export interface ComboTarget {
   weight?: number;
   /** Exact efforts JEV may choose; omitted means every currently advertised effort. */
   reasoningEfforts?: ComboEffort[];
-  /** Per-target JEV decision description. Omitted uses the built-in profile. */
+  /** Optional operator note that supplements the built-in JEV profile. */
   modelProfile?: string;
   /** UI-only stable key for React lists; never sent to the API. */
   clientKey?: string;
@@ -484,7 +484,7 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
         ...(target.reasoningEfforts !== undefined
           ? { reasoningEfforts: [...target.reasoningEfforts] }
           : {}),
-        ...(item.strategy === "jev" && target.modelProfile?.trim()
+        ...(target.modelProfile?.trim()
           ? { modelProfile: target.modelProfile.trim() }
           : {}),
       })),
