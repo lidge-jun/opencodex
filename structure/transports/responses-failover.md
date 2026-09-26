@@ -14,8 +14,12 @@ with adapter dispatch, and only additional retries draw from the remainder. Adap
 before response projection. Native encrypted compaction, uploaded files, stored continuations,
 and policy/combo routes are excluded. Emergency output must contain one readable portable
 compaction item; recent original user messages are retained verbatim, and recovery failure keeps
-the original failure. `tests/responses/responses-compaction-recovery-policy.test.ts` and
-`tests/responses/responses-compaction-recovery.test.ts` pin these boundaries.
+the original failure. A source Kiro account lease is returned before the emergency child is
+admitted: the child shares its holder and may select the same account, so replacing that holder
+without returning the source lease would block cap-one fallback and leak capacity at higher caps.
+`tests/responses/responses-compaction-recovery-policy.test.ts`,
+`tests/responses/responses-compaction-recovery.test.ts` and
+`tests/providers/kiro/kiro-leased-responses.test.ts` pin these boundaries.
 
 Retry, replay, and combo failover on the Responses data plane: upstream reset retry, the
 ambiguous-resend gate and replay boundary, combo quota fallback and commit boundaries, compaction

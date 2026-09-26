@@ -44,10 +44,10 @@ function config(): OcxConfig {
     models: ["claude-sonnet-4.5"], oauthAccountFailover: { maxConcurrentPerAccount: 1 },
   } } } as OcxConfig;
 }
-async function seed(count = 1) {
+async function seed(count = 1, accountPrefix = "load-account") {
   for (let i = 0; i < count; i++) await saveCredential("kiro", {
     access: `load-access-${i}`, refresh: `load-refresh-${i}`, expires: Date.now() + 3_600_000,
-    accountId: `load-account-${i}`, source: "oauth", kiro: { profileArn: `arn:aws:codewhisperer:us-east-1:123456789012:profile/${i}`,
+    accountId: `${accountPrefix}-${i}`, source: "oauth", kiro: { profileArn: `arn:aws:codewhisperer:us-east-1:123456789012:profile/${i}`,
       apiRegion: "us-east-1" },
   }, { addAccount: true });
   const ids = getAccountSet("kiro")!.accounts.map(row => row.id);
@@ -64,6 +64,69 @@ function answer() {
     new TextEncoder().encode(JSON.stringify({ content: "done" }))),
   { headers: { "content-type": "application/vnd.amazon.eventstream" } });
 }
+
+function compactionConfig(cap: number): OcxConfig {
+  const cfg = config();
+  cfg.providers.kiro!.models = ["claude-sonnet-4.5", "claude-haiku-4.5"];
+  cfg.providers.kiro!.oauthAccountFailover = { maxConcurrentPerAccount: cap };
+  cfg.compactionRecovery = { enabled: true, model: "kiro/claude-haiku-4.5" };
+  return cfg;
+}
+
+function compactionRequest(signal?: AbortSignal): Request {
+  return new Request("http://localhost/v1/responses", { method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "kiro/claude-sonnet-4.5", store: false, stream: false,
+      input: [{ type: "message", role: "user", content: "Keep this goal." }, { type: "compaction_trigger" }] }), signal });
+}
+
+test.each([1, 2])("Kiro compaction fallback returns the source lease before next admission (cap=%s)", async cap => {
+  const [id] = await seed(1, `compact-cap-${cap}`);
+  let sends = 0;
+  globalThis.fetch = (async () => {
+    sends += 1;
+    return sends === 1
+      ? Response.json({ error: { code: "server_error", message: "source failed" } }, { status: 500 })
+      : answer();
+  }) as typeof fetch;
+  const response = await handleResponses(compactionRequest(), compactionConfig(cap), { model: "claude-sonnet-4.5", provider: "kiro" });
+  await response.text();
+  expect(response.status).toBe(200);
+  expect(sends).toBe(2);
+  expect(accountInFlight("kiro", id!)).toBe(0);
+});
+
+test("cancelled Kiro compaction fallback releases both account leases", async () => {
+  const [id] = await seed(1, "compact-cancel");
+  const controller = new AbortController();
+  let fallbackStarted!: () => void;
+  const started = new Promise<void>(resolve => { fallbackStarted = resolve; });
+  let sends = 0;
+  globalThis.fetch = (async (_input, init) => {
+    sends += 1;
+    if (sends === 1) return Response.json({ error: { code: "server_error" } }, { status: 500 });
+    fallbackStarted();
+    return new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      const abort = () => reject(signal?.reason ?? new DOMException("Aborted", "AbortError"));
+      if (signal?.aborted) abort();
+      else signal?.addEventListener("abort", abort, { once: true });
+    });
+  }) as typeof fetch;
+  const pending = handleResponses(compactionRequest(controller.signal), compactionConfig(2),
+    { model: "claude-sonnet-4.5", provider: "kiro" }, { abortSignal: controller.signal });
+  try {
+    await started;
+    controller.abort();
+    const response = await pending;
+    await response.text();
+    expect(response.status).toBe(499);
+    expect(sends).toBe(2);
+    expect(accountInFlight("kiro", id!)).toBe(0);
+  } finally {
+    controller.abort();
+  }
+});
 
 test("a full selected account waits then returns 503 account_capacity without a store write", async () => {
   const [id] = await seed();

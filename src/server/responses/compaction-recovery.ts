@@ -252,6 +252,13 @@ export async function runWithCompactionRecovery(
     try {
       const child = new Request(req.url, { method: "POST", headers, body: JSON.stringify(nextBody), signal: req.signal });
       linkRequestSessionLane(req, child);
+      // The source send is finished. The child reuses this account-load holder and may
+      // select the same Kiro account, so return its lease before child admission can
+      // acquire and replace the holder's reference.
+      if (options.accountLoad?.lease) {
+        options.accountLoad.lease.release();
+        options.accountLoad.lease = null;
+      }
       fallback = await dispatch(child, config, logCtx, {
         ...options, compactionRecoveryAttempted: true, compactionRecoveryPermit: recoveryPermit,
         compactionRoutingOverride: { sourceModel: originalModel },
