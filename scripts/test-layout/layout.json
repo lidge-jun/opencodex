@@ -1923,7 +1923,8 @@
     "advisor-guard.test.ts": "advisor",
     "advisor-consult.test.ts": "advisor",
     "advisor-plan.test.ts": "advisor",
-    "advisor-responses-wiring.test.ts": "advisor"
+    "advisor-responses-wiring.test.ts": "advisor",
+    "advisor-routes.test.ts": "server"
   },
   "migrated": [
     "adapters",
