@@ -91,7 +91,8 @@ export interface GenericPoolSettingsDto {
   strategy: GenericPoolStrategy | null;
   autoSwitchThreshold: number | null;
   stickyLimit: number | null;
-  maxConcurrentPerAccount: number | null;
+  /** Present only for Kiro; other generic providers keep their original legacy shape. */
+  maxConcurrentPerAccount?: number | null;
   /**
    * Marker for `strategy`, `autoSwitchThreshold` and `stickyLimit` only: true while they are
    * persisted but not consumed by the selector, false once `pool.kernel` is on and they
@@ -118,7 +119,7 @@ export function genericPoolSettingsDto(
     kind: "generic",
     enabled: typeof failover.enabled === "boolean" ? failover.enabled : null,
     strategy: parseGenericPoolStrategy(failover.strategy, name),
-    maxConcurrentPerAccount: name === "kiro" ? parseKiroAccountCap(failover.maxConcurrentPerAccount) : null,
+    ...(name === "kiro" ? { maxConcurrentPerAccount: parseKiroAccountCap(failover.maxConcurrentPerAccount) } : {}),
     autoSwitchThreshold: parseGenericAutoSwitchThreshold(failover.autoSwitchThreshold),
     stickyLimit: parseGenericStickyLimit(failover.stickyLimit),
     inert: kernelEnabled !== true,

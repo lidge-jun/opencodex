@@ -787,8 +787,8 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
         // Same key set for every kind. An unsupported field is a declared null, not an absence,
         // which is the whole difference between a consolidation and a fourth contract.
         expect(Object.keys(dto).sort()).toEqual([
-          "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "provider",
-          "maxConcurrentPerAccount", "quotaWindow", "stickyLimit", "strategy", "supported",
+          "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "maxConcurrentPerAccount",
+          "provider", "quotaWindow", "stickyLimit", "strategy", "supported",
         ]);
         expect(dto.kind).toBe(kind);
         expect(dto.supported).toEqual([...supported]);
