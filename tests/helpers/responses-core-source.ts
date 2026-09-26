@@ -32,6 +32,8 @@ export const RESPONSES_CORE_MODULES = [
   "request-prepare.ts",
   "shadow-target-availability.ts",
   "compaction-routing.ts",
+  "compaction-recovery.ts",
+  "compaction-recovery-policy.ts",
   "request-transport.ts",
   "request-sidecar-auth.ts",
   "response-effects.ts",
