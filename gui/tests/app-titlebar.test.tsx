@@ -177,7 +177,7 @@ test("macOS titlebar clearance follows page zoom and monitor scale", async () =>
   Object.defineProperty(win, "devicePixelRatio", { configurable: true, value: 2 });
   win.__TAURI__ = { core: { invoke: async (command) => {
     calls.push(command);
-    return { scaleFactor: monitorScale };
+    return monitorScale;
   } } };
   const stop = watchMacTitlebarMetrics(host);
   await Promise.resolve();
@@ -200,7 +200,7 @@ test("macOS titlebar clearance follows page zoom and monitor scale", async () =>
   win.dispatchEvent(new win.Event("resize"));
   await new Promise((resolve) => setTimeout(resolve, 100));
   expect(host.style.getPropertyValue("--tl-inset")).toBe("400px");
-  expect(calls).toContain("plugin:window|current_monitor");
+  expect(calls).toContain("plugin:window|scale_factor");
   stop();
 });
 

@@ -63,29 +63,28 @@ export function windowChromeHandlers(): {
 /** Native traffic lights stay in window points while WKWebView page zoom scales CSS pixels. */
 export function watchMacTitlebarMetrics(app: HTMLElement): () => void {
   const core = window.__TAURI__?.core;
-  // Retina is the conservative initial guess until the monitor query resolves.
+  // Retina is the conservative initial guess until the window scale query resolves.
   const initialDpr = window.devicePixelRatio;
-  let monitorScale = Number.isFinite(initialDpr) && initialDpr > 0 ? Math.max(2, initialDpr) : 2;
+  let windowScale = Number.isFinite(initialDpr) && initialDpr > 0 ? Math.max(2, initialDpr) : 2;
   let active = true;
   let request = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
   const apply = () => {
     const dpr = window.devicePixelRatio;
-    const ratio = Number.isFinite(dpr) && dpr > 0 ? Math.max(1, monitorScale / dpr) : 1;
+    const ratio = Number.isFinite(dpr) && dpr > 0 ? Math.max(1, windowScale / dpr) : 1;
     app.classList.toggle("app--reduced-zoom", ratio > 1);
     app.style.setProperty("--tl-inset", `${Math.ceil(80 * ratio)}px`);
     app.style.setProperty("--titlebar-h", `${Math.ceil(40 * ratio)}px`);
     app.style.setProperty("--chrome-clear", `${Math.ceil(124 * ratio)}px`);
   };
-  const readMonitor = () => {
+  const readScale = () => {
     if (!core?.invoke) return;
     const current = ++request;
-    void core.invoke("plugin:window|current_monitor").then((value) => {
+    void core.invoke("plugin:window|scale_factor").then((scale) => {
       if (!active || current !== request) return;
-      const scale = (value as { scaleFactor?: unknown } | null)?.scaleFactor;
       if (typeof scale === "number" && Number.isFinite(scale) && scale > 0) {
-        monitorScale = scale;
+        windowScale = scale;
         apply();
       }
     }).catch(() => {});
@@ -93,17 +92,17 @@ export function watchMacTitlebarMetrics(app: HTMLElement): () => void {
   const onResize = () => {
     apply();
     clearTimeout(timer);
-    timer = setTimeout(readMonitor, 80);
+    timer = setTimeout(readScale, 80);
   };
 
   apply();
-  readMonitor();
+  readScale();
   window.addEventListener("resize", onResize);
-  window.addEventListener("focus", readMonitor);
+  window.addEventListener("focus", readScale);
   return () => {
     active = false;
     clearTimeout(timer);
     window.removeEventListener("resize", onResize);
-    window.removeEventListener("focus", readMonitor);
+    window.removeEventListener("focus", readScale);
   };
 }

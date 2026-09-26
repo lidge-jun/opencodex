@@ -260,7 +260,7 @@ mod tests {
     /// The overlay title bar is moved and zoomed from the page: the dashboard's top strips call
     /// `plugin:window|start_dragging` and `plugin:window|toggle_maximize` from the loopback
     /// origin, and the bundled pages do the same from the app origin. The dashboard also reads
-    /// the current monitor scale so its traffic-light clearance survives page zoom. Grants are
+    /// the window's native scale so its traffic-light clearance survives page zoom. Grants are
     /// pinned to `main`; the app origin needs only the two window commands.
     #[test]
     fn the_titlebar_commands_are_granted_on_each_origin() {
@@ -277,7 +277,7 @@ mod tests {
             serde_json::json!([
                 "core:window:allow-start-dragging",
                 "core:window:allow-toggle-maximize",
-                "core:window:allow-current-monitor"
+                "core:window:allow-scale-factor"
             ])
         );
 
