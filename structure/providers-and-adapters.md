@@ -4,6 +4,8 @@ The coding-agent stream parser buffers each tool-use block by its content-block 
 and emits a complete start/delta/end sequence on closure. A new start on an occupied
 index closes the previous block; distinct indices can interleave. Turn completion
 requires every opened block to close, preserving the downstream single-open-call contract.
+An indexless argument delta belongs to the sole open block; with multiple blocks open,
+the parser fails the turn before releasing their buffered calls.
 The capture-only bridge checks each raw tool-use start against the init handshake before
 buffering; a later init cannot authorize a call that started earlier.
 

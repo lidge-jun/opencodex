@@ -366,8 +366,8 @@ function toolBlockKey(state: StreamParseState, event: StreamMessage): number {
  * Resolve a delta/stop frame to an open tool block. An indexed frame only matches a block
  * opened under the same index — CodeBuddy skips stop frames for thinking blocks, and such a
  * stop must not close a tool block that happens to be open. An index-less frame resolves
- * only when exactly one block is open; with several open blocks attribution is unknowable,
- * so the frame is dropped and the turn fails closed at the terminal accounting check.
+ * only when exactly one block is open. Ambiguous argument deltas are rejected before
+ * resolution; an unmatched stop cannot close a tool block.
  */
 function resolveToolBlockKey(state: StreamParseState, event: StreamMessage): number | undefined {
   const index = event.index;
@@ -418,6 +418,12 @@ function mapRawStreamEvent(event: StreamMessage, state: StreamParseState): Adapt
       // CodeBuddy alternates deltas across interleaved parallel blocks; parsed
       // unconditionally so a stray frame on a tools-disabled turn is ignored rather than
       // crashing.
+      if (
+        (state.openToolBlocks?.size ?? 0) > 1
+        && (typeof event.index !== "number" || !Number.isInteger(event.index))
+      ) {
+        throw new CodingAgentProtocolError("Coding-agent CLI sent an unindexed tool argument delta with multiple tool blocks open.");
+      }
       const partial = asString(delta?.partial_json);
       if (partial) {
         const key = resolveToolBlockKey(state, event);

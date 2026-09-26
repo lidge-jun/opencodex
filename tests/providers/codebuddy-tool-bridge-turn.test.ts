@@ -390,6 +390,33 @@ describe("CodeBuddy capture-only tool bridge turn", () => {
     expect(child?.killed).toBe(true);
   });
 
+  test("an indexless argument delta with two open tool blocks fails before emitting a tool call", async () => {
+    const p = parsed([tool("exec")]);
+    const cliName = [...buildCodeBuddyToolBridge(p).emittedNameMap.keys()][0]!;
+    const frame = (event: Record<string, unknown>) => ({ type: "stream_event", event });
+    let child: FakeChild | undefined;
+    const spawn: SpawnFn = () => {
+      child = fakeChild(frameLines([
+        INIT_OK,
+        frame({ type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "tu_a", name: cliName } }),
+        frame({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_b", name: cliName } }),
+        frame({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: '{"a":' } }),
+        inputJsonDelta("2"),
+        frame({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta", partial_json: "1}" } }),
+        frame({ type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: '{"a":3}' } }),
+        frame({ type: "content_block_stop", index: 1 }),
+        frame({ type: "content_block_stop", index: 2 }),
+        MESSAGE_STOP,
+      ]));
+      return child as unknown as ChildProcess;
+    };
+    const adapter = createCodeBuddyAdapter(provider(), { spawn, which: () => "/usr/bin/codebuddy" });
+    const events = await run(adapter, p);
+    // Dropping the ambiguous "2" would still leave valid JSON ({"a":1}) and a successful turn.
+    expect(events).toEqual([expect.objectContaining({ type: "error", code: "protocol_error", status: 502, retryable: false })]);
+    expect(child?.killed).toBe(true);
+  });
+
   test("a parallel batch on one shared block index completes every call in the leg", async () => {
     const p = parsed([tool("exec")]);
     const bridge = buildCodeBuddyToolBridge(p);
