@@ -34,8 +34,8 @@ import type { OcxParsedRequest, OcxProviderConfig } from "../types";
  * Of that client's full header set, only two values are minted here —
  * `x-opencode-session` and the anonymous `Bearer public` (the `User-Agent`
  * and `x-opencode-client` markers already ship as registry static headers).
- * A configured API key keeps billing that account, and any operator-supplied
- * header or key always wins over a minted value. The keyed `opencode-zen`
+ * A configured API key keeps billing that account, and any valid existing
+ * wire header or key wins over a minted value. The keyed `opencode-zen`
  * provider remains the supported route to these models, and OpenCode may
  * change or restrict the keyless admission path at any time.
  */

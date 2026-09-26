@@ -114,10 +114,9 @@ export function enrichOpenCodeZenRateLimitMessage(
  *
  * opencodex mints that identity automatically for this destination
  * (`src/adapters/opencode-free-session.ts`, with provenance from OpenCode's
- * own client and gateway code), so a refusal that still surfaces means the
- * turn bypassed it — a non-streaming send, caller-supplied headers the
- * gateway rejected, or tightened upstream admission — and the guidance below
- * says exactly that instead of leaking the raw envelope through.
+ * own client and gateway code). A refusal can still surface if the gateway
+ * rejects caller-supplied header values or tightens upstream admission, and
+ * the guidance below says that instead of leaking the raw envelope through.
  *
  * Two markers are matched because the two request surfaces expose different parts of the
  * upstream envelope: the Responses path forwards the bounded raw body (which carries the
@@ -156,9 +155,8 @@ export function enrichOpenCodeZenFreeTierMessage(
     `${message}`
     + " OpenCode Zen's keyless free tier admits only requests carrying OpenCode's anonymous"
     + " client identity (x-opencode-session and a versioned opencode User-Agent)."
-    + ` opencodex ${FREE_TIER_ENRICHMENT_MARKER} for this destination, so a refusal that still`
-    + " arrives means the turn bypassed it — a non-streaming send, caller-supplied headers the"
-    + " gateway rejected, or tightened upstream admission."
+    + ` opencodex ${FREE_TIER_ENRICHMENT_MARKER} for this destination. A refusal can still occur`
+    + " if the gateway rejects caller-supplied header values or tightens its admission rules."
     + " Use the keyed opencode-zen provider with an OpenCode Zen API key"
     + " (https://opencode.ai/auth), or route this model through another provider."
     + " Upstream terms: https://opencode.ai/docs/zen/."
