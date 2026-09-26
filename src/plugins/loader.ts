@@ -8,6 +8,7 @@
  * A plugin is a module whose default export is `{ name?, setup(ctx) }`. It runs in the proxy
  * process with the operator's credentials, so the loader accepts only files owned by the
  * current user that no other user can write — the same trust boundary as `config.json`.
+ * Windows auto-loading stays disabled until this trust check is backed by an ACL check.
  * Plugins cannot import ocx internals (a compiled binary keeps them inside `$bunfs`); they
  * receive everything they may use through `OcxPluginContext`.
  *
@@ -49,7 +50,9 @@ export interface PluginLoadResult {
   file: string;
   name: string;
   loaded: boolean;
-  error?: string;
+  error?: "windows_auto_load_disabled" | "directory_read_failed" | "directory_resolution_failed"
+    | "directory_untrusted" | "ancestor_untrusted" | "file_untrusted"
+    | "import_failed" | "invalid_export" | "setup_failed" | "setup_timeout";
 }
 
 const PLUGIN_EXTENSIONS = [".ts", ".js", ".mjs"];
@@ -79,14 +82,14 @@ function listPluginFiles(dir: string): string[] {
  * Null when `path` is safe to trust, otherwise the reason it is refused. `lstat` is used so a
  * symbolic link is judged as a link — and refused — rather than as the file it points to: a
  * link to a file you own would otherwise pass the owner and mode checks. Windows has no
- * POSIX owner or mode bits, so there only the file type is checked.
+ * POSIX owner or mode bits; the loader refuses execution on that platform.
  */
 function trustError(path: string, kind: "file" | "directory"): string | null {
   let stats: ReturnType<typeof lstatSync>;
   try {
     stats = lstatSync(path);
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "filesystem inspection failed";
   }
   if (stats.isSymbolicLink()) return "is a symbolic link";
   if (kind === "file" ? !stats.isFile() : !stats.isDirectory()) return `not a regular ${kind}`;
@@ -125,8 +128,8 @@ export function pluginAncestorsTrustError(realDir: string): string | null {
     let stats: ReturnType<typeof lstatSync>;
     try {
       stats = lstatSync(current);
-    } catch (error) {
-      return `${current}: ${error instanceof Error ? error.message : String(error)}`;
+    } catch {
+      return "ancestor inspection failed";
     }
     if (uid !== undefined && stats.uid !== uid && stats.uid !== 0) return `${current} is owned by another user`;
     if ((stats.mode & 0o022) !== 0 && (stats.mode & 0o1000) === 0) {
@@ -142,10 +145,10 @@ function isPlugin(value: unknown): value is OcxPlugin {
   return typeof value === "object" && value !== null && typeof (value as OcxPlugin).setup === "function";
 }
 
-async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${label} did not finish within ${ms}ms`)), ms);
+    timer = setTimeout(() => reject(new PluginSetupTimeoutError()), ms);
   });
   try {
     return await Promise.race([work, timeout]);
@@ -153,6 +156,8 @@ async function withTimeout<T>(work: Promise<T>, ms: number, label: string): Prom
     clearTimeout(timer);
   }
 }
+
+class PluginSetupTimeoutError extends Error {}
 
 export interface LoadOcxPluginsOptions {
   /** Deadline for a setup that yields; see the module comment. */
@@ -164,30 +169,33 @@ export async function loadOcxPlugins(
   options: LoadOcxPluginsOptions = {},
 ): Promise<PluginLoadResult[]> {
   if (process.env["OCX_PLUGINS"] === "0") return [];
+  if (process.platform === "win32") {
+    return [{ file: dir, name: "plugins directory", loaded: false, error: "windows_auto_load_disabled" }];
+  }
   let files: string[];
   try {
     files = listPluginFiles(dir);
-  } catch (error) {
-    return [{ file: dir, name: "plugins directory", loaded: false, error: error instanceof Error ? error.message : String(error) }];
+  } catch {
+    return [{ file: dir, name: "plugins directory", loaded: false, error: "directory_read_failed" }];
   }
   if (files.length === 0) return [];
   const dirRefused = pluginDirectoryTrustError(dir);
-  if (dirRefused) return [{ file: dir, name: "plugins directory", loaded: false, error: `refused: ${dirRefused}` }];
+  if (dirRefused) return [{ file: dir, name: "plugins directory", loaded: false, error: "directory_untrusted" }];
   // Check and import through the resolved path, so both refer to the same components.
   let realDir: string;
   try {
     realDir = realpathSync(dir);
-  } catch (error) {
-    return [{ file: dir, name: "plugins directory", loaded: false, error: error instanceof Error ? error.message : String(error) }];
+  } catch {
+    return [{ file: dir, name: "plugins directory", loaded: false, error: "directory_resolution_failed" }];
   }
   const ancestorRefused = pluginAncestorsTrustError(realDir);
-  if (ancestorRefused) return [{ file: dir, name: "plugins directory", loaded: false, error: `refused: ${ancestorRefused}` }];
+  if (ancestorRefused) return [{ file: dir, name: "plugins directory", loaded: false, error: "ancestor_untrusted" }];
   const results: PluginLoadResult[] = [];
   for (const file of files.map(listed => join(realDir, basename(listed)))) {
     const fallbackName = basename(file).replace(/\.(ts|js|mjs)$/, "");
     const refused = pluginFileTrustError(file);
     if (refused) {
-      results.push({ file, name: fallbackName, loaded: false, error: `refused: ${refused}` });
+      results.push({ file, name: fallbackName, loaded: false, error: "file_untrusted" });
       continue;
     }
     const unregister: Array<() => void> = [];
@@ -196,14 +204,16 @@ export async function loadOcxPlugins(
     let shutdownCount = 0;
     const whileActive = (name: string, register: () => () => void): void => {
       if (!active) {
-        console.error(`[plugin:${name}] registration after a failed setup was ignored`);
+        console.error("[opencodex] plugin registration ignored: setup_failed");
         return;
       }
       unregister.push(register());
     };
+    let phase: "import" | "export" | "setup" = "import";
     try {
       const module = await import(pathToFileURL(file).href) as { default?: unknown; plugin?: unknown };
       const plugin = module.default ?? module.plugin;
+      phase = "export";
       if (!isPlugin(plugin)) throw new Error("default export must be { name?, setup(context) }");
       const name = typeof plugin.name === "string" && plugin.name.trim() ? plugin.name.trim() : fallbackName;
       const context: OcxPluginContext = {
@@ -217,7 +227,8 @@ export async function loadOcxPlugins(
         onShutdown: teardown => whileActive(name, () => registerOptionalShutdownHook(`plugin:${file}#${++shutdownCount}`, teardown)),
       };
       const timeoutMs = options.setupTimeoutMs ?? SETUP_TIMEOUT_MS;
-      await withTimeout(Promise.resolve(plugin.setup(context)), timeoutMs, `plugin "${name}" setup`);
+      phase = "setup";
+      await withTimeout(Promise.resolve(plugin.setup(context)), timeoutMs);
       results.push({ file, name, loaded: true });
     } catch (error) {
       // A half-initialised plugin must not leave hooks behind, now or later.
@@ -227,7 +238,9 @@ export async function loadOcxPlugins(
         file,
         name: fallbackName,
         loaded: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: error instanceof PluginSetupTimeoutError ? "setup_timeout"
+          : phase === "import" ? "import_failed"
+          : phase === "export" ? "invalid_export" : "setup_failed",
       });
     }
   }
@@ -239,9 +252,9 @@ export async function loadAndReportOcxPlugins(): Promise<void> {
   try {
     for (const result of await loadOcxPlugins()) {
       if (result.loaded) console.log(`🔌 Plugin loaded: ${result.name}`);
-      else console.error(`⚠️  Plugin ${result.name} skipped: ${result.error}`);
+      else console.error(`⚠️  Plugin skipped: ${result.error}`);
     }
-  } catch (error) {
-    console.error(`⚠️  Plugin loading failed: ${error instanceof Error ? error.message : String(error)}`);
+  } catch {
+    console.error("⚠️  Plugin loading failed: internal_error");
   }
 }

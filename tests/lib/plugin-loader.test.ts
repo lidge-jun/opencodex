@@ -77,6 +77,28 @@ test("OCX_PLUGINS=0 skips loading", async () => {
   expect(hasUpstreamRewriters()).toBe(false);
 });
 
+test("Windows does not auto-load plugins without an ACL trust check", async () => {
+  writePlugin("redirect.ts", REDIRECT_PLUGIN);
+  const platform = process.platform;
+  try {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const results = await loadOcxPlugins(dir);
+    expect(results).toEqual([{ file: dir, name: "plugins directory", loaded: false, error: "windows_auto_load_disabled" }]);
+    expect(hasUpstreamRewriters()).toBe(false);
+  } finally {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  }
+});
+
+test("plugin setup exceptions expose only a bounded category", async () => {
+  const marker = "private plugin error marker";
+  writePlugin("throws.ts", `export default { setup() { throw new Error("${marker}"); } };`);
+  const results = await loadOcxPlugins(dir);
+  expect(results[0]?.loaded).toBe(false);
+  expect(results[0]?.error).toBe("setup_failed");
+  expect(JSON.stringify(results)).not.toContain(marker);
+});
+
 test.skipIf(process.platform === "win32")("a group- or world-writable plugin is refused", async () => {
   const path = writePlugin("redirect.ts", REDIRECT_PLUGIN, 0o664);
   expect(pluginFileTrustError(path)).toContain("writable by group or others");
@@ -94,7 +116,7 @@ test.skipIf(process.platform === "win32")("a symbolic link is refused even when 
     symlinkSync(target, join(dir, "linked.ts"));
     const [result] = await loadOcxPlugins(dir);
     expect(result?.loaded).toBe(false);
-    expect(result?.error).toBe("refused: is a symbolic link");
+    expect(result?.error).toBe("file_untrusted");
     expect(hasUpstreamRewriters()).toBe(false);
   } finally {
     rmSync(outside, { recursive: true, force: true });
@@ -109,7 +131,7 @@ test.skipIf(process.platform === "win32")("a plugin directory writable by group 
     file: dir,
     name: "plugins directory",
     loaded: false,
-    error: "refused: writable by group or others (chmod go-w)",
+    error: "directory_untrusted",
   }]);
   expect(hasUpstreamRewriters()).toBe(false);
 });
@@ -124,7 +146,7 @@ test.skipIf(process.platform === "win32")("a plugin directory under a group-writ
   const results = await loadOcxPlugins(nested);
   expect(results).toHaveLength(1);
   expect(results[0]?.loaded).toBe(false);
-  expect(results[0]?.error).toContain("is writable by group or others");
+  expect(results[0]?.error).toBe("ancestor_untrusted");
   expect(hasUpstreamRewriters()).toBe(false);
 });
 
@@ -145,7 +167,7 @@ export default {
     ["b-throws", false],
     ["redirect", true],
   ]);
-  expect(results[1]?.error).toBe("setup failed");
+  expect(results[1]?.error).toBe("setup_failed");
   expect(rewriteUpstream("https://api.example.com/v1/x", undefined, "http").url).toBe("http://127.0.0.1:8787/v1/x");
 });
 
@@ -155,7 +177,7 @@ test("a plugin path that cannot be read is reported, not treated as empty", asyn
   expect(results).toHaveLength(1);
   expect(results[0]?.loaded).toBe(false);
   expect(results[0]?.name).toBe("plugins directory");
-  expect(results[0]?.error).toContain("ENOTDIR");
+  expect(results[0]?.error).toBe("directory_read_failed");
 });
 
 test("two plugins with the same name keep separate shutdown teardowns", async () => {
@@ -218,7 +240,7 @@ export default {
   try {
     const results = await loadOcxPlugins(dir, { setupTimeoutMs: 20 });
     expect(results[0]?.loaded).toBe(false);
-    expect(results[0]?.error).toContain("did not finish within 20ms");
+    expect(results[0]?.error).toBe("setup_timeout");
     await new Promise(resolve => setTimeout(resolve, 120));
   } finally {
     console.error = originalError;

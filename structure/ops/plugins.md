@@ -18,7 +18,8 @@ or signs them.
   `config.json`. Every ancestor of the resolved plugin directory up to `/` must be owned by the user
   or root and not group/other-writable unless sticky (`pluginAncestorsTrustError`), so no other user
   can swap a checked path before it is imported; files are imported through the resolved directory.
-  Owner and mode checks are POSIX-only; on Windows only the file type is checked.
+  Owner and mode checks are POSIX-only; Windows auto-loading is disabled until an ACL trust
+  check can enforce the same boundary.
 - A missing plugin directory means no plugins. Any other read failure (`EACCES`, `ENOTDIR`) is
   reported as a skipped `plugins directory` entry.
 - A plugin module default-exports `{ name?, setup(context) }`. An asynchronous `setup` has five
@@ -27,6 +28,8 @@ or signs them.
   its context is closed, every hook it registered is removed, and a setup that resumes after the
   deadline cannot register again. A timed-out setup keeps running; resources it already opened
   are not closed. The other plugins and the proxy start normally.
+- Automatic failure logs use bounded categories such as `setup_failed`, `setup_timeout` and
+  `file_untrusted`. They omit raw exception text, which can contain credentials or outbound headers.
 - Plugins cannot import ocx modules: in a compiled binary they live inside `$bunfs`. Everything a
   plugin may use arrives through `OcxPluginContext` (`name`, `configDir`, `pluginDir`, `log`,
   `registerUpstreamRewriter`, `onShutdown`). `onShutdown` registers through
@@ -60,7 +63,8 @@ so the request path depends on it without depending on the loader.
   original URL, so a misconfigured provider fails the same way with or without a plugin.
 - With no rewriter registered, the send is returned untouched and nothing is allocated.
 - A rewriter that throws has its own edits to that send undone and is disabled for the rest of the
-  process. Rollback is per rewriter: edits from rewriters that ran before it are kept, and the send
+  process. Its automatic log reports `plugin_exception` without the exception or plugin name.
+  Rollback is per rewriter: edits from rewriters that ran before it are kept, and the send
   continues with them. `onShutdown` keys are unique per registration (`plugin:<file>#<n>`), so a
   plugin may register several teardowns.
 - Rewrites happen after the request is built, routed and paced, so they do not change routing,

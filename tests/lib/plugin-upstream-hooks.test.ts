@@ -61,6 +61,21 @@ test("a throwing rewriter is disabled and never breaks the send", () => {
   expect(calls).toBe(1);
 });
 
+test("a throwing rewriter logs only a bounded category", () => {
+  const marker = "private upstream error marker";
+  registerUpstreamRewriter(marker, () => { throw new Error(marker); });
+  const originalError = console.error;
+  const lines: string[] = [];
+  console.error = (...args) => { lines.push(args.map(String).join(" ")); };
+  try {
+    rewriteUpstream("https://api.example.com/v1/messages", { authorization: `Bearer ${marker}` }, "http");
+  } finally {
+    console.error = originalError;
+  }
+  expect(lines).toEqual(["[opencodex] plugin upstream rewriter disabled: plugin_exception"]);
+  expect(lines.join(" ")).not.toContain(marker);
+});
+
 test("a rewriter that edits the target and then throws leaves the send unmodified", () => {
   registerUpstreamRewriter("half", target => {
     target.url = "http://127.0.0.1:9/partial";

@@ -30,12 +30,11 @@ Put plugin files in `plugins/` inside the opencodex home (`~/.opencodex/plugins/
   not writable by group or others, unless it is sticky like `/tmp`. Fix permissions with
   `chmod go-w ~/.opencodex/plugins ~/.opencodex/plugins/*`; on systems whose default umask is
   `002`, check the parent directories too.
-- On Windows these owner and permission checks are not performed; only regular files are loaded.
-  Keep the `plugins/` directory writable by your account only.
+- On Windows automatic plugin loading is disabled until an ACL trust check is available.
 
 Restart the proxy after adding, changing or removing a plugin (`ocx service restart`, or stop and
 start `ocx start`). Each loaded plugin prints a `Plugin loaded: <name>` line at startup; a skipped
-plugin prints the reason.
+plugin prints a bounded reason category. Raw plugin exception text is never printed automatically.
 
 To start once without plugins, set `OCX_PLUGINS=0`.
 

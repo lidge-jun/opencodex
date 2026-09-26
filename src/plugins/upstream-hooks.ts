@@ -64,12 +64,11 @@ export function rewriteUpstream<H extends HeadersInit | undefined>(
     const headersBefore = new Headers(target.headers);
     try {
       registration.rewrite(target);
-    } catch (error) {
+    } catch {
       target.url = urlBefore;
       target.headers = headersBefore;
       registration.disabled = true;
-      const reason = error instanceof Error ? error.message : String(error);
-      console.error(`[opencodex] plugin "${registration.name}" upstream rewriter disabled after an error: ${reason}`);
+      console.error("[opencodex] plugin upstream rewriter disabled: plugin_exception");
     }
   }
   return { url: target.url, headers: target.headers };
