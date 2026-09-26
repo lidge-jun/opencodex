@@ -42,6 +42,8 @@ import {
   upstreamErrorEvent,
 } from "./openai-chat/errors";
 import { messagesToChatFormat } from "./openai-chat/messages";
+import { isZenFreeEndpoint, zenFreeHasApiKey } from "./opencode-free-session";
+import { missingZenFreeGateTools, zenFreeGateChatTool } from "./opencode-free-tools";
 import { withOpenAIChatToolNames } from "./openai-chat/tool-name-registry";
 import { openAIChatTransport, stripBracketedModelSuffix } from "./openai-chat/wire";
 import { toolChoiceToChatFormat, toolsToChatFormatForProvider } from "./openai-chat/tool-schema";
@@ -101,12 +103,26 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
 
     buildRequest(parsed: OcxParsedRequest, incoming?: IncomingMeta) {
       lastRequestedModelId = parsed.modelId;
-      const { url, headers, hasCredential } = openAIChatTransport(provider);
+      // The transport applies the keyless Zen identity when the endpoint
+      // matches; every other destination is unaffected.
+      const { url, headers, hasCredential } = openAIChatTransport(provider, { parsed, incomingHeaders: incoming?.headers });
       const messages = toolNames.messages(parsed, provider.baseUrl, messagesToChatFormat(parsed, provider));
       freeformTools = freeformToolsByWireName(parsed.context.tools, tool => toolNames.registry().alias(tool));
       const finish = (): AdapterRequest => {
-        const tools = toolsToChatFormatForProvider(parsed, provider, toolNames.registry());
+        let tools = toolsToChatFormatForProvider(parsed, provider, toolNames.registry());
         const toolChoice = toolChoiceToChatFormat(parsed.options.toolChoice, parsed.context.tools, provider, toolNames.registry());
+        // Keyless Zen tier: the gateway refuses turns that do not declare the
+        // OpenCode-native shell/read pair, so append the missing gate
+        // declarations (never-invoked compatibility entries). Keyless only;
+        // effort and tool-choice policy above already ran against the
+        // caller's real tools.
+        if (isZenFreeEndpoint(provider.baseUrl) && !zenFreeHasApiKey(provider)) {
+          const names = (tools ?? []).map(tool =>
+            (tool as { function?: { name?: unknown } } | null)?.function?.name,
+          ).filter((name): name is string => typeof name === "string");
+          const missing = missingZenFreeGateTools(names);
+          if (missing.length > 0) tools = [...(tools ?? []), ...missing.map(zenFreeGateChatTool)];
+        }
 
         const body: Record<string, unknown> = {
           model: provider.modelSuffixBracketStrip ? stripBracketedModelSuffix(parsed.modelId) : parsed.modelId,

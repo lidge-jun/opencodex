@@ -336,6 +336,10 @@ export async function runNativeChatAttempt(
       requestedStream,
       fastPolicyForModel(activeProvider, route.modelId, route.providerName, "chat"),
       config.fastMode,
+      // The native lane never builds a parsed request, so there is no thread
+      // to stabilize on: the process fallback session applies. Caller headers
+      // still ride along so an explicit session wins.
+      { incomingHeaders: req.headers },
     );
   };
   try {

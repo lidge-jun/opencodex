@@ -1,7 +1,22 @@
 import { describe, expect, test } from "bun:test";
-import { PROVIDER_REGISTRY } from "../../src/providers/registry";
+import { PROVIDER_REGISTRY, providerModelWireDefault } from "../../src/providers/registry";
 import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from "../../src/providers/derive";
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
+import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat/passthrough";
+import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses";
+import {
+  ZEN_FREE_SESSION_RE,
+  ZEN_FREE_USER_AGENT,
+  mintZenFreeSessionId,
+  resetZenFreeSessionCache,
+} from "../../src/adapters/opencode-free-session";
+import {
+  ZEN_FREE_GATE_DECLARATION,
+  missingZenFreeGateTools,
+} from "../../src/adapters/opencode-free-tools";
+import { MODEL_ADAPTER_OVERRIDE_ALLOWED } from "../../src/types/wire";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import type { IncomingMeta } from "../../src/adapters/base";
 import { routedProviderConfig } from "../../src/router";
 import { buildModelsRequest } from "../../src/oauth";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../src/types";
@@ -13,6 +28,29 @@ function minimalRequest(model = "kimi-k2.7-code"): OcxParsedRequest {
     context: { messages: [{ role: "user", content: "hi" }], tools: [] },
     options: {},
   };
+}
+
+function threadedRequest(threadId: string, model = "muse-spark-1.3-contributor-free"): OcxParsedRequest {
+  return { ...minimalRequest(model), _codexOwnThreadId: threadId };
+}
+
+function responsesInboundRequest(threadId: string): OcxParsedRequest {
+  // The Responses passthrough forwards the caller's raw body, so a request
+  // without one never reaches the header path under test.
+  return {
+    ...threadedRequest(threadId),
+    _rawBody: {
+      model: "muse-spark-1.3-contributor-free",
+      input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] }],
+      stream: false,
+    },
+  };
+}
+
+function metaWithSession(session?: string): IncomingMeta {
+  const headers = new Headers();
+  if (session !== undefined) headers.set("x-opencode-session", session);
+  return { headers, translatorBudget: createTranslatorBudget() };
 }
 
 describe("opencode-free provider", () => {
@@ -53,15 +91,154 @@ describe("opencode-free provider", () => {
     expect(deriveFeaturedProviderIds()).toContain("opencode-free");
   });
 
-  test("adapter sends no auth header with no apiKey configured", () => {
+  test("keyless requests mint the anonymous tier identity", () => {
+    resetZenFreeSessionCache();
     const provider: OcxProviderConfig = providerConfigSeed(entry!);
     const adapter = createOpenAIChatAdapter(provider);
-    const req = adapter.buildRequest(minimalRequest());
+    const req = adapter.buildRequest(threadedRequest("thread-alpha"));
     const headers = req.headers as Record<string, string>;
-    expect(headers["Authorization"]).toBeUndefined();
-    expect(headers["User-Agent"]).toBe("opencode");
+    // The gateway maps Bearer public to its anonymous pool (see
+    // src/adapters/opencode-free-session.ts for provenance).
+    expect(headers["Authorization"]).toBe("Bearer public");
+    // The bare registry default is repaired: the gate only admits versioned UAs.
+    expect(headers["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
     expect(headers["x-opencode-client"]).toBe("desktop");
+    expect(ZEN_FREE_SESSION_RE.test(headers["x-opencode-session"] ?? "")).toBe(true);
     expect(req.url).toBe("https://opencode.ai/zen/v1/chat/completions");
+  });
+
+  test("an operator User-Agent is preserved verbatim, only the bare default is repaired", () => {
+    resetZenFreeSessionCache();
+    const seed = providerConfigSeed(entry!);
+    const custom = createOpenAIChatAdapter({
+      ...seed,
+      headers: { ...seed.headers, "User-Agent": "custom-agent/9.9" },
+    }).buildRequest(threadedRequest("t")).headers as Record<string, string>;
+    expect(custom["User-Agent"]).toBe("custom-agent/9.9");
+    expect(ZEN_FREE_SESSION_RE.test(custom["x-opencode-session"] ?? "")).toBe(true);
+  });
+
+  test("the minted session is stable per Codex thread and distinct across threads", () => {
+    resetZenFreeSessionCache();
+    const provider: OcxProviderConfig = providerConfigSeed(entry!);
+    const adapter = createOpenAIChatAdapter(provider);
+    const first = (adapter.buildRequest(threadedRequest("thread-alpha")).headers as Record<string, string>)["x-opencode-session"];
+    const second = (adapter.buildRequest(threadedRequest("thread-alpha")).headers as Record<string, string>)["x-opencode-session"];
+    const other = (adapter.buildRequest(threadedRequest("thread-beta")).headers as Record<string, string>)["x-opencode-session"];
+    expect(first).toBe(second);
+    expect(other).not.toBe(first);
+    expect(ZEN_FREE_SESSION_RE.test(other ?? "")).toBe(true);
+  });
+
+  test("a valid caller session passes through, a malformed one is replaced", () => {
+    resetZenFreeSessionCache();
+    const provider: OcxProviderConfig = providerConfigSeed(entry!);
+    const adapter = createOpenAIChatAdapter(provider);
+    const valid = mintZenFreeSessionId("caller-seed");
+    const kept = (adapter.buildRequest(threadedRequest("t"), metaWithSession(valid)).headers as Record<string, string>)["x-opencode-session"];
+    expect(kept).toBe(valid);
+    const replaced = (adapter.buildRequest(threadedRequest("t"), metaWithSession("not-a-session")).headers as Record<string, string>)["x-opencode-session"];
+    expect(replaced).not.toBe("not-a-session");
+    expect(ZEN_FREE_SESSION_RE.test(replaced ?? "")).toBe(true);
+  });
+
+  test("an operator-configured Authorization header is never overwritten", () => {
+    resetZenFreeSessionCache();
+    const provider: OcxProviderConfig = {
+      ...providerConfigSeed(entry!),
+      headers: { ...providerConfigSeed(entry!).headers, Authorization: "Bearer operator-key" },
+    };
+    const headers = createOpenAIChatAdapter(provider).buildRequest(threadedRequest("t")).headers as Record<string, string>;
+    expect(headers["Authorization"]).toBe("Bearer operator-key");
+    expect(ZEN_FREE_SESSION_RE.test(headers["x-opencode-session"] ?? "")).toBe(true);
+  });
+
+  test("the Responses wire mints the same identity for Muse Spark turns", () => {
+    resetZenFreeSessionCache();
+    const provider: OcxProviderConfig = providerConfigSeed(entry!);
+    const headers = createResponsesPassthroughAdapter(provider).buildRequest(
+      responsesInboundRequest("thread-alpha"),
+      metaWithSession(),
+    ).headers as Record<string, string>;
+    expect(headers["Authorization"]).toBe("Bearer public");
+    expect(headers["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
+    expect(headers["x-opencode-client"]).toBe("desktop");
+    const chatHeaders = createOpenAIChatAdapter(provider).buildRequest(threadedRequest("thread-alpha")).headers as Record<string, string>;
+    expect(headers["x-opencode-session"]).toBe(chatHeaders["x-opencode-session"]);
+  });
+
+  test("the native Chat fast path mints the same identity", () => {
+    resetZenFreeSessionCache();
+    const provider: OcxProviderConfig = providerConfigSeed(entry!);
+    const rawBody = { messages: [{ role: "user", content: "hi" }], stream: true };
+    const headers = buildOpenAIChatPassthroughRequest(
+      provider,
+      rawBody,
+      "big-pickle",
+      true,
+      undefined,
+      undefined,
+      { incomingHeaders: new Headers() },
+    ).headers as Record<string, string>;
+    expect(headers["Authorization"]).toBe("Bearer public");
+    expect(headers["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
+    expect(ZEN_FREE_SESSION_RE.test(headers["x-opencode-session"] ?? "")).toBe(true);
+  });
+
+  test("the native Chat fast path leaves other endpoints byte-identical", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://api.example.test/v1",
+      authMode: "key",
+      keyOptional: true,
+    };
+    const rawBody = { messages: [{ role: "user", content: "hi" }], stream: true };
+    const headers = buildOpenAIChatPassthroughRequest(
+      provider,
+      rawBody,
+      "some-model",
+      true,
+      undefined,
+      undefined,
+      { incomingHeaders: new Headers() },
+    ).headers as Record<string, string>;
+    expect(headers["Authorization"]).toBeUndefined();
+    expect(headers["x-opencode-session"]).toBeUndefined();
+  });
+
+  test("a relayed caller User-Agent is replaced when the operator configured none", () => {
+    resetZenFreeSessionCache();
+    // A saved row with no header block: the Responses passthrough relays the
+    // caller's fingerprint (e.g. codex-cli), which the gate refuses.
+    const provider: OcxProviderConfig = {
+      adapter: "openai-chat",
+      baseUrl: "https://opencode.ai/zen/v1",
+      authMode: "key",
+      keyOptional: true,
+    };
+    const incoming = new Headers({ "user-agent": "codex-cli/0.153.4" });
+    const headers = createResponsesPassthroughAdapter(provider).buildRequest(
+      responsesInboundRequest("t"),
+      { headers: incoming, translatorBudget: createTranslatorBudget() },
+    ).headers as Record<string, string>;
+    expect(headers["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
+    expect(headers["Authorization"]).toBe("Bearer public");
+    expect(ZEN_FREE_SESSION_RE.test(headers["x-opencode-session"] ?? "")).toBe(true);
+  });
+
+  test("Muse Spark contributor-free ids default to the Responses wire on every inbound", () => {    const base = { baseUrl: "https://opencode.ai/zen/v1", adapter: "openai-chat" };
+    for (const model of ["muse-spark-1.2-contributor-free", "muse-spark-1.3-contributor-free"]) {
+      for (const inbound of ["responses", "chat", "anthropic"] as const) {
+        expect(providerModelWireDefault("opencode-free", base, model, MODEL_ADAPTER_OVERRIDE_ALLOWED, inbound))
+          .toBe("openai-responses");
+      }
+      // Case-insensitive like the rest of model-id matching.
+      expect(providerModelWireDefault("opencode-free", base, "Muse-Spark-1.3-Contributor-Free", MODEL_ADAPTER_OVERRIDE_ALLOWED, "responses"))
+        .toBe("openai-responses");
+    }
+    // Chat-wire free models stay on Chat.
+    expect(providerModelWireDefault("opencode-free", base, "big-pickle", MODEL_ADAPTER_OVERRIDE_ALLOWED, "responses"))
+      .toBeUndefined();
   });
 
   test("user-supplied apiKey is sent when configured", () => {
@@ -114,10 +291,10 @@ describe("opencode-free provider", () => {
       expect(routed.headers?.["x-opencode-client"]).toBe("desktop");
     });
 
-    test("the merged headers reach the wire, not just the resolved config", () => {
+    test("the merged headers reach the wire with the repaired UA, not just the resolved config", () => {
       const routed = routedProviderConfig("opencode-free", persisted({ "x-opencode-client": "desktop" }));
       const req = createOpenAIChatAdapter(routed).buildRequest(minimalRequest());
-      expect((req.headers as Record<string, string>)["User-Agent"]).toBe("opencode");
+      expect((req.headers as Record<string, string>)["User-Agent"]).toBe(ZEN_FREE_USER_AGENT);
     });
 
     test("a user override wins and does not become a second comma-joined value", () => {
@@ -214,6 +391,91 @@ describe("opencode-free provider", () => {
     expect(preset).toBeDefined();
     expect(preset.keyOptional).toBe(true);
     expect(preset.note).toBeDefined();
+  });
+
+  describe("keyless gate declarations (shell/read pair)", () => {
+    test("missing-pair detection mirrors the gateway: exact lowercase only", () => {
+      expect(missingZenFreeGateTools(undefined)).toEqual(["shell", "read"]);
+      expect(missingZenFreeGateTools([])).toEqual(["shell", "read"]);
+      expect(missingZenFreeGateTools(["shell"])).toEqual(["read"]);
+      expect(missingZenFreeGateTools(["bash", "read"])).toEqual([]);
+      expect(missingZenFreeGateTools(["shell", "read", "exec"])).toEqual([]);
+      // Capitalized Claude-style names do not satisfy the gate.
+      expect(missingZenFreeGateTools(["Bash", "Read"])).toEqual(["shell", "read"]);
+      expect(missingZenFreeGateTools(["exec", "wait"])).toEqual(["shell", "read"]);
+    });
+
+    function chatToolNames(provider: OcxProviderConfig, request: OcxParsedRequest): (string | undefined)[] {
+      const body = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(request).body as string) as {
+        tools?: Array<{ function?: { name?: unknown } }>;
+      };
+      return (body.tools ?? []).map(tool => typeof tool?.function?.name === "string" ? tool.function.name : undefined);
+    }
+
+    test("translated Chat appends the missing pair and never duplicates", () => {
+      resetZenFreeSessionCache();
+      const provider: OcxProviderConfig = providerConfigSeed(entry!);
+      expect(chatToolNames(provider, minimalRequest("big-pickle"))).toEqual(["shell", "read"]);
+      const execOnly: OcxParsedRequest = {
+        ...minimalRequest("big-pickle"),
+        context: {
+          messages: [{ role: "user", content: "hi" }],
+          tools: [{ name: "exec", description: "run", parameters: { type: "object", properties: {} } }],
+        },
+      };
+      expect(chatToolNames(provider, execOnly)).toEqual(["exec", "shell", "read"]);
+      const already: OcxParsedRequest = {
+        ...minimalRequest("big-pickle"),
+        context: {
+          messages: [{ role: "user", content: "hi" }],
+          tools: [
+            { name: "shell", description: "s", parameters: { type: "object", properties: {} } },
+            { name: "read", description: "r", parameters: { type: "object", properties: {} } },
+          ],
+        },
+      };
+      expect(chatToolNames(provider, already)).toEqual(["shell", "read"]);
+    });
+
+    test("appended declarations carry the never-invoke wording", () => {
+      resetZenFreeSessionCache();
+      const provider: OcxProviderConfig = providerConfigSeed(entry!);
+      const body = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(minimalRequest("big-pickle")).body as string) as {
+        tools?: Array<{ function?: { description?: unknown } }>;
+      };
+      for (const tool of body.tools ?? []) {
+        expect(tool?.function?.description).toBe(ZEN_FREE_GATE_DECLARATION);
+      }
+    });
+
+    test("keyed sends do not gain gate declarations", () => {
+      const provider: OcxProviderConfig = { ...providerConfigSeed(entry!), apiKey: "user-secret-key" };
+      const body = JSON.parse(createOpenAIChatAdapter(provider).buildRequest(minimalRequest("big-pickle")).body as string) as {
+        tools?: unknown[];
+      };
+      expect(body.tools).toBeUndefined();
+    });
+
+    test("Responses wire creates the pair when the turn declares no tools", () => {
+      resetZenFreeSessionCache();
+      const provider: OcxProviderConfig = providerConfigSeed(entry!);
+      const body = JSON.parse(createResponsesPassthroughAdapter(provider).buildRequest(
+        responsesInboundRequest("thread-gamma"),
+        metaWithSession(),
+      ).body as string) as { tools?: Array<{ name?: unknown }> };
+      expect((body.tools ?? []).map(tool => tool?.name)).toEqual(["shell", "read"]);
+    });
+
+    test("native Chat fast path creates the pair when the turn declares no tools", () => {
+      const provider: OcxProviderConfig = providerConfigSeed(entry!);
+      const body = JSON.parse(buildOpenAIChatPassthroughRequest(
+        provider,
+        { messages: [{ role: "user", content: "hi" }], stream: true },
+        "big-pickle",
+        true,
+      ).body as string) as { tools?: Array<{ function?: { name?: unknown } }> };
+      expect((body.tools ?? []).map(tool => tool?.function?.name)).toEqual(["shell", "read"]);
+    });
   });
 });
 

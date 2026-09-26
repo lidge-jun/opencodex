@@ -1,5 +1,6 @@
 import { agentRouterDefaultHeaders } from "../agentrouter";
 import { openaiChatCompletionsUrl } from "../openai-chat-url";
+import { applyZenFreeIdentity, isZenFreeEndpoint, type ZenFreeIdentity } from "../opencode-free-session";
 import type { OcxProviderConfig } from "../../types";
 
 // Providers may opt into stripping one trailing "[...]" group from the wire model id.
@@ -16,7 +17,10 @@ export function stripBracketedModelSuffix(modelId: string): string {
   return suffixStart === -1 ? modelId : modelId.slice(0, suffixStart);
 }
 
-export function openAIChatTransport(provider: OcxProviderConfig): {
+export function openAIChatTransport(
+  provider: OcxProviderConfig,
+  identity?: ZenFreeIdentity,
+): {
   url: string;
   headers: Record<string, string>;
   hasCredential: boolean;
@@ -31,6 +35,13 @@ export function openAIChatTransport(provider: OcxProviderConfig): {
   };
   if (hasCredential) headers.Authorization = `Bearer ${provider.apiKey}`;
   if (provider.headers) Object.assign(headers, provider.headers);
+  // Keyless Zen tier admission lives here so every Chat-wire builder shares
+  // it: the translated adapter and the native Chat fast path both resolve
+  // headers through this transport. Gated on the canonical endpoint, so all
+  // other destinations build byte-identical headers to before.
+  if (isZenFreeEndpoint(provider.baseUrl)) {
+    applyZenFreeIdentity(headers, provider, identity);
+  }
   // A configured relative path wins, mirroring how the Responses adapter honours
   // `responsesPath`. An upstream can serve both wires under different prefixes, and a
   // per-model wire override only swaps the adapter, so without this the opted-in Chat
