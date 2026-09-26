@@ -7,6 +7,8 @@
  * unchanged. The Responses output (SSE or JSON) is converted back to Anthropic shape.
  */
 import { FORWARD_HEADERS } from "../adapters/openai-responses";
+import { fetchMirasim } from "../adapters/mirasim/transport";
+import { mirasimAnthropicBetaValue } from "../adapters/mirasim/anthropic";
 import {
   admissionModelDeniedResponse,
   AdmissionModelDeniedError,
@@ -45,12 +47,14 @@ import {
   responsesSseToAnthropicSse,
 } from "../claude/outbound";
 import { clearableDeadline, idleDeadline } from "../lib/abort";
+import { readBoundedResponseBytes } from "../lib/bounded-body";
 import { estimateTokens } from "../lib/token-estimate";
 import {
   CLAUDE_NATIVE_THINKING,
   projectClaudeRequest,
   type ClaudeThinkingProjection,
 } from "../lib/claude-request-projection";
+import { resolveStallTimeoutSec } from "../stall-timeout";
 import { captureRouteStaticPolicy, NoEligiblePolicyCandidateError, previewRouteModel, routedProviderConfig, UnknownRoutingPolicyError, routeModel, type RouteResult } from "../router";
 import { evidenceFromBody } from "../routing/request-evidence";
 import { resolveWireProtocolOverride } from "./adapter-resolve";
@@ -81,6 +85,12 @@ import { resolveApiSurfaceSettings, resolveProtocolSettings } from "../protocols
 import { markProtocolBlocked, markProtocolEntry } from "../protocols/trace";
 import { recordProtocolShadowPlan } from "../protocols/shadow-plan";
 import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "./messages-native-eligibility";
+import { providerFetch } from "./responses/fetch-helpers";
+import {
+  forceRefreshOAuthAccessSnapshot,
+  getValidAccessTokenSnapshot,
+  publicOAuthAuthenticationErrorMessage,
+} from "../oauth";
 import {
   isApiAuthRequired,
   isDataPlaneAdmissionSecret,
@@ -1494,11 +1504,132 @@ function thinkingProjectionForPreview(config: OcxConfig, modelId: string): Claud
   }
 }
 
+const MIRASIM_COUNT_TOKENS_MAX_BYTES = 1024 * 1024;
+
+async function handleMirasimClaudeCountTokens(
+  req: Request,
+  config: OcxConfig,
+  raw: Rec,
+  routedModel: string,
+  longContext: boolean,
+  admission?: DataPlaneAdmission,
+): Promise<Response | undefined> {
+  let route: ReturnType<typeof routeModel>;
+  try {
+    route = routeModel(config, routedModel);
+  } catch {
+    return undefined;
+  }
+  if (route.provider.adapter !== "mirasim") return undefined;
+  if (!route.modelId.trim().toLowerCase().startsWith("claude-")) {
+    return anthropicErrorResponse(
+      400,
+      "Mirasim /v1/messages/count_tokens requires a Claude Messages model",
+      "invalid_request_error",
+    );
+  }
+  try {
+    assertRouteAllowedByScope(
+      resolveAdmissionModelScope(config, admission),
+      routedModel,
+      route,
+    );
+  } catch (error) {
+    if (error instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(error);
+    throw error;
+  }
+
+  let snapshot;
+  try {
+    snapshot = await getValidAccessTokenSnapshot(route.providerName);
+  } catch (error) {
+    return anthropicErrorResponse(
+      401,
+      publicOAuthAuthenticationErrorMessage(error),
+      "authentication_error",
+    );
+  }
+
+  const beta = mirasimAnthropicBetaValue(
+    [req.headers.get("anthropic-beta")],
+    longContext,
+  );
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+    "accept": "application/json",
+    "anthropic-version": req.headers.get("anthropic-version")?.trim() || "2023-06-01",
+    ...(beta ? { "anthropic-beta": beta } : {}),
+  };
+  const url = `${route.provider.baseUrl.replace(/\/+$/, "")}/v1/messages/count_tokens`;
+  const body = JSON.stringify({ ...raw, model: route.modelId });
+  const executor = providerFetch(route.provider, undefined, {
+    providerName: route.providerName,
+    modelId: route.modelId,
+  });
+  const outbound = { url, method: "POST", headers, body } as const;
+  let upstream: Response | undefined;
+  const connectTimeoutMs = config.connectTimeoutMs ?? 200_000;
+  const bodyInactivityMs = resolveStallTimeoutSec(config.stallTimeoutSec) * 1_000;
+  try {
+    upstream = await fetchMirasim(outbound, snapshot.accessToken, {
+      abortSignal: req.signal,
+      timeoutMs: connectTimeoutMs,
+      executor,
+    });
+    if (upstream.status === 401) {
+      try {
+        const refreshed = await forceRefreshOAuthAccessSnapshot(snapshot);
+        const replacement = await fetchMirasim(outbound, refreshed.accessToken, {
+          abortSignal: req.signal,
+          timeoutMs: connectTimeoutMs,
+          executor,
+        });
+        try { await upstream.body?.cancel(); } catch { /* already closed */ }
+        upstream = replacement;
+      } catch {
+        // Preserve the relay's authenticated rejection below.
+      }
+    }
+    const observed = await readBoundedResponseBytes(upstream, {
+      maxBytes: MIRASIM_COUNT_TOKENS_MAX_BYTES,
+      signal: req.signal,
+      inactivityTimeoutMs: bodyInactivityMs,
+    });
+    if (observed.oversized) {
+      return anthropicErrorResponse(502, "Mirasim count_tokens response exceeded the safe size limit", "api_error");
+    }
+    const responseHeaders = new Headers({
+      "content-type": upstream.headers.get("content-type") ?? "application/json",
+    });
+    return new Response(observed.bytes, {
+      status: upstream.status,
+      headers: responseHeaders,
+    });
+  } catch (error) {
+    if (req.signal.aborted) {
+      return anthropicErrorResponse(499, "request canceled by client", "api_error");
+    }
+    return anthropicErrorResponse(
+      502,
+      error instanceof Error && error.name === "TimeoutError"
+        ? "Mirasim count_tokens request timed out"
+        : "Mirasim count_tokens relay failed",
+      "api_error",
+    );
+  } finally {
+    const pending = upstream?.body;
+    if (pending && !pending.locked) {
+      try { void pending.cancel().catch(() => undefined); } catch { /* already closed */ }
+    }
+  }
+}
+
 export async function handleClaudeCountTokens(
   req: Request,
   config: OcxConfig,
   requestPolicy: RequestPolicyView = config,
   ingress: ClaudeIngressOptions = {},
+  admission?: DataPlaneAdmission,
 ): Promise<Response> {
   const disabled = claudeInboundDisabled(config);
   if (disabled) return disabled;
@@ -1522,6 +1653,7 @@ export async function handleClaudeCountTokens(
   }
   try {
     let model = raw.model;
+    const longContext = /\[1m\]/i.test(model);
     // Case-insensitive [1m] strip (audit 021 #7 — the CLI matches /\[1m\]/i).
     const stripped = stripOneMillionMarker(model);
     if (stripped !== model) {
@@ -1546,7 +1678,17 @@ export async function handleClaudeCountTokens(
       model = countFastRow.baseId;
       raw.model = model;
     }
-    captureClaudeInbound("count_tokens", raw, resolveInboundModel(model, cc), req.headers.get("anthropic-beta") ?? undefined);
+    const routedModel = resolveInboundModel(model, cc);
+    captureClaudeInbound("count_tokens", raw, routedModel, req.headers.get("anthropic-beta") ?? undefined);
+    const mirasim = await handleMirasimClaudeCountTokens(
+      req,
+      config,
+      raw,
+      routedModel,
+      longContext,
+      admission,
+    );
+    if (mirasim) return mirasim;
     if (wantsNativePassthrough(req, config, requestPolicy, model, cc)) {
       return await anthropicNativePassthrough(req, config, { model, provider: "anthropic-native", surface: "claude" }, undefined, raw, "/v1/messages/count_tokens");
     }

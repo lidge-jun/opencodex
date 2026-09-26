@@ -181,6 +181,7 @@ that route.
 ```bash
 ocx login xai          # xAI Grok
 ocx login anthropic    # Anthropic Claude (Pro/Max)
+ocx login mirasim      # Mirasim browser login; use --email <address> for email verification
 ocx login kimi         # Moonshot Kimi
 ocx login nous         # Nous Portal (device grant; free + paid models)
 ocx login kiro         # import kiro-cli credentials (or token fallback)
@@ -198,6 +199,7 @@ ocx logout <provider>
 | --- | --- | --- | --- |
 | `xai` | `openai-chat` | `https://cli-chat-proxy.grok.com/v1` | OAuth uses the separate Grok CLI subscription gateway. The API-key override uses `https://api.x.ai/v1` and may inject Priority Processing. Live-first Grok catalog; `grok-4.5` is the fallback default. |
 | `anthropic` | `anthropic` | `https://api.anthropic.com` | Claude models; live model list fetched from `/v1/models`. |
+| `mirasim` | `mirasim` | `https://relay.mirasim.ai` | Native signed Mirasim account provider. GPT-family models and `kimi-k3` use Responses semantics; Claude-family models use Messages semantics. The signed account roster supplies live model availability/context limits, and the Providers page shows Mirasim account quota windows. |
 | `kimi` | `openai-chat` | `https://api.kimi.com/coding/v1` | Kimi Code Plan coding models. Defaults to the stable `kimi-for-coding` alias (currently K2.8 Preview): 1M-token context window, adjustable `low`/`high`/`max` thinking (default `max`), text + image input. Retired `kimi-k2.x` selections are migrated to the alias on upgrade. |
 | `kimi-responses` | `openai-responses` | `https://api.kimi.com/coding/v1` | Same Kimi account login (reuses the `kimi` OAuth credential) over the OpenAI Responses wire. Same model roster and capabilities as `kimi`; thinking content stays encrypted server-side, tool calls and results stay visible. |
 | `nous` | `openai-chat` | `https://inference-api.nousresearch.com/v1` | Nous Research subscription gateway (same backend Hermes Agent uses). Device-grant login against `portal.nousresearch.com`; the access token is the per-request inference JWT. Mixed paid + `:free` model catalog (`tencent/hy3:free`, `stepfun/step-3.7-flash:free`, ...) discovered live from the signed-in account. Refresh tokens are single-use and rotated on every refresh. |
@@ -207,6 +209,8 @@ ocx logout <provider>
 | `orcarouter-oauth` | `openai-chat` | `https://api.orcarouter.ai/v1` | Browser consent and key exchange use `https://www.orcarouter.ai` with S256 PKCE. The returned user-owned `sk-orca-…` API key is stored in the existing credential store and reused until revoked. |
 | `devin` | `devin` | `https://server.codeium.com` | Experimental unofficial Cognition/Devin bridge. Login first imports the credential the installed Devin CLI already holds (`devin auth login` writes a `devin-session-token` to its own `credentials.toml`); when none is present it opens Auth0 browser sign-in and exchanges the pasted token via Cognition's `RegisterUser` for a long-lived API key. `ocx login devin-cli` remains as a deprecated alias. Models are discovered per account with `GetCascadeModelConfigs`. Not shown in the dashboard preset by default. Chat and usage reporting are verified against a live account across three models. |
 | `github-copilot` | `openai-chat` | `https://api.githubcopilot.com` | Experimental. GitHub device flow + `copilot_internal` exchange (VS Code OAuth client). Requires an active Copilot subscription; not an official third-party API. |
+
+For Mirasim email login, `ocx login mirasim --email <address>` prompts for the one-time code locally. For non-interactive use, pass `--code -` and supply the code on standard input rather than placing it in the process arguments. Claude selectors may append `[1m]` when the signed roster advertises the long-context variant; OpenCodex removes that selector before dispatch and applies the corresponding Claude beta.
 
 Google Antigravity account and provider quota probes use fixed Google accounting endpoints, including the models fallback. They support transparent Fake-IP DNS for those destinations while retaining TLS verification, redirect rejection and private-address checks. A custom provider base URL changes model requests, not quota destinations; `NO_PROXY` continues to select the direct-route policy.
 
@@ -443,7 +447,7 @@ selectors, then retry. Signing in from a machine with no existing `kiro-cli` ses
 
 ## 3. API-key catalog
 
-opencodex ships 99 built-in presets: 82 key-based, 13 OAuth, three local, and one default
+opencodex ships 100 built-in presets: 82 key-based, 14 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 

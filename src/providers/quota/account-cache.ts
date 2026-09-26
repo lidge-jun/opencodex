@@ -180,7 +180,8 @@ export function supportsPerAccountQuota(provider: string): boolean {
 }
 
 export function explicitAccountReader(provider: string): boolean {
-  return provider === "xai" || provider === "cursor" || provider === "kimi" || provider === "command-code";
+  return provider === "xai" || provider === "cursor" || provider === "kimi"
+    || provider === "command-code" || provider === "mirasim";
 }
 
 export function providerOAuthAccountQuotaMode(provider: string): AccountQuotaMode {
@@ -464,6 +465,9 @@ export function quotaCredentialIdentity(provider: string, accountId: string, cre
   return createHash("sha256").update(JSON.stringify([
     provider, accountId, credential.access, credential.refresh, credential.expires,
     credential.accountId, credential.projectId, credential.source,
+    credential.mirasim?.devicePrivateKey,
+    credential.mirasim?.relayUrl,
+    credential.mirasim?.clientVersion,
     target.adapter, target.baseUrl, target.authMode, target.disabled === true,
   ])).digest("hex");
 }
@@ -472,6 +476,17 @@ export function explicitQuotaDestination(provider: string, config: OcxProviderCo
   if (config.disabled === true || config.authMode !== "oauth") return false;
   if (provider === "kimi") return isCanonicalKimiCodeBaseUrl(config.baseUrl);
   if (provider === "command-code") return isCanonicalCommandCodeBaseUrl(config.baseUrl);
+  if (provider === "mirasim") {
+    try {
+      const normalized = new URL(config.baseUrl);
+      return config.adapter === "mirasim"
+        && normalized.protocol === "https:"
+        && normalized.origin === "https://relay.mirasim.ai"
+        && normalized.pathname.replace(/\/+$/, "") === "";
+    } catch {
+      return false;
+    }
+  }
   // These readers use fixed canonical billing origins, never config.baseUrl.
   return provider === "xai" || provider === "cursor";
 }

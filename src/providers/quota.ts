@@ -1,4 +1,3 @@
-
 import { listCodexAuthAccountsSnapshot } from "../codex/auth-api";
 import { resolveEnvValue } from "../config";
 import { getAccountCredential, getAccountSet } from "../oauth/store";
@@ -61,7 +60,7 @@ import {
   fetchChatGptForwardQuota,
   fetchCursorQuota,
   fetchKiroQuota,
-  fetchMuseKeyQuota,
+  fetchMirasimQuotaReport, fetchMuseKeyQuota,
   fetchPassiveProviderQuota,
   fetchXaiQuota,
 } from "./quota/vendor-probes-oauth";
@@ -363,6 +362,7 @@ async function readExplicitAccountQuota(provider: string, accountId: string, con
     case "cursor": result = await fetchCursorQuota(provider, accessToken); break;
     case "kimi": result = await fetchKimiQuota(provider, config, accessToken); break;
     case "command-code": result = await fetchCommandCodeQuota(provider, config, accessToken); break;
+    case "mirasim": result = await fetchMirasimQuotaReport(provider, config, accessToken); break;
     default: return null;
   }
   return { result, identity, isCurrent };

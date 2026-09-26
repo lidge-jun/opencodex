@@ -16,7 +16,7 @@ import {
   runWithImageBridge,
   clampImageMaxRounds,
 } from "../../images";
-import type { ProviderAdapter } from "../../adapters/base";
+import { adapterIsPassthrough, type ProviderAdapter } from "../../adapters/base";
 import type { OcxParsedRequest } from "../../types";
 import { rotateProviderTransportOn429, rateLimitRetryPolicyFor } from "../../providers/key-failover";
 import {
@@ -126,7 +126,7 @@ export async function executeResponsesSidecars(
   //
   // Keyed on the adapter, not on position: routedCompaction skips the passthrough branch above
   // yet still builds from _rawBody (see the :3703 comment).
-  if (!("passthrough" in transportState.adapter && transportState.adapter.passthrough)) {
+  if (!adapterIsPassthrough(transportState.adapter, parsed)) {
     const unpaired = parsed.context.messages.find(
       message => message.role === "toolResult"
         && (typeof (message as { toolCallId?: unknown }).toolCallId !== "string"

@@ -191,7 +191,15 @@ function appendedUtf8Bytes(previousBytes: number, lastCodeUnit: number, fragment
   return previousBytes + Buffer.byteLength(fragment, "utf8") - (joinsSurrogatePair ? 2 : 0);
 }
 
-export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): ProviderAdapter & { passthrough: true } {
+export interface ResponsesPassthroughCompatibility {
+  /** Additional routed custom tool names proven native on this destination/request family. */
+  routedCustomToolPassthroughNames?: ReadonlySet<string>;
+}
+
+export function createResponsesPassthroughAdapter(
+  provider: OcxProviderConfig,
+  compatibility: ResponsesPassthroughCompatibility = {},
+): ProviderAdapter & { passthrough: true } {
   return {
     name: "openai-responses",
     passthrough: true as const,
@@ -391,6 +399,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         const rewritten = rewriteRoutedCustomToolsForUpstream(
           outBody,
           provider.supportsResponsesCustomTools,
+          compatibility.routedCustomToolPassthroughNames,
         );
         outBody = rewritten.body;
         convertedRoutedCustomToolNames = rewritten.names;

@@ -1784,5 +1784,13 @@
   "link-compensation.test.ts": "clients",
   "web-search-run-turn-loop.test.ts": "web-search",
   "responses-run-turn-web-search.test.ts": "responses",
-  "server-combo-cooldown-recording.test.ts": "server"
+  "server-combo-cooldown-recording.test.ts": "server",
+  "mirasim-control-plane.test.ts": "providers",
+  "mirasim-crypto.test.ts": "providers",
+  "mirasim-endpoints.test.ts": "providers",
+  "mirasim-oauth.test.ts": "providers",
+  "mirasim-provider.test.ts": "providers",
+  "mirasim-recovery.test.ts": "providers",
+  "mirasim-transport.test.ts": "providers",
+  "mirasim-compact-endpoint.test.ts": "responses"
 }

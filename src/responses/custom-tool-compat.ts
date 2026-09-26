@@ -13,8 +13,10 @@ const BUILTIN_FUNCTIONS_NAMESPACE = "functions";
 function routedCustomToolPassesThrough(
   name: string,
   supportsResponsesCustomTools: boolean | undefined,
+  requestPassthroughNames?: ReadonlySet<string>,
 ): boolean {
-  return supportsResponsesCustomTools !== false && ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(name);
+  return supportsResponsesCustomTools !== false
+    && (ROUTED_CUSTOM_TOOL_PASSTHROUGH.has(name) || requestPassthroughNames?.has(name) === true);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -88,6 +90,7 @@ function collectRoutedCustomToolWireNames(
   body: unknown,
   supportsResponsesCustomTools?: boolean,
   passthrough = false,
+  requestPassthroughNames?: ReadonlySet<string>,
 ): Set<string> {
   const names = new Set<string>();
   const groups = collectResponsesToolGroups(body);
@@ -108,7 +111,7 @@ function collectRoutedCustomToolWireNames(
       if (
         tool.type === "custom"
         && typeof tool.name === "string"
-        && routedCustomToolPassesThrough(tool.name, supportsResponsesCustomTools) === passthrough
+        && routedCustomToolPassesThrough(tool.name, supportsResponsesCustomTools, requestPassthroughNames) === passthrough
       ) {
         names.add(tool.name);
         continue;
@@ -121,7 +124,7 @@ function collectRoutedCustomToolWireNames(
           isPlainObject(child)
           && child.type === "custom"
           && typeof child.name === "string"
-          && routedCustomToolPassesThrough(child.name, supportsResponsesCustomTools) === passthrough
+          && routedCustomToolPassesThrough(child.name, supportsResponsesCustomTools, requestPassthroughNames) === passthrough
           && (!passthrough || tool.name === BUILTIN_FUNCTIONS_NAMESPACE)
           && !(tool.name === BUILTIN_FUNCTIONS_NAMESPACE && bareWireNames.has(child.name))
         ) names.add(customToolWireName(tool.name, child.name));
@@ -138,6 +141,7 @@ export function customToolItemId(id: unknown): unknown {
 export function collectRoutedCustomToolNames(
   body: unknown,
   supportsResponsesCustomTools?: boolean,
+  requestPassthroughNames?: ReadonlySet<string>,
 ): Set<string> {
   const names = new Set<string>();
   const visit = (value: unknown): void => {
@@ -149,7 +153,7 @@ export function collectRoutedCustomToolNames(
     if (
       value.type === "custom"
       && typeof value.name === "string"
-      && !routedCustomToolPassesThrough(value.name, supportsResponsesCustomTools)
+      && !routedCustomToolPassesThrough(value.name, supportsResponsesCustomTools, requestPassthroughNames)
     ) {
       names.add(value.name);
     }
@@ -398,14 +402,29 @@ export function validateFinalCustomToolCompatibility(
 export function rewriteRoutedCustomToolsForUpstream(
   body: unknown,
   supportsResponsesCustomTools?: boolean,
+  requestPassthroughNames?: ReadonlySet<string>,
 ): {
   body: unknown;
   names: Set<string>;
   repairNames: Set<string>;
 } {
-  const conversionNames = collectRoutedCustomToolNames(body, supportsResponsesCustomTools);
-  const names = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools);
-  const repairNames = collectRoutedCustomToolWireNames(body, supportsResponsesCustomTools, true);
+  const conversionNames = collectRoutedCustomToolNames(
+    body,
+    supportsResponsesCustomTools,
+    requestPassthroughNames,
+  );
+  const names = collectRoutedCustomToolWireNames(
+    body,
+    supportsResponsesCustomTools,
+    false,
+    requestPassthroughNames,
+  );
+  const repairNames = collectRoutedCustomToolWireNames(
+    body,
+    supportsResponsesCustomTools,
+    true,
+    requestPassthroughNames,
+  );
   for (const name of repairNames) {
     if (!toolChoiceAllowsRoutedCustomTool(body, name, repairNames)) repairNames.delete(name);
   }

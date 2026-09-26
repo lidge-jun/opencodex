@@ -66,6 +66,9 @@ export function supportsNativeResponsesCompactEndpoint(
   provider: OcxProviderConfig,
 ): boolean {
   if (isCanonicalOpenAiForwardProvider(provider)) return true;
+  if (providerName === "mirasim" && provider.adapter === "mirasim") {
+    return normalizedBaseUrl(provider.baseUrl) === "https://relay.mirasim.ai";
+  }
   return providerName === OPENAI_API_PROVIDER_ID
     && provider.adapter === "openai-responses"
     && normalizedBaseUrl(provider.baseUrl) === OPENAI_API_BASE_URL;
@@ -98,5 +101,6 @@ export function isOpenAiOperatedResponsesDestination(provider: OcxProviderConfig
  */
 export function destinationDecodesNativeCompactionBlob(provider: OcxProviderConfig): boolean {
   return isOpenAiOperatedResponsesDestination(provider)
+    || (provider.adapter === "mirasim" && normalizedBaseUrl(provider.baseUrl) === "https://relay.mirasim.ai")
     || provider.decodesNativeCompactionBlobs === true;
 }

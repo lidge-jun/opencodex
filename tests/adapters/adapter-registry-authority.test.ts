@@ -23,6 +23,7 @@ const EXPECTED_ADAPTER_NAMES = {
   cursor: "cursor",
   devin: "devin",
   "mimo-free": "mimo-free",
+  mirasim: "mirasim",
   qoder: "qoder",
   "claude-cli": "claude-cli",
 } as const;
@@ -77,10 +78,12 @@ describe("adapter registry authority", () => {
     expect(getAdapterDefinition("azure")?.contractParent).toBe("openai-responses");
     expect(getAdapterDefinition("azure-openai")?.contractParent).toBe("openai-responses");
     expect(getAdapterDefinition("mimo-free")?.contractParent).toBe("openai-chat");
+    expect(getAdapterDefinition("mirasim")?.contractParent).toBe("openai-responses");
 
     expect(effectiveAdapterContract("azure").wire).toBe("openai-responses");
     expect(effectiveAdapterContract("azure-openai").wire).toBe("openai-responses");
     expect(effectiveAdapterContract("mimo-free").wire).toBe("openai-chat");
+    expect(effectiveAdapterContract("mirasim").wire).toBe("openai-responses");
     expect(effectiveAdapterContract("cursor").mutation).toBe("codex-owned-with-gated-native-fallback");
   });
 

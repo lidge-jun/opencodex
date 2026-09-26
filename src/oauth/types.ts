@@ -54,6 +54,19 @@ export interface MuseOAuthMetadata {
   tierName?: string;
 }
 
+/**
+ * Account-scoped Mirasim device material.
+ *
+ * The Ed25519 private key is a request-signing secret. It stays inside the protected OAuth
+ * credential store and must never be projected into management/status responses.
+ */
+export interface MirasimOAuthMetadata {
+  devicePrivateKey: string;
+  relayUrl: string;
+  adminUrl: string;
+  clientVersion: string;
+}
+
 export type OAuthCredentials = {
   refresh: string;
   access: string;
@@ -73,6 +86,8 @@ export type OAuthCredentials = {
   kiro?: KiroOAuthMetadata;
   /** Never returned by management APIs; persisted only inside the protected auth-store boundary. */
   muse?: MuseOAuthMetadata;
+  /** Never returned by management APIs; contains the Mirasim device signing private key. */
+  mirasim?: MirasimOAuthMetadata;
 };
 
 /** One logged-in account inside a provider's account set (multiauth). */
@@ -106,7 +121,7 @@ export interface OAuthAccountSelection {
 export interface OAuthController {
   onAuth?(info: { url: string; instructions?: string; deviceCode?: string }): void;
   onProgress?(message: string): void;
-  onManualCodeInput?(expectedState?: string): Promise<string>;
+  onManualCodeInput?(expectedState?: string, prompt?: string): Promise<string>;
   signal?: AbortSignal;
 }
 

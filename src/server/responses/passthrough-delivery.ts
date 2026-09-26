@@ -1,4 +1,5 @@
 import { isNativeControlResponse } from "./native-response-control";
+import { Buffer } from "node:buffer";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -135,6 +136,99 @@ import { inspectResponseLogJson } from "../request-log";
 import { restoreRoutedCustomCallsInJson } from "../../responses/custom-tool-compat";
 import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-compat";
 import { responsesJsonToSseStream } from "../responses-json-events";
+import { decodeServerSentEvents } from "../../lib/sse-decoder";
+
+function outboundRequestForcesResponsesStream(
+  body: Record<string, unknown> | undefined,
+): boolean {
+  return body?.stream === true;
+}
+
+async function collectForcedResponsesStream(
+  response: Response,
+  translatorBudget: PreparedResponsesRequest["translatorBudget"],
+  signal: AbortSignal,
+): Promise<Response> {
+  if (!response.body) throw new Error("upstream streaming response has no body");
+  const indexedItems = new Map<number, { item: Record<string, unknown>; bytes: number }>();
+  const fallbackItems: Array<{ item: Record<string, unknown>; bytes: number }> = [];
+  let retainedBytes = 0;
+  const retain = (bytes: number): void => {
+    if (bytes <= 0) return;
+    translatorBudget.chargeRetained(bytes, { kind: "retained_collectors" });
+    retainedBytes += bytes;
+  };
+  const release = (bytes: number): void => {
+    if (bytes <= 0) return;
+    translatorBudget.releaseRetained(bytes, { kind: "retained_collectors" });
+    retainedBytes -= bytes;
+  };
+  try {
+    for await (const event of decodeServerSentEvents(response.body, { signal, translatorBudget })) {
+      let payload: unknown;
+      try { payload = JSON.parse(event.data); } catch { continue; }
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) continue;
+      const record = payload as {
+        type?: unknown;
+        output_index?: unknown;
+        item?: unknown;
+        response?: unknown;
+      };
+      const type = String(record.type ?? "");
+      if (type === "response.output_item.done") {
+        if (!record.item || typeof record.item !== "object" || Array.isArray(record.item)) continue;
+        // Match the reference client's non-stream collector: retain authoritative completed
+        // output items and patch them into a terminal snapshot whose output[] is empty.
+        const item = record.item as Record<string, unknown>;
+        const bytes = Buffer.byteLength(JSON.stringify(item), "utf8");
+        const index = typeof record.output_index === "number"
+          && Number.isSafeInteger(record.output_index)
+          && record.output_index >= 0
+          ? record.output_index
+          : undefined;
+        retain(bytes);
+        if (index === undefined) {
+          fallbackItems.push({ item, bytes });
+        } else {
+          const previous = indexedItems.get(index);
+          if (previous) release(previous.bytes);
+          indexedItems.set(index, { item, bytes });
+        }
+        continue;
+      }
+      if (type === "error" || type === "response.failed") {
+        throw new Error("upstream streaming response failed before completion");
+      }
+      if (type !== "response.completed" && type !== "response.incomplete") continue;
+      if (!record.response || typeof record.response !== "object" || Array.isArray(record.response)) {
+        throw new Error("upstream streaming terminal omitted its response object");
+      }
+      const terminal = record.response as Record<string, unknown>;
+      if ((!Array.isArray(terminal.output) || terminal.output.length === 0)
+        && (indexedItems.size > 0 || fallbackItems.length > 0)) {
+        terminal.output = [
+          ...[...indexedItems.entries()]
+            .sort(([left], [right]) => left - right)
+            .map(([, entry]) => entry.item),
+          ...fallbackItems.map(entry => entry.item),
+        ];
+      }
+      const headers = new Headers(response.headers);
+      headers.set("content-type", "application/json");
+      headers.set("cache-control", "no-store");
+      return new Response(JSON.stringify(terminal), {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    }
+    throw new Error("upstream streaming response ended before a terminal response");
+  } finally {
+    if (retainedBytes > 0) {
+      translatorBudget.releaseRetained(retainedBytes, { kind: "retained_collectors" });
+    }
+  }
+}
 
 const PLAINTEXT_V2_SSE_PREFIX_LIMIT = 4096;
 
@@ -360,7 +454,7 @@ export async function deliverPassthroughResponse(
     });
   }
 
-    const headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
+    let headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
     const resolvedModel = headers.get("openai-model")?.trim();
     if (resolvedModel) {
       logCtx.servedModel = resolvedModel;
@@ -369,8 +463,31 @@ export async function deliverPassthroughResponse(
     // ChatGPT may omit Content-Type on SSE responses. Plaintext V2 responses
     // reach this fallback only after their first Responses event is confirmed.
     const passthroughCt = headers.get("content-type")?.toLowerCase();
-    const isEventStream = passthroughCt?.includes("text/event-stream")
+    let isEventStream = passthroughCt?.includes("text/event-stream")
       || (responseEffects.plaintextV2AgentMessageToolNames.size === 0 && upstreamResponse.ok && !!upstreamResponse.body && !passthroughCt && parsed.stream);
+    if (
+      clientRequestedStream === false
+      && isEventStream
+      && upstreamResponse.ok
+      && outboundRequestForcesResponsesStream(nativeExchange.outboundRequestBody)
+    ) {
+      try {
+        upstreamResponse = await collectForcedResponsesStream(
+          upstreamResponse,
+          translatorBudget,
+          upstream.signal,
+        );
+        headers = sanitizePassthroughHeaders(upstreamResponse.headers, codexSafetyBufferingOptions);
+        isEventStream = false;
+      } catch {
+        upstream.abort();
+        return formatErrorResponse(
+          502,
+          "upstream_error",
+          "upstream streaming response ended before a bounded non-streaming response could be collected",
+        );
+      }
+    }
     const recordTerminalOutcome = codexForwardTerminalOutcomeRecorder(
       config,
       admissionState.authCtx,

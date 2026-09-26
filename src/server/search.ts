@@ -11,6 +11,7 @@
  * paid backend than the one the operator named.
  */
 import { formatErrorResponse } from "../bridge";
+import { fetchMirasim } from "../adapters/mirasim/transport";
 import {
   CodexAccountCooldownError,
   codexMainProfileDrainingResponse,
@@ -39,6 +40,11 @@ import {
   type ExactOpenAiSidecarAccount,
 } from "../providers/openai-sidecar";
 import { previewRouteModel, routeModel } from "../router";
+import {
+  forceRefreshOAuthAccessSnapshot,
+  getValidAccessTokenSnapshot,
+  publicOAuthAuthenticationErrorMessage,
+} from "../oauth";
 import { handleAlphaSearchSidecarFallback, handleDevinAlphaSearch } from "../web-search/alpha-search";
 import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import { ForwardAdmissionCredentialError, validateForwardAdmissionCredential } from "./auth-cors";
@@ -47,6 +53,7 @@ import { codexLogAccountId, decodeRequestErrorResponse } from "./responses";
 import type { AdmissionLease } from "../lib/admission";
 import { codexAccountSelectionForTurn } from "./lifecycle";
 import { codexModelAvailabilityErrorResponse } from "./responses/codex-auth-error";
+import { providerFetch } from "./responses/fetch-helpers";
 
 /**
  * Default TOTAL deadline for one search relay. alpha/search is non-streaming JSON — response
@@ -57,6 +64,125 @@ import { codexModelAvailabilityErrorResponse } from "./responses/codex-auth-erro
  */
 const SEARCH_UPSTREAM_TIMEOUT_MS = 200_000;
 export const SEARCH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
+async function handleMirasimSearch(
+  req: Request,
+  config: OcxConfig,
+  body: unknown,
+  model: string,
+  logCtx: RequestLogContext,
+  admission?: DataPlaneAdmission,
+): Promise<Response | undefined> {
+  let route: ReturnType<typeof routeModel>;
+  try {
+    route = routeModel(config, model);
+  } catch {
+    // Preserve the existing ChatGPT-forward / sidecar behavior for a model the normal router
+    // does not recognize. Mirasim takes this branch only after routing proves its ownership.
+    return undefined;
+  }
+  if (route.provider.adapter !== "mirasim") return undefined;
+
+  const denial = admissionScopeDenial(config, admission, model, route);
+  if (denial) return denial;
+  if (!route.modelId.trim().toLowerCase().startsWith("gpt-")) {
+    return formatErrorResponse(
+      400,
+      "invalid_request_error",
+      "Mirasim /v1/alpha/search requires a GPT Responses model",
+    );
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return formatErrorResponse(400, "invalid_request_error", "search request body must be a JSON object");
+  }
+
+  logCtx.provider = route.providerName;
+  logCtx.model = route.modelId;
+  logCtx.routeDecision = route.routeDecision;
+
+  let snapshot;
+  try {
+    snapshot = await getValidAccessTokenSnapshot(route.providerName);
+  } catch (error) {
+    return formatErrorResponse(
+      401,
+      "authentication_error",
+      publicOAuthAuthenticationErrorMessage(error),
+    );
+  }
+
+  const timeoutMs = config.search?.timeoutMs ?? SEARCH_UPSTREAM_TIMEOUT_MS;
+  const linkedSignal = signalWithTimeout(timeoutMs, req.signal);
+  const executor = providerFetch(route.provider, undefined, {
+    providerName: route.providerName,
+    modelId: route.modelId,
+  });
+  const outbound = {
+    url: `${route.provider.baseUrl.replace(/\/+$/, "")}/v1/alpha/search`,
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "accept": "application/json",
+    },
+    body: JSON.stringify({ ...(body as Record<string, unknown>), model: route.modelId }),
+  } as const;
+  let upstreamResponse: Response | undefined;
+  try {
+    upstreamResponse = await fetchMirasim(outbound, snapshot.accessToken, {
+      abortSignal: linkedSignal.signal,
+      timeoutMs,
+      executor,
+    });
+    if (upstreamResponse.status === 401) {
+      try {
+        const refreshed = await forceRefreshOAuthAccessSnapshot(snapshot);
+        const replacement = await fetchMirasim(outbound, refreshed.accessToken, {
+          abortSignal: linkedSignal.signal,
+          timeoutMs,
+          executor,
+        });
+        try { await upstreamResponse.body?.cancel(); } catch { /* already closed */ }
+        upstreamResponse = replacement;
+      } catch {
+        // Return the relay's authenticated rejection below. The public response never reflects
+        // token/device material or the refresh error body.
+      }
+    }
+
+    const observed = await readBoundedResponseBytes(upstreamResponse, {
+      maxBytes: SEARCH_RESPONSE_MAX_BYTES,
+      signal: linkedSignal.signal,
+    });
+    if (observed.oversized) {
+      return formatErrorResponse(
+        502,
+        "upstream_error",
+        `search response too large (exceeded ${SEARCH_RESPONSE_MAX_BYTES} bytes)`,
+      );
+    }
+    const relayHeaders: Record<string, string> = {};
+    const contentType = upstreamResponse.headers.get("content-type");
+    if (contentType) relayHeaders["content-type"] = contentType;
+    return new Response(observed.bytes, {
+      status: upstreamResponse.status,
+      headers: relayHeaders,
+    });
+  } catch (error) {
+    if (req.signal.aborted) {
+      return formatErrorResponse(499, "client_closed_request", "search request canceled by client");
+    }
+    if (linkedSignal.signal.aborted || (error instanceof Error && error.name === "TimeoutError")) {
+      return formatErrorResponse(504, "upstream_error", "search upstream timed out");
+    }
+    return formatErrorResponse(502, "upstream_error", "search relay failed");
+  } finally {
+    linkedSignal.cleanup();
+    const pendingBody = upstreamResponse?.body;
+    if (pendingBody && !pendingBody.locked) {
+      try { void pendingBody.cancel().catch(() => undefined); } catch { /* already closed */ }
+    }
+  }
+}
 
 export async function handleSearch(
   req: Request,
@@ -134,6 +260,10 @@ export async function handleSearch(
   if (isCodexReserveRequestEligible(config, admission) && (exactAccount?.modelId ?? model) === NATIVE_RESERVE_MODEL) {
     return formatErrorResponse(400, "invalid_request_error",
       "Luna Reserve compatibility is only available as a conversation model, not the standalone search relay. Choose another search model.");
+  }
+  if (typeof model === "string" && model.trim()) {
+    const mirasim = await handleMirasimSearch(req, config, body, model, logCtx, admission);
+    if (mirasim) return mirasim;
   }
   const candidates = listOpenAiForwardSidecarCandidates(config);
   if (candidates.length === 0) {

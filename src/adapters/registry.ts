@@ -12,6 +12,7 @@ import { createDevinAdapter } from "./devin";
 import { createGoogleAdapter } from "./google";
 import { createKiroAdapter } from "./kiro";
 import { createMimoFreeAdapter } from "./mimo-free";
+import { createMirasimAdapter } from "./mirasim";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { createOllamaNativeAdapter } from "./ollama-native";
 import { createResponsesPassthroughAdapter } from "./openai-responses";
@@ -135,6 +136,13 @@ export const ADAPTER_REGISTRY = {
   "mimo-free": {
     contractParent: "openai-chat",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createMimoFreeAdapter(provider),
+  },
+  mirasim: {
+    // Mirasim can select Anthropic or Responses per model. The Responses contract is the least
+    // restrictive parent (media is not pre-rejected here); the wrapper delegates to the concrete
+    // wire adapter after routing the model.
+    contractParent: "openai-responses",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createMirasimAdapter(provider),
   },
   qoder: {
     contractParent: "codebuddy",

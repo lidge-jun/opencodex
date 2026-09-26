@@ -7,7 +7,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { IconLock, IconRefresh, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
-import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
+import {
+  oauthAccountDisplayLabel,
+  oauthAccountSecondaryIdentity,
+  providerAuthSurface,
+} from "../../provider-workspace/auth";
 import { displayAccountId } from "../../lib/privacy";
 import {
   formatOAuthHealthLabel,
@@ -533,6 +537,7 @@ export default function ProviderAuthPanel({
                   const maskedId = displayAccountId(account.id);
                   const healthLabel = formatOAuthHealthLabel(t, account.health);
                   const healthSummary = formatOAuthHealthSummary(t, item.name, account.id, account.health);
+                  const secondaryIdentity = oauthAccountSecondaryIdentity(account, maskedId, t);
                   return (
                   <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
                     <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
@@ -544,7 +549,7 @@ export default function ProviderAuthPanel({
                       <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       <span className="pwi-auth-row-copy">
                         <span className="pwi-auth-row-label">{label}</span>
-                        <span className="pwi-auth-row-secondary">{[account.email, `${t("prov.accountId")}: ${maskedId}`].filter(Boolean).join(" · ")}</span>
+                        <span className="pwi-auth-row-secondary">{secondaryIdentity}</span>
                         {healthSummary && (
                           <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
                         )}

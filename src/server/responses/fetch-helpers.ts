@@ -123,6 +123,12 @@ export function wantsFreshConnection(
 export interface PaceAwareFetch {
   waitForPacing?: (signal?: AbortSignal) => Promise<void>;
   unpacedFetch?: typeof globalThis.fetch;
+  /**
+   * Provider-scoped HTTP transport without this wrapper's request-specific dispatchOverride.
+   * Stateful adapters use it only for credential/control sidecars (for example Mirasim's
+   * /v1/device/session), whose URL/body must never be rebuilt as the parent inference request.
+   */
+  unoverriddenFetch?: typeof globalThis.fetch;
 }
 
 export type ProviderFetch = typeof globalThis.fetch & PaceAwareFetch;
@@ -237,6 +243,14 @@ export function providerFetch(
       sendWithConnectionPolicy(base, input, init, egressBinding),
     { preconnect },
   ) as typeof globalThis.fetch);
+  // Credential/control sidecars owned by an adapter must keep the provider's egress and
+  // connection policy but must not enter a dispatchOverride that knows how to rebuild only the
+  // parent inference request. The caller still owns pacing/admission around this raw HTTP seam.
+  const unoverriddenFetch = markEgressTransparentExecutor(Object.assign(
+    (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
+      dispatch(input, { ...withUpstreamHttpVersion(input, init, provider), timeout: 0 }),
+    { preconnect },
+  ) as typeof globalThis.fetch);
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => {
       // Refuse before any dispatch side effect where that is sound. `beforeDispatch` commits
@@ -306,6 +320,7 @@ export function providerFetch(
     preconnect,
     waitForPacing,
     unpacedFetch: Object.assign(unpaced, { preconnect }),
+    unoverriddenFetch,
   });
   markEgressTransparentExecutor(paceAware as unknown as typeof globalThis.fetch);
   return paceAware;

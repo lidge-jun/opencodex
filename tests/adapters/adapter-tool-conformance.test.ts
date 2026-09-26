@@ -50,7 +50,9 @@ function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfi
     codebuddy: "https://www.codebuddy.ai",
   };
   // Semantic wrappers with provider-specific URL shapes must override the wire-family default here.
-  const baseUrl = adapterId === "mimo-free"
+  const baseUrl = adapterId === "mirasim"
+    ? "https://relay.mirasim.ai"
+    : adapterId === "mimo-free"
     ? "https://api.xiaomimimo.com/api/free-ai/openai/chat"
     : adapterId === "azure" || adapterId === "azure-openai"
       ? "https://example.openai.azure.com/openai/v1"
@@ -58,7 +60,7 @@ function providerFixture(adapterId: string, wire: AdapterWire): OcxProviderConfi
   return {
     adapter: adapterId,
     baseUrl,
-    authMode: wire === "anthropic" || wire === "command-code" ? "oauth" : "key",
+    authMode: adapterId === "mirasim" || wire === "anthropic" || wire === "command-code" ? "oauth" : "key",
     apiKey: wire === "kiro" ? "ksk_test" : "test-key",
     defaultMaxOutputTokens: 64_000,
     googleMode: "ai-studio",
@@ -211,7 +213,16 @@ async function withMimoBootstrap<T>(adapterId: string, run: () => Promise<T>): P
 async function outbound(adapterId: string, parsed: OcxParsedRequest): Promise<string> {
   const contract = effectiveAdapterContract(adapterId);
   const adapter = createRegisteredAdapter(providerFixture(adapterId, contract.wire));
-  return await withMimoBootstrap(adapterId, () => TOOL_WIRE_DRIVERS[contract.wire].observeOutbound(adapter, parsed));
+  // Mirasim inherits the Responses semantic contract, but its actual model namespace is
+  // intentionally narrower than a generic Responses gateway. Keep the registry-wide fixture
+  // on the same wire while selecting a model Mirasim is allowed to route.
+  const routedParsed = adapterId === "mirasim"
+    ? { ...parsed, modelId: "gpt-5.6-sol" }
+    : parsed;
+  return await withMimoBootstrap(
+    adapterId,
+    () => TOOL_WIRE_DRIVERS[contract.wire].observeOutbound(adapter, routedParsed),
+  );
 }
 
 function advertisedToolNames(wire: AdapterWire, body: string): string[] {

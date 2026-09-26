@@ -57,6 +57,8 @@ import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
 import { resolveDevinApiBaseUrl } from "../../oauth/devin/api-base";
+import { fetchMirasimLiveCatalog } from "../../adapters/mirasim/control-plane";
+import { mirasimCredentialCacheScope } from "../../adapters/mirasim/transport";
 import { isCanonicalOpenAiForwardProvider, OPENAI_API_PROVIDER_ID, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import {
   COMBO_NAMESPACE,
@@ -103,7 +105,7 @@ import type {
   CatalogTrustedOpenAiApiPolicySnapshot,
 } from "../convergence-types";
 import type { CapturedProviderGather, CatalogGatherProviderAuthOutcome, CatalogGatherProviderModelOutcome, ModelsAuthResolution, ModelsAuthResolver } from "./gather-capture";
-import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig } from "./model-hints";
+import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, applyProviderConfigHints, boundedOwnedBy, catalogHintsFromModelsApiItem, catalogHintsFromProviderConfig, configuredAutoCompactTokenLimit } from "./model-hints";
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
 import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
 
@@ -245,6 +247,109 @@ export async function fetchProviderModelsWithAuth(
       ? [...models, vertexDefaultSeed]
       : models
   );
+  if (prov.adapter === "mirasim") {
+    if (!apiKey) return observed(configured, "degraded");
+    // The Mirasim catalog and signed roster are account/device-scoped. Keep cache authority
+    // stable across access-token rotation without allowing another account/device to inherit it.
+    // Ambiguous/crafted auth rows must degrade discovery, not fail the whole catalog gather.
+    let authorityIdentity: string;
+    try {
+      authorityIdentity = mirasimCredentialCacheScope(apiKey);
+    } catch {
+      return observed(configured, "degraded");
+    }
+    const fresh = getFreshCached(name, ttlMs, Date.now(), authorityIdentity);
+    if (fresh) {
+      return observed(withConfiguredRetention(fresh), "authoritative");
+    }
+    const scopedStale = getStaleCached(name, authorityIdentity);
+    if (isModelsFetchCoolingDown(name, undefined, undefined, authorityIdentity) && scopedStale) {
+      return observed(withConfiguredRetention(scopedStale), "degraded");
+    }
+
+    const live = await fetchMirasimLiveCatalog(name, prov, apiKey);
+    if (live.ok) {
+      const discovered = live.models.map(model => {
+        const softCompact = model.contextWindow && model.autoCompactRatio
+          ? Math.floor(model.contextWindow * model.autoCompactRatio)
+          : undefined;
+        const hinted = applyProviderConfigHints(name, prov, {
+          id: model.id,
+          provider: name,
+          ...(model.displayName ? { displayName: model.displayName } : {}),
+          ...(model.ownedBy ? { owned_by: model.ownedBy } : {}),
+          ...(model.contextWindow ? {
+            contextWindow: model.contextWindow,
+            maxInputTokens: model.contextWindow,
+          } : {}),
+          ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}),
+          ...(model.reasoningEfforts?.length ? { reasoningEfforts: model.reasoningEfforts } : {}),
+          ...(softCompact ? { autoCompactTokenLimit: softCompact } : {}),
+        }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias);
+        // The signed account roster is Mirasim's wire authority. Generic provider hints are
+        // still useful for local-only presentation/capability policy, but registry fallback
+        // tables must not overwrite a successfully observed account context/output/effort.
+        const liveWindow = model.contextWindow
+          ? applyProviderContextCap(model.contextWindow, contextCap)
+          : undefined;
+        const configuredSoftCompact = configuredAutoCompactTokenLimit(prov, model.id);
+        const effectiveSoftCompact = liveWindow
+          ? clampAutoCompactTokenLimit(
+              liveWindow,
+              liveWindow,
+              [softCompact, configuredSoftCompact]
+                .filter((value): value is number => typeof value === "number" && value > 0)
+                .sort((left, right) => left - right)[0],
+            )
+          : undefined;
+        return {
+          // `hinted` already carries the live roster label as its fallback; an operator's
+          // modelDisplayNames entry (what the dashboard shows and edits) must win over it.
+          ...hinted,
+          ...(liveWindow ? {
+            contextWindow: liveWindow,
+            maxInputTokens: liveWindow,
+            ...(contextCap !== undefined ? {
+              contextCap,
+              contextCapped: liveWindow < model.contextWindow!,
+            } : {}),
+          } : {}),
+          ...(model.maxOutputTokens ? { maxOutputTokens: model.maxOutputTokens } : {}),
+          ...(model.reasoningEfforts?.length
+            ? { reasoningEfforts: [...model.reasoningEfforts] }
+            : {}),
+          ...(effectiveSoftCompact ? { autoCompactTokenLimit: effectiveSoftCompact } : {}),
+        } as CatalogModel;
+      });
+      const forCache = withConfiguredRetention(discovered, { retainComboTargets: false });
+      if (!setCached(name, forCache, Date.now(), cacheGeneration, authorityIdentity)) {
+        return observed(withConfiguredRetention(configured), "degraded");
+      }
+      markProviderDiscoveryOk(name, live.models.length);
+      return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
+    }
+
+    if (isCurrentCacheGeneration()) {
+      markModelsFetchFailure(name, undefined, authorityIdentity);
+      if (live.reason === "http" && live.status !== undefined) {
+        markProviderDiscoveryFailed(name, { reason: "http", httpStatus: live.status });
+      } else {
+        markProviderDiscoveryFailed(name, {
+          reason: live.reason === "auth"
+            ? "provider"
+            : live.reason === "invalid_response"
+              ? "invalid_response"
+              : "network",
+        });
+      }
+    }
+    return observed(
+      withConfiguredRetention(
+        scopedStale ?? configured,
+      ),
+      "degraded",
+    );
+  }
   if (prov.adapter === "qoder") {
     if (!apiKey) return observed(configured, "degraded");
     const profile = resolveQoderProfile(prov.baseUrl);

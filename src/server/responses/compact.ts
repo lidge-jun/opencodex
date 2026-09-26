@@ -15,6 +15,8 @@ import { resolveProviderApiKey } from "../../providers/key-store";
 import { parseRequest } from "../../responses/parser";
 import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractCompactUserMessages } from "../../responses/compaction";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
+import { fetchMirasim } from "../../adapters/mirasim/transport";
+import { normalizeMirasimCompactBody } from "../../adapters/mirasim/compact";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
 import { NoEligiblePolicyCandidateError, routeCompactionModel } from "../../router";
@@ -808,7 +810,20 @@ export async function handleResponsesCompact(
     // headers would run compaction on the wrong account (or 401) whenever a pool account is
     // active for this thread while normal turns succeed.
     let compactProvider = route.provider;
+    let mirasimSnapshot: OAuthAccessSnapshot | undefined;
     let headers = new Headers({ "content-type": "application/json" });
+    if (compactProvider.adapter === "mirasim") {
+      try {
+        const snapshot = await getValidAccessTokenSnapshot(route.providerName);
+        mirasimSnapshot = snapshot;
+        compactProvider = { ...compactProvider, apiKey: snapshot.accessToken };
+      } catch (err) {
+        if (err instanceof UnsupportedOAuthProviderError) {
+          return formatErrorResponse(400, "invalid_request_error", "Mirasim OAuth provider is unavailable");
+        }
+        return formatErrorResponse(401, "authentication_error", "Mirasim authentication is unavailable");
+      }
+    }
     try {
       if (route.codexAccountMode || customReserveForward) {
         if (route.codexAccountMode) authCtx = await resolveCodexAuthContext(req.headers, config, route.codexAccountMode, {
@@ -874,16 +889,22 @@ export async function handleResponsesCompact(
       if (warmKeyProvider?.apiKey) compactProvider = warmKeyProvider;
       headers.set("authorization", `Bearer ${resolveProviderApiKey(compactProvider.apiKey)}`);
     }
-    const { reasoning: _reasoning, ...compactBodyRaw } = raw as typeof raw & { reasoning?: unknown };
+    const { reasoning: _reasoning, ...withoutReasoning } = raw as typeof raw & { reasoning?: unknown };
+    const compactBodyRaw: Record<string, unknown> = compactProvider.adapter === "mirasim"
+      ? { ...(raw as Record<string, unknown>) }
+      : withoutReasoning;
     // The regular /v1/responses path applies sanitizeReasoningInputContent via the adapter's
     // buildRequest, but the compact endpoint forwards directly. Apply the same sanitizer here
     // so routed-model reasoning items (reasoning_text content) don't 400 the ChatGPT backend.
     // #5095: the compact endpoint forwards `raw` directly, so it needs the same legacy dotted
     // call-name repair the adapter applies. A damaged item here refuses the compaction itself,
     // which is the request a long task depends on to keep going.
-    const compactBody = repairLegacyDottedToolCallNames(
+    const sanitizedCompactBody = repairLegacyDottedToolCallNames(
       sanitizeReasoningInputContent(compactBodyRaw),
     ) as typeof compactBodyRaw;
+    const compactBody = compactProvider.adapter === "mirasim"
+      ? normalizeMirasimCompactBody(sanitizedCompactBody, route.modelId)
+      : sanitizedCompactBody;
     {
       const binding = conversationStateBindingFromAuth(authCtx, codexPoolAffinityKey(req.headers));
       if (binding) {
@@ -909,7 +930,9 @@ export async function handleResponsesCompact(
         });
       }
     }
-    const compactUrl = `${base}/responses/compact`;
+    const compactUrl = compactProvider.adapter === "mirasim"
+      ? `${base}/v1/responses/compact`
+      : `${base}/responses/compact`;
     const compactTargetKey = `${route.providerName}|${route.modelId}|compact`;
     const actualCompactHostKey = upstreamHostHealthKey(
       route.providerName,
@@ -1013,6 +1036,30 @@ export async function handleResponsesCompact(
       recovery: "normal" | "single",
       sendAuthCtx: CodexAuthContext,
     ): Promise<Response> => {
+      if (sendProvider.adapter === "mirasim") {
+        const accessToken = sendProvider.apiKey;
+        if (!accessToken) {
+          return Promise.reject(new Error("Mirasim compact access token is unavailable"));
+        }
+        return fetchMirasim({
+          url: compactUrl,
+          method: "POST",
+          headers: Object.fromEntries(sendHeaders.entries()),
+          body: JSON.stringify(compactBody),
+        }, accessToken, {
+          abortSignal: req.signal,
+          timeoutMs: connectMs,
+          sendBudget,
+          ...(recovery === "single" ? { sendClass: "auth-recovery" as const, recovery: "oauth-401" as const } : {}),
+          executor: providerFetch(sendProvider, undefined, {
+            providerName: route.providerName,
+            modelId: route.modelId,
+          }),
+        }).then(res => {
+          settleObservedCompactHostResponse();
+          return res;
+        });
+      }
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,
         applyUpstreamRecoveryInit({
@@ -1095,6 +1142,32 @@ export async function handleResponsesCompact(
       compactHostAdmissionLease = null;
       recordCompactPoolOutcome(outcomeCtx, outcome);
       return formatErrorResponse(502, "upstream_error", "Failed to connect to compact upstream");
+    }
+
+    if (
+      upstream.status === 401
+      && compactProvider.adapter === "mirasim"
+      && mirasimSnapshot
+      && !req.signal.aborted
+    ) {
+      const rejected = upstream;
+      try {
+        const refreshed = await forceRefreshOAuthAccessSnapshot(mirasimSnapshot);
+        const refreshedProvider = { ...compactProvider, apiKey: refreshed.accessToken };
+        const replacement = await sendCompactAttempt(refreshedProvider, headers, "single", authCtx);
+        try { await rejected.body?.cancel(); } catch { /* already closed */ }
+        upstream = replacement;
+        compactProvider = refreshedProvider;
+        mirasimSnapshot = refreshed;
+      } catch (err) {
+        if (req.signal.aborted) {
+          return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
+        }
+        const localRefusal = localDispatchRefusal(err);
+        if (localRefusal) return localRefusal;
+        // Preserve the relay's authenticated rejection when refresh or replay fails.
+        upstream = rejected;
+      }
     }
 
     if (

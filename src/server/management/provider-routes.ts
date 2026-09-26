@@ -117,6 +117,7 @@ import {
   type ProviderEditorProviderDTO,
 } from "../auth-cors";
 import { providerCatalogCapabilityConfigError } from "./provider-capability-config";
+import { probeMirasimProviderLiveCatalog } from "./mirasim-provider-probe";
 import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
 import { applySystemEnvToggle } from "../system-env";
 import {
@@ -1712,6 +1713,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         models: live.models.length,
         message: `Connected. ${live.models.length} models.`,
       });
+    }
+    if (prov.adapter === "mirasim") {
+      return probeMirasimProviderLiveCatalog(name, prov, apiKey ?? "");
     }
     const project = prov.project ?? snapshot?.projectId;
     if (antigravity && !project) {

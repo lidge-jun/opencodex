@@ -29,6 +29,7 @@ let originalFetch: typeof globalThis.fetch;
 let pendingLogins: Array<(url: string) => void> = [];
 let oauthStatus: { loggedIn: boolean; error?: string } = { loggedIn: false };
 let cancelledProviders: string[] = [];
+let oauthLoginBodies: Array<Record<string, unknown>> = [];
 
 const PRESETS = [
   { id: "claude", label: "Claude", adapter: "anthropic", baseUrl: "https://api.anthropic.com", auth: "oauth", oauthProvider: "claude" },
@@ -51,6 +52,7 @@ beforeEach(() => {
   pendingLogins = [];
   oauthStatus = { loggedIn: false };
   cancelledProviders = [];
+  oauthLoginBodies = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -59,6 +61,7 @@ beforeEach(() => {
       if (url.pathname === "/api/provider-presets") return Response.json({ providers: PRESETS });
       if (url.pathname === "/api/usage") return Response.json({ providers: [] });
       if (url.pathname === "/api/oauth/login" && (init?.method ?? "GET") === "POST") {
+        oauthLoginBodies.push(JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>);
         // Held open so the test controls when the URL lands.
         return await new Promise<Response>((resolve) => {
           pendingLogins.push((authUrl: string) => resolve(Response.json({ url: authUrl })));
@@ -253,6 +256,22 @@ test("leaving the providers page cancels its in-flight account login", async () 
   await new Promise((r) => setTimeout(r, 20));
 
   expect(cancelledProviders).toEqual(["orcarouter-oauth"]);
+});
+
+test("providers OAuth forwards the selected UI locale for Mirasim browser pages", async () => {
+  localStorage.setItem("ocx-lang", "zh-TW");
+  await mountProvidersOAuthHarness({ provider: "mirasim" });
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+
+  expect(oauthLoginBodies[0]).toMatchObject({
+    provider: "mirasim",
+    locale: "zh-TW",
+  });
+
+  await act(async () => {
+    pendingLogins.shift()?.(A_URL);
+    await new Promise((r) => setTimeout(r, 20));
+  });
 });
 
 test("pagehide cancels an account login and allows another login after bfcache restore", async () => {

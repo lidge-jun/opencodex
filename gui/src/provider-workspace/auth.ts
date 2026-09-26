@@ -41,3 +41,21 @@ export function oauthAccountDisplayLabel<T extends OAuthAccountIdentity>(
   const index = accounts.findIndex(candidate => candidate.id === account.id);
   return t("pws.accountOrdinal", { count: String(index >= 0 ? index + 1 : 1) });
 }
+
+/**
+ * Secondary identity line for OAuth rows.
+ * When the email is already the primary label, repeating it here only adds visual noise.
+ * If an alias owns the primary slot, keep the email as useful disambiguation.
+ */
+export function oauthAccountSecondaryIdentity(
+  account: OAuthAccountIdentity,
+  maskedId: string,
+  t: TFn,
+): string {
+  const alias = account.alias?.trim();
+  const email = account.email?.trim();
+  return [
+    alias && email ? email : undefined,
+    `${t("prov.accountId")}: ${maskedId}`,
+  ].filter(Boolean).join(" · ");
+}

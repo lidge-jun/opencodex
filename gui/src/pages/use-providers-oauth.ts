@@ -5,8 +5,24 @@ import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
+import { getActiveLocale } from "../i18n/shared";
 
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
+
+export async function reconcileCancelledOAuthProvider(
+  provider: string,
+  _setAccountSets: React.Dispatch<React.SetStateAction<Record<string, AccountSet>>>,
+  fetchAccountSets: (providers: string[]) => Promise<unknown>,
+  fetchOauth: () => Promise<void>,
+): Promise<void> {
+  // Cancellation ends only the pending login transaction. Existing committed accounts remain
+  // authoritative until a successful backend read replaces them. Clearing optimistically here
+  // made a transient refresh failure hide real credentials from the UI.
+  await Promise.allSettled([
+    fetchAccountSets([provider]),
+    fetchOauth(),
+  ]);
+}
 
 export function useProvidersOAuth({
   apiBase,
@@ -83,10 +99,12 @@ export function useProvidersOAuth({
     activeLoginGenerationsRef.current.delete(provider);
     await cancelServerLogin(provider);
     if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== gen) return;
+    await reconcileCancelledOAuthProvider(provider, setAccountSets, fetchAccountSets, fetchOauth);
+    if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== gen) return;
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
     notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
-  }, [aliveRef, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t]);
+  }, [aliveRef, bumpLoginGeneration, cancelServerLogin, fetchAccountSets, fetchOauth, notify, setAccountSets, setBusy, setLoginInfo, t]);
 
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
     const generation = bumpLoginGeneration(provider);
@@ -103,6 +121,7 @@ export function useProvidersOAuth({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             provider,
+            ...(provider === "mirasim" ? { locale: getActiveLocale() } : {}),
             // Explicit, never inferred, and omitted entirely when this operator has
             // expressed no preference — otherwise the request would permanently
             // overrule a persisted `oauthOpenBrowser: false`.
@@ -116,7 +135,12 @@ export function useProvidersOAuth({
       if (!res.ok) {
         const data = await res.json().catch(() => ({})) as { error?: string };
         if (!aliveRef.current || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
-        notify(data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }), false);
+        notify(
+          provider === "mirasim"
+            ? t("prov.loginFailStart", { provider: oauthLabel(provider) })
+            : data.error || t("prov.loginFailStart", { provider: oauthLabel(provider) }),
+          false,
+        );
         return;
       }
       const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string };
@@ -138,10 +162,15 @@ export function useProvidersOAuth({
         if (s.error) {
           setOauthStatus(prev => ({ ...prev, [provider]: s }));
           const cancelled = /cancel/i.test(s.error);
+          const timedOut = /timed?\s*out|timeout/i.test(s.error);
           notify(
             cancelled
               ? t("prov.loginCancelled", { provider: oauthLabel(provider) })
-              : t("prov.loginError", { provider: oauthLabel(provider), error: s.error }),
+              : timedOut
+                ? t("prov.loginTimeout", { provider: oauthLabel(provider) })
+                : provider === "mirasim"
+                  ? t("prov.loginRequestFail", { provider: oauthLabel(provider) })
+                  : t("prov.loginError", { provider: oauthLabel(provider), error: s.error }),
             false,
           );
           setLoginInfo(null);

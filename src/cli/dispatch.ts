@@ -367,7 +367,7 @@ const commandRunners: Record<string, CommandRunner> = {
       return code ?? 1;
     }
     const { handleLogin } = await import("../oauth/login-cli");
-    await handleLogin(loginArgs[0]);
+    await handleLogin(loginArgs[0], {}, loginArgs.slice(1));
     return 0;
   },
   logout: async deps => {

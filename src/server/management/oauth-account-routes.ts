@@ -216,7 +216,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as {
+      provider?: string;
+      addAccount?: boolean;
+      accountId?: string;
+      reauth?: boolean;
+      openBrowser?: unknown;
+      locale?: unknown;
+    };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     // Muse may import a local Keychain credential or start a device grant; add-account
@@ -244,6 +251,14 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { url: authUrl, instructions, deviceCode } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
+        ...(provider === "mirasim"
+          ? {
+              mirasimBrowserBaseUrl: url.origin,
+              ...(typeof body.locale === "string" && body.locale.length <= 32
+                ? { mirasimBrowserLocale: body.locale }
+                : {}),
+            }
+          : {}),
       }, {
         // startLoginFlow returns the authorization URL before background persistence completes.
         // Three-way reconcile settled disk changes so a failed login cannot leave a provider

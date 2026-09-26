@@ -43,6 +43,12 @@ import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
+import {
+  loginMirasim,
+  MirasimTokenRefreshError,
+  mirasimRelayUrl,
+  refreshMirasimToken,
+} from "./mirasim";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_REQUEST_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
@@ -172,6 +178,18 @@ export interface LoginOpts {
   /** When set, persist into this account slot and require matching identity. */
   reauthAccountId?: string;
   /**
+   * Management-owned browser origin for Mirasim OAuth.
+   * The GUI supplies this so Mirasim can return to the long-lived OpenCodex server
+   * instead of a random ephemeral loopback listener.
+   */
+  mirasimBrowserBaseUrl?: string;
+  /** Dashboard/browser locale forwarded to the Mirasim management-owned OAuth pages. */
+  mirasimBrowserLocale?: string;
+  /** Mirasim CLI-only email-code login. Browser/GUI login leaves these unset. */
+  mirasimEmail?: string;
+  /** Optional already-received Mirasim email verification code. */
+  mirasimCode?: string;
+  /**
    * ChatGPT only: `device` selects the deviceauth grant instead of the
    * localhost:1455 callback flow, for hosts with no browser or no loopback
    * listener (#3366). Ignored by every other provider.
@@ -218,6 +236,29 @@ function oauthDefaultModel(id: string): string {
 }
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
+  mirasim: {
+    login: (ctrl, opts) => loginMirasim(ctrl, {
+      ...(opts?.mirasimBrowserBaseUrl ? { browserBaseUrl: opts.mirasimBrowserBaseUrl } : {}),
+      ...(opts?.mirasimBrowserLocale ? { browserLocale: opts.mirasimBrowserLocale } : {}),
+      ...(opts?.mirasimEmail ? { email: opts.mirasimEmail } : {}),
+      ...(opts?.mirasimCode ? { code: opts.mirasimCode } : {}),
+    }),
+    refresh: (refreshToken, signal, credential) =>
+      refreshMirasimToken(refreshToken, signal, credential),
+    providerConfig: {
+      ...oauthConfig("mirasim"),
+      upstreamHttpVersion: "http1.1",
+    },
+    resolveProviderConfig: () => ({
+      ...oauthConfig("mirasim"),
+      baseUrl: mirasimRelayUrl(),
+      upstreamHttpVersion: "http1.1",
+    }),
+    defaultModel: oauthDefaultModel("mirasim"),
+    // Mirasim refresh tokens are used only when a request needs a fresh bearer. Avoid creating
+    // unattended auth traffic on behalf of a relay account.
+    defaultRefreshPolicy: "lazy-only",
+  },
   "command-code": {
     // Add-account/reauth must not reimport the current local CLI credential.
     login: (ctrl, opts) => loginCommandCode(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
@@ -616,6 +657,7 @@ export async function getValidAccessTokenSnapshot(provider: string): Promise<OAu
 /** Providers whose upstream-401 replay path may force a snapshot refresh. */
 const FORCE_REFRESH_PROVIDERS = new Set([
   "xai",
+  "mirasim",
   "github-copilot",
   "kiro",
   "google-antigravity",
@@ -673,6 +715,7 @@ function isTerminalRefreshError(err: unknown): boolean {
 function terminal(error:unknown):boolean{
   if(error instanceof XaiTokenRequestError)return ["invalid_grant","refresh_token_reused","revoked_token"].includes(error.oauthError??"");
   if(error instanceof AnthropicTokenError)return (error.httpStatus===400||error.httpStatus===401)&&["invalid_grant","refresh_token_reused","revoked","revoked_token","refresh_token_revoked"].includes(error.oauthError??"");
+  if(error instanceof MirasimTokenRefreshError)return (error.httpStatus===400||error.httpStatus===401)&&["invalid_grant","refresh_token_reused","revoked","revoked_token","refresh_token_revoked","expired_token"].includes(error.oauthError??"");
   if(error instanceof KiroTokenRefreshError)return (error.httpStatus===400||error.httpStatus===401)&&error.oauthError!==undefined;
   if(error instanceof NousTokenError)return error.terminal===true||["invalid_grant","refresh_token_reused","revoked","revoked_token","expired_token"].includes(error.oauthError??"");
   // Local durable-write/read/cleanup failures are operational, not credential
@@ -1018,8 +1061,9 @@ export async function refreshGenericAccountWithLock(
   logOAuthEvent("OAuth refresh started", { provider, accountId });
   const guard = await (deps.intentLock ?? createOAuthRefreshIntentLock(provider, accountId)).acquire();
   try {
-    const stored = getAccountCredential(provider, accountId);
-    if (!stored) throw new OAuthLoginRequiredError(provider);
+    const account = getAccountCredentialWithStatus(provider, accountId);
+    if (!account || account.needsReauth) throw new OAuthLoginRequiredError(provider);
+    const stored = account.credential;
     if (
       credentialGeneration(stored) !== credentialGeneration(callerCredential)
       && stored.expires > Date.now() + REFRESH_SKEW_MS

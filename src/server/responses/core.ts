@@ -27,7 +27,7 @@ import { createAdapterContinuations } from "./adapter-continuation";
 import { deliverAdapterResponse } from "./adapter-delivery";
 import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
-
+import { adapterIsPassthrough } from "../../adapters/base";
 /** Public Responses entry and compatibility exports. Implementations live with their owners. */
 
 /**
@@ -111,7 +111,7 @@ async function handleResponsesInner(
     );
     const sendBudgetState = createResponsesSendBudget(requestContext);
     if (sendBudgetState instanceof Response) return sendBudgetState;
-    if ("passthrough" in transportState.adapter && transportState.adapter.passthrough && !sidecarState.routedCompaction) {
+    if (adapterIsPassthrough(transportState.adapter, requestState.parsed) && !sidecarState.routedCompaction) {
       return await executePassthroughResponse(
         requestContext,
         admissionState,

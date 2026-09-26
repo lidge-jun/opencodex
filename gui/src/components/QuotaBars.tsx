@@ -23,8 +23,11 @@ export type QuotaBarRow = {
  * shorter windows first — 5h, weekly, cursor first-party, cursor API, monthly,
  * then subscription credits before other custom windows.
  */
+const MIRASIM_MODEL_WEEKLY = /^Model\s*·\s*7d[-_]([a-z0-9][a-z0-9.-]{0,63})$/i;
+
 function rawCustomWindowRank(rawLabel: string): number {
   if (rawLabel === "5h") return 0;
+  if (MIRASIM_MODEL_WEEKLY.test(rawLabel)) return 1.5;
   if (rawLabel === "First-party models") return 2;
   if (rawLabel === "API usage") return 3;
   if (rawLabel === "Total subscription credits") return 4.5;
@@ -53,6 +56,23 @@ export function isCustomQuotaWindowIncomplete(
 }
 
 function localizeCustomQuotaLabel(rawLabel: string, t: TFn): string {
+  const mirasimWeekly = rawLabel.match(MIRASIM_MODEL_WEEKLY);
+  if (mirasimWeekly?.[1]) {
+    const familyId = mirasimWeekly[1].toLowerCase();
+    const knownFamilyKey = ({
+      claude: "quota.modelFamily.claude",
+      fable: "quota.modelFamily.fable",
+      sonnet: "quota.modelFamily.sonnet",
+      opus: "quota.modelFamily.opus",
+      haiku: "quota.modelFamily.haiku",
+    } as const)[familyId as "claude" | "fable" | "sonnet" | "opus" | "haiku"];
+    const family = knownFamilyKey
+      ? t(knownFamilyKey)
+      : familyId.split(/[.-]/).filter(Boolean)
+        .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+        .join(" ");
+    return `${family} · ${t("quota.weeklyLimit")}`;
+  }
   switch (rawLabel) {
     case "First-party models":
       return t("quota.cursorFirstParty");

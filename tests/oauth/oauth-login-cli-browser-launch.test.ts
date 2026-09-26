@@ -91,6 +91,24 @@ afterEach(() => {
 });
 
 describe("CLI OAuth login reports the browser launch (#5261)", () => {
+  test("Mirasim --code - reads the verification code from the prompt instead of argv", async () => {
+    let receivedCode: string | undefined;
+    const prompts: string[] = [];
+    const login: FakeRunLogin = async (_provider, _ctrl, opts) => {
+      receivedCode = opts?.mirasimCode;
+      return {} as OAuthCredentials;
+    };
+
+    await handleOAuthLogin("mirasim", {
+      runLogin: login,
+      openUrl: async () => ({ status: "started" }),
+      ask: async question => { prompts.push(question); return "654321"; },
+    }, { mirasimEmail: "user@example.com", mirasimCode: "-" });
+
+    expect(receivedCode).toBe("654321");
+    expect(prompts).toEqual(["Enter the Mirasim sign-in code: "]);
+  });
+
   test("a browser that never opened is on screen before the paste prompt", async () => {
     const events: string[] = [];
     let settleLaunch: (result: OpenUrlResult) => void = () => {};

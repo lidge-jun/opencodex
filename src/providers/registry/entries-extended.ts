@@ -10,6 +10,14 @@ import {
 } from "../base-url-choices";
 import { COMMAND_CODE_MODEL_REASONING_EFFORTS } from "../command-code-efforts";
 import {
+  MIRASIM_MODEL_CONTEXT_WINDOWS,
+  MIRASIM_MODEL_DISPLAY_NAMES,
+  MIRASIM_MODEL_MAX_OUTPUT_TOKENS,
+  MIRASIM_MODEL_REASONING_EFFORTS,
+  MIRASIM_REASONING_EFFORTS,
+  MIRASIM_SELECTABLE_MODELS,
+} from "../mirasim-models";
+import {
   CODEBUDDY_CN_MODELS,
   CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS,
   CODEBUDDY_CN_MODEL_DEFAULT_REASONING_EFFORTS,
@@ -131,6 +139,30 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     apiKeyValidation: "unknown",
     preserveCustomDestination: true,
     note: "TypeSafe JEV decision service for the optional JEV Combo strategy. This credential-only preset does not publish a directly routable model.",
+  },
+  {
+    id: "mirasim",
+    label: "Mirasim",
+    adapter: "mirasim",
+    baseUrl: "https://relay.mirasim.ai",
+    authKind: "oauth",
+    oauthId: "mirasim",
+    dashboardPreset: true,
+    defaultModel: "gpt-5.6-sol",
+    models: [...MIRASIM_SELECTABLE_MODELS],
+    liveModels: true,
+    modelDiscovery: {
+      path: "/v1/models",
+    },
+    modelContextWindows: { ...MIRASIM_MODEL_CONTEXT_WINDOWS },
+    modelDisplayNames: { ...MIRASIM_MODEL_DISPLAY_NAMES },
+    modelMaxOutputTokens: { ...MIRASIM_MODEL_MAX_OUTPUT_TOKENS },
+    defaultMaxOutputTokens: 128_000,
+    reasoningEfforts: [...MIRASIM_REASONING_EFFORTS],
+    modelReasoningEfforts: { ...MIRASIM_MODEL_REASONING_EFFORTS },
+    // The official client maps its workflow-only "ultra" rung to max on the single inference
+    // request; the surrounding multi-turn workflow is client orchestration, not a relay effort.
+    reasoningEffortMap: { ultra: "max" },
   },
   {
     id: "baseten",

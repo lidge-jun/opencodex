@@ -170,8 +170,9 @@ describe("registry-derived buffered tool conformance", () => {
       if (!adapter.parseResponse) continue;
       if (contract.wire === "openai-responses") {
         // Responses passthrough only invokes parseResponse for routed compaction, where tool calls
-        // are not part of the contract. Azure inherits that same compaction-only parser.
-        expect(["openai-responses", "azure", "azure-openai"]).toContain(adapterId);
+        // are not part of the contract. Azure inherits that same compaction-only parser, and the
+        // Mirasim mixed-wire wrapper reaches its Responses parser only for routed GPT compaction.
+        expect(["openai-responses", "azure", "azure-openai", "mirasim"]).toContain(adapterId);
         continue;
       }
       const response = bufferedResponse(contract.wire);

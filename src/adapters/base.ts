@@ -1,6 +1,6 @@
 import type { AdapterEvent, OcxParsedRequest } from "../types";
 import type { TranslatorBudget } from "../lib/translator-budget";
-import type { RequestExecutionBudget } from "../lib/request-execution-budget";
+import type { RequestExecutionBudget, SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../usage/log";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 
@@ -48,6 +48,13 @@ export interface IncomingMeta {
 
 export interface ProviderAdapter {
   name: string;
+
+  /**
+   * Native Responses passthrough capability. Fixed-wire adapters set `passthrough`; mixed-wire
+   * adapters may decide from the routed request before any upstream request is built.
+   */
+  passthrough?: boolean;
+  passthroughFor?(parsed: OcxParsedRequest): boolean;
 
   /**
    * This adapter reports every physical inference send through `IncomingMeta.onPhysicalSend`,
@@ -113,6 +120,13 @@ export interface ProviderAdapter {
 
   /** Exact no-field observation for runTurn adapters, which expose no AdapterRequest object. */
   tierLogForRunTurn?(parsed: OcxParsedRequest): AdapterTierMetadata | undefined;
+}
+
+export function adapterIsPassthrough(
+  adapter: ProviderAdapter,
+  parsed: OcxParsedRequest,
+): boolean {
+  return adapter.passthrough === true || adapter.passthroughFor?.(parsed) === true;
 }
 
 export interface AdapterRequest {
@@ -185,6 +199,10 @@ export interface AdapterFetchContext {
    * adapter entry as one send is how a nested 3x3 ladder stayed invisible to a request cap.
    */
   sendBudget?: RequestExecutionBudget;
+  /** Default send class for the first physical send of an adapter-owned recovery leg. */
+  sendClass?: SendClass;
+  /** Default recovery label for physical sends that do not declare a narrower inner recovery. */
+  recovery?: AttemptRecoveryKind;
   /**
    * Observes every physical upstream send this adapter makes, including its own inner retries.
    *
