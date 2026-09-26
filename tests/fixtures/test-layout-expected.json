@@ -576,6 +576,7 @@
   "combo-workspace-data.test.ts": "gui",
   "combos.test.ts": "codex-integration",
   "command-code-error-finish.test.ts": "providers",
+  "command-code-efforts.test.ts": "providers",
   "command-code-provider.test.ts": "providers",
   "command-code-quota.test.ts": "providers",
   "command-code-tool-text.test.ts": "providers",

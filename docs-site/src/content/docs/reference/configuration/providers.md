@@ -292,6 +292,14 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor legacy boolean, equivalent to `nativeLocalExec: "on"` only when the newer field is unset. |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor local-exec policy. `off` is default; `codex-sandbox` currently fails closed like `off`. |
 
+Command Code's shipped per-model effort defaults include live API measurements. DeepSeek
+v4/v4.1 Flash (including v4 Flash Vision), GLM-5.3 and GLM-5.3-Flash, Qwen3.8-Flash,
+and Gemini-3.7-Flash support `low`, `medium`, `high`, `xhigh`, and `max`. Ladders remain
+model-specific: `poolside/laguna-s-2.1-free` offers only `medium`, while Gemini-3.8-Flash
+and MiMo-v2.5-Pro offer `low`, `medium`, and `high`. To override a pinned Command Code
+row, set `modelReasoningEffortsAuthoritative: true` together with that model's
+`modelReasoningEfforts` list.
+
 Provider registration and replacement (`POST /api/providers`) validate `responsesPath` and `chatCompletionsPath` before changing live configuration or disk state. `PATCH /api/providers?name=<provider>` merges the request body with the stored provider; updates touching fields beyond `disabled` — except `requestPacing`-only updates — validate the merged provider's paths the same way before saving, and an invalid retained path returns `400` with the configuration unchanged. The same path rules apply when loading a configuration file.
 
 ### What a provider save keeps
