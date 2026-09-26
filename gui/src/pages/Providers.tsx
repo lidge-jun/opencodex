@@ -1,4 +1,4 @@
-import { usageSummary30dResourceKey } from "../usage-summary-resource";
+import { readUsageResponseJson, usageSummary30dResourceKey } from "../usage-summary-resource";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ProviderWorkspaceShell, { type AddProviderIntent } from "../components/provider-workspace/ProviderWorkspaceShell";
 import ProviderDetails from "../components/provider-workspace/ProviderDetails";
@@ -316,8 +316,7 @@ export default function Providers({ apiBase }: { apiBase: string }) {
     [apiBase],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
-      if (!res.ok) throw new Error(String(res.status));
-      return await res.json() as { providers?: Array<{ provider: string; requests: number }> };
+      return await readUsageResponseJson<{ providers?: Array<{ provider: string; requests: number }> }>(res);
     },
     { deadlineMs: 60_000 }, // shared usage-summary key: all four subscribers raise the deadline together
   );

@@ -20,6 +20,8 @@
  */
 import {
   collectCodexAppServerCatalogState,
+  collectCodexAppServerCatalogStateWithin,
+  DASHBOARD_CATALOG_STATE_DEADLINE_MS,
   listCodexAppServerProcesses,
   readProcessStartMsBatch,
   resetCodexAppServerCatalogStateCache,
@@ -59,6 +61,8 @@ export interface CodexRestartServiceIo {
    */
   listenPort?: () => number | undefined;
   collectState?: typeof collectCodexAppServerCatalogState;
+  /** Deadline for the default dashboard state read (ms). */
+  stateDeadlineMs?: number;
   listProcesses?: typeof listCodexAppServerProcesses;
   restart?: typeof restartCodexAppServers;
   resetStateCache?: () => void;
@@ -88,10 +92,23 @@ class CodexAppServerIdentityChanged extends Error {
  */
 let inFlight: Promise<CodexRestartResponse> | null = null;
 
-export function readCodexAppServerState(
+/**
+ * Read-only state for the dashboard route. The default classifier is the bounded
+ * request-path read: on Windows the synchronous one runs PowerShell CIM enumeration
+ * inline, which measured 4-7s per call and stalled every listener, proxy traffic
+ * included, each time the Models page opened. A probe slower than the deadline answers
+ * `unknown` and keeps refreshing the cache. The restart path below keeps the
+ * synchronous reading because it acts on it.
+ */
+export async function readCodexAppServerState(
   io: CodexRestartServiceIo = {},
-): CodexAppServerStateResponse {
-  const status = (io.collectState ?? collectCodexAppServerCatalogState)(io.processIo ?? {});
+): Promise<CodexAppServerStateResponse> {
+  const status = io.collectState
+    ? io.collectState(io.processIo ?? {})
+    : await collectCodexAppServerCatalogStateWithin(
+      io.stateDeadlineMs ?? DASHBOARD_CATALOG_STATE_DEADLINE_MS,
+      io.processIo ?? {},
+    );
   return { state: status.state, runningCount: status.processes.length };
 }
 

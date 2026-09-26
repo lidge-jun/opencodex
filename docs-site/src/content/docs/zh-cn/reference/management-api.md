@@ -183,7 +183,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 | `GET /api/debug/usage-logs` | 读取有上限的 usage-debug 条目 | — |
 | `GET /api/debug/injection-logs` | 读取有上限的 guidance-injection 调试条目 | — |
 | `GET /api/claude/inbound-debug` | 读取 Claude 入站调试状态和条目 | — |
-| `GET /api/usage` | 按范围和客户端界面汇总使用情况 | 若无法读取存储，则返回带有 `error: "read_failed"` 的摘要 |
+| `GET /api/usage` | 按范围和客户端界面汇总使用情况 | 若无法读取存储，则返回 500 `{ "error": "read_failed" }` |
 | `GET /api/metrics` | 返回进程本地的 Prometheus 文本指标，涵盖逻辑请求、实际发送、恢复类型、持续时间和 TTFT。标签仅使用协议、结果和恢复类别的封闭集合；绝不导出请求或凭据标识。 | 启动时 `metricsExport.enabled` 不为 true 则返回 404；需要普通管理认证，数据平面凭据不能访问 |
 | `GET /api/storage` | 按桶扫描 Codex 存储使用情况 | 扫描失败时返回带有 `error: "scan_failed"` 的载荷 |
 | `POST /api/storage/cleanup/preview` | 预览已归档会话清理并返回绑定摘要 | 400 `invalid_json` 或 `invalid_percent` |

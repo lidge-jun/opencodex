@@ -190,7 +190,7 @@ Aside プロファイルの変更はこの場合でも一つだけ保存しま�
 | `GET /api/debug/usage-logs` |制限された使用法デバッグ エントリを読み取る | — |
 | `GET /api/debug/injection-logs` |制限付きガイダンス挿入デバッグ エントリを読み取る | — |
 | `GET /api/claude/inbound-debug` | Claude インバウンドのデバッグ状態とエントリを読む | — |
-| `GET /api/usage` |範囲とクライアント サーフェスごとの使用状況を要約する |ストレージを読み取れない場合は、`error: "read_failed"` 概要を返します。
+| `GET /api/usage` |範囲とクライアント サーフェスごとの使用状況を要約する |ストレージを読み取れない場合は 500 `{ "error": "read_failed" }` を返します。
 | `GET /api/metrics` | 論理リクエスト、物理送信、復旧種別、所要時間、TTFT のプロセスローカル Prometheus テキストメトリクスを返します。ラベルはプロトコル、結果、復旧クラスの閉じた集合のみで、リクエストや認証情報の識別子は出力しません。 | 起動時に `metricsExport.enabled` が true でなければ 404。通常の管理認証が必要で、データプレーン認証情報ではアクセスできません。 |
 | `GET /api/storage` |バケットごとの Codex ストレージ使用量をスキャン |スキャン失敗時に `error: "scan_failed"` ペイロードを返します。
 | `POST /api/storage/cleanup/preview` |アーカイブされたセッションのクリーンアップをプレビューし、バインディング ダイジェストを返します。 400 `invalid_json` または `invalid_percent` |

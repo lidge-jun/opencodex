@@ -5,7 +5,7 @@ import { classifyCodexRouting, hasInjectedCodexRouting } from "../../src/codex/i
 import { isCodexClientProcess, listCodexClientProcesses } from "../../src/codex/native-profile-processes";
 import { collectRoutingAdoption, deriveRoutingAdoption } from "../../src/codex/routing-adoption";
 import { handleManagementAPI } from "../../src/server/management-api";
-import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache, markStartupHealthDiagnosticStale } from "../../src/server/startup-health-cache";
+import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache, markStartupHealthDiagnosticStale, resetStartupHealthCacheForTests } from "../../src/server/startup-health-cache";
 import type { OcxConfig } from "../../src/types";
 
 const base = {
@@ -278,6 +278,40 @@ describe("Codex startup health", () => {
     releaseProbe(deriveStartupHealth({ ...base, routingKind: "native" }));
     await pendingProbe;
     invalidateStartupHealthCache();
+  });
+
+  test("invalidation keeps the last reading for the snapshot instead of a not-installed fallback", async () => {
+    // A settings PUT invalidates, then reads the snapshot. Answering with the synthetic
+    // fallback (serviceInstalled: false, at-risk) flashed a healthy service as at risk
+    // until the dedicated probe finished.
+    resetStartupHealthCacheForTests();
+    const healthy = {
+      ...base,
+      routingKind: "native" as const,
+      serviceInstalled: true,
+      serviceViable: true,
+      serviceEnabled: true,
+      serviceRunning: true,
+    };
+    const reading = await getCachedStartupHealth(
+      { codexAutoStart: true },
+      { probe: async () => deriveStartupHealth(healthy) },
+    );
+    expect(reading.diagnosticStale).toBe(false);
+    expect(reading.serviceInstalled).toBe(true);
+
+    invalidateStartupHealthCache();
+    let releaseProbe!: (value: ReturnType<typeof deriveStartupHealth>) => void;
+    const pendingProbe = new Promise<ReturnType<typeof deriveStartupHealth>>(resolve => {
+      releaseProbe = resolve;
+    });
+    const snapshot = getStartupHealthSnapshot({ codexAutoStart: true }, { probe: async () => pendingProbe });
+    expect(snapshot).toEqual(markStartupHealthDiagnosticStale(reading));
+    expect(snapshot.serviceInstalled).toBe(true);
+
+    releaseProbe(deriveStartupHealth(healthy));
+    await pendingProbe;
+    resetStartupHealthCacheForTests();
   });
 
   test("settings snapshot starts a probe without waiting for it", async () => {

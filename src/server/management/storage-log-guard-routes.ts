@@ -11,7 +11,8 @@ import {
   type CodexLogGuardMutationResult,
   type CodexLogGuardStatus,
 } from "../../codex/log-guard/protection";
-import { scanStorage } from "../../storage/scanner";
+import { scanStorageAsync, type StorageReport } from "../../storage/scanner";
+import { noteStorageMutationCompleted, storageMutationEpoch } from "../../storage/storage-mutation-coordinator";
 import { jsonResponse } from "../auth-cors";
 import {
   managementBodyTooLargeResponse,
@@ -104,6 +105,67 @@ async function readProtectMode(ctx: ManagementContext): Promise<"compat" | "quie
   return mode;
 }
 
+/**
+ * Concurrent GET /api/storage requests for the same CODEX_HOME share one walk; nothing is
+ * cached past it. A walk is joined only while no storage mutation has completed since it
+ * started, so a read issued after a cleanup, restore, policy run or Log Guard change always
+ * rescans instead of receiving sizes observed before it.
+ */
+interface StorageScanFlight {
+  epoch: number;
+  promise: Promise<StorageReport>;
+}
+const storageScanFlights = new Map<string, StorageScanFlight>();
+
+export function sharedStorageScan(
+  codexHome: string,
+  scan: (codexHome: string) => Promise<StorageReport> = scanStorageAsync,
+): Promise<StorageReport> {
+  const epoch = storageMutationEpoch();
+  const pending = storageScanFlights.get(codexHome);
+  if (pending && pending.epoch === epoch) return pending.promise;
+  const flight: StorageScanFlight = {
+    epoch,
+    promise: scan(codexHome).finally(() => {
+      // A newer flight may already own this key; only retire our own entry.
+      if (storageScanFlights.get(codexHome) === flight) storageScanFlights.delete(codexHome);
+    }),
+  };
+  storageScanFlights.set(codexHome, flight);
+  return flight.promise;
+}
+
+/**
+ * Log Guard results that are refused before anything under CODEX_HOME is touched. Anything
+ * else (success, a database or config write failure, `busy` which compaction can report
+ * after partial progress, a post-compaction integrity failure) may have changed storage.
+ */
+const REFUSED_BEFORE_CHANGE: ReadonlySet<string> = new Set([
+  "unsupported_schema",
+  "codex_running",
+  "process_enumeration_failed",
+  "unsafe_path",
+  "trigger_collision",
+  "auto_vacuum_not_incremental",
+]);
+
+export function logGuardResultMayHaveChangedStorage(
+  result: CodexLogGuardMutationResult | CodexLogGuardCompactionResult,
+): boolean {
+  if (result.ok) return true;
+  if (result.error === "integrity_check_failed") return result.phase === "after";
+  return !REFUSED_BEFORE_CHANGE.has(result.error);
+}
+
+/** Invalidate in-flight storage scans only when the Log Guard operation may have changed storage. */
+function afterLogGuardMutation(
+  result: CodexLogGuardMutationResult | CodexLogGuardCompactionResult,
+  response: Response,
+): Response {
+  if (logGuardResultMayHaveChangedStorage(result)) noteStorageMutationCompleted();
+  return response;
+}
+
 /** Codex Log Guard diagnostics plus explicit protection and maintenance mutations. */
 export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps } = ctx;
@@ -129,22 +191,26 @@ export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promi
     if (req.method !== "POST") return null;
     const mode = await readProtectMode(ctx);
     if (mode instanceof Response) return mode;
-    return mutationResponse(protectCodexLogs(mode, protectionDeps), ctx);
+    const result = protectCodexLogs(mode, protectionDeps);
+    return afterLogGuardMutation(result, mutationResponse(result, ctx));
   }
 
   if (url.pathname === "/api/storage/codex-logs/unprotect") {
     if (req.method !== "POST") return null;
-    return mutationResponse(unprotectCodexLogs(protectionDeps), ctx);
+    const result = unprotectCodexLogs(protectionDeps);
+    return afterLogGuardMutation(result, mutationResponse(result, ctx));
   }
 
   if (url.pathname === "/api/storage/codex-logs/repair") {
     if (req.method !== "POST") return null;
-    return mutationResponse(repairCodexLogGuardProtection(protectionDeps), ctx);
+    const result = repairCodexLogGuardProtection(protectionDeps);
+    return afterLogGuardMutation(result, mutationResponse(result, ctx));
   }
 
   if (url.pathname === "/api/storage/codex-logs/compact") {
     if (req.method !== "POST") return null;
-    return compactResponse(compactCodexLogs(deps.codexLogGuardMaintenanceDeps), ctx);
+    const result = compactCodexLogs(deps.codexLogGuardMaintenanceDeps);
+    return afterLogGuardMutation(result, compactResponse(result, ctx));
   }
 
   if (url.pathname !== "/api/storage" || req.method !== "GET") return null;
@@ -154,7 +220,7 @@ export async function handleStorageLogGuardRoutes(ctx: ManagementContext): Promi
   // silently folded into CODEX_HOME totals.
   let storage;
   try {
-    storage = scanStorage();
+    storage = await sharedStorageScan(resolveCodexHomeDir());
   } catch {
     const fallback = {
       codexHome: resolveCodexHomeDir(),

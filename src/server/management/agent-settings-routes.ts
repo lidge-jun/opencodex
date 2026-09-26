@@ -753,9 +753,13 @@ export async function handleAgentSettingsRoutes(ctx: ManagementContext): Promise
       ...[...new Set(chosen)].filter(model => !selectableSet.has(model)),
     ];
     // #857: let CLI/GUI show when a running Codex app-server keeps an older
-    // in-memory catalog than the one on disk.
-    const { collectCodexAppServerCatalogState } = await import("../../codex/app-server-processes");
-    const catalogState = collectCodexAppServerCatalogState();
+    // in-memory catalog than the one on disk. Bounded request-path read: the synchronous
+    // collector blocked the event loop for the whole Windows CIM walk (4-7s measured).
+    const {
+      collectCodexAppServerCatalogStateWithin,
+      DASHBOARD_CATALOG_STATE_DEADLINE_MS,
+    } = await import("../../codex/app-server-processes");
+    const catalogState = await collectCodexAppServerCatalogStateWithin(DASHBOARD_CATALOG_STATE_DEADLINE_MS);
     return jsonResponse({
       chosen, available, catalogState,
       pickerAvailable: [...new Set(filterCatalogVisibleModels(models, config).map(catalogModelSlug).filter(slug => slug.includes("/")))],

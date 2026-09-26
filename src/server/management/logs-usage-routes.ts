@@ -347,45 +347,11 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       }
       return jsonResponse(requestedSummary);
     } catch {
-      return jsonResponse({
-        range,
-        surface,
-        since: window?.since ?? null,
-        ...(window ? { customWindow: true, until: window.until } : {}),
-        generatedAt: now,
-        summary: {
-          requests: 0,
-          attemptCount: 0,
-          measuredRequests: 0,
-          reportedRequests: 0,
-          unreportedRequests: 0,
-          unsupportedRequests: 0,
-          estimatedRequests: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedInputTokens: 0,
-          cacheReadInputTokens: 0,
-          cacheCreationInputTokens: 0,
-          reasoningOutputTokens: 0,
-          totalTokens: 0,
-          coverageRatio: 0,
-          estimatedCostUsd: 0,
-          pricedRequests: 0,
-          unpricedRequests: 0,
-          unmeteredRequests: 0,
-        },
-        days: [],
-        models: [],
-        providers: [],
-        accounts: [],
-        historyTruncated: false,
-        truncatedPrefixBytes: 0,
-        entriesTruncated: false,
-        entriesDropped: 0,
-        snapshotWindowStart: null,
-        snapshotWindowEnd: null,
-        error: "read_failed",
-      });
+      // A missing ledger is handled as an empty installation by the reader. Reaching this catch
+      // therefore means the report is unavailable, not that usage was measured as zero. Keep the
+      // transport status aligned with the JEV projection above so every dashboard consumer can
+      // retain its last valid snapshot instead of caching fabricated zero totals.
+      return jsonResponse({ error: "read_failed" }, 500);
     }
   }
 
