@@ -195,7 +195,7 @@ export function createRegisteredAdapter(
   if (wire !== "openai-responses") {
     withInputMediaGuard(adapter, wire);
   }
-  adapter = withProviderRequestCompatibility(adapter, provider);
+  adapter = withProviderRequestCompatibility(adapter, provider, context.providerId);
   const buildRequest = adapter.buildRequest.bind(adapter);
   adapter.buildRequest = (parsed, incoming) => {
     const attachTierMetadata = (request: Awaited<ReturnType<ProviderAdapter["buildRequest"]>>) => {

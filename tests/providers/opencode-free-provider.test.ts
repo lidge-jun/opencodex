@@ -68,6 +68,7 @@ function nativeRequest(
 ) {
   const request = buildOpenAIChatPassthroughRequest(provider, body, model, body.stream === true);
   return transformProviderRequest(provider, request, {
+    providerId: "opencode-free",
     incomingHeaders: new Headers(),
     requestSessionLane,
   });
@@ -287,6 +288,32 @@ describe("opencode-free provider", () => {
     expect(headers["Authorization"]).toBe("Bearer user-secret-key");
     expect(headers["x-opencode-client"]).toBe("desktop");
     expect(Object.keys(headers)).toContain("Authorization");
+  });
+
+  test("keyed sends bypass the keyless compatibility profile", async () => {
+    const provider: OcxProviderConfig = {
+      ...providerConfigSeed(entry!),
+      apiKey: "user-secret-key",
+    };
+    const request = await registered(provider).buildRequest(threadedRequest("t"), metaWithSession());
+    const headers = request.headers as Record<string, string>;
+    const body = JSON.parse(request.body) as { tools?: unknown };
+    expect(headers["Authorization"]).toBe("Bearer user-secret-key");
+    expect(headers["User-Agent"]).toBe("opencode");
+    expect(headers["x-opencode-session"]).toBeUndefined();
+    expect(body.tools).toBeUndefined();
+  });
+
+  test("the keyed opencode-zen provider never enters the keyless profile", async () => {
+    const keyedEntry = PROVIDER_REGISTRY.find(candidate => candidate.id === "opencode-zen");
+    const provider = { ...providerConfigSeed(keyedEntry!), apiKey: "zen-key" };
+    const request = await createRegisteredAdapter(provider, { providerId: "opencode-zen" })
+      .buildRequest(minimalRequest(), metaWithSession());
+    const headers = request.headers as Record<string, string>;
+    const body = JSON.parse(request.body) as { tools?: unknown };
+    expect(headers["Authorization"]).toBe("Bearer zen-key");
+    expect(headers["x-opencode-session"]).toBeUndefined();
+    expect(body.tools).toBeUndefined();
   });
 
   // A seeded config is the easy case. The one that actually reaches users is a config written

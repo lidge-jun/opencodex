@@ -1,5 +1,5 @@
 import type { ProviderRequestCompatibility } from "./provider-compatibility";
-import { applyZenFreeIdentity, isZenFreeEndpoint } from "./opencode-free-session";
+import { applyZenFreeIdentity, isZenFreeEndpoint, zenFreeHasApiKey } from "./opencode-free-session";
 import { ZEN_FREE_GATE_TOOLS } from "./opencode-free-tools";
 
 /**
@@ -8,13 +8,16 @@ import { ZEN_FREE_GATE_TOOLS } from "./opencode-free-tools";
  * this profile only declares when the policy applies and what Zen requires.
  */
 export const openCodeFreeCompatibility: ProviderRequestCompatibility = {
-  applies(provider) {
-    return isZenFreeEndpoint(provider.baseUrl) && provider.authMode !== "forward";
+  applies(provider, context) {
+    return context.providerId === "opencode-free"
+      && isZenFreeEndpoint(provider.baseUrl)
+      && provider.authMode !== "forward"
+      && !zenFreeHasApiKey(provider);
   },
   amendHeaders(headers, provider, context) {
     applyZenFreeIdentity(headers, provider, context);
   },
-  requiredFunctionTools(provider) {
-    return provider.apiKey?.trim() ? [] : ZEN_FREE_GATE_TOOLS;
+  requiredFunctionTools() {
+    return ZEN_FREE_GATE_TOOLS;
   },
 };

@@ -343,6 +343,7 @@ export async function runNativeChatAttempt(
       activeProvider,
       request,
       {
+        providerId: route.providerName,
         incomingHeaders: req.headers,
         requestSessionLane: getOrAllocateRequestSessionLane(req),
       },

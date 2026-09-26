@@ -3,6 +3,8 @@ import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import { openCodeFreeCompatibility } from "./opencode-free-compatibility";
 
 export interface ProviderRequestContext {
+  /** Config key for the selected provider row. */
+  providerId?: string;
   parsed?: OcxParsedRequest;
   incomingHeaders?: Headers;
   /** Stable lane for request paths that do not build an `OcxParsedRequest`. */
@@ -18,7 +20,7 @@ export interface CompatibilityFunctionTool {
 }
 
 export interface ProviderRequestCompatibility {
-  applies(provider: OcxProviderConfig): boolean;
+  applies(provider: OcxProviderConfig, context: ProviderRequestContext): boolean;
   amendHeaders?(
     headers: Record<string, string>,
     provider: OcxProviderConfig,
@@ -67,7 +69,7 @@ export function transformProviderRequest(
   request: AdapterRequest,
   context: ProviderRequestContext = {},
 ): AdapterRequest {
-  const profile = PROVIDER_COMPATIBILITY.find(candidate => candidate.applies(provider));
+  const profile = PROVIDER_COMPATIBILITY.find(candidate => candidate.applies(provider, context));
   if (!profile) return request;
 
   const headers = { ...request.headers };
@@ -103,12 +105,14 @@ export function transformProviderRequest(
 export function withProviderRequestCompatibility(
   adapter: ProviderAdapter,
   provider: OcxProviderConfig,
+  providerId?: string,
 ): ProviderAdapter {
   const buildRequest = adapter.buildRequest.bind(adapter);
   return {
     ...adapter,
     buildRequest(parsed: OcxParsedRequest, incoming: IncomingMeta) {
       const apply = (request: AdapterRequest) => transformProviderRequest(provider, request, {
+        providerId,
         parsed,
         incomingHeaders: incoming?.headers,
       });
