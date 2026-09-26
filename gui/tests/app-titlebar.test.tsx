@@ -11,6 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { SidebarTopStrip } from "../src/components/app-titlebar";
 import { useSidebarCollapse } from "../src/use-sidebar-collapse";
 import { LanguageProvider } from "../src/i18n/provider";
+import { watchMacTitlebarMetrics } from "../src/lib/window-chrome";
 
 const globals = ["document", "window", "navigator", "localStorage", "HTMLElement", "Element", "IS_REACT_ACT_ENVIRONMENT"] as const;
 const WINDOW_EVENT_STUB: { event: undefined } = { event: undefined };
@@ -168,4 +169,49 @@ test("the traffic-light position and the CSS row stay in step", () => {
   const column = Number(styles.match(/\.app\s*\{[^}]*grid-template-columns:\s*(\d+)px/)?.[1]);
   const stripWidth = Number(css.match(/\.sidebar-top\s*\{[^}]*width:\s*(\d+)px/)?.[1]);
   expect(stripWidth).toBe(column);
+});
+
+test("macOS titlebar clearance follows page zoom and monitor scale", async () => {
+  let monitorScale = 2;
+  const calls: string[] = [];
+  Object.defineProperty(win, "devicePixelRatio", { configurable: true, value: 2 });
+  win.__TAURI__ = { core: { invoke: async (command) => {
+    calls.push(command);
+    return { scaleFactor: monitorScale };
+  } } };
+  const stop = watchMacTitlebarMetrics(host);
+  await Promise.resolve();
+  expect(host.style.getPropertyValue("--tl-inset")).toBe("80px");
+  expect(host.style.getPropertyValue("--titlebar-h")).toBe("40px");
+  expect(host.classList.contains("app--reduced-zoom")).toBe(false);
+
+  // WKWebView pageZoom=0.2 on a Retina display reports DPR=0.4. The
+  // controls stay in window points, so CSS clearance must grow fivefold.
+  Object.defineProperty(win, "devicePixelRatio", { configurable: true, value: 0.4 });
+  win.dispatchEvent(new win.Event("resize"));
+  expect(host.style.getPropertyValue("--tl-inset")).toBe("400px");
+  expect(host.style.getPropertyValue("--titlebar-h")).toBe("200px");
+  expect(host.style.getPropertyValue("--chrome-clear")).toBe("620px");
+  expect(host.classList.contains("app--reduced-zoom")).toBe(true);
+
+  // Moving to a non-Retina monitor at the same zoom changes the native scale.
+  monitorScale = 1;
+  Object.defineProperty(win, "devicePixelRatio", { configurable: true, value: 0.2 });
+  win.dispatchEvent(new win.Event("resize"));
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(host.style.getPropertyValue("--tl-inset")).toBe("400px");
+  expect(calls).toContain("plugin:window|current_monitor");
+  stop();
+});
+
+test("the narrow macOS strip and drawer reserve the native controls", () => {
+  const css = readFileSync(new URL("../src/components/app-titlebar.css", import.meta.url), "utf8");
+  const lib = readFileSync(new URL("../../desktop/src-tauri/src/lib.rs", import.meta.url), "utf8");
+  const mobile = css.slice(css.indexOf("@media (max-width: 760px)"));
+  expect(mobile).toContain(".app--macos .mobile-topbar { padding-left: var(--tl-inset, 80px); }");
+  expect(mobile).toContain(".app--macos .sidebar.open { padding-top: calc(var(--titlebar-h, 40px) + 18px); }");
+  expect(css).toContain("--sidebar-column: max(232px, calc(var(--tl-inset) + 52px))");
+  expect(css).toContain(".app--macos.app--reduced-zoom { transition: none; }");
+  expect(css).toContain(".app--macos .mobile-topbar { flex-wrap: wrap; }");
+  expect(lib).toContain(".min_inner_size(360.0, 320.0)");
 });

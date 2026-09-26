@@ -26,7 +26,12 @@
 */
 
 .app { --titlebar-h: 40px; --tl-inset: 80px; --chrome-clear: 52px; }
-.app--macos { --chrome-clear: 124px; }
+.app--macos {
+  --chrome-clear: 124px;
+  /* At reduced page zoom the native lights occupy more CSS pixels. Keep the
+     expanded sidebar and its strip wide enough to place main content after them. */
+  --sidebar-column: max(232px, calc(var(--tl-inset) + 52px));
+}
 
 .sidebar-top {
   position: fixed;
@@ -51,6 +56,7 @@
 }
 
 .app--macos .sidebar-top {
+  width: var(--sidebar-column);
   padding-left: var(--tl-inset, 80px);
 }
 
@@ -107,6 +113,9 @@
    Only the fixed strip survives, floating over the main strip's left edge. */
 @media (min-width: 761px) {
   .app { transition: grid-template-columns 160ms ease; }
+  /* The native lights do not animate with CSS: clear them immediately on zoom out. */
+  .app--macos.app--reduced-zoom { transition: none; }
+  .app--macos:not(.app--nav-collapsed) { grid-template-columns: var(--sidebar-column) minmax(0, 1fr); }
   /* Double class beats the base `.app` columns regardless of stylesheet order. */
   .app.app--nav-collapsed { grid-template-columns: 0px 1fr; }
   .app--nav-collapsed .sidebar { display: none; }
@@ -130,9 +139,21 @@
 }
 
 /* The mobile drawer keeps its own chrome; the strip would duplicate the drawer head.
-   The traffic lights still overlay the window on macOS at any width, so the
-   topbar's leading edge reserves the lights' row. */
+   The mobile bar clears the native lights horizontally; the open drawer's first
+   control starts below their row. Both clearances grow when page zoom shrinks. */
 @media (max-width: 760px) {
   .sidebar-top { display: none; }
   .app--macos .mobile-topbar { padding-left: var(--tl-inset, 80px); }
+  .app--macos .sidebar.open { padding-top: calc(var(--titlebar-h, 40px) + 18px); }
+}
+
+/* At high page zoom a 360-point window can have fewer than 320 CSS pixels.
+   Put the action orbs below the lights, where they can use the whole row. */
+@media (max-width: 320px) {
+  .app--macos .mobile-topbar { flex-wrap: wrap; }
+  .app--macos .mobile-topbar-actions {
+    width: calc(100% + var(--tl-inset, 80px));
+    margin-left: calc(-1 * var(--tl-inset, 80px));
+    justify-content: flex-end;
+  }
 }

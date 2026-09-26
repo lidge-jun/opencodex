@@ -32,8 +32,11 @@ The main window carries an integrated title bar on macOS: the builder sets
 the traffic lights land inside it at a fixed `traffic_light_position`. The layout that receives
 them is the GUI's: the dashboard keeps a top strip across the sidebar and the main area, reserves
 the lights' inset on macOS only, and moves or zooms the window through `plugin:window` commands.
-`capabilities/dashboard-titlebar.json` grants `start_dragging` and `toggle_maximize` to `main`
-for the loopback origin, the same test pins it, and `capabilities/default.json` grants the pair
+`capabilities/dashboard-titlebar.json` grants `start_dragging`, `toggle_maximize`, and a read-only
+`current_monitor` query to `main` for the loopback origin. The dashboard uses the monitor scale
+and page device-pixel ratio to keep the traffic-light row and inset clear at reduced WebKit zoom;
+the macOS window has a 360-point minimum width. The same test pins the capability shape, and
+`capabilities/default.json` grants the drag/zoom pair
 on the app origin because the bundled bootstrap and update pages draw their own matching strip —
 a page with an overlay title bar and no strip cannot be dragged or zoomed at all. Windows and
 Linux keep the native title bar: the shell ships no min/max/close widgets of its own, and the

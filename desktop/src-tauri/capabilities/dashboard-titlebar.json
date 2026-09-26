@@ -8,6 +8,7 @@
   },
   "permissions": [
     "core:window:allow-start-dragging",
-    "core:window:allow-toggle-maximize"
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-current-monitor"
   ]
 }

@@ -31,6 +31,7 @@ import { confirmAction } from "./action-dialogs";
 import { hostOs, isDesktopShell, isExternalLink, openDesktopUpdatePage } from "./lib/desktop-shell";
 import { useSidebarCollapse } from "./use-sidebar-collapse";
 import { MainTopStrip, SidebarTopStrip } from "./components/app-titlebar";
+import { watchMacTitlebarMetrics } from "./lib/window-chrome";
 
 type Theme = "light" | "dark" | "system";
 
@@ -209,6 +210,10 @@ export default function App() {
   const desktopShell = isDesktopShell();
   const { collapsed: navCollapsed, toggle: toggleNavCollapse } = useSidebarCollapse({ shortcut: desktopShell });
   const desktopMac = desktopShell && hostOs() === "macos";
+  const appRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (desktopMac && appRef.current) return watchMacTitlebarMetrics(appRef.current);
+  }, [desktopMac]);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const navWasOpen = useRef(false);
@@ -381,7 +386,7 @@ export default function App() {
   );
 
   return (
-    <div className={`app${desktopShell ? " app--desktop" : ""}${desktopMac ? " app--macos" : ""}${navCollapsed ? " app--nav-collapsed" : ""}`}>
+    <div ref={appRef} className={`app${desktopShell ? " app--desktop" : ""}${desktopMac ? " app--macos" : ""}${navCollapsed ? " app--nav-collapsed" : ""}`}>
       <DesktopStarOnboarding apiBase={sharedBase} enabled={targetsSettled && !targets.connected} />
       {actionFeedback && (
         <ToastNotice tone={actionFeedback.tone} onDismiss={() => setActionFeedback(null)} dismissLabel={t("common.close")}>

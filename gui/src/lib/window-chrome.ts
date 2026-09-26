@@ -59,3 +59,51 @@ export function windowChromeHandlers(): {
     },
   };
 }
+
+/** Native traffic lights stay in window points while WKWebView page zoom scales CSS pixels. */
+export function watchMacTitlebarMetrics(app: HTMLElement): () => void {
+  const core = window.__TAURI__?.core;
+  // Retina is the conservative initial guess until the monitor query resolves.
+  const initialDpr = window.devicePixelRatio;
+  let monitorScale = Number.isFinite(initialDpr) && initialDpr > 0 ? Math.max(2, initialDpr) : 2;
+  let active = true;
+  let request = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const apply = () => {
+    const dpr = window.devicePixelRatio;
+    const ratio = Number.isFinite(dpr) && dpr > 0 ? Math.max(1, monitorScale / dpr) : 1;
+    app.classList.toggle("app--reduced-zoom", ratio > 1);
+    app.style.setProperty("--tl-inset", `${Math.ceil(80 * ratio)}px`);
+    app.style.setProperty("--titlebar-h", `${Math.ceil(40 * ratio)}px`);
+    app.style.setProperty("--chrome-clear", `${Math.ceil(124 * ratio)}px`);
+  };
+  const readMonitor = () => {
+    if (!core?.invoke) return;
+    const current = ++request;
+    void core.invoke("plugin:window|current_monitor").then((value) => {
+      if (!active || current !== request) return;
+      const scale = (value as { scaleFactor?: unknown } | null)?.scaleFactor;
+      if (typeof scale === "number" && Number.isFinite(scale) && scale > 0) {
+        monitorScale = scale;
+        apply();
+      }
+    }).catch(() => {});
+  };
+  const onResize = () => {
+    apply();
+    clearTimeout(timer);
+    timer = setTimeout(readMonitor, 80);
+  };
+
+  apply();
+  readMonitor();
+  window.addEventListener("resize", onResize);
+  window.addEventListener("focus", readMonitor);
+  return () => {
+    active = false;
+    clearTimeout(timer);
+    window.removeEventListener("resize", onResize);
+    window.removeEventListener("focus", readMonitor);
+  };
+}
