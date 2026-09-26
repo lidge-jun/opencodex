@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
+import { isProtectedHomeUnderTest } from "../../src/lib/test-home-guard";
 import { parseClaimArgs, runServiceClaim, CLAIM_SCHEMA } from "../../src/service/claim";
 import { ServiceOwnershipSubjectMismatchError, serviceStatePath, serviceStatePaths } from "../../src/service/state";
 import type { ServiceOwnershipSubject } from "../../src/service/state";
@@ -147,8 +150,12 @@ describe("runServiceClaim", () => {
     const previousUserProfile = process.env.USERPROFILE;
     if (process.platform === "win32") process.env.USERPROFILE = home.root;
     try {
-      expect(serviceStatePath().startsWith(home.root)).toBe(true);
-      expect(serviceStatePaths()).toContain(serviceStatePath());
+      const primary = serviceStatePath();
+      const legacy = join(homedir(), ".opencodex", "service-state.json");
+      expect(primary.startsWith(home.root)).toBe(true);
+      expect(serviceStatePaths()).toContain(primary);
+      expect(serviceStatePaths().every(path => path === primary
+        || (path === legacy && !isProtectedHomeUnderTest(dirname(path))))).toBe(true);
       mkdirSync(serviceStatePath());
       const lines: string[] = [];
       const code = await runServiceClaim([...VALID, "--json"], {
