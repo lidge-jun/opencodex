@@ -114,6 +114,13 @@ Avec l’authentification `key`, [`retryOn429`](/fr/reference/configuration/) s�
 **Cibles :** le service Amazon CodeWhisperer Streaming `GenerateAssistantResponse` utilisé par Kiro (`https://runtime.{region}.kiro.dev/`).
 **Authentification :** jeton d’accès OAuth Kiro en Bearer, accompagné des métadonnées region/profile issues de l’identifiant Kiro.
 
+Après l’admission d’une requête, le proxy lit en arrière-plan la liste des modèles du compte sur le
+service de gestion régional. Les modèles observés complètent la liste fournie ; une réponse vide ou
+inconnue conserve la dernière liste valide. Cette liste guide seulement la préférence entre comptes
+admissibles : un identifiant de modèle inconnu est toujours transmis. Les limites d’entrée signalées
+informent la fenêtre de contexte, avec la limite fournie comme repli si les preuves sont partielles.
+Les comptes inactifs n’ont pas encore nécessairement de liste observée.
+
 - Construit le `conversationState` de Kiro, mappe les outils Codex et leurs résultats, puis envoie les blocs d’image pris en charge par le protocole Kiro.
 - Décode `application/vnd.amazon.eventstream`, reconstruit les événements de texte, de raisonnement et d’outil, détecte les données JSON d’outil tronquées et estime l’utilisation, car le service en amont ne renvoie aucun nombre de jetons.
 - Utilise à l’identique le `baseUrl` configuré lorsqu’il est personnalisé. Une URL canonique `runtime.{region}.kiro.dev` suit la région d’API de l’identifiant importé ; seule cette forme canonique peut faire l’objet d’un unique repli borné vers `q.{region}.amazonaws.com` après un échec de point de terminaison, de signature, de DNS ou de connexion, ou une réponse HTTP 502/503/504 reçue avant toute sortie.

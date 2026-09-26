@@ -39,6 +39,7 @@ import { parseRetryAfterMs } from "../combos/failover";
 import type { KiroRefusalKind } from "../adapters/kiro-refusal";
 import { kiroAccountEvidence } from "../providers/kiro-usage";
 import { kiroEvidenceIdentity } from "../providers/kiro-account-state-disk";
+import { kiroAccountSupportsModel } from "../providers/kiro-model-catalog";
 import { ACCOUNT_QUOTA_TTL_MS } from "../providers/quota-wire";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -216,6 +217,25 @@ export function eligibleFailoverAccounts(providerName: string, now = Date.now(),
   return eligibleIdsIn(getAccountSet(providerName), providerName, now, family);
 }
 
+/** Model evidence only ranks accounts already eligible and below any configured cap. */
+export function preferKiroModelSupport(
+  providerName: string, ids: string[], model?: string | null, config?: OcxConfig,
+): string[] {
+  if (providerName !== "kiro" || !model) return ids;
+  const cap = config?.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount;
+  const withRoom = typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100
+    ? ids.filter(id => accountInFlight("kiro", id) < cap) : ids;
+  const positive = withRoom.filter(id => kiroAccountSupportsModel(id, model) === true);
+  return positive.length ? positive : ids;
+}
+
+function kiroModelListingHasRoom(config: OcxConfig, accountId: string, model: string): boolean {
+  if (kiroAccountSupportsModel(accountId, model) !== true) return false;
+  const cap = config.providers?.kiro?.oauthAccountFailover?.maxConcurrentPerAccount;
+  return !(typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100)
+    || accountInFlight("kiro", accountId) < cap;
+}
+
 function eligibleIdsIn(
   set: ReturnType<typeof getAccountSet>,
   providerName: string,
@@ -320,7 +340,8 @@ function pickFillFirstGenericAccount(
   const stableAll = stableGenericRoster(providerName);
   if (stableAll.length < 2) return null;
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
-  const eligible = new Set(eligibleFailoverAccounts(providerName, now, family));
+  const eligible = new Set(preferKiroModelSupport(providerName,
+    eligibleFailoverAccounts(providerName, now, family), requestedModelId, config));
   const stored = config.providers?.[providerName]?.oauthAccountFailover?.autoSwitchThreshold;
   const threshold = typeof stored === "number" && Number.isInteger(stored) && stored >= 0 && stored <= 100
     ? stored
@@ -445,6 +466,7 @@ export function rotateGenericOAuthAccountOnRefusal(
     const withRoom = candidates.filter(id => accountInFlight("kiro", id) < cap);
     if (withRoom.length > 0) candidates = withRoom;
   }
+  candidates = preferKiroModelSupport(providerName, candidates, requestedModelId, config);
   // The 429 path branches too. Leaving it on the quota ranking would make a configured
   // strategy inert in practice the moment anything actually failed, which is the case the
   // operator chose the strategy for.
@@ -486,9 +508,14 @@ export function refusalAwareInitialKiroAccount(
   const set = getAccountSet("kiro");
   if (!set || set.accounts.length < 2) return null;
   const active = set.accounts.find(account => account.id === activeId);
-  if (!active || (!isCooled("kiro", activeId, now)
-    && kiroAccountEvidence(active, now).exhausted !== true)) return null;
-  const eligible = new Set(eligibleIdsIn(set, "kiro", now, classifyModelFamilyForQuota("kiro", requestedModelId)));
+  if (!active) return null;
+  const eligibleIds = eligibleIdsIn(set, "kiro", now, classifyModelFamilyForQuota("kiro", requestedModelId));
+  const preferred = preferKiroModelSupport("kiro", eligibleIds, requestedModelId, config);
+  const activeLacks = requestedModelId && kiroAccountSupportsModel(activeId, requestedModelId) === false
+    && preferred.some(id => id !== activeId && kiroModelListingHasRoom(config, id, requestedModelId));
+  if (!activeLacks && !isCooled("kiro", activeId, now)
+    && kiroAccountEvidence(active, now).exhausted !== true) return null;
+  const eligible = new Set(preferred);
   const start = set.accounts.findIndex(account => account.id === activeId);
   for (const account of [...set.accounts.slice(start + 1), ...set.accounts.slice(0, start)]) {
     if (eligible.has(account.id)) return account.id;
@@ -540,6 +567,16 @@ export function preferredInitialAccount(
   const order = selected.accounts.filter(account => account.needsReauth !== true).map(account => account.id);
   if (order.length < 2) return null;
 
+  const modelEligible = preferKiroModelSupport(providerName,
+    eligibleFailoverAccounts(providerName, now, classifyModelFamilyForQuota(providerName, requestedModelId)),
+    requestedModelId, config);
+  const activeLacks = providerName === "kiro" && !!active && !!requestedModelId
+    && kiroAccountSupportsModel(active, requestedModelId) === false;
+  const listingSibling = activeLacks
+    ? modelEligible.find(id => id !== active && kiroModelListingHasRoom(config, id, requestedModelId!))
+    : undefined;
+  if (listingSibling) return listingSibling;
+
   // A configured strategy answers this question itself. Both guards below exist to protect the
   // QUOTA answer, and both are fatal to the other two: hasHeadroomEvidence refuses every
   // provider with no quota data, which is exactly where round-robin is the point, and the
@@ -553,12 +590,14 @@ export function preferredInitialAccount(
     if (typeof cap === "number" && Number.isInteger(cap) && cap >= 1 && cap <= 100) {
       candidates = candidates.filter(id => accountInFlight("kiro", id) < cap);
     }
+    candidates = preferKiroModelSupport(providerName, candidates, requestedModelId, config);
     const picked = candidates.sort((a, b) => accountInFlight("kiro", a) - accountInFlight("kiro", b))[0];
     return picked && picked !== active ? picked : null;
   }
   if (strategy === "round-robin") {
     const family = classifyModelFamilyForQuota(providerName, requestedModelId);
-    const eligibleNow = eligibleFailoverAccounts(providerName, now, family);
+    const eligibleNow = preferKiroModelSupport(providerName,
+      eligibleFailoverAccounts(providerName, now, family), requestedModelId, config);
     if (eligibleNow.length === 0) return null;
     // PEEK, not pick: this proposal is discardable, and advancing the ring for an account the
     // resolver then rejects would skip a turn for nothing. noteGenericPoolSelection commits.
@@ -589,7 +628,9 @@ export function preferredInitialAccount(
   // Cooldowns are respected here, unlike in the presence count: this picks the account to
   // send to right now, and one inside its 429 window is the single candidate we hold
   // positive evidence against.
-  const eligible = order.filter(id => !isCooled(providerName, id, now, classifyModelFamilyForQuota(providerName, requestedModelId)));
+  const eligible = preferKiroModelSupport(providerName,
+    order.filter(id => !isCooled(providerName, id, now, classifyModelFamilyForQuota(providerName, requestedModelId))),
+    requestedModelId, config);
   if (eligible.length === 0) return null;
 
   // Start the ring at the active account so an unranked outcome reproduces today's choice.

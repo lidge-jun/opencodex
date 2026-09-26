@@ -6,7 +6,9 @@ import {
   commitOAuthAccountSelection,
   getAccountCredentialWithStatus,
   credentialGeneration,
+  getAccountSet,
 } from "../../oauth/store";
+import { refreshKiroAccountModelsDetached } from "../../providers/kiro-model-catalog";
 import type { ProviderAdapter, AdapterRequest } from "../../adapters/base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-routing";
@@ -627,6 +629,10 @@ export async function prepareResponsesTransport(
             ? clientCancelledResponse() : capacityResponse();
           if (options.accountLoad) options.accountLoad.lease = lease;
           else lease.release();
+        }
+        if (route.providerName === "kiro") {
+          const account = getAccountSet("kiro")?.accounts.find(row => row.id === admitted.accountId);
+          if (account) refreshKiroAccountModelsDetached(account, route.provider);
         }
         if (admitted.accountId !== resolved.accountId) usedPreferredAccount = true;
         resolved = admitted;
