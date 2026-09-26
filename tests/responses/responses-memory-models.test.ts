@@ -198,6 +198,9 @@ describe("memory model config", () => {
       warnDegradedMemoryModels(invalid, configSchema.parse(invalid) as OcxConfig);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("memoryModels.extract is invalid");
+      // The route a broken phase keeps is not necessarily Codex's own model: the shadow-call
+      // intercept can still match the request.
+      expect(warnings[0]).toContain("keeps its existing route");
       // The surviving phase is not repeated, and a wholly broken block keeps the block wording.
       const survivor = { ...config(), memoryModels: { extract: { model: "" }, consolidation: { model: "gateway/strong" } } };
       warnDegradedMemoryModels(survivor, configSchema.parse(survivor) as OcxConfig);
@@ -212,6 +215,25 @@ describe("memory model config", () => {
       delete absent.memoryModels;
       warnDegradedMemoryModels(absent, configSchema.parse(absent) as OcxConfig);
       expect(warnings).toHaveLength(3);
+    } finally {
+      console.warn = original;
+    }
+  });
+
+  test("an unrecognized phase key warns instead of vanishing on the next save", () => {
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (message: unknown) => { warnings.push(String(message)); };
+    try {
+      const typo = { ...config(), memoryModels: { extrcat: { model: "gateway/cheap" }, consolidation: { model: "gateway/strong" } } };
+      const parsed = configSchema.parse(typo) as OcxConfig;
+      // The load schema stays permissive, so the misspelled key is stripped while the valid phase
+      // survives - which is exactly why the warning has to read the raw object.
+      expect(parsed.memoryModels).toEqual({ consolidation: { model: "gateway/strong" } });
+      warnDegradedMemoryModels(typo, parsed);
+      expect(warnings).toHaveLength(1);
+      // The key name is JSON-quoted because it is redacted and escaped before it reaches the log.
+      expect(warnings[0]).toContain('memoryModels."extrcat" is not a recognized phase');
     } finally {
       console.warn = original;
     }
