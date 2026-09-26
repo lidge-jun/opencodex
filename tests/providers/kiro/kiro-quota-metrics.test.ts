@@ -102,3 +102,22 @@ test("disk sanitizer preserves valid precise plan credits only", () => {
   expect(invalid.kiroCreditsUsed).toBeUndefined();
   expect(invalid.kiroCreditsLimit).toBeUndefined();
 });
+
+test("a metrics scrape never hydrates the disk snapshot; routing does", async () => {
+  const { writeFileSync } = await import("node:fs");
+  const { getConfigDir } = await import("../../../src/config");
+  const { kiroEvidenceIdentity } = await import("../../../src/providers/kiro-account-state-disk");
+  const { kiroAccountEvidence } = await import("../../../src/providers/kiro-usage");
+  const a = await account("disk");
+  const now = Date.now();
+  clearAccountQuotaCache();
+  writeFileSync(join(getConfigDir(), "provider-account-quota-cache.json"), JSON.stringify({
+    version: 1,
+    rows: { [`kiro\u0000${a.id}`]: { monthlyPercent: 40, kiroCreditsUsed: 4, kiroCreditsLimit: 10,
+      updatedAt: now - 1_000, identity: kiroEvidenceIdentity(a) } },
+  }));
+  expect(cachedKiroQuotaMetricRows(now)).toEqual([]);
+  expect(kiroAccountEvidence(a, now).quotaPercent).toBe(40);
+  expect(cachedKiroQuotaMetricRows(now)).toHaveLength(1);
+});
+

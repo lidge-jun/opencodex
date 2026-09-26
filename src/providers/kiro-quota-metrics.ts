@@ -19,7 +19,7 @@ export function cachedKiroQuotaMetricRows(now = Date.now()): KiroQuotaMetricRow[
   const labels = new Set<string>();
   for (const account of [...accounts].sort((a, b) => a.id.localeCompare(b.id))) {
     const { quotaPercent: percent, creditsUsed: used, creditsLimit: limit, resetAt } =
-      kiroAccountEvidence(account, now);
+      kiroAccountEvidence(account, now, { hydrate: false });
     if (typeof used !== "number" || !Number.isFinite(used) || used < 0
       || typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0
       || typeof percent !== "number" || !Number.isFinite(percent) || percent < 0 || percent > 100

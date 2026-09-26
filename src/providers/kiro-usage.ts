@@ -297,9 +297,11 @@ export function getKiroAccountExhaustion(
 }
 
 /** The only Kiro routing evidence read; each half expires on its own clock. */
-export function kiroAccountEvidence(account: ProviderAccount, now = Date.now()):
+export function kiroAccountEvidence(account: ProviderAccount, now = Date.now(), opts: { hydrate?: boolean } = {}):
   { quotaPercent?: number; creditsUsed?: number; creditsLimit?: number; exhausted?: boolean; resetAt?: number } {
-  hydrateKiroAccountState();
+  // Routing hydrates saved evidence on first use; the metrics scrape passes hydrate:false so a
+  // scrape never touches the disk snapshot and simply reports nothing until routing has loaded it.
+  if (opts.hydrate !== false) hydrateKiroAccountState();
   const key = accountCacheKey("kiro", account.id);
   const row = accountQuotaCache.get(key);
   const quota = row?.identity === kiroEvidenceIdentity(account) && row.quota
