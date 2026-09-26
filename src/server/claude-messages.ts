@@ -27,6 +27,7 @@ import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureClaudeInbound } from "../claude/inbound-debug";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { analyzeClaudeCompatibility, isClaudeCompatibilityMode } from "../claude/compatibility";
+import { carriesMessageThread, messageThreadUnsupportedResponse } from "../claude/message-threads";
 import {
   applyReplayRefusalClientHeaders,
   carryReplayRefusal,
@@ -836,6 +837,12 @@ async function handleClaudeMessagesWithBudget(
       markProtocolEntry(logCtx, { inbound: "messages", lane: "native", features: messagesFeatures });
       recordProtocolShadowPlan(logCtx, config, { inbound: "messages", model: requestedModel });
       return await anthropicNativePassthrough(req, config, logCtx, logIds, anthropicBody, "/v1/messages");
+    }
+    // Only Anthropic holds message-thread state; the error makes Claude Code resend the full turn.
+    if (carriesMessageThread(anthropicBody)) {
+      logCtx.errorCode = "claude_thread_unsupported";
+      if (logIds) addFinalRequestLog(logIds.requestId, logIds.start, logCtx, 400, { closeReason: "non_stream" });
+      return messageThreadUnsupportedResponse();
     }
     // Capture source semantics before effort rewriting or translation drops fields.
     // This policy is uniform across translated targets, including later fallback attempts.
