@@ -867,7 +867,9 @@ export async function refetchAfterProtocolSafeReset(
 export function wrapWithZeroOutputRefetch(
   body: ReadableStream<Uint8Array>,
   doFetch: ProtocolSafeRefetch,
-  opts: ProtocolSafeRefetchOptions = {},
+  // `authorize` is optional on the shared options but required here: a zero-output replacement
+  // is always a post-header resend, so every caller must name the gate that weighs it.
+  opts: ProtocolSafeRefetchOptions & { authorize: () => boolean },
 ): ReadableStream<Uint8Array> {
   let reader = body.getReader();
   let bytesRead = 0;
@@ -887,7 +889,7 @@ export function wrapWithZeroOutputRefetch(
         } catch (err) {
           if (!retried && bytesRead === 0 && !opts.abortSignal?.aborted) {
             retried = true;
-            const replacement = await refetchAfterProtocolSafeReset(doFetch, err, opts);
+            const replacement = await refetchAfterProtocolSafeReset(doFetch, err, { ...opts, authorize: opts.authorize });
             if (replacement?.body) {
               try { void reader.cancel().catch(() => {}); } catch { /* broken reader; the replacement won */ }
               reader = replacement.body.getReader();
