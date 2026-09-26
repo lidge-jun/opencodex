@@ -616,7 +616,12 @@
     ]
   },
   "grace": {
-    "undocumentedSourceAreas": [],
+    "undocumentedSourceAreas": [
+      {
+        "path": "src/chatgpt/",
+        "reason": "ChatGPT desktop send-unblock intercept; upstream PR ships no structure doc for this feature area"
+      }
+    ],
     "unboundInvariants": [
       {
         "id": "INV-HOME-01",

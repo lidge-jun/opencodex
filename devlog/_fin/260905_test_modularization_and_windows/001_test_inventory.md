@@ -415,6 +415,10 @@ Sum of the table: **1061**. Zero leftover.
 
 `phase100-native-parity.test.ts`
 
+#### `tests/chatgpt-unblock/` (1)
+
+`rewrite.test.ts`
+
 ## 3. Cross-cutting coupling
 
 ### 3.A tests/helpers imported by how many tests (unique files)

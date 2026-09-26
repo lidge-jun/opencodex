@@ -166,6 +166,7 @@ A source area can be described by more than one doc, because these docs are orga
 
 | Source path | Why |
 | --- | --- |
+| `src/chatgpt/` | ChatGPT desktop send-unblock intercept; upstream PR ships no structure doc for this feature area |
 
 ## Cross-cutting contracts
 

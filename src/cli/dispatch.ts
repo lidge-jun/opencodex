@@ -959,6 +959,10 @@ const commandRunners: Record<string, CommandRunner> = {
     }
     return await cmdClaude(deps.args.slice(1));
   },
+  chatgpt: async deps => {
+    const { handleChatgptCommand } = await import("./chatgpt-command");
+    return await handleChatgptCommand(deps.args.slice(1));
+  },
   opencode: async deps => {
     const { cmdOpencode } = await import("./opencode");
     return await cmdOpencode(deps.args.slice(1));

@@ -4,6 +4,7 @@ import {
   createClaudeInterceptLifecycle,
   type ClaudeInterceptLifecycle,
 } from "./claude-intercept-lifecycle";
+import { createChatgptUnblockLifecycle, type ChatgptUnblockLifecycle } from "./chatgpt-unblock-lifecycle";
 import {
   createLinkListenerLifecycle,
   linkRouteAllowed,
@@ -43,6 +44,9 @@ export interface OptionalListenerSet<T> {
 
 export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): OptionalListenerSet<T> {
   const claudeIntercept: ClaudeInterceptLifecycle<T> = createClaudeInterceptLifecycle<T>();
+  // Opt-in ChatGPT desktop send-unblock listener; like the Claude intercept it binds its own
+  // loopback port, starts fire-and-forget and degrades to a warning.
+  const chatgptUnblock: ChatgptUnblockLifecycle = createChatgptUnblockLifecycle<T>();
   const linkListener: LinkListenerLifecycle<T> = createLinkListenerLifecycle<T>(linkDeps);
   let activeConfig: OcxConfig | undefined;
   const supervisor = createLinkSupervisor({
@@ -91,6 +95,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
         maxRequestBodySize: ctx.maxRequestBodySize,
         dispatch: ctx.dispatch,
       });
+      chatgptUnblock.start({ config: ctx.config, publicPort: ctx.publicPort });
     },
     ensureStarted: () => linkListener.ensureStarted(),
     close: () => linkListener.close(),
@@ -107,6 +112,7 @@ export function createOptionalListenerSet<T>(linkDeps: LinkListenerDeps = {}): O
       }
       try { await linkListener.stop(); } catch (error) { failure ??= error; }
       try { await claudeIntercept.stop(); } catch (error) { failure ??= error; }
+      try { await chatgptUnblock.stop(); } catch (error) { failure ??= error; }
       unregisterSupervisorAdmission?.();
       unregisterSupervisorAdmission = undefined;
       if (failure) throw failure;

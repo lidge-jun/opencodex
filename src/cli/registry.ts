@@ -488,6 +488,22 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     ],
   },
   {
+    name: "chatgpt",
+    usage: "ocx chatgpt <status|install-watcher [--yes]|uninstall-watcher|launch|restore>",
+    summary: "Inspect and operate the ChatGPT desktop send-unblock integration (macOS).",
+    details: [
+      "status              Feature, intercept listener, certificate trust, watcher and app state.",
+      "install-watcher     Install the launchd watcher so Dock/Spotlight launches of the ChatGPT",
+      "                    app are automatically corrected to carry the configured launch switches",
+      "                    (host-resolver rule, or the PAC file when pacFallback is on).",
+      "                    Asks for confirmation; --yes confirms non-interactively.",
+      "uninstall-watcher   Remove the launch watcher script and agent.",
+      "launch              Launch the ChatGPT app with the configured launch switches.",
+      "restore             Relaunch a switched ChatGPT app with native networking.",
+      "Requires chatgptDesktop.unblockSend: true in config for install-watcher.",
+    ],
+  },
+  {
     name: "opencode",
     usage: "ocx opencode [opencode args...]",
     summary: "Launch opencode wired to the proxy (runtime provider config).",

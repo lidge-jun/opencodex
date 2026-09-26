@@ -92,6 +92,7 @@ Usage:
   ocx lab <sub>               Read-only Compatibility Lab projection inspection
   ocx claude [args...]        Launch Claude Code wired to the proxy (model discovery on)
   ocx claude desktop [sub]    Manage and apply Claude Desktop's four-family profile
+  ocx chatgpt <sub>           ChatGPT desktop send-unblock (status|install-watcher|launch|restore)
   ocx opencode [args...]      Launch opencode wired to the proxy (runtime provider config)
   ocx mcode [args...]         Launch MiniMax Code through its managed provider
   ocx mmx text <sub> [args]   Launch MiniMax CLI text through the proxy
