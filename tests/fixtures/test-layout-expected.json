@@ -64,6 +64,7 @@
   "inference-send-budget.test.ts": "server",
   "inference-client-encoder-delivery.test.ts": "server",
   "adapter-tool-conformance.test.ts": "adapters",
+  "zed-hosted-provider.test.ts": "providers",
   "adapter-usage.test.ts": "adapters",
   "agent-driven.test.ts": "cli",
   "agent-task-recovery-cache.test.ts": "server",

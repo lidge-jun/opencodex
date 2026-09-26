@@ -541,6 +541,20 @@ id is preserved. This applies through the shared adapter to every Devin account,
 whichever login path minted the credential; other model families keep their
 existing suffix precedence.
 
+## `zed`
+
+**Targets:** Zed Hosted AI's `POST /completions` endpoint at `cloud.zed.dev`.
+**Auth:** Zed native-app account identity plus access token, exchanged for a short-lived LLM token.
+
+- Uses the native RSA callback login (`ocx login zed`) and pairs the returned `user_id` with the
+  access token for account-scoped user and organization lookups.
+- Wraps the existing Anthropic Messages, Google Gemini, OpenAI Responses, and xAI Chat builders
+  inside Zed's provider envelope, then unwraps Zed's NDJSON/SSE events back into `AdapterEvent`.
+- Fetches a bounded, account-scoped live model roster for display and provider-family inference;
+  the roster is not a model allowlist, so a caller-supplied model id is still forwarded.
+- Experimental unofficial bridge. Zed's service terms and account enforcement remain the user's
+  responsibility; review them before enabling the route.
+
 ## `azure-openai` (alias: `azure`)
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).

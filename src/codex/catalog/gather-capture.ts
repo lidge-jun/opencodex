@@ -122,6 +122,8 @@ export interface ModelsAuthResolution {
   readonly observed: boolean;
   readonly oauthApiBaseUrl?: string;
   readonly oauthProjectId?: string;
+  /** Account id paired with an observed OAuth access token. */
+  readonly oauthAccountId?: string;
 }
 
 export type ModelsAuthResolver =

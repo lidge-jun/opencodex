@@ -48,6 +48,7 @@ import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
 import { resolveDevinApiBaseUrl } from "../../oauth/devin/api-base";
 import { fetchQoderModels } from "../../adapters/qoder/live-models";
 import { resolveQoderProfile } from "../../adapters/qoder/profiles";
+import { resolveZedModels } from "../../providers/zed";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import {
@@ -1646,6 +1647,27 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const apiKey = prov.authMode === "oauth" ? snapshot?.accessToken : await resolveModelsAuthToken(name, prov);
     if (prov.authMode === "oauth" && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
+    }
+    if (prov.adapter === "zed") {
+      const started = Date.now();
+      if (!snapshot?.accountId) {
+        return jsonResponse({ ok: false, latencyMs: 0, error: "Zed account identity is unavailable — re-run `ocx login zed`" });
+      }
+      try {
+        const zedFetch = (prov as OcxProviderConfig & { fetch?: typeof globalThis.fetch }).fetch;
+        const live = await resolveZedModels(
+          { userId: snapshot.accountId, accessToken: apiKey ?? "" },
+          { forceRefresh: true, ...(zedFetch ? { fetchFn: zedFetch } : {}) },
+        );
+        return jsonResponse({
+          ok: true,
+          latencyMs: Date.now() - started,
+          models: live.models.length,
+          message: `Connected. ${live.models.length} models.`,
+        });
+      } catch {
+        return jsonResponse({ ok: false, latencyMs: Date.now() - started, error: "zed model discovery failed" });
+      }
     }
     if (prov.adapter === "cursor") {
       const started = Date.now();
