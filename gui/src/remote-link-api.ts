@@ -28,6 +28,9 @@ export const LINK_ERROR_CODES = [
   "probe_failed",
   "remote_connect_failed",
   "remote_disconnect_failed",
+  "remote_ocx_missing",
+  "remote_ocx_outdated",
+  "remote_ocx_unrecognized",
   "remote_port_failed",
   "standalone_required",
   "tailscale_session_refused",
@@ -49,6 +52,11 @@ export interface RemoteLinkStatusWire {
   listener: { state: LinkListenerState; port: number | null };
   links: LinkRowWire[];
   child: null | { alias: string; state: LinkWireState; since: string; reason: string | null };
+  /**
+   * Whether this dashboard session may join a Home as a Child. Only a paired session on a
+   * standalone runtime may; the server omits the field for non-dashboard callers, read as false.
+   */
+  joinAvailable: boolean;
 }
 
 const LINK_STATES: readonly LinkWireState[] = ["connecting", "connected", "reconnecting", "failed", "idle"];
@@ -57,17 +65,40 @@ const LINK_ROLES = ["standalone", "home", "child"] as const;
 export class LinkApiError extends Error {
   readonly code: string;
   readonly status: number;
+  /** The server's bounded hint line (ssh stderr, the ssh runner's own failure, or the parsed remote version), shown under the translated message. */
+  readonly hint: string | null;
 
-  constructor(code: string, status: number) {
+  constructor(code: string, status: number, hint: string | null = null) {
     super(code);
     this.name = "LinkApiError";
     this.code = code;
     this.status = status;
+    this.hint = hint;
   }
 }
 
+const HINT_MAX_CHARS = 160;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+/** C0/C1 controls plus the invisible and bidi formatting ranges, compared by code point. */
+function isHintControl(code: number): boolean {
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f) || (code >= 0x200b && code <= 0x200f)
+    || (code >= 0x202a && code <= 0x202e) || (code >= 0x2060 && code <= 0x206f) || code === 0xfeff;
+}
+
+/**
+ * The server already bounds hints; the dashboard re-bounds them so no response can grow the UI.
+ * The cap counts and cuts code points, so an astral character is never split into a lone surrogate.
+ */
+export function boundLinkHint(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const clean = Array.from(value, char => isHintControl(char.codePointAt(0) ?? 0) ? " " : char).join("").replace(/\s+/g, " ").trim();
+  if (!clean) return null;
+  const points = Array.from(clean);
+  return points.length > HINT_MAX_CHARS ? `${points.slice(0, HINT_MAX_CHARS - 1).join("")}\u2026` : clean;
 }
 
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
@@ -87,7 +118,7 @@ export function parseRemoteLinkStatus(value: unknown): RemoteLinkStatusWire {
     if (!isRecord(value.child) || !nonEmpty(value.child.alias) || !isLinkState(value.child.state) || !nonEmpty(value.child.since) || (value.child.reason !== null && typeof value.child.reason !== "string")) throw new Error("invalid child");
     child = { alias: value.child.alias, state: value.child.state, since: value.child.since, reason: value.child.reason as string | null };
   }
-  return { role: value.role as RemoteLinkStatusWire["role"], listener: { state: listener.state as LinkListenerState, port: listener.port as number | null }, links, child };
+  return { role: value.role as RemoteLinkStatusWire["role"], listener: { state: listener.state as LinkListenerState, port: listener.port as number | null }, links, child, joinAvailable: value.joinAvailable === true };
 }
 
 /** Read link-route JSON and preserve the server's machine-readable error code. */
@@ -100,7 +131,7 @@ export async function readLinkJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const error = isRecord(body) && isRecord(body.error) ? body.error : null;
     const code = error && typeof error.code === "string" ? error.code : "unknown";
-    throw new LinkApiError(code, response.status);
+    throw new LinkApiError(code, response.status, boundLinkHint(error?.hint));
   }
   if (body === null || body === undefined) throw new LinkApiError("invalid_body", response.status);
   return body as T;

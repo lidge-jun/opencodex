@@ -3,8 +3,19 @@ import { ClientLinkJoinError, joinHome, type ClientLinkJoinDeps } from "../../sr
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
 import type { SshRunner } from "../../src/link/ssh-runner";
+import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 
 const LINK_ID = "lnk_0123456789abcdef";
+const REVOKE_COMMAND = quoteRemote(remoteOcxArgv(["link", "revoke", "--link-id", LINK_ID]));
+
+/** The issue command up to its variable arguments, wrapped in the remote PATH prelude. */
+function isWrappedIssue(argv: readonly string[]): boolean {
+  return (argv.at(-1) ?? "").startsWith(`${quoteRemote(remoteOcxArgv(["link", "issue", "--alias"]))} `);
+}
+
+function revokeCalls(calls: readonly string[][]): string[][] {
+  return calls.filter(argv => argv.at(-1) === REVOKE_COMMAND);
+}
 const API_KEY_ID = "link-key-1";
 const KEY = `ocx_data_${"a".repeat(40)}`;
 const FINGERPRINT = `SHA256:${"a".repeat(32)}`;
@@ -13,7 +24,7 @@ function runnerFor(calls: string[][], issueResult = true): SshRunner {
   return {
     run: async argv => {
       calls.push([...argv]);
-      if (argv.some(value => value.includes("issue"))) {
+      if (isWrappedIssue(argv)) {
         return issueResult
           ? { code: 0, stdout: JSON.stringify({ linkId: LINK_ID, apiKeyId: API_KEY_ID, key: KEY, listenerPort: 45678 }), stderr: "" }
           : { code: 1, stdout: "", stderr: "failed" };
@@ -69,6 +80,7 @@ function context(options: {
   principal?: ManagementContext["principal"];
   paired?: boolean;
   issuance?: ManagementContext["guiSessionIssuance"];
+  trustedLoopback?: boolean;
   body?: unknown;
   deps?: Record<string, unknown>;
 } = {}): ManagementContext {
@@ -85,8 +97,8 @@ function context(options: {
     deps: options.deps ?? {},
     version: "test",
     principal: options.principal,
-    sessionControl: { isPaired: () => options.paired === true },
-    trustedLoopbackIngress: true,
+    sessionControl: { isPaired: () => options.paired === true, isCurrent: () => true, revokeCurrent: () => true },
+    trustedLoopbackIngress: options.trustedLoopback ?? true,
     guiSessionIssuance: options.issuance ?? null,
     convergeCodexCatalog: async () => ({ status: "unchanged" } as never),
     syncClaudeAgentDefsBestEffort: async () => {},
@@ -108,6 +120,61 @@ describe("client initiated link join", () => {
       expect(response?.status).toBe(409);
       expect(await response?.json()).toMatchObject({ error: { code: "standalone_required" } });
     }
+  });
+
+  test("refuses every loopback dashboard session with 403 before a join starts", async () => {
+    // A join restarts this proxy and moves Codex routing to the Home, dropping live Codex
+    // connections, so the credentialless loopback session never reaches it; only pairing does.
+    let joins = 0;
+    const deps = { joinHome: async () => { joins += 1; return { linkId: LINK_ID, apiKeyId: API_KEY_ID }; } };
+    for (const options of [
+      { role: "standalone" as const, trustedLoopback: true },
+      { role: "standalone" as const, trustedLoopback: false },
+      { role: "hub" as const, trustedLoopback: true },
+      { role: "client" as const, trustedLoopback: true },
+    ]) {
+      const response = await handleLinkRoutes(context({ ...options, principal: "gui-session", issuance: "loopback", deps }), routeState());
+      expect(response?.status).toBe(403);
+      expect(await response?.json()).toMatchObject({ error: { code: "forbidden" } });
+    }
+    expect(joins).toBe(0);
+
+    const paired = await handleLinkRoutes(context({ principal: "gui-session", issuance: "pairing", paired: true, deps }), routeState());
+    expect(paired?.status).toBe(202);
+    expect(joins).toBe(1);
+  });
+
+  test("maps a missing ocx on Home to remote_ocx_missing with a redacted stderr hint", async () => {
+    const calls: string[][] = [];
+    const runner: SshRunner = {
+      run: async argv => {
+        calls.push([...argv]);
+        return isWrappedIssue(argv)
+          ? { code: 127, stdout: "", stderr: `sh: 1: exec: ocx: not found ${KEY}\n` }
+          : { code: 0, stdout: "", stderr: "" };
+      },
+      spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill: () => {} }),
+    };
+    const response = await handleLinkRoutes(context({
+      principal: "gui-session",
+      paired: true,
+      deps: {
+        sshRunner: runner,
+        linkKnownHostsPath: () => "/tmp/ocx-known-hosts",
+        joinHome: (async (deps, input) => joinHome({
+          ...deps,
+          choosePort: async () => 23456,
+          now: () => 1,
+          readSidecar: () => null,
+          readConnectionState: () => ({ kind: "disconnected" }),
+        }, input)) as typeof import("../../src/client/link-join").joinHome,
+      },
+    }), routeState());
+    expect(response?.status).toBe(502);
+    expect(await response?.json()).toEqual({
+      error: { code: "remote_ocx_missing", message: "ocx was not found on the home.", hint: "sh: 1: exec: ocx: not found ocx_data_[redacted]" },
+    });
+    expect(calls.filter(isWrappedIssue)).toHaveLength(1);
   });
 
   test("requires the exact body and a confirmed host", async () => {
@@ -172,8 +239,8 @@ describe("client initiated link join", () => {
     expect(responseBody).toEqual({ linkId: LINK_ID, alias: "home", restarting: true });
     expect(sidecar).toMatchObject({ linkId: LINK_ID, tunnelPort: 23456, peerListenerPort: 45678 });
     expect(order).toEqual(["write-state", "spawn-tunnel", "readyz:key", "connect", "stop-tunnel", "restart"]);
-    expect(calls[0]?.some(value => value.includes("issue"))).toBe(true);
-    expect(calls[0]?.some(value => value.includes("--json"))).toBe(true);
+    expect(isWrappedIssue(calls[0] ?? [])).toBe(true);
+    expect(calls[0]?.at(-1)?.endsWith(" '--json'")).toBe(true);
   });
 
   test("rolls back sidecar and remote issue when sidecar write fails", async () => {
@@ -185,7 +252,7 @@ describe("client initiated link join", () => {
       clearState: () => { cleared = true; },
       spawnTunnel: () => { throw new Error("must not start"); },
     }), { alias: "home" })).rejects.toMatchObject({ code: "join_tunnel_failed" });
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
     expect(cleared).toBe(true);
   });
 
@@ -207,7 +274,7 @@ describe("client initiated link join", () => {
       await expect(joinHome(deps, { alias: "home" })).rejects.toMatchObject({
         code: readiness === "timeout" ? "join_tunnel_failed" : "admission_failed",
       });
-      expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+      expect(revokeCalls(calls)).toHaveLength(1);
       expect(stopped).toBe(1);
       expect(cleared).toBe(1);
     }
@@ -228,7 +295,7 @@ describe("client initiated link join", () => {
     } finally {
       logs.mockRestore();
     }
-    expect(calls.filter(argv => argv.some(value => value.includes("revoke")))).toHaveLength(1);
+    expect(revokeCalls(calls)).toHaveLength(1);
     expect(logs.mock.calls.flat().join(" ")).not.toContain(KEY);
   });
 
@@ -245,11 +312,11 @@ describe("client initiated link join", () => {
     const order: string[] = [];
     const runner: SshRunner = {
       run: async argv => {
-        if (argv.some(value => value.includes("issue"))) {
+        if (isWrappedIssue(argv)) {
           order.push("issue");
           return { code: 0, stdout: JSON.stringify({ linkId: LINK_ID, apiKeyId: API_KEY_ID, key: KEY, listenerPort: 45678 }), stderr: "" };
         }
-        if (argv.some(value => value.includes("revoke"))) {
+        if (argv.at(-1) === REVOKE_COMMAND) {
           revokeCount += 1;
           order.push(`revoke-${revokeCount}`);
           return { code: revokeCount === 1 ? 1 : 0, stdout: "", stderr: "failed" };

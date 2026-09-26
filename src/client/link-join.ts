@@ -2,8 +2,8 @@ import { randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { findAvailablePort } from "../server/ports";
 import { isLinkPort } from "../link/ports";
-import { buildExecArgv } from "../link/ssh-argv";
-import type { SshRunner } from "../link/ssh-runner";
+import { buildExecArgv, REMOTE_COMMAND_NOT_FOUND, remoteOcxArgv } from "../link/ssh-argv";
+import { sshFailureHint, sshRunnerErrorHint, type SshRunner, type SshRunResult } from "../link/ssh-runner";
 import { connectClient, type ClientConnectDeps } from "./connect";
 import {
   clearClientLinkState,
@@ -40,6 +40,7 @@ export type JoinFailureCode =
   | "host_confirmation_expired"
   | "join_port_failed"
   | "join_issue_failed"
+  | "remote_ocx_missing"
   | "join_tunnel_failed"
   | "admission_failed"
   | "join_connect_failed"
@@ -47,7 +48,8 @@ export type JoinFailureCode =
   | "join_restart_failed";
 
 export class ClientLinkJoinError extends Error {
-  constructor(readonly code: JoinFailureCode, readonly linkId?: string) {
+  /** `hint` is a bounded line from ssh stderr or the ssh runner's own failure, for the dashboard; it is not part of the message. */
+  constructor(readonly code: JoinFailureCode, readonly linkId?: string, readonly hint?: string) {
     super(linkId ? `${code}: ${linkId}` : code);
     this.name = "ClientLinkJoinError";
   }
@@ -148,7 +150,7 @@ async function revokeIssuedLink(deps: ClientLinkJoinDeps, linkId: string, alias 
     const result = await deps.runner.run(
       buildExecArgv({
         alias,
-        argv: ["ocx", "link", "revoke", "--link-id", linkId],
+        argv: remoteOcxArgv(["link", "revoke", "--link-id", linkId]),
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
@@ -248,24 +250,24 @@ export async function joinHome(deps: ClientLinkJoinDeps, input: { alias: string 
   }
 
   const thisAlias = localAlias(deps);
-  let issued: IssuedLink;
+  let result: SshRunResult;
   try {
-    const result = await deps.runner.run(
+    result = await deps.runner.run(
       buildExecArgv({
         alias: input.alias,
-        argv: ["ocx", "link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), "--json"],
+        argv: remoteOcxArgv(["link", "issue", "--alias", thisAlias, "--tunnel-port", String(tunnelPort), "--json"]),
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: JOIN_REVOKE_TIMEOUT_MS },
     );
-    if (result.code !== 0) throw new Error("issue failed");
-    const parsed = parseIssuedLink(result.stdout);
-    if (!parsed) throw new Error("invalid issue response");
-    issued = parsed;
   } catch (error) {
-    void error;
-    throw new ClientLinkJoinError("join_issue_failed");
+    throw new ClientLinkJoinError("join_issue_failed", undefined, sshRunnerErrorHint(error));
   }
+  // Hints come from stderr only: a successful issue prints the new data key on stdout.
+  if (result.code === REMOTE_COMMAND_NOT_FOUND) throw new ClientLinkJoinError("remote_ocx_missing", undefined, sshFailureHint(result.stderr));
+  const parsed = result.code === 0 ? parseIssuedLink(result.stdout) : null;
+  if (!parsed) throw new ClientLinkJoinError("join_issue_failed", undefined, result.code === 0 ? undefined : sshFailureHint(result.stderr));
+  const issued: IssuedLink = parsed;
 
   let tunnel: ClientLinkTunnelHandle | null = null;
   try {
