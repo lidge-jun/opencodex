@@ -484,8 +484,8 @@ describe("main quota refresh diagnostics", () => {
       } else {
         expect(result).not.toHaveProperty("quotaRefresh");
       }
-      // The existing terminal-auth decision still applies, independently of diagnostic freshness.
-      if (outcome === "terminal_http") expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(true);
+      // Terminal errors can quarantine only the still-current identity and credential.
+      if (outcome === "terminal_http") expect(isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)).toBe(invalidation === "none");
       expect(result).not.toHaveProperty("quotaRefreshGeneration");
       expect(JSON.stringify(result)).not.toContain("quotaRefreshGeneration");
       expect(JSON.stringify(result)).not.toContain("canary");
