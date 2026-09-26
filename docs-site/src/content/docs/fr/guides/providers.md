@@ -373,20 +373,10 @@ des indications propres au fournisseur ainsi qu'un `Retry-After` synthétique ; 
 reste prioritaire. L'attente et la nouvelle tentative avec la même clé restent facultatives et s'activent avec
 [`retryOn429`](/fr/reference/configuration/).
 
-**Le niveau sans clé `opencode-free` est actuellement fermé aux clients tiers.** Zen refuse toute requête
-qui arrive sans en-tête `x-opencode-session` et répond avec le type d'erreur `MissingSessionID` et le message
-« OpenCode's free tier can only be used in OpenCode ». Le contrôle porte uniquement sur la présence de
-l'en-tête : un proxy pourrait donc le franchir en inventant une valeur, ce que opencodex ne fait pas.
-Fabriquer un identifiant de session et un User-Agent versionné `opencode/<version>` revient à se déclarer
-client OpenCode, alors qu'OpenCode ne publie aucun contrat d'intégration tierce pour ce niveau sans clé ;
-une réponse HTTP 200 obtenue ainsi est un contrôle d'admission contourné, pas une autorisation. opencodex
-signale donc la restriction au lieu de la contourner : une requête vers `opencode-free` renvoie une erreur
-qui explique le blocage en amont.
+**Le niveau sans clé `opencode-free` présente l'identité client anonyme qu'envoie la CLI OpenCode elle-même.** Les requêtes sans clé portent un `x-opencode-session` stable par conversation (au format d'identifiant `ses_` d'OpenCode), un User-Agent `opencode/<version>` versionné et le marqueur `x-opencode-client`, et `Authorization: Bearer public`, que Zen associe à son contingent anonyme — provenance : `packages/opencode/src/session/llm/request.ts` (en-têtes) et `packages/console/app/src/routes/zen/util/handler.ts` (admission de la passerelle) d'OpenCode. Tout `x-opencode-session` ou toute clé d'API que vous configurez prime toujours ; avec une clé, la requête est facturée sur ce compte. Les modèles contributeurs gratuits Muse Spark passent par le point de terminaison `/v1/responses` de Zen, conformément à la table des points de terminaison Zen. Cette admission est tolérée, pas contractuelle : OpenCode peut la modifier ou la restreindre à tout moment, auquel cas ces routes échouent avec l'erreur amont.
 
 La voie prise en charge vers les mêmes modèles est le fournisseur **`opencode-zen`** avec une clé d'API
-OpenCode Zen obtenue sur [opencode.ai/auth](https://opencode.ai/auth). Si OpenCode publie plus tard un accès
-tiers pour le niveau sans clé, opencodex pourra le suivre ; d'ici là, le préréglage sert à documenter la
-restriction. Conditions en amont : [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
+OpenCode Zen obtenue sur [opencode.ai/auth](https://opencode.ai/auth). Conditions en amont : [opencode.ai/docs/zen](https://opencode.ai/docs/zen/).
 
 La plupart utilisent l'adaptateur `openai-chat` avec une clé Bearer ; les préréglages compatibles
 Anthropic, comme **Xiaomi MiMo** (`xiaomi`), utilisent l'adaptateur `anthropic` (`x-api-key`). Xiaomi propose
