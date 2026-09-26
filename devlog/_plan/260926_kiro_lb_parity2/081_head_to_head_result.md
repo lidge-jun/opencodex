@@ -14,7 +14,7 @@ now survives restart and is fenced to the login that measured it (kiro-lb keys b
 fences a re-login), refresh stays leased where kiro-lb falls back to an unleased refresh, credentials are
 never reloaded from an unrelated source, region values are validated, and polling is on demand; load
 spreading is now at parity (deterministic, opt-in least-loaded against kiro-lb's weighted race or
-deterministic most-credits mode). Kiro-lb still leads on eight axes listed
+deterministic most-credits mode). Kiro-lb still leads on six axes listed
 below. Each is a deliberate choice or needs live evidence we do not have, so **the goal criterion "ahead on
 every compared axis" is not met as written**; "ahead or at parity on every adopted axis" is.
 
@@ -36,7 +36,7 @@ every compared axis" is not met as written**; "ahead or at parity on every adopt
 | P9 | Served success clears a verdict | `kiro/account_manager.py:1411` | `src/providers/kiro-usage.ts:344`; `src/server/responses/adapter-delivery.ts:125` | parity | `tests/providers/kiro/kiro-refusal-failover.test.ts` "kiro later served completion clears older exhaustion but not a newer refusal or different identity" |
 | E5 | Provider egress | `kiro/proxy_chain.py:176-198` | `src/adapters/kiro-retry.ts:169-196` | parity | `tests/providers/kiro/kiro-transport-parity.test.ts` "initial, reset, gateway alternate and 429 recovery use the supplied executor" |
 | E2/H | 502/503/504 rotation | `kiro/http_client.py:603-653` | `src/adapters/kiro-retry.ts:290-296` | parity | `tests/providers/kiro/kiro-transport-parity.test.ts` "canonical HTTP %i rotates once and final failure is fixed text", "500, 521 and custom URLs do not rotate" |
-| E6 | Timeout handling | `kiro/network_errors.py:65-145` | `src/adapters/kiro-retry.ts:200` | parity on header deadline → 504; ahead-lb on the connect/read split | `tests/providers/kiro/kiro-transport-parity.test.ts` "header deadline becomes 504 without rotating; caller abort preserves its reason" |
+| E6 | Timeout handling | `kiro/network_errors.py:65-145` | header deadline `src/adapters/kiro-retry.ts:191`; body inactivity `src/server/responses/adapter-delivery.ts:79-99`, `src/server/responses/adapter-continuation.ts:666-687` | parity (equivalent bound: our header deadline covers connect plus first byte, kiro-lb's covers connect only; read inactivity bounded on both sides) | `tests/providers/kiro/kiro-transport-parity.test.ts` "header deadline becomes 504 without rotating; caller abort preserves its reason"; `tests/server/terminal-guard-server.test.ts` "a stalled initial body fails with a 504 upstream error instead of a proxy error", "a stalled continuation body reports 504 even when cancelling it aborts the client signal" |
 | E7 | Fixed public 5xx text | `kiro/exceptions.py:27-36` | `src/adapters/kiro-errors.ts:215` | parity | `tests/providers/kiro/kiro-transport-parity.test.ts` "upstream 5xx marker reaches neither client nor debug ring or stderr"; `tests/server/server-kiro-refusal-e2e.test.ts` "unrotated Kiro 5xx retains fixed public text after raw-error handoff" |
 | E1 | Extra endpoint dialects | `kiro/endpoints.py:25-82` | runtime host plus `q.*` | ahead-lb | Reject holds: kiro-lb itself verifies only the runtime host (`kiro/endpoints.py:9-12`). |
 | E4 | Endpoint probe | `kiro/endpoint_probe.py:2-8` | absent | ahead-lb | Reject holds: the probe spends real credits. |
@@ -51,7 +51,7 @@ every compared axis" is not met as written**; "ahead or at parity on every adopt
 | U1 | Multiplier estimates | `kiro/model_costs.py:8-22` | none | ahead-lb (advisory) | Reject holds: a second, weaker number beside measured credits. |
 | C1/N | Per-account catalogue | `kiro/model_catalog.py:38-78` | `src/providers/kiro-model-catalog.ts:12,120` | parity | `tests/providers/kiro/kiro-model-catalog.test.ts` "management ListAvailableModels pairs each bearer with its own profile and region", "unrecognised or empty management replies preserve the last good list" |
 | C2 | Membership as evidence | `kiro/model_resolver.py:309-355` | `src/oauth/generic-account-failover.ts:237` | parity | `tests/providers/kiro/kiro-model-preference.test.ts` "reactive Kiro rotation prefers model evidence after room filtering", "no catalogue evidence never moves a healthy active account" |
-| C3 | Context limits | `kiro/model_costs.py:64-74` | `src/providers/kiro-model-catalog.ts:129`; `src/adapters/kiro/usage.ts:223`; `src/server/request-log.ts:1633` | parity when catalogue evidence exists; ahead-lb on the static fallback (272k GPT-5.6 window at `src/providers/kiro-models.ts:34` vs kiro-lb's 1M) | `tests/providers/kiro/kiro-model-catalog.test.ts` "a mixed known/unknown roster never reports more than the smallest known window" |
+| C3 | Context limits | `kiro/model_costs.py:64-74` | static `src/providers/kiro-models.ts:31-37` (GPT-5.6 1M per kiro.dev/docs/models, updated in wp10); observed minimum `src/providers/kiro-model-catalog.ts:129`; consumers `src/adapters/kiro/usage.ts:223`, `src/server/request-log.ts:1633` | parity (static window matches Kiro's page and kiro-lb; observed catalogue evidence preferred when present) | `tests/providers/kiro/kiro-adapter.test.ts` "1M-context models map to 1_000_000"; `tests/providers/kiro/kiro-model-catalog.test.ts` "a mixed known/unknown roster never reports more than the smallest known window" |
 | W1/W2 | IDE fingerprint | `kiro/utils.py:20-31,74-85` | `src/adapters/kiro/wire.ts:8` (`KIRO_IDE_VERSION = "1.0.0"`) | ahead-lb | Reject holds: needs our own capture. |
 | S2 | MCP web search | `kiro/mcp_tools.py:131-150` | none | n/a | Reject holds: a new feature, not auth or usage. |
 | K | Quota metrics | `kiro/metrics.py:262` | `src/providers/kiro-quota-metrics.ts:16`; `src/server/request-metrics.ts:192-196` | parity | `tests/providers/kiro/kiro-quota-metrics.test.ts` "fresh cached credits yield four opaque gauges without probing", "future, stale, reset-passed, and identity-mismatched rows are omitted" |
@@ -59,6 +59,9 @@ every compared axis" is not met as written**; "ahead or at parity on every adopt
 | M | Opaque labels | `c0a7f98` | `src/codex/account-label.ts:36` | parity | Kept; `tests/oauth/oauth-account-attribution.test.ts` "an o-label is a valid persisted label and a p-label still is" |
 
 ## Where kiro-lb still leads
+
+Updated in wp10 (`090_context_and_timeout_corrections.md`): the C3 static window and E6 timeout rows moved to parity.
+
 
 | Axis | Why we did not follow (yet) |
 |---|---|
@@ -69,8 +72,6 @@ every compared axis" is not met as written**; "ahead or at parity on every adopt
 | U1 per-model credit estimates | Measured credits (`providerCredits`) are the source of truth; an estimate beside them is a weaker second number. |
 | Dashboard device-login UI | Native device login ships in the CLI and management API (060, option a); the dashboard still uses kiro-cli. A device-code dialog is the follow-up. |
 | Operations dashboard | Routable state and quota gauges are in the API, CLI and metrics export (070), not rendered in the GUI; the `health` field does not yet reflect Kiro suspension/exhaustion. |
-| C3 static context fallback | Without catalogue evidence our static GPT-5.6 window is 272k (`src/providers/kiro-models.ts:34`) where kiro-lb records 1M; the observed catalogue raises it when an account reports it. |
-| E6 connect vs read timeout split | A header deadline maps to 504 and never rotates on caller abort, but connect and read timeouts are not separated. |
 
 ## Narrowed by recorded decisions (not failures)
 
