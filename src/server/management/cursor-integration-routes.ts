@@ -12,6 +12,7 @@ import { readRuntimePort } from "../../config/process-state";
 import { filterCatalogVisibleModels, nativeContextLimits, nativeOpenAiContextTier, nativeReasoningEfforts, uniqueCatalogModelsForRawPublicList, visibleNativeSlugs } from "../../codex/catalog";
 import { cursorLastSeen, type CursorSeen } from "../../integrations/cursor-seen";
 import { detectCursorInstalls, type CursorInstall } from "../../integrations/cursor-detect";
+import { buildCursorLocalInstallerHint, type CursorLocalInstallerHint } from "../../integrations/cursor-local-installer";
 import { loadCursorEffortTable } from "../../integrations/cursor-effort-table";
 import { configuredApiAuthToken, isApiAuthRequired, jsonResponse } from "../auth-cors";
 import { localInferenceDestination } from "../../lib/local-destinations";
@@ -37,6 +38,11 @@ export interface CursorIntegrationStatus {
     effortRows: string[];
     context: { defaultWindow: number; longWindow: number } | null;
   }>;
+  /**
+   * Resolved only when regular Cursor exists and Private Inference does not: the
+   * cursor-local installer the update channel advertises, surfaced read-only (#5679).
+   */
+  localInstaller: CursorLocalInstallerHint;
   guideUrl: string;
 }
 
@@ -108,6 +114,11 @@ export async function buildCursorIntegrationStatus(
     ? { source: "bundle" as const, version: table.version, families: table.families.length }
     : { source: "static" as const, version: null, families: null };
 
+  const localInstaller = await buildCursorLocalInstallerHint({
+    regularInstalled: regular !== undefined,
+    privateInferenceInstalled: privateInference !== undefined,
+  });
+
   return {
     privateInference: {
       installed: privateInference !== undefined,
@@ -123,6 +134,7 @@ export async function buildCursorIntegrationStatus(
     lastSeen: cursorLastSeen(),
     effortTable,
     models,
+    localInstaller,
     guideUrl: CURSOR_GUIDE_URL,
   };
 }

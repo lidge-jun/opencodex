@@ -70,7 +70,7 @@ Cursor Private Inference 是 GUI 應用程式，因此只設定互動式 shell p
 
 opencodex 儀表板在 Integrations 下有 **Cursor** 分頁（`/#integrations/cursor`）。它對 Cursor 只有唯讀存取：絕不寫入 Cursor 的設定資料庫、keychain 項目或應用程式 bundle，所以也沒有能直接切換的開關。它會提供設定值，並顯示是否生效。
 
-- **已安裝版本。** 顯示是否存在 Cursor Private Inference（含路徑與版本）及一般版 Cursor（僅路徑）。如果只找到一般版 Cursor，分頁會說明並連回此處：一般版 Cursor 透過 Cursor 伺服器路由自訂端點，因此若沒有公開 tunnel，loopback 代理無法連線。
+- **已安裝版本。** 顯示是否存在 Cursor Private Inference（含路徑與版本）及一般版 Cursor（僅路徑）。如果只找到一般版 Cursor，分頁會向 Cursor 自己的更新通道（`api2.cursor.sh` 上的 `cursor-local` 通道）查詢它為目前平台與 CPU 提供的 local-mode 安裝程式，顯示該版本及指向 `downloads.cursor.com/local-mode/` 安裝程式的連結，並連回此處。opencodex 只顯示連結，從不下載、啟動或安裝任何東西。結果會快取 30 分鐘（失敗後為 5 分鐘）。若通道無法連線、回傳無法使用的內容，或 Cursor 沒有為這台電腦提供版本（僅 Windows、macOS 與 Linux 的 x64 和 arm64 有），分頁會說明無法確定安裝程式；無論哪種情況，下方的閘道值都仍然有效。一般版 Cursor 本身仍透過 Cursor 伺服器路由自訂端點，因此無法連線到 loopback 代理。
 - **Gateway 值。** 提供代理自身監聽連接埠的 Base URL（從執行環境記錄取得，因此即使儀表板經 reverse proxy，仍顯示本機 Cursor 可連到的連接埠），並附 Copy 按鈕。API Key 資料列依繫結方式而定：無須憑證時顯示 `opencodex-loopback` 和 Copy；啟用 API auth 或已設定任何 opencodex API 金鑰時，則提示使用自己的金鑰，並連到 API Keys 分頁。任何已設定的金鑰都可使用，不限於 `OPENCODEX_API_AUTH_TOKEN`。
 - **連線狀態。** 顯示最近一次 User-Agent 恰為 `Cursor/<version>` 的 `/v1/models` 請求（Cursor 本機代理執行環境送出的標頭），包含時間與版本。Cursor 尚未呼叫代理時會顯示「never seen」；在 Cursor 按 **Refresh model list** 後就會更新。分頁開啟時，卡片每 15 秒重新整理一次。
 - **Cursor 將顯示的內容。** 依照下一節規則，為 opencodex 公開的模型顯示 Model / Reasoning / Context 表格（停用模型與 provider allowlist 的規則和原始清單一致）。這是預測值：Cursor 會從自身的表格選擇 Reasoning 階梯。

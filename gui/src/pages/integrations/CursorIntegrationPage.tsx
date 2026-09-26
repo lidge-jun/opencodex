@@ -59,6 +59,27 @@ function DetectionRow({ labelKey, installed, path, version }: { labelKey: TKey; 
   );
 }
 
+/**
+ * The regular-only notice for #5679: instead of a dead end, name the installer the
+ * cursor-local update channel advertises when it could be resolved, and say so honestly
+ * when it could not. Rendering only; the URL is never fetched by the GUI itself.
+ */
+function CursorInstallerHint({ hint }: { hint: { available: boolean; url: string | null; version: string | null; reason: string | null } | undefined }) {
+  const t = useT();
+  // An older hub answers without `localInstaller`; that is the unavailable case, not an error.
+  if (!hint || !hint.available || hint.url === null) {
+    return <span data-cursor-installer-unavailable>{t("integrations.cursor.installerUnavailable")}</span>;
+  }
+  return (
+    <span data-cursor-installer-hint>
+      {t("integrations.cursor.installerIntro", { version: hint.version ?? t("integrations.cursor.unknownVersion") })}
+      {" "}
+      <a href={hint.url} target="_blank" rel="noreferrer" data-cursor-installer-url>{t("integrations.cursor.installerOpen")}</a>
+      .
+    </span>
+  );
+}
+
 export default function CursorIntegrationPage({ apiBase, active }: { apiBase: string; active: boolean }) {
   const { t, locale } = useI18n();
   // The clock is sampled when a payload arrives, never during render: the "seen within 24h"
@@ -100,7 +121,11 @@ export default function CursorIntegrationPage({ apiBase, active }: { apiBase: st
             <DetectionRow labelKey="integrations.cursor.regular" installed={status.regularCursor.installed} path={status.regularCursor.path} version={null} />
             {!status.privateInference.installed && (
               <Notice tone="warn">
-                {t(status.regularCursor.installed ? "integrations.cursor.regularOnly" : "integrations.cursor.nothingFound")}
+                {status.regularCursor.installed
+                  ? (
+                    <CursorInstallerHint hint={status.localInstaller} />
+                  )
+                  : t("integrations.cursor.nothingFound")}
                 {" "}
                 <a href={status.guideUrl} target="_blank" rel="noreferrer" data-cursor-guide="notice">{t("integrations.cursor.guide")}</a>
               </Notice>

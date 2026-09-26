@@ -38,6 +38,7 @@ function payload(overrides: Partial<CursorIntegrationStatus> = {}): CursorIntegr
       { id: "gpt-5.6-sol", reasoning: ["low", "medium", "high", "xhigh"], family: "gpt-5.6", tableLess: false, effortRows: [], context: { defaultWindow: 272_000, longWindow: 922_000 } },
       { id: "kimi/k3", reasoning: null, family: null, tableLess: true, effortRows: [], context: null },
     ],
+    localInstaller: { available: false, url: null, version: null, reason: null },
     guideUrl: "https://example.invalid/guides/cursor-private-inference/",
     ...overrides,
   };
@@ -137,16 +138,45 @@ test("a stale request keeps the timestamp but drops the green badge", async () =
   expect(container.querySelector("[data-seen='true'] .badge-muted")).not.toBeNull();
 });
 
-test("regular Cursor alone gets the tunnel explanation, not a gateway promise", async () => {
-  statusResponse = () => json(payload({ privateInference: { installed: false, path: null, version: null } }));
+test("regular Cursor alone surfaces the local-mode installer when the channel advertises one", async () => {
+  statusResponse = () => json(payload({
+    privateInference: { installed: false, path: null, version: null },
+    localInstaller: { available: true, url: "https://downloads.cursor.com/local-mode/x/win32/x64/user-setup/CursorUserSetup-x64-3.21.18.exe", version: "3.21.18", reason: null },
+  }));
   await mount();
   const text = textOf();
-  expect(text).toContain("Only regular Cursor was found");
-  expect(text).toContain("public tunnel");
+  expect(text).toContain("separate local-mode build");
+  expect(text).toContain("version 3.21.18");
   expect(container.querySelectorAll("[data-installed='false']").length).toBe(1);
-  // The remediation is a link inside the warning itself, not a footer the user must scroll to.
+  const installer = container.querySelector("a[data-cursor-installer-url]");
+  expect(installer?.getAttribute("href")).toContain("downloads.cursor.com/local-mode/");
+  // The remediation still ends at the guide link inside the warning itself.
   const notice = container.querySelector("a[data-cursor-guide='notice']");
   expect(notice?.getAttribute("href")).toBe("https://example.invalid/guides/cursor-private-inference/");
+});
+
+test("regular Cursor alone without a resolvable installer says so instead of promising one", async () => {
+  statusResponse = () => json(payload({
+    privateInference: { installed: false, path: null, version: null },
+    localInstaller: { available: false, url: null, version: null, reason: "unreachable" },
+  }));
+  await mount();
+  const text = textOf();
+  expect(text).toContain("could not be resolved");
+  // The failure notice still says why regular Cursor needs the separate build.
+  expect(text).toContain("cannot reach this proxy");
+  expect(container.querySelector("[data-cursor-installer-url]")).toBeNull();
+  expect(container.querySelector("a[data-cursor-guide='notice']")).not.toBeNull();
+});
+
+test("a hub that predates the installer lookup renders the unavailable notice", async () => {
+  const legacy = payload({ privateInference: { installed: false, path: null, version: null } });
+  delete (legacy as { localInstaller?: unknown }).localInstaller;
+  statusResponse = () => json(legacy);
+  await mount();
+  const text = textOf();
+  expect(text).toContain("could not be resolved");
+  expect(container.querySelector("[data-cursor-installer-url]")).toBeNull();
 });
 
 test("no Cursor at all still hands over the gateway values", async () => {

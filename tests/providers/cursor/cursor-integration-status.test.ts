@@ -62,6 +62,16 @@ describe("detectCursorInstalls", () => {
     expect(installs[0].version).toBeNull();
   });
 
+  test("finds the /usr/share distro-style tarball layout on Linux", () => {
+    const deps = fakeDeps("linux", {
+      "/usr/share": ["cursor"],
+      "/usr/share/cursor/resources/app/product.json": JSON.stringify({ nameLong: "Cursor Private Inference", version: "3.22.9" }),
+    });
+    expect(detectCursorInstalls(deps)).toEqual([
+      { build: "private-inference", path: "/usr/share/cursor", version: "3.22.9" },
+    ]);
+  });
+
   test("finds nothing when no candidate directory exists", () => {
     expect(detectCursorInstalls(fakeDeps("linux", {}))).toEqual([]);
   });

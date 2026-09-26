@@ -47,6 +47,26 @@ inspection. Failure retains the static-table fallback. Parsed content is cached 
 size; the returned table always uses the current install version, including on a cache hit.
 `tests/providers/cursor/cursor-effort-table.test.ts` covers cache reuse, version refresh and unsafe files.
 
+`src/integrations/cursor-detect.ts` looks for `cursor*` install roots under `/opt`, `/usr/share` and
+`~/.local/share` on Linux and classifies each by `product.json` `nameLong`. When only a regular install
+is found, `src/integrations/cursor-local-installer.ts` resolves the Private Inference installer that
+Cursor's `cursor-local` update channel advertises for the host platform and architecture (only
+`x64` and `arm64` on Windows, macOS and Linux map; any other host resolves to `unsupported-platform`
+with no request)
+(`<updateHost>/updates/api/update/<platform>/cursor-local/0.0.0/manual-check/stable`, 4 s timeout).
+Only a `https://downloads.cursor.com/local-mode/` URL with a version is accepted (a Linux
+`.AppImage.zsync` delta-metadata URL is mapped to its sibling `.AppImage`); anything else
+resolves to `available: false` with reason `unreachable` or `unusable-response`, and nothing is
+requested when Private Inference is already installed or no regular install exists. The module never
+downloads or launches the installer: `buildCursorIntegrationStatus`
+(`src/server/management/cursor-integration-routes.ts`) returns it as `localInstaller`, and the
+dashboard only renders the link. The GUI treats a status body without `localInstaller` (a hub
+that predates the lookup) as the unavailable case. `tests/providers/cursor/cursor-local-installer.test.ts` covers the
+manifest shapes, failures, skip conditions, the OS/architecture mapping, blank versions, the cache
+windows and request sharing. Answers are cached per update host and platform (30 minutes after a
+success, 5 after a failure) and concurrent lookups share one request, because the Cursor tab polls
+its status every 15 seconds.
+
 ## Data Flow
 
 ```text
