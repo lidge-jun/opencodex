@@ -186,8 +186,12 @@ export function revokeApiKeyInProcess(config: OcxConfig, id: string): boolean {
   return true;
 }
 
+function canStartManagementOAuth(provider: string, principal: ManagementContext["principal"]): boolean {
+  return provider !== "meta-muse" || principal === "gui-session";
+}
+
 function metaMuseConsentRequired(provider: string, principal: ManagementContext["principal"]): Response | null {
-  if (provider !== "meta-muse" || principal === "gui-session") return null;
+  if (canStartManagementOAuth(provider, principal)) return null;
   return jsonResponse({
     error: "Meta Muse login requires acknowledgement in the OpenCodex dashboard.",
     code: "oauth_consent_required",
@@ -204,7 +208,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
 
   // Which providers support real OAuth login (drives the GUI's "Log in with …" buttons).
   if (url.pathname === "/api/oauth/providers" && req.method === "GET") {
-    return jsonResponse({ providers: listOAuthProviders() });
+    // Discovery reflects this principal's admission; hiding a button is not the
+    // consent boundary, which remains independently enforced on both POST routes.
+    return jsonResponse({ providers: listOAuthProviders().filter(provider => canStartManagementOAuth(provider, principal)) });
   }
 
   // API-key "login" providers (open dashboard → paste key). Drives the GUI's key-provider picker.

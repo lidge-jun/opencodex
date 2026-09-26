@@ -915,4 +915,63 @@ describe("codex-journal", () => {
     // And completeness still gates journal deletion.
     expect(body).toContain("if (complete) removeJournal();");
   });
+
+  test("a sibling instance neither restores, injects over, nor drops the live owner's journal", () => {
+    // A sibling shares CODEX_HOME with the live proxy. The desired-state re-reads in the restore
+    // path would read its closed gate as "Codex is OFF" and replay the owner's journal, and the
+    // external-provider courtesy in both directions deletes the journal outright. The mark has to
+    // win before either runs.
+    for (const provider of ["opencodex", "custom-provider"]) {
+      const original = '# original\nmodel_provider = "openai"\n';
+      const injected = `# injected\nmodel_provider = "${provider}"\nopenai_base_url = "http://127.0.0.1:10100/v1"\n`;
+      writeFileSync(join(testDir, "config.toml"), injected);
+      const journal = JSON.stringify({
+        version: 1,
+        originalConfig: Buffer.from(original).toString("base64"),
+        originalProfile: null,
+        injectedConfigHash: createHash("sha256").update(injected).digest("hex"),
+        injectedProfileHash: null,
+        pid: 999_999,
+        timestamp: new Date().toISOString(),
+      });
+      writeFileSync(join(testDir, "opencodex-journal.json"), journal);
+      const r = runScript(testDir, `
+        const fs = require("node:fs");
+        const path = require("node:path");
+        const { markSiblingStart, resetSiblingStartForTests } = require("./src/codex/sibling-start");
+        const { injectCodexConfig, restoreNativeCodex, restoreNativeCodexAsync } = require("./src/codex/inject");
+        const configPath = path.join(process.env.CODEX_HOME, "config.toml");
+        const journalPath = path.join(process.env.CODEX_HOME, "opencodex-journal.json");
+        const bytes = () => ({
+          config: fs.readFileSync(configPath, "utf8"),
+          journal: fs.existsSync(journalPath) ? fs.readFileSync(journalPath, "utf8") : null,
+        });
+        markSiblingStart(10100);
+        const sync = restoreNativeCodex();
+        const afterSync = bytes();
+        const async = await restoreNativeCodexAsync({ revalidateDesiredState: true });
+        const afterAsync = bytes();
+        const inject = await injectCodexConfig(10199, { port: 10199, providers: {}, defaultProvider: "openai" });
+        const afterInject = bytes();
+        // Unmarked, the same process restores: the mark is what held the bytes.
+        resetSiblingStartForTests();
+        const unmarked = restoreNativeCodex();
+        console.log(JSON.stringify({ sync, async, inject, afterSync, afterAsync, afterInject, unmarked, afterUnmarked: bytes() }));
+      `);
+      expect(r.status, r.stderr).toBe(0);
+      const out = JSON.parse(r.stdout.split("\n").at(-1)!);
+      for (const result of [out.sync, out.async]) {
+        expect(result.success).toBe(true);
+        expect(result.message).toContain("Client routing stays on the proxy at port 10100");
+        expect(result.artifacts.config).toMatchObject({ state: "skipped", changed: false });
+      }
+      expect(out.inject).toMatchObject({ success: true, status: "skipped", skippedReason: "sibling" });
+      for (const snapshot of [out.afterSync, out.afterAsync, out.afterInject]) {
+        expect(snapshot).toEqual({ config: injected, journal });
+      }
+      // Control: the unmarked restore does act (restores or, for an external provider, drops the
+      // stale journal), so the assertions above are not vacuous.
+      expect(out.afterUnmarked).not.toEqual({ config: injected, journal });
+    }
+  });
 });

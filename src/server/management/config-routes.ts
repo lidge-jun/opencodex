@@ -70,6 +70,7 @@ import {
   initializeDefaultCodexAccountNamespaces,
 } from "../../codex/account-namespaces";
 import { catalogRefreshIsPending } from "../../codex/catalog-refresh-status";
+import { siblingOfLivePort } from "../../codex/sibling-start";
 import { DEFAULT_PROVIDER_CONTEXT_CAP, globalContextCapValue, providerContextCap, providerContextCaps, setAllProviderContextCaps, setGlobalContextCapValue, setProviderContextCap } from "../../providers/context-cap";
 import { resolveCodexHomeDir } from "../../codex/home";
 import { readUsageEntries } from "../../usage/log";
@@ -197,7 +198,9 @@ export async function syncEnabledClientIntegrations(
   deps: Pick<ManagementContext["deps"],
     "fetchAllModels" | "refreshOwnedCatalogIntegrations" | "writeDesktop3pConfig"> = {},
 ): Promise<ClientIntegrationSyncOutcome[]> {
-  if (port === undefined) return [];
+  // A sibling instance passes its OWN port here; the Grok fence and the Desktop gateway profile
+  // stay on the live owner's (`src/codex/sibling-start.ts`).
+  if (port === undefined || siblingOfLivePort() !== null) return [];
   const { claudeDesktopIntegrationEnabled, grokIntegrationEnabled } = await import("../../codex/desired-state");
   const out: ClientIntegrationSyncOutcome[] = [];
 

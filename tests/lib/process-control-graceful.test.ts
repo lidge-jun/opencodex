@@ -65,6 +65,22 @@ describe("stopProxyGracefully", () => {
     }
   });
 
+  test("a sibling's not-owned answer confirms a plain stop but never a deferral", async () => {
+    // A sibling instance owns no shared teardown, so nothing is left for the caller to finish.
+    // A caller that handed over a receipt asked for something else, and still gets no confirmation.
+    for (const nonce of [undefined, "receipt-nonce"]) {
+      const result = await stopProxyGracefully(4242, {
+        readRuntime: () => ({ port: 10199 }),
+        fetchFn: (async () => new Response(JSON.stringify({ success: true, sharedTeardown: "not-owned" }))) as typeof fetch,
+        waitExit: () => true,
+        ...(nonce ? { deferSharedTeardownNonce: nonce } : {}),
+        exitTimeoutMs: 1,
+        env: {},
+      });
+      expect(result).toBe(nonce ? "teardown-unconfirmed" : true);
+    }
+  });
+
   test("an unconfirmed response still requires process exit", async () => {
     expect(await stopProxyGracefully(4242, {
       readRuntime: () => ({ port: 10100 }),

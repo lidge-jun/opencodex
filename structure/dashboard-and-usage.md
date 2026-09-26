@@ -141,7 +141,7 @@ that tested contract without disabling the rule for other calls.
 
 Rail selection is component-local state today, so a reload returns to the workspace's default
 selection rather than the previously selected row. An OAuth ToS warning is shown before a login that
-requires acceptance (`gui/src/components/OAuthTosWarningModal.tsx`).
+requires acceptance (`gui/src/components/OAuthTosWarningModal.tsx`). Provider-login polling follows the [current continuation contract](gui-and-management-api.md#oauth-login-continuations): device approval shows its code and verification link without a callback paste field; a later manual step replaces that hint and restores paste. Discovery reflects the current management principal.
 
 The `/#codex-auth` add-account modal has a three-step manual-code UX contract on top of the existing
 OAuth polling API: submit request, waiting-for-login completion, and terminal success/failure. Once

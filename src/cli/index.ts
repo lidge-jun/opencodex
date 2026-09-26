@@ -84,10 +84,11 @@ import { requestBoundSystemRestart } from "./system-restart-client";
 import { installCrashGuards } from "../lib/crash-guard";
 import { SpendLedgerOwnerError } from "../lib/spend-ledger-owner";
 import { redactUrlForLog } from "../lib/redact";
-import { dispatchCommand, decideBusyPreferredPort, decideStartWithLiveOwner } from "./dispatch";
+import { dispatchCommand, decideBusyPreferredPort, decideStartExitTeardown, decideStartWithLiveOwner, startupLeftCodexNativeLine } from "./dispatch";
 import { AuxiliaryListenerBindError, findAvailablePort, isAddrInUse, PortUnavailableError, shouldPersistSelectedPort, waitForPortAvailable } from "../server/ports";
 import {
   findLiveProxy,
+  proveLiveProxyOwnedByHome,
   probeEndpointLiveness,
   probeHostname,
   probePortOwner,
@@ -128,13 +129,9 @@ import {
   StartOwnershipRollbackUncertainError,
 } from "./start-ownership-publication";
 import { syncModelsToCodex } from "../codex/sync";
-import {
-  HUB_GATED_SKIP_MESSAGE,
-  localClientSkipReason,
-  shouldSyncGrokOnStart,
-  syncCodexOnStartIfEnabled,
-  type LocalClientSkipReason,
-} from "../codex/desired-state";
+import { localClientSkipReason, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
+import { honorSiblingMarker, markSiblingStart, siblingOfLivePort, siblingRuntimeField, siblingStopFoundOwner, withoutSiblingMarker } from "../codex/sibling-start";
+import { consumeSiblingHandoff } from "../codex/sibling-handoff";
 import {
   reconcileClientStartupBeforeReady,
   syncClaudeAgentDefsAtProxyStartup,
@@ -231,19 +228,6 @@ async function waitForProxy(timeoutMs = 8_000): Promise<LiveProxy | null> {
     await new Promise(resolve => setTimeout(resolve, 150));
   }
   return null;
-}
-
-/**
- * The one startup line for "nothing was written to Codex".
- *
- * Two very different facts reached it: the user's own OFF switch, and a hub declining to
- * rewrite its own local clients. Printing the toggle's wording for the gate is what made
- * operators hunt for a switch they never set (#4236).
- */
-function startupLeftCodexNativeLine(reason: LocalClientSkipReason): string {
-  return reason === "hub-gated"
-    ? `   ${HUB_GATED_SKIP_MESSAGE} Startup left Codex native.`
-    : "   Codex integration OFF; startup left Codex native.";
 }
 
 /** Argv for detached `start`, optionally hard-pinning the listen port. */
@@ -381,7 +365,8 @@ async function findProxyOwnerBeforeJournalRecovery(
   // The probe established that the snapshotted owner is stale. Compare before
   // deleting so a concurrent start that rewrote the PID file keeps its state.
   removePidIfValueIs(pidSnapshot);
-  if (!currentExternalCodexModelProvider()) {
+  // A marked sibling's owner can be down mid-restart; its journal is still not ours to replay.
+  if (!currentExternalCodexModelProvider() && siblingOfLivePort() === null) {
     const clientState = readClientConnectionState();
     reconcileJournal(clientState.kind === "connected"
       ? { activeClientApiKeyId: clientState.value.apiKeyId }
@@ -433,9 +418,9 @@ async function handleStart(options: { block?: boolean } = {}) {
   // configured port. Without the probe, `start` shadowed a healthy proxy with an
   // ephemeral-port copy and re-pointed client config at the copy; the next sibling
   // shutdown then left no runtime record for discovery at all. `handleEnsure`
-  // already passes this; `handleStart` is the path that did not.
+  // already passes this; `handleStart` also consumes a sibling replacement's handoff first.
+  let siblingStart = honorSiblingMarker(process.env, consumeSiblingHandoff) !== null;
   const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
-  let siblingStart = false;
   if (owner.live) {
     // Rationale and the full decision table live on `decideStartWithLiveOwner`.
     const decision = decideStartWithLiveOwner({
@@ -452,13 +437,14 @@ async function handleStart(options: { block?: boolean } = {}) {
       console.error(`⚠️  Proxy already running (PID ${owner.live.pid ?? owner.pidSnapshot ?? "unknown"}, port ${owner.live.port}). Use 'ocx stop' first.`);
       process.exit(1);
     }
-    // Sibling path. Honest about the side effects it shares with any start in this home:
-    // the new instance takes over this home's ocx.pid / runtime-port.json while it runs,
-    // and re-points this home's Codex config at the new port when injection applies.
-    // What it must NOT do is persist its port into config.port: the configured-port
-    // proxy is still the owner of this home, and a later `ocx service` reads config.port
-    // to bake the service (observed: a probe on 10198 left the service pinned there).
+    // Sibling path. The new instance takes over this home's ocx.pid / runtime-port.json while
+    // it runs, and nothing else: Codex, Grok, Claude and the system env keep pointing at the
+    // live proxy for this process's whole lifetime, its exit and `ocx stop` included, so the
+    // mark goes down before any client write (`src/codex/sibling-start.ts`). Nor may it persist
+    // its port into config.port: the configured-port proxy still owns this home, and a later
+    // `ocx service` reads config.port to bake the service (a probe on 10198 pinned it there).
     siblingStart = true;
+    markSiblingStart(owner.live.port);
     console.warn(
       `Proxy already running on port ${owner.live.port}; requested a second instance on port ${requestedPort}. `
       + `Startup continues only for an independent OPENCODEX_HOME; one state directory has one spend-ledger writer.`,
@@ -481,8 +467,9 @@ async function handleStart(options: { block?: boolean } = {}) {
 
   // Interactive-only update prompt. Must run BEFORE we bind a port / write a
   // PID: choosing "Update now" installs globally and exits, so we never want a
-  // live daemon holding resources while it overwrites its own binary.
-  await maybeShowUpdatePrompt();
+  // live daemon holding resources while it overwrites its own binary. Never from a
+  // sibling: replacing the global package makes the live proxy drain and restart.
+  if (!siblingStart) await maybeShowUpdatePrompt();
 
   type StartServerModule = typeof import("../server");
   type BoundStart = {
@@ -516,6 +503,7 @@ async function handleStart(options: { block?: boolean } = {}) {
             throw new StartCommandExit(1);
           }
           siblingStart = true;
+          markSiblingStart(fencedLive.port);
         }
 
         // Port selection is check-then-bind. The lease prevents every cooperating start or
@@ -563,6 +551,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         port: bound.port,
         hostname: bound.config.hostname,
         attestationSecret: bound.localAttestationSecret,
+        ...siblingRuntimeField(),
       }),
       stopBound: bound => bound.server.stop(true),
       removeRuntime: () => removeRuntimePortIfPidIs(process.pid),
@@ -598,15 +587,14 @@ async function handleStart(options: { block?: boolean } = {}) {
     try { guardian.stop(); } catch { /* best-effort */ }
     try { historyGuardian?.stop(); } catch { /* best-effort */ }
     // Dashboard drain-and-restart (#563) must not tear down injection: the replacement
-    // process expects Codex/Grok/env fences to still be in place.
-    const recycling = isRecyclingForExit();
-    if (!recycling) {
+    // process expects Codex/Grok/env fences to still be in place. A sibling owns none of them.
+    const teardown = decideStartExitTeardown({ sibling: siblingStart, recycling: isRecyclingForExit(), ocxService: process.env.OCX_SERVICE });
+    if (teardown.revertSystemEnv) {
       try { revertSystemEnv(); } catch { /* best-effort */ }
     }
     removePid(process.pid);
     removeRuntimePort(process.pid);
-    const preserveRouting = process.env.OCX_SERVICE === "1";
-    if (!recycling && !preserveRouting && !currentExternalCodexModelProvider()) {
+    if (teardown.restoreNativeCodex && !currentExternalCodexModelProvider()) {
       try {
         const restored = restoreNativeCodex();
         if (!restored.success) {
@@ -622,7 +610,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     // Grok fence is shared state we must not remove — that service keeps running and would be
     // left pointing nowhere. This guard also covers signal-driven exits, which is the path that
     // would otherwise bypass handleStop's gate entirely.
-    if (!recycling && !preserveRouting && serviceEnvironmentOwnedHere()) {
+    if (teardown.stripGrokConfig && serviceEnvironmentOwnedHere()) {
       try { stripGrokConfig(); } catch { /* best-effort restore */ }
     }
     return cleanupSucceeded;
@@ -669,8 +657,9 @@ async function handleStart(options: { block?: boolean } = {}) {
   // syncCleanup reverts even if injection itself or subsequent startup steps fail).
   const systemEnv = await injectSystemEnv(port, config).catch(() => ({ injected: false }));
   // The hook is useful only for an installed Claude Code CLI. Reconcile instead of
-  // appending unconditionally so stale OpenCodex-owned hooks are removed as well.
-  reportShellHookFailure(reconcileShellHook(systemEnv.injected));
+  // appending unconditionally so stale OpenCodex-owned hooks are removed as well. A sibling
+  // skips it: reconciling to "not injected" would uninstall the live owner's ~/.zshrc hook.
+  if (!siblingStart) reportShellHookFailure(reconcileShellHook(systemEnv.injected));
   await maybeShowStarPrompt(); // once-only Yes/No GitHub-star prompt on first interactive start
   // Codex sync owns the ready/failed verdict, but its successful transition is
   // deferred until the best-effort Claude roster and Desktop registry settle. This
@@ -706,7 +695,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       }
     },
   );
-  if (!startupSync.ran) console.log(startupLeftCodexNativeLine(localClientSkipReason(config)));
+  if (!startupSync.ran) console.log(startupLeftCodexNativeLine(localClientSkipReason(config), server.port ?? port));
   await refreshOwnedRaycastCatalog(config, port);
   // #1046: one warning per startup, after BOTH writes. The server's cache
   // invalidation happens first and the catalog sync second, so the mtime is only
@@ -717,7 +706,7 @@ async function handleStart(options: { block?: boolean } = {}) {
     const { warnIfStaleCodexAppServersAfterStartupWrite } = await import("../codex/app-server-processes");
     warnIfStaleCodexAppServersAfterStartupWrite({ log: console });
   }
-  if (!currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
+  if (!siblingStart && !currentExternalCodexModelProvider() && !shouldInjectApiAuthHeader(config) && config.syncResumeHistory !== false) {
     historyGuardian = startHistoryMigrationGuardian();
   }
   // Grok Build auto-registration: additive fenced block in ~/.grok/config.toml so an installed
@@ -748,9 +737,9 @@ async function handleStart(options: { block?: boolean } = {}) {
 }
 
 function detachedStartEnvironment(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  // Only a real service wrapper may claim supervision. A detached ensure/tray child
-  // is an ordinary owner: while live it maintains routing, and on exit it restores it.
+  const env: NodeJS.ProcessEnv = withoutSiblingMarker(process.env);
+  // Only a real service wrapper may claim supervision. A detached ensure/tray child is an
+  // ordinary owner, never a sibling: while live it maintains routing, and on exit restores it.
   delete env.OCX_SERVICE;
   return withProcessRuntimeProvenance(env);
 }
@@ -1097,6 +1086,11 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   // service — the exact failure this flag prevents. A plain stop failure is different: we
   // tried, so local teardown still proceeds.
   let ownershipBlocked = false;
+  // A sibling instance's shared teardown is not this stop's to run: the client routing belongs
+  // to the live proxy it ran beside (`src/codex/sibling-start.ts`). Read before any stop removes
+  // the record; a record left behind by a hard-killed sibling still says so.
+  const siblingOfPort = readRuntimePort()?.siblingOfPort;
+  const stoppingSibling = siblingOfPort !== undefined;
   // Structured twin of the human lines below, for `ocx stop --json`: one document the
   // desktop shell can read across the process boundary (D4). Every field is assigned
   // where the corresponding boolean already flips — the summarizer never re-decides.
@@ -1134,7 +1128,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let teardownNonce: string | undefined;
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
-    if (teardownNonce) return;
+    if (teardownNonce || stoppingSibling) return;
     try {
       teardownNonce = claimPendingTeardown(endpoint, endpointSource).nonce;
     } catch (err) {
@@ -1152,8 +1146,8 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
    * silently reopening the parent-crash window on the path where the stop is a hard kill
    * and no child teardown runs at all.
    *
-   * So the caller supplies whatever endpoint it already discovered: the orphan path knows
-   * one from `findLiveProxy` even when the runtime record is gone.
+   * So the caller supplies the endpoint it discovered after the orphan listener proves
+   * possession of this home's runtime record, even when the pid file is gone.
    *
    * When nothing resolves, the graceful request cannot be made at all — `stopProxy` goes
    * straight to the kill ladder, no child teardown runs, and there is no receipt to leave
@@ -1198,7 +1192,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
           settle: () => settleApprovedTarget(snapshot.approval),
           managerState: () => observeGuardedManagerStopped(snapshot.manager),
         })).service
-      : stopServiceIfInstalledDetailed();
+      // A sibling never runs under a service manager: an installed one belongs to the live owner,
+      // and its ownership check would fail this stop and skip the stale-record purge below.
+      : stoppingSibling ? "absent" : stopServiceIfInstalledDetailed();
     record.service = serviceStop;
     stoppedService = serviceStop === "stopped" || serviceStop === "stopped-respawnable";
     schedulerCanRespawn = serviceStop === "stopped-respawnable";
@@ -1285,14 +1281,22 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       }
     }
   } else {
-    // Snapshot the stale on-disk state BEFORE the async probe: a concurrent `ocx start`
-    // can write fresh records mid-probe, and the purge below must never delete those.
+    // Snapshot stale state before probing; purge only exact values if another start races us.
     const stalePidValue = readPidFileValue();
     const staleRuntimePid = readRuntimePort()?.pid ?? null;
     // Orphan recovery: a live proxy can outlive its pid file (crash, manual delete,
     // corrupt file). Identity-checked liveness still finds it via the runtime record.
     const live = await findLiveProxy({ acceptPackageTreeFenced: true });
-    if (live?.pid) {
+    if (siblingStopFoundOwner(siblingOfPort, live)) {
+      record.proxy = "not-running";
+      console.log(`The sibling instance is already gone; the proxy on port ${siblingOfPort} was left running.`);
+    } else if (live?.pid && !(await proveLiveProxyOwnedByHome(live))) {
+      stopFailed = true;
+      ownershipBlocked = true;
+      record.proxy = "ownership-refused";
+      console.error(`❌ A proxy answers on port ${live.port}, but it has not proved it belongs to this home; refusing to stop it.`);
+      console.error("   Skipping shared teardown (native Codex restore, Grok config) while that proxy is running.");
+    } else if (live?.pid) {
       try {
         // The probe already found where it answers, and on this path the runtime record is
         // typically what went missing in the first place.
@@ -1340,9 +1344,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
     }
   }
   }
-  // Environment ownership is independent from service ownership. Always roll back
-  // current-home variables; the helper refuses foreign markers on its own.
-  try { revertSystemEnv(); } catch { /* best-effort */ }
+  // Environment ownership is independent from service ownership. Roll back current-home
+  // variables (the helper refuses foreign markers on its own) unless a sibling never set them.
+  if (!stoppingSibling) { try { revertSystemEnv(); } catch { /* best-effort */ } }
   // A stopped Windows scheduler is not a proven-down proxy. `killWindowsSchedulerWrappers`
   // is explicitly best-effort and the `:loop` wrapper respawns its child after ~5s, so an
   // immediate probe can see a dead interval and an update can start replacing files right
@@ -1429,8 +1433,9 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
       console.error("   The obligation is preserved; retry once the proxy is confirmed stopped.");
     }
   }
-  if (nativeRestoreHandledByProxy) record.sharedTeardown = "performed-by-proxy";
-  const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy;
+  if (nativeRestoreHandledByProxy && !stoppingSibling) record.sharedTeardown = "performed-by-proxy";
+  if (stoppingSibling) console.log(`↩️  Client routing stays on the proxy at port ${siblingOfPort}; this sibling had no shared teardown to run.`);
+  const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling;
   if (!restoreBlocked) {
     if (recoveredNonces.length > 0) {
       // A previous deferred stop died before restoring, and the probe says its endpoint is
@@ -1971,7 +1976,7 @@ process.exit(await dispatchCommand(head, {
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-      env: withProcessRuntimeProvenance(process.env),
+      env: withProcessRuntimeProvenance(withoutSiblingMarker(process.env)),
     });
     child.unref();
   },

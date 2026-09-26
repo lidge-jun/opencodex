@@ -183,6 +183,22 @@ export interface LiveProxy {
 }
 
 /**
+ * A /healthz identity proves only that a proxy holds the port. Before a destructive orphan stop,
+ * require that listener to prove possession of this home's runtime-record secret as well.
+ */
+export async function proveLiveProxyOwnedByHome(live: LiveProxy, io: LivenessIo = {}): Promise<boolean> {
+  if (live.pid === null) return false;
+  return attestFencedIdentity(
+    `http://${probeHostname(live.hostname)}:${live.port}/healthz`,
+    live.port,
+    live.pid,
+    io,
+    io.fetchFn ?? directLocalHttpFetch,
+    io.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+  );
+}
+
+/**
  * Host to probe for a given bind hostname: wildcards answer on IPv4 loopback, and raw
  * IPv6 addresses must be bracketed or the composed URL is invalid.
  *

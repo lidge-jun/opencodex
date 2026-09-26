@@ -5,6 +5,7 @@ import { handleDisconnectCommand } from "../../src/cli/connect";
 import { connectClient } from "../../src/client/connect";
 import { teardownClientLink } from "../../src/client/link-teardown";
 import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link-state";
+import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { createTempHome } from "../helpers/temp-home";
 
 const linkId = "lnk_0123456789abcdef";
@@ -39,8 +40,8 @@ test("teardown revokes the matching link once and returns tunnel state", async (
   expect(calls).toHaveLength(1);
   expect(calls[0]?.timeoutMs).toBe(30_000);
   expect(calls[0]?.argv).toContain("home.example.test");
-  expect(calls[0]?.argv.join(" ")).toContain("ocx");
-  expect(calls[0]?.argv.join(" ")).toContain(linkId);
+  // The revoke runs through the remote PATH prelude, never as a bare `ocx`.
+  expect(calls[0]?.argv.at(-1)).toBe(quoteRemote(remoteOcxArgv(["link", "revoke", "--link-id", linkId])));
 });
 
 test("teardown reports revoke failure and leaves a mismatched sidecar alone", async () => {

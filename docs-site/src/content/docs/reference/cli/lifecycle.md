@@ -27,7 +27,10 @@ would leave the first proxy running and re-point Codex at the second. An explici
 and enforced spend accounting both write the same journal. Use a separate `OPENCODEX_HOME` for an
 independent sibling; `port: 0` only asks the OS for that instance's port and does not separate its
 state. On start it syncs each provider's models into Codex's catalog. On shutdown it restores
-native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`).
+native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`). A sibling started
+beside a running proxy does neither: it serves direct requests on its own port only, and Codex,
+Grok and Claude stay pointed at the proxy that was already running. Stopping that sibling, with
+`ocx stop` or a signal, leaves their configuration alone as well.
 
 `--socks5` (default `127.0.0.1:10808`) saves `config.proxy` as a SOCKS5 URL and routes outbound
 HTTP(S) through a real SOCKS5 tunnel. `--socks5-off` clears only that saved SOCKS5 proxy; it
