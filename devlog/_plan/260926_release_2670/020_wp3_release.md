@@ -98,3 +98,12 @@ blindly.
    note restored from 2.66.0's 060).
 3. Minor: acceptance adds `isPrerelease` = true for `v$PV` and false for `v2.67.0`.
 4. Minor: 010 re-verifies the `dev` failure list before wp2 exit.
+
+## wp3 P revalidation (2026-09-26T02:38Z)
+
+- `CAND=dac1d25f48fad18420aa856631ff9ee9c1775b0f` (green lane=all `36210914271`), not `08fd8a6284`; the
+  owner added #5866 and #5875 during wp2.
+- `PV=2.67.0-preview.20260926` unchanged. `main` `e70b3d86fb`, `preview` `0c37e74002`.
+- Pre-move PR #5895 (`codex/dev-version-2.68.0`, head `4c64fd4acc`, base `dac1d25f48`) was opened by the
+  workflow token, which does not trigger `pull_request` workflows; close/reopen by the maintainer started
+  its CI. Diff is exactly the four version sources, 2.67.0 → 2.68.0.
