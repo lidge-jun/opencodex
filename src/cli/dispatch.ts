@@ -692,13 +692,14 @@ const commandRunners: Record<string, CommandRunner> = {
     switch (deps.args[1]) {
       case "install": {
         const r = installCodexShim();
-        const healthy = diagnoseCodexShim().healthy;
+        const { healthy, summary } = diagnoseCodexShim();
         const { collectCodexShimReadinessWarnings } = await import("./codex-shim-readiness");
         const warnings = healthy
           ? collectCodexShimReadinessWarnings()
           : [];
         console.log(`${r.installed && warnings.length === 0 ? "✅ " : "⚠️  "}${r.message}`);
         for (const warning of warnings) console.warn(`   ${warning}`);
+        if (!healthy) console.error(`Codex shim installation is unhealthy: ${summary}`);
         return healthy ? 0 : 1;
       }
       case "status":

@@ -4,6 +4,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -220,8 +221,19 @@ describe("Codex shim install readiness", () => {
       expect(repeat.status).toBe(0);
       expect(repeat.stdout).toContain("already installed");
       expect(repeat.stderr).toContain("Codex routing could not be verified");
+      // Keep the marker and backing file, but break the launch-time ensure contract.
+      writeFileSync(codex, readFileSync(codex, "utf8").replaceAll("ensure", "broken"));
+      const damaged = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        cwd: repoRoot,
+        env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome,
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+        encoding: "utf8", timeout: SHIM_INSTALL_CHILD_MS, killSignal: "SIGKILL",
+      });
+      expect(damaged.error).toBeUndefined();
+      expect(damaged.status).toBe(1);
+      expect(damaged.stderr).toContain("unhealthy");
     } finally {
       removeTreeWithRetry(root);
     }
-  }, SHIM_INSTALL_CASE_MS * 2);
+  }, SHIM_INSTALL_CASE_MS * 3);
 });
