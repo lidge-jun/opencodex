@@ -46,7 +46,9 @@ prefers accounts already eligible and with room under a configured cap; unknown 
 callable. Reported `tokenLimits.maxInputTokens` informs a conservative catalog and token
 estimate window, including the static limit when any live account lacks evidence. Only accounts
 that have served acquire list evidence; inactive siblings may remain unknown until refusal
-rotation reaches them.
+rotation reaches them. The public catalog advertises only observed IDs made of plain
+characters (no `/` the router would have to decode), at most 64 across the roster; every
+observed ID still informs routing preference.
 
 `src/adapters/kiro-refusal.ts` recognizes an exact monthly reason on HTTP 400/429 and a
 confirmed suspension on HTTP 403; ordinary 400/403 remains an error without an account

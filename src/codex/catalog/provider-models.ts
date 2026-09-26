@@ -109,6 +109,11 @@ import { QUIET_AUTHORITATIVE_CATALOG_PROVIDERS, applyConfigHintsToCachedModels, 
 import { mergeConfiguredModelsIntoLiveCatalog, shouldExposeProviderModel, warnDroppedConfiguredIdsOnce } from "./model-visibility";
 import { captureModelsRequest, captureProviderGather, materializeCapturedHeaders } from "./gather-capture";
 
+
+/** Observed Kiro ids advertised in the public catalog: plain ids that need no router decoding. */
+const KIRO_PUBLISHABLE_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+/** Upper bound on observed Kiro ids added to the catalog across the whole roster. */
+const KIRO_OBSERVED_CATALOG_MAX = 64;
 export interface ProviderModelsResult {
   readonly models: CatalogModel[];
   readonly outcome: CatalogGatherProviderModelOutcome;
@@ -218,10 +223,17 @@ export async function fetchProviderModelsWithAuth(
     clearProviderDiscoveryStatus(name);
     if (name === "kiro") {
       const ids = [...configuredIds];
+      // Observed ids are advertised only when they round-trip through catalog encoding (no "/"
+      // or other separators the router would have to decode), and the roster adds at most
+      // KIRO_OBSERVED_CATALOG_MAX of them. Every observed id still informs routing preference.
+      let observedAdded = 0;
       for (const account of getAccountSet("kiro")?.accounts ?? []) {
         if (account.needsReauth === true) continue;
         for (const row of readKiroAccountModels(account) ?? []) {
-          if (!ids.includes(row.modelId)) ids.push(row.modelId);
+          if (observedAdded >= KIRO_OBSERVED_CATALOG_MAX) break;
+          if (!KIRO_PUBLISHABLE_MODEL_ID.test(row.modelId) || ids.includes(row.modelId)) continue;
+          ids.push(row.modelId);
+          observedAdded += 1;
         }
       }
       return observed(ids.map(id => {

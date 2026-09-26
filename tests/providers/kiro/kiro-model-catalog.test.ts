@@ -235,3 +235,33 @@ test("cached account models augment the static catalog without gathering from ne
   expect(result.models.map(model => model.id)).toEqual(["shipped", "observed"]);
   expect(result.models.find(model => model.id === "observed")?.contextWindow).toBe(123_000);
 });
+
+test("observed ids that need router decoding are used for routing but not advertised", async () => {
+  setup();
+  const account = await add("a");
+  refreshKiroAccountModelsDetached(account, provider,
+    wire({ models: [{ modelId: "vendor/model" }, { modelId: "plain-model" }] }, []));
+  await awaitKiroModelRefreshForTests(account.id);
+  expect(kiroAccountSupportsModel(account.id, "vendor/model")).toBe(true);
+  const staticProvider = { ...provider, liveModels: false, models: ["shipped"] } as OcxProviderConfig;
+  const result = await fetchProviderModelsWithAuth({ name: "kiro", provider: staticProvider,
+    metadataModelIdCaseFold: false } as never, 60_000, undefined, refreshingModelsAuthResolver);
+  expect(result.models.map(model => model.id)).toEqual(["shipped", "plain-model"]);
+});
+
+test("the roster adds at most 64 observed ids to the catalog", async () => {
+  setup();
+  const first = await add("a");
+  const second = await add("b");
+  refreshKiroAccountModelsDetached(first, provider,
+    wire({ models: Array.from({ length: 50 }, (_, i) => ({ modelId: `a-${i}` })) }, []));
+  refreshKiroAccountModelsDetached(second, provider,
+    wire({ models: Array.from({ length: 50 }, (_, i) => ({ modelId: `b-${i}` })) }, []));
+  await awaitKiroModelRefreshForTests(first.id);
+  await awaitKiroModelRefreshForTests(second.id);
+  const staticProvider = { ...provider, liveModels: false, models: ["shipped"] } as OcxProviderConfig;
+  const result = await fetchProviderModelsWithAuth({ name: "kiro", provider: staticProvider,
+    metadataModelIdCaseFold: false } as never, 60_000, undefined, refreshingModelsAuthResolver);
+  expect(result.models).toHaveLength(1 + 64);
+});
+
