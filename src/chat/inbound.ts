@@ -57,11 +57,21 @@ function contentToText(content: unknown): string {
 // route-eligibility predicate and this translator cannot drift apart again.
 const imageUrlFromPart = chatImageUrlFromPart;
 
-function videoUrlFromPart(part: Rec): string | null {
+/**
+ * A caller's video part, with the `processing` mode Gemini's agentic video
+ * understanding is requested by (#3271). The object form is the only one that
+ * can carry it — `video_url` as a bare string has nowhere to put it.
+ */
+function videoFromPart(part: Rec): { url: string; processing?: string } | null {
   if (part.type !== "video_url") return null;
   const videoUrl = part.video_url;
-  if (typeof videoUrl === "string" && videoUrl.length > 0) return videoUrl;
-  if (isRec(videoUrl) && typeof videoUrl.url === "string" && videoUrl.url.length > 0) return videoUrl.url;
+  if (typeof videoUrl === "string" && videoUrl.length > 0) return { url: videoUrl };
+  if (isRec(videoUrl) && typeof videoUrl.url === "string" && videoUrl.url.length > 0) {
+    const processing = typeof videoUrl.processing === "string" && videoUrl.processing.length > 0
+      ? videoUrl.processing
+      : undefined;
+    return { url: videoUrl.url, ...(processing ? { processing } : {}) };
+  }
   return null;
 }
 
@@ -91,9 +101,13 @@ function userContentToBlocks(content: unknown): Rec[] {
       });
       continue;
     }
-    const videoUrl = videoUrlFromPart(raw);
-    if (videoUrl) {
-      blocks.push({ type: "input_video", video_url: videoUrl });
+    const video = videoFromPart(raw);
+    if (video) {
+      blocks.push({
+        type: "input_video",
+        video_url: video.url,
+        ...(video.processing ? { processing: video.processing } : {}),
+      });
       continue;
     }
     const file = fileFromPart(raw);

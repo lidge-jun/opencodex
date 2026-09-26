@@ -221,8 +221,17 @@ export interface OcxImageContent {
 
 export interface OcxVideoContent {
   type: "video";
-  /** A base64 `data:` URL from an OpenAI-compatible `video_url` part. */
+  /**
+   * A base64 `data:` URL from an OpenAI-compatible `video_url` part, or a URI
+   * the upstream can fetch itself (a YouTube watch URL, a Files API uri).
+   */
   videoUrl: string;
+  /**
+   * Gemini's agentic video mode, carried verbatim from the caller's
+   * `video_url.processing` (#3271). Absent for every request that does not ask
+   * for it, so no existing traffic gains a field.
+   */
+  processing?: string;
 }
 
 /**
