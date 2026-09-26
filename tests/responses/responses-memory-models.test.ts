@@ -126,6 +126,12 @@ describe("memory phase detection", () => {
     expect(detectMemoryModelPhase(input, headers)).toBeNull();
     expect(detectMemoryModelPhase(input, headers, { transport: "websocket" })).toBe("consolidation");
   });
+
+  test("the connection's sub-agent header consolidates HTTP turns but not websocket frames", () => {
+    const headers = new Headers({ "x-openai-subagent": "memory_consolidation" });
+    expect(detectMemoryModelPhase(body("gpt-5.6-terra"), headers)).toBe("consolidation");
+    expect(detectMemoryModelPhase(body("gpt-5.6-terra"), headers, { transport: "websocket" })).toBeNull();
+  });
 });
 
 describe("memory model settings", () => {
@@ -164,9 +170,16 @@ describe("memory model config", () => {
       const raw = { ...config(), memoryModels: value };
       expect(validateConfigCandidate(raw).ok).toBe(false);
       const loaded = configSchema.parse(raw);
-      expect(loaded.memoryModels).toBeUndefined();
       expect(loaded.providers).toEqual(config().providers);
     }
+    // A wholly broken block drops entirely; a broken phase drops only that phase, so a typo in
+    // one phase can no longer delete the operator's routing for the other.
+    for (const value of [null, [], "cheap"]) {
+      const loaded = configSchema.parse({ ...config(), memoryModels: value });
+      expect(loaded.memoryModels).toBeUndefined();
+    }
+    const oneBroken = configSchema.parse({ ...config(), memoryModels: { extract: { model: " " }, consolidation: { model: "gateway/strong" } } });
+    expect(oneBroken.memoryModels).toEqual({ consolidation: { model: "gateway/strong" } });
   });
 
   test("an empty block is valid and means both phases stay with Codex", () => {
@@ -175,7 +188,7 @@ describe("memory model config", () => {
     expect(configuredMemoryModel(configSchema.parse(raw) as OcxConfig, "extract")).toBeUndefined();
   });
 
-  test("a dropped hand-edited block warns at load; valid or absent blocks stay silent", () => {
+  test("a broken phase warns per phase at load; valid or absent blocks stay silent", () => {
     const warnings: string[] = [];
     const original = console.warn;
     console.warn = (message: unknown) => { warnings.push(String(message)); };
@@ -183,12 +196,21 @@ describe("memory model config", () => {
       const invalid = { ...config(), memoryModels: { extract: { model: "" } } };
       warnDegradedMemoryModels(invalid, configSchema.parse(invalid) as OcxConfig);
       expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain("memoryModels is invalid");
+      expect(warnings[0]).toContain("memoryModels.extract is invalid");
+      // The surviving phase is not repeated, and a wholly broken block keeps the block wording.
+      const survivor = { ...config(), memoryModels: { extract: { model: "" }, consolidation: { model: "gateway/strong" } } };
+      warnDegradedMemoryModels(survivor, configSchema.parse(survivor) as OcxConfig);
+      expect(warnings).toHaveLength(2);
+      expect(warnings[1]).toContain("memoryModels.extract is invalid");
+      const whole = { ...config(), memoryModels: "cheap" };
+      warnDegradedMemoryModels(whole, configSchema.parse(whole) as OcxConfig);
+      expect(warnings).toHaveLength(3);
+      expect(warnings[2]).toContain("memoryModels is invalid");
       warnDegradedMemoryModels(config(), configSchema.parse(config()) as OcxConfig);
       const absent = config();
       delete absent.memoryModels;
       warnDegradedMemoryModels(absent, configSchema.parse(absent) as OcxConfig);
-      expect(warnings).toHaveLength(1);
+      expect(warnings).toHaveLength(3);
     } finally {
       console.warn = original;
     }
