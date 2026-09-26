@@ -1,4 +1,3 @@
-import { readMacOSSystemProxy, type MacOSProxyReader } from "./macos-system-proxy";
 import { configureSocks5Fetch, socks5ProxyFromEnv } from "../lib/proxy-env";
 import { redactUrlForLog } from "../lib/redact";
 import { join } from "node:path";
@@ -170,10 +169,10 @@ export function applyProxyEnv(config: OcxConfig, announce = false): void {
   if (outbound) console.log(`   outbound proxy: ${redactUrlForLog(outbound)}`);
 }
 
-/** Test seam for `proxy: "auto"`: the system readers and platform are injectable. */
+/** Test seam for `proxy: "auto"`: the registry reader and platform are injectable. */
 export function applyProxyEnvWith(
   config: OcxConfig,
-  auto: { reader?: WindowsProxyRegistryReader; macOSReader?: MacOSProxyReader; platform?: NodeJS.Platform } = {},
+  auto: { reader?: WindowsProxyRegistryReader; platform?: NodeJS.Platform } = {},
 ): void {
   // `proxy` and `noProxy` are not declared in the top-level schema, which ends in
   // `.passthrough()`, so whatever is on disk arrives here verbatim. A non-string value
@@ -181,7 +180,6 @@ export function applyProxyEnvWith(
   // process entry point — the failure was a startup crash, not a degraded proxy. Ignore
   // malformed values with a privacy-safe warning instead: they cannot express a routing
   // intent, and refusing to start is a worse answer than starting without them.
-  let systemNoProxy: string[] = [];
   const rawProxy = config.proxy;
   let proxy = typeof rawProxy === "string" ? resolveEnvValue(rawProxy) : undefined;
   if (!proxy) {
@@ -196,36 +194,31 @@ export function applyProxyEnvWith(
     return;
   }
   if (proxy.trim().toLowerCase() === "auto") {
-    // One startup read of the platform static proxy. Never copy the literal
+    // #1525 slice 1: one startup read of the Windows static proxy. Never copy the literal
     // "auto" into HTTP_PROXY; every non-proxy outcome leaves outbound routing as it was.
     if (process.env.HTTP_PROXY?.trim() || process.env.http_proxy?.trim()
       || process.env.HTTPS_PROXY?.trim() || process.env.https_proxy?.trim()) {
       console.log("[opencodex] proxy \"auto\": existing HTTP_PROXY/HTTPS_PROXY environment wins; system proxy not consulted");
       proxy = undefined;
     } else {
-      const platform = auto.platform ?? process.platform;
-      const system = platform === "darwin" ? "macOS" : "Windows";
-      const found = platform === "darwin"
-        ? readMacOSSystemProxy(auto.macOSReader)
-        : { ...readWindowsSystemProxy(auto.reader, platform), noProxy: [] };
+      const found = readWindowsSystemProxy(auto.reader, auto.platform);
       if (found.kind === "proxy") {
         const origins = [
           found.httpUrl && `HTTP ${describeProxyForLog(found.httpUrl)}`,
           found.httpsUrl && `HTTPS ${describeProxyForLog(found.httpsUrl)}`,
         ].filter(Boolean).join(", ");
-        console.log(`[opencodex] proxy "auto": using ${system} system proxy ${origins}`);
-        systemNoProxy = found.noProxy;
+        console.log(`[opencodex] proxy "auto": using Windows system proxy ${origins}`);
         if (found.httpUrl) process.env.HTTP_PROXY = found.httpUrl;
         if (found.httpsUrl) process.env.HTTPS_PROXY = found.httpsUrl;
         proxy = undefined;
       } else {
         const reason = found.kind === "unsupported"
-          ? "only Windows and macOS system proxy discovery is supported; using direct egress on this OS"
+          ? "only Windows system proxy discovery is supported; using direct egress on this OS"
           : found.kind === "disabled"
-            ? `${system} system proxy is disabled; using direct egress`
+            ? "Windows system proxy is disabled; using direct egress"
             : found.kind === "socks-only"
               ? "Windows system proxy is SOCKS-only, which HTTP_PROXY cannot express; using direct egress"
-              : `${system} proxy settings could not be read; using direct egress`;
+              : "Windows proxy settings could not be read; using direct egress";
         console.log(`[opencodex] proxy "auto": ${reason}`);
         proxy = undefined;
       }
@@ -264,6 +257,6 @@ export function applyProxyEnvWith(
   const configured = configuredEntries
     .map(entry => entry.trim())
     .filter(Boolean);
-  mergeNoProxyEntries([...configured, ...systemNoProxy]);
+  mergeNoProxyEntries(configured);
   configureSocks5Fetch();
 }

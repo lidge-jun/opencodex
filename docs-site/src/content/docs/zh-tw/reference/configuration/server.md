@@ -217,4 +217,4 @@ Anthropic OAuth sidecar 重用 opencodex 既有的 Claude Code OAuth 指紋。�
 
 ## Codex 配額網路診斷
 
-主 Codex 帳戶列中的 `quotaRefresh` 描述配額查詢結果，並不代表剩餘配額或模型存取權限。讀取快取或未執行查詢時，這個欄位可能省略。查詢使用執行中代理服務的環境，而不是目前終端機的環境。未設定 `proxy` 時保留既有環境；`"auto"` 只在啟動時讀取 Windows 或 macOS 靜態代理設定，不會自動處理 PAC/WPAD、僅 SOCKS 的設定或執行中的變更。TUN 測試成功本身不能證明 HTTP 代理路徑正常。命令與狀態說明請見[英文網路診斷章節](/reference/configuration/server/#codex-quota-network-diagnostics)。
+主 Codex 帳戶列中的 `quotaRefresh` 描述配額查詢結果，並不代表剩餘配額或模型存取權限。讀取快取或未執行查詢時，這個欄位可能省略。查詢使用執行中代理服務的環境，而不是目前終端機的環境。未設定 `proxy` 時保留既有環境；`"auto"` 只在啟動時讀取 Windows 靜態代理設定，不會自動處理 PAC/WPAD、僅 SOCKS 的設定或執行中的變更。TUN 測試成功本身不能證明 HTTP 代理路徑正常。命令與狀態說明請見[英文網路診斷章節](/reference/configuration/server/#codex-quota-network-diagnostics)。

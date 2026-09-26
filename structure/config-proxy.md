@@ -3,7 +3,7 @@
 `src/config/proxy-env.ts` remains the single application owner for global proxy
 configuration. An explicit SOCKS5 or SOCKS5h URL selects ALL_PROXY and removes
 stale scheme-proxy variables; HTTP(S) settings retain their existing environment
-precedence. Activation supports Windows and macOS static system proxy discovery and keeps loopback
+precedence. Activation keeps the existing Windows auto-discovery path and loopback
 NO_PROXY entries; the no-configured-proxy return merges all of them only when an inherited
 SOCKS proxy is the only inherited proxy; whenever Bun applies an inherited HTTP(S) scheme proxy
 or HTTP(S) `ALL_PROXY`/`all_proxy`, it matches by domain suffix, so activation adds only the
@@ -29,11 +29,3 @@ userinfo is stripped while host and port stay visible, `direct` and credential-l
 print unchanged, and a non-URL value that is not `direct` is masked whole. `config export`
 keeps the raw file so exports can restore credentials. Get and mutation output select
 redaction by the normalized final path segment, matching lookup and mutation semantics.
-
-On macOS, `src/config/macos-system-proxy.ts` reads `/usr/sbin/scutil --proxy` once
-with a timeout and output bound. Only top-level enabled HTTP/HTTPS settings become
-scheme proxies; nested scoped settings, PAC/WPAD and SOCKS are not selected.
-System exceptions join configured and inherited `NO_PROXY` entries when a proxy is
-found, with the lowercase precedence above unchanged. Invalid settings or command
-failures leave scheme variables unset. Existing HTTP(S) variables skip discovery.
-Regression coverage lives in `tests/server/proxy-env.test.ts`.

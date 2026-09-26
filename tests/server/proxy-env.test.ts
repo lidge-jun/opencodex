@@ -511,7 +511,7 @@ describe("applyProxyEnv with proxy: \"auto\" (#1525)", () => {
 
   test("auto never leaks the literal into HTTP_PROXY when discovery yields nothing", () => {
     for (const [platform, reader] of [
-      ["linux", () => ({ proxyEnable: "0x1", proxyServer: "127.0.0.1:1" })],
+      ["darwin", () => ({ proxyEnable: "0x1", proxyServer: "127.0.0.1:1" })],
       ["win32", () => ({ proxyEnable: "0x0", proxyServer: "127.0.0.1:1" })],
       ["win32", () => ({ proxyEnable: "0x1", proxyServer: "socks=127.0.0.1:1080" })],
       ["win32", () => null],
@@ -532,82 +532,5 @@ describe("applyProxyEnv with proxy: \"auto\" (#1525)", () => {
     expect(consulted).toBe(false);
     expect(process.env.HTTPS_PROXY).toBe("http://from-env:9");
     expect(process.env.HTTP_PROXY).toBeUndefined();
-  });
-});
-
-describe('macOS proxy: "auto" (#5853)', () => {
-  const { applyProxyEnvWith } = require("../../src/config") as typeof import("../../src/config");
-  const { readMacOSSystemProxy } = require("../../src/config/macos-system-proxy") as typeof import("../../src/config/macos-system-proxy");
-  const settings = (body: string) => `<dictionary> {\n${body}\n}`;
-  const both = "HTTPEnable : 1\nHTTPProxy : proxy.example\nHTTPPort : 8080\nHTTPSEnable : 1\nHTTPSProxy : ::1\nHTTPSPort : 8443";
-
-  test("maps enabled schemes and merges system, configured, inherited and loopback exceptions", () => {
-    process.env.NO_PROXY = "existing.example,LOCALHOST";
-    applyProxyEnvWith(configWithProxy("auto", ["configured.example"]), {
-      platform: "darwin",
-      macOSReader: () => settings(`${both}\nExceptionsList : <array> {\n0 : *.local\n1 : 169.254/16\n2 : existing.example\n3 : localhost\n}`),
-    });
-    expect(process.env.HTTP_PROXY).toBe("http://proxy.example:8080");
-    expect(process.env.HTTPS_PROXY).toBe("http://[::1]:8443");
-    expect(process.env.NO_PROXY).toBe("existing.example,LOCALHOST,configured.example,*.local,169.254/16,127.0.0.1,::1,[::1]");
-    expect(process.env.ALL_PROXY).toBeUndefined();
-  });
-
-  test.each(["HTTP", "HTTPS"])("preserves %s-only scope", scheme => {
-    applyProxyEnvWith(configWithProxy(" AUTO "), {
-      platform: "darwin",
-      macOSReader: () => settings(`${scheme}Enable : 1\n${scheme}Proxy : 127.0.0.1\n${scheme}Port : 7890`),
-    });
-    expect(process.env[`${scheme}_PROXY`]).toBe("http://127.0.0.1:7890");
-    expect(process.env[scheme === "HTTP" ? "HTTPS_PROXY" : "HTTP_PROXY"]).toBeUndefined();
-  });
-
-  test.each(["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"])("does not read macOS settings when %s is inherited", key => {
-    process.env[key] = "http://inherited.example:8080";
-    let reads = 0;
-    applyProxyEnvWith(configWithProxy("auto"), {
-      platform: "darwin", macOSReader: () => { reads++; return settings(both); },
-    });
-    expect(reads).toBe(0);
-    expect(process.env[key]).toBe("http://inherited.example:8080");
-  });
-
-  test("preserves inherited lowercase bypass precedence", () => {
-    process.env.no_proxy = "inherited.example";
-    applyProxyEnvWith(configWithProxy("auto"), {
-      platform: "darwin", macOSReader: () => settings(`${both}\nExceptionsList : <array> {\n0 : *.local\n}`),
-    });
-    expect(process.env.NO_PROXY).toContain("*.local");
-    if (process.platform !== "win32") expect(process.env.no_proxy).toBe("inherited.example,127.0.0.1,::1,[::1]");
-  });
-
-  test.each([
-    "", "garbage", "<dictionary> {\nHTTPEnable : 1", settings(""),
-    settings("HTTPEnable : 0\nHTTPProxy : proxy.example\nHTTPPort : 8080"),
-    settings("ProxyAutoConfigEnable : 1\nProxyAutoConfigURLString : https://example.test/proxy.pac"),
-    settings("SOCKSEnable : 1\nSOCKSProxy : localhost\nSOCKSPort : 1080"),
-    settings(`__SCOPED__ : <dictionary> {\nen0 : <dictionary> {\n${both}\n}\n}`),
-  ])("does not set proxy variables for unavailable static settings (%#)", output => {
-    applyProxyEnvWith(configWithProxy("auto"), { platform: "darwin", macOSReader: () => output });
-    expect(process.env.HTTP_PROXY).toBeUndefined();
-    expect(process.env.HTTPS_PROXY).toBeUndefined();
-  });
-
-  test.each(["0", "65536", "-1", "8e3", "8080junk", ""])("rejects invalid port %s", port => {
-    expect(readMacOSSystemProxy(() => settings(`HTTPEnable : 1\nHTTPProxy : proxy.example\nHTTPPort : ${port}`))).toEqual({ kind: "disabled" });
-  });
-
-  test.each(["user:password@host", "https://host", "host/path", "host?query", "host#fragment", "host name", ""])("rejects non-host proxy value (%#)", host => {
-    expect(readMacOSSystemProxy(() => settings(`HTTPEnable : 1\nHTTPProxy : ${host}\nHTTPPort : 8080`))).toEqual({ kind: "disabled" });
-  });
-
-  test("ignores disabled and malformed schemes without losing a valid HTTPS proxy", () => {
-    const result = readMacOSSystemProxy(() => settings(`${both.replace("HTTPPort : 8080", "HTTPPort : invalid")}\nExceptionsList : <array> {\n0 : good.example\n1 : bad,entry\n2 : bad entry\n}`));
-    expect(result).toEqual({ kind: "proxy", httpUrl: undefined, httpsUrl: "http://[::1]:8443", noProxy: ["good.example"] });
-  });
-
-  test("command failures degrade without exposing output or throwing", () => {
-    expect(readMacOSSystemProxy(() => null)).toEqual({ kind: "unreadable" });
-    expect(readMacOSSystemProxy(() => { throw new Error("command failed"); })).toEqual({ kind: "unreadable" });
   });
 });
