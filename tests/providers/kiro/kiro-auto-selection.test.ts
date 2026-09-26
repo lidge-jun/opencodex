@@ -53,15 +53,18 @@ test("Kiro candidate and list projection agree on family-less exclusion states",
     exhausted: true, nextResetAt: now + 3600_000 }, kiroEvidenceIdentity(exhausted));
   const expected = { reauth: "needs_reauth", suspended: "suspended", cooldown: "cooldown",
     exhausted: "quota_exhausted", unknown: undefined } as const;
+  // Evaluate after every write: evidence stamped later than the evaluation clock is rejected as
+  // future-dated, so reusing the pre-setup `now` made this test depend on millisecond timing.
+  const evalNow = Date.now();
   const live = getAccountSet("kiro")!.accounts;
-  const eligible = eligibleFailoverAccounts("kiro", now);
+  const eligible = eligibleFailoverAccounts("kiro", evalNow);
   for (const account of live) {
     const name = account.credential.accountId as keyof typeof expected;
-    const projected = kiroAutoSelection(account, now);
+    const projected = kiroAutoSelection(account, evalNow);
     expect(projected.autoSelectable).toBe(eligible.includes(account.id));
     expect(projected.skipReason).toBe(expected[name]);
   }
   expect(eligible).toEqual([byName("unknown").id]);
-  expect(kiroAutoSelection(byName("suspended"), now + 24 * 60 * 60_000 + 1))
+  expect(kiroAutoSelection(byName("suspended"), evalNow + 24 * 60 * 60_000 + 1))
     .toEqual({ autoSelectable: true });
 });
