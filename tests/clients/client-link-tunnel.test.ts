@@ -66,6 +66,7 @@ test("spawns the client tunnel with the exact local forward argv and writes a pr
       configDir,
       knownHostsFile: join(configDir, "link", "known_hosts"),
       runner: fake.runner,
+      readProcessStartTime: () => "fixture-start",
     });
     expect(fake.children[0]!.child.argv).toEqual(buildTunnelArgv({
       alias: "home.example.test",
@@ -81,6 +82,7 @@ test("spawns the client tunnel with the exact local forward argv and writes a pr
       pid: fake.children[0]!.child.pid,
       argv: fake.children[0]!.child.argv,
       ownerPid: process.pid,
+      startTime: "fixture-start",
     });
     if (process.platform !== "win32") expect(statSync(pidfile).mode & 0o777).toBe(0o600);
     fake.children[0]!.resolve(0);
@@ -124,12 +126,13 @@ test("reaps only a dead owner's exact Linux tunnel and drops a stale pidfile", a
   const argv = ["ssh", "-N", "-T"];
   const writePidfile = (ownerPid: number, pid: number, value = argv) => {
     mkdirSync(join(configDir, "link"), { recursive: true });
-    writeFileSync(path, JSON.stringify({ version: 1, linkId: sidecar().linkId, pid, argv: value, ownerPid }));
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: sidecar().linkId, pid, argv: value, ownerPid, startTime: "linux-start" }));
   };
   try {
     writePidfile(41, 42);
     expect(await reapOrphanTunnel({
       configDir, isAlive: pid => pid === 41 || pid === 42, platform: "linux", readProcessArgv: () => argv,
+      readProcessStartTime: () => "linux-start",
     })).toEqual({ tunnel: "owned", pid: 42 });
     expect(existsSync(path)).toBe(true);
 
@@ -146,6 +149,7 @@ test("reaps only a dead owner's exact Linux tunnel and drops a stale pidfile", a
       isAlive: pid => pid === 42,
       platform: "linux",
       readProcessArgv: () => argv,
+      readProcessStartTime: () => "linux-start",
       signal: (_pid, signal) => signals.push(signal),
       sleep: async () => {},
     })).toEqual({ tunnel: "reaped" });
@@ -165,13 +169,57 @@ test("reaps only a dead owner's exact Linux tunnel and drops a stale pidfile", a
   }
 });
 
+for (const platform of ["linux", "darwin"] as const) {
+  test(`${platform} never escalates to a reused PID after TERM`, async () => {
+    const configDir = tempConfigDir();
+    const path = clientTunnelPidfilePath(configDir);
+    const argv = ["ssh", "-N", "-T"];
+    let startTime = "start-a";
+    const signals: NodeJS.Signals[] = [];
+    mkdirSync(join(configDir, "link"), { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: sidecar().linkId, pid: 42, argv, ownerPid: 41, startTime }));
+    try {
+      const result = await reapOrphanTunnel({
+        configDir, platform,
+        isAlive: pid => pid === 42,
+        readProcessArgv: () => argv,
+        readProcessStartTime: () => startTime,
+        readProcessInfo: () => ({ ppid: 1, args: argv.join(" "), startTime }),
+        signal: (_pid, signal) => { signals.push(signal); if (signal === "SIGTERM") startTime = "start-b"; },
+        sleep: async () => {},
+      });
+      expect(signals).toEqual(["SIGTERM"]);
+      expect(result).toEqual({ tunnel: "unresolved", pid: 42 });
+    } finally {
+      rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("a legacy tunnel pidfile without start identity never authorizes a signal", async () => {
+  const configDir = tempConfigDir();
+  const path = clientTunnelPidfilePath(configDir);
+  const argv = ["ssh", "-N", "-T"];
+  const signals: NodeJS.Signals[] = [];
+  mkdirSync(join(configDir, "link"), { recursive: true });
+  writeFileSync(path, JSON.stringify({ version: 1, linkId: sidecar().linkId, pid: 42, argv, ownerPid: 41 }));
+  try {
+    expect(await reapOrphanTunnel({ configDir, platform: "linux", isAlive: pid => pid === 42,
+      readProcessArgv: () => argv, readProcessStartTime: () => "live-start",
+      signal: (_pid, signal) => { signals.push(signal); } })).toEqual({ tunnel: "unresolved", pid: 42 });
+    expect(signals).toEqual([]);
+  } finally {
+    rmSync(configDir, { recursive: true, force: true });
+  }
+});
+
 test("macOS reaps an exact-argv orphan of launchd and never signals a process it cannot prove is its own", async () => {
   const configDir = tempConfigDir();
   const path = clientTunnelPidfilePath(configDir);
   const argv = ["ssh", "-N", "-T", "-L", "127.0.0.1:19002:127.0.0.1:19001", "--", "home.example.test"];
   const writePidfile = () => {
     mkdirSync(join(configDir, "link"), { recursive: true });
-    writeFileSync(path, JSON.stringify({ version: 1, linkId: sidecar().linkId, pid: 42, argv, ownerPid: 41 }));
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: sidecar().linkId, pid: 42, argv, ownerPid: 41, startTime: "darwin-start" }));
   };
   const signals: Array<[number, NodeJS.Signals]> = [];
   const record = (pid: number, signal: NodeJS.Signals) => { signals.push([pid, signal]); };
@@ -188,7 +236,7 @@ test("macOS reaps an exact-argv orphan of launchd and never signals a process it
       configDir,
       platform: "darwin",
       isAlive: pid => pid === 42 && alive,
-      readProcessInfo: () => ({ ppid: 1, args: argv.join(" ") }),
+      readProcessInfo: () => ({ ppid: 1, args: argv.join(" "), startTime: "darwin-start" }),
       signal: (pid, signal) => { record(pid, signal); alive = false; },
       sleep: async () => {},
     })).toEqual({ tunnel: "reaped" });
@@ -196,7 +244,7 @@ test("macOS reaps an exact-argv orphan of launchd and never signals a process it
     expect(existsSync(path)).toBe(false);
 
     // Our argv under another parent, or a process ps cannot read: watched, never signalled.
-    for (const info of [{ ppid: 500, args: argv.join(" ") }, null]) {
+    for (const info of [{ ppid: 500, args: argv.join(" "), startTime: "darwin-start" }, null]) {
       signals.length = 0;
       writePidfile();
       expect(await reapOrphanTunnel({
@@ -209,7 +257,7 @@ test("macOS reaps an exact-argv orphan of launchd and never signals a process it
     // The pid now runs another program (reused after a reboot): stale, and never signalled.
     expect(await reapOrphanTunnel({
       configDir, platform: "darwin", isAlive: pid => pid === 42,
-      readProcessInfo: () => ({ ppid: 1, args: "/usr/libexec/some-daemon --agent" }), signal: record,
+      readProcessInfo: () => ({ ppid: 1, args: "/usr/libexec/some-daemon --agent", startTime: "darwin-start" }), signal: record,
     })).toEqual({ tunnel: "absent" });
     expect(signals).toEqual([]);
     expect(existsSync(path)).toBe(false);
@@ -643,12 +691,13 @@ test("a start-up read that cannot be used still reaps a leftover tunnel before t
   const h = supervisorHarness({
     platform: "linux",
     readProcessArgv: pid => (pid === 42 && orphanAlive ? argv : null),
+    readProcessStartTime: () => "linux-start",
     isAlive: pid => pid === 42 && orphanAlive,
     signal: (pid, signal) => { signals.push([pid, signal]); orphanAlive = false; },
     sleep: async () => {},
   });
   mkdirSync(join(h.configDir, "link"), { recursive: true });
-  writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1, linkId: sidecar().linkId, pid: 42, argv, ownerPid: 41 }));
+  writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1, linkId: sidecar().linkId, pid: 42, argv, ownerPid: 41, startTime: "linux-start" }));
   try {
     h.view.connected = CONNECTION_UNREADABLE as never;
     await h.start();
@@ -686,12 +735,12 @@ test("a macOS orphan with the exact argv under launchd is reaped and replaced", 
   const h = supervisorHarness({
     platform: "darwin",
     isAlive: pid => pid === 42 && orphanAlive,
-    readProcessInfo: pid => (pid === 42 ? { ppid: 1, args: argv.join(" ") } : null),
+    readProcessInfo: pid => (pid === 42 ? { ppid: 1, args: argv.join(" "), startTime: "darwin-start" } : null),
     signal: (pid, signal) => { signals.push([pid, signal]); orphanAlive = false; },
     sleep: async () => {},
   });
   mkdirSync(join(h.configDir, "link"), { recursive: true });
-  writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1, linkId: sidecar().linkId, pid: 42, argv, ownerPid: 41 }));
+  writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1, linkId: sidecar().linkId, pid: 42, argv, ownerPid: 41, startTime: "darwin-start" }));
   try {
     await h.start();
     expect(signals).toEqual([[42, "SIGTERM"]]);

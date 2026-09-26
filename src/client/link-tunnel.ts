@@ -57,6 +57,7 @@ export type OrphanTunnelResult =
 /** A macOS process as `ps -o ppid= -o args=` shows it: the parent pid and the space-joined argv. */
 export interface DarwinProcessInfo {
   ppid: number;
+  startTime: string;
   args: string;
 }
 
@@ -64,6 +65,8 @@ export interface OrphanReapDeps {
   configDir?: string;
   platform?: NodeJS.Platform;
   readProcessArgv?: (pid: number) => readonly string[] | null;
+  /** Stable process start identity; unavailable identity means the orphan is never signalled. */
+  readProcessStartTime?: (pid: number, platform: NodeJS.Platform) => string | null;
   /** macOS: the parent pid and argv of `pid`, or null when they cannot be read. */
   readProcessInfo?: (pid: number) => DarwinProcessInfo | null;
   isAlive?: (pid: number) => boolean;
@@ -146,6 +149,8 @@ export interface ClientTunnelPidfile {
   pid: number;
   argv: string[];
   ownerPid: number;
+  /** Captured at spawn; legacy pidfiles without it cannot authorize a signal. */
+  startTime: string | null;
 }
 
 const STOP_TIMEOUT_MS = 5_000;
@@ -172,13 +177,16 @@ function parsePidfile(value: unknown): ClientTunnelPidfile | null {
   if (raw.version !== 1 || typeof raw.linkId !== "string" || typeof raw.pid !== "number"
     || !Number.isSafeInteger(raw.pid) || raw.pid < 1 || !Array.isArray(raw.argv)
     || raw.argv.length === 0 || raw.argv.some(item => typeof item !== "string")
-    || typeof raw.ownerPid !== "number" || !Number.isSafeInteger(raw.ownerPid) || raw.ownerPid < 1) return null;
+    || typeof raw.ownerPid !== "number" || !Number.isSafeInteger(raw.ownerPid) || raw.ownerPid < 1
+    || (raw.startTime !== undefined && raw.startTime !== null
+      && (typeof raw.startTime !== "string" || raw.startTime.length === 0 || raw.startTime.length > 128))) return null;
   return {
     version: 1,
     linkId: raw.linkId,
     pid: raw.pid,
     argv: raw.argv as string[],
     ownerPid: raw.ownerPid,
+    startTime: typeof raw.startTime === "string" ? raw.startTime : null,
   };
 }
 
@@ -198,9 +206,9 @@ function writePidfile(path: string, value: ClientTunnelPidfile): void {
   if (process.platform !== "win32") chmodSync(path, 0o600);
 }
 
-function removePidfileIfPid(path: string, pid: number): void {
+function removePidfileIfPid(path: string, pid: number, startTime: string | null): void {
   const current = readPidfile(path);
-  if (current?.pid !== pid) return;
+  if (current?.pid !== pid || current.startTime !== startTime) return;
   try {
     unlinkSync(path);
   } catch (error) {
@@ -237,20 +245,40 @@ function linuxProcessArgv(pid: number): readonly string[] | null {
   }
 }
 
-/** `ps -ww -o ppid= -o args= -p <pid>`: one line, the right-aligned parent pid, one space, the argv. */
+/** Field 22 of /proc/<pid>/stat: kernel start ticks survive argv and parent changes. */
+function linuxProcessStartTime(pid: number): string | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const afterCommand = stat.lastIndexOf(") ");
+    if (afterCommand < 0) return null;
+    const startTime = stat.slice(afterCommand + 2).trim().split(/\s+/)[19];
+    return startTime && /^\d+$/.test(startTime) ? startTime : null;
+  } catch {
+    return null;
+  }
+}
+
+/** One `ps` snapshot carries parent, second-resolution start time and the full argv. */
 function darwinProcessInfo(pid: number): DarwinProcessInfo | null {
   try {
-    const result = Bun.spawnSync(["/bin/ps", "-ww", "-o", "ppid=", "-o", "args=", "-p", String(pid)], {
+    const result = Bun.spawnSync(["/bin/ps", "-ww", "-o", "ppid=", "-o", "lstart=", "-o", "args=", "-p", String(pid)], {
       stdin: "ignore",
       stdout: "pipe",
       stderr: "ignore",
     });
     if (result.exitCode !== 0) return null;
-    const match = /^\s*(\d+) (.+)$/.exec(result.stdout.toString().replace(/\r?\n$/, ""));
-    return match ? { ppid: Number(match[1]), args: match[2]! } : null;
+    const match = /^\s*(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/.exec(result.stdout.toString().replace(/\r?\n$/, ""));
+    return match ? { ppid: Number(match[1]), startTime: match[2]!, args: match[3]! } : null;
   } catch {
     return null;
   }
+}
+
+function processStartTime(pid: number, platform: NodeJS.Platform, deps: OrphanReapDeps): string | null {
+  if (deps.readProcessStartTime) return deps.readProcessStartTime(pid, platform);
+  if (platform === "linux") return linuxProcessStartTime(pid);
+  if (platform === "darwin") return (deps.readProcessInfo ?? darwinProcessInfo)(pid)?.startTime ?? null;
+  return null;
 }
 
 function timerDeps(deps: ClientLinkTunnelDeps): Required<Pick<ClientLinkTunnelDeps, "setTimer" | "clearTimer">> {
@@ -297,8 +325,9 @@ export function spawnClientLinkTunnel(spec: ClientLinkTunnelSpec, deps: ClientLi
   });
   const child = runner.spawnTunnel(argv);
   const pidfile = clientTunnelPidfilePath(deps.configDir);
+  const startTime = processStartTime(child.pid, process.platform, deps);
   try {
-    writePidfile(pidfile, { version: 1, linkId: spec.linkId, pid: child.pid, argv: [...argv], ownerPid: process.pid });
+    writePidfile(pidfile, { version: 1, linkId: spec.linkId, pid: child.pid, argv: [...argv], ownerPid: process.pid, startTime });
   } catch (error) {
     try { child.kill("SIGTERM"); } catch (killError) { if ((killError as NodeJS.ErrnoException).code !== "ESRCH") throw killError; }
     throw error;
@@ -306,7 +335,7 @@ export function spawnClientLinkTunnel(spec: ClientLinkTunnelSpec, deps: ClientLi
 
   let stopPromise: Promise<void> | undefined;
   const handleExit = (): void => {
-    removePidfileIfPid(pidfile, child.pid);
+    removePidfileIfPid(pidfile, child.pid, startTime);
   };
   const handle = {
     pid: child.pid,
@@ -314,7 +343,7 @@ export function spawnClientLinkTunnel(spec: ClientLinkTunnelSpec, deps: ClientLi
     stderr: child.stderr,
     stop(): Promise<void> {
       if (stopPromise) return stopPromise;
-      stopPromise = stopChild(child, deps).finally(() => removePidfileIfPid(pidfile, child.pid));
+      stopPromise = stopChild(child, deps).finally(() => removePidfileIfPid(pidfile, child.pid, startTime));
       return stopPromise;
     },
   } satisfies ClientLinkTunnelHandle & { stderr?: Promise<string> };
@@ -325,7 +354,7 @@ export function spawnClientLinkTunnel(spec: ClientLinkTunnelSpec, deps: ClientLi
 type TunnelIdentity =
   | { kind: "gone" }
   | { kind: "other" }
-  | { kind: "ours"; orphaned: boolean }
+  | { kind: "ours"; orphaned: boolean; startTime: string }
   | { kind: "unknown" };
 
 /**
@@ -342,14 +371,20 @@ function tunnelIdentity(
   if (platform === "linux") {
     const actualArgv = (deps.readProcessArgv ?? linuxProcessArgv)(pidfile.pid);
     if (!actualArgv) return { kind: "gone" };
-    return sameArgv(actualArgv, pidfile.argv) ? { kind: "ours", orphaned: true } : { kind: "other" };
+    if (!sameArgv(actualArgv, pidfile.argv)) return { kind: "other" };
+    const startTime = processStartTime(pidfile.pid, platform, deps);
+    if (!pidfile.startTime || !startTime) return { kind: "unknown" };
+    return startTime === pidfile.startTime ? { kind: "ours", orphaned: true, startTime } : { kind: "other" };
   }
   if (!isAlive(pidfile.pid)) return { kind: "gone" };
   if (platform !== "darwin") return { kind: "unknown" };
   const info = (deps.readProcessInfo ?? darwinProcessInfo)(pidfile.pid);
   if (!info) return { kind: "unknown" };
   if (info.args !== pidfile.argv.join(" ")) return { kind: "other" };
-  return { kind: "ours", orphaned: info.ppid === 1 };
+  if (!pidfile.startTime || !info.startTime) return { kind: "unknown" };
+  return info.startTime === pidfile.startTime
+    ? { kind: "ours", orphaned: info.ppid === 1, startTime: info.startTime }
+    : { kind: "other" };
 }
 
 /**
@@ -370,19 +405,27 @@ export async function reapOrphanTunnel(deps: OrphanReapDeps = {}): Promise<Orpha
   const platform = deps.platform ?? process.platform;
   const identity = tunnelIdentity(pidfile, platform, deps, isAlive);
   if (identity.kind === "gone" || identity.kind === "other") {
-    removePidfileIfPid(path, pidfile.pid);
+    removePidfileIfPid(path, pidfile.pid, pidfile.startTime);
     return { tunnel: "absent" };
   }
   if (isAlive(pidfile.ownerPid)) return { tunnel: "owned", pid: pidfile.pid };
   if (identity.kind !== "ours" || !identity.orphaned) return { tunnel: "unresolved", pid: pidfile.pid };
+  // The pid may have been reused since the first read. Recheck the saved start identity and
+  // orphan proof immediately before each signal, including the escalation after the wait.
+  const stillOurOrphan = (): boolean => {
+    const current = tunnelIdentity(pidfile, platform, deps, isAlive);
+    return current.kind === "ours" && current.orphaned && current.startTime === identity.startTime;
+  };
+  if (!stillOurOrphan()) return { tunnel: "unresolved", pid: pidfile.pid };
   const signal = deps.signal ?? defaultSignal;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
   try { signal(pidfile.pid, "SIGTERM"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
   for (let waited = 0; waited < STOP_TIMEOUT_MS && isAlive(pidfile.pid); waited += REAP_POLL_MS) await sleep(REAP_POLL_MS);
   if (isAlive(pidfile.pid)) {
+    if (!stillOurOrphan()) return { tunnel: "unresolved", pid: pidfile.pid };
     try { signal(pidfile.pid, "SIGKILL"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
   }
-  removePidfileIfPid(path, pidfile.pid);
+  removePidfileIfPid(path, pidfile.pid, pidfile.startTime);
   return { tunnel: "reaped" };
 }
 
