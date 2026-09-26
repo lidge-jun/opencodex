@@ -99,4 +99,30 @@ check(NativeTrayFormat.percentText(69.9) == "69%" && NativeTrayFormat.severity(6
 check(NativeTrayFormat.percentText(89.9) == "89%" && NativeTrayFormat.severity(89.9) == .warn, "89.9% reads 89% on orange")
 check(NativeTrayFormat.percentDescription(89.9) == "89 percent", "Spoken value floors too")
 check(NativeTrayFormat.percentText(nil) == "—", "Missing value renders a dash")
+
+// Account switching: only names cross to the host, and only for rows the runtime would accept.
+func switchRow(_ id: String, _ fields: [String: Any]) -> [String: Any] {
+    var row: [String: Any] = ["id": "\(id):0", "label": id, "active": false, "unavailable": false, "windows": []]
+    row.merge(fields) { _, new in new }
+    return row
+}
+let switching = try decode(["providers": [
+    ["id": "openai", "label": "OpenAI", "unavailable": false, "switchable": true, "accounts": [
+        switchRow("__main__", ["accountId": "__main__", "switchState": "blocked", "blockedReason": "mainHardLock"]),
+        switchRow("pool-a", ["accountId": "pool-a", "switchState": "active", "active": true]),
+        switchRow("pool-b", ["accountId": "pool-b", "switchState": "available", "exhausted": true]),
+        switchRow("pool-c", ["accountId": "pool-c", "switchState": "blocked", "blockedReason": "paused"]),
+    ]],
+    ["id": "legacy", "label": "Older host", "unavailable": false, "accounts": [switchRow("k", [:])]],
+]])
+let openai = switching.providers[0]
+check(NativeTraySwitch.request(provider: openai, account: openai.accounts[0]) == nil, "A hard-locked main account is not offered")
+check(NativeTraySwitch.request(provider: openai, account: openai.accounts[1]) == nil, "The active account is not offered")
+let exhaustedPick = NativeTraySwitch.request(provider: openai, account: openai.accounts[2])
+check(exhaustedPick?.provider == "openai" && exhaustedPick?.accountId == "pool-b", "An exhausted pool account stays switchable, by raw id")
+check(openai.accounts[2].exhausted == true, "Exhaustion decodes for the warning")
+check(NativeTraySwitch.request(provider: openai, account: openai.accounts[3]) == nil, "A paused account is not offered")
+let legacy = switching.providers[1]
+check(legacy.switchable == nil && NativeTraySwitch.request(provider: legacy, account: legacy.accounts[0]) == nil,
+      "Snapshots from older hosts decode and offer no switch")
 print("PASS: \(assertions) native tray contract/formatting assertions")

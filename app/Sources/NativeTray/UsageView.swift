@@ -4,7 +4,32 @@ import SwiftUI
 final class NativeTrayStore: ObservableObject {
     @Published var snapshot: NativeTraySnapshot?
     @Published var decodeFailed = false
+    /// The account row whose switch is in flight, until a settled snapshot arrives.
+    @Published var pendingSwitch: String?
     var action: (Int32) -> Void = { _ in }
+    var switchAccount: (String, String) -> Void = { _, _ in }
+    private var pendingSince: Date?
+
+    func requestSwitch(provider: NativeTrayProvider, account: NativeTrayProvider.Account) {
+        guard pendingSwitch == nil, let request = NativeTraySwitch.request(provider: provider, account: account) else { return }
+        pendingSwitch = account.id
+        pendingSince = Date()
+        switchAccount(request.provider, request.accountId)
+    }
+
+    /// A switch settles when the host publishes a finished snapshot: the new account is active, or
+    /// the failure is listed. A snapshot that arrives before the host even started refreshing
+    /// would clear it too early, so the wait also has a floor and a ceiling.
+    func settlePendingSwitch(now: Date = Date()) {
+        guard let pending = pendingSwitch, let since = pendingSince, let snapshot else { return }
+        let elapsed = now.timeIntervalSince(since)
+        let nowActive = snapshot.providers.contains { $0.accounts.contains { $0.id == pending && $0.active } }
+        let settled = !snapshot.refreshing && (nowActive || !snapshot.errors.isEmpty) && elapsed > 0.2
+        if settled || elapsed > 20 {
+            pendingSwitch = nil
+            pendingSince = nil
+        }
+    }
 }
 
 struct NativeTrayUsageView: View {
@@ -56,7 +81,9 @@ struct NativeTrayUsageView: View {
                         if snapshot.settings.showAccounts {
                             Divider()
                             ForEach(snapshot.providers) { provider in
-                                NativeTrayProviderView(provider: provider)
+                                NativeTrayProviderView(provider: provider, pendingSwitch: store.pendingSwitch) { account in
+                                    store.requestSwitch(provider: provider, account: account)
+                                }
                             }
                         }
                         ForEach(Array(snapshot.errors.enumerated()), id: \.offset) { _, error in

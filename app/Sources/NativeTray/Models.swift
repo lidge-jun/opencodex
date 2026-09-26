@@ -96,6 +96,8 @@ public struct NativeTrayProvider: Decodable, Identifiable {
     /// `dark-plate`). Both are optional: older hosts and unknown providers send neither.
     public let iconSvg: String?
     public let iconPaint: String?
+    /// Whether the host can switch this provider's active account. Absent on older hosts.
+    public let switchable: Bool?
     public struct Account: Decodable, Identifiable {
         public let id: String
         public let label: String
@@ -104,6 +106,15 @@ public struct NativeTrayProvider: Decodable, Identifiable {
         public let active: Bool
         public let unavailable: Bool
         public let windows: [Window]
+        /// The provider's own account id; `id` is a display key and never leaves the panel.
+        public let accountId: String?
+        /// `active`, `available` or `blocked`, mirroring what the runtime refuses or drains.
+        public let switchState: String?
+        /// `mainHardLock` or `paused` when blocked.
+        public let blockedReason: String?
+        /// A window reads 100%; switching is allowed and the row warns.
+        public let exhausted: Bool?
+        public var canSwitch: Bool { !active && switchState == "available" && accountId != nil }
     }
     public struct Window: Decodable, Identifiable {
         public let id: String

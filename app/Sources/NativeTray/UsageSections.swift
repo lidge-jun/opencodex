@@ -3,6 +3,8 @@ import Charts
 
 struct NativeTrayProviderView: View {
     let provider: NativeTrayProvider
+    var pendingSwitch: String? = nil
+    var onUse: ((NativeTrayProvider.Account) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -16,15 +18,12 @@ struct NativeTrayProviderView: View {
             }
             ForEach(provider.accounts) { account in
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text(account.label).lineLimit(1).help(account.label)
-                        Spacer()
-                        if let plan = account.plan { Text(plan).foregroundStyle(.secondary) }
-                        if account.active {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                                .accessibilityLabel("Active account").help("Active account")
-                        }
-                    }.font(.caption)
+                    NativeTrayAccountHeader(
+                        account: account,
+                        switchable: provider.switchable == true && onUse != nil,
+                        pending: pendingSwitch == account.id,
+                        busy: pendingSwitch != nil,
+                        onUse: { onUse?(account) })
                     if let email = account.email, email != account.label {
                         Text(email).font(.caption2).foregroundStyle(.secondary)
                     }

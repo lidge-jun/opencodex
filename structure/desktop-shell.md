@@ -173,6 +173,7 @@ Allowlisted GETs use the existing single-use read-v1 capability; the snapshot PO
 Both grants bind a fresh nonce, PID, port and ten-second expiry to the recorded runtime secret. The snapshot additionally signs the SHA-256 digest of the exact serialized JSON bytes.
 The server consumes the grant once and verifies the bounded body before parsing or storing it; the snapshot grant authorizes no other read or write. Existing admin-token publishers remain compatible, but GUI sessions and browser-origin writes are refused.
 The unauthenticated health body is only a discovery hint. Minting re-confirms the recorded runtime against the current identity and binding generation; an earlier binding does not authorize a request after the shell rebinds.
+The native panel's account switch uses a third body-bound grant (`put_account_switch`) for exactly one of `PUT /api/codex-auth/active`, `/api/oauth/accounts/active` or `/api/providers/keys/active`, contract in [GUI and management API](gui-and-management-api.md). The panel passes only a provider id and the provider's own account id through `ocx_native_tray_set_switch_handler`; `desktop/src-tauri/src/native_tray.rs` bounds and copies those strings on the main thread, picks the route and body from its own provider sources (`native_tray_accounts::switch_request`), sends the request, and refreshes the panel or lists the failure.
 
 `desktop/src-tauri/src/tray_availability.rs` asks the session bus whether
 `org.kde.StatusNotifierWatcher` reports a host registered; macOS and Windows answer yes without a
