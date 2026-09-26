@@ -41,3 +41,9 @@ Sweep #5858 (merge `ca74738bc5`) is the union of twelve PRs, all already in the 
 #5850 (features). Its integration commits `43345e3c0e` and `3ed77e964f` are in ops and standalone.
 The remaining commits in the range (#5857 devlog, #5852 version pre-move) carry no runtime code.
 Before wp2 exits, re-read the `dev` run list to confirm no new failure since this was written.
+
+## Status at wp1 close (01:36Z)
+
+Run `36208751784` in progress: skipped=1, success=20 of 37 jobs, no failure yet. Four kimi regression leaves
+(standalone, chat, ops, features) dispatched in wp1's P as read-only discovery; their reports are
+synthesized in wp2.
