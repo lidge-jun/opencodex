@@ -101,7 +101,7 @@ const STDIN_SENTINEL = "-";
 
 /** Providers whose ONLY login is already a device flow; --device is redundant, not wrong. */
 const DEVICE_NATIVE_PROVIDERS = new Set(["kimi", "nous", "github-copilot"]);
-const stripTerminalControls = (value: string): string => value.replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
+const stripTerminalControls = (value: string): string => value.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "");
 export function formatKiroDeviceInstructions(start: { verificationUriComplete?: string; verificationUri?: string; userCode?: string; flowId?: string }): string {
   return [
     stripTerminalControls(start.verificationUriComplete ?? start.verificationUri ?? ""),

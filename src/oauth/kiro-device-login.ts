@@ -46,7 +46,8 @@ const TERMINAL_RETENTION_MS = 60_000;
 const MAX_LIFETIME_MS = 15 * 60_000;
 const PROFILE_ARN = /^arn:[a-z0-9-]+:codewhisperer:[a-z0-9-]+:\d{12}:profile\/[A-Za-z0-9-]+$/;
 const USER_CODE = /^[A-Za-z0-9-]{4,32}$/;
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+/** C0/C1 controls plus bidi and zero-width formatting marks that can disguise a URL. */
+const CONTROL = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/;
 const flows = new Map<string, Flow>();
 
 async function defaultPost(url: string, body: Record<string, unknown>): Promise<Response> {

@@ -88,6 +88,8 @@ describe("Kiro Builder ID device grant", () => {
       { verificationUri: "http://example.test/verify" },
       { verificationUri: `https://example.test/${"a".repeat(2048)}` },
       { userCode: "ABCD\u001b[31m" },
+      { verificationUri: "https://example.test/\u202egnp.exe" },
+      { verificationUriComplete: "https://example.test/\u200bverify" },
     ]) {
       fixture = kiroDeviceFixture();
       fixture.setPost(async url => url.endsWith("/client/register")
