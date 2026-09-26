@@ -128,6 +128,69 @@ describe("withUniqueToolCallIds", () => {
 
     expect(started?.type === "tool_call_start" && started.id).toBe("call-0-0");
   });
+
+  /** The same positional upstream, but framed as an SSE stream: the stream path remints separately. */
+  const positionalUpstreamStream = (id: string) => new Response(
+    `data: ${JSON.stringify({
+      choices: [{
+        delta: { tool_calls: [{ index: 0, id, function: { name: "Bash", arguments: '{"command":' } }] },
+      }],
+    })}\n\n`
+    + `data: ${JSON.stringify({
+      choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"ls"}' } }] } }],
+    })}\n\n`
+    + `data: ${JSON.stringify({
+      choices: [{ delta: {}, finish_reason: "tool_calls" }],
+    })}\n\ndata: [DONE]\n\n`,
+  );
+
+  test("the stream path remints a repeated id and keeps each call's event sequence intact", async () => {
+    const adapter = withTestTranslatorBudget(withUniqueToolCallIds(createOpenAIChatAdapter(baseProvider)));
+    const emitted: string[] = [];
+    const history: OcxMessage[] = [];
+
+    // Each turn: build (sees the history), stream (emits the call), then the client stores it.
+    for (let turn = 0; turn < 2; turn++) {
+      adapter.buildRequest(buildParsed(history));
+      const events = [];
+      for await (const event of adapter.parseStream(positionalUpstreamStream("call-0-0"), createTestTranslatorBudget())) {
+        events.push(event);
+      }
+
+      const started = events.find(event => event.type === "tool_call_start");
+      if (started?.type !== "tool_call_start") throw new Error("no tool call emitted");
+      emitted.push(started.id);
+
+      // The remint must not disturb the deltas or the terminator around it.
+      const startIndex = events.indexOf(started);
+      const endIndex = events.findIndex(event => event.type === "tool_call_end");
+      expect(startIndex).toBeGreaterThanOrEqual(0);
+      expect(endIndex).toBeGreaterThan(startIndex);
+      const argumentsParts: string[] = [];
+      for (const event of events) {
+        if (event.type === "tool_call_delta") argumentsParts.push(event.arguments);
+      }
+      const arguments_ = argumentsParts.join("");
+      expect(arguments_).toBe('{"command":"ls"}');
+
+      history.push({ role: "assistant", content: [{ type: "toolCall", id: started.id, name: "Bash", arguments: arguments_ }], timestamp: turn });
+    }
+
+    expect(emitted).toEqual(["call-0-0", "call-0-0-2"]);
+    expect(new Set(emitted).size).toBe(2);
+  });
+
+  test("a first streamed turn with no history emits the upstream id byte-identical", async () => {
+    const adapter = withTestTranslatorBudget(withUniqueToolCallIds(createOpenAIChatAdapter(baseProvider)));
+    adapter.buildRequest(buildParsed([]));
+
+    let id: string | undefined;
+    for await (const event of adapter.parseStream(positionalUpstreamStream("call-0-0"), createTestTranslatorBudget())) {
+      if (event.type === "tool_call_start") id = event.id;
+    }
+
+    expect(id).toBe("call-0-0");
+  });
 });
 
 describe("reservedToolCallIdsFromHistory", () => {
