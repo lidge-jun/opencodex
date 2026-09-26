@@ -1402,7 +1402,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://www.codebuddy.ai/profile/keys",
     defaultModel: "default-model",
     models: CODEBUDDY_GLOBAL_MODELS,
-    liveModels: false,
+    liveModels: true,
     modelContextWindows: CODEBUDDY_GLOBAL_MODEL_CONTEXT_WINDOWS,
     modelMaxOutputTokens: CODEBUDDY_GLOBAL_MODEL_MAX_OUTPUT_TOKENS,
     defaultMaxOutputTokens: 32_000,
@@ -1415,7 +1415,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     // Official CodeBuddy Code CLI provider, CHINA / `internal` environment. Identical adapter and
     // binary as `codebuddy`; the region is fixed by the profile's CODEBUDDY_INTERNET_ENVIRONMENT
     // and this canonical baseUrl. CN key: https://copilot.tencent.com/profile/keys. The CN model
-    // roster differs from Global (see codebuddy-models.ts) and is seeded separately (§八).
+    // roster differs from Global and is discovered live from the key-authenticated product
+    // configuration roster; the seeded list in codebuddy-models.ts is only the degraded
+    // fallback (§八).
     id: "codebuddy-cn",
     label: "CodeBuddy (CN)",
     adapter: "codebuddy",
@@ -1426,7 +1428,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     dashboardUrl: "https://copilot.tencent.com/profile/keys",
     defaultModel: "default",
     models: CODEBUDDY_CN_MODELS,
-    liveModels: false,
+    liveModels: true,
     modelContextWindows: CODEBUDDY_CN_MODEL_CONTEXT_WINDOWS,
     modelMaxOutputTokens: CODEBUDDY_CN_MODEL_MAX_OUTPUT_TOKENS,
     defaultMaxOutputTokens: 32_000,

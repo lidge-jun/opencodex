@@ -7,8 +7,12 @@
  * Global and CN are deliberately NOT the same roster (§八). Context windows, output caps, vision
  * and reasoning ladders are filled ONLY where the official manifest states them; a model with no
  * published figure is omitted rather than guessed (§二十八/§二十九). CodeBuddy exposes no documented
- * third-party live `/v1/models` endpoint, so these providers seed a static catalog
- * (`liveModels: false`) exactly like the Kiro and Command Code entries.
+ * third-party live `/v1/models` endpoint, so live discovery instead reads the key-authenticated
+ * product configuration roster (src/adapters/codebuddy/live-models.ts) and this static catalog is
+ * only the degraded seed for keys that fail to authenticate or requests that fail. The
+ * server-side roster can list models the manifest does not know — an account's entitlement can
+ * be newer than the bundled manifest — so a mismatch between this file and a live roster is
+ * expected, not a catalog bug.
  */
 
 /** Global (`public`) session models accepted by `codebuddy --model`. */
