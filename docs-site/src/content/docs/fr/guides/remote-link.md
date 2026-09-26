@@ -9,20 +9,19 @@ Une liaison entre machines connecte un ordinateur OpenCodex **Home** à un ordin
 
 - Home peut se connecter à Child avec une clé OpenSSH.
 - Pour une liaison initiée par Child, Child peut se connecter à Home avec une clé OpenSSH (la connexion par mot de passe n’est pas prise en charge).
-- OpenCodex est installé sur Child.
+- OpenCodex 2.66.0 ou ultérieur est installé sur Child (et sur Home pour une liaison initiée par Child).
 - Les deux ordinateurs utilisent macOS ou Linux.
-- Le tableau de bord Home dispose d’une session appairée complète.
+- La liaison se lance depuis Home : son tableau de bord est ouvert sur l’ordinateur Home lui-même (navigateur ou application de bureau, installation autonome) ou via une session Hub appairée.
 
-SSH par mot de passe et Windows restent hors du flux actuel. Pour démarrer une liaison depuis Child, ouvrez le tableau de bord du Child autonome, choisissez **Enfant** → **Trouver le Home**, sélectionnez l’hôte SSH de Home, vérifiez puis confirmez l’empreinte de la clé hôte, et choisissez **Connecter comme Enfant**. Child doit pouvoir se connecter à Home avec une clé SSH (les mots de passe ne sont pas pris en charge), et `ocx` doit être en cours d’exécution sur Home. Le port du tunnel client est `1024` ou supérieur. Après la jonction, Child redémarre et se connecte via Home. Cette option est disponible uniquement en mode autonome.
+SSH par mot de passe et Windows restent hors du flux actuel. Connecter un ordinateur comme Child depuis le tableau de bord (liaison initiée par Child) n’est pas disponible dans cette version : la jonction redémarre OpenCodex sur cet ordinateur, ce qui couperait les connexions Codex déjà ouvertes ; le tableau de bord affiche donc le rôle **Enfant** comme indisponible. La liaison initiée par Home est la voie prise en charge : sur l’ordinateur qui doit servir de Home, choisissez **Home** et ajoutez l’autre ordinateur comme Child, comme décrit ci-dessous.
 
 ## Ajouter un Child depuis `#remote`
 
 1. Ouvrez le tableau de bord sur `#remote` et activez Remote Link.
-2. Choisissez **Home**.
-3. Sélectionnez **Add child**.
-4. Choisissez un hôte parmi les candidats SSH, ou saisissez un alias de configuration SSH.
-5. Lancez le test de connexion et comparez l’empreinte proposée avec celle de l’ordinateur visé. Cette comparaison aide à détecter un mauvais hôte ou une clé d’hôte modifiée avant que SSH ne lui fasse confiance.
-6. Confirmez l’empreinte, puis connectez Child.
+2. Choisissez **Home**, puis **Continue**. La liste des hôtes SSH s’ouvre.
+3. Choisissez un hôte parmi les candidats SSH, ou saisissez un alias de configuration SSH.
+4. Lancez le test de connexion et comparez l’empreinte proposée avec celle de l’ordinateur visé. Cette comparaison aide à détecter un mauvais hôte ou une clé d’hôte modifiée avant que SSH ne lui fasse confiance.
+5. Confirmez l’empreinte, puis connectez Child.
 
 Le tableau de bord ne demande pas de saisir un jeton. Il sonde d’abord l’hôte et ne peut appliquer la liaison qu’après votre confirmation explicite de l’empreinte.
 

@@ -1,4 +1,4 @@
-import { buildExecArgv } from "../link/ssh-argv";
+import { buildExecArgv, remoteOcxArgv } from "../link/ssh-argv";
 import type { SshRunner } from "../link/ssh-runner";
 import type { ClientLinkState } from "./link-state";
 import type { OrphanTunnelResult } from "./link-tunnel";
@@ -47,7 +47,7 @@ export async function teardownClientLink(
     const result = await deps.runner.run(
       buildExecArgv({
         alias: sidecar.alias,
-        argv: ["ocx", "link", "revoke", "--link-id", sidecar.linkId],
+        argv: remoteOcxArgv(["link", "revoke", "--link-id", sidecar.linkId]),
         knownHostsFile: deps.knownHostsFile,
       }),
       { timeoutMs: deps.timeoutMs ?? HOME_REVOKE_TIMEOUT_MS },

@@ -9,20 +9,19 @@ description: 透過 SSH 連接 OpenCodex Home 電腦與 Child 電腦。
 
 - Home 可以使用 OpenSSH 金鑰登入 Child。
 - 對於由 Child 發起的連結，Child 必須能使用 OpenSSH 金鑰登入 Home（不支援密碼登入）。
-- Child 已安裝 OpenCodex。
+- Child 已安裝 OpenCodex 2.66.0 或更新版本（由 Child 發起的連結也要求 Home 符合）。
 - 兩台電腦執行 macOS 或 Linux。
-- Home 儀表板擁有完整的已配對工作階段。
+- 連結由 Home 端發起：儀表板需在 Home 電腦本機開啟（獨立安裝的瀏覽器或桌面應用程式），或透過已配對的 Hub 工作階段開啟。
 
-密碼 SSH 和 Windows 不在目前流程中。若要從 Child 發起連線，請在獨立執行的 Child 儀表板中選擇 **子裝置** → **尋找 Home**，選取 Home 的 SSH 主機，檢查並確認主機金鑰指紋，然後選擇 **以子裝置身分連線**。Child 必須能使用 SSH 金鑰登入 Home（不支援密碼登入），而且 Home 上正在執行 `ocx`。用戶端通道連接埠必須是 `1024` 或更高。加入後，Child 會重新啟動並連線到 Home。這個入口只在 standalone 執行個體中提供。
+密碼 SSH 和 Windows 不在目前流程中。此版本不支援從儀表板將電腦連線為 Child（即由 Child 發起的連結）：加入會重新啟動這台電腦上的 OpenCodex，已在執行的 Codex 連線會因此中斷，因此儀表板中的 **子裝置** 角色無法選取。受支援的方式是由 Home 發起連結：在要作為 Home 的電腦上選擇 **Home**，再依下方步驟將另一台電腦新增為 Child。
 
 ## 從 `#remote` 新增 Child
 
 1. 開啟儀表板的 `#remote`，開啟 Remote Link。
-2. 選擇 **Home**。
-3. 選擇 **Add child**。
-4. 從 SSH 候選主機選擇主機，或輸入 SSH 設定別名。
-5. 執行連線測試，並將顯示的主機指紋與目標電腦的指紋比較。比較指紋可在 SSH 信任主機前發現錯誤的電腦或已變更的主機金鑰。
-6. 確認指紋，然後連接 Child。
+2. 選擇 **Home**，然後按 **Continue**。SSH 主機列表會開啟。
+3. 從 SSH 候選主機選擇主機，或輸入 SSH 設定別名。
+4. 執行連線測試，並將顯示的主機指紋與目標電腦的指紋比較。比較指紋可在 SSH 信任主機前發現錯誤的電腦或已變更的主機金鑰。
+5. 確認指紋，然後連接 Child。
 
 儀表板不會要求輸入權杖。它會先探測主機，只有明確確認指紋後才能套用連結。
 

@@ -35,6 +35,7 @@
 .remote-link-row-meta { display: flex; flex-wrap: wrap; gap: var(--space-3); color: var(--muted); font-size: var(--text-caption); }
 .remote-link-row .btn { min-height: var(--control-touch); }
 .remote-link-error { color: var(--red); }
+.remote-link-hint { display: block; margin-top: var(--space-1); color: var(--muted); font-size: var(--text-label); overflow-wrap: anywhere; }
 .remote-link-info { color: var(--muted); font-size: var(--text-label); }
 .remote-link-restart { display: grid; gap: var(--space-2); padding: var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--raised); }
 .remote-link-restart p { margin: 0; color: var(--muted); }
