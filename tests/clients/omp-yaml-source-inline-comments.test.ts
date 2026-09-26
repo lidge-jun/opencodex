@@ -297,7 +297,7 @@ describe("OMP managed YAML inline comments", () => {
       "providers:",
       "  opencodex:",
       "    api: openai-completions",
-      ...Array.from({ length: 16_000 }, () => ""),
+      ...Array.from({ length: 40_000 }, () => ""),
       "    baseUrl: http://127.0.0.1:10100/v1",
       "",
     ].join("\n");
