@@ -722,7 +722,7 @@ export function opencodeProviderBlocks(
     const entry: OpencodeModelEntry = { name: exportModelLabel(model) };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
-      entry.limit = { context, output: outputBudgetFor(context) };
+      entry.limit = { context, output: outputBudgetFor(context, model) };
     }
     // `attachment` / `modalities` are fields of opencode's V1 model schema — the shape its
     // published config.json defines and the one its loader reads (verified against opencode
@@ -1004,7 +1004,7 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.contextWindow = context;
-      entry.maxTokens = outputBudgetFor(context);
+      entry.maxTokens = outputBudgetFor(context, model);
     }
     models.push(entry);
   }
@@ -1140,7 +1140,7 @@ function buildGajaeClientConfig(ctx: ExportContext): GajaeGeneratedConfig {
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.contextWindow = context;
-      entry.maxTokens = outputBudgetFor(context);
+      entry.maxTokens = outputBudgetFor(context, model);
     }
     models.push(entry);
   }

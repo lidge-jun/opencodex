@@ -195,6 +195,7 @@ export function deriveEntry(
     return ensureStrictCatalogFields(normalizeServiceTiers(e), {
       preserveExactInputModalities: preserveExact,
       isRouted,
+      preserveNativeAccessPrograms: codexForwardNativeCapabilityAlias !== null,
     });
   }
   // Fallback when no template is available (best-effort; strict parser may need more).

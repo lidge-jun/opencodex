@@ -93,14 +93,14 @@ quietly when the server predates its route:
 
 Deep links (`gui/src/protocol-deep-links.ts`) carry their target in the hash query, which
 `resolveAppHashChange` keeps only on `#providers` and `#models/compatibility` (`QUERY_HASH_PATHS`)
-and drops elsewhere. Each plan candidate links to `#providers?provider=<name>`
-(`gui/src/pages/providers-deep-link.ts` selects that provider and opens its Settings tab, and drops
-the query once another provider is chosen) and to `#models/compatibility?inbound=…&upstream=…`; a
-traced Logs row links to the compatibility pair it took. Links push history, the matrix replaces
+and drops elsewhere. Each plan candidate links to `#providers?provider=<name>` (`gui/src/pages/providers-deep-link.ts` selects that provider and opens its Settings tab, and drops
+the query once another provider is chosen) and to `#models/compatibility?inbound=…&upstream=…`; a traced Logs row links to the compatibility pair it took. Each chip of the header quota strip
+(`gui/src/components/quota-summary-bar/QuotaSummaryBar.tsx`, one scrolling row with « / » paging) links to `#providers?provider=<name>&tab=accounts`, which opens that provider's
+Accounts tab through `revealProviderAccounts` instead; following the same link again re-dispatches `hashchange` so it re-applies. Links push history, the matrix replaces
 the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
 so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
-`gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`,
-`gui/tests/providers-deep-link.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`.
+`gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`.
 
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
@@ -285,16 +285,11 @@ ordinary appends. It does not retain the full input or a normalized object for e
 neither the old byte window nor the parsed-entry cap can discard an earlier prefix before range and
 surface filtering. `managementUsageMaxReadBytes` remains a recognized compatibility setting for
 bounded legacy readers, but it is not an accuracy limit or tuning knob for `GET /api/usage`.
-A Codex-surface response also includes an `accounts` breakdown keyed by the stable non-PII
-`accountLogLabel`; current cards join those rows to the management account DTO and show the 30-day
-token total, API-equivalent cost estimate, and measurement coverage. New main-pool rows use `main`,
-while legacy bare `openai` rows stay ambiguous rather than being reassigned from current config.
-A missing `usage.jsonl` returns a zeroed summary with 200, not an error: a fresh install has no
-usage and must not render as a failure. What the shape must never do is present an unmeasured
-request as a measured zero — that is what the `measured / reported / unreported / unsupported /
-estimated` split exists for, and why coverage is reported alongside totals. The dashboard Usage tab renders the same shape, and the
-main Dashboard surfaces a 30d token / coverage summary. The in-memory `requestLog` is capped at
-200 entries and is **not** the source of truth for aggregation — the JSONL on disk is.
+A Codex-surface response includes an `accounts` breakdown keyed by stable non-PII `accountLogLabel`; cards join it to the management account DTO for 30-day tokens, API-equivalent cost and coverage. New main-pool rows use `main`; legacy bare `openai` rows remain ambiguous.
+A missing `usage.jsonl` returns a zeroed summary with 200 because a fresh install has no usage. Unmeasured requests remain distinct from measured zero through `measured / reported / unreported / unsupported / estimated` counts and their coverage totals.
+The Usage tab renders that shape and the main Dashboard shows its 30-day summary. The 200-entry in-memory `requestLog` is not the aggregation source; the JSONL ledger is.
+Ledger read failures instead return `500 { error: "read_failed" }`. Shared GUI usage admission reads that body before classifying HTTP failure and also rejects the legacy HTTP-200 envelope, so every shared cache retains its last valid report rather than fabricating zero totals.
+> Decision record: [ADR-0106](decisions/ADR-0106-usage-read-failure-contract.md)
 
 A row also records the upstream cost of its logical request. `logicalRequestId` names the turn
 that a retry leg, a repair refetch and a combo child all belong to, and `spend` aggregates their

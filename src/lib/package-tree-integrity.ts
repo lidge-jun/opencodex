@@ -1,4 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isStandaloneBinary } from "./standalone";
 
 export interface PackageTreeObservation {
@@ -63,9 +65,19 @@ const packageManifestUrl = new URL("../../package.json", import.meta.url);
 
 const INSTALLED_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 
+/** Directory of the package this process was loaded from, as the module loader spells it. */
+export function runningPackageRoot(): string {
+  return dirname(fileURLToPath(packageManifestUrl));
+}
+
 function readInstalledManifestVersion(): string | undefined {
+  return readPackageManifestVersionAt(fileURLToPath(packageManifestUrl));
+}
+
+/** The `version` of the manifest at `manifestPath`, or undefined when unreadable or malformed. */
+export function readPackageManifestVersionAt(manifestPath: string): string | undefined {
   try {
-    const version = (JSON.parse(readFileSync(packageManifestUrl, "utf8")) as { version?: unknown }).version;
+    const version = (JSON.parse(readFileSync(manifestPath, "utf8")) as { version?: unknown }).version;
     return typeof version === "string" && version.length <= 64 && INSTALLED_VERSION_PATTERN.test(version)
       ? version
       : undefined;
@@ -75,8 +87,13 @@ function readInstalledManifestVersion(): string | undefined {
 }
 
 function observePackageManifest(): PackageTreeObservation | null {
+  return observePackageManifestAt(fileURLToPath(packageManifestUrl));
+}
+
+/** Identity of the manifest at `manifestPath`, or null when it cannot be stat'd. */
+export function observePackageManifestAt(manifestPath: string): PackageTreeObservation | null {
   try {
-    const stat = statSync(packageManifestUrl, { bigint: true });
+    const stat = statSync(manifestPath, { bigint: true });
     return {
       device: stat.dev,
       inode: stat.ino,
@@ -99,7 +116,12 @@ function observePackageManifest(): PackageTreeObservation | null {
   }
 }
 
-function sameObservation(left: PackageTreeObservation, right: PackageTreeObservation): boolean {
+/** The manifest path inside a package root. */
+export function packageManifestPathIn(root: string): string {
+  return join(root, "package.json");
+}
+
+export function sameObservation(left: PackageTreeObservation, right: PackageTreeObservation): boolean {
   return left.device === right.device
     && left.inode === right.inode
     && left.contentTimeNs === right.contentTimeNs

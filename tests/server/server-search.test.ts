@@ -20,6 +20,7 @@ import {
   recordCodexUpstreamOutcome,
 } from "../../src/codex/routing";
 import { loadConfig, saveConfig } from "../../src/config";
+import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { saveCredential } from "../../src/oauth/store";
 import { routeModel } from "../../src/router";
 import { startServer } from "../../src/server";
@@ -52,7 +53,7 @@ beforeEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
@@ -66,6 +67,9 @@ afterEach(() => {
   clearAccountNeedsReauth("pool-b");
   clearAccountQuota();
   clearRequestLogsForTests();
+  // Credential writes start a Windows icacls harden of the home; it holds the directory open
+  // until it exits, so removing the home first answers EPERM on every later case.
+  await flushConfigDirHardeningForTests();
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
 });
 

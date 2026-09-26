@@ -132,14 +132,21 @@ export interface AdapterEventPreflight {
   error?: Extract<AdapterEvent, { type: "error" }>;
   empty: boolean;
   replayUnsafe: boolean;
+  timedOut?: boolean;
 }
 
 async function* replay(
   buffered: readonly AdapterEvent[],
   iterator: AsyncIterator<AdapterEvent>,
+  pendingNext?: Promise<IteratorResult<AdapterEvent>>,
 ): AsyncGenerator<AdapterEvent> {
   try {
     for (const event of buffered) yield event;
+    if (pendingNext) {
+      const next = await pendingNext;
+      if (next.done) return;
+      yield next.value;
+    }
     while (true) {
       const next = await iterator.next();
       if (next.done) return;
@@ -153,31 +160,58 @@ async function* replay(
 export async function preflightAdapterEvents(
   source: AsyncIterable<AdapterEvent>,
   classifyFirstEvent?: (event: AdapterEvent) => Extract<AdapterEvent, { type: "error" }> | undefined,
+  options?: { maxWaitMs?: number },
 ): Promise<AdapterEventPreflight> {
   const iterator = source[Symbol.asyncIterator]();
   const buffered: AdapterEvent[] = [];
   let replayUnsafe = false;
-  while (true) {
-    const next = await iterator.next();
-    if (next.done) return { stream: replay(buffered, iterator), empty: true, replayUnsafe };
-    if (next.value.type === "heartbeat") {
-      replayUnsafe ||= next.value.replayUnsafe === true;
+  const maxWaitMs = options?.maxWaitMs;
+  if (maxWaitMs !== undefined && maxWaitMs <= 0) {
+    return { stream: replay(buffered, iterator), empty: false, replayUnsafe, timedOut: true };
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let timeoutPromise: Promise<"timeout"> | undefined;
+  if (maxWaitMs !== undefined) {
+    timeoutPromise = new Promise(resolve => {
+      timeout = setTimeout(() => resolve("timeout"), maxWaitMs);
+    });
+  }
+  try {
+    while (true) {
+      const pendingNext = iterator.next();
+      const raced = timeoutPromise ? await Promise.race([pendingNext, timeoutPromise]) : await pendingNext;
+      if (raced === "timeout") {
+        return {
+          stream: replay(buffered, iterator, pendingNext),
+          empty: false,
+          replayUnsafe,
+          timedOut: true,
+        };
+      }
+      const next = raced;
+      if (next.done) return { stream: replay(buffered, iterator), empty: true, replayUnsafe };
+      if (next.value.type === "heartbeat") {
+        replayUnsafe ||= next.value.replayUnsafe === true;
+        // Preserve the latch in replay even after the original unsafe heartbeat is evicted.
+        buffered.push(replayUnsafe ? { ...next.value, replayUnsafe: true } : next.value);
+        if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
+        continue;
+      }
+      const classifiedError = replayUnsafe ? undefined : classifyFirstEvent?.(next.value);
+      if (classifiedError) {
+        buffered.push(classifiedError);
+        await iterator.return?.();
+        return { stream: replay(buffered, iterator), error: classifiedError, empty: false, replayUnsafe };
+      }
       buffered.push(next.value);
-      if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
-      continue;
+      if (next.value.type === "error") {
+        await iterator.return?.();
+        return { stream: replay(buffered, iterator), error: next.value, empty: false, replayUnsafe };
+      }
+      return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
     }
-    const classifiedError = replayUnsafe ? undefined : classifyFirstEvent?.(next.value);
-    if (classifiedError) {
-      buffered.push(classifiedError);
-      await iterator.return?.();
-      return { stream: replay(buffered, iterator), error: classifiedError, empty: false, replayUnsafe };
-    }
-    buffered.push(next.value);
-    if (next.value.type === "error") {
-      await iterator.return?.();
-      return { stream: replay(buffered, iterator), error: next.value, empty: false, replayUnsafe };
-    }
-    return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
   }
 }
 

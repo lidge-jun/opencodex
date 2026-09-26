@@ -1099,7 +1099,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
           // `thinking.type: "enabled"` outright. `max_tokens` still caps thinking plus visible
           // output, so high effort needs the same total-token headroom as budget thinking or a
           // default 8192-token request can spend everything on thought and return empty text.
-          body.thinking = { type: "adaptive" };
+          // Opus 4.7+ defaults `display` to "omitted": the stream then carries signature-only
+          // thinking blocks, so a Chat client sees minutes of heartbeats and no reasoning delta
+          // during a long think (#5824). Ask for summarized thinking unless the caller hides it.
+          body.thinking = parsed.options.hideThinkingSummary
+            ? { type: "adaptive" }
+            : { type: "adaptive", display: "summarized" };
           const effort = adaptiveEffort(effectiveReasoning);
           body.output_config = { effort };
           const explicitMaxOut = parsed.options.maxOutputTokens;

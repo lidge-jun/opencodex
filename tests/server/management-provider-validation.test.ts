@@ -47,6 +47,7 @@ import type { OcxConfig } from "../../src/types";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import * as destinationPolicy from "../../src/lib/destination-policy";
+import * as providerOutbound from "../../src/lib/provider-outbound";
 import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 import { LOCAL_PROVIDER_RELOAD_NAME_HEADER, LOCAL_PROVIDER_RELOAD_PATH } from "../../src/lib/local-provider-reload-contract";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
@@ -96,16 +97,14 @@ function redirectCanonicalCodexTo(baseUrl: string): void {
   }) as typeof fetch;
 }
 
+let discoverySpy: ReturnType<typeof spyOn<typeof providerOutbound, "providerOutboundGet">> | undefined;
 function stubModelDiscoveryFor(...origins: string[]): void {
-  const allowed = new Set(origins);
-  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    const url = new URL(requestUrl);
-    if (allowed.has(url.origin) && url.pathname.endsWith("/models")) {
-      return Promise.resolve(Response.json({ data: [] }));
-    }
-    return originalGlobalFetch(input, init);
-  }) as typeof fetch;
+  const allowed = new Set(["https://api.example.test", ...origins]);
+  const original = providerOutbound.providerOutboundGet;
+  discoverySpy = spyOn(providerOutbound, "providerOutboundGet").mockImplementation((name, provider, url, ...args) =>
+    allowed.has(new URL(url).origin) && new URL(url).pathname.endsWith("/models")
+      ? Promise.resolve(Response.json({ data: [] }))
+      : original(name, provider, url, ...args));
 }
 
 beforeEach(() => {
@@ -113,6 +112,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  discoverySpy?.mockRestore();
+  discoverySpy = undefined;
   globalThis.fetch = originalGlobalFetch;
   if (previousApiToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousApiToken;
@@ -2653,8 +2654,8 @@ describe("provider management validation", () => {
     stubModelDiscoveryFor("https://api.example.com", "http://127.0.0.1:11434");
 
     const server = startServer(0);
+    const resolvedDestination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
     try {
-      // Step 1: create a provider with a public URL
       const createRes = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2665,7 +2666,6 @@ describe("provider management validation", () => {
       });
       expect(createRes.status).toBe(200);
 
-      // Step 2: PATCH allowPrivateNetwork to true
       const patchRes = await fetch(new URL("/api/providers?name=patch-test", server.url), {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -2673,7 +2673,6 @@ describe("provider management validation", () => {
       });
       expect(patchRes.status).toBe(200);
 
-      // Step 3: PATCH baseUrl to localhost — should succeed because flag is now true
       const urlRes = await fetch(new URL("/api/providers?name=patch-test", server.url), {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -2681,13 +2680,13 @@ describe("provider management validation", () => {
       });
       expect(urlRes.status).toBe(200);
 
-      // Verify the persisted state
       const saved = await fetch(new URL("/api/config", server.url)).then(r => r.json()) as {
         providers: Record<string, { allowPrivateNetwork?: boolean; baseUrl?: string }>;
       };
       expect(saved.providers["patch-test"].allowPrivateNetwork).toBe(true);
       expect(saved.providers["patch-test"].baseUrl).toContain("127.0.0.1");
     } finally {
+      resolvedDestination.mockRestore();
       await server.stop(true);
     }
   });
@@ -2731,8 +2730,10 @@ describe("provider management validation", () => {
     mkdirSync(TEST_DIR, { recursive: true });
     process.env.OPENCODEX_HOME = TEST_DIR;
     saveConfig(config("127.0.0.1"));
+    stubModelDiscoveryFor("https://api.example.com");
 
     const server = startServer(0);
+    const resolvedDestination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
     try {
       const createRes = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
@@ -2780,6 +2781,7 @@ describe("provider management validation", () => {
       };
       expect(saved.providers["discovery-toggle"].liveModels).toBe(false);
     } finally {
+      resolvedDestination.mockRestore();
       await server.stop(true);
     }
   });

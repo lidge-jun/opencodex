@@ -111,6 +111,7 @@ HTTP リトライ ループの対象外です。
 - メッセージを Anthropic content block（text、base64 image、`tool_use`、`thinking`）に変換します。
 - **Extended thinking の計算:** Anthropic は `max_tokens > thinking.budget_tokens` を要求します。
   アダプターは reasoning effort を budget にマッピングし（minimal 1024 … max 32000）、出力余裕を取った安全な `max_tokens` を計算します。thinking がオンのときは Anthropic が禁止する **`temperature`/`top_p` を削除**します。
+- **adaptive thinking の表示:** adaptive thinking モデル（Opus 4.7+、Sonnet 5、Fable）には `thinking.display: "summarized"` を送るため、長い思考は数分間の heartbeat ではなく reasoning delta として Chat と Responses のクライアントに届きます。reasoning の要約を隠すリクエスト（`reasoning.summary: "none"`）はプロバイダーの既定値を維持します。
 - 常に `anthropic-version: 2023-06-01` を送ります。`content_block_delta`（`text_delta`、
   `thinking_delta`、`input_json_delta`）をストリーミングします。
 

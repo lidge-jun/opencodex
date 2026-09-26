@@ -51,8 +51,11 @@ zaman yukarı akışta yenilemeye zorlamaz.
   aylık, sonra 5 saatlik, sonra sağlayıcı adlı bir pencere veya ön ödemeli krediler.
 - Etiket %70 kullanımda amber rengine, %90 kullanımda kırmızıya döner.
 - Bildirilen tüm pencereleri sıfırlama saati ve okuma zamanıyla görmek için etiketin
-  üzerine gelin veya tıklayın. Sabitlenmiş bir etiketi kapatmak için Escape'e basın veya
-  başka bir yere tıklayın.
+  üzerine gelin veya klavyeyle odaklayın. Dokunmatik ekranda ilk dokunuş bu ayrıntıları gösterir.
+- Etikete tıklamak (dokunmatik ekranda ikinci dokunuş) Sağlayıcılar'da o sağlayıcının Hesaplar
+  sekmesini açar; hesaplar veya API anahtarları orada yönetilir.
+- Çubuk her zaman tek satırdır. Etiketler sığmadığında yatay kaydırın veya iki uçtaki « ve »
+  düğmelerini kullanın.
 - Kota penceresi bildirmeyen sağlayıcılar gösterilmez. Hiçbir sağlayıcı bildirmiyorsa
   çubuk gizlenir.
 - Sağ kenar, kontrol panelinin raporları en son ne zaman okuduğunu gösterir. Son okuma

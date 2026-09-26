@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useKeyedClientResource } from "../../client-resource";
 import { createBoundedFetch } from "../../bounded-fetch";
-import { readUsageMetadata, usageSummary30dResourceKey, type UsageReadMetadata } from "../../usage-summary-resource";
+import { readUsageMetadata, readUsageResponseJson, usageSummary30dResourceKey, type UsageReadMetadata } from "../../usage-summary-resource";
 import { UsageIncompleteNotice } from "../usage-incomplete-notice";
 import { useT } from "../../i18n/shared";
 import { IconFilter, IconSearch, IconBoxes, IconGlobe, IconLock, IconKey, IconTrash } from "../../icons";
@@ -178,7 +178,10 @@ export default function ProviderWorkspaceShell({
   useEffect(() => { modelsSettled.current = onModelsSettled; }, [onModelsSettled]);
   const filterWrapRef = useRef<HTMLDivElement>(null);
   // Shared usage-summary key: all four subscribers raise the deadline together (30d usage is ~5s cold).
-  const usageResource = useKeyedClientResource(usageSummary30dResourceKey(apiBase), [apiBase], async (signal) => { const res = await fetch(apiBase + "/api/usage?range=30d", { signal }); if (!res.ok) throw new Error(String(res.status)); return await res.json(); }, { deadlineMs: 60_000 });
+  const usageResource = useKeyedClientResource(usageSummary30dResourceKey(apiBase), [apiBase], async (signal) => {
+    const res = await fetch(apiBase + "/api/usage?range=30d", { signal });
+    return await readUsageResponseJson(res);
+  }, { deadlineMs: 60_000 });
 
   const sections = useMemo(() => {
     const base = buildProviderWorkspace(hideRedundantChatGptForwardProviders(providers));

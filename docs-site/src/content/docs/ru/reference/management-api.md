@@ -214,7 +214,7 @@ GUI-сессия в стиле loopback не выпускается.
 | `GET /api/debug/usage-logs` | Прочитать ограниченные usage-debug-записи | — |
 | `GET /api/debug/injection-logs` | Прочитать ограниченные guidance-injection debug-записи | — |
 | `GET /api/claude/inbound-debug` | Прочитать состояние и записи Claude inbound debug | — |
-| `GET /api/usage` | Сводка usage по диапазону и client surface | При сбое чтения storage вернёт summary с `error: "read_failed"` |
+| `GET /api/usage` | Сводка usage по диапазону и client surface | При сбое чтения storage вернёт 500 `{ "error": "read_failed" }` |
 | `GET /api/metrics` | Вернуть локальные для процесса текстовые метрики Prometheus: логические запросы, физические отправки, виды восстановления, длительность и TTFT. Метки ограничены закрытыми наборами protocol, result и recovery class; идентификаторы запросов и учётных данных не экспортируются. | 404, если `metricsExport.enabled` не был true при запуске; требуется обычная management-аутентификация, data-plane credentials доступа не дают |
 | `GET /api/storage` | Просканировать использование storage Codex по bucket'ам | При ошибке scan вернёт payload с `error: "scan_failed"` |
 | `POST /api/storage/cleanup/preview` | Предпросмотр cleanup archived-session и возврат binding digest | 400 `invalid_json` or `invalid_percent` |

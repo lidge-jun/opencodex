@@ -837,6 +837,18 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    command: ["claude", "config"],
+    summary: "Read or update Claude Code settings, including independent CLI first-party routing.",
+    routes: [{ method: "GET", path: "/api/claude-code" }, { method: "PUT", path: "/api/claude-code" }],
+    flags: [
+      { name: "--first-party", value: "string", summary: "For `set`, on or off; route standalone Claude CLI subscription requests through the intercept." },
+      { name: "--json", value: "boolean", summary: "Emit the management response as JSON." },
+    ],
+    mutates: true,
+    json: "payload",
+    details: ["`status` reads the route; `set` writes only submitted fields. Enabling first-party requires a running Claude intercept."],
+  },
+  {
     command: ["claude", "desktop", "status"],
     summary: "Applied-vs-desired Claude Desktop state, including staleness, drift, and health.",
     routes: [{ method: "GET", path: "/api/claude-desktop/status" }],

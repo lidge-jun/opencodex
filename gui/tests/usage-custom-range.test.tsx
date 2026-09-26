@@ -163,6 +163,23 @@ async function respond(index: number, marker: string, date?: string) {
   await act(async () => { requests[index].resolve(Response.json(report(requests[index], marker, date))); });
 }
 
+test("a stale connected report identifies ledger read failure instead of a hub outage", async () => {
+  await mount(true);
+  await respond(0, "last-readable-marker");
+  await act(async () => { root!.unmount(); });
+  root = undefined;
+  clearClientResourceStoresForTests();
+
+  await mount(true);
+  await act(async () => {
+    requests[1]!.resolve(Response.json({ error: "read_failed" }, { status: 500 }));
+  });
+
+  expect(container.textContent).toContain("last-readable-marker");
+  expect(container.textContent).toContain(en["usage.loadError"]);
+  expect(container.textContent).not.toContain(en["usage.hubOffline"]);
+});
+
 test("incomplete usage notice survives held cache and remains visible with no readable rows", async () => {
   await mount();
   const partial = { ...report(requests[0], "readable-model"), usageIncomplete: true, usageIncompleteReason: "oversized_rows" };

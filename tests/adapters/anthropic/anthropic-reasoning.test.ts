@@ -98,13 +98,17 @@ describe("anthropic extended-thinking gate", () => {
     "claude-opus-4-8.1",
   ])("adaptive-thinking model %s sends thinking.adaptive + output_config.effort", async (modelId) => {
     const b = await bodyOf(parsed("xhigh", { temperature: 0.3, topP: 0.9 }, modelId));
-    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(b.output_config).toEqual({ effort: "xhigh" });
     expect(b.temperature).toBeUndefined();
     expect(b.top_p).toBeUndefined();
   });
 
   test("adaptive-thinking model maps unsupported 'minimal' effort to 'low'", async () => {
+    // #5824: summarized thinking keeps a long think visible as reasoning deltas; a caller that
+    // hides the summary keeps the provider default instead.
+    const hidden = await bodyOf(parsed("high", { hideThinkingSummary: true }, "claude-opus-4-8"));
+    expect(hidden.thinking).toEqual({ type: "adaptive" });
     const b = await bodyOf(parsed("minimal", {}, "claude-fable-5"));
     expect(b.output_config).toEqual({ effort: "low" });
     expect(b.max_tokens).toBe(12_288);
@@ -259,7 +263,7 @@ describe("anthropic extended-thinking gate", () => {
     // Exact regression: effort=max budget is 32000; adaptive ceiling adds OUTPUT_HEADROOM (8192)
     // so max_tokens = 40192, genuinely above the reasoning budget at full effort.
     expect(b.max_tokens as number).toBe(40_192);
-    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(b.output_config).toEqual({ effort: "max" });
   });
 
@@ -354,7 +358,7 @@ describe("anthropic extended-thinking gate", () => {
     "claude-opus-4-8/vendor-suffix",
   ])("adaptive-thinking model %s keeps the adaptive wire shape", async (modelId) => {
     const b = await bodyOf(parsed("high", {}, modelId));
-    expect(b.thinking).toEqual({ type: "adaptive" });
+    expect(b.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(b.output_config).toEqual({ effort: "high" });
   });
 

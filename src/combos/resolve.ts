@@ -1,6 +1,6 @@
 import type { OcxComboTarget, OcxConfig } from "../types";
 import { getCachedProviderRoutingQuota } from "../providers/quota-routing-cache";
-import type { ProviderQuota } from "../providers/quota-types";
+import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
 import { sleepWithAbort } from "../lib/upstream-retry";
 import {
   coolComboTarget,
@@ -64,7 +64,7 @@ function targetProviderIsUsable(config: OcxConfig, target: OcxComboTarget, now: 
   if (!Object.hasOwn(config.providers, target.provider)) return false;
   const provider = config.providers[target.provider];
   if (!provider || provider.disabled === true) return false;
-  return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now);
+  return !cachedProviderQuotaIsExhausted(getCachedProviderRoutingQuota(target.provider, provider, now), now, target.model);
 }
 
 function quotaWindowExhausted(percent: number | undefined, resetAt: number | undefined, now: number): boolean {
@@ -72,15 +72,39 @@ function quotaWindowExhausted(percent: number | undefined, resetAt: number | und
   return typeof resetAt !== "number" || !Number.isFinite(resetAt) || resetAt > now;
 }
 
+// `customWindows` is a generic carrier. Most labels are provider-wide counters ("Prepaid
+// credits", "Free trial", "burst", "Spark") and must gate every model. Anthropic also rides it
+// for per-model family counters, where a spent Opus week says nothing about a Sonnet request.
+// `routing/quota.ts` already scopes those per model when it ranks accounts
+// (`anthropicFamilyWindow`); this is the same fact applied to combo target selection.
+//
+// The scoping keys on `window.scope`, which the PRODUCER sets only where it proved model scope
+// structurally, NEVER on the label text: `quota/antigravity.ts` forwards an upstream
+// `group.displayName` unchanged, so a provider-wide group named "Opus" read as per-model would
+// leave a spent window unenforced and send a doomed request. Every unproven direction keeps
+// gating everything, which is the behaviour before this change: no scope on the window, no
+// model on the request, or a family this gateway cannot match against a model id. Failing
+// closed there costs at most a diverted target.
+const MODEL_FAMILY_WINDOW_LABELS = new Set(["fable", "opus", "sonnet"]);
+
+function customWindowAppliesToModel(window: ProviderQuotaWindow, model: string | undefined): boolean {
+  if (window.scope !== "model" || model === undefined) return true;
+  const family = window.label.trim().toLowerCase();
+  if (!MODEL_FAMILY_WINDOW_LABELS.has(family)) return true;
+  return model.toLowerCase().includes(family);
+}
+
 export function cachedProviderQuotaIsExhausted(
   quota: ProviderQuota | null,
   now = Date.now(),
+  model?: string,
 ): boolean {
   if (!quota) return false;
   if (quotaWindowExhausted(quota.fiveHourPercent, quota.fiveHourResetAt, now)) return true;
   if (quotaWindowExhausted(quota.weeklyPercent, quota.weeklyResetAt, now)) return true;
   if (quotaWindowExhausted(quota.monthlyPercent, quota.monthlyResetAt, now)) return true;
-  if (quota.customWindows?.some(window => quotaWindowExhausted(window.percent, window.resetAt, now))) return true;
+  if (quota.customWindows?.some(window => customWindowAppliesToModel(window, model)
+    && quotaWindowExhausted(window.percent, window.resetAt, now))) return true;
   if (quota.creditsUsd?.unlimited !== true
       && typeof quota.creditsUsd?.percent === "number"
       && Number.isFinite(quota.creditsUsd.percent)
@@ -120,7 +144,9 @@ export type QuotaInactiveReason = "no_credit";
  */
 export function quotaInactiveReason(
   config: OcxConfig,
-  targets: readonly { provider: string }[],
+  // A combo votes over its own targets, which carry a model; the single-provider case has none,
+  // and an absent model keeps gating on every window exactly as before.
+  targets: readonly { provider: string; model?: string }[],
   now = Date.now(),
 ): QuotaInactiveReason | undefined {
   const usable = targets.filter(target => {
@@ -132,7 +158,7 @@ export function quotaInactiveReason(
   for (const target of usable) {
     const provider = config.providers[target.provider]!;
     const quota = getCachedProviderRoutingQuota(target.provider, provider, now);
-    if (!quota || !cachedProviderQuotaIsExhausted(quota, now)) return undefined;
+    if (!quota || !cachedProviderQuotaIsExhausted(quota, now, target.model)) return undefined;
   }
   return "no_credit";
 }
@@ -185,7 +211,11 @@ function resetWindowIndex(
     const target = targets[index]!;
     if (!eligible(target)) continue;
     const remaining = quotaResetRemainingMs(
-      getCachedProviderRoutingQuota(target.provider, config.providers[target.provider], now), now,
+      getCachedProviderRoutingQuota(target.provider, config.providers[target.provider], now),
+      now,
+      // Rank by the windows that gate this target: a model-scoped window of another family
+      // says nothing about when this model regains capacity.
+      window => customWindowAppliesToModel(window, target.model),
     );
     // Strict comparison deliberately retains configured order for ties,
     // including the no-snapshot fallback where every value is Infinity.

@@ -148,12 +148,7 @@ yapılandırmanızı tam olarak eskisi gibi okur.
 yazılır; bildirmediğinde tüm `limit` bloğu atlanır ve opencode kendi
 varsayılanlarını korur.
 
-opencode'un şeması `output` olmadan `context` taşıyan bir `limit` bloğunu
-reddeder ve kataloğun yetkili bir model başına çıktı alanı yoktur; bu nedenle
-yanında `32000`'lik bir `output` bütçesi yayınlanır ve küçük bağlamlı bir modele
-asla `output > context` verilmemesi için bağlam penceresine doğru sabitlenir. Bu
-rakam şemayı karşılamak için vardır — belirli bir modelin gerçek maksimumu
-hakkında bir iddia değildir.
+Çıktı sınırı, katalogdaki veya oluşturulan meta verilerdeki bilinen model sınırını kullanır. Yalnızca sınır bilinmiyorsa `32000` kullanılır. Çıktı sınırı her zaman bağlam penceresiyle sınırlanır; `32000` altındaki bilinen sınırlar da korunur.
 
 `opencodex` sağlayıcı bloğu her başlatmada yeniden oluşturulur, bu nedenle
 içinde yapılan model başına ince ayarlar hayatta kalmaz. Bunun yerine özel

@@ -11,7 +11,7 @@ import type { ResponsesSendBudget } from "./request-send-budget";
 import { preparePassthroughExchange } from "./passthrough-dispatch";
 import { deliverPassthroughResponse } from "./passthrough-delivery";
 import { guardDirectPassthroughBodyInactivity } from "../../lib/response-body-inactivity";
-import { resolveStallTimeoutSec } from "../../stall-timeout";
+import { resolveStallTimeoutMs } from "../../stall-timeout";
 import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 
@@ -53,7 +53,7 @@ export async function executePassthroughResponse(
     return guardDirectPassthroughBodyInactivity(
       response,
       nativeExchange.upstream.signal,
-      resolveStallTimeoutSec(requestContext.config.stallTimeoutSec) * 1000,
+      resolveStallTimeoutMs(requestContext.config.stallTimeoutSec, { localUpstream: nativeExchange.localUpstream }),
     );
   } finally {
     if (nativeHostState.lease) {

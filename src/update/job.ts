@@ -60,6 +60,7 @@ import {
   runNpmCachePreflight,
   type NpmCachePreflightReason,
 } from "./npm-cache-preflight.mjs";
+import { guiUpdateWorkerCommand } from "./worker-launch";
 
 const RELEASE_NOTES_URL = "https://github.com/lidge-jun/opencodex/releases/latest";
 const UPDATE_JOB_FILENAME = "update-job.json";
@@ -574,7 +575,8 @@ export function spawnGuiUpdateWorker(
     restart ? "restart" : "no-restart",
   ]);
   if (process.platform !== "win32") {
-    return spawn(process.execPath, args, {
+    const launch = guiUpdateWorkerCommand(process.execPath, args);
+    return spawn(launch.command, launch.argv, {
       detached: true,
       stdio: "ignore",
       windowsHide: true,

@@ -19,7 +19,7 @@ import {
   readResponseStreamWithInactivity,
   ResponseBodyInactivityError,
 } from "../../lib/response-body-inactivity";
-import { resolveStallTimeoutSec } from "../../stall-timeout";
+import { resolveStallTimeoutMs } from "../../stall-timeout";
 import { clientEncoderForDelivery, deliverClientEncodedResponse } from "../inference/client-encoder-delivery";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -43,7 +43,7 @@ export async function deliverAdapterResponse(
     | "notifyResponseComplete"
   >,
   completionPolicy: Pick<ResponsesCompletionPolicy, "emptyCompletionGuardEnabled">,
-  adapterExchange: Pick<AdapterExchange, "upstreamResponse" | "upstream" | "cleanupUpstreamAbort">,
+  adapterExchange: Pick<AdapterExchange, "upstreamResponse" | "upstream" | "cleanupUpstreamAbort" | "localUpstream">,
   continuationState: Pick<AdapterContinuations, "terminalGuardEnabled" | "fetchTerminalGuardContinuation" | "fetchGuardedEmptyCompletionRetry">,
 ): Promise<Response> {
   const { logCtx, options, config } = requestContext;
@@ -54,7 +54,7 @@ export async function deliverAdapterResponse(
     rememberKiroDeliveredFinalAnswer,
     responseStateOptions,
   } = requestState;
-  const { upstreamResponse, upstream, cleanupUpstreamAbort } = adapterExchange;
+  const { upstreamResponse, upstream, cleanupUpstreamAbort, localUpstream } = adapterExchange;
   const {
     terminalGuardEnabled,
     fetchTerminalGuardContinuation,
@@ -68,7 +68,7 @@ export async function deliverAdapterResponse(
     notifyResponseComplete,
   } = responseEffects;
   const { routedCompaction } = sidecarState;
-  const bodyInactivityMs = resolveStallTimeoutSec(config.stallTimeoutSec) * 1000;
+  const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
 
 
   if (parsed.stream) {
@@ -148,6 +148,7 @@ export async function deliverAdapterResponse(
           toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, toolSearchToolNames,
         },
         stallTimeoutSec: config.stallTimeoutSec,
+        localUpstream,
         turnAdmissionLease: options.turnAdmissionLease,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
         stopUpstream: () => { cancelResponseCompletion(); upstream.abort(); },
@@ -164,6 +165,7 @@ export async function deliverAdapterResponse(
         replayCacheScope: parsed._reasoningReplayScope,
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
         stallTimeoutSec: config.stallTimeoutSec,
+        localUpstream,
         hideThinkingSummary: parsed.options.hideThinkingSummary,
         declaredToolNames,
         enforceDeclaredToolNames: options.inboundWire !== "chat" && options.inboundWire !== "anthropic",

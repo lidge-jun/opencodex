@@ -8,6 +8,7 @@ import {
   ZCODE_STORE_PROVIDER_RULES_PATH,
   ZCODE_STORE_SCHEMA_VERSION,
   buildZcodeStoreProviderRule,
+  type ZcodeStoreProviderRule,
   type ExportModel,
 } from "../../src/clients/config-export";
 import { formatSelectorConjunction } from "../../src/integrations/merge";
@@ -136,6 +137,8 @@ describe("writing the provider store the client reads", () => {
     // so the base URL is the one `ocx export` composes rather than a literal.
     expect(readPath(readStore(), OUR_PROVIDER_RULE))
       .toEqual(buildZcodeStoreProviderRule(exportContextOf(input())));
+    const writtenRule = readPath(readStore(), OUR_PROVIDER_RULE) as ZcodeStoreProviderRule;
+    expect(writtenRule.config.access.type).toBe("api-key");
     expect(readPath(readStore(), ourModelRule("anthropic/claude-opus-4-8")))
       .toMatchObject({ config: { properties: { contextWindow: 200_000 } } });
     // And nothing was written to the file it stopped reading.

@@ -230,11 +230,17 @@ export function coolComboTarget(
   const cooldownMs = serverDelayMs
     ?? parseResetCooldownMs(options?.resetAt, now)
     ?? options?.cooldownMs
-    ?? (isTransientRequestRateLimit({
-      status: options?.status,
-      code: options?.code,
-      message: options?.message,
-    }) ? COMBO_REQUEST_RATE_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
+    // A spent account window or an unpaid/rejected credential does not turn over in a minute,
+    // so the 60s default would re-offer a target that cannot succeed. Only the duration
+    // changes; the scope and hop decisions are untouched.
+    ?? (isAccountWindowExhausted(options?.message ?? "", options?.code)
+      || PROVIDER_SCOPED_FAILURE_CODES.has(normalizedFailureCode(options?.code))
+      ? MAX_COOLDOWN_MS
+      : isTransientRequestRateLimit({
+        status: options?.status,
+        code: options?.code,
+        message: options?.message,
+      }) ? COMBO_REQUEST_RATE_COOLDOWN_MS : DEFAULT_COOLDOWN_MS);
   targetCooldowns.set(cooldownMapKey(comboId, target), {
     // Local fallbacks are capped at ten minutes; explicit server delays at one day.
     cooldownUntil: now + (serverDelayMs ?? Math.min(Math.max(cooldownMs, 1), MAX_COOLDOWN_MS)),
@@ -304,6 +310,27 @@ export type ComboFailureCooldownScope = "none" | "target" | "provider";
 
 function normalizedFailureCode(code?: string | null): string {
   return code?.trim().toLowerCase().replaceAll("-", "_") ?? "";
+}
+
+/**
+ * A spent account window, by structured code or upstream prose. Status is deliberately not
+ * consulted: the ChatGPT Codex backend reports a depleted plan window as HTTP 502
+ * `upstream_server_error` carrying `The usage limit has been reached`, never the documented 429,
+ * so any status gate misses it. Read in exactly ONE place -- the cooldown DURATION fallback. A
+ * status-blind prose match is safe for choosing how long to wait; it is not safe for choosing
+ * what to black out, so `isProviderScopedQuotaCap` and the scope/decision paths stay untouched
+ * and a Codex 502 still resolves `target` scope and `hop` through `status >= 500`.
+ */
+// `1308` is the vendor code for a spent five-hour window and carries no prose of its own when the
+// upstream reports it bare, so it belongs here too. The rest of QUOTA_LIMIT_CODES stays out: those
+// are quota-limit codes whose window length this gateway has no evidence for, and guessing long on
+// them would hold a target that may clear sooner.
+const ACCOUNT_EXHAUSTION_CODES = new Set(["usage_limit_exceeded", "usage_limit_reached", "1308"]);
+const ACCOUNT_EXHAUSTION_TEXT = /usage limit (?:has been )?reached/;
+
+function isAccountWindowExhausted(message: string, code?: string | null): boolean {
+  return ACCOUNT_EXHAUSTION_CODES.has(normalizedFailureCode(code))
+    || ACCOUNT_EXHAUSTION_TEXT.test(message.toLowerCase());
 }
 
 function isProviderScopedQuotaCap(

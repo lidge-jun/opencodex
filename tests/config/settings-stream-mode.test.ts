@@ -7,10 +7,10 @@
  * backup-and-defaults repair path), and settable alone via PUT (legacy
  * codexAutoStart-only PUTs keep working).
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
@@ -233,6 +233,7 @@ describe("GET /api/settings", () => {
     const {
       persistEffortClamp,
       resetCodexRuntimeResolveCacheForTests,
+      resolveCodexRuntimeAsync,
     } = await import("../../src/codex/runtime");
     resetCodexRuntimeResolveCacheForTests();
 
@@ -258,6 +259,9 @@ describe("GET /api/settings", () => {
     try {
       process.env.CODEX_CLI_PATH = fakeCodex;
       process.env.PATH = "";
+      // Settings serve the runtime stale-while-revalidate; land the probe first so this
+      // asserts the validated projection rather than the cold deferred answer.
+      await resolveCodexRuntimeAsync();
       const body = await (await getSettings(baseConfig()))!.json() as {
         codexRuntime?: {
           path?: string;
@@ -293,6 +297,163 @@ describe("GET /api/settings", () => {
       resetCodexRuntimeResolveCacheForTests();
     }
   });
+});
+
+describe("settings codexRuntime snapshot", () => {
+  /** A launcher whose `--version` takes ~2s, as a real Codex probe can under load. */
+  function slowFakeCodex(version: string): string {
+    mkdirSync(join(TEST_DIR, "slow-bin"), { recursive: true });
+    if (process.platform === "win32") {
+      const path = join(TEST_DIR, "slow-bin", "codex.cmd");
+      writeFileSync(
+        path,
+        `@echo off\r\n"%SystemRoot%\\System32\\ping.exe" -n 3 127.0.0.1 >nul\r\necho codex-cli ${version}\r\n`,
+        "utf8",
+      );
+      return path;
+    }
+    const path = join(TEST_DIR, "slow-bin", "codex");
+    writeFileSync(path, `#!/bin/sh\nsleep 2\necho 'codex-cli ${version}'\n`, { encoding: "utf8", mode: 0o755 });
+    return path;
+  }
+
+  async function withRuntimeEnv(command: string, run: () => Promise<void>): Promise<void> {
+    const keys = ["CODEX_CLI_PATH", "PATH", "LOCALAPPDATA", "HOME"] as const;
+    const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    try {
+      process.env.CODEX_CLI_PATH = command;
+      // No other codex on PATH or in the install roots: only the launcher above is probed.
+      process.env.PATH = process.platform === "win32" ? "" : "/usr/bin:/bin";
+      process.env.LOCALAPPDATA = join(TEST_DIR, "no-codex-app");
+      process.env.HOME = join(TEST_DIR, "no-codex-home");
+      await run();
+    } finally {
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+    }
+  }
+
+  test("GET answers without waiting on the runtime probe and serves it once it lands", async () => {
+    const { resetCodexRuntimeResolveCacheForTests, resolveCodexRuntimeAsync } = await import("../../src/codex/runtime");
+    resetCodexRuntimeResolveCacheForTests();
+    const launcher = slowFakeCodex("0.200.0");
+    try {
+      await withRuntimeEnv(launcher, async () => {
+        type Body = { codexRuntime: { version: string | null; source: string } };
+        const coldStarted = performance.now();
+        const cold = await (await getSettings(baseConfig()))!.json() as Body;
+        // The sync resolver made this request take the whole ~2s probe.
+        expect(performance.now() - coldStarted).toBeLessThan(1_000);
+        expect(cold.codexRuntime).toMatchObject({ version: null, source: "environment" });
+
+        // The refresh the GET started runs on async exec: timers keep firing meanwhile.
+        const refresh = resolveCodexRuntimeAsync();
+        const tickStarted = performance.now();
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(performance.now() - tickStarted).toBeLessThan(250);
+        expect((await refresh).runtime.version).toBe("0.200.0");
+
+        const warmStarted = performance.now();
+        const warm = await (await getSettings(baseConfig()))!.json() as Body;
+        expect(performance.now() - warmStarted).toBeLessThan(1_000);
+        expect(warm.codexRuntime).toMatchObject({ version: "0.200.0", source: "environment" });
+      });
+    } finally {
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  }, 30_000);
+
+  test("an expired memo stays observable while its refresh runs, then gives way to the result", async () => {
+    // Catalog gather and convergence read the memo through peek. With the refresh off the
+    // event loop they can now read during it; an expired memo reported as unavailable there
+    // sent gather to the persisted runtime and got convergence's candidate rejected.
+    const {
+      peekCodexRuntimeProcessCache,
+      resetCodexRuntimeResolveCacheForTests,
+      resolveCodexRuntimeAsync,
+    } = await import("../../src/codex/runtime");
+    resetCodexRuntimeResolveCacheForTests();
+    const launcher = slowFakeCodex("0.200.0");
+    const realNow = Date.now.bind(Date);
+    let offset = 0;
+    const clock = spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+    try {
+      await withRuntimeEnv(launcher, async () => {
+        await resolveCodexRuntimeAsync();
+        const first = peekCodexRuntimeProcessCache();
+        expect(first.kind).toBe("available");
+
+        offset = 20_000;
+        expect(peekCodexRuntimeProcessCache().kind).toBe("unavailable");
+
+        const refresh = resolveCodexRuntimeAsync();
+        const during = peekCodexRuntimeProcessCache();
+        expect(during.kind).toBe("available");
+        if (during.kind === "available" && first.kind === "available") {
+          expect(during.valueIdentity).toBe(first.valueIdentity);
+        }
+
+        await refresh;
+        const after = peekCodexRuntimeProcessCache();
+        expect(after.kind).toBe("available");
+        if (after.kind === "available" && first.kind === "available") {
+          expect(after.valueIdentity).not.toBe(first.valueIdentity);
+        }
+      });
+    } finally {
+      clock.mockRestore();
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  }, 30_000);
+
+  test("a runtime switch during the background probe keeps its result out of the memo", async () => {
+    const {
+      clearCodexRuntimeResolveCache,
+      peekCodexRuntimeProcessCache,
+      resetCodexRuntimeResolveCacheForTests,
+      resolveCodexRuntimeAsync,
+    } = await import("../../src/codex/runtime");
+    resetCodexRuntimeResolveCacheForTests();
+    const launcher = slowFakeCodex("0.200.0");
+    try {
+      await withRuntimeEnv(launcher, async () => {
+        const refresh = resolveCodexRuntimeAsync();
+        // persistCodexRuntime and clearPersistedCodexRuntime invalidate through this.
+        clearCodexRuntimeResolveCache();
+        expect((await refresh).runtime.version).toBe("0.200.0");
+        expect(peekCodexRuntimeProcessCache().kind).toBe("unavailable");
+      });
+    } finally {
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  }, 30_000);
+
+  test("a runtime file rewritten by another process during the probe keeps its result out of the memo", async () => {
+    const {
+      codexRuntimeStatePath,
+      peekCodexRuntimeProcessCache,
+      resetCodexRuntimeResolveCacheForTests,
+      resolveCodexRuntimeAsync,
+    } = await import("../../src/codex/runtime");
+    resetCodexRuntimeResolveCacheForTests();
+    const launcher = slowFakeCodex("0.200.0");
+    try {
+      await withRuntimeEnv(launcher, async () => {
+        const refresh = resolveCodexRuntimeAsync();
+        // No in-process persist, so no epoch bump: only the on-disk selection changes.
+        writeFileSync(codexRuntimeStatePath(), JSON.stringify({
+          version: 1, command: join(TEST_DIR, "other-codex"), source: "configured", updatedAt: new Date().toISOString(),
+        }));
+        expect((await refresh).runtime.version).toBe("0.200.0");
+        expect(peekCodexRuntimeProcessCache().kind).toBe("unavailable");
+      });
+    } finally {
+      rmSync(codexRuntimeStatePath(), { force: true });
+      resetCodexRuntimeResolveCacheForTests();
+    }
+  }, 30_000);
 });
 
 describe("usage summary retained-store accounting", () => {

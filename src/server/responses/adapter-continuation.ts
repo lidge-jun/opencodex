@@ -39,7 +39,6 @@ import {
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
@@ -53,7 +52,7 @@ import {
   readResponseStreamWithInactivity,
   ResponseBodyInactivityError,
 } from "../../lib/response-body-inactivity";
-import { resolveStallTimeoutSec } from "../../stall-timeout";
+import { resolveStallTimeoutMs } from "../../stall-timeout";
 import { guardTerminalEventStream } from "./terminal-guard";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -84,6 +83,7 @@ export function createAdapterContinuations(
     | "commitResolvedOAuthSelection"
     | "genericFailoverAccountId"
     | "genericFailovers"
+    | "genericFailoverLimit"
     | "applyFailoverSnapshot"
     | "replayOAuthCredentialSnapshot"
     | "noteRoutedAttemptSend"
@@ -107,7 +107,8 @@ export function createAdapterContinuations(
     | "rateLimitPolicy"
     | "rateLimitRetries"
     | "stallTimeoutMs"
-  >,
+    | "localUpstream"
+   >,
 ) {
   const { options, logCtx, config } = requestContext;
   const {
@@ -120,8 +121,8 @@ export function createAdapterContinuations(
   } = transportState;
   const { route, translatorBudget, inboundWire, parsed } = requestState;
   const { routedCompaction } = sidecarState;
-  const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs } = adapterExchange;
-  const bodyInactivityMs = resolveStallTimeoutSec(config.stallTimeoutSec) * 1000;
+  const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs, localUpstream } = adapterExchange;
+  const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
   const {
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
@@ -406,7 +407,7 @@ export function createAdapterContinuations(
        response.status === 429
        && transportState.genericFailoverAccountId
         && !isNonReplayableResponse(response)
-       && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+       && transportState.genericFailovers < transportState.genericFailoverLimit
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
         // Intersection with the shared request budget. The continuation loop re-sends the

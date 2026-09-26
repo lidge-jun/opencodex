@@ -28,7 +28,10 @@ import { useAppRouteState } from "./use-app-route-state";
 import { requestProxyStop } from "./stop-proxy";
 import { useCodexRestart } from "./use-codex-restart";
 import { confirmAction } from "./action-dialogs";
-import { isDesktopShell, isExternalLink, openDesktopUpdatePage } from "./lib/desktop-shell";
+import { hostOs, isDesktopShell, isExternalLink, openDesktopUpdatePage } from "./lib/desktop-shell";
+import { useSidebarCollapse } from "./use-sidebar-collapse";
+import { MainTopStrip, SidebarTopStrip } from "./components/app-titlebar";
+import { watchMacTitlebarMetrics } from "./lib/window-chrome";
 
 type Theme = "light" | "dark" | "system";
 
@@ -203,6 +206,14 @@ export default function App() {
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
+  // Codex-style rail collapse on wide screens, persisted; Cmd/Ctrl+B toggles too.
+  const desktopShell = isDesktopShell();
+  const { collapsed: navCollapsed, toggle: toggleNavCollapse } = useSidebarCollapse({ shortcut: desktopShell });
+  const desktopMac = desktopShell && hostOs() === "macos";
+  const appRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (desktopMac && appRef.current) return watchMacTitlebarMetrics(appRef.current);
+  }, [desktopMac]);
   const menuBtnRef = useRef<HTMLButtonElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
   const navWasOpen = useRef(false);
@@ -368,8 +379,14 @@ export default function App() {
     </button>
   );
 
+  const quotaSummary = targetsSettled && page !== "startup" && (!targets.connected || sharedSessionReady) && (
+    <ErrorBoundary key={sharedBase} pageName={t("quotaSummary.aria")} title={t("errorBoundary.title")} message={t("errorBoundary.message")} detailsLabel={t("errorBoundary.details")} reloadLabel={t("errorBoundary.reload")}>
+      <QuotaSummaryBar apiBase={sharedBase} />
+    </ErrorBoundary>
+  );
+
   return (
-    <div className="app">
+    <div ref={appRef} className={`app${desktopShell ? " app--desktop" : ""}${desktopMac ? " app--macos" : ""}${navCollapsed ? " app--nav-collapsed" : ""}`}>
       <DesktopStarOnboarding apiBase={sharedBase} enabled={targetsSettled && !targets.connected} />
       {actionFeedback && (
         <ToastNotice tone={actionFeedback.tone} onDismiss={() => setActionFeedback(null)} dismissLabel={t("common.close")}>
@@ -403,6 +420,9 @@ export default function App() {
         </div>
       </header>
       {navOpen && <div className="drawer-scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+      {/* Fixed to the window's top-left; kept outside .sidebar so the sidebar's
+         backdrop-filter containing block can't clip it to 0 width when collapsed. */}
+      <SidebarTopStrip collapsed={navCollapsed} onToggle={toggleNavCollapse} />
       <aside id="app-sidebar" className={`sidebar${navOpen ? " open" : ""}`} ref={sidebarRef} tabIndex={-1}>
         <div className="drawer-head">
           {brand}
@@ -496,11 +516,11 @@ export default function App() {
       </aside>
 
       <main className="main" inert={navOpen}>
-        {targetsSettled && page !== "startup" && (!targets.connected || sharedSessionReady) && (
-          <ErrorBoundary key={sharedBase} pageName={t("quotaSummary.aria")} title={t("errorBoundary.title")} message={t("errorBoundary.message")} detailsLabel={t("errorBoundary.details")} reloadLabel={t("errorBoundary.reload")}>
-            <QuotaSummaryBar apiBase={sharedBase} />
-          </ErrorBoundary>
-        )}
+        {/* Inside the desktop shell the strip is the integrated title bar's right half —
+            draggable, at the very top of the window, level with the traffic lights — so it
+            exists even while the bar inside it does not. The browser dashboard keeps the
+            bar as it was: no strip, no reserved row. */}
+        {desktopShell ? <MainTopStrip>{quotaSummary}</MainTopStrip> : quotaSummary}
         {/*
           Combos is full-bleed, unlike every other surface, and it is reachable only as
           a Models tab. `.main-inner` is App's element, so App is the only place that

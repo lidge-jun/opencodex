@@ -13,6 +13,7 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { transientSendCapFor } from "./request-send-budget";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
+import { isLocalUpstream } from "../../lib/local-upstream";
 import { codexSafetyBufferingFilterOptions, terminalStatusFromParsed } from "../relay";
 import { imageGenToolCallAliases } from "../responses-image-gen-repair";
 import { rememberResponseState, isBodyNonPersistable } from "../../responses/state";
@@ -137,7 +138,6 @@ import type { OAuthAccessSnapshot } from "../../oauth";
 import { publicOAuthAuthenticationErrorMessage } from "../../oauth";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   hasEligibleGenericOAuthFailoverTarget,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
@@ -193,6 +193,7 @@ export async function preparePassthroughExchange(
     | "refreshResolvedOAuthSelection"
     | "replayOAuthCredentialSnapshot"
     | "genericFailovers"
+    | "genericFailoverLimit"
     | "applyFailoverSnapshot"
     | "noteRoutedAttemptSend"
     | "selectionIsCurrent"
@@ -1318,7 +1319,7 @@ export async function preparePassthroughExchange(
       // have run and would cool down an account that refused nothing.
       && !isNonReplayableResponse(upstreamResponse)
      && transportState.genericFailoverAccountId
-      && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+      && transportState.genericFailovers < transportState.genericFailoverLimit
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
       // The roster cap above is one half of the bound; the request's shared budget is the
@@ -1782,6 +1783,12 @@ export async function preparePassthroughExchange(
     break;
     }
 
+  // Where this relay dials upstream. Local infrastructure (loopback / private / `.local` / `.lan`)
+  // is operator-trusted and its silent phases are normal, so an unset stall budget resolves to
+  // disabled for it. Provider rotation above keeps the same endpoint origin, so the routed
+  // provider's baseUrl is the stable classification source.
+  const localUpstream = isLocalUpstream(route.provider.baseUrl);
+
   return {
     codexSafetyBufferingOptions,
     imageGenCallAliases,
@@ -1819,6 +1826,7 @@ export async function preparePassthroughExchange(
     rememberPassthroughResponseChecked,
     upstream,
     connectMs,
+    localUpstream,
     upstreamResponse,
   };
 }

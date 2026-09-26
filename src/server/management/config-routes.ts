@@ -119,10 +119,10 @@ import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { withProviderCatalogCapabilityDTO } from "./provider-capability-config";
 import { applySystemEnvToggle } from "../system-env";
-import { getCachedStartupHealth, invalidateStartupHealthCache } from "../startup-health-cache";
+import { getCachedStartupHealth, getStartupHealthSnapshot, invalidateStartupHealthCache } from "../startup-health-cache";
 import { runWindowsTrayAction } from "../windows-tray-control";
 import { runStartupInstallAction, type StartupInstallAction } from "../startup-action-control";
-import { displayCodexRuntimePath, effortClampAppliesToRuntime, liveRemovedEfforts, loadLastEffortClamp, resolveCodexRuntime } from "../../codex/runtime";
+import { displayCodexRuntimePath, effortClampAppliesToRuntime, getCodexRuntimeSnapshot, liveRemovedEfforts, loadLastEffortClamp } from "../../codex/runtime";
 
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
@@ -291,6 +291,10 @@ function publicVisionSidecarSettings(
 export async function handleConfigRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
   const readStartupHealth = deps.getCachedStartupHealth ?? getCachedStartupHealth;
+  // Settings only seed the dashboard chip; /api/startup-health owns the bounded fresh read.
+  // Waiting on the Windows service-manager probe here held settings reads and saves open
+  // for up to 15s, including the admin-token check. An injected reader stays authoritative.
+  const readStartupHealthSnapshot = deps.getCachedStartupHealth ?? getStartupHealthSnapshot;
   if (url.pathname === "/api/config" && req.method === "GET") {
     return jsonResponse(withProviderCatalogCapabilityDTO(safeConfigDTO(config), config));
   }
@@ -300,10 +304,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
   }
 
   if (url.pathname === "/api/settings" && req.method === "GET") {
-    let resolved: ReturnType<typeof resolveCodexRuntime>;
+    let resolved: ReturnType<typeof getCodexRuntimeSnapshot>;
     try {
-      // Full alternative discovery (memoized) so newerAvailable warnings work.
-      resolved = resolveCodexRuntime();
+      // Full alternative discovery so newerAvailable warnings work, served stale-while-
+      // revalidate: the sync resolver ran `codex --version` per candidate on this request and
+      // froze the whole proxy for ~0.6s every memo expiry while the dashboard polled here.
+      resolved = getCodexRuntimeSnapshot();
     } catch {
       resolved = {
         runtime: { command: "codex", version: null, source: "fallback" },
@@ -363,7 +369,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexClientCompaction: config.codexClientCompaction === true,
       codexDesktopSwitches: describeCodexDesktopSwitches(config, await observedCodexDesktopSwitchApply()),
       compactionRouting: config.compactionRouting ?? null,
-      startupHealth: await readStartupHealth(config),
+      startupHealth: await readStartupHealthSnapshot(config),
       codexRuntime: {
         path: displayCodexRuntimePath(resolved.runtime.command),
         version: resolved.runtime.version,
@@ -707,7 +713,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       compactionRouting: config.compactionRouting ?? null,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
       mainAccountHardLock: getMainAccountHardLockStatus(config),
-      startupHealth: await readStartupHealth(config),
+      startupHealth: await readStartupHealthSnapshot(config),
     });
   }
 

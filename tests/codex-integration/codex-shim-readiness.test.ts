@@ -4,6 +4,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,6 +31,29 @@ const ready = {
 };
 
 describe("Codex shim install readiness", () => {
+  test("a refused install exits unsuccessfully and preserves its reason", () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-shim-refused-"));
+    const binDir = join(root, "bin");
+    mkdirSync(binDir);
+    mkdirSync(join(root, "codex-home"));
+    mkdirSync(join(root, "ocx-home"));
+    if (process.platform === "win32") writeFileSync(join(binDir, "codex.exe"), "fixture executable");
+    try {
+      const result = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        cwd: repoRoot,
+        env: { ...process.env, CODEX_HOME: join(root, "codex-home"),
+          OPENCODEX_HOME: join(root, "ocx-home"), PATH: process.platform === "win32"
+            ? `${binDir}${delimiter}${join(process.env.SystemRoot ?? "C:\\Windows", "System32")}` : binDir },
+        encoding: "utf8", timeout: SHIM_INSTALL_CHILD_MS,
+      });
+      expect(result.error).toBeUndefined();
+      if (!result.stdout) throw new Error(result.stderr);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toContain(process.platform === "win32"
+        ? "Refusing to rename a real .exe" : "Could not find a codex executable");
+    } finally { removeTreeWithRetry(root); }
+  }, SHIM_INSTALL_CASE_MS);
+
   test("keeps a clean install green for native and managed routing", () => {
     expect(codexShimReadinessWarnings(ready)).toEqual([]);
     expect(codexShimReadinessWarnings({
@@ -186,8 +210,30 @@ describe("Codex shim install readiness", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toStartWith("⚠️  Codex autostart shim installed");
       expect(result.stderr).toContain("Codex routing could not be verified");
+      // A healthy no-op reports installed:false internally but must still exit successfully.
+      const repeat = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        cwd: repoRoot,
+        env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome,
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+        encoding: "utf8", timeout: SHIM_INSTALL_CHILD_MS, killSignal: "SIGKILL",
+      });
+      expect(repeat.error).toBeUndefined();
+      expect(repeat.status).toBe(0);
+      expect(repeat.stdout).toContain("already installed");
+      expect(repeat.stderr).toContain("Codex routing could not be verified");
+      // Keep the marker and backing file, but break the launch-time ensure contract.
+      writeFileSync(codex, readFileSync(codex, "utf8").replaceAll("ensure", "broken"));
+      const damaged = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        cwd: repoRoot,
+        env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome,
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+        encoding: "utf8", timeout: SHIM_INSTALL_CHILD_MS, killSignal: "SIGKILL",
+      });
+      expect(damaged.error).toBeUndefined();
+      expect(damaged.status).toBe(1);
+      expect(damaged.stderr).toContain("unhealthy");
     } finally {
       removeTreeWithRetry(root);
     }
-  }, SHIM_INSTALL_CASE_MS);
+  }, SHIM_INSTALL_CASE_MS * 3);
 });

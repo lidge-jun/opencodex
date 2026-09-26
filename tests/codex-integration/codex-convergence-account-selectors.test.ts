@@ -66,6 +66,7 @@ let previousOpencodexHome: string | undefined;
 let previousCodexCliPath: string | undefined;
 let previousFetch: typeof fetch;
 let modelRostersByChatgptAccount: Map<string, readonly string[]>;
+let modelAccessProgramsByChatgptAccount: Map<string, ReadonlyMap<string, unknown>>;
 
 const GPT56_NATIVE_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"] as const;
 
@@ -307,6 +308,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = opencodexHome;
   previousFetch = globalThis.fetch;
   modelRostersByChatgptAccount = new Map();
+  modelAccessProgramsByChatgptAccount = new Map();
   writeFileSync(join(codexHome, "auth.json"), JSON.stringify({
     tokens: { access_token: "main-token", account_id: "main-chatgpt-account" },
   }));
@@ -325,6 +327,9 @@ beforeEach(() => {
           slug,
           supported_in_api: true,
           visibility: "list",
+          ...(modelAccessProgramsByChatgptAccount.get(accountId)?.has(slug)
+            ? { available_access_programs: modelAccessProgramsByChatgptAccount.get(accountId)!.get(slug) }
+            : {}),
         })),
       });
     }
@@ -333,6 +338,25 @@ beforeEach(() => {
   resetCatalogRuntimeStateForTests();
   resetCodexRuntimeResolveCacheForTests();
   resetCodexModelEntitlementCacheForTests();
+});
+
+test.each(["convergence", "retained"] as const)("%s writes account-specific access programs into the serialized catalog", async writer => {
+  primeCodexRuntimeFixture();
+  writeCatalog([nativeEntry()]);
+  grantGpt56NativeModels("main-chatgpt-account", "side-chatgpt-account");
+  const mainPrograms = { cyber: ["standard", "daybreak_blue"] };
+  const sidePrograms = { cyber: ["standard"] };
+  modelAccessProgramsByChatgptAccount.set("main-chatgpt-account", new Map([["gpt-5.6-sol", mainPrograms]]));
+  modelAccessProgramsByChatgptAccount.set("side-chatgpt-account", new Map([["gpt-5.6-sol", sidePrograms]]));
+  const next = config(true);
+  const catalog = writer === "convergence"
+    ? await convergeCatalog(next)
+    : (await syncCatalogModels(next), JSON.parse(readFileSync(catalogPath, "utf8")) as RawCatalog);
+  const rows = catalog.models ?? [];
+  expect(rows.find(row => row.slug === "gpt-5.6-sol")?.available_access_programs).toEqual(mainPrograms);
+  expect(rows.find(row => row.slug === "desktop/gpt-5.6-sol")?.available_access_programs).toEqual(mainPrograms);
+  expect(rows.find(row => row.slug === "team/gpt-5.6-sol")?.available_access_programs).toEqual(sidePrograms);
+  expect(JSON.parse(readFileSync(catalogPath, "utf8")).models).toEqual(rows);
 });
 
 afterEach(() => {

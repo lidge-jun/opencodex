@@ -510,6 +510,8 @@ adresindeki [web kontrol panelini](/tr/guides/web-dashboard/) açın; hub'da yö
 
 OpenCodex mise üzerinden kurulduğunda bu komut proxy'yi durdurmadan veya paket dosyalarını değiştirmeden önce başarısız olur ve doğrulanmış yerel mise diğer adını kullanarak `mise upgrade <tool>` komutunu gösterir. Güncelleme denetimi kullanılabilir kalır ve kurulumun harici olarak yönetildiğini bildirir. Okunamayan veya tutarsız mise sahiplik meta verileri de araç adını tahmin etmeden değişikliği reddeder; `--tag preview` mise içinde yapılandırılmış seçimi değiştirmez.
 
+Linux'ta kayıtlı başlatıcısı mise paket başlatıcısı (mise shim'i değil, `<tool>/latest/node_modules/.bin/ocx`) olan bir arka plan hizmeti `mise upgrade` işlemini kendiliğinden izler: yeni sürüm oturduktan yaklaşık on saniye sonra etkin istekleri boşaltır ve yeni sürümle yeniden başlar; mise daha sonra çalıştığı sürümü temizlerse de aynı şekilde toparlanır. macOS'ta, mise shim'i üzerinden kurulan bir hizmette ve ön plandaki bir proxy'de yükseltmeden sonra kendiniz yeniden başlatın (macOS'ta önce `ocx service repair`).
+
 opencodex'i npm'den kendi kendine güncelleyin. Kararlı kurulumlar `@latest`
 kullanır; önizleme kurulumları `--tag latest|preview` iletmediğiniz sürece
 `@preview` üzerinde kalır. Bir kaynak kod kopyasını algılar ve bunun yerine `git

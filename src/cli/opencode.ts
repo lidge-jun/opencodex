@@ -101,6 +101,8 @@ export interface OpencodeProxyModelRow {
   displayName?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
   contextWindow?: number;
+  /** Authoritative output limit (CatalogModel.maxOutputTokens); optional. */
+  maxOutputTokens?: number;
   /** Declared input modalities from `/api/models`; carried into opencode model capabilities. */
   inputModalities?: string[];
   /** Declared effort ladder from `/api/models`; carried into opencode model variants. */
@@ -427,6 +429,7 @@ export function opencodeCatalogFromProxyRows(
       provider: row.provider,
       id: row.id,
       contextWindow: row.contextWindow,
+      ...(typeof row.maxOutputTokens === "number" ? { maxTokens: row.maxOutputTokens } : {}),
       displayName: row.displayNameSource === "fallback" ? undefined : row.displayName,
       ...(Array.isArray(row.inputModalities) && row.inputModalities.length > 0
         ? { inputModalities: [...row.inputModalities] }

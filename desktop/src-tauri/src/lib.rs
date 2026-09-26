@@ -285,7 +285,7 @@ pub fn run() {
             // or started, so every state below has somewhere to be reported. A login launch stays
             // hidden until the tray verdict, because R1 shows it after all when there turns out to
             // be nowhere to hide.
-            let window =
+            let builder =
                 WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                     .title("OpenCodex")
                     .inner_size(1100.0, 720.0)
@@ -308,8 +308,23 @@ pub fn run() {
                                 window.is_visible().unwrap_or(false),
                             );
                         }
-                    })
-                    .build()?;
+                    });
+            // The integrated title bar: macOS keeps its traffic lights but draws them over the
+            // webview, so the dashboard's sidebar top strip reserves the space they land in
+            // (`app-titlebar.css` keeps it aligned with this position) and the strips move or
+            // zoom the window through `plugin:window` commands granted by
+            // `capabilities/dashboard-titlebar.json`. Windows and Linux keep the native title
+            // bar — the shell ships no min/max/close widgets of its own — while the sidebar-top
+            // layout applies unchanged.
+            #[cfg(target_os = "macos")]
+            let builder = builder
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true)
+                .min_inner_size(360.0, 320.0)
+                .traffic_light_position(tauri::Position::Logical(tauri::LogicalPosition::new(
+                    18.0, 22.0,
+                )));
+            let window = builder.build()?;
             window::configure(&window);
             if startup::LaunchOrigin::detect() == startup::LaunchOrigin::User {
                 window::show(&window);

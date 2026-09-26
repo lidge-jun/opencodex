@@ -199,7 +199,7 @@ Aside 프로필 변경은 이때도 한 가지를 저장합니다. 확인을 보
 | `GET /api/debug/usage-logs` | 제한된 usage-debug 항목을 읽습니다 | — |
 | `GET /api/debug/injection-logs` | 제한된 guidance-injection debug 항목을 읽습니다 | — |
 | `GET /api/claude/inbound-debug` | Claude inbound debug 상태와 항목을 읽습니다 | — |
-| `GET /api/usage` | 범위와 클라이언트 surface별 사용량을 요약합니다 | 저장소를 읽을 수 없으면 `error: "read_failed"` 요약을 반환합니다 |
+| `GET /api/usage` | 범위와 클라이언트 surface별 사용량을 요약합니다 | 저장소를 읽을 수 없으면 500 `{ "error": "read_failed" }`를 반환합니다 |
 | `GET /api/metrics` | 논리 요청, 실제 송신, 복구 종류, 소요 시간, TTFT에 대한 프로세스 로컬 Prometheus 텍스트 메트릭을 반환합니다. label은 protocol, result, recovery class의 닫힌 집합만 사용하며 요청·자격 증명 식별자는 내보내지 않습니다. | 시작 시 `metricsExport.enabled`가 true가 아니면 404; 일반 관리 인증이 필요하며 데이터 플레인 자격 증명으로는 접근할 수 없습니다 |
 | `GET /api/storage` | bucket별 Codex 저장소 사용량을 검사합니다 | 검사 실패 시 `error: "scan_failed"` payload를 반환합니다 |
 | `POST /api/storage/cleanup/preview` | archived-session cleanup을 미리 보고 binding digest를 반환합니다 | 400 `invalid_json` 또는 `invalid_percent` |

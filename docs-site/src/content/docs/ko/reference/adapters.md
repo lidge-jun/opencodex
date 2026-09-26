@@ -120,6 +120,7 @@ Ollama 공급자에 `adapter: "ollama-native"`로 설정할 수도 있습니다.
   어댑터는 reasoning effort를 budget으로 매핑하고(minimal 1024 … max 32000), 출력 여유를 둔
   안전한 `max_tokens`를 계산합니다. thinking이 켜지면 Anthropic에서 금지한
   **`temperature`/`top_p`를 제거**합니다.
+- **적응형 thinking 표시:** 적응형 thinking 모델(Opus 4.7+, Sonnet 5, Fable)에는 `thinking.display: "summarized"`를 보내므로, 긴 사고가 몇 분 동안의 heartbeat 대신 reasoning delta로 Chat과 Responses 클라이언트에 전달됩니다. reasoning 요약을 숨기는 요청(`reasoning.summary: "none"`)은 공급자 기본값을 그대로 씁니다.
 - 항상 `anthropic-version: 2023-06-01`을 보냅니다. `content_block_delta`(`text_delta`,
   `thinking_delta`, `input_json_delta`)를 스트리밍합니다.
 

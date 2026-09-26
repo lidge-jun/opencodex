@@ -156,6 +156,14 @@ authoritative. Existing client configs receive the entries on export or managed 
 save refreshes enabled native clients and already-owned file integrations when the running proxy port
 is available; otherwise the operator refreshes the integration or client catalog explicitly.
 
+## Model output limits
+
+OpenCode, Pi-family clients, OMP and Gajae export the explicit model `maxTokens` when valid (a catalog
+row's `maxOutputTokens`, carried by `toExportModel` in `src/server/management/model-rows.ts` and by
+`opencodeCatalogFromProxyRows` in `src/cli/opencode.ts`), otherwise the generated metadata limit for the provider and model ID (including provider aliases).
+Only unknown limits fall back to 32000. Every output limit is clamped to the authoritative
+context window; absent context still omits both limits. Fast rows preserve these limits.
+
 ## Model input capability exports
 
 All registered integrations consume the shared catalog, including [Anthropic seed image metadata](../runtime.md#capability-aware-image-admission), through their existing schema-specific exports:

@@ -41,15 +41,22 @@ mutually exclusive on one machine:
   creating the local authority first. Only the Claude Code process Desktop spawns for the Code tab
   (and its subagents, and any standalone `claude` CLI) reads that env, so only their
   `api.anthropic.com` traffic reaches the [Claude intercept pair](../runtime.md#claude-intercept-pair).
+  The Desktop and standalone CLI first-party switches are independent intents. They share only the owned
+  settings env; it remains while either intent is desired. A client whose intent is off may still traverse
+  that proxy, but every path relays to real Anthropic when its intent is off. The account-risk warning applies
+  to either routed first-party client.
 - **gateway** (default for new installs): the existing third-party profile written by
   `src/claude/desktop-3p.ts`; the whole app switches to the local gateway. The dashboard,
   `--gateway`, and legacy `--static|--hybrid|--discovery-only` shape flags also select it.
 
 `resolveClaudeDesktopMode` uses observations from `observeClaudeDesktopMode` in this order:
 explicit `claudeCode.desktopMode` → selected owned gateway row → persisted
-`desktopProfile.appliedFingerprint` → owned first-party env in `~/.claude/settings.json` →
-gateway. The owned env observation preserves first-party installs applied before mode persistence;
-foreign proxy settings do not count. `resolveClaudeDesktopApplyMode` preserves the resolved mode.
+`desktopProfile.appliedFingerprint` → legacy Desktop-owned first-party env →
+gateway. This env observation preserves Desktop installs that predate mode persistence
+only while CLI first-party intent is off. An owned env observed with
+`claudeCode.cliFirstParty === true` is not Desktop-mode evidence, even when the
+intercept is disabled; foreign proxy settings do not count.
+`resolveClaudeDesktopApplyMode` preserves the resolved mode.
 An apply for a first-party install with `claudeCode.intercept.enabled: false` is refused with
 `intercept_disabled` rather than switched to gateway. New installs apply gateway.
 `src/claude/desktop-risk.ts` owns the account-suspension warning: first-party sends subscription
@@ -70,11 +77,12 @@ cleanup via `src/claude/desktop-gateway-state.ts`. Cleanup failure remains a par
 subsequent default applies and status retain the gateway choice. A separate persistence failure
 is reported explicitly; its mode/profile snapshot is not claimed to have been saved. These file operations are ordered,
 not a crash-atomic transaction across the settings file and Desktop library.
-Disabling the integration (native toggle, `ocx ensure` with the durable switch OFF) removes both the
-gateway profile and the first-party env. With the switch ON in first-party mode, `ocx ensure`
-re-applies a stale env (the proxy port follows the public port).
+Disabling Desktop integration removes its gateway profile. It removes the owned first-party env
+only when `claudeCode.cliFirstParty` is not set; otherwise the env stays for the CLI. With Desktop
+first-party ON, `ocx ensure` re-applies a stale env; the proxy port follows the public port.
 
 Surfaces: `ocx claude desktop apply [--first-party|--gateway]` in `src/cli/claude-desktop.ts`;
+`ocx claude config set --first-party on|off` and the Claude Code page switch control the CLI intent; `ocx ensure` refreshes a stale or absent env while it is on.
 `POST /api/claude-desktop/apply` with `mode` ∈ `first-party|gateway|static|hybrid|discovery` and
 `GET /api/claude-desktop/status` (`mode`, `riskWarning`, `firstParty.{applied,stale,interceptEnabled,interceptRunning,proxyPort,caCertPath}`)
 in `src/server/management/agent-settings-routes.ts`; the native toggle in
@@ -210,16 +218,24 @@ writes the resulting local Desktop configuration. No admin token, hub-profile up
 alias regeneration is part of this flow. Unsupported old hubs, invalid snapshots and unavailable
 Desktop models fail apply without a local-catalog or loopback fallback.
 
-Managed-namespace date aliases occupy `claude-opus-4-8-YYYYMMDD` slots across 2026-2035, not 2026
+Managed profile assignments persist `claude-opus-4-8-YYYYMMDD` slots across 2026-2035, not 2026
 alone. The original 2026-only design held 365 slots and failed with "all 365 encoded date slots are
 occupied" once a catalog exceeded 365 routes, because stale assignments are retained by design and
-the set only grows. 2026 is still allocated first, so existing assignments keep their ids, and
+the set only grows. 2026 is still allocated first, so existing assignments keep their slots, and
 2027-2035 are reached only after it fills. Years before 2026 stay rejected: dated ids such as
 `claude-opus-4-8-20250201` are real Anthropic snapshot ids and the inbound decoder relies on that
-distinction. Every emitted suffix stays eight digits so `modelMap` date-stripping keeps working.
-`src/claude/desktop-profile.ts` owns this range.
+distinction. At render time each stored slot becomes a unique `p`-prefixed four-character wire
+code, disjoint from the historical three-character hash namespace. Claude Desktop strips terminal
+dates when comparing active-session model identity, so writing
+the persisted date slots directly would collapse every managed route to `claude-opus-4-8` and
+suppress `set_model` between them (#3782). The registry accepts both forms during migration. If an
+active real Anthropic id claims a persisted date slot, reconciliation reallocates the non-Anthropic
+route before rendering. If any synthetic or compatibility alias matches an active real Anthropic id,
+the conflicting routed row or compatibility binding is omitted with a warning, and the real
+Anthropic identity remains unclaimed; a profile alias can never overwrite native routing.
+`src/claude/desktop-profile.ts` owns the slot range and wire conversion.
 
-Date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
+Persisted date-shaped Desktop IDs can overlap genuine native model IDs. When available discovery and
 mapping evidence cannot resolve one, Messages and count-tokens return HTTP 503 with the fixed
 `desktop_model_mapping_unavailable` error rather than classifying it as invalid. Unknown legacy hash aliases
 remain HTTP 400; neither case reaches date-stripping or fallback routing. Known/registered IDs,

@@ -498,6 +498,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Umans AI · Neuralwatt | `https://api.code.umans.ai` · `https://api.neuralwatt.com/v1` |
 | Mistral | `https://api.mistral.ai/v1` |
 | MiniMax · MiniMax (CN) | `https://api.minimax.io/v1` · `https://api.minimaxi.com/v1` |
+
 | DeepSeek | `https://api.deepseek.com` |
 | Cerebras | `https://api.cerebras.ai/v1` |
 | Chutes | `https://llm.chutes.ai/v1` |
@@ -538,6 +539,10 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
 | …and more | opencode zen, Vercel AI Gateway, Venice, NanoGPT, Synthetic, Qianfan, Alibaba, Parallel, ZenMux, LiteLLM |
 
+The MiniMax and MiniMax (CN) provider cards can also show Coding Plan quota when the configured
+key has an active plan. The dashboard reads the plan's 5-hour window and, when present, weekly
+window; these are display observations and do not change model routing.
+
 **OpenCode Go** requires a stable session identifier for routing. OpenCodex derives
 its Go session header from Codex thread/session headers, or from a client's
 `x-opencode-session` header when Codex headers are absent. This applies to direct
@@ -565,7 +570,13 @@ when a stable upstream session is required.
 **MiMo tool-call echoes.** On OpenCode Go and other Chat Completions routes, a bare
 `<tool_call>` block is hidden when it duplicates one structured call to the same tool
 with the same effective input. If the input differs or several calls could explain
-the block, the markup remains visible. Tool execution still uses the structured call.
+the block, the markup remains visible. For `mimo-v2` and dotted MiMo V2 model IDs such as
+`mimo-v2.6-pro`, if the gateway instead sends exactly one empty `{}` call for a declared
+freeform tool and puts its input in a standalone bare block, opencodex restores that
+input to the call and hides the block. Hyphenated IDs such as `mimo-v2-pro` and
+`mimo-v2-omni` are outside this recovery rule. Prose, quoted
+examples, ordinary functions, and ambiguous responses remain unchanged. This also handles
+MiMo's malformed `<parameter=` opener at the start of that standalone block.
 
 **OpenCode Zen** (`opencode-zen`) and the keyless **OpenCode Free** preset share
 `https://opencode.ai/zen/v1`. Free models on that gateway often hit a short-window burst

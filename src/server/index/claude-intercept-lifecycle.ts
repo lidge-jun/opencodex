@@ -1,6 +1,10 @@
 import type { Server } from "bun";
+import type { OcxConfig } from "../../types";
 import type { PickerRouteInput } from "../../claude/intercept/picker-models";
+import { observeClaudeDesktopMode, type ClaudeDesktopModeObservation } from "../../claude/desktop-first-party";
+import { firstPartyDesired, type ClaudeFirstPartyDesired } from "../../claude/first-party-settings";
 import {
+  claudeInterceptEnabled,
   startClaudeIntercept,
   type ClaudeInterceptHandle,
   type StartClaudeInterceptOptions,
@@ -17,6 +21,12 @@ export interface ClaudeInterceptLifecycle<T> {
   ownsListener(requestServer: Server<T>): boolean;
   start(options: StartClaudeInterceptOptions<T>): void;
   stop(): Promise<void>;
+}
+
+export function buildInterceptDesiredClients(config: OcxConfig, observed: ClaudeDesktopModeObservation): () => ClaudeFirstPartyDesired {
+  return () => claudeInterceptEnabled(config)
+    ? firstPartyDesired(config, observed)
+    : { desktop: false, cli: false };
 }
 
 /**
@@ -48,8 +58,11 @@ export function createClaudeInterceptLifecycle<T>(): ClaudeInterceptLifecycle<T>
     ownsListener: requestServer => listener !== null && requestServer === listener,
     start(options) {
       const dispatch = options.dispatch;
+      const observed = observeClaudeDesktopMode(options.config);
       pending = startClaudeIntercept<T>({
         ...options,
+        // A disabled Claude surface relays everything while the bound listener lives until restart.
+        desiredClients: buildInterceptDesiredClients(options.config, observed),
         loadPickerRoutes: options.loadPickerRoutes ?? loadPickerRoutesFromCatalog,
         dispatch: (req, requestServer) => {
           listener ??= requestServer;

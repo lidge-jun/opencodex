@@ -12,20 +12,73 @@
   font-size: var(--text-label);
 }
 
-.quota-summary-list {
+/*
+  The strip is one row at every width: chips never wrap to a second line and never break
+  inside. What does not fit scrolls sideways (scrollbar hidden) and the « / » buttons page it.
+*/
+.quota-summary-scroller {
   display: flex;
   flex: 1;
   min-width: 0;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.quota-summary-list {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
   margin: 0;
-  padding: 0;
+  /* Room for the focus ring, which the scroll box would otherwise clip. */
+  padding: 3px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
   list-style: none;
 }
 
+.quota-summary-list::-webkit-scrollbar {
+  display: none;
+}
+
 .quota-summary-item {
-  position: relative;
+  flex: 0 0 auto;
+}
+
+.quota-summary-scroll {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.quota-summary-scroll:hover:not([aria-disabled="true"]) {
+  background: var(--bg);
+}
+
+.quota-summary-scroll[aria-disabled="true"] {
+  color: var(--muted);
+  opacity: 0.45;
+  cursor: default;
+}
+
+.quota-summary-scroll:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 1px;
 }
 
 .quota-summary-chip {
@@ -38,11 +91,13 @@
   background: none;
   color: var(--text);
   font: inherit;
+  text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
 }
 
 .quota-summary-chip:hover,
-.quota-summary-chip[aria-expanded="true"] {
+.quota-summary-chip--open {
   border-color: var(--border);
 }
 
@@ -96,12 +151,19 @@
   background: var(--red);
 }
 
+/*
+  Fixed, not absolute: the chip list is a horizontal scroll box, which would clip an absolutely
+  positioned child. The component writes the chip-relative coordinates, in unitless pixels, into
+  these variables.
+*/
 .quota-summary-popover {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
+  position: fixed;
+  top: calc(var(--qs-pop-top, 0) * 1px);
+  left: calc(var(--qs-pop-left, 0) * 1px);
   z-index: var(--z-popover);
   min-width: 260px;
+  /* A fixed box resolves % against the viewport without its scrollbar; 100vw would include it. */
+  max-width: calc(100% - 16px);
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -179,6 +241,10 @@
 }
 
 .quota-summary-popover-foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 12px;
   margin-top: 6px;
   color: var(--muted);
   font-size: var(--text-caption);
@@ -219,12 +285,10 @@
   }
 
   .quota-summary-popover {
-    position: fixed;
-    top: auto;
+    top: calc(var(--qs-pop-top, 0) * 1px);
     left: 8px;
     right: 8px;
     min-width: 0;
-    margin-top: 4px;
   }
 
   /*

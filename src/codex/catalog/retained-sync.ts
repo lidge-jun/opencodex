@@ -12,6 +12,7 @@ import { providerCodexAccountMode } from "../../providers/registry";
 import { COMBO_NAMESPACE } from "../../combos";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
+import { applyNativeAccessPrograms } from "./access-programs";
 import {
   availableAccountGatedNativeModels,
   codexModelEntitlementStateForAccount,
@@ -266,6 +267,7 @@ function catalogModelsForMergeWithNativeRecovery(
   ]);
 }
 
+/** Merge retained rows, project confirmed account metadata, and publish only changed catalog bytes. */
 function writeRetainedCatalogSync({
   config,
   goModels,
@@ -526,6 +528,7 @@ function writeRetainedCatalogSync({
       warningPolicy: "emit",
     },
   });
+  applyNativeAccessPrograms(catalog.models, modelEntitlements, accountTargets);
   clampCatalogModelsToCodexSupport(catalog.models);
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
   // Last mutation before serialization; see `enforceCatalogSlugUniqueness` for why the ordering

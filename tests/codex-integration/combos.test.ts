@@ -633,14 +633,21 @@ describe("combo target cooldowns", () => {
     expect(isComboTargetInCooldown("free", configuredPick.target, 1_000 + 7_000)).toBe(false);
   });
 
-  test("keeps the default cooldown for usage-window 1308", () => {
+  // Changed in #5860. This arrived as the negative control proving 1308 does NOT take the
+  // 5-second request-rate cooldown, so the 60-second value was a side effect of that contrast,
+  // not a position on exhaustion. 1308 IS a 5-hour usage window: a 60-second cooldown re-probes
+  // it about 300 times before it can possibly succeed. The contrast it was written to prove is
+  // preserved -- 1308 is still not COMBO_REQUEST_RATE_COOLDOWN_MS -- it now holds the full
+  // ten-minute exhaustion cooldown instead of the generic default.
+  test("holds the exhaustion cooldown for usage-window 1308", () => {
     coolComboTarget("free", target, {
       now: 1_000,
       code: "1308",
       message: "Usage limit reached for 5 hour",
     });
-    expect(isComboTargetInCooldown("free", target, 1_000 + 59_999)).toBe(true);
-    expect(isComboTargetInCooldown("free", target, 1_000 + 60_000)).toBe(false);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 60_000)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 10 * 60_000 - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 10 * 60_000)).toBe(false);
   });
 
   test("honors explicit Retry-After over the request-rate default", () => {
@@ -1905,4 +1912,60 @@ test("combo identifiers leaf preserves public export identity without facade imp
   const source = readFileSync(repoPath("src", "combos", "identifiers.ts"), "utf8");
   expect(source.split(/\r?\n/).some(line => /from\s+["']\.\/(types|index)["']/.test(line)))
     .toBe(false);
+});
+
+describe("per-model provider quota windows", () => {
+  const now = 100_000;
+  const resetAt = now + 60_000;
+  const quotaConfig = (targets: { provider: string; model: string }[]): OcxConfig =>
+    baseConfig({ combos: { scoped: { strategy: "failover", targets } } });
+
+  beforeEach(() => { clearCachedProviderQuotas(); });
+  afterEach(() => { clearCachedProviderQuotas(); });
+
+  test("a spent model-scoped window gates only its own family", () => {
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Opus", scope: "model", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    const config = quotaConfig([
+      { provider: "a", model: "claude-opus-4-5" },
+      { provider: "a", model: "claude-sonnet-4-5" },
+    ]);
+    expect(pickComboTarget(config, "scoped", { now })?.target.model).toBe("claude-sonnet-4-5");
+  });
+
+  test("an unscoped window of the same label still gates every model", () => {
+    // `quota/antigravity.ts` forwards an upstream group display name unchanged, so a
+    // provider-wide group named "Opus" must not be read as per-model: skipping it would
+    // leave a spent window unenforced.
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Opus", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    const config = quotaConfig([{ provider: "a", model: "claude-sonnet-4-5" }]);
+    expect(pickComboTarget(config, "scoped", { now })).toBeNull();
+  });
+
+  test("a model-scoped family this gateway cannot match gates every model", () => {
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Claude Neptune", scope: "model", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    const config = quotaConfig([{ provider: "a", model: "claude-opus-4-5" }]);
+    expect(pickComboTarget(config, "scoped", { now })).toBeNull();
+  });
+
+  test("provider-wide windows and canonical buckets are untouched", () => {
+    setCachedProviderQuotaForTests("a", {
+      customWindows: [{ label: "Prepaid credits", percent: 100, resetAt }],
+      updatedAt: now,
+    });
+    setCachedProviderQuotaForTests("b", { weeklyPercent: 100, weeklyResetAt: resetAt, updatedAt: now });
+    const config = quotaConfig([
+      { provider: "a", model: "claude-opus-4-5" },
+      { provider: "b", model: "claude-sonnet-4-5" },
+    ]);
+    expect(pickComboTarget(config, "scoped", { now })).toBeNull();
+  });
 });

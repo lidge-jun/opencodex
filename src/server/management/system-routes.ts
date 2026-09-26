@@ -217,7 +217,7 @@ export async function handleSystemRoutes(ctx: ManagementContext): Promise<Respon
       };
     }
     if (req.method === "GET") {
-      return jsonResponse(service.readState(), 200, req, config);
+      return jsonResponse(await service.readState(), 200, req, config);
     }
     return jsonResponse(await service.performRestart(), 200, req, config);
   }

@@ -9,7 +9,6 @@ import {
   OPENCODE_API_KEY_ENV,
   OPENCODE_API_KEY_ENV_REF,
   LOOPBACK_API_KEY_PLACEHOLDER,
-  SCHEMA_REQUIRED_OUTPUT_BUDGET,
   buildClientConfig,
   buildClientContribution,
   buildClientConfigText,
@@ -65,15 +64,15 @@ function cfg(extra?: Partial<OcxConfig>): OcxConfig {
 }
 
 /**
- * Captured from `buildOpencodeProviderBlockFromCatalog` BEFORE the serializer moved to
+ * Based on `buildOpencodeProviderBlockFromCatalog` before the serializer moved to
  * src/clients/config-export.ts, for the fixture above at port 10100 / 127.0.0.1. Inlined
  * rather than read from a file so the assertion survives without scratch state.
  *
- * The relocated builder must reproduce this byte-for-byte; the client-config path adds a
+ * Updated for authoritative output limits (#5828). The builder reproduces this; the client-config path adds a
  * dedupe+sort precondition, so it is compared entry-by-entry against the same truth.
  */
 const GOLDEN_OPENCODE_BLOCK = JSON.parse(
-  '{"npm":"@ai-sdk/openai-compatible","name":"OpenCodex","options":{"baseURL":"http://127.0.0.1:10100/v1","apiKey":"{env:OPENCODEX_OPENCODE_API_KEY}"},"models":{"gpt-5.6-luna":{"name":"gpt-5.6-luna (native)","limit":{"context":272000,"output":32000}},"anthropic/claude-opus-5":{"name":"Claude Opus 5 (anthropic)","limit":{"context":200000,"output":32000}},"custom/no-context":{"name":"no-context (custom)"},"tiny/small-ctx":{"name":"small-ctx (tiny)","limit":{"context":8000,"output":8000}}}}',
+  '{"npm":"@ai-sdk/openai-compatible","name":"OpenCodex","options":{"baseURL":"http://127.0.0.1:10100/v1","apiKey":"{env:OPENCODEX_OPENCODE_API_KEY}"},"models":{"gpt-5.6-luna":{"name":"gpt-5.6-luna (native)","limit":{"context":272000,"output":128000}},"anthropic/claude-opus-5":{"name":"Claude Opus 5 (anthropic)","limit":{"context":200000,"output":128000}},"custom/no-context":{"name":"no-context (custom)"},"tiny/small-ctx":{"name":"small-ctx (tiny)","limit":{"context":8000,"output":8000}}}}',
 ) as {
   npm: string;
   name: string;
@@ -141,7 +140,7 @@ describe("split config-export public facade", () => {
 
 
 describe("relocated OpenCode serializer (accept criterion 1)", () => {
-  test("the moved builder reproduces the pre-refactor golden byte-for-byte", () => {
+  test("the builder reproduces the updated golden byte-for-byte", () => {
     const block = buildOpencodeProviderBlockFromCatalog(10100, FIXTURE, "127.0.0.1");
     expect(JSON.stringify(block)).toBe(JSON.stringify(GOLDEN_OPENCODE_BLOCK));
   });
@@ -397,11 +396,11 @@ describe("Pi serializer (accept criterion 2)", () => {
     expect(entry).toEqual({ id: "custom/no-context", name: "no-context (custom)", input: ["text"] });
   });
 
-  test("maxTokens uses the schema budget and clamps to a smaller context window", () => {
+  test("maxTokens uses the known output limit and clamps to a smaller context window", () => {
     const models = piConfig().providers.opencodex!.models;
     const large = models.find(model => model.id === "gpt-5.6-luna")!;
     expect(large.contextWindow).toBe(272_000);
-    expect(large.maxTokens).toBe(SCHEMA_REQUIRED_OUTPUT_BUDGET);
+    expect(large.maxTokens).toBe(128_000);
     const small = models.find(model => model.id === "tiny/small-ctx")!;
     expect(small.contextWindow).toBe(8_000);
     expect(small.maxTokens).toBe(8_000);
@@ -879,7 +878,7 @@ describe("EXPORT_CLIENTS registry", () => {
           "name": "Claude Opus 5 (anthropic)",
           "limit": {
             "context": 200000,
-            "output": 32000
+            "output": 128000
           }
         },
         "custom/no-context": {
@@ -889,7 +888,7 @@ describe("EXPORT_CLIENTS registry", () => {
           "name": "gpt-5.6-luna (native)",
           "limit": {
             "context": 272000,
-            "output": 32000
+            "output": 128000
           }
         },
         "tiny/small-ctx": {
@@ -915,7 +914,7 @@ describe("EXPORT_CLIENTS registry", () => {
           "name": "Claude Opus 5 (anthropic)",
           "limit": {
             "context": 200000,
-            "output": 32000
+            "output": 128000
           }
         },
         "custom/no-context": {
@@ -925,7 +924,7 @@ describe("EXPORT_CLIENTS registry", () => {
           "name": "gpt-5.6-luna (native)",
           "limit": {
             "context": 272000,
-            "output": 32000
+            "output": 128000
           }
         },
         "tiny/small-ctx": {
@@ -963,7 +962,7 @@ describe("EXPORT_CLIENTS registry", () => {
             "text"
           ],
           "contextWindow": 200000,
-          "maxTokens": 32000
+          "maxTokens": 128000
         },
         {
           "id": "custom/no-context",
@@ -979,7 +978,7 @@ describe("EXPORT_CLIENTS registry", () => {
             "text"
           ],
           "contextWindow": 272000,
-          "maxTokens": 32000
+          "maxTokens": 128000
         },
         {
           "id": "tiny/small-ctx",
@@ -1155,5 +1154,39 @@ test("renamed CommandCode gathered effort tables reach DSH and ZCode exports", a
   } finally {
     clearModelCache();
     isolated.restore();
+  }
+});
+
+describe("authoritative client output limits (#5828)", () => {
+  for (const [provider, id, contextWindow, expected] of [
+    ["anthropic", "claude-opus-5", 200_000, 128_000],
+    ["anthropic-apikey", "claude-opus-5", 200_000, 128_000],
+    ["xai", "grok-4.20-0309-reasoning", 2_000_000, 30_000],
+    ["anthropic", "claude-opus-5", 8_000, 8_000],
+    ["custom", "unknown", 200_000, 32_000],
+    ["custom", "unknown", 8_000, 8_000],
+  ] as const) {
+    test(`${provider}/${id} with context ${contextWindow} exports ${expected}`, () => {
+      const model = { provider, id, namespaced: `${provider}/${id}`, contextWindow };
+      const context = ctx({ models: [model] });
+      const block = opencodeConfig(context).provider.opencodex!;
+      expect(block.models[model.namespaced]!.limit!.output).toBe(expected);
+      for (const client of ["pi", "omp", "gajae"] as const) {
+        const config = buildClientConfig(client, context) as PiGeneratedConfig;
+        expect(config.providers.opencodex!.models[0]!.maxTokens).toBe(expected);
+      }
+    });
+  }
+});
+
+test("explicit output metadata takes precedence and survives Fast expansion", () => {
+  for (const maxTokens of [60_000, 300_000, 0, NaN, Infinity]) {
+    const model: ExportModel = { provider: "anthropic", id: "claude-opus-5", namespaced: "anthropic/claude-opus-5", contextWindow: 200_000, maxTokens, fastRowAvailable: true };
+    const expected = maxTokens > 0 && Number.isFinite(maxTokens) ? Math.min(maxTokens, 200_000) : 128_000;
+    for (const client of ["pi", "omp", "gajae"] as const) {
+      const config = buildClientConfig(client, ctx({ models: [model] })) as PiGeneratedConfig;
+      expect(config.providers.opencodex!.models).toHaveLength(2);
+      for (const entry of config.providers.opencodex!.models) expect(entry.maxTokens).toBe(expected);
+    }
   }
 });

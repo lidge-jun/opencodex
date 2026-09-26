@@ -282,6 +282,8 @@ ocx codex-shim uninstall
 
 当 OpenCodex 由 mise 安装时，此命令会在停止代理或修改软件包文件之前以失败状态退出，并使用经过验证的本地 mise 别名显示 `mise upgrade <tool>`。更新检查仍然可用，并会报告该安装由外部管理。无法读取或不一致的 mise 所有权元数据也会阻止修改，且不会猜测工具名称；`--tag preview` 绝不会更改 mise 中配置的选择。
 
+在 Linux 上，如果后台服务记录的启动器是 mise 的包启动器（`<tool>/latest/node_modules/.bin/ocx`，而不是 mise shim），服务会自动跟随 `mise upgrade`：新版本稳定后约十秒内，它会排空进行中的请求并在新版本上重启；如果 mise 之后清理了它正在运行的版本，也会以同样方式恢复。在 macOS 上、通过 mise shim 安装的服务以及前台代理，请在升级后自行重启（macOS 上先运行 `ocx service repair`）。
+
 从 npm 自更新 opencodex。稳定版安装使用 `@latest`；预览版安装保持在 `@preview`，除非你传入 `--tag latest|preview`。它会检测源码检出，并提示你改为运行 `git pull && bun install`；如果你已经是该标签的最新版本，则不会执行任何操作。对于 npm 安装，它会在停止任何进程之前，对 Unix 缓存的所有权和访问权限执行有界检查。嵌套符号链接会通过 `lstat` 检查但不会跟随；Windows 会明确跳过这项仅适用于 Unix 的检查。检查失败时，更新会在托盘和代理仍运行的情况下中止。随后才会在替换文件之前停止正在运行的代理；已安装的服务会自动重建并启动，而前台安装则会打印 `ocx start` 作为下一步。持久化前，仪表板更新记录会隐去用户配置文件/缓存路径以及 UID/GID 值。
 
 ```bash

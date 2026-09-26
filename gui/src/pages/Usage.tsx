@@ -1,7 +1,7 @@
 import { createPortal } from "react-dom";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useI18n, type TFn, type Locale } from "../i18n/shared";
-import type { UsageReadMetadata } from "../usage-summary-resource";
+import { readUsageResponseJson, UsageReadFailedError, type UsageReadMetadata } from "../usage-summary-resource";
 import { UsageIncompleteNotice } from "../components/usage-incomplete-notice";
 import { formatProviderDisplayName } from "../provider-icons";
 import { formatTokens } from "../format-tokens";
@@ -1090,8 +1090,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
       query.set("until", String(until));
     }
     const response = await fetch(`${apiBase}/api/usage?${query}`, { signal });
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
-    const next = await response.json() as UsageResponse;
+    const next = await readUsageResponseJson<UsageResponse>(response);
     // HTTP 200 alone does not prove an older daemon honored the custom bounds.
     if (since !== undefined && (next?.customWindow !== true || next.since !== since || next.until !== until)) {
       throw new UsageWindowMismatchError();
@@ -1244,6 +1243,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
         <Notice tone="err">
           {state.error instanceof UsageWindowMismatchError
             ? `${t("usage.loadError")} ${t("dash.codexRestartMalformed")}`
+            : state.error instanceof UsageReadFailedError ? t("usage.loadError")
             : connected ? t("usage.hubOffline") : state.error instanceof Error ? `${t("usage.loadError")} ${state.error.message}` : t("usage.loadError")}{" "}
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => resource.refresh()}>
             {t("common.retry")}
@@ -1251,7 +1251,11 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
         </Notice>
       ) : (
         <>
-          {state.showError && <Notice tone="err">{t(connected ? "usage.hubOffline" : "usage.loadError")}</Notice>}
+          {state.showError && (
+            <Notice tone="err">
+              {t(connected && !(state.error instanceof UsageReadFailedError) ? "usage.hubOffline" : "usage.loadError")}
+            </Notice>
+          )}
           <UsageIncompleteNotice data={data} />
           {data?.historyTruncated && (
             // Naming the loaded window is the point: without it, `30d` and "Available history"

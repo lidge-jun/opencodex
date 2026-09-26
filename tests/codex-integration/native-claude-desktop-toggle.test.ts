@@ -55,6 +55,26 @@ async function toggle(enabled: boolean, deps: ManagementApiDeps = {}) {
   return { status: response!.status, body: await response!.json() as Record<string, unknown> };
 }
 
+test("native Desktop OFF publishes committed intent to the running config", async () => {
+  const live = config();
+  const response = await dispatch("/api/native-integrations/claude-desktop", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: false }),
+  }, { removeDesktop3pStandardPivot: () => ({ ok: true, changed: false, kind: "noop", libraryPath: library }) }, live);
+  expect(response!.status).toBe(200);
+  expect(persistedIntent()).toBe(false);
+  expect(live.clientIntegrations?.["claude-desktop"]).toBe(false);
+});
+
+test("failed native Desktop intent write leaves the running config unchanged", async () => {
+  const live = config();
+  writeFileSync(join(root, "config.json"), "{");
+  const response = await dispatch("/api/native-integrations/claude-desktop", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: false }),
+  }, {}, live);
+  expect(response!.status).not.toBe(200);
+  expect(live.clientIntegrations).toBeUndefined();
+});
+
 function oversizedTrackedBody(): {
   body: ReadableStream<Uint8Array>;
   stats: { pulls: number; cancelled: number; sentinelPulled: boolean };

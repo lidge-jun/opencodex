@@ -141,6 +141,7 @@ Pro/Max için Bearer + `anthropic-beta`).
   (en az 1024 … en çok 32000) eşler, ardından çıktı payı ile güvenli bir
   `max_tokens` hesaplar ve düşünme etkinleştirildiğinde
   **`temperature`/`top_p`'yi bırakır** (Anthropic orada bunları yasaklar).
+- **Uyarlanabilir thinking gösterimi:** uyarlanabilir thinking modellerine (Opus 4.7+, Sonnet 5, Fable) `thinking.display: "summarized"` gönderilir; böylece uzun bir düşünme, Chat ve Responses istemcilerine dakikalarca heartbeat yerine reasoning deltaları olarak ulaşır. Reasoning özetini gizleyen bir istek (`reasoning.summary: "none"`) sağlayıcının varsayılanını korur.
 - **Yapılandırılmış çıktı:** `type: "json_schema"` içeren Responses
   `text.format` ve Chat Completions `response_format` istekleri Anthropic
   `output_config.format` haline gelir. Format, uyumlu bir

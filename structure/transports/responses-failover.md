@@ -192,6 +192,20 @@ The management quota DTO keeps Combo editing aligned with scoped inference evide
 
 Lite and routing metadata use the same suffix-normalized model object as serialization, including configured bracket-suffix removal.
 
+## Grok Devin pre-output rate limits
+
+For direct Grok Responses requests served by the Devin runTurn adapter,
+`src/server/responses/run-turn-execution.ts` uses `preflightAdapterEvents` before creating the
+streaming Response. A first-event 429 without a replay-unsafe heartbeat becomes an HTTP 429 JSON
+error through the shared error formatter and client Retry-After resolver. The buffered first event
+is replayed for every other outcome. The preflight is bounded by the configured stall timeout,
+including any earlier OAuth failover preflight on this path. On expiry, its pending iterator read is
+handed to SSE replay exactly once; timeout therefore starts a 200 SSE response, and any later 429
+is an SSE failure. Text, reasoning, and tool output commit the stream. This boundary neither retries
+the turn nor changes combo failover policy. Buffered Responses turns apply the same refusal
+formatter to their collected first event after OAuth failover. Other buffered results retain
+the original event list, including output preceding a late error.
+
 ## Optional client transport hints
 
 `dropCodexSafetyBuffering` defaults to false. Canonical OpenAI forward Responses can remove only
@@ -460,10 +474,11 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 ## Account refusal and rotation boundaries
 
-Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum,
-cooldown and the three-rotation request cap remain in force, the complete credential/transport/replay
-identity is refreshed, and usage is attributed to the serving account. Single-account installs do not
-retry; a missing alternate credential preserves the original error. Organization or project exhaustion
+Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum and
+cooldown remain in force, while generic OAuth uses the stable snapshot ceiling described below. The
+complete credential/transport/replay identity is refreshed, and usage is attributed to the serving
+account. Single-account installs do not rotate; a missing alternate credential preserves the original
+error while transient recovery remains available. Organization or project exhaustion
 allows an initial alternate attempt because the response does not identify the refusing scope. After
 resolving an alternate, organization-level retry is withheld only when both credentials have the same
 known workspace account id. Stored Pool/main-pool alternates supply that id directly; a request-owned
@@ -478,6 +493,12 @@ credential has been resolved.
 Send-budget refusal is attributed as a withheld rotation only when a model-family-aware eligibility
 check confirms from the live roster that at least two accounts exist and an alternate is not currently
 cooled. That check applies no cooldown and advances no rotation.
+
+Generic OAuth snapshots its eligible roster before dispatch. Its request rotation ceiling is
+`max(3, min(eligibleCount, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) - 1)` (the cap is six); the live picker still filters cooldowns, so the snapshot supplies the
+stable ceiling without making a cooled account eligible. Same-provider auth recovery keeps the last
+physical target, rather than a diagnostic key, and a real send is charged once even when recovery
+rebuilds the request.
 
 Precommit Codex model refusals use bounded account recovery for HTTP `detail` and WebSocket-projected
 `error.message` bodies. Only an exact HTTP 400 refusal naming the requested or wire model establishes

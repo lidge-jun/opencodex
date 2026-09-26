@@ -115,7 +115,8 @@ understands:
 The bridge also runs a **heartbeat keep-alive** (RC3): during upstream silence, it emits an SSE
 comment line (`: opencodex heartbeat`) every 2 seconds to re-arm Codex's idle timer. Comment lines
 are discarded by every eventsource parser without producing an event, so strict Responses decoders
-never see an unknown variant. The default **stall deadline** is 300 seconds (`stallTimeoutSec`);
+never see an unknown variant. The default **stall deadline** is 300 seconds for a public upstream
+and disabled for a local one (`stallTimeoutSec`; `0` disables it everywhere);
 reaching it aborts the upstream and emits `response.incomplete` with reason
 `upstream_stall_timeout`, preventing a hung connection from blocking Codex indefinitely.
 
@@ -239,7 +240,8 @@ keepalives do not reset the adapter-event stall watchdog. The default stall
 timeout stays 300 seconds; encrypted compaction content is preserved unchanged.
 
 Native compact response buffering also enforces a body-byte inactivity deadline
-using `stallTimeoutSec` (300 seconds by default). Nonempty chunks reset that
+using `stallTimeoutSec` (300 seconds for a public upstream, disabled for a local one,
+and disabled everywhere when set to `0`). Nonempty chunks reset that
 deadline; a stalled body returns HTTP 504, client cancellation retains HTTP 499,
 and cleanup does not wait for a stuck upstream cancellation promise. The 32 MiB
 response ceiling and the original body bytes are preserved.

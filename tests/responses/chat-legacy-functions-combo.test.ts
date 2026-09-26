@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
@@ -53,6 +54,9 @@ afterEach(async () => {
   releaseSpendHome?.();
   releaseSpendHome = undefined;
   for (const server of servers.splice(0)) await server.stop(true);
+  // Policy routes open the routing-history index under OPENCODEX_HOME; Windows cannot remove
+  // the home while that SQLite handle is open (EBUSY).
+  closeRequestHistoryIndex();
   await flushResponseState();
   clearResponseStateForTests();
   resetRoutingState();

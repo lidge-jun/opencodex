@@ -135,6 +135,7 @@ interface ProviderAdapter {
   Адаптер отображает уровень рассуждений в бюджет (minimal 1024 … max 32000), затем вычисляет
   безопасный `max_tokens` с запасом на вывод и **удаляет `temperature`/`top_p`**, когда thinking
   включён (Anthropic запрещает их в этом режиме).
+- **Показ адаптивного thinking:** модели с адаптивным thinking (Opus 4.7+, Sonnet 5, Fable) получают `thinking.display: "summarized"`, поэтому долгое размышление приходит клиентам Chat и Responses как reasoning-дельты, а не как минуты heartbeat. Запрос, скрывающий сводку рассуждений (`reasoning.summary: "none"`), сохраняет значение провайдера по умолчанию.
 - Всегда отправляет `anthropic-version: 2023-06-01`. Стримит `content_block_delta` (`text_delta`,
   `thinking_delta`, `input_json_delta`).
 

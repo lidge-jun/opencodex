@@ -131,10 +131,7 @@ Rien à annuler — aucun fichier de configuration généré n'est écrit sous `
 `limit.context` n’est écrit que lorsque le catalogue fournit une fenêtre de contexte faisant autorité. Dans le cas
 contraire, le bloc `limit` entier est omis et opencode conserve ses propres valeurs par défaut.
 
-Le schéma d’opencode rejette un bloc `limit` qui contient `context` sans `output`. Comme le catalogue ne fournit
-aucune limite de sortie faisant autorité par modèle, opencodex émet également un budget `output` de `32000`, limité
-à la fenêtre de contexte afin qu’un modèle à petit contexte ne reçoive jamais `output > context`. Cette valeur sert
-uniquement à satisfaire le schéma ; elle ne prétend pas représenter la véritable limite d’un modèle particulier.
+La limite de sortie utilise le maximum connu du modèle dans le catalogue ou les métadonnées générées. La valeur `32000` ne sert que de repli si cette limite est inconnue. La limite est toujours plafonnée à la fenêtre de contexte, et les limites connues inférieures à `32000` sont conservées.
 
 Le bloc fournisseur `opencodex` est régénéré à chaque lancement, donc des ajustements par modèle y sont apportés
 ne survivra pas. Conservez plutôt les entrées personnalisées sous votre propre clé de fournisseur.

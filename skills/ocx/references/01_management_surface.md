@@ -950,6 +950,24 @@ JSON mode: `payload`.
 - Restarts the Codex desktop app as well as the app-servers, through the same module the CLI uses. When the proxy itself runs inside the Codex app it refuses instead, because restarting the app would kill the request.
 - --yes is mandatory because this interrupts a running editor session and may discard unsaved composer drafts, model-picker selections, and pending approval prompts; it must never happen because an agent guessed a subcommand.
 
+### `ocx claude config`
+
+Read or update Claude Code settings, including independent CLI first-party routing.
+
+| Method | Route |
+|---|---|
+| GET | `/api/claude-code` |
+| PUT | `/api/claude-code` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--first-party` | string | For `set`, on or off; route standalone Claude CLI subscription requests through the intercept. |
+| `--json` | boolean | Emit the management response as JSON. |
+
+JSON mode: `payload`.
+
+- `status` reads the route; `set` writes only submitted fields. Enabling first-party requires a running Claude intercept.
+
 ### `ocx claude desktop bind`
 
 First-party: serve a Claude Desktop Code tab picker model with an opencodex route.
@@ -1121,6 +1139,6 @@ JSON mode: `payload`.
 
 ## Counts
 
-- declared capabilities: 63
-- of those, state-changing: 33
+- declared capabilities: 64
+- of those, state-changing: 34
 - head-resolved invocations: 2
