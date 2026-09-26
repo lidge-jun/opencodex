@@ -209,8 +209,19 @@ describe("Codex shim install readiness", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toStartWith("⚠️  Codex autostart shim installed");
       expect(result.stderr).toContain("Codex routing could not be verified");
+      // A healthy no-op reports installed:false internally but must still exit successfully.
+      const repeat = spawnSync(process.execPath, [cliPath, "codex-shim", "install"], {
+        cwd: repoRoot,
+        env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome,
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+        encoding: "utf8", timeout: SHIM_INSTALL_CHILD_MS, killSignal: "SIGKILL",
+      });
+      expect(repeat.error).toBeUndefined();
+      expect(repeat.status).toBe(0);
+      expect(repeat.stdout).toContain("already installed");
+      expect(repeat.stderr).toContain("Codex routing could not be verified");
     } finally {
       removeTreeWithRetry(root);
     }
-  }, SHIM_INSTALL_CASE_MS);
+  }, SHIM_INSTALL_CASE_MS * 2);
 });
