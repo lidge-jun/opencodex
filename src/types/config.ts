@@ -722,6 +722,8 @@ export interface OcxConfig {
     /** Compaction triggers this override covers; omission means `["manual"]`. */
     triggers?: ("manual" | "auto")[];
   };
+  /** Opt-in failure-only recovery; never replaces the initial compaction model. */
+  compactionRecovery?: { enabled: boolean; model: string; allowDevinInvalidArgument?: boolean };
   /**
    * Models hidden from Codex discovery without blocking direct proxy calls. Routed provider ids
    * are excluded from the catalog + /v1/models entirely. Account-qualified native ids hide only

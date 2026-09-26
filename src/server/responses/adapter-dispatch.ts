@@ -1102,6 +1102,11 @@ export async function prepareAdapterExchange(
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");
       const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
+      options.onCompactionRecoveryAdapterEvent?.({
+        type: "error", status: upstreamResponse.status,
+        errorType: normalized.type, code: normalized.code,
+        message: "Structured upstream failure observed before client formatting",
+      });
       const message = normalized.cyberPolicy
         ? normalized.message
           ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)

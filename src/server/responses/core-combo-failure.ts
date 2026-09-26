@@ -117,6 +117,7 @@ export async function consumeComboFailure(
     ...(nonReplayable ? { nonReplayable: true } : {}),
     classificationText,
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
+    ...(upstreamType !== undefined ? { upstreamType } : {}),
     ...(!cyberFailure && cooldownRetryAfter !== undefined ? { retryAfter: cooldownRetryAfter } : {}),
     // The EFFECTIVE classification decides, not the raw status. An upstream that wraps a quota
     // refusal in a 5xx still carries `x-codex-*-reset-at`, and gating on 402/429 alone threw
