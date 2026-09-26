@@ -184,6 +184,7 @@ export const ru: Record<TKey, string> = {
   "auth.adminTokenTitle": "Токен администратора OpenCodex (OPENCODEX_ADMIN_AUTH_TOKEN)",
   "auth.adminAccountLabel": "Учётная запись",
   "auth.adminTokenFieldLabel": "Токен администратора",
+  "auth.adminTokenRemember": "Запомнить на этом устройстве",
   "auth.adminTokenRejected": "Токен администратора отклонён. Проверьте его и повторите попытку.",
   "auth.adminTokenUnavailable": "Не удалось проверить токен администратора. Повторите попытку.",
   "auth.adminTokenHelp": "Это административный токен управляющего API OpenCodex, а не ключ API провайдера. При первом запуске прокси записывает его в ~/.opencodex/admin-api-token (или $OPENCODEX_HOME/admin-api-token), а OPENCODEX_ADMIN_AUTH_TOKEN переопределяет это значение.",
