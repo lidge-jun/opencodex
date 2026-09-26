@@ -131,7 +131,15 @@ test("an ended link recycles a connected sibling after listener cleanup", async 
     if (child) await child.exited;
     if (replacementPid !== null) {
       try { process.kill(replacementPid, "SIGTERM"); } catch { /* already exited */ }
-      await waitFor(() => existsSync(join(home, "runtime-port.json")) ? null : true, "replacement shutdown");
+      await waitFor(() => {
+        try { return process.kill(replacementPid, 0) ? null : true; }
+        catch { return true; }
+      }, "replacement process exit");
+      // Windows SIGTERM is TerminateProcess, so no signal/exit handler removes the runtime
+      // record. The fixture cleanup owns that stale file after proving the process is gone.
+      if (process.platform !== "win32") {
+        await waitFor(() => existsSync(join(home, "runtime-port.json")) ? null : true, "replacement runtime cleanup");
+      }
     }
     if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = priorHome;
