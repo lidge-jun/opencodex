@@ -129,22 +129,27 @@ describe("headroom ranking", () => {
 });
 
 describe("exhaustion cooldown", () => {
-  test("a distant reset is clamped to a day", () => {
+  test("a distant reset is clamped to a day", async () => {
+    // A busy multi-file test process can cross a millisecond before the verdict is written.
+    await Bun.sleep(2);
+    const resetAt = Date.now() + 3 * 24 * 60 * 60_000;
+    seedExhausted("a", resetAt);
+    // The read clock must follow the observation; a future-dated verdict is invalid.
     const now = Date.now();
-    seedExhausted("a", now + 3 * 24 * 60 * 60_000);
     expect(exhaustedCooldownMs("kiro", "a", now, account("a"))).toBe(24 * 60 * 60_000);
   });
 
   test("an imminent reset is floored at five minutes", () => {
+    seedExhausted("a", Date.now() + 30_000);
     const now = Date.now();
-    seedExhausted("a", now + 30_000);
     expect(exhaustedCooldownMs("kiro", "a", now, account("a"))).toBe(5 * 60_000);
   });
 
   test("a reset inside the window is honoured exactly", () => {
+    const resetAt = Date.now() + 60 * 60_000;
+    seedExhausted("a", resetAt);
     const now = Date.now();
-    seedExhausted("a", now + 60 * 60_000);
-    expect(exhaustedCooldownMs("kiro", "a", now, account("a"))).toBe(60 * 60_000);
+    expect(exhaustedCooldownMs("kiro", "a", now, account("a"))).toBe(resetAt - now);
   });
 
   test("a healthy account has no exhaustion cooldown", () => {
