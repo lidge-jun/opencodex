@@ -31,9 +31,10 @@ public struct SnapshotProvider: TimelineProvider {
         if let snapshot = current.snapshot, !current.stale {
             entries.append(SnapshotEntry(date: snapshot.staleDate, snapshot: snapshot, failure: nil, stale: true))
         }
-        // The desktop app requests a reload whenever it writes a changed snapshot, so this schedule
-        // is only the fallback; WidgetKit's documented budget is a few dozen reloads a day.
-        completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(15 * 60))))
+        // The desktop app requests a reload when what the widget shows changes (at most every 20
+        // minutes) and writes every poll, so this schedule is the fallback that picks up a change
+        // made inside that window. WidgetKit's documented budget is a few dozen reloads a day.
+        completion(Timeline(entries: entries, policy: .after(now.addingTimeInterval(30 * 60))))
     }
 
     private func readEntry(now: Date = Date()) -> SnapshotEntry {
