@@ -109,6 +109,22 @@
   border-bottom: none;
 }
 
+/*
+  Combos is a fixed 100dvh shell. quota-summary-bar.css sizes it only when the bar is a
+  direct child of .main (the browser dashboard); in the desktop shell the bar lives inside
+  .main-top, which is always present, so the same column layout keys on the strip here.
+*/
+.main:has(> .main-top):has(> .main-inner--combos .combos-workspace-shell) {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+}
+.main:has(> .main-top) > .main-inner.main-inner--combos:has(.combos-workspace-shell) {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+
 /* Collapsed = the sidebar is gone entirely: no column, no rail, no background.
    Only the fixed strip survives, floating over the main strip's left edge. */
 @media (min-width: 761px) {
@@ -143,6 +159,14 @@
    control starts below their row. Both clearances grow when page zoom shrinks. */
 @media (max-width: 760px) {
   .sidebar-top { display: none; }
+  /* The sticky mobile header owns the top edge here. A sticky strip at top: 0 would paint
+     over its menu while scrolling, so the strip scrolls with the page like the bare bar. */
+  .main-top { position: static; z-index: auto; }
+  /* The grid already reserves the header's row; fill the main row, not a full viewport. */
+  .main:has(> .main-top):has(> .main-inner--combos .combos-workspace-shell) {
+    height: 100%;
+    min-height: 0;
+  }
   .app--macos .mobile-topbar { padding-left: var(--tl-inset, 80px); }
   .app--macos .sidebar.open { padding-top: calc(var(--titlebar-h, 40px) + 18px); }
 }

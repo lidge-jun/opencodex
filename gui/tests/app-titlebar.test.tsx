@@ -204,6 +204,31 @@ test("macOS titlebar clearance follows page zoom and monitor scale", async () =>
   stop();
 });
 
+test("zooming in shrinks only the lights' clearance so the narrow menu stays on screen", async () => {
+  win.__TAURI__ = { core: { invoke: async () => 2 } };
+  // 300% page zoom on a Retina window: DPR 6, so one CSS pixel is a third of a point.
+  Object.defineProperty(win, "devicePixelRatio", { configurable: true, value: 6 });
+  const stop = watchMacTitlebarMetrics(host);
+  await Promise.resolve();
+  expect(host.style.getPropertyValue("--tl-inset")).toBe("27px");
+  expect(host.style.getPropertyValue("--chrome-clear")).toBe("71px");
+  expect(host.style.getPropertyValue("--titlebar-h")).toBe("40px");
+  expect(host.classList.contains("app--reduced-zoom")).toBe(false);
+  // A 360pt window at 300% is 120 CSS pixels: the inset plus the 44px menu must fit.
+  expect(27 + 44).toBeLessThanOrEqual(120);
+  stop();
+});
+
+test("the strip yields to the mobile header and still sizes the desktop Combos shell", () => {
+  const css = readFileSync(new URL("../src/components/app-titlebar.css", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const mobile = css.slice(css.indexOf("@media (max-width: 760px)"));
+  expect(mobile).toContain(".main-top { position: static; z-index: auto; }");
+  expect(css).toContain(".main:has(> .main-top):has(> .main-inner--combos .combos-workspace-shell) {");
+  expect(css).toContain(".main:has(> .main-top) > .main-inner.main-inner--combos:has(.combos-workspace-shell) {");
+  expect(app).toContain('<header className="mobile-topbar" inert={navOpen} {...(desktopShell ? windowChromeHandlers() : {})}>');
+});
+
 test("the narrow macOS strip and drawer reserve the native controls", () => {
   const css = readFileSync(new URL("../src/components/app-titlebar.css", import.meta.url), "utf8");
   const lib = readFileSync(new URL("../../desktop/src-tauri/src/lib.rs", import.meta.url), "utf8");
