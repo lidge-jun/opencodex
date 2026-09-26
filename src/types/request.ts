@@ -149,6 +149,19 @@ export interface OcxParsedRequest {
    * provider-private continuation caches again on every later turn.
    */
   _contextCompactionBoundary?: boolean;
+  /**
+   * Core-owned registration slot for the optional advisor subsystem (src/advisor). Set per request
+   * by the sidecar planner, never at module load: the core Responses path only sees this
+   * structural shape, so an advisor-disabled install imports no advisor module. When present, the
+   * adapter delivery wraps the worker's event stream with it — the guard holds synthetic
+   * `advisor` tool calls, consults the configured expert model, and re-dispatches the worker.
+   */
+  _advisorGuard?: (options: {
+    parsed: OcxParsedRequest;
+    firstEvents: AsyncIterable<AdapterEvent>;
+    /** One bounded worker continuation re-dispatch (same machinery as the terminal guard). */
+    continuation: (parsed: OcxParsedRequest) => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;
+  }) => AsyncGenerator<AdapterEvent>;
 }
 
 export interface OcxContext {

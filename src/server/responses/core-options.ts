@@ -162,6 +162,15 @@ export interface HandleResponsesOptions {
    */
   visionDescribeTerminal?: boolean;
   /**
+   * Terminal advisor marker: true when the inbound request IS the advisor sidecar's own loopback
+   * consultation. The advisor planner then never plans a consultation — a depth cap of 1 that
+   * keeps Worker → Advisor → Advisor recursion impossible (same structure as
+   * {@linkcode visionDescribeTerminal}). The Chat surface detects the raw
+   * `x-opencodex-advisor-internal` header before its bridge rebuilds headers and carries the
+   * fact through this flag.
+   */
+  advisorInternal?: boolean;
+  /**
    * Set only by the Chat and Messages ingresses when `protocols.rollout.directEncoders` is on and
    * the settled route is one non-Responses target. Adapter delivery then encodes the adapter
    * events straight into the client's wire and returns a response marked with `markClientWire`.

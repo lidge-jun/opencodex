@@ -956,6 +956,14 @@ export interface OcxConfig {
   cacheRetention?: "none" | "short" | "long";
   /** Web-search sidecar: route web_search for non-OpenAI models through a gpt-mini via ChatGPT passthrough. */
   webSearchSidecar?: OcxWebSearchSidecarConfig;
+  /**
+   * Advisor sidecar: an OpenCodex-owned expert consultation runtime. The proxy injects a synthetic
+   * `advisor` tool into routed worker turns, executes the configured expert model itself (loopback
+   * through the normal routing authority, so the advisor may be ANY routable provider/model), and
+   * reinjects the advice so the original worker continues. `policy: "preflight"` additionally
+   * guarantees at least one automatic consultation per task without any worker cooperation.
+   */
+  advisor?: OcxAdvisorConfig;
   /** Vision sidecar: describe images via a gpt vision model so text-only models can "see" them. */
   visionSidecar?: OcxVisionSidecarConfig;
   /** /v1/images relay for codex's built-in image_gen tool. */
@@ -1449,6 +1457,31 @@ export interface OcxVisionSidecarConfig {
   /** Max description cache misses admitted in one main-model turn. Zero disables description calls. */
   maxDescriptionsPerTurn?: number;
   /** Sidecar fetch timeout (ms). */
+  timeoutMs?: number;
+}
+
+/**
+ * Advisor sidecar configuration. Kept deliberately small for PR1: no adaptive trigger knobs
+ * (failedValidations / noProgressCycles / semanticClassifier) — those belong to a later PR.
+ */
+export interface OcxAdvisorConfig {
+  /** Master switch. Default: false — the advisor stays off the request path entirely. */
+  enabled?: boolean;
+  /**
+   * The expert model consulted by the sidecar. Any model string the routing authority accepts:
+   * a bare native model ("gpt-6-astra"), an explicit "provider/model" ("anthropic/claude-...",
+   * "xai/grok-..."), or an account-qualified native model ("<namespace>/gpt-6-astra").
+   */
+  model?: string;
+  /** Reasoning effort for the advisor call. Validated against the canonical effort ladder. */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+  /**
+   * When the advisor is consulted. "manual" (default): only when the worker explicitly calls the
+   * synthetic `advisor` tool. "preflight": OpenCodex additionally guarantees at least one automatic
+   * consultation per task before the worker's first substantive turn.
+   */
+  policy?: "manual" | "preflight";
+  /** Advisor fetch timeout (ms). Default 120000. */
   timeoutMs?: number;
 }
 

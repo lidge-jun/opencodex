@@ -837,6 +837,10 @@ const commandRunners: Record<string, CommandRunner> = {
     const { handleComboCommand } = await import("./combo");
     return await handleComboCommand(deps.args.slice(1));
   },
+  advisor: async deps => {
+    const { handleAdvisorCommand } = await import("./advisor");
+    return await handleAdvisorCommand(deps.args.slice(1));
+  },
   companion: async deps => {
     const { handleCompanionCommand } = await import("./companion");
     return await handleCompanionCommand(deps.args.slice(1));

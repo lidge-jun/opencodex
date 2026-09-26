@@ -351,6 +351,11 @@ async function handleChatCompletionsWithBudget(
   }
 
   const visionDescribeTerminal = req.headers.get("x-opencodex-vision-describe") === "1";
+  // Terminal advisor marker: the advisor sidecar's own loopback consultation re-enters through
+  // this surface. The bridge rebuilds headers from the FORWARD_HEADERS allowlist, which would
+  // drop the raw marker header — so the fact is detected here and carried as an option flag
+  // (same structure as the vision-describe fence above, depth cap 1).
+  const advisorInternal = req.headers.get("x-opencodex-advisor-internal") === "1";
   // Concrete helper targets must fail before optional stored-main credential enrichment.
   // Unresolved combos are checked after their concrete child route is selected in Responses.
   if (settledRoute && !settledRoute.combo && isCanonicalOpenAiForwardProvider(settledRoute.provider)
@@ -446,6 +451,7 @@ async function handleChatCompletionsWithBudget(
     // headers from the FORWARD_HEADERS allowlist, which would drop the raw
     // header — so the fact is detected here and carried as an option flag.
     ...(visionDescribeTerminal ? { visionDescribeTerminal: true } : {}),
+    ...(advisorInternal ? { advisorInternal: true } : {}),
     translatorBudget,
     ...(logIds ? { onFirstOutput: () => recordFirstOutput(logCtx, logIds.start) } : {}),
     onNativePassthroughTerminal: status => finalizeNativeLog(httpStatusForRequestLogTerminal(status, logCtx), { terminalStatus: status, closeReason: "terminal" }),
