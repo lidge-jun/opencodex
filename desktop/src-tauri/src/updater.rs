@@ -1,4 +1,7 @@
-use crate::{exit::RestartReadiness, logging, tray};
+use crate::{
+    exit::{ExitCoordinator, ExitPhase, RestartReadiness},
+    logging, tray,
+};
 use serde::Serialize;
 use serde_json::to_value;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -398,15 +401,39 @@ pub async fn install(app: &AppHandle, update: Update) -> Result<(), String> {
     // coordinated restart and not a quit — but the coordination has to finish first.
     let readiness = crate::exit::prepare_restart(app).await;
     if readiness != RestartReadiness::Ready {
+        // Not an ending after all: the app goes back to running, so a close hides again, Quit
+        // works and Install can be retried. A drain somebody else owns is left alone.
+        recover_after_failed_install(app);
         return Err(format!(
             "the update was downloaded but not installed: {}",
             readiness.describe()
         ));
     }
 
-    update.install(package).map_err(|error| error.to_string())?;
+    if let Err(error) = update.install(package) {
+        // The installer returned a failure. The runtime was stopped for an install that did not
+        // happen, so the app brings one back instead of sitting drained.
+        recover_after_failed_install(app);
+        return Err(error.to_string());
+    }
     // Only reached where the installer returns. On Windows it does not.
     crate::exit::complete_restart(app)
+}
+
+/// Hand a failed install back to a running app. True when the drain had already stopped the
+/// runtime, so the startup sequence has to bring one back; a drain that failed left it running.
+fn after_install_failure(coordinator: &ExitCoordinator) -> bool {
+    coordinator.abort_restart() == Some(ExitPhase::Drained)
+}
+
+fn recover_after_failed_install(app: &AppHandle) {
+    let restart = app
+        .try_state::<ExitCoordinator>()
+        .is_some_and(|coordinator| after_install_failure(&coordinator));
+    if restart {
+        // Recover, not Launch: nobody is waiting on a prompt, and only a proven absence starts one.
+        crate::startup::begin_with(app, crate::startup::Mode::Recover);
+    }
 }
 
 pub fn update_label(version: &str) -> String {
@@ -476,12 +503,37 @@ pub async fn check_and_show(app: &AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        linux_updater_target, update_label, CheckGeneration, DesktopUpdateState, InstallClaim,
-        UiProjection,
+        after_install_failure, linux_updater_target, update_label, CheckGeneration,
+        DesktopUpdateState, InstallClaim, UiProjection,
     };
+    use crate::exit::{DrainVerdict, ExitCoordinator, ExitDecision, ExitReason};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{mpsc, Arc};
     use tauri_utils::config::BundleType;
+
+    #[test]
+    fn a_failed_install_restarts_the_runtime_only_when_the_drain_had_stopped_it() {
+        let coordinator = ExitCoordinator::new();
+        coordinator.claim_drain(ExitReason::CoordinatedRestart);
+        coordinator.finish_drain(DrainVerdict::Drained);
+        assert!(after_install_failure(&coordinator));
+        assert!(coordinator.supervision_allowed());
+        assert!(coordinator.begin_spawn());
+
+        // A drain that failed left the runtime serving: back to running, nothing to start.
+        let coordinator = ExitCoordinator::new();
+        coordinator.claim_drain(ExitReason::CoordinatedRestart);
+        coordinator.finish_drain(DrainVerdict::Failed);
+        assert!(!after_install_failure(&coordinator));
+        assert!(coordinator.supervision_allowed());
+
+        // A quit that took the drain is never turned back into a running app.
+        let coordinator = ExitCoordinator::new();
+        coordinator.claim_drain(ExitReason::UserQuit);
+        coordinator.finish_drain(DrainVerdict::Drained);
+        assert!(!after_install_failure(&coordinator));
+        assert_eq!(coordinator.decision(), ExitDecision::Proceed);
+    }
 
     #[test]
     fn desktop_snapshot_serializes_the_bounded_wire_fields() {

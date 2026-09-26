@@ -91,6 +91,11 @@ fn is_update_page_url(url: &Url) -> bool {
     is_app_origin(url) && url.path() == "/update.html"
 }
 
+/// Whether the window currently shows the bundled update page. An unreadable URL reads as not.
+pub fn shows_update_page(window: &WebviewWindow) -> bool {
+    window.url().is_ok_and(|url| is_update_page_url(&url))
+}
+
 pub fn show(window: &WebviewWindow) {
     let _ = window.show();
     let _ = window.set_focus();

@@ -300,12 +300,17 @@ a client-role body: liveness answers "is one of our processes listening here", w
 orphan cleanup, and duplicate-start avoidance need, and narrowing it would make them blind to a real
 opencodex process and let them shadow-start over it. Refusing the client role belongs to the caller
 that needs a management plane, which is the [CLI management client](config.md#management-backed-cli-commands-need-a-management-plane).
+The desktop shell needs only the dashboard, so it attaches to a client-role listener as a guest
+([desktop shell](desktop-shell.md#keeping-the-runtime-alive)).
 
 ## Sidebar stop button
 
 The dashboard sidebar includes a stop button that calls `POST /api/stop`. The button shows a
 confirmation prompt, then fires the request and accepts the connection drop (the proxy exits). The
 endpoint restores native Codex config, stops any installed service to prevent respawn, and exits.
+While the desktop app supervises the proxy it refuses a dashboard session with 409
+`desktop_supervised` before touching anything, because the app would start the proxy again
+([desktop shell](desktop-shell.md#keeping-the-runtime-alive)); the button reports the refusal.
 
 ## Bun runtime provenance
 

@@ -370,7 +370,11 @@ export async function handleManagementAPI(
     // outcome. This process cannot verify its own post-exit respawn window; only the
     // receipt-backed parent `ocx stop` can, which is what the deferral exists for.
     const { deferralMatchesReceipt } = await import("../config/pending-teardown");
-    const { deferralHonored, performStopTeardown } = await import("./stop-teardown");
+    const { deferralHonored, desktopSupervisedStopRefusal, performStopTeardown } = await import("./stop-teardown");
+    // The desktop app would start this proxy again within seconds; refuse before anything is
+    // touched and point at its tray, whose Stop it honours (#3008 refuses an undone stop the same way).
+    const desktopRefusal = desktopSupervisedStopRefusal(principal);
+    if (desktopRefusal) return jsonResponse(desktopRefusal, 409, req, config);
     const holdsReceipt = deferralHonored(url, deferralMatchesReceipt);
     // A sibling never runs under a service manager, and the installed service is the live
     // owner's: asking the manager to stop from here would refuse, or boot the owner's job out.
