@@ -23,6 +23,7 @@ import { clearableDeadline, idleDeadline } from "../lib/abort";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait } from "../lib/upstream-retry";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
+import { releaseProviderRequestSlot, sendTrackingRequestSlot, type ProviderRequestSlot } from "../providers/request-pacing";
 import {
   createTranslatorBudget,
   isTranslatorBudgetExceededError,
@@ -309,7 +310,7 @@ export interface ImageBridgeDeps {
   /** Bind physical dispatch to this iteration's built request; pacing remains owned by the loop. */
   fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest) => typeof globalThis.fetch;
   /** Reserve the routed provider's next request-start slot before each adapter dispatch. */
-  waitForRequestSlot?: (signal?: AbortSignal) => Promise<void>;
+  waitForRequestSlot?: (signal?: AbortSignal) => Promise<ProviderRequestSlot | void>;
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   /**
@@ -466,7 +467,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     // expose buildRequest/fetchResponse/parseStream to the bridge, so collect their events through
     // an AdapterEventQueue and pass the bounded collection directly to the common scanner.
     if (adapter.runTurn) {
-      await deps.waitForRequestSlot?.(signal);
+      const pacingSlot = (await deps.waitForRequestSlot?.(signal)) || undefined;
       const queue = createAdapterEventQueue({
         onBacklogExceeded: () => internalAbort.abort("runTurn backlog exceeded"),
       });
@@ -514,6 +515,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           headers: deps.forwardHeaders ? new Headers(deps.forwardHeaders) : new Headers(),
           abortSignal: signal,
           translatorBudget,
+          pacingSlot,
         }, emit).then(closeOnAbort).catch(err => {
           if (accepting) {
             collectionError = err;
@@ -528,6 +530,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           if (event.type !== "heartbeat") events.push(event);
         }
       } finally {
+        releaseProviderRequestSlot(pacingSlot);
         accepting = false;
         idle.cancel();
         signal.removeEventListener("abort", closeOnAbort);
@@ -561,10 +564,11 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
     }
 
     let headerDeadline = clearableDeadline(connectTimeoutMs, signal);
-    const paceThenResetHeaderDeadline = async (): Promise<void> => {
+    const paceThenResetHeaderDeadline = async (): Promise<ProviderRequestSlot | undefined> => {
       headerDeadline.clear();
-      await deps.waitForRequestSlot?.(signal);
+      const slot = (await deps.waitForRequestSlot?.(signal)) || undefined;
       headerDeadline = clearableDeadline(connectTimeoutMs, signal);
+      return slot;
     };
     try {
       /**
@@ -597,35 +601,43 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         let response: Response;
         try {
           if (requestAdapter.fetchResponse) {
-            await paceThenResetHeaderDeadline();
-            deps.onAttemptSend?.(recovery);
-            response = await requestAdapter.fetchResponse(request, {
-              abortSignal: headerDeadline.signal,
-              timeoutMs: connectTimeoutMs,
-              returnRawErrors: true,
-              stream: true,
-              executor: requestFetch,
-            });
+            const slot = await paceThenResetHeaderDeadline();
+            try {
+              deps.onAttemptSend?.(recovery);
+              response = await sendTrackingRequestSlot(slot, () => requestAdapter.fetchResponse!(request, {
+                abortSignal: headerDeadline.signal,
+                timeoutMs: connectTimeoutMs,
+                returnRawErrors: true,
+                stream: true,
+                executor: requestFetch,
+              }));
+            } finally {
+              releaseProviderRequestSlot(slot);
+            }
           } else {
             response = await fetchWithResetRetry(
               async (retryRecovery) => {
-                await paceThenResetHeaderDeadline();
-                // Record every helper-driven send (the callback runs for the first attempt and
-                // each connection-reset replay); preserve the caller's recovery kind
-                // (rate-limit-429 / key-429) when the retry layer supplies none.
-                deps.onAttemptSend?.(retryRecovery ?? recovery);
-                const h = new Headers(request.headers);
-                if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
-                // Same reset-recovery parity as the web-search loop: the replay needs
-                // `keepalive: false` to abandon the pooled socket, because Bun has ignored the
-                // hop-by-hop header alone (oven-sh/bun#20492).
-                return requestFetch(request.url, applyUpstreamRecoveryInit({
-                  method: request.method,
-                  redirect: "manual",
-                  headers: h,
-                  body: request.body,
-                  signal: headerDeadline.signal,
-                }, retryRecovery));
+                const slot = await paceThenResetHeaderDeadline();
+                try {
+                  // Record every helper-driven send (the callback runs for the first attempt and
+                  // each connection-reset replay); preserve the caller's recovery kind
+                  // (rate-limit-429 / key-429) when the retry layer supplies none.
+                  deps.onAttemptSend?.(retryRecovery ?? recovery);
+                  const h = new Headers(request.headers);
+                  if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
+                  // Same reset-recovery parity as the web-search loop: the replay needs
+                  // `keepalive: false` to abandon the pooled socket, because Bun has ignored the
+                  // hop-by-hop header alone (oven-sh/bun#20492).
+                  return await sendTrackingRequestSlot(slot, () => requestFetch(request.url, applyUpstreamRecoveryInit({
+                    method: request.method,
+                    redirect: "manual",
+                    headers: h,
+                    body: request.body,
+                    signal: headerDeadline.signal,
+                  }, retryRecovery)));
+                } finally {
+                  releaseProviderRequestSlot(slot);
+                }
               },
               { replaySafe: true, abortSignal: headerDeadline.signal, label: "image-bridge-loop" },
             );

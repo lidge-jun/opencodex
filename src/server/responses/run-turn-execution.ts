@@ -13,7 +13,7 @@ import {
   adapterResponseReachedServingTerminal,
 } from "./core-replay";
 import { noteAttemptRecoveryWithheld, sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
-import { waitForProviderRequestSlot, RequestPacingQueueOverloadError } from "../../providers/request-pacing";
+import { releaseProviderRequestSlot, waitForProviderRequestSlot, RequestPacingQueueOverloadError, type ProviderRequestSlot } from "../../providers/request-pacing";
 import type { AdapterEventQueue } from "../../adapters/run-turn-queue";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { providerFetch } from "./fetch-helpers";
@@ -187,8 +187,9 @@ export async function executeResponsesRunTurn(
     };
     // Initial admission must settle before the streaming Response commits HTTP 200.
     // Let the outer Responses facade preserve the local retryable-429 contract.
+    let initialPacingSlot: ProviderRequestSlot;
     try {
-      await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
+      initialPacingSlot = await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
     } catch (error) {
       cleanupRunTurnAbort();
       queue.close();
@@ -214,11 +215,13 @@ export async function executeResponsesRunTurn(
       // rounds carry the grown message history and adjusted tool list while
       // selection/replay binding stays on the request's own parsed object.
       turnParsed: PreparedResponsesRequest["parsed"] = parsed,
+      preacquiredSlot?: ProviderRequestSlot,
     ): Promise<void> => {
       const attemptSeq = ++runTurnAttemptSeq;
+      let pacingSlot = preacquiredSlot;
       try {
         if (!pacingSlotAcquired) {
-          await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
+          pacingSlot = await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, runTurnAbort.signal);
         }
         await refreshRunTurnSelection();
         // LOCAL PATCH (runturn-websearch): refreshRunTurnSelection binds route
@@ -244,6 +247,8 @@ export async function executeResponsesRunTurn(
             // Cursor HTTP/1.1 consumes it for RunSSE; every BidiAppend and redial then waits on
             // the same provider queue through this stateful wrapper.
             pacingSlotAcquired: true,
+            pacingSlot,
+            turnScopedPacing: true,
           },
         );
         await transportState.runTurnAdapter.runTurn?.(
@@ -253,6 +258,7 @@ export async function executeResponsesRunTurn(
             abortSignal: runTurnAbort.signal,
             translatorBudget,
             providerFetch: runTurnProviderFetch,
+            pacingSlot,
             // The only way the request budget reaches a transport the adapter owns. Without it
             // a Cursor turn's inner ladder was three physical sends the cap read as one.
             ...(adapterDispatchBudget ? { sendBudget: adapterDispatchBudget } : {}),
@@ -304,6 +310,7 @@ export async function executeResponsesRunTurn(
                 message: err instanceof Error ? err.message : String(err),
               });
       } finally {
+        releaseProviderRequestSlot(pacingSlot);
         // Cursor assigns a stable conversation id inside runTurn on the first headerless
         // turn; backfill so Logs can filter/total that opening request (#330 / #522).
         if (!logCtx.conversationId && parsed._cursorConversationId) {
@@ -316,7 +323,7 @@ export async function executeResponsesRunTurn(
     // synthetic web_search tool; later iterations get their own queue so the
     // search loop can buffer each turn's events before deciding to intercept.
     const wsFirstParsed = wsPlan ? runTurnWebSearchInitialParsed(parsed) : parsed;
-    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true, wsFirstParsed);
+    const runTurn = async (): Promise<void> => runTurnAttempt(queue, undefined, true, wsFirstParsed, initialPacingSlot);
     const runTurnFailoverArmed = () =>
       route.provider.authMode === "oauth"
       || !!(transportState.genericFailoverAccountId

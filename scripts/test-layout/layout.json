@@ -1187,6 +1187,7 @@
     "management-provider-atomicity.test.ts": "server",
     "management-provider-pinsless-validation.test.ts": "server",
     "management-provider-proto-override.test.ts": "server",
+    "management-provider-request-pacing.test.ts": "server",
     "management-provider-reasoning-lists.test.ts": "server",
     "management-provider-reset-replay.test.ts": "server",
     "management-provider-synthetic-max.test.ts": "server",
