@@ -43,8 +43,8 @@ import { bridgeSearchReplayScope } from "../../responses/bridge-search-replay-ca
 import { applyTierDecisionToResponsesBody, normalizeCanonicalForwardContinuationEnvelope, normalizeCanonicalForwardPromptEnvelope, stripCanonicalForwardSamplingParams, stripPreviousResponseId, stripStatefulResponsesParams, stripUnsupportedForwardParams } from "./canonical-forward";
 import { normalizeImageGenClientTools, preferConfiguredHostedTools } from "./image-gen";
 import { stripMuseSparkUnsupportedWebSearchFields, stripOpenAiOnlyWebSearchFields } from "./web-search";
-import { applyZenFreeIdentity, isZenFreeEndpoint, zenFreeHasApiKey } from "../opencode-free-session";
-import { missingZenFreeGateTools, zenFreeGateResponsesTool } from "../opencode-free-tools";
+import { applyZenFreeIdentity, isZenFreeEndpoint } from "../opencode-free-session";
+import { withZenFreeGateDeclarations, zenFreeGateResponsesTool } from "../opencode-free-tools";
 import { observeOutbound } from "../../usage/cache-diagnostic";
 import { normalizeMuseToolChoice } from "./muse-tool-choice";
 
@@ -546,19 +546,16 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);
       }
-      // Keyless Zen tier: the gateway refuses turns that do not declare the
-      // OpenCode-native shell/read pair, so append the missing gate
-      // declarations (never-invoked compatibility entries). Keyless only, and
-      // never on the forward lane (ChatGPT is not this gateway).
-      if (!forward && isZenFreeEndpoint(provider.baseUrl) && !zenFreeHasApiKey(provider) && isPlainObject(finalBody)) {
-        const current = Array.isArray(finalBody.tools) ? finalBody.tools : undefined;
-        const names = (current ?? []).map(item =>
-          isPlainObject(item) && typeof item.name === "string" ? item.name : undefined,
-        ).filter((name): name is string => typeof name === "string");
-        const missing = missingZenFreeGateTools(names);
-        if (missing.length > 0) {
-          (finalBody as Record<string, unknown>).tools = [...(current ?? []), ...missing.map(zenFreeGateResponsesTool)];
-        }
+      // Keyless Zen tier gate declarations; policy lives in the shared
+      // helper, this wire only supplies its tool shape.
+      if (isPlainObject(finalBody)) {
+        const gated = withZenFreeGateDeclarations(
+          provider,
+          Array.isArray(finalBody.tools) ? finalBody.tools : undefined,
+          item => isPlainObject(item) && typeof item.name === "string" ? item.name : undefined,
+          zenFreeGateResponsesTool,
+        );
+        if (gated !== undefined) (finalBody as Record<string, unknown>).tools = gated;
       }
       const body = JSON.stringify(finalBody);
       const releaseBodyObservation = translatorBudget.observeExternallyCapped(
