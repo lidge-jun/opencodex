@@ -474,10 +474,11 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 
 ## Account refusal and rotation boundaries
 
-Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum,
-cooldown and the three-rotation request cap remain in force, the complete credential/transport/replay
-identity is refreshed, and usage is attributed to the serving account. Single-account installs do not
-retry; a missing alternate credential preserves the original error. Organization or project exhaustion
+Native Responses uses the existing pre-stream OAuth HTTP-429 account rotation: account quorum and
+cooldown remain in force, while generic OAuth uses the stable snapshot ceiling described below. The
+complete credential/transport/replay identity is refreshed, and usage is attributed to the serving
+account. Single-account installs do not rotate; a missing alternate credential preserves the original
+error while transient recovery remains available. Organization or project exhaustion
 allows an initial alternate attempt because the response does not identify the refusing scope. After
 resolving an alternate, organization-level retry is withheld only when both credentials have the same
 known workspace account id. Stored Pool/main-pool alternates supply that id directly; a request-owned
@@ -492,6 +493,12 @@ credential has been resolved.
 Send-budget refusal is attributed as a withheld rotation only when a model-family-aware eligibility
 check confirms from the live roster that at least two accounts exist and an alternate is not currently
 cooled. That check applies no cooldown and advances no rotation.
+
+Generic OAuth snapshots its eligible roster before dispatch. Its request rotation ceiling is
+`max(3, min(eligibleCount, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) - 1)` (the cap is six); the live picker still filters cooldowns, so the snapshot supplies the
+stable ceiling without making a cooled account eligible. Same-provider auth recovery keeps the last
+physical target, rather than a diagnostic key, and a real send is charged once even when recovery
+rebuilds the request.
 
 Precommit Codex model refusals use bounded account recovery for HTTP `detail` and WebSocket-projected
 `error.message` bodies. Only an exact HTTP 400 refusal naming the requested or wire model establishes
