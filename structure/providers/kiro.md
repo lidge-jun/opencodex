@@ -132,8 +132,17 @@ from `metadataEvent` is legitimate rather than impossible. Both feed the same fi
 positive value overwrites an earlier one.
 
 Spend arrives in `meteringEvent` as **credits, not tokens**. No captured response carried
-`tokenUsage` on any event, which is why Kiro usage stays estimated; `meteringEvent` is currently
-ignored because a credit is not a token count.
+`tokenUsage` on any event, which is why Kiro token usage stays estimated. The parser preserves
+`meteringEvent` unit/usage (`amount` is an alias) and optional `unitPlural`; credit readings populate
+`OcxUsage.providerCredits` independently of token metadata. The latest reading within a response
+is a snapshot; separate completion-fallback responses add their credits. Missing metering stays
+absent and measured zero stays zero. `initial-response` carries `conversationId` through the same
+validated provider-state path as `messageMetadataEvent`. Unknown event types produce opt-in
+`debugProviderDiagnostic` entries containing only the event type, never the payload.
+Coverage: `tests/providers/kiro/kiro-metering-events.test.ts`,
+`tests/providers/kiro/kiro-metering-usage.test.ts`, and
+`tests/server/server-kiro-completion-e2e.test.ts`.
+
 ## Remote image references
 
 Kiro's wire inlines base64 bytes only, so a remote `https` image reference cannot be

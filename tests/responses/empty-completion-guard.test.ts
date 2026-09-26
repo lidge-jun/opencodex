@@ -125,13 +125,13 @@ describe("empty-completion guard retry", () => {
     const events = await collect(guardEmptyCompletionEventStream({
       firstEvents: eventsOf(
         { type: "thinking_delta", thinking: "..." },
-        { type: "done", usage: { inputTokens: 100, outputTokens: 0, cachedInputTokens: 40 } },
+        { type: "done", usage: { inputTokens: 100, outputTokens: 0, cachedInputTokens: 40, providerCredits: 0.04 } },
       ),
       continuation: () => eventsOf(
         { type: "tool_call_start", id: "c1", name: "run" },
         { type: "tool_call_delta", arguments: "{}" },
         { type: "tool_call_end" },
-        { type: "done", usage: { inputTokens: 200, outputTokens: 30, reasoningOutputTokens: 12 } },
+        { type: "done", usage: { inputTokens: 200, outputTokens: 30, reasoningOutputTokens: 12, providerCredits: 0.01 } },
       ),
     }));
 
@@ -142,6 +142,7 @@ describe("empty-completion guard retry", () => {
       totalTokens: 330,
       cachedInputTokens: 40,
       reasoningOutputTokens: 12,
+      providerCredits: 0.05,
     });
   });
 
