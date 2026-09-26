@@ -73,7 +73,7 @@ import {
   type UsageDebugBodyKind,
 } from "../usage/debug";
 import { MAX_LOG_SIZE } from "./request-log-filter";
-export { filterRequestLogs, filteredRequestLogCount } from "./request-log-filter";
+export { filterRequestLogs, filteredRequestLogCount, queryRequestLogs } from "./request-log-filter";
 import { enforceAppOwnedMemoryBudget, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 import { capEstimateAtContextWindow } from "../lib/token-estimate";
 import { inferCursorContextWindow } from "../adapters/cursor/discovery";
