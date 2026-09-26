@@ -112,3 +112,7 @@ candidate evidence.
 ## Final candidate
 
 `CAND=dac1d25f48fad18420aa856631ff9ee9c1775b0f`, lane=all run `36210914271`.
+
+Result: run `36210914271` completed `success` at CAND, attempt 1: 39 jobs success, `privacy gate` skipped by
+design, no reruns. `windows 7/9` passed, so the earlier `cli-connect-readiness` timeouts were the runner stall.
+wp2 exits with no accepted blocker.
