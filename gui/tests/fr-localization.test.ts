@@ -218,6 +218,10 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "logs.protocol.wire.chat",
   "logs.protocol.wire.messages",
   "logs.protocol.hop.ir",
+  // The consolidation phase's name is the ordinary French noun, spelled exactly as in English.
+  // Inventing a synonym would also break the pair with the extract row, whose French label is
+  // "Extraction".
+  "memoryModels.consolidation",
 ]);
 
 function placeholders(value: string): string[] {
