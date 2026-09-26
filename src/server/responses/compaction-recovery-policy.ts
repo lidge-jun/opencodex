@@ -59,7 +59,7 @@ export function readCompactionRecoveryConfig(value: unknown): CompactionRecovery
 const PROTECTED_CODE = /(?:^|_)(?:auth|authentication|authorization|unauthenticated|unauthorized|permission|forbidden|policy|refusal|refused|budget|quota|billing|safety|content_filter|origin_rejected|admission|scope)(?:_|$)/;
 const CONTEXT_CODES = new Set(["context_length_exceeded", "context_window_exceeded", "input_too_long"]);
 const COMPACTION_CODES = new Set(["compaction_failed", "invalid_compaction_output", "empty_compaction_output"]);
-const SERVER_CODES = new Set(["upstream_error", "internal", "internal_error", "server_error", "unavailable", "service_unavailable", "gateway_timeout"]);
+const SERVER_CODES = new Set(["upstream_error", "upstream_server_error", "server_is_overloaded", "internal", "internal_error", "server_error", "unavailable", "service_unavailable", "gateway_timeout"]);
 
 /** Decides eligibility only; returning true neither spends nor grants another send. */
 export function decideCompactionRecovery(

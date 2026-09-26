@@ -131,13 +131,32 @@ describe("routed compaction emergency integration", () => {
     expect(config).toEqual(before);
   });
 
-  test("routed v1 returns replacement history retaining original user text", async () => {
+  test("routed v1 returns replacement history retaining original user text once", async () => {
     const response = await handleResponsesCompact(request(body(false, false), "responses/compact"), settings(), { model: "", provider: "" });
     expect(response.status).toBe(200);
     const json = await response.json();
-    expect(JSON.stringify(json.output)).toContain("ALPHA-729");
-    expect(JSON.stringify(json.output)).toContain("Latest goal: finish the report");
+    const output = JSON.stringify(json.output);
+    expect(output).toContain("ALPHA-729");
+    expect(output).toContain("Latest goal: finish the report");
+    // Retained messages belong to v1 output items; embedding them in the summary duplicates the text.
+    expect(output).not.toContain("Retained original user messages");
+    expect(output.split("ALPHA-729").length - 1).toBe(1);
     expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+  });
+
+  test("a failed fallback returns and logs the original failure", async () => {
+    fallbackEvents = [{ type: "error", status: 503, code: "server_is_overloaded", message: "Emergency overloaded fixture" }];
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(request(body(false)), settings(), log);
+    expect(response.status).toBe(400);
+    expect(calls.map(call => call.model)).toEqual(["swe-2", "rescue"]);
+    // The returned failure is the source's, so the log must describe it too — not the fallback's.
+    expect(log.provider).toBe("source");
+    expect(log.model).toBe("swe-2");
+    expect(log.requestedAlias).toBe("source/swe-2");
+    expect(log.activeAttempt).toBeUndefined();
+    // The fallback's own failed attempt stays recorded; its wire status was a failed 200 terminal.
+    expect(log.attempts?.map(attempt => attempt.status)).toEqual([400, 200]);
   });
 
   test("an existing unconditional override keeps its original logical model on recovery", async () => {

@@ -100,6 +100,7 @@ export async function runWithCompactionRecovery(
   let adapterError: Extract<AdapterEvent, { type: "error" }> | undefined;
   let sourceFailure: Response | undefined;
   let recoveryPermit: SingleUseDispatchPermit | undefined;
+  let restoreSourceLog: ((attemptStatus?: number) => void) | undefined;
   let sourceReportedSends = 0;
   const gate = createChildPassthroughCallbackGate(options);
   const signal = options.abortSignal ?? req.signal;
@@ -207,6 +208,28 @@ export async function runWithCompactionRecovery(
     // Finish the first physical attempt while retaining its receipt in attempts[].
     if (logCtx.activeAttempt) finishRequestAttempt(logCtx.activeAttempt, response.status,
       Math.max(0, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now())), logCtx.activeAttempt.usage ?? logCtx.usage);
+    // Snapshot the original log fields before the fallback rewrites them: a failed fallback
+    // returns the original failure, so the log must keep describing that failure, not the
+    // fallback's model, provider, route decision or terminal error.
+    const SOURCE_LOG_FIELDS = [
+      "model", "provider", "providerAdapter", "requestedAlias", "servedModel", "wireModel",
+      "resolvedModel", "routeDecision", "tierOutcome", "activeTierMetadata", "usage",
+      "usageFromBridge", "upstreamError", "terminalHttpStatus", "terminalErrorCode",
+      "terminalIncompleteReason", "errorCode",
+    ] as const;
+    const sourceLog: Partial<Record<keyof RequestLogContext, unknown>> = {};
+    const logFields = logCtx as unknown as Record<string, unknown>;
+    for (const field of SOURCE_LOG_FIELDS) sourceLog[field] = logCtx[field];
+    restoreSourceLog = (attemptStatus?: number) => {
+      if (logCtx.activeAttempt) finishRequestAttempt(logCtx.activeAttempt, attemptStatus ?? sourceFailure!.status,
+        Math.max(0, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now())), logCtx.activeAttempt.usage ?? logCtx.usage);
+      delete logCtx.activeAttempt;
+      delete logCtx.activeAttemptStartedAt;
+      for (const field of SOURCE_LOG_FIELDS) {
+        if (sourceLog[field] === undefined) delete logFields[field];
+        else logFields[field] = sourceLog[field];
+      }
+    };
     delete logCtx.activeAttempt;
     delete logCtx.activeAttemptStartedAt;
     delete logCtx.usage;
@@ -250,6 +273,7 @@ export async function runWithCompactionRecovery(
     }
     if (!fallback.ok) {
       void fallback.body?.cancel().catch(() => undefined);
+      restoreSourceLog?.(fallback.status);
       return response;
     }
     const completed = await bufferedJson(fallback, signal);
@@ -261,11 +285,16 @@ export async function runWithCompactionRecovery(
     const summary = item && typeof item.encrypted_content === "string" ? decodeCompactionSummary(item.encrypted_content) : null;
     if (json?.status !== "completed" || !summary?.trim()) {
       void completed.response.body?.cancel().catch(() => undefined);
+      restoreSourceLog?.(completed.response.status);
       return response;
     }
-    const retained = buildCompactV1Output(extractCompactUserMessages(snapshot.input), summary).slice(0, -1);
-    const userText = extractCompactUserMessages(retained).map((text, index) => `User message ${index + 1}:\n${text}`).join("\n\n");
-    const preserved = `${summary}\n\nRetained original user messages (verbatim; preserve their goals and constraints):\n${userText}`;
+    // v1 unpacks this text through buildCompactV1Output, which already re-adds retained user
+    // messages as items; embedding them here too would duplicate the same text in the output.
+    const preserved = options.compactionRecoveryKind === "compaction-v1" ? summary : (() => {
+      const retained = buildCompactV1Output(extractCompactUserMessages(snapshot.input), summary).slice(0, -1);
+      const userText = extractCompactUserMessages(retained).map((text, index) => `User message ${index + 1}:\n${text}`).join("\n\n");
+      return `${summary}\n\nRetained original user messages (verbatim; preserve their goals and constraints):\n${userText}`;
+    })();
     item!.encrypted_content = encodeCompactionSummary(preserved);
     json.model = originalModel;
     void completed.response.body?.cancel().catch(() => undefined);
@@ -284,7 +313,7 @@ export async function runWithCompactionRecovery(
   } catch (error) {
     gate.discard();
     if (signal.aborted || req.signal.aborted) return formatErrorResponse(499, "client_cancelled", "Client cancelled compact request");
-    if (sourceFailure) return sourceFailure;
+    if (sourceFailure) { restoreSourceLog?.(); return sourceFailure; }
     throw error;
   } finally {
     if (snapshotBytes) options.translatorBudget.releaseRetained(snapshotBytes, { kind: "request_copies" });

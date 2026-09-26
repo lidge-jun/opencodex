@@ -69,6 +69,9 @@ describe("compaction emergency recovery policy", () => {
     expect(decideCompactionRecovery(configured, failure({ provider: "google", errorCode: "context_length_exceeded" }))).toMatchObject({ recover: true, reason: "context-overflow" });
     expect(decideCompactionRecovery(configured, failure({ httpStatus: 200, errorCode: "invalid_compaction_output" }))).toMatchObject({ recover: true, reason: "compaction-output" });
     expect(decideCompactionRecovery(configured, failure({ httpStatus: 503, errorCode: "unavailable" }))).toMatchObject({ recover: true, reason: "upstream-unavailable" });
+    // classifyError normalizes codeless 5xx bodies and overloads before the evidence reaches us.
+    expect(decideCompactionRecovery(configured, failure({ httpStatus: 500, errorCode: "upstream_server_error" }))).toMatchObject({ recover: true, reason: "upstream-unavailable" });
+    expect(decideCompactionRecovery(configured, failure({ httpStatus: 503, errorCode: "server_is_overloaded" }))).toMatchObject({ recover: true, reason: "upstream-unavailable" });
     expect(decideCompactionRecovery(configured, failure({ httpStatus: 503, errorCode: "unrecognized_failure" })).recover).toBe(false);
   });
 
