@@ -192,7 +192,8 @@ export async function preflightAdapterEvents(
       if (next.done) return { stream: replay(buffered, iterator), empty: true, replayUnsafe };
       if (next.value.type === "heartbeat") {
         replayUnsafe ||= next.value.replayUnsafe === true;
-        buffered.push(next.value);
+        // Preserve the latch in replay even after the original unsafe heartbeat is evicted.
+        buffered.push(replayUnsafe ? { ...next.value, replayUnsafe: true } : next.value);
         if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
         continue;
       }

@@ -6,7 +6,7 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import type { ResponsesCompletionPolicy } from "./completion-policy";
 import { linkAbortSignal, runTurnAdapterSseResponses } from "./core-lifetime";
-import { createAdapterEventQueue, preflightAdapterEvents } from "../../adapters/run-turn-queue";
+import { createAdapterEventQueue, preflightAdapterEvents, type AdapterEventPreflight } from "../../adapters/run-turn-queue";
 import {
   bindRouteReasoningReplayScope,
   adapterNeedsForcedContinuation,
@@ -513,12 +513,26 @@ export async function executeResponsesRunTurn(
         message: undeclaredToolCallMessage(effectiveName),
       };
     };
+    const grokDevinPreflight = !options.comboAttempt && logCtx.surface === "grok" && inboundWire === "responses"
+      && transportState.runTurnAdapter.name === "devin";
+    const grokRateLimitResponse = (preflight: AdapterEventPreflight): Response | undefined => {
+      if (preflight.replayUnsafe || preflight.error?.status !== 429
+        || preflight.error.code === SEND_BUDGET_EXHAUSTED_CODE) return;
+      const { httpStatus, error } = adapterFailureFromEvent(preflight.error);
+      cancelResponseCompletion();
+      runTurnAbort.abort();
+      queue.close();
+      cleanupRunTurnAbort();
+      releaseSearchProbeLease();
+      return formatErrorResponse(httpStatus, error.type, error.message, {
+        code: error.code,
+        retryAfter: resolveClientRetryAfter({ status: httpStatus, message: error.message }),
+      });
+    };
     if (parsed.stream) {
       try {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
-      const grokDevinPreflight = !options.comboAttempt && logCtx.surface === "grok" && inboundWire === "responses"
-        && transportState.runTurnAdapter.name === "devin";
       const stallTimeoutSec = wsPlan?.stallTimeoutSec ?? config.stallTimeoutSec;
       const preflightDeadlineAt = grokDevinPreflight
         ? Date.now() + resolveStallTimeoutSec(stallTimeoutSec) * 1_000
@@ -533,20 +547,8 @@ export async function executeResponsesRunTurn(
           maxWaitMs: (preflightDeadlineAt ?? Date.now()) - Date.now(),
         });
         eventSource = preflight.stream;
-        // Grok treats a failed HTTP 200 stream as 500; preserve a refusal before output commits.
-        if (!preflight.replayUnsafe && preflight.error?.status === 429
-          && preflight.error.code !== SEND_BUDGET_EXHAUSTED_CODE) {
-          const { httpStatus, error } = adapterFailureFromEvent(preflight.error);
-          cancelResponseCompletion();
-          runTurnAbort.abort();
-          queue.close();
-          cleanupRunTurnAbort();
-          releaseSearchProbeLease();
-          return formatErrorResponse(httpStatus, error.type, error.message, {
-            code: error.code,
-            retryAfter: resolveClientRetryAfter({ status: httpStatus, message: error.message }),
-          });
-        }
+        const refusal = grokRateLimitResponse(preflight);
+        if (refusal) return refusal;
       }
       if (options.comboAttempt) {
         const preflight = await preflightAdapterEvents(eventSource, classifyUndeclaredFirstTool);
@@ -666,6 +668,11 @@ export async function executeResponsesRunTurn(
       for await (const event of await preflightRunTurnFailover(
         (async function* () { yield* firstAttemptEvents; })(),
       )) runTurnEvents.push(event);
+    }
+    if (grokDevinPreflight) {
+      const preflight = await preflightAdapterEvents((async function* () { yield* runTurnEvents; })());
+      const refusal = grokRateLimitResponse(preflight);
+      if (refusal) return refusal;
     }
     let events: AdapterEvent[];
     // LOCAL PATCH (runturn-websearch): same exclusion as the streaming branch —

@@ -181,8 +181,10 @@ If Devin rejects a direct request with a rate limit before producing output or p
 an action, OpenCodex returns HTTP 429 with a JSON error. Grok can then recognize the limit
 instead of displaying a generic 500 error from a failed HTTP 200 stream. If the response
 includes `Retry-After`, follow that delay before retrying. Exhausted quotas without a reset
-hint do not receive a default delay. Existing OAuth account failover still applies.
+hint do not receive a default delay. Existing OAuth account failover still applies. This
+HTTP 429 handling also applies to non-streaming Responses requests.
 
-OpenCodex waits up to the configured stall timeout for this early refusal. If that wait
+For streaming requests, OpenCodex waits up to the configured stall timeout for this early
+refusal. If that wait
 expires, it opens the SSE response and lets the existing stream watchdog handle stalls.
 After HTTP headers are sent, a later failure stays in the stream as `response.failed`.

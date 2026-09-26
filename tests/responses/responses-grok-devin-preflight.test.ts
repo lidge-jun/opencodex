@@ -51,13 +51,13 @@ afterEach(() => {
     home.remove();
   }
 });
-function run(
-  surface: "grok" | "codex" = "grok",
-  comboAttempt = false,
-  abortSignal?: AbortSignal,
-  stallTimeoutSec?: number,
-  oauthFailoverEnabled = false,
-) {
+function run({
+  surface = "grok", comboAttempt = false, abortSignal, stallTimeoutSec,
+  oauthFailoverEnabled = false, stream = true,
+}: {
+  surface?: "grok" | "codex"; comboAttempt?: boolean; abortSignal?: AbortSignal;
+  stallTimeoutSec?: number; oauthFailoverEnabled?: boolean; stream?: boolean;
+} = {}) {
   const config = {
     port: 0, defaultProvider: "devin", oauthAccountFailover: { enabled: oauthFailoverEnabled },
     stallTimeoutSec,
@@ -65,7 +65,7 @@ function run(
   } as OcxConfig;
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "devin/swe-2", input: "answer", stream: true }),
+    body: JSON.stringify({ model: "devin/swe-2", input: "answer", stream }),
   }), config, { model: "", provider: "", surface }, { comboAttempt, abortSignal });
 }
 
@@ -88,9 +88,12 @@ async function waitForPreflightResponse(pending: Promise<Response>, started: Pro
   return response;
 }
 
-test.each([false, true])("pre-output 429 reaches Grok as HTTP 429 (heartbeat=%s)", async heartbeat => {
+test.each([
+  { stream: true, heartbeat: false }, { stream: true, heartbeat: true },
+  { stream: false, heartbeat: false }, { stream: false, heartbeat: true },
+])("pre-output 429 reaches Grok as HTTP 429 (stream=$stream heartbeat=$heartbeat)", async ({ stream, heartbeat }) => {
   events = heartbeat ? [{ type: "heartbeat" }, limit] : [limit];
-  const response = await run();
+  const response = await run({ stream });
   expect(response.status).toBe(429);
   expect(response.headers.get("content-type")).toContain("application/json");
   expect(response.headers.get("retry-after")).toBe("60");
@@ -120,7 +123,7 @@ test("a replay-unsafe heartbeat leaves the error in SSE", async () => {
 });
 
 test("other clients keep their existing SSE response", async () => {
-  const response = await run("codex");
+  const response = await run({ surface: "codex" });
   expect(response.status).toBe(200);
   expect(await response.text()).toContain("response.failed");
 });
@@ -137,7 +140,7 @@ test.each([false, true])("Grok starts SSE after bounded Devin preflight (heartbe
   };
 
   const response = await waitForPreflightResponse(
-    run("grok", false, undefined, 1), started.promise, () => continueTurn.resolve(),
+    run({ stallTimeoutSec: 1 }), started.promise, () => continueTurn.resolve(),
   );
   expect(response.status).toBe(200);
   const frames = (await response.text()).split("\n")
@@ -175,7 +178,7 @@ test("timed-out OAuth replay keeps its reserved dispatch permit until Devin send
   };
 
   const response = await waitForPreflightResponse(
-    run("grok", false, undefined, 1, true), retryStarted.promise, () => dispatchRetry.resolve(),
+    run({ stallTimeoutSec: 1, oauthFailoverEnabled: true }), retryStarted.promise, () => dispatchRetry.resolve(),
   );
   expect(response.status).toBe(200);
   expect(await response.text()).toContain("response.failed");
@@ -184,7 +187,7 @@ test("timed-out OAuth replay keeps its reserved dispatch permit until Devin send
 });
 
 test("combo children retain their existing preflight failure", async () => {
-  const response = await run("grok", true);
+  const response = await run({ comboAttempt: true });
   expect(response.status).toBe(502);
   expect(response.headers.get("retry-after")).toBeNull();
   await response.text();
@@ -214,11 +217,58 @@ test("cancellation before the first event aborts the producer", async () => {
     started.resolve();
     await stopped.promise;
   };
-  const pending = run("grok", false, controller.signal);
+  const pending = run({ abortSignal: controller.signal });
   await started.promise;
   controller.abort();
   const response = await pending;
   await response.text();
   expect(aborted).toBe(true);
   expect(calls).toBe(1);
+});
+
+const bufferedExclusions: { name: string; surface?: "grok" | "codex"; source: AdapterEvent[] }[] = [
+  { name: "other client", surface: "codex", source: [limit] },
+  { name: "replay-unsafe activity", source: [{ type: "heartbeat", replayUnsafe: true }, limit] },
+  { name: "local send budget", source: [{ ...limit, code: SEND_BUDGET_EXHAUSTED_CODE }] },
+  { name: "non-429 failure", source: [{ ...limit, status: 503, errorType: "upstream_error" }] },
+];
+test.each(bufferedExclusions)("buffered $name retains its existing JSON result", async ({ surface, source }) => {
+  events = source;
+  const response = await run({ stream: false, surface });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(await response.json()).toMatchObject({ status: "failed", error: { message: limit.message } });
+});
+
+test("buffered output before a 429 is retained exactly once", async () => {
+  events = [{ type: "text_delta", text: "answer" }, limit];
+  const response = await run({ stream: false });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({
+    status: "failed", output: [{ content: [{ type: "output_text", text: "answer" }] }],
+    error: { message: limit.message },
+  });
+  expect(calls).toBe(1);
+});
+
+test.each([true, false])("OAuth replay preserves unsafe activity through heartbeat eviction (stream=%s)", async stream => {
+  await saveCredential("devin", {
+    access: "synthetic-devin-preflight-spare", refresh: "synthetic-refresh-spare",
+    expires: Date.now() + 3_600_000, accountId: "fixture-spare",
+  });
+  blockedRun = async (_parsed, _incoming, emit) => {
+    if (calls > 1) {
+      emit({ type: "heartbeat", replayUnsafe: true });
+      for (let i = 0; i < 32; i++) {
+        await Bun.sleep(1);
+        emit({ type: "heartbeat" });
+      }
+    }
+    emit(limit);
+  };
+  const response = await run({ stream, oauthFailoverEnabled: true });
+  expect(response.status).toBe(200);
+  if (stream) expect(await response.text()).toContain("response.failed");
+  else expect(await response.json()).toMatchObject({ status: "failed", error: { message: limit.message } });
+  expect(calls).toBe(2);
 });

@@ -294,8 +294,10 @@ describe("run-turn adapter event preflight", () => {
     ];
     const preflight = await preflightAdapterEvents(events(values));
     expect(preflight.replayUnsafe).toBe(true);
-    expect(await collect(preflight.stream)).toEqual([
-      ...Array.from({ length: PREFLIGHT_HEARTBEAT_RETAIN_LIMIT }, () => heartbeat),
+    const repeated = await preflightAdapterEvents(preflight.stream);
+    expect(repeated.replayUnsafe).toBe(true);
+    expect(await collect(repeated.stream)).toEqual([
+      ...Array.from({ length: PREFLIGHT_HEARTBEAT_RETAIN_LIMIT }, () => unsafeHeartbeat),
       error,
     ]);
   });

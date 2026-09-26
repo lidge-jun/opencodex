@@ -202,7 +202,9 @@ is replayed for every other outcome. The preflight is bounded by the configured 
 including any earlier OAuth failover preflight on this path. On expiry, its pending iterator read is
 handed to SSE replay exactly once; timeout therefore starts a 200 SSE response, and any later 429
 is an SSE failure. Text, reasoning, and tool output commit the stream. This boundary neither retries
-the turn nor changes combo failover policy.
+the turn nor changes combo failover policy. Buffered Responses turns apply the same refusal
+formatter to their collected first event after OAuth failover. Other buffered results retain
+the original event list, including output preceding a late error.
 
 ## Optional client transport hints
 

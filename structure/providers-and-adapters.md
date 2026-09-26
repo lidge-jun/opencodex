@@ -383,3 +383,6 @@ normalization, and `tool_choice` alias resolution, so every adapter matches a de
 same way. `src/types/wire.ts` owns accepted wire enumerations such as the per-provider upstream
 HTTP-version pin, shared by the config load schema, the management write boundary, and the fetch
 runtime, so no boundary accepts a value another rejects.
+
+Preflight heartbeat retention keeps `replayUnsafe` sticky in the replayed tail, so a second
+preflight cannot forget earlier side effects after the original marker is evicted.
