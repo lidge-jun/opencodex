@@ -1,11 +1,12 @@
 import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
+import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
 import { applyExplicitChatReasoningWirePolicy } from "./openai-chat/reasoning-wire";
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "./base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../types";
 import { modelInList } from "../types";
 import { createInlineThinkContentSplitter, splitInlineThinkContent } from "./inline-think-tags";
-import { mapReasoningEffort, modelRecordValue } from "../reasoning-effort";
+import { mapReasoningEffort } from "../reasoning-effort";
 import { debugProviderDiagnostic } from "../lib/debug";
 import { sseFieldValue } from "../lib/sse-decoder";
 import { isDebugEnabled } from "../lib/debug-settings";
@@ -50,12 +51,6 @@ import { freeformToolsByWireName, type FreeformToolIdentity, reconcileSerialized
 export { stripBracketedModelSuffix } from "./openai-chat/wire";
 export { buildOpenAIChatPassthroughRequest } from "./openai-chat/passthrough";
 export { formatOpenAIChatErrorBody } from "./openai-chat/errors";
-
-function resolveMaxTokens(provider: OcxProviderConfig, parsed: OcxParsedRequest): number | undefined {
-  return parsed.options.maxOutputTokens
-    ?? modelRecordValue(provider.modelMaxOutputTokens, parsed.modelId)
-    ?? provider.defaultMaxOutputTokens;
-}
 
 function thinkingBudgetForEffort(parsed: OcxParsedRequest, reasoningEffort: string, maxOutputTokens?: number): number | undefined {
   if (parsed.options.reasoning === "minimal") return 0;
@@ -150,12 +145,13 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           body.stop = parsed.options.stopSequences;
         }
         const reasoningDisabled = modelInList(provider.noReasoningModels, parsed.modelId);
-        const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);
+        const requestedEffort = protectGlmSummaryBudget(body) ? "low" : parsed.options.reasoning;
+        const reasoningEffort = mapReasoningEffort(provider, parsed.modelId, requestedEffort);
         const explicitReasoning = applyExplicitChatReasoningWirePolicy({
           provider,
           modelId: parsed.modelId,
           hasTools: !!tools,
-          requestedEffort: parsed.options.reasoning,
+          requestedEffort,
           wireEffort: reasoningEffort,
           reasoningDisabled,
           body,
