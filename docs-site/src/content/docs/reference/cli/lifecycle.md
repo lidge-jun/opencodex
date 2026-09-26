@@ -30,7 +30,11 @@ state. On start it syncs each provider's models into Codex's catalog. On shutdow
 native Codex — unless it was launched as a managed service (`OCX_SERVICE=1`). A sibling started
 beside a running proxy does neither: it serves direct requests on its own port only, and Codex,
 Grok and Claude stay pointed at the proxy that was already running. Stopping that sibling, with
-`ocx stop` or a signal, leaves their configuration alone as well.
+`ocx stop` or a signal, leaves their configuration alone as well. While it runs, the proxy also
+keeps Codex pointed at itself: when the opencodex routing in `~/.codex/config.toml` names another
+local port where no opencodex has answered for about 20 seconds (an instance that re-pointed it and
+then died, for example), the proxy re-points Codex at its own port and prints one warning. Codex
+threads opened in the meantime keep the dead address until you reopen them.
 
 `--socks5` (default `127.0.0.1:10808`) saves `config.proxy` as a SOCKS5 URL and routes outbound
 HTTP(S) through a real SOCKS5 tunnel. `--socks5-off` clears only that saved SOCKS5 proxy; it
@@ -165,7 +169,10 @@ is not normalized. JSON exposes the same advice in `versionSkew`, whose fields r
 Print a read-only diagnostic summary: proxy PID, `/healthz` reachability, dashboard URL, config path,
 default provider, Codex autostart setting, service state, shim state, and the redacted effective Codex
 home. Only the explicit, high-confidence Windows Orca runtime-home signature adds an actionable App-home
-mismatch warning; it never changes `CODEX_HOME` automatically.
+mismatch warning; it never changes `CODEX_HOME` automatically. It also warns when the Codex routing
+opencodex wrote names a local port the running proxy does not serve. `ocx sync` repairs it
+immediately, and a running owner proxy may also re-point it on its own once nothing answers on that
+port. A sibling's status does not report it, because its routing names the proxy it runs beside.
 
 Human output also includes an **OAuth health** block after the OAuth logins summary: `OAuth health:
 ok` when every known account is healthy, or `OAuth health: warning` with one redacted line per

@@ -170,6 +170,38 @@ Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`open
 auto-start and the updater's restart) starts an ordinary owner and strips an inherited marker
 through `withoutSiblingMarker`.
 
+The startup sync is not the owner's last look at `config.toml`. Once it settles, `handleStart`
+starts `src/codex/routing-healer.ts` in an unmarked owner (never in a sibling or the
+connected-client runtime), and the exit cleanup stops it before any teardown. An unref'd timer
+reads `config.toml` every 10 s; unchanged bytes cost nothing more. `src/codex/routing-drift.ts`
+calls routing foreign only when it is opencodex-owned (the marker line, the journaled value, or the
+`opencodex` provider table), names a loopback endpoint with an explicit port that is neither the
+bound port nor the loopback listener's, and no external `model_provider` is selected, so native,
+user, custom, external, restored, LAN and admission-token routing never is. Foreign ports are
+probed with `probeEndpointLiveness`: a live opencodex is left alone with one log line, `unknown`
+never advances the streak, and a heal needs dead on at least two probes spanning 20 s, dead again
+on a final probe, and every gate open (no sibling mark, no recycle or drain, the runtime record
+names this process, Codex ON and not hub-gated, no admission-token routing, a write target this
+process serves, no client connection and no client-owned journal). The heal is
+`injectCodexConfig` with no catalog path, a 1 s lock timeout and a synchronous `beforeClientWrite`
+guard that re-reads `config.toml` under the lock and aborts when the routing moved. A coordinated
+home re-reads its admission under the lock before that guard runs, so a rewrite between plan and
+lock comes back as a stale-admission refusal instead: any refused or failed write whose
+`config.toml` bytes moved since the proof is the same abort, with no wait and no warning, and the
+next heal needs a fresh streak. A busy lock retries on the next tick. A refusal over the proven
+bytes waits 10 minutes, and that wait ends once routing is no longer foreign. Six attempts, or a
+fourth heal, within an hour pause probing and writing until the oldest one leaves the hour; the
+loop then resumes with a fresh streak and never stops for good. An `unknown` answer is asked again
+every 30 s, not every tick. Each heal prints one warning; a failure line carries only the first
+message line, with home paths masked. Detection, gates and probes read the
+journal only through the read-only accessors, `journalOwner({ readOnly: true })` included, so
+watching never deletes an unreadable journal; only a heal write goes through the injector's
+ordinary journal handling. Threads Codex opened while routing named the dead port keep that address until they are
+reopened. `ocx status` reports the same drift, also while the loop is gated off, through
+`codexRoutingDriftWarning` in `src/cli/status.ts`, which reads the journal the same read-only way.
+It says nothing in a sibling's home, whose routing names the owner beside it, and it promises only
+`ocx sync`, because it cannot see whether a healer runs, is gated, or is paused.
+
 The native main slot also accepts one same-identity device reauth (#3898):
 `/api/codex-auth/main/reauth-device` (start/status/cancel) plus
 `ocx account main reauth`. The grant is the OpenAI deviceauth grant already
