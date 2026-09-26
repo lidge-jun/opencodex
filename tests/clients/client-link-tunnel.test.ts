@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   CLIENT_LINK_MAX_HOLDS,
+  LINK_OWNER_PROOF_TTL_MS,
   clientLinkTunnelStatus,
   clientTunnelPidfilePath,
   CONNECTION_UNREADABLE,
@@ -453,8 +454,10 @@ function supervisorHarness(overrides: Partial<ClientLinkSupervisorDeps> = {}) {
     clearTimer: () => {},
     now: () => view.clock,
     random: () => 0.5,
+    readProcessStartTime: pid => `fixture-start-${pid}`,
     linkKey: () => LINK_KEY,
-    scanListenPids: () => ({ ok: true, pids: ssh.live().map(item => item.child.pid) }),
+    ownsLoopbackListener: async (_port, pid) => ssh.live().some(item => item.child.pid === pid),
+    ownerProofNow: () => view.clock,
     fetchImpl: (async (input, init) => {
       probes.push({ url: String(input), keyed: new Headers(init?.headers).get("x-opencodex-api-key") === LINK_KEY, cache: init?.cache });
       if (view.readyz === "refused") throw Object.assign(new Error("Unable to connect"), { code: "ConnectionRefused" });
@@ -502,7 +505,7 @@ test("a competing listener cannot receive the probe key or relayed traffic befor
   } });
   const h = supervisorHarness({
     fetchImpl: fetch,
-    scanListenPids: () => ({ ok: true, pids: [process.pid] }),
+    ownsLoopbackListener: async () => false,
   });
   h.view.sidecar = { ...sidecar(), tunnelPort: competing.port! };
   try {
@@ -512,7 +515,7 @@ test("a competing listener cannot receive the probe key or relayed traffic befor
       method: "POST", headers: { "Content-Type": "application/json" }, body: '{"input":"private"}',
     }), { tunnelPort: competing.port!, admissionKey: LINK_KEY }, { tunnel: h.supervisor, holdMs: 10, fetchImpl: fetch });
     expect(response.status).toBe(503);
-    expect(h.supervisor.connected()).toBe(false);
+    expect(await h.supervisor.connected()).toBe(false);
     expect(received).toEqual([]);
   } finally {
     await h.close();
@@ -823,7 +826,7 @@ test("an adopted tunnel is probed only when pidfile identity and socket owner ag
     platform: "darwin",
     isAlive: pid => pid === 42 || pid === process.pid,
     readProcessInfo: pid => pid === 42 ? { ppid: process.pid, args: argv.join(" "), startTime: "adopted-start" } : null,
-    scanListenPids: () => ({ ok: true, pids: [42] }),
+    ownsLoopbackListener: async (_port, pid) => pid === 42,
   });
   mkdirSync(join(h.configDir, "link"), { recursive: true });
   writeFileSync(clientTunnelPidfilePath(h.configDir), JSON.stringify({ version: 1,
@@ -832,7 +835,7 @@ test("an adopted tunnel is probed only when pidfile identity and socket owner ag
     await h.start();
     expect(h.ssh.children).toHaveLength(0);
     await h.step();
-    expect(h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toBe(true);
     expect(h.probes).toHaveLength(1);
     expect(h.probes[0]?.keyed).toBe(true);
   } finally {
@@ -842,15 +845,16 @@ test("an adopted tunnel is probed only when pidfile identity and socket owner ag
 
 test("a connected tunnel stops relaying when another PID takes its port", async () => {
   let owners: number[] = [];
-  const h = supervisorHarness({ scanListenPids: () => ({ ok: true, pids: owners }) });
+  const h = supervisorHarness({ ownsLoopbackListener: async (_port, pid) => owners.includes(pid) });
   let forwarded = 0;
   try {
     await h.start();
     owners = [h.ssh.children[0]!.child.pid];
     await h.step();
-    expect(h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toBe(true);
     owners = [process.pid];
-    expect(h.supervisor.connected()).toBe(false);
+    h.view.clock += LINK_OWNER_PROOF_TTL_MS + 1;
+    expect(await h.supervisor.connected()).toBe(false);
     const response = await relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/responses", {
       method: "POST", body: '{"input":"private"}',
     }), { tunnelPort: sidecar().tunnelPort, admissionKey: LINK_KEY }, {
@@ -859,6 +863,53 @@ test("a connected tunnel stops relaying when another PID takes its port", async 
     });
     expect(response.status).toBe(503);
     expect(forwarded).toBe(0);
+  } finally {
+    await h.close();
+  }
+});
+
+test("relay admissions reuse an asynchronous owner proof instead of scanning synchronously", async () => {
+  let lookups = 0;
+  const h = supervisorHarness({
+    ownsLoopbackListener: async () => { lookups += 1; await Bun.sleep(1); return true; },
+  });
+  const relay = () => relayLinkDataRequest(new Request("http://127.0.0.1:10100/v1/models"),
+    { tunnelPort: sidecar().tunnelPort, admissionKey: LINK_KEY }, {
+      tunnel: h.supervisor,
+      holdMs: 10,
+      fetchImpl: (async () => Response.json({ ok: true })) as typeof fetch,
+    });
+  try {
+    await h.start();
+    await h.step();
+    const afterProbe = lookups;
+    const responses = await Promise.all([relay(), relay(), relay()]);
+    expect(responses.map(response => response.status)).toEqual([200, 200, 200]);
+    expect(lookups).toBe(afterProbe);
+    h.view.clock += 1_500;
+    expect((await relay()).status).toBe(200);
+    expect(lookups).toBe(afterProbe + 1);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a replacement SSH child needs a new ownership proof before its first keyed probe", async () => {
+  let lookups = 0;
+  const h = supervisorHarness({ ownerProofNow: () => 0,
+    ownsLoopbackListener: async () => { lookups += 1; return true; } });
+  try {
+    await h.start();
+    await h.step();
+    const firstProofs = lookups;
+    expect(h.state()).toBe("connected");
+    h.ssh.children[0]!.exit(255, "Connection reset by peer");
+    await h.settle();
+    for (let tick = 0; tick < 10 && h.ssh.children.length < 2; tick += 1) await h.step();
+    expect(h.ssh.children).toHaveLength(2);
+    await h.step();
+    expect(h.state()).toBe("connected");
+    expect(lookups).toBeGreaterThan(firstProofs);
   } finally {
     await h.close();
   }
@@ -909,19 +960,19 @@ test("an unreadable read does not end the link; three in a row or an explicit di
 test("requests wait on a reconnect only while it lasts and are released when it connects or fails", async () => {
   const h = supervisorHarness();
   try {
-    expect(h.supervisor.connected()).toBe(false);
+    expect(await h.supervisor.connected()).toBe(false);
     expect(h.supervisor.pending()).toBe(false);
     await h.start();
     expect(h.supervisor.pending()).toBe(true);
     await h.step();
-    expect(h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toBe(true);
     expect(h.supervisor.pending()).toBe(false);
     expect(await h.supervisor.waitForConnected(15_000)).toBe(true);
 
     h.view.readyz = "refused";
     h.ssh.children[0]!.exit(255, "Connection reset by peer");
     await h.settle();
-    expect(h.supervisor.connected()).toBe(false);
+    expect(await h.supervisor.connected()).toBe(false);
     expect(h.supervisor.pending()).toBe(true);
     let released: boolean | undefined;
     const waiting = h.supervisor.waitForConnected(15_000).then(value => { released = value; return value; });
@@ -931,7 +982,7 @@ test("requests wait on a reconnect only while it lasts and are released when it 
     h.view.readyz = 200;
     await h.step();
     expect(await waiting).toBe(true);
-    expect(h.supervisor.connected()).toBe(true);
+    expect(await h.supervisor.connected()).toBe(true);
 
     h.ssh.children[1]!.exit(255, "Connection reset by peer");
     await h.settle();
@@ -941,7 +992,7 @@ test("requests wait on a reconnect only while it lasts and are released when it 
     await h.settle();
     expect(await failing).toBe(false);
     expect(h.supervisor.status()).toMatchObject({ state: { kind: "failed", reason: "hostkey" } });
-    expect(h.supervisor.connected()).toBe(false);
+    expect(await h.supervisor.connected()).toBe(false);
     expect(h.supervisor.pending()).toBe(false);
     expect(await h.supervisor.waitForConnected(15_000)).toBe(false);
   } finally {

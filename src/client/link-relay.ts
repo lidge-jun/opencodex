@@ -24,12 +24,12 @@ export interface LinkRelayClock {
 
 /**
  * The Child's tunnel as the relay sees it (the client link supervisor implements it). A request
- * waits on it only while the tunnel is being (re)established; a connected tunnel costs one
- * `pending()` call per request and nothing else.
+ * waits on it only while the tunnel is being (re)established. A connected tunnel uses a brief
+ * positive ownership proof; expiry triggers a bounded asynchronous lookup before another fetch.
  */
 export interface LinkTunnelGate {
   /** True only while a keyed probe has established this live tunnel. */
-  connected(): boolean;
+  connected(): boolean | Promise<boolean>;
   /** True while the tunnel is connecting or reconnecting. */
   pending(): boolean;
   /**
@@ -347,8 +347,8 @@ export async function relayLinkDataRequest(
   };
   const readyForFetch = async (): Promise<boolean> => {
     if (!tunnel) return false;
-    if (tunnel.connected()) return true;
-    return tunnel.pending() && await holdForTunnel(tunnel) && tunnel.connected();
+    if (await tunnel.connected()) return true;
+    return tunnel.pending() && await holdForTunnel(tunnel) && await tunnel.connected();
   };
 
   let upstream: Response | undefined;

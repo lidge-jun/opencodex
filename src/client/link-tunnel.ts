@@ -17,7 +17,7 @@ import {
   type TunnelState,
 } from "../link/tunnel-state";
 import { isLinkPort } from "../link/ports";
-import { scanListenPids, type ListenPidScan } from "../server/port-reclaim";
+import { ownsIpv4LoopbackListener } from "../server/port-reclaim";
 import { isLinkConnection, readClientConnectionState } from "./state";
 import { clientLinkStatePath, readClientLinkState, type ClientLinkState } from "./link-state";
 import type { LinkTunnelGate } from "./link-relay";
@@ -36,6 +36,7 @@ export interface ClientLinkTunnelSpec {
 
 export interface ClientLinkTunnelHandle {
   readonly pid: number;
+  readonly startTime: string | null;
   readonly exited: Promise<number>;
   /** TERM, wait up to 5 s, then KILL; removes the pidfile this handle wrote. Idempotent. */
   stop(): Promise<void>;
@@ -129,8 +130,9 @@ export interface ClientLinkSupervisorDeps extends ClientLinkTunnelDeps, OrphanRe
   onLinkEnded?: () => void;
   /** The link key for the keyed readiness probe. The runtime passes its cached key source. */
   linkKey?: () => string | null;
-  /** Local TCP LISTEN ownership; an unknown or foreign owner never receives the link key. */
-  scanListenPids?: (port: number) => ListenPidScan;
+  /** Async local IPv4 LISTEN ownership; an unknown or foreign owner never receives the link key. */
+  ownsLoopbackListener?: (port: number, pid: number) => Promise<boolean>;
+  ownerProofNow?: () => number;
   fetchImpl?: typeof fetch;
   now?: () => number;
   random?: () => number;
@@ -169,6 +171,8 @@ const PROBE_BACKOFF_MAX_MS = 5_000;
 const PROBE_BODY_MAX_BYTES = 4_096;
 /** Requests that may wait on a reconnecting tunnel at once; more are answered 503 at once. */
 export const CLIENT_LINK_MAX_HOLDS = 64;
+/** Reuse a positive socket-owner proof briefly; tunnel generation and process start bind the key. */
+export const LINK_OWNER_PROOF_TTL_MS = 1_000;
 
 function sameArgv(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
@@ -342,6 +346,7 @@ export function spawnClientLinkTunnel(spec: ClientLinkTunnelSpec, deps: ClientLi
   };
   const handle = {
     pid: child.pid,
+    startTime,
     exited: child.exited,
     stderr: child.stderr,
     stop(): Promise<void> {
@@ -516,7 +521,8 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   const policy = CLIENT_TUNNEL_RETRY_POLICY;
   const isAlive = deps.isAlive ?? defaultIsAlive;
   const linkKey = deps.linkKey ?? (() => null);
-  const scanOwner = deps.scanListenPids ?? scanListenPids;
+  const ownerLookup = deps.ownsLoopbackListener ?? ownsIpv4LoopbackListener;
+  const proofNow = deps.ownerProofNow ?? (() => performance.now());
   const fetchImpl = deps.fetchImpl ?? fetch;
   const setSupervisorTimer = deps.setTimer ?? ((callback: () => void, ms: number) => {
     const interval = setInterval(callback, ms);
@@ -534,7 +540,11 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   let child: ClientLinkTunnelHandle | undefined;
   /** A leftover tunnel this supervisor may not signal: watched, and replaced once it dies. */
   let adopted: number | null = null;
+  let adoptedStartTime: string | null = null;
   let tunnelPort: number | null = null;
+  let ownerGeneration = 0;
+  let ownerProof: { key: string; expiresAt: number } | null = null;
+  let ownerFlight: { key: string; promise: Promise<boolean> } | null = null;
   let state: TunnelState = IDLE;
   let linkId: string | null = null;
   let failure: ClientLinkSupervisorStatus | undefined;
@@ -552,30 +562,42 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   /** The tunnel is being (re)established, so a request may wait for it instead of failing. */
   const pending = (): boolean => !stopping && failure === undefined
     && ((started && !initialized) || state.kind === "connecting" || state.kind === "reconnecting");
-  const listenerOwnedByTunnel = (port: number): boolean => {
-    const pid = child?.pid ?? adopted;
-    if (pid === null || pid === undefined) return false;
-    if (adopted !== null) {
-      // An old or unreadable pidfile can be watched, but it grants no authority to send a key.
-      const record = readPidfile(clientTunnelPidfilePath(deps.configDir));
-      if (!record || record.pid !== adopted || record.linkId !== linkId
-        || tunnelIdentity(record, deps.platform ?? process.platform, deps, isAlive).kind !== "ours") return false;
-    }
-    try {
-      const scan = scanOwner(port);
-      const pids = scan.ok ? new Set(scan.pids) : null;
-      return pids !== null && pids.size === 1 && pids.has(pid);
-    } catch {
-      return false;
-    }
+  const invalidateOwnerProof = (): void => {
+    ownerGeneration += 1;
+    ownerProof = null;
+    ownerFlight = null;
   };
-  const connected = (): boolean => started && !stopping && failure === undefined
+  const ownerCandidate = (port: number): { pid: number; startTime: string | null; key: string } | null => {
+    if (port !== tunnelPort) return null;
+    const pid = child?.pid ?? adopted;
+    if (pid === null || pid === undefined || (adopted !== null && !adoptedStartTime)) return null;
+    const startTime = child?.startTime ?? adoptedStartTime;
+    return { pid, startTime, key: JSON.stringify([port, pid, startTime, ownerGeneration]) };
+  };
+  const listenerOwnedByTunnel = async (port: number): Promise<boolean> => {
+    const candidate = ownerCandidate(port);
+    if (!candidate) return false;
+    if (candidate.startTime !== null && ownerProof?.key === candidate.key
+      && proofNow() < ownerProof.expiresAt) return true;
+    if (ownerFlight?.key === candidate.key) return await ownerFlight.promise;
+    const promise = Promise.resolve().then(() => ownerLookup(port, candidate.pid)).catch(() => false)
+      .then(owned => {
+        if (stopping || ownerCandidate(port)?.key !== candidate.key) return false;
+        ownerProof = owned && candidate.startTime !== null
+          ? { key: candidate.key, expiresAt: proofNow() + LINK_OWNER_PROOF_TTL_MS }
+          : null;
+        return owned;
+      }).finally(() => { if (ownerFlight?.promise === promise) ownerFlight = null; });
+    ownerFlight = { key: candidate.key, promise };
+    return await promise;
+  };
+  const connected = async (): Promise<boolean> => started && !stopping && failure === undefined
     && state.kind === "connected" && linkId !== null && tunnelPort !== null
-    && listenerOwnedByTunnel(tunnelPort);
+    && await listenerOwnedByTunnel(tunnelPort);
 
   const settleWaiters = (): void => {
     if (waiters.size === 0) return;
-    const ready = connected();
+    const ready = !stopping && failure === undefined && state.kind === "connected";
     if (!ready && pending()) return;
     for (const settle of [...waiters]) settle(ready);
   };
@@ -615,6 +637,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   /** Stops our own child only; the tunnel state is left for the caller to decide. */
   const killChild = async (): Promise<void> => {
     const current = child;
+    invalidateOwnerProof();
     child = undefined;
     probe = null;
     abortProbe();
@@ -622,7 +645,9 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
   };
 
   const stopTunnel = async (): Promise<void> => {
+    invalidateOwnerProof();
     adopted = null;
+    adoptedStartTime = null;
     tunnelPort = null;
     setState(reduceTunnel(state, { type: "stop" }));
     await killChild();
@@ -656,6 +681,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       deps.warn?.("client link tunnel could not be started");
       return;
     }
+    invalidateOwnerProof();
     linkId = sidecar.linkId;
     tunnelPort = sidecar.tunnelPort;
     probe = null;
@@ -665,6 +691,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     const current = child;
     void current.exited.then(async () => {
       if (child !== current) return;
+      invalidateOwnerProof();
       child = undefined;
       probe = null;
       const stderr = (current as ClientLinkTunnelHandle & { stderr?: Promise<string> }).stderr
@@ -673,6 +700,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       onExit(classifySshStderr(stderr));
     }).catch(() => {
       if (child !== current) return;
+      invalidateOwnerProof();
       child = undefined;
       probe = null;
       onExit("network");
@@ -711,19 +739,22 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
    * Starts one keyed probe only after a local socket-owner check. A slow Home never delays the
    * check that notices a disconnect, and stop() aborts it instead of waiting for probe timeout.
    */
-  const startProbe = (tunnelPort: number, key: string): void => {
-    if (!listenerOwnedByTunnel(tunnelPort)) return;
+  const startProbe = (tunnelPort: number): void => {
     const flight = { child, adopted, abort: new AbortController() };
     probeFlight = flight;
     const wasConnected = state.kind === "connected";
-    void probeTunnel(fetchImpl, tunnelPort, key, flight.abort.signal).then(result => {
-      // An aborted probe, or one whose tunnel exited meanwhile, says nothing about the next tunnel.
-      if (probeFlight !== flight) return;
-      probeFlight = undefined;
-      if (stopping || child !== flight.child || adopted !== flight.adopted
-        || !listenerOwnedByTunnel(tunnelPort)) return;
+    void (async () => {
+      if (!await listenerOwnedByTunnel(tunnelPort)) return;
+      if (probeFlight !== flight || stopping || flight.abort.signal.aborted
+        || child !== flight.child || adopted !== flight.adopted) return;
+      const key = linkKey();
+      if (!key) return;
+      const result = await probeTunnel(fetchImpl, tunnelPort, key, flight.abort.signal);
+      // An aborted probe, or one whose listener changed while it ran, proves nothing.
+      if (probeFlight !== flight || stopping || child !== flight.child || adopted !== flight.adopted
+        || !await listenerOwnedByTunnel(tunnelPort)) return;
       applyProbe(result, wasConnected);
-    }, () => {
+    })().catch(() => undefined).finally(() => {
       if (probeFlight === flight) probeFlight = undefined;
     });
   };
@@ -744,6 +775,11 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
       // A leftover tunnel that may not be ours to stop: watch it, probe only after identity and
       // socket ownership match, and start our own once it dies. It is never signalled.
       adopted = orphan.pid;
+      const record = readPidfile(clientTunnelPidfilePath(deps.configDir));
+      const identity = record?.pid === adopted && record.linkId === afterReap.sidecar.linkId
+        ? tunnelIdentity(record, deps.platform ?? process.platform, deps, isAlive) : null;
+      adoptedStartTime = identity?.kind === "ours" ? identity.startTime : null;
+      invalidateOwnerProof();
       linkId = afterReap.sidecar.linkId;
       tunnelPort = afterReap.sidecar.tunnelPort;
       nextProbeAt = now();
@@ -787,7 +823,9 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     }
     if (adopted !== null && !isAlive(adopted)) {
       // The leftover tunnel is gone: start our own on this tick.
+      invalidateOwnerProof();
       adopted = null;
+      adoptedStartTime = null;
       tunnelPort = null;
       probe = null;
       setState(IDLE);
@@ -803,9 +841,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     // forward that just came up releases them at once. Held requests exist only while it is down.
     if ((child || adopted !== null) && (state.kind === "connected" || awaitingReady()) && !probeFlight
       && (now() >= nextProbeAt || waiters.size > 0)) {
-      // Without the committed key nothing can be proven, and the relay refuses requests anyway.
-      const key = linkKey();
-      if (key) startProbe(sidecar.tunnelPort, key);
+      startProbe(sidecar.tunnelPort);
     }
     if (!child && adopted === null && (state.kind === "idle" || dueForSpawn(state, now()))) spawn(sidecar);
     settleWaiters();
@@ -879,7 +915,7 @@ export function createClientLinkSupervisor(deps: ClientLinkSupervisorDeps = {}):
     pending,
     connected,
     waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean> {
-      if (connected()) return Promise.resolve(true);
+      if (state.kind === "connected") return connected();
       if (!pending() || waiters.size >= CLIENT_LINK_MAX_HOLDS || signal?.aborted || !(timeoutMs > 0)) {
         return Promise.resolve(false);
       }
