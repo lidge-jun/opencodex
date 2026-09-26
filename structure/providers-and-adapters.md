@@ -1,5 +1,16 @@
 # Providers And Adapters
 
+JEV Combo targets can carry an optional operator-authored `modelProfile` note (up to 512
+characters) in `config.combos[id].targets[]`. Configuration validation rejects empty or
+oversized values; normalization trims whitespace, and management storage omits absent notes.
+Every JEV decision request keeps its built-in target profile in the trusted
+`instructions.model_profiles`; an optional note is sent separately in the decision state's
+`operator_notes`, keyed by target. The note supplements rather than replaces the built-in
+profile and is evidence for the decision, not a command. Notes do not change the provider
+catalog or target eligibility/effort allowlists. Never put credentials or private account data
+in them.
+
+
 RunTurn hosted search uses `src/web-search/run-turn-loop.ts`: synthetic calls remain private, progress reaches the bridge during collection, and a validated terminal precedes search execution. Complete search calls remain actionable at a truncated `done`; cancellation prevents subsequent queries and calls. OAuth preflight replay in `src/server/responses/run-turn-execution.ts` retains the synthetic tool while refreshing credential-scoped route state. In `src/server/responses/sidecar-execution.ts`, a search plan takes priority over image/video bridge execution for both transports; only fetch-capable adapters enter the fetch search loop.
 
 Combo preflight allows the private search tool only while a search plan is active; client tool declaration checks and replay-unsafe heartbeat protection remain enforced.

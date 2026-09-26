@@ -91,6 +91,8 @@ export interface ComboTarget {
   weight?: number;
   /** Exact efforts JEV may choose; omitted means every currently advertised effort. */
   reasoningEfforts?: ComboEffort[];
+  /** Optional operator note that supplements the built-in JEV profile. */
+  modelProfile?: string;
   /** UI-only stable key for React lists; never sent to the API. */
   clientKey?: string;
 }
@@ -111,6 +113,7 @@ export function newComboTarget(partial: Partial<ComboTarget> = {}): ComboTarget 
     ...(partial.reasoningEfforts !== undefined
       ? { reasoningEfforts: [...partial.reasoningEfforts] }
       : {}),
+    ...(partial.modelProfile !== undefined ? { modelProfile: partial.modelProfile } : {}),
     clientKey: partial.clientKey ?? `ct-${++comboTargetKeySeq}`,
   };
 }
@@ -257,6 +260,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
         model,
         ...(weight !== undefined ? { weight } : {}),
         ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
+        ...(typeof tr.modelProfile === "string" ? { modelProfile: tr.modelProfile } : {}),
       }));
     }
     out.push({
@@ -448,7 +452,8 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
     return t.provider === o.provider
       && t.model === o.model
       && (t.weight ?? 1) === (o.weight ?? 1)
-      && targetReasoningEffortsEqual(t, o);
+      && targetReasoningEffortsEqual(t, o)
+      && (t.modelProfile ?? "") === (o.modelProfile ?? "");
   });
 }
 
@@ -478,6 +483,9 @@ export function toPutBody(item: ComboItem, options: { renameFrom?: string } = {}
         ...(weighted ? { weight: target.weight ?? 1 } : {}),
         ...(target.reasoningEfforts !== undefined
           ? { reasoningEfforts: [...target.reasoningEfforts] }
+          : {}),
+        ...(target.modelProfile?.trim()
+          ? { modelProfile: target.modelProfile.trim() }
           : {}),
       })),
       strategy: item.strategy,
@@ -515,6 +523,7 @@ export type ComboDraftError =
   | "invalidStickyLimit"
   | "invalidWeight"
   | "invalidReasoningEfforts"
+  | "invalidModelProfile"
   | "noEnabledTarget";
 
 export function validateComboDraft(
@@ -565,6 +574,7 @@ export function validateComboDraft(
         || new Set(t.reasoningEfforts).size !== t.reasoningEfforts.length)) {
       return "invalidReasoningEfforts";
     }
+    if (t.modelProfile !== undefined && t.modelProfile.trim().length > 512) return "invalidModelProfile";
   }
 
   const targets = new Set<string>();

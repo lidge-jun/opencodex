@@ -148,7 +148,7 @@ describe("JEV bounded decision state", () => {
 });
 
 describe("JEV route question", () => {
-  test("constructs literal joint target-effort choices with known and neutral profiles", () => {
+  test("constructs the literal joint target-effort choice set", () => {
     const question = buildJevRouteQuestion([
       ...candidates,
       {
@@ -166,7 +166,6 @@ describe("JEV route question", () => {
     ]) as {
       route: {
         type: string;
-        instructions: { model_profiles: Record<string, string> };
         criteria: Record<string, unknown>;
       };
     };
@@ -189,10 +188,65 @@ describe("JEV route question", () => {
         target: "openai/gpt-5.6-luna", provider: "openai", model: "gpt-5.6-luna", reasoning_effort: "medium",
       },
     });
-    expect(question.route.instructions.model_profiles["openai/gpt-6-astra"]).toContain("Most capable");
-    expect(question.route.instructions.model_profiles["openai/gpt-5.6-sol"]).toContain("Higher-capacity");
-    expect(question.route.instructions.model_profiles["openai/gpt-5.6-luna"]).toContain("cost-optimized");
-    expect(question.route.instructions.model_profiles["custom/other-model"]).toContain("unspecified");
+  });
+
+  test("exact model identities take precedence over family and unknown fallbacks", () => {
+    const question = buildJevRouteQuestion([
+      ...candidates,
+      { key: "openai/gpt-5.6-luna", provider: "openai", model: "gpt-5.6-luna", reasoningEfforts: ["low"] },
+      { key: "openai/gpt-9-lambda", provider: "openai", model: "gpt-9-lambda", reasoningEfforts: ["low"] },
+      { key: "anthropic/claude-4", provider: "anthropic", model: "claude-4", reasoningEfforts: ["low"] },
+      { key: "xai/grok-4", provider: "xai", model: "grok-4", reasoningEfforts: ["low"] },
+      { key: "google/gemini-4", provider: "google", model: "gemini-4", reasoningEfforts: ["low"] },
+      { key: "custom/other-model", provider: "custom", model: "other-model", reasoningEfforts: ["low"] },
+    ]) as { route: { instructions: { model_profiles: Record<string, string> } } };
+    const profiles = question.route.instructions.model_profiles;
+    const exactProfiles = [
+      [profiles["openai/gpt-5.6-luna"]!, "GPT-5.6 Luna"],
+      [profiles["openai/gpt-5.6-sol"]!, "GPT-5.6 Sol"],
+      [profiles["openai/gpt-6-astra"]!, "GPT-6 Astra"],
+    ];
+    const gptFamilyProfile = profiles["openai/gpt-9-lambda"]!;
+
+    for (const [profile, modelName] of exactProfiles) {
+      expect(profile).toContain(modelName);
+      expect(profile).not.toContain("unspecified");
+      expect(profile).not.toBe(gptFamilyProfile);
+      for (const unsupportedClaim of ["capacity", "price", "cost", "context"]) {
+        expect(profile.toLowerCase()).not.toContain(unsupportedClaim);
+      }
+    }
+    for (const [key, familyName] of [
+      ["openai/gpt-9-lambda", "gpt"],
+      ["anthropic/claude-4", "claude"],
+      ["xai/grok-4", "grok"],
+      ["google/gemini-4", "gemini"],
+    ]) {
+      const profile = profiles[key]!.toLowerCase();
+      expect(profile).toContain(familyName);
+      expect(profile).toContain("unspecified");
+    }
+    const unknownProfile = profiles["custom/other-model"]!.toLowerCase();
+    expect(unknownProfile).toContain("unspecified");
+    expect(unknownProfile).not.toContain("family");
+  });
+
+  test("keeps trimmed operator notes in state without replacing built-in profiles", () => {
+    const notedCandidates = [
+      { ...candidates[0]!, modelProfile: "  1M context; low marginal subscription cost.  " },
+      { ...candidates[1]!, modelProfile: " \t " },
+    ];
+    const question = buildJevRouteQuestion(notedCandidates) as {
+      route: { instructions: { model_profiles: Record<string, string> }; criteria: Record<string, unknown> };
+    };
+    const state = buildJevState({ input: "Choose carefully." }, notedCandidates);
+
+    expect(state.operator_notes).toEqual({ "openai/gpt-6-astra": "1M context; low marginal subscription cost." });
+    const astraProfile = question.route.instructions.model_profiles["openai/gpt-6-astra"]!;
+    expect(astraProfile.toLowerCase()).toContain("gpt-6 astra");
+    expect(astraProfile).not.toContain("1M context");
+    expect(question.route.instructions).not.toHaveProperty("operator_notes");
+    expect(Object.keys(question.route.criteria)).toHaveLength(3);
   });
 });
 
@@ -446,6 +500,29 @@ describe("JEV decision client", () => {
     });
 
     expect(decision).toMatchObject({ ...largeFallback, gate: "invalid" });
+    expect(calls).toBe(0);
+  });
+
+  test("rejects an operator note that pushes the decision payload beyond its byte budget", async () => {
+    const oversizedCandidate: JevCandidate = {
+      ...candidates[0]!,
+      modelProfile: "n".repeat(65_536),
+    };
+    let calls = 0;
+    const post = (async () => {
+      calls += 1;
+      return Response.json(validPayload);
+    }) as JevPost;
+
+    const decision = await resolveJevDecision({
+      body: decisionBody,
+      candidates: [oversizedCandidate],
+      fallback: { targetKey: oversizedCandidate.key, effort: "medium" },
+      config: jevConfig("secret"),
+      post,
+    });
+
+    expect(decision).toMatchObject({ targetKey: oversizedCandidate.key, effort: "medium", gate: "invalid" });
     expect(calls).toBe(0);
   });
 
