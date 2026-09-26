@@ -902,6 +902,8 @@
   "kiro-fallback-error-body.test.ts": "providers/kiro",
   "kiro-images.test.ts": "providers/kiro",
   "kiro-leased-responses.test.ts": "providers/kiro",
+  "kiro-model-catalog.test.ts": "providers/kiro",
+  "kiro-model-preference.test.ts": "providers/kiro",
   "kiro-oauth.test.ts": "providers/kiro",
   "kiro-pool-load-settings.test.ts": "providers/kiro",
   "kiro-pool-rank.test.ts": "providers/kiro",
