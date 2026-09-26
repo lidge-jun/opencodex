@@ -579,6 +579,7 @@
     "codebuddy-adapter.test.ts": "providers",
     "codebuddy-live-acceptance.test.ts": "providers",
     "codebuddy-mcp-server.test.ts": "providers",
+    "codebuddy-live-models.test.ts": "providers",
     "codebuddy-protocol.test.ts": "providers",
     "codebuddy-tool-bridge-turn.test.ts": "providers",
     "codebuddy-tool-bridge.test.ts": "providers",

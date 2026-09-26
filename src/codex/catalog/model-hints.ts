@@ -426,6 +426,17 @@ export function suppressedSyntheticMaxCatalogSlugs(
 export const QUIET_AUTHORITATIVE_CATALOG_PROVIDERS = new Set(["kimi", "xai"]);
 
 export const CALLABLE_CONFIGURED_COMPATIBILITY_MODELS: Readonly<Record<string, ReadonlySet<string>>> = {
+  // CodeBuddy's vendor defaults are real callable selectors — both the bundled manifests
+  // (`product.json` / `product.internal.json`) and `--model` accept them — but the key-scoped
+  // configuration roster omits them. Without this entry, a successful live roster
+  // would drop the configured default ("default" for CN, "default-model" for Global) from
+  // the catalog even though the client can still call it (maintainer review, #5147).
+  codebuddy: new Set([
+    "default-model",
+  ]),
+  "codebuddy-cn": new Set([
+    "default",
+  ]),
   kimi: new Set([
     "k3[1m]",
     "kimi-k2.7-code",
