@@ -1554,6 +1554,7 @@
   "settings-desktop-switch-apply.test.ts": "config",
   "settings-fast-rows.test.ts": "config",
   "settings-main-account-hard-lock.test.ts": "config",
+  "settings-memory-models.test.ts": "config",
   "settings-oauth-open-browser.test.ts": "config",
   "settings-startup-health-seam.test.ts": "config",
   "settings-stream-mode.test.ts": "config",

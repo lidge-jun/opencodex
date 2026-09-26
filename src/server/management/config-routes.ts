@@ -736,6 +736,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopSwitches,
       compactionRouting: config.compactionRouting ?? null,
       compactionRecovery: config.compactionRecovery ?? null,
+      // The panel re-reads its own save response, so a missing block would render both
+      // phases as "Off" while the server kept them.
+      memoryModels: config.memoryModels ?? null,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),
       mainAccountHardLock: getMainAccountHardLockStatus(config),
       startupHealth: await readStartupHealthSnapshot(config),
