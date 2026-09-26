@@ -170,8 +170,7 @@
   "explicit": {
     "provider-antigravity-quota-retry.test.ts": "providers",
     "desktop-supervised-restart.test.ts": "clients", "cli-restart-handoff.test.ts": "cli",
-    "restart-replacement.test.ts": "server",
-    "deepseek-artifact-tool-schema.test.ts": "providers",
+    "restart-replacement.test.ts": "server", "deepseek-artifact-tool-schema.test.ts": "providers",
     "client-config-export-output-limit.test.ts": "config",
     "openai-chat-serialized-tool-call-scaling.test.ts": "adapters/openai",
     "openai-chat-tool-call-id-remint.test.ts": "adapters/openai",
@@ -1966,10 +1965,8 @@
     "web-search-run-turn-loop.test.ts": "web-search",
     "responses-run-turn-web-search.test.ts": "responses",
     "server-combo-cooldown-recording.test.ts": "server",
-    "injection-routing-drift.test.ts": "codex-integration",
-    "injection-routing-healer.test.ts": "codex-integration",
-    "injection-routing-heal-apply.test.ts": "codex-integration",
-    "cli-start-routing-heal-wiring.test.ts": "cli",
+    "injection-routing-drift.test.ts": "codex-integration", "injection-routing-healer.test.ts": "codex-integration",
+    "injection-routing-heal-apply.test.ts": "codex-integration", "cli-start-routing-heal-wiring.test.ts": "cli",
     "cli-status-codex-routing-drift.test.ts": "cli"
   },
   "migrated": [
