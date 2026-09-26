@@ -226,9 +226,9 @@ A Devin live row spreads its measured `inputModalities` before
 `modelInputModalities` record and the vision-sidecar rewrite keep precedence and the live
 value survives only when none of them applies.
 
-For `liveModels: false`, a static provider publishes the ordered union of `models` and
-`retainModels`. When `models` is absent or empty, its configured `defaultModel` seeds that
+For `liveModels: false`, a static provider publishes the ordered union of `models` and `retainModels`. When `models` is absent or empty, its configured `defaultModel` seeds that
 union before retained ids; a nonempty explicit list does not import a different default.
+Kiro keeps this static union as its floor and merges cached account model IDs and input limits; gathering neither refreshes tokens nor calls management, and runtime `/models` discovery remains disabled.
 Without any default or configured/retained ids, the static result stays empty. The existing
 forward-auth native path remains separate. Static gathering does not refresh OAuth or call
 the provider's model endpoint, and normal selection and visibility filters still apply.

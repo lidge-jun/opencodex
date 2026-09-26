@@ -202,6 +202,13 @@ veya Google Antigravity OAuth.
 **Kimlik Doğrulama:** Kiro kimlik bilgisinden bölge/profil meta verileriyle
 birlikte Bearer olarak Kiro OAuth erişim belirteci.
 
+Bir istek hesaba kabul edildikten sonra proxy, hesabın model listesini bölgesel yönetim
+hizmetinden arka planda okur. Gözlenen modeller yerleşik listeye eklenir; boş veya tanınmayan
+yanıt son geçerli listeyi korur. Üyelik yalnızca uygun hesaplar arasında tercih sağlar; bilinmeyen
+model kimlikleri de üst hizmete gönderilir. Bildirilen giriş sınırları bağlam penceresini
+bilgilendirir ve kısmi kanıtta yerleşik sınır kullanılır. Henüz hizmet vermemiş hesaplarda
+model listesi kanıtı bulunmayabilir.
+
 - Kiro `conversationState` oluşturur, Codex araçlarını ve araç sonuçlarını eşler
   ve Kiro hattı tarafından desteklenen görsel bloklarını gönderir.
 - `application/vnd.amazon.eventstream` kodunu çözer, metin/düşünme/araç

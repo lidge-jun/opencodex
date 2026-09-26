@@ -103,6 +103,10 @@ export function kiroUsageManagementUrl(region: string): string {
   return `https://management.${region}.kiro.dev/`;
 }
 
+export function kiroManagementHost(ctx: KiroUsageContext): string {
+  return kiroUsageManagementUrl(usageRegion(ctx));
+}
+
 /** Credit balances are fractional; the integer fields round 695.17 down to 695. */
 function preciseNumber(row: Record<string, unknown>, precise: string, whole: string): number | undefined {
   return toFiniteNumber(row[precise]) ?? toFiniteNumber(row[whole]);
