@@ -33,6 +33,7 @@ import { formatErrorResponse, bridgeToResponsesSSE, buildResponseJSON } from "..
 import { redactSecretString } from "../../lib/redact";
 import { adapterFailureFromEvent } from "../../bridge/internal";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
+import { resolveStallTimeoutSec } from "../../stall-timeout";
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import {
@@ -440,11 +441,32 @@ export async function executeResponsesRunTurn(
       // request — the grown-history iteration for post-search legs, the
       // tool-injected first request elsewhere.
       replayParsed: PreparedResponsesRequest["parsed"] = wsFirstParsed,
+      deadlineAt?: number,
     ): Promise<AsyncIterable<AdapterEvent>> => {
       let source = firstSource;
+      let latestRetryAttempt: Promise<void> | undefined;
+      let deferPendingPermitCleanup = false;
       try {
         while (true) {
-          const preflight = await preflightAdapterEvents(source);
+          const preflight = await preflightAdapterEvents(source, undefined, deadlineAt === undefined
+            ? undefined
+            : { maxWaitMs: deadlineAt - Date.now() });
+          if (preflight.timedOut) {
+            const pendingPermit = sendBudgetState.pendingHopPermit;
+            if (pendingPermit && latestRetryAttempt) {
+              // The timed-out replay may still be waiting for its first physical dispatch.
+              // Keep its reservation available until the adapter claims it; if the attempt ends
+              // before claiming, refund it then rather than charging a later send twice.
+              deferPendingPermitCleanup = true;
+              const releaseIfUnclaimed = () => {
+                if (sendBudgetState.pendingHopPermit !== pendingPermit) return;
+                sendBudgetState.pendingHopPermit = undefined;
+                pendingPermit.release();
+              };
+              void latestRetryAttempt.then(releaseIfUnclaimed, releaseIfUnclaimed);
+            }
+            return preflight.stream;
+          }
           if (preflight.replayUnsafe
             || !preflight.error
             || !(await rotateRunTurnAdapterOnPreflight429(preflight.error))) {
@@ -453,15 +475,14 @@ export async function executeResponsesRunTurn(
           const retryQueue = createAdapterEventQueue({
             onBacklogExceeded: () => runTurnAbort.abort(),
           });
-          void runTurnAttempt(retryQueue, "oauth-account-429", false, replayParsed);
+          latestRetryAttempt = runTurnAttempt(retryQueue, "oauth-account-429", false, replayParsed);
+          void latestRetryAttempt;
           source = retryQueue.stream();
         }
       } finally {
-        // A handed-down hop reservation belongs to the replay this loop dispatched, and the
-        // loop only leaves after that replay's first event has arrived -- so the adapter has
-        // already reserved if it was ever going to. Dropping the reference here keeps an
-        // adapter that reserves nothing from leaving a free send for an unrelated later leg.
-        sendBudgetState.pendingHopPermit = undefined;
+        // On ordinary exit the replay's first event proves its first-send reservation was reached.
+        // A timed-out replay may not have dispatched yet, so that path defers cleanup above.
+        if (!deferPendingPermitCleanup) sendBudgetState.pendingHopPermit = undefined;
       }
     };
     // The empty-completion retry re-runs the turn against a fresh queue: the
@@ -496,14 +517,21 @@ export async function executeResponsesRunTurn(
       try {
       void runTurn();
       let eventSource: AsyncIterable<AdapterEvent> = queue.stream();
+      const grokDevinPreflight = !options.comboAttempt && logCtx.surface === "grok" && inboundWire === "responses"
+        && transportState.runTurnAdapter.name === "devin";
+      const stallTimeoutSec = wsPlan?.stallTimeoutSec ?? config.stallTimeoutSec;
+      const preflightDeadlineAt = grokDevinPreflight
+        ? Date.now() + resolveStallTimeoutSec(stallTimeoutSec) * 1_000
+        : undefined;
       if (runTurnFailoverArmed()) {
         // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
         // replayed transparently; after any output reaches the bridge, a later error stays terminal.
-        eventSource = await preflightRunTurnFailover(eventSource);
+        eventSource = await preflightRunTurnFailover(eventSource, wsFirstParsed, preflightDeadlineAt);
       }
-      if (!options.comboAttempt && logCtx.surface === "grok" && inboundWire === "responses"
-        && transportState.runTurnAdapter.name === "devin") {
-        const preflight = await preflightAdapterEvents(eventSource);
+      if (grokDevinPreflight) {
+        const preflight = await preflightAdapterEvents(eventSource, undefined, {
+          maxWaitMs: (preflightDeadlineAt ?? Date.now()) - Date.now(),
+        });
         eventSource = preflight.stream;
         // Grok treats a failed HTTP 200 stream as 500; preserve a refusal before output commits.
         if (!preflight.replayUnsafe && preflight.error?.status === 429
@@ -580,7 +608,7 @@ export async function executeResponsesRunTurn(
           translatorBudget,
           replayCacheScope: parsed._reasoningReplayScope,
           ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
-          stallTimeoutSec: wsPlan?.stallTimeoutSec ?? config.stallTimeoutSec,
+          stallTimeoutSec,
           hideThinkingSummary: parsed.options.hideThinkingSummary,
           declaredToolNames,
           enforceDeclaredToolNames,

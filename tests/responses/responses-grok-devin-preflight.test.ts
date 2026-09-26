@@ -51,15 +51,41 @@ afterEach(() => {
     home.remove();
   }
 });
-function run(surface: "grok" | "codex" = "grok", comboAttempt = false, abortSignal?: AbortSignal) {
+function run(
+  surface: "grok" | "codex" = "grok",
+  comboAttempt = false,
+  abortSignal?: AbortSignal,
+  stallTimeoutSec?: number,
+  oauthFailoverEnabled = false,
+) {
   const config = {
-    port: 0, defaultProvider: "devin", oauthAccountFailover: { enabled: false },
+    port: 0, defaultProvider: "devin", oauthAccountFailover: { enabled: oauthFailoverEnabled },
+    stallTimeoutSec,
     providers: { devin: { adapter: "devin", authMode: "oauth", baseUrl: "https://server.codeium.com", models: ["swe-2"] } },
   } as OcxConfig;
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "devin/swe-2", input: "answer", stream: true }),
   }), config, { model: "", provider: "", surface }, { comboAttempt, abortSignal });
+}
+
+async function waitForPreflightResponse(pending: Promise<Response>, started: Promise<void>, resume: () => void) {
+  let guard: ReturnType<typeof setTimeout> | undefined;
+  let response: Response | null;
+  try {
+    response = await Promise.race([
+      Promise.all([started, pending]).then(([, value]) => value),
+      new Promise<null>(resolve => { guard = setTimeout(() => resolve(null), 2_500); }),
+    ]);
+  } finally {
+    if (guard !== undefined) clearTimeout(guard);
+    resume();
+  }
+  if (response === null) {
+    await (await pending).body?.cancel();
+    throw new Error("Grok did not receive a response before the next provider event");
+  }
+  return response;
 }
 
 test.each([false, true])("pre-output 429 reaches Grok as HTTP 429 (heartbeat=%s)", async heartbeat => {
@@ -97,6 +123,64 @@ test("other clients keep their existing SSE response", async () => {
   const response = await run("codex");
   expect(response.status).toBe(200);
   expect(await response.text()).toContain("response.failed");
+});
+
+test.each([false, true])("Grok starts SSE after bounded Devin preflight (heartbeat=%s)", async heartbeat => {
+  const started = Promise.withResolvers<void>();
+  const continueTurn = Promise.withResolvers<void>();
+  blockedRun = async (_parsed, _incoming, emit) => {
+    if (heartbeat) emit({ type: "heartbeat" });
+    started.resolve();
+    await continueTurn.promise;
+    emit({ type: "text_delta", text: "after preflight" });
+    emit({ type: "done" });
+  };
+
+  const response = await waitForPreflightResponse(
+    run("grok", false, undefined, 1), started.promise, () => continueTurn.resolve(),
+  );
+  expect(response.status).toBe(200);
+  const frames = (await response.text()).split("\n")
+    .filter(line => line.startsWith("data: {"))
+    .map(line => JSON.parse(line.slice(6)));
+  expect(frames.filter(frame => frame.type === "response.output_text.delta").map(frame => frame.delta))
+    .toEqual(["after preflight"]);
+  expect(frames.filter(frame => frame.type === "response.completed")).toHaveLength(1);
+});
+
+test("timed-out OAuth replay keeps its reserved dispatch permit until Devin sends", async () => {
+  await saveCredential("devin", {
+    access: "synthetic-devin-preflight-spare", refresh: "synthetic-refresh-spare",
+    expires: Date.now() + 3_600_000, accountId: "fixture-spare",
+  });
+  const retryStarted = Promise.withResolvers<void>();
+  const dispatchRetry = Promise.withResolvers<void>();
+  let retryBudgetUsed: number | undefined;
+  let retryDispatchAllowed: boolean | undefined;
+  blockedRun = async (_parsed, incoming, emit) => {
+    if (calls === 1) {
+      const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "initial", targetKey: "devin|first" });
+      if (decision?.allowed) decision.permit.use();
+      emit(limit);
+      return;
+    }
+    retryStarted.resolve();
+    await dispatchRetry.promise;
+    const budget = incoming.sendBudget;
+    const decision = budget?.reserveDispatch({ sendClass: "auth-recovery", targetKey: "devin|retry" });
+    retryDispatchAllowed = decision?.allowed;
+    if (decision?.allowed) decision.permit.use();
+    retryBudgetUsed = budget?.used;
+    emit(limit);
+  };
+
+  const response = await waitForPreflightResponse(
+    run("grok", false, undefined, 1, true), retryStarted.promise, () => dispatchRetry.resolve(),
+  );
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("response.failed");
+  expect(retryDispatchAllowed).toBe(true);
+  expect(retryBudgetUsed).toBe(2);
 });
 
 test("combo children retain their existing preflight failure", async () => {

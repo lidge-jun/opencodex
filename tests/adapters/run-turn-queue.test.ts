@@ -317,6 +317,64 @@ describe("run-turn adapter event preflight", () => {
     expect(await collect(preflight.stream)).toEqual(values);
   });
 
+  test("timeout transfers the pending next read to replay exactly once", async () => {
+    const pending = Promise.withResolvers<IteratorResult<AdapterEvent>>();
+    let nextCalls = 0;
+    const source: AsyncIterable<AdapterEvent> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            nextCalls++;
+            if (nextCalls === 1) return Promise.resolve({ done: false, value: heartbeat });
+            if (nextCalls === 2) return pending.promise;
+            return Promise.resolve({ done: true, value: undefined });
+          },
+        };
+      },
+    };
+    const preflightPromise = preflightAdapterEvents(source, undefined, { maxWaitMs: 20 });
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    const preflight = await Promise.race([
+      preflightPromise,
+      new Promise<null>(resolve => { guard = setTimeout(() => resolve(null), 500); }),
+    ]);
+    if (guard !== undefined) clearTimeout(guard);
+    if (preflight === null) {
+      pending.resolve({ done: false, value: text("late") });
+      await preflightPromise;
+    }
+    expect(preflight).not.toBeNull();
+    if (preflight === null) return;
+
+    expect(preflight.timedOut).toBe(true);
+    expect(nextCalls).toBe(2);
+    pending.resolve({ done: false, value: text("late") });
+    expect(await collect(preflight.stream)).toEqual([heartbeat, text("late")]);
+    expect(nextCalls).toBe(3);
+  });
+
+  test("an expired preflight wait is timed out, not empty, without reading ahead", async () => {
+    let nextCalls = 0;
+    const source: AsyncIterable<AdapterEvent> = {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            nextCalls++;
+            return Promise.resolve(nextCalls === 1
+              ? { done: false, value: text("resume") }
+              : { done: true, value: undefined });
+          },
+        };
+      },
+    };
+    const preflight = await preflightAdapterEvents(source, undefined, { maxWaitMs: 0 });
+    expect(preflight.timedOut).toBe(true);
+    expect(preflight.empty).toBe(false);
+    expect(nextCalls).toBe(0);
+    expect(await collect(preflight.stream)).toEqual([text("resume")]);
+    expect(nextCalls).toBe(2);
+  });
+
   test("first-event classifier replaces only the first meaningful event", async () => {
     const values: AdapterEvent[] = [
       heartbeat,

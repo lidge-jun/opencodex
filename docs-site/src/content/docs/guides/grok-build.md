@@ -183,5 +183,6 @@ instead of displaying a generic 500 error from a failed HTTP 200 stream. If the 
 includes `Retry-After`, follow that delay before retrying. Exhausted quotas without a reset
 hint do not receive a default delay. Existing OAuth account failover still applies.
 
-Once output has started, HTTP headers cannot change. A later failure stays in the stream
-as `response.failed`.
+OpenCodex waits up to the configured stall timeout for this early refusal. If that wait
+expires, it opens the SSE response and lets the existing stream watchdog handle stalls.
+After HTTP headers are sent, a later failure stays in the stream as `response.failed`.
