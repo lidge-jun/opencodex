@@ -94,4 +94,9 @@ check(NativeTrayFormat.severity(90) == .critical && NativeTrayFormat.severity(12
 check(NativeTrayFormat.severity(nil) == .normal, "Unknown is not a severity")
 check(NativeTrayFormat.percentDescription(125) == "125 percent", "Over-limit value is spoken as reported")
 check(NativeTrayFormat.percentDescription(nil) == "Unavailable", "Missing value is spoken as unavailable")
+// Labels floor like the dashboard so the number never crosses a threshold the color has not.
+check(NativeTrayFormat.percentText(69.9) == "69%" && NativeTrayFormat.severity(69.9) == .normal, "69.9% reads 69% on green")
+check(NativeTrayFormat.percentText(89.9) == "89%" && NativeTrayFormat.severity(89.9) == .warn, "89.9% reads 89% on orange")
+check(NativeTrayFormat.percentDescription(89.9) == "89 percent", "Spoken value floors too")
+check(NativeTrayFormat.percentText(nil) == "—", "Missing value renders a dash")
 print("PASS: \(assertions) native tray contract/formatting assertions")
