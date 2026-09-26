@@ -136,6 +136,7 @@ const CLIENT_MANAGED_PATHS = {
     [...ZCODE_STORE_PROVIDER_RULES_PATH, `[providerId=${OPENCODE_PROVIDER_ID}]`],
     [...ZCODE_STORE_MODEL_RULES_PATH, DYNAMIC_SEGMENT],
   ],
+  commandcode: [["provider", OPENCODE_PROVIDER_ID]],
   prime: [["providers", OPENCODE_PROVIDER_ID]],
   aside: [["providers", OPENCODE_PROVIDER_ID]],
   raycast: [["providers", `[id=${OPENCODE_PROVIDER_ID}]`]],
