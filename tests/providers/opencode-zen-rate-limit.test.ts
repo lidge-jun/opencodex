@@ -144,9 +144,9 @@ describe("opencode-zen rate-limit guidance (#1145)", () => {
 
 /**
  * Zen admits the keyless tier only with OpenCode's anonymous client identity,
- * which opencodex mints automatically for this destination — so a surviving
- * refusal needs guidance about what bypassed it, and the user-facing failure
- * has to say that rather than leaking `MissingSessionID` through.
+ * which opencodex mints automatically for this destination. A surviving
+ * refusal needs guidance about changed admission or rejected caller headers,
+ * rather than leaking `MissingSessionID` through.
  */
 describe("opencode-free keyless tier lock-in (#4121)", () => {
   /** Verbatim upstream body from the issue, as the Responses wire forwards it. */
@@ -194,6 +194,8 @@ describe("opencode-free keyless tier lock-in (#4121)", () => {
     // The user is told the identity is minted automatically and what a surviving
     // refusal means, not that the request merely failed.
     expect(enriched).toContain("mints that identity automatically");
+    expect(enriched).toContain("rejects caller-supplied header values");
+    expect(enriched).not.toContain("non-streaming");
   });
 
   test("enrichment is scoped to Zen destinations and to this error", () => {
