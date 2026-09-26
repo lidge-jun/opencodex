@@ -143,3 +143,28 @@ test("an authenticated remote hub without a GUI session offers one-time pairing"
   expect(container.textContent).toContain('ocx gui pair --origin "https://opencodex.rhodiz.net"');
   expect(linkStatusReads).toBe(0);
 });
+
+test("a non-loopback standalone without a GUI session does not offer hub pairing", async () => {
+  mountWindow("standalone", {
+    session: false,
+    url: "https://standalone.example.test/#remote",
+    managementAuthRequired: true,
+  });
+  const { resetApiAuthFetchForTests, installApiAuthFetch } = await import("../src/api");
+  resetApiAuthFetchForTests();
+  installApiAuthFetch();
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: window.fetch });
+  const [{ createRoot }, { LanguageProvider }, { default: App }] = await Promise.all([
+    import("react-dom/client"),
+    import("../src/i18n/provider"),
+    import("../src/App"),
+  ]);
+  await act(async () => {
+    root = createRoot(container);
+    root.render(<LanguageProvider><App /></LanguageProvider>);
+  });
+  await waitFor(() => (container.textContent ?? "").includes("Sign in to the local dashboard session"));
+  expect(container.textContent).not.toContain("Connect this dashboard to the hub");
+  expect(container.textContent).not.toContain("ocx gui pair --origin");
+  expect(linkStatusReads).toBe(0);
+});

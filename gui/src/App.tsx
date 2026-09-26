@@ -20,7 +20,7 @@ import { IconGrid, IconServer, IconBoxes, IconBot, IconList, IconActivity, IconH
 import { useI18n, useT, LOCALES, localeDisplayName, type Locale, type TKey } from "./i18n/shared";
 import { Notice, Select, ToastNotice, type NoticeTone } from "./ui";
 import { configureApiTargets, hasApiSession, installApiAuthFetch, installApiSessionFromHtml, logoutApiSession, SESSION_UNAVAILABLE_EVENT } from "./api";
-import { adminTokenPromptAllowed, apiBaseForPlane, discoverApiTargets, isConnectedRuntime, standaloneApiTargets, type ApiTargets } from "./api-targets";
+import { adminTokenPromptAllowed, apiBaseForPlane, discoverApiTargets, isConnectedRuntime, runtimeRoleFromDocument, standaloneApiTargets, type ApiTargets } from "./api-targets";
 import { ConnectPairingForm } from "./connect-pairing";
 import { type Page } from "./app-routing";
 import { readModelsTab, type ModelsTab } from "./pages/models-tab";
@@ -207,7 +207,8 @@ export default function App() {
   // consent-bearing GUI session even though it is not a connected client. Remote Link requires
   // that stronger principal, so offer the existing one-time pairing flow instead of a dead-end
   // "sign in" warning. Other pages keep their ordinary admin-token flow unchanged.
-  const remotePairingRequired = page === "remote" && !sharedSessionReady && adminTokenPromptAllowed();
+  const remotePairingRequired = page === "remote" && !sharedSessionReady
+    && runtimeRoleFromDocument() === "hub" && adminTokenPromptAllowed();
 
   // Narrow screens: the sidebar becomes an off-canvas drawer behind a hamburger toggle.
   const [navOpen, setNavOpen] = useState(false);
