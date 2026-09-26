@@ -1,10 +1,10 @@
 import { beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { MANAGED_AGENTS_TABLE_MARKER, MANAGED_SUBAGENT_DEFAULT_MARKER } from "../../src/codex/subagent-defaults";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   downloadClientCatalog,
   exchangeConnectPairingGrant,
@@ -1396,5 +1396,42 @@ describe("Desktop copy coherence across client lifecycle", () => {
     expect(r.statusInside.backupPresent).toBe(true);
     expect(r.statusOutside.kind).toBe(mode === "status-lock" ? "orphan-cleaned" : "recovery-required");
     expect(r.backupPresent).toBe(mode === "status-receipt");
+  });
+});
+
+describe("a sibling instance never connects, syncs or disconnects the shared Codex home", () => {
+  /**
+   * A sibling (`ocx start --port <other>` beside a live proxy) shares CODEX_HOME with that proxy.
+   * Connecting writes the shared `opencodex-catalog.json` BEFORE the injector runs, so a refusal
+   * at injection would come after the owner's catalog was already replaced. The refusal has to be
+   * the first thing each entry point does. In-process on purpose: the mark is process-local, and
+   * CODEX_HOME here is the preload sandbox.
+   */
+  test("every entry point refuses before any catalog, journal or network write", async () => {
+    const { connectClient, disconnectClient, syncConnectedClient } = await import("../../src/client/connect");
+    const { DEFAULT_CATALOG_PATH } = await import("../../src/codex/paths");
+    const { markSiblingStart, resetSiblingStartForTests, siblingSkipMessage } = await import("../../src/codex/sibling-start");
+    const ownerCatalog = JSON.stringify({ models: [{ slug: "owner-model" }] });
+    mkdirSync(dirname(DEFAULT_CATALOG_PATH), { recursive: true });
+    writeFileSync(DEFAULT_CATALOG_PATH, ownerCatalog);
+    let fetches = 0;
+    const deps = { fetchImpl: (async () => { fetches += 1; return new Response("{}"); }) as unknown as typeof fetch };
+    markSiblingStart(10100);
+    try {
+      const message = siblingSkipMessage();
+      await expect(connectClient({
+        serverUrl: "https://hub.example.test",
+        credential: { kind: "invite", token: "x" },
+        selectedClients: ["codex"],
+        managementTransport: "direct",
+      } as unknown as Parameters<typeof connectClient>[0], deps)).rejects.toThrow(message);
+      await expect(syncConnectedClient({}, deps)).rejects.toThrow(message);
+      await expect(disconnectClient({})).rejects.toThrow(message);
+      expect(fetches).toBe(0);
+      expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(ownerCatalog);
+    } finally {
+      resetSiblingStartForTests();
+      rmSync(DEFAULT_CATALOG_PATH, { force: true });
+    }
   });
 });

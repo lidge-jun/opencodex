@@ -21,6 +21,7 @@ import { isLoopbackHostname } from "../server/auth-cors";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { OcxConfig } from "../types";
 import { opencodeProxyStartEnv } from "./opencode";
+import { withoutSiblingMarker } from "../codex/sibling-start";
 
 export interface MinimaxLaunchEnv {
   [key: string]: string | undefined;
@@ -270,8 +271,9 @@ async function ensureProxy(config: OcxConfig): Promise<LiveProxy | null> {
     stdio: "ignore",
     windowsHide: true,
     // Reuse the established service-token lookup so a detached start works
-    // when admission lives in the hardened token file rather than this shell.
-    env: withProcessRuntimeProvenance(opencodeProxyStartEnv(process.env) as NodeJS.ProcessEnv),
+    // when admission lives in the hardened token file rather than this shell. An ordinary
+    // owner, so a stray sibling marker is dropped.
+    env: withProcessRuntimeProvenance(opencodeProxyStartEnv(withoutSiblingMarker(process.env)) as NodeJS.ProcessEnv),
   });
   child.on("error", () => { /* the bounded health poll reports failure */ });
   child.unref();

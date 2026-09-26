@@ -185,7 +185,7 @@ described in [OpenAI quota ownership](providers/openai-tiers.md#public-provider-
 
 `ocx start` refuses a duplicate PID, starts the proxy, writes `~/.opencodex/ocx.pid` and
 `runtime-port.json` through `src/config/process-state.ts`, syncs Codex config/catalog, then serves
-until shutdown. Normal shutdown restores native Codex. Service mode sets
+until shutdown. Normal shutdown restores native Codex; a sibling instance beside a live proxy ([Codex home](codex-home.md#codex-home)) syncs and restores nothing, and `ocx stop` of a runtime whose record carries `siblingOfPort` skips the shared teardown. Service mode sets
 `OCX_SERVICE=1`, so managed restarts do not repeatedly restore/reinject; explicit service stop and
 uninstall still restore. `src/service/cli.ts` removes the service token on uninstall only when persisted client state is disconnected and no pending connect marker owns the newly issued key. `src/client/connect.ts` publishes that fingerprint marker before the key, then clears it with the connection commit or rollback under the client lifecycle and config mutation locks. Connected, invalid, or mismatched client state retains an existing token. A valid pending marker retains only its matching fingerprint; an older marker does not own a replacement service key. An absent token is reported as absent; unsafe, malformed, or unreadable markers and lock, state-read, or deletion failures leave cleanup unverified.
 The package-tree integrity fence for live package replacement follows the
@@ -342,7 +342,7 @@ field for every tool. Only bare or `default.`-prefixed `exec` and `apply_patch` 
 one recognized alternate body field or remove one complete outer Markdown fence; ambiguous
 alternate fields and every other freeform grammar pass through unchanged.
 
-The server exposes `POST /api/stop` which restores native Codex config, stops any installed service
+The server exposes `POST /api/stop` which restores native Codex config (a sibling instance answers `sharedTeardown: "not-owned"` instead), stops any installed service
 (to prevent respawn), and exits the process. The GUI sidebar stop button calls this endpoint.
 
 > Decision record: [ADR-0004](decisions/ADR-0004-lifecycle.md)

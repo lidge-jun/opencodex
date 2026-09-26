@@ -88,6 +88,8 @@ import type { CatalogDisposition, ConvergeCodex } from "../codex/convergence-typ
 import { normalizeCatalogDisposition } from "../codex/catalog-refresh-status";
 import { managementBodyTooLargeResponse } from "./management/body";
 import { handleSessionRoutes } from "./management/session-routes";
+import { siblingRefusesManagementRequest } from "./management/sibling-guard";
+import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
 import { isLocalAccountSwitchPath } from "../lib/local-account-switch-capability";
 import { readVerifiedAccountSwitchBody } from "./local-account-switch-auth";
@@ -312,6 +314,10 @@ export async function handleManagementAPI(
     guiSessionIssuance: requestIngress.guiSessionIssuance ?? null,
     convergeCodexCatalog, syncClaudeAgentDefsBestEffort,
   };
+  // Before any route module, including the link, native-main and codex-auth dispatch below.
+  if (siblingRefusesManagementRequest(req.method, url.pathname)) {
+    return jsonResponse({ error: siblingSkipMessage(), code: "sibling_instance" }, 409, req, config);
+  }
   let routed: Response | null | undefined;
   try {
     routed = handleSessionRoutes(ctx)
@@ -381,7 +387,10 @@ export async function handleManagementAPI(
     const { deferralMatchesReceipt } = await import("../config/pending-teardown");
     const { deferralHonored, performStopTeardown } = await import("./stop-teardown");
     const holdsReceipt = deferralHonored(url, deferralMatchesReceipt);
-    const respawnRisk = holdsReceipt ? "none" : installedServiceRespawnRisk();
+    // A sibling never runs under a service manager, and the installed service is the live
+    // owner's: asking the manager to stop from here would refuse, or boot the owner's job out.
+    const sibling = siblingOfLivePort() !== null;
+    const respawnRisk = holdsReceipt || sibling ? "none" : installedServiceRespawnRisk();
     if (respawnRisk === "respawnable") {
       return jsonResponse({
         success: false,
@@ -415,7 +424,7 @@ export async function handleManagementAPI(
     }
     let serviceStop: import("../service").ServiceStopOutcome;
     try {
-      serviceStop = stopServiceIfInstalledDetailed();
+      serviceStop = sibling ? "absent" : stopServiceIfInstalledDetailed();
     } catch (err) {
       if (isServiceOwnershipError(err)) {
         // The installed service belongs to another CODEX_HOME/OPENCODEX_HOME: it would respawn

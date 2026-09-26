@@ -21,7 +21,9 @@ import {
   localClientSkipMessage,
   setIntegrationEnabled,
   shouldSyncCodexOnStart,
+  type LocalClientSkipReason,
 } from "../codex/desired-state";
+import { siblingSkipMessage } from "../codex/sibling-start";
 import { syncModelsToCodex } from "../codex/sync";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { restoreNativeCodexAsync, type CodexNativeRestoreResult } from "../codex/inject";
@@ -1021,11 +1023,55 @@ export function decideStartWithLiveOwner(input: {
 }): StartOwnerDecision {
   const sibling = input.requestedPort !== undefined
     && input.requestedPort !== input.livePort
-    // Only the exact "1" sentinel is service context — the same check syncCleanup
+    // Only the exact "1" sentinel is service context — the same check the exit teardown
     // uses — so an env value like "0" or "false" cannot reach the stay-out path.
     && input.ocxService !== "1";
   if (sibling) return "sibling";
   return input.ocxService === "1" ? "service-stay-out" : "refuse";
+}
+
+/** Which shared client state `handleStart`'s exit cleanup tears down. */
+export interface StartExitTeardown {
+  revertSystemEnv: boolean;
+  restoreNativeCodex: boolean;
+  stripGrokConfig: boolean;
+}
+
+/**
+ * Pure exit-teardown decision for `handleStart`'s `syncCleanup`.
+ *
+ * A sibling instance tears down nothing: the Codex routing, the Grok fence and the system env
+ * belong to the live proxy it runs beside, and restoring them would take Codex off a proxy that
+ * is still serving it (`src/codex/sibling-start.ts`). A dashboard drain-and-restart (#563) keeps
+ * everything for the replacement process. Under a service manager — only the exact `"1"`
+ * sentinel — a crash/respawn keeps routing and the fence, and only the environment comes down.
+ * The caller still applies its own external-provider and service-ownership checks.
+ */
+export function decideStartExitTeardown(input: {
+  sibling: boolean;
+  recycling: boolean;
+  ocxService: string | undefined;
+}): StartExitTeardown {
+  if (input.sibling || input.recycling) {
+    return { revertSystemEnv: false, restoreNativeCodex: false, stripGrokConfig: false };
+  }
+  const preserveRouting = input.ocxService === "1";
+  return { revertSystemEnv: true, restoreNativeCodex: !preserveRouting, stripGrokConfig: !preserveRouting };
+}
+
+/**
+ * The one startup line for "nothing was written to Codex".
+ *
+ * Three very different facts reach it: the user's own OFF switch, a hub declining to rewrite its
+ * own local clients, and a sibling instance leaving the live proxy's routing alone. Printing the
+ * toggle's wording for the gate is what made operators hunt for a switch they never set (#4236).
+ * `port` is the sibling's own bound port, named in its line.
+ */
+export function startupLeftCodexNativeLine(reason: LocalClientSkipReason, port?: number): string {
+  if (reason === "sibling") return `   ${siblingSkipMessage(port)}`;
+  return reason === "hub-gated"
+    ? `   ${HUB_GATED_SKIP_MESSAGE} Startup left Codex native.`
+    : "   Codex integration OFF; startup left Codex native.";
 }
 
 /** What `chooseListenPort` does when the preferred port stayed busy through prefer-retry. */

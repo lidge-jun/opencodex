@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { MANAGEMENT_ROUTES } from "../../src/server/management/route-registry";
+import { SIBLING_REFUSED_MANAGEMENT_PATHS, siblingRefusesManagementRequest } from "../../src/server/management/sibling-guard";
+import { markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
 import { scanRoutes, distinctRoutes } from "../helpers/management-route-scan";
 import { repoRoot as resolveRepoRoot } from "../helpers/repo-root";
 
@@ -275,6 +277,113 @@ describe("route exemptions stay honest", () => {
       .filter(r => r.mutates && r.exempt?.reason === "local-transport")
       .map(r => key(r.method, r.path));
     expect(wrong).toEqual([]);
+  });
+});
+
+describe("the sibling guard refuses only declared shared-state mutations", () => {
+  const matches = (entry: { path: string; children: boolean }, path: string): boolean =>
+    path === entry.path || (entry.children && path.startsWith(`${entry.path}/`));
+
+  test("every guard entry names at least one declared mutating route", () => {
+    // A guard entry that matches no mutation is either a typo or a route that moved; either way
+    // the route it was meant to cover is open.
+    const orphans = SIBLING_REFUSED_MANAGEMENT_PATHS
+      .filter(entry => !MANAGEMENT_ROUTES.some(route => route.mutates && matches(entry, route.path)))
+      .map(entry => entry.path);
+    expect(orphans).toEqual([]);
+  });
+
+  test("unmarked, nothing is refused; marked, reads never are", () => {
+    for (const route of MANAGEMENT_ROUTES) {
+      expect(siblingRefusesManagementRequest(route.method, route.path)).toBe(false);
+    }
+    markSiblingStart(10100);
+    try {
+      for (const route of MANAGEMENT_ROUTES.filter(r => r.method === "GET" || r.method === "HEAD")) {
+        expect(siblingRefusesManagementRequest(route.method, route.path), key(route.method, route.path)).toBe(false);
+      }
+    } finally {
+      resetSiblingStartForTests();
+    }
+  });
+
+  test("marked, shared-state writers are refused and own-home control stays open", () => {
+    markSiblingStart(10100);
+    try {
+      for (const [method, path] of [
+        ["PUT", "/api/client-integrations/raycast"],
+        ["POST", "/api/sync"],
+        ["POST", "/api/link/join"],
+        ["POST", "/api/native-main-profiles/switch"],
+        ["POST", "/api/codex-auth/main/reauth-device"],
+        ["POST", "/api/startup-action"],
+        ["PUT", "/api/v2"],
+        ["PUT", "/api/native-integrations/grok"],
+        ["POST", "/api/system/codex-restart"],
+        ["PUT", "/api/codex-prompt/toggle"],
+        // Archived-session storage lives in the shared CODEX_HOME.
+        ["POST", "/api/storage/cleanup"],
+        ["POST", "/api/storage/cleanup-policy/run"],
+        ["POST", "/api/storage/trash/restore"],
+      ] as const) {
+        expect(siblingRefusesManagementRequest(method, path), `${method} ${path}`).toBe(true);
+      }
+      for (const [method, path] of [
+        ["POST", "/api/stop"],
+        ["POST", "/api/system/restart"],
+        ["PUT", "/api/settings"],
+        ["POST", "/api/providers"],
+        // The preview reads, and the policy itself is own-home config.
+        ["POST", "/api/storage/cleanup/preview"],
+        ["PUT", "/api/storage/cleanup-policy"],
+        // A prefix is not a path: the guard must not swallow a sibling route that shares one.
+        ["POST", "/api/syncx"],
+        ["POST", "/api/link/joined"],
+      ] as const) {
+        expect(siblingRefusesManagementRequest(method, path), `${method} ${path}`).toBe(false);
+      }
+    } finally {
+      resetSiblingStartForTests();
+    }
+  });
+
+  test("handleManagementAPI answers 409 sibling_instance before any route runs, and only while marked", async () => {
+    const { handleManagementAPI } = await import("../../src/server/management-api");
+    const { ManagementRequest } = await import("../helpers/management-auth");
+    const config = { port: 10199, hostname: "127.0.0.1", providers: {}, defaultProvider: "openai" } as unknown as Parameters<typeof handleManagementAPI>[2];
+    const call = async (method: string, path: string, body?: unknown) => {
+      const request = new ManagementRequest(`http://127.0.0.1:10199${path}`, {
+        method,
+        ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { "content-type": "application/json" } }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), config);
+      expect(response, `${method} ${path}`).not.toBeNull();
+      return { status: response!.status, body: await response!.json() as { code?: string; error?: string } };
+    };
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-sibling-guard-"));
+    process.env.OPENCODEX_HOME = home;
+    try {
+      // Unmarked control: the same cleanup request reaches its handler and fails its own validation.
+      expect(await call("POST", "/api/storage/cleanup", { percent: -1 })).toEqual({ status: 400, body: { error: "invalid_percent" } });
+      markSiblingStart(10100);
+      for (const [method, path] of [["POST", "/api/sync"], ["POST", "/api/storage/cleanup"]] as const) {
+        const refused = await call(method, path, { percent: -1 });
+        expect(refused.status, `${method} ${path}`).toBe(409);
+        expect(refused.body.code).toBe("sibling_instance");
+        expect(refused.body.error).toContain("Client routing stays on the proxy at port 10100");
+      }
+      // A read, and the allowed POST cleanup preview, still reach their handlers.
+      const read = await call("GET", "/api/storage/cleanup-policy");
+      expect(read.status).toBe(200);
+      expect(read.body.code).toBeUndefined();
+      expect(await call("POST", "/api/storage/cleanup/preview", { percent: -1 })).toEqual({ status: 400, body: { error: "invalid_percent" } });
+    } finally {
+      resetSiblingStartForTests();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 

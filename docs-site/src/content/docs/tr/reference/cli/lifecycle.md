@@ -32,7 +32,9 @@ yalnızca gözlem ve sınır uygulama kiplerinin ikisi de aynı harcama günlü�
 bir kardeş örnek için ayrı bir `OPENCODEX_HOME` kullanın. `port: 0` yalnızca port seçimini
 işletim sistemine bırakır, durumu ayırmaz. Başlangıçta her sağlayıcının modellerini Codex'in kataloğuna
 senkronize eder. Kapatıldığında — yönetilen bir servis olarak başlatılmadığı sürece
-(`OCX_SERVICE=1`) — yerel Codex'i geri yükler.
+(`OCX_SERVICE=1`) — yerel Codex'i geri yükler. Çalışan bir proxy'nin yanında başlatılan kardeş örnek,
+`ocx stop` ya da bir sinyalle durdurulduğunda da dahil ikisini de yapmaz: yalnızca kendi portundaki
+doğrudan istekleri karşılar ve Codex, Grok ile Claude zaten çalışmakta olan proxy'yi göstermeye devam eder.
 
 `--socks5` (varsayılan `127.0.0.1:10808`) SOCKS5 URL'sini `config.proxy` içine kaydeder ve giden
 HTTP(S) isteklerini gerçek bir SOCKS5 tünelinden yönlendirir. `--socks5-off` yalnızca kaydedilmiş

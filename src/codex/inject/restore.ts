@@ -1,5 +1,6 @@
 import { loadConfig } from "../../config";
 import { shouldSyncCodexOnStart } from "../desired-state";
+import { siblingOfLivePort, siblingSkipMessage } from "../sibling-start";
 import { withCatalogWriteSerialization } from "../catalog-write-serialization";
 import { restoreCodexCatalogWithPermit } from "../catalog/sync";
 import { withCodexWriteLock, CodexWriteLockSkipped } from "../codex-write-lock";
@@ -254,6 +255,18 @@ function desiredEnabledRestoreSkip(): CodexNativeRestoreResult {
 }
 
 /**
+ * A sibling instance restores nothing: the journal, config and catalog are the live owner's.
+ *
+ * It has to be checked before anything else, not left to the desired-state re-reads below. Those
+ * skip a restore when `shouldSyncCodexOnStart` says ON, and the sibling mark makes that gate
+ * answer OFF, so without this the gate would read as "the user turned Codex off" and the restore
+ * would replay the owner's journal.
+ */
+function siblingRestoreSkip(): CodexNativeRestoreResult | null {
+  return siblingOfLivePort() === null ? null : skippedRestoreEnvelope(true, siblingSkipMessage());
+}
+
+/**
  * A schema-complete all-skipped envelope for outcomes decided before any
  * restore machinery runs. Every `restore --json` path must stay shape-stable
  * with `CodexNativeRestoreResult`; consumers never special-case early exits.
@@ -471,6 +484,8 @@ function restoreCodexCatalogArtifact(
 export async function restoreNativeCodexAsync(
   options: { revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
 ): Promise<CodexNativeRestoreResult> {
+  const sibling = siblingRestoreSkip();
+  if (sibling) return sibling;
   try {
     return await restoreNativeCodexAsyncImpl(options);
   } catch (error) {
@@ -669,6 +684,8 @@ async function restoreNativeCodexAsyncImpl(
 export function restoreNativeCodex(
   options: { skipHistory?: boolean; revalidateDesiredState?: boolean; removeProviderTable?: boolean } = {},
 ): CodexNativeRestoreResult {
+  const sibling = siblingRestoreSkip();
+  if (sibling) return sibling;
   const activeProvider = currentExternalCodexModelProvider();
   if (activeProvider) {
     removeJournal();

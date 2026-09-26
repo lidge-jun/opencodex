@@ -284,9 +284,11 @@ export async function syncModelsToCodex(
   if (result.status === "skipped") {
     return {
       status: "skipped",
-      // The apply direction's only under-lock policy skips are desired OFF and the hub gate;
-      // carry whichever the injector reported so the caller can say the honest thing.
-      skippedReason: result.skippedReason === "hub-gated" ? "hub-gated" : "desired_disabled",
+      // The apply direction's only policy skips are desired OFF, the hub gate and a sibling
+      // instance; carry whichever the injector reported so the caller can say the honest thing.
+      skippedReason: result.skippedReason === "hub-gated" || result.skippedReason === "sibling"
+        ? result.skippedReason
+        : "desired_disabled",
       ok: true,
       added: 0,
       catalogPath: null,
