@@ -147,6 +147,10 @@ still cover the rule, which is a judgement only review makes.
   there, reported as an unidentified holder otherwise. A configured `port: 0` still asks the OS for a
   port, and an explicit `--port` still waits for its pin instead of hopping.
   Enforced by `tests/cli/cli-dispatch.test.ts`.
+- **INV-START-02** — A sibling instance (`ocx start --port <other>` beside a live proxy, see
+  [`codex-home.md`](codex-home.md#codex-home)) never writes, restores or reverts the shared client
+  routing: not at startup, not in its own exit cleanup, and not through an `ocx stop` of its runtime.
+  Enforced by `tests/cli/cli-start-journal-order.test.ts`.
 - **INV-FENCE-01** — A proxy fenced by the package-tree guard stays discoverable by attested identity:
   `/healthz` keeps answering the local attestation challenge, and liveness accepts the fenced 503
   only for opted-in callers and only with a proof from the pid and port this home's runtime record

@@ -144,9 +144,9 @@ export interface CodexWriteCommitContext {
  *
  * `hub-gated` is not the user's switch: a hub declines to rewrite its own local clients, and
  * reporting that as "integration is OFF" sent operators hunting for a toggle they never set
- * (#4236).
+ * (#4236). `sibling` is a second instance beside a live proxy that owns the routing.
  */
-export type CodexWriteLockSkipReason = "desired_disabled" | "desired_enabled" | "hub-gated";
+export type CodexWriteLockSkipReason = "desired_disabled" | "desired_enabled" | "hub-gated" | "sibling";
 
 /** A synchronous under-lock policy re-read proved the requested apply stale. */
 export class CodexWriteLockSkipped extends Error {

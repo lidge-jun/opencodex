@@ -1,4 +1,5 @@
 import type { CodexNativeRestoreResult } from "../codex/inject";
+import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import { deferralMatchesReceipt } from "../config/pending-teardown";
 
 /**
@@ -22,7 +23,8 @@ export type StopTeardownIo = {
 export type StopTeardownBody = {
   success: boolean;
   message: string;
-  sharedTeardown: "deferred" | "performed";
+  /** `not-owned`: a sibling instance, whose shared client routing belongs to the live owner. */
+  sharedTeardown: "deferred" | "performed" | "not-owned";
 };
 
 /**
@@ -45,6 +47,11 @@ export function deferralHonored(url: URL, ownsReceipt: (nonce: string | null) =>
 
 /** Run (or skip) the shared teardown and describe the outcome truthfully. */
 export async function performStopTeardown(url: URL, io: StopTeardownIo = {}): Promise<StopTeardownBody> {
+  // Before the deferral check: a sibling owns no shared teardown to perform OR to hand over.
+  // Restoring here would replay the live owner's journal and strip its Grok fence.
+  if (siblingOfLivePort() !== null) {
+    return { success: true, message: `Proxy stopping. ${siblingSkipMessage()}`, sharedTeardown: "not-owned" };
+  }
   const ownsReceipt = io.ownsReceipt ?? deferralMatchesReceipt;
   if (deferralHonored(url, ownsReceipt)) {
     // Not "native Codex restored": nothing was restored here, and claiming otherwise

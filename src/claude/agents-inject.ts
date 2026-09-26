@@ -23,6 +23,7 @@ import { effectiveBlockedSkillNames, resolveInboundModel } from "./inbound";
 import { AnthropicRequestError } from "./inbound-records";
 import { knownModelIdsForProvider } from "../router";
 import { decodeRoutedModelIdOrThrow } from "../providers/slug-codec";
+import { siblingOfLivePort } from "../codex/sibling-start";
 
 export interface ClaudeAgentDef {
   file: string;
@@ -285,6 +286,9 @@ export function injectClaudeAgentDefs(
   /** Hub-sourced roster on a connected client; see `buildClaudeAgentDefs`. */
   rosterOverride?: readonly string[],
 ): string[] | null {
+  // `~/.claude/agents` is shared with the live proxy a sibling instance runs beside, which owns
+  // both its roster and its pruning (`src/codex/sibling-start.ts`).
+  if (siblingOfLivePort() !== null) return null;
   if (config.claudeCode?.enabled === false || config.claudeCode?.injectAgents === false) {
     // Disabled: prune verified-owned files so stale definitions stop loading
     // in future sessions (audit 071 #3). The roster override is irrelevant here by

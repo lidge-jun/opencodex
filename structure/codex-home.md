@@ -141,6 +141,35 @@ cannot leave the process fenced for the servers that follow it; an entry created
 the same home arms its own gate, and the retired generation's late convergence writes are ignored.
 `tests/codex-integration/native-profile-startup-release.test.ts` pins that ordering.
 
+A sibling instance — `ocx start --port <other>` while a live proxy serves the configured port, the
+`"sibling"` outcome of `decideStartWithLiveOwner` in `src/cli/dispatch.ts` — gets past the spend-ledger
+lease only with its own `OPENCODEX_HOME`, and still shares this Codex home, `~/.claude`, `~/.grok` and
+the launchd domain with the live owner. `handleStart` marks the process through
+`src/codex/sibling-start.ts` before the server binds, and the mark is one-way for the process's
+lifetime. It closes `localClientSyncAllowed` in `src/codex/desired-state.ts` with its own skip reason
+`sibling`, so startup sync, cache invalidation, Grok, the retained catalog writers and the native-main
+lifecycle stand down (the sibling runs the no-op lifecycle, so it never contends for the owner lease;
+its data-plane `auth.json` refresh still runs under the machine-wide exclusive claim). Owner-level
+checks cover what the gate reads backwards or never reaches: both restore entry points and the
+injector return before their external-provider journal cleanup, the management catalog funnel,
+`src/integrations/catalog-refresh.ts`, `connectClient`/`syncConnectedClient`/`disconnectClient`,
+the Claude roster and system env refuse, the exit teardown comes from `decideStartExitTeardown`, and
+`POST /api/stop` answers `sharedTeardown: "not-owned"` without touching the service manager. The guard refuses the native-main
+profile and reauth routes among the others listed in
+[`gui-and-management-api.md`](gui-and-management-api.md#api-ownership). The runtime record carries
+`siblingOfPort`, and `ocx stop` of such a runtime, live or left behind by a hard kill, claims no
+receipt, runs no shared teardown, does not revert the system env and does not ask the service
+manager: a sibling never runs under one, so an installed service is the live owner's. When the
+recorded sibling no longer answers and discovery reaches the owner instead (`siblingStopFoundOwner`),
+the stop leaves that proxy running, clears the stale sibling records and exits 0. The sibling's own
+drain-and-restart (`src/server/management/system-restart.ts`) and standalone recycle
+(`src/client/runtime.ts`) hand the mark to their replacement through `OCX_SIBLING_OF_PORT`;
+`handleStart` honors and consumes it before any probe, so an owner that is down for that moment
+cannot turn the replacement into an owner, and the journal recovery in that probe stays skipped.
+Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`opencode`/`minimax`
+auto-start and the updater's restart) starts an ordinary owner and strips an inherited marker
+through `withoutSiblingMarker`.
+
 The native main slot also accepts one same-identity device reauth (#3898):
 `/api/codex-auth/main/reauth-device` (start/status/cancel) plus
 `ocx account main reauth`. The grant is the OpenAI deviceauth grant already

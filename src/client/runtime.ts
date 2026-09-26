@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { Server } from "bun";
+import { siblingRuntimeField, withSiblingMarker } from "../codex/sibling-start";
 import { loadConfig } from "../config";
 import { removePid, removeRuntimePort, writePid, writeRuntimePort } from "../config/process-state";
 import { installCrashGuards } from "../lib/crash-guard";
@@ -90,7 +91,8 @@ async function recycleStandalone(disconnectedTokenFingerprint: string): Promise<
       detached: true,
       stdio: "ignore",
       windowsHide: true,
-      env: standaloneRecycleEnv(process.env, disconnectedTokenFingerprint),
+      // A sibling's replacement stays a sibling even if the owner is down while it probes.
+      env: withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint)),
     });
     child.unref();
   }
@@ -134,7 +136,7 @@ export async function startClientRuntime(
   supervisor?.start();
   installCrashGuards();
   writePid(process.pid);
-  writeRuntimePort({ pid: process.pid, port: boundPort, hostname: "127.0.0.1" });
+  writeRuntimePort({ pid: process.pid, port: boundPort, hostname: "127.0.0.1", ...siblingRuntimeField() });
 
   let shuttingDown = false;
   const shutdown = () => {

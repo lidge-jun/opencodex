@@ -38,6 +38,7 @@ import {
 } from "./npm-cache-preflight.mjs";
 import { handoffWindowsTrayForUpdate, planWindowsTrayUpdate } from "./tray-update-plan.mjs";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
+import { withoutSiblingMarker } from "../codex/sibling-start";
 import { packageVersion } from "../lib/package-version";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 
@@ -529,7 +530,8 @@ export async function runUpdate(): Promise<void> {
   };
   const startProxyDirectly = async (): Promise<boolean> => {
     if (!postUpdateLauncherUsable || !existsSync(postUpdateLauncher)) return false;
-    const env = mutation.controlEnvironment();
+    // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
+    const env = mutation.controlEnvironment(withoutSiblingMarker(process.env));
     delete env.OCX_SERVICE;
     const child = spawn(process.execPath, [postUpdateLauncher, "start", "--port", String(capturedListen.port)], {
       detached: true, stdio: "ignore", windowsHide: true, env: withProcessRuntimeProvenance(env),
