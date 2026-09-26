@@ -143,9 +143,10 @@ describe("opencode-zen rate-limit guidance (#1145)", () => {
 });
 
 /**
- * Zen closed the keyless tier to non-OpenCode clients. The gate is the mere presence of
- * `x-opencode-session`, so opencodex could pass it by inventing a value; it does not, and the
- * user-facing failure has to say that rather than leaking `MissingSessionID` through.
+ * Zen admits the keyless tier only with OpenCode's anonymous client identity,
+ * which opencodex mints automatically for this destination — so a surviving
+ * refusal needs guidance about what bypassed it, and the user-facing failure
+ * has to say that rather than leaking `MissingSessionID` through.
  */
 describe("opencode-free keyless tier lock-in (#4121)", () => {
   /** Verbatim upstream body from the issue, as the Responses wire forwards it. */
@@ -190,8 +191,9 @@ describe("opencode-free keyless tier lock-in (#4121)", () => {
     expect(enriched).toContain("opencode-zen");
     expect(enriched).toContain("https://opencode.ai/auth");
     expect(enriched).toContain("https://opencode.ai/docs/zen/");
-    // The user is told opencodex declines to impersonate, not that the request merely failed.
-    expect(enriched).toContain("does not send a fabricated OpenCode session header");
+    // The user is told the identity is minted automatically and what a surviving
+    // refusal means, not that the request merely failed.
+    expect(enriched).toContain("mints that identity automatically");
   });
 
   test("enrichment is scoped to Zen destinations and to this error", () => {

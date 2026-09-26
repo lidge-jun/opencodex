@@ -118,6 +118,12 @@ rewrite rules and the routed-id settlement.
 | `src/adapters/image.ts`, `src/adapters/anthropic-image-guard.ts`, `src/adapters/anthropic-image-normalize.ts`, `src/adapters/anthropic-image-codec.ts` | Image conversion for adapter ingress and Anthropic-specific normalization/limits. An image's ladder position is pinned to its own identity (content hash + media type), so appending a newer image cannot re-encode older ones and bust Anthropic's prompt prefix cache (#4532). |
 | `src/adapters/run-turn-queue.ts`, `src/adapters/tool-catalog-nudge.ts`, `src/adapters/identity.ts`, `src/adapters/upstream-http-error.ts` | Shared adapter execution support: turn queueing, tool-catalog nudging, client identity, upstream error normalization. |
 
+## Keyless Zen client identity
+
+`src/adapters/opencode-free-session.ts` mints the keyless Zen tier identity for the canonical `https://opencode.ai/zen/v1` endpoint from the shared Chat transport (translated adapter and native fast path alike) and the Responses passthrough (`src/adapters/openai-responses/passthrough.ts`): a stable-per-Codex-thread `x-opencode-session` in the OpenCode session shape (`ses_` + 12 hex + 14 base62), the anonymous `Bearer public`, and a repair of exactly the bare default User-Agent to a verified versioned one — applied only when the operator has not set those headers and only when no API key is configured. `src/adapters/opencode-free-tools.ts` appends the missing never-invoked `shell`/`read` gate declarations the tier requires, keyless only. The `opencode-free` registry entry routes the Responses-only Muse Spark contributor-free ids to `openai-responses` through `modelWireDefaults` on every inbound; every other Zen id stays on Chat.
+
+> Decision record: [ADR-5810](decisions/ADR-5810-zen-keyless-client-identity.md)
+
 Inline document admission shares one encoding predicate between its scanner and parser in
 `src/responses/inline-document.ts`: malformed base64 quantum/padding lengths are refused,
 and valid padded or unpadded payloads pass unchanged without a decoding allocation.
