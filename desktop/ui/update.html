@@ -24,9 +24,13 @@
         #error { color: #ff8a80; }
         button.secondary { background: #3a3a3c; color: #f5f5f7; }
       }
+      /* Overlay title bar grip on macOS; hidden everywhere else (native decorations). */
+      #titlebar { position: fixed; top: 0; left: 0; right: 0; height: 40px; z-index: 1; user-select: none; -webkit-user-select: none; }
+      #titlebar[hidden] { display: none; }
     </style>
   </head>
   <body>
+    <div id="titlebar" hidden></div>
     <main>
       <h1>OpenCodex update</h1>
       <p id="state" role="status" aria-live="polite">Reading update status…</p>
@@ -39,6 +43,7 @@
     </main>
     <script nonce="__TAURI_SCRIPT_NONCE__">
 const invoke = window.__TAURI__?.core?.invoke;
+const titlebar = document.querySelector("#titlebar");
 const state = document.querySelector("#state");
 const error = document.querySelector("#error");
 const check = document.querySelector("#check");
@@ -116,6 +121,22 @@ back.addEventListener("click", async () => {
   try { await call("return_to_dashboard"); }
   catch (cause) { showError(cause); back.disabled = false; }
 });
+// The strip exists so the overlay title bar keeps the window movable on macOS. Other
+// platforms keep native decorations, so it stays hidden there.
+const macWebview = typeof navigator === "object" && /Mac OS X|Macintosh/.test(navigator.userAgent || "");
+if (invoke && macWebview) {
+  titlebar.hidden = false;
+  titlebar.addEventListener("mousedown", (event) => {
+    if (event.button === 0 && event.target === titlebar) {
+      invoke("plugin:window|start_dragging").catch(() => {});
+    }
+  });
+  titlebar.addEventListener("dblclick", (event) => {
+    if (event.target === titlebar) {
+      invoke("plugin:window|toggle_maximize").catch(() => {});
+    }
+  });
+}
 if (!invoke) { state.textContent = "Open this page from the OpenCodex desktop app."; check.disabled = true; install.disabled = true; back.disabled = true; }
 else void refresh("update_status");
     </script>

@@ -12,6 +12,7 @@
  * the pool needs those two answers to decide how long to cool a 429'd account.
  */
 import { getValidAccessSnapshotForAccount } from "../oauth";
+import { resolveKiroRequestProfile } from "../oauth/kiro";
 import type { ProviderQuota, ProviderQuotaWindow } from "./quota-types";
 import {
   ACCOUNT_QUOTA_TTL_MS,
@@ -46,6 +47,8 @@ export interface KiroUsageContext {
   accountId: string;
   access: string;
   profileArn?: string;
+  /** The ARN is the Builder ID service profile, not the account's; it must not pick the region. */
+  builderIdFallback?: boolean;
   apiRegion?: string;
   ssoRegion?: string;
 }
@@ -82,7 +85,10 @@ function safeRegion(value: string | undefined): string | undefined {
  * the SSO session that minted the token.
  */
 function usageRegion(ctx: KiroUsageContext): string {
-  return safeRegion(ctx.profileArn?.split(":")[3])
+  // The Builder ID service profile is Amazon's fixed us-east-1 ARN, not the account's own, so it
+  // must not pin the region, as kiro-constants.ts requires for the runtime path.
+  const arnRegion = ctx.builderIdFallback ? undefined : ctx.profileArn?.split(":")[3];
+  return safeRegion(arnRegion)
     ?? safeRegion(ctx.apiRegion)
     ?? safeRegion(ctx.ssoRegion)
     ?? "us-east-1";
@@ -207,10 +213,19 @@ export async function fetchKiroUsageSnapshot(ctx: KiroUsageContext): Promise<Kir
  */
 export async function kiroUsageContextForAccount(accountId: string): Promise<KiroUsageContext> {
   const snapshot = await getValidAccessSnapshotForAccount("kiro", accountId);
+  // Builder ID accounts never get an account-scoped ARN, and GetUsageLimits rejects a missing one
+  // with 400 "Invalid profileArn". Ask the same resolver the runtime path uses, so the usage probe
+  // sends exactly the ARN a generation request would. An account object is always passed, so the
+  // accountless env/local-import fallbacks never apply to a pooled account.
+  const profile = resolveKiroRequestProfile({
+    profileArn: snapshot.kiro?.profileArn,
+    authType: snapshot.kiro?.authType,
+  });
   return {
     accountId,
     access: snapshot.accessToken,
-    ...(snapshot.kiro?.profileArn ? { profileArn: snapshot.kiro.profileArn } : {}),
+    ...(profile.profileArn ? { profileArn: profile.profileArn } : {}),
+    ...(profile.builderIdFallback ? { builderIdFallback: true } : {}),
     ...(snapshot.kiro?.apiRegion ? { apiRegion: snapshot.kiro.apiRegion } : {}),
     ...(snapshot.kiro?.ssoRegion ? { ssoRegion: snapshot.kiro.ssoRegion } : {}),
   };

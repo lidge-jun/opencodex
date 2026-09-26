@@ -142,12 +142,18 @@ describe.skipIf(!runnable)("ocx launcher graceful shutdown", () => {
         child.stderr?.on("data", chunk => { output += String(chunk); });
 
         // 1. Proxy comes up + injected the Codex config (Design B root override on loopback).
-        const up = await waitUntil(() => healthy(port), STARTUP_BUDGET_MS);
+        // The health listener may answer before the launcher completes injection.
+        let healthSeen = false;
+        const up = await waitUntil(async () => {
+          if (!(await healthy(port))) return false;
+          healthSeen = true;
+          return readFileSync(codexConfig, "utf8").includes(OCX_ROUTING_MARKER_LINE);
+        }, STARTUP_BUDGET_MS);
         if (!up) {
           // Name what actually went wrong instead of asserting a bare boolean.
           const died = exited ? ` The launcher EXITED (code ${exitCode}, signal ${exitSignal}).` : " The launcher was still running.";
           throw new Error(
-            `The proxy never answered /healthz on port ${port} within ${STARTUP_BUDGET_MS}ms.${died}`
+            `The proxy ${healthSeen ? "answered /healthz but did not inject Codex config" : "never answered /healthz"} on port ${port} within ${STARTUP_BUDGET_MS}ms.${died}`
             + ` Launcher output:\n${output.trim() || "(none)"}`,
           );
         }

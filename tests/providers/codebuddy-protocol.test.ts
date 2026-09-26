@@ -232,20 +232,83 @@ describe("codebuddy stream-json event mapping", () => {
   });
 
   test("parses tool_use blocks defensively even though v1 disables tools", () => {
-    const state = { sawPartialText: false, sawPartialThinking: false, sawTerminalResult: false, openToolCallId: undefined as string | undefined };
+    const state = { sawPartialText: false, sawPartialThinking: false, sawTerminalResult: false };
     const start = mapStreamMessageToEvents(
       { type: "stream_event", event: { type: "content_block_start", content_block: { type: "tool_use", id: "t1", name: "exec" } } },
       state,
     );
-    expect(start).toEqual([{ type: "tool_call_start", id: "t1", name: "exec" }]);
+    // Tool blocks are buffered and emitted atomically at their own stop: downstream keeps a
+    // single open call, and CodeBuddy interleaves parallel blocks.
+    expect(start).toEqual([]);
     const delta = mapStreamMessageToEvents(
       { type: "stream_event", event: { type: "content_block_delta", delta: { type: "input_json_delta", partial_json: "{\"a\":1}" } } },
       state,
     );
-    expect(delta).toEqual([{ type: "tool_call_delta", arguments: "{\"a\":1}" }]);
+    expect(delta).toEqual([]);
     const stop = mapStreamMessageToEvents({ type: "stream_event", event: { type: "content_block_stop" } }, state);
-    expect(stop).toEqual([{ type: "tool_call_end" }]);
-    expect(state.openToolCallId).toBeUndefined();
+    expect(stop).toEqual([
+      { type: "tool_call_start", id: "t1", name: "exec" },
+      { type: "tool_call_delta", arguments: "{\"a\":1}" },
+      { type: "tool_call_end" },
+    ]);
+    expect(state.completedToolCalls).toBe(1);
+    expect(state.openToolBlocks?.size ?? 0).toBe(0);
+  });
+
+  test("interleaved parallel tool_use blocks are serialized per block index", () => {
+    const state = { sawPartialText: false, sawPartialThinking: false, sawTerminalResult: false };
+    const feed = (event: unknown) => mapStreamMessageToEvents({ type: "stream_event", event: event as Record<string, unknown> }, state);
+    const startAt = (index: number, id: string) =>
+      feed({ type: "content_block_start", index, content_block: { type: "tool_use", id, name: "exec" } });
+    const deltaAt = (index: number, part: string) =>
+      feed({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: part } });
+
+    expect(startAt(1, "tu_a")).toEqual([]);
+    expect(startAt(2, "tu_b")).toEqual([]);
+    expect(deltaAt(1, "{\"cmd\":\"a")).toEqual([]);
+    expect(deltaAt(2, "{\"cmd\":\"b")).toEqual([]);
+    expect(deltaAt(1, "\"}")).toEqual([]);
+    // A stop for a non-tool block must not close an open tool block.
+    expect(feed({ type: "content_block_stop", index: 0 })).toEqual([]);
+    expect(feed({ type: "content_block_stop", index: 2 })).toEqual([
+      { type: "tool_call_start", id: "tu_b", name: "exec" },
+      { type: "tool_call_delta", arguments: "{\"cmd\":\"b" },
+      { type: "tool_call_end" },
+    ]);
+    expect(feed({ type: "content_block_stop", index: 1 })).toEqual([
+      { type: "tool_call_start", id: "tu_a", name: "exec" },
+      { type: "tool_call_delta", arguments: "{\"cmd\":\"a" },
+      { type: "tool_call_delta", arguments: "\"}" },
+      { type: "tool_call_end" },
+    ]);
+    expect(state.toolBlockStarts).toBe(2);
+    expect(state.completedToolCalls).toBe(2);
+  });
+
+  test("a parallel batch reuses one block index; a new start implicitly closes the open block", () => {
+    // Live capture 2026-09-26 (CodeBuddy 2.158.0, kimi-k3-1, two parallel calls): START idx=2
+    // alpha, alpha's complete args, START idx=2 beta (alpha never stopped), beta's complete
+    // args, one STOP idx=2, message_stop. A start that reuses an open block's index closes
+    // that block — parallel argument streams are sequential, so the open block is complete.
+    const state = { sawPartialText: false, sawPartialThinking: false, sawTerminalResult: false };
+    const feed = (event: unknown) => mapStreamMessageToEvents({ type: "stream_event", event: event as Record<string, unknown> }, state);
+
+    expect(feed({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_a", name: "alpha" } })).toEqual([]);
+    expect(feed({ type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{\"value\":\"A\"}" } })).toEqual([]);
+    expect(feed({ type: "content_block_start", index: 2, content_block: { type: "tool_use", id: "tu_b", name: "beta" } })).toEqual([
+      { type: "tool_call_start", id: "tu_a", name: "alpha" },
+      { type: "tool_call_delta", arguments: "{\"value\":\"A\"}" },
+      { type: "tool_call_end" },
+    ]);
+    expect(feed({ type: "content_block_delta", index: 2, delta: { type: "input_json_delta", partial_json: "{\"value\":\"B\"}" } })).toEqual([]);
+    expect(feed({ type: "content_block_stop", index: 2 })).toEqual([
+      { type: "tool_call_start", id: "tu_b", name: "beta" },
+      { type: "tool_call_delta", arguments: "{\"value\":\"B\"}" },
+      { type: "tool_call_end" },
+    ]);
+    expect(state.toolBlockStarts).toBe(2);
+    expect(state.completedToolCalls).toBe(2);
+    expect(state.openToolBlocks?.size ?? 0).toBe(0);
   });
 
   test("usageFromResult returns undefined when no usage is present", () => {

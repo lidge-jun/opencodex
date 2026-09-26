@@ -847,6 +847,62 @@ export async function refetchAfterProtocolSafeReset(
     console.warn("[upstream-retry] protocol-safe refetch rejected" + label + "; preserving original stream error");
     return null;
   }
-  console.warn("[upstream-retry] pre-output Responses reset" + label + "; using one replacement stream");
+  console.warn("[upstream-retry] pre-output stream reset" + label + "; using one replacement stream");
   return replacement;
+}
+
+/**
+ * Wrap a streamed body so a reset that arrives before the downstream reader has consumed a single
+ * byte swaps in ONE replacement body.
+ *
+ * The zero-byte gate is the whole reason this wrapper exists: the caller observed nothing, which is
+ * the stage where a replacement may even be considered. Every other question -- whether the operator
+ * granted one, whether the request is replayable, whether the replacement is a fresh unlocked body
+ * that matches the contract already promised to the client -- belongs to
+ * {@link refetchAfterProtocolSafeReset}. Delegating rather than re-deciding is what keeps the chat
+ * lane from drifting away from the one the Responses stream already uses.
+ *
+ * Partial output is never masked: once a byte has reached the caller, the original failure stands.
+ */
+export function wrapWithZeroOutputRefetch(
+  body: ReadableStream<Uint8Array>,
+  doFetch: ProtocolSafeRefetch,
+  // `authorize` is optional on the shared options but required here: a zero-output replacement
+  // is always a post-header resend, so every caller must name the gate that weighs it.
+  opts: ProtocolSafeRefetchOptions & { authorize: () => boolean },
+): ReadableStream<Uint8Array> {
+  let reader = body.getReader();
+  let bytesRead = 0;
+  let retried = false;
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      for (;;) {
+        try {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            return;
+          }
+          bytesRead += value.byteLength;
+          controller.enqueue(value);
+          return;
+        } catch (err) {
+          if (!retried && bytesRead === 0 && !opts.abortSignal?.aborted) {
+            retried = true;
+            const replacement = await refetchAfterProtocolSafeReset(doFetch, err, { ...opts, authorize: opts.authorize });
+            if (replacement?.body) {
+              try { void reader.cancel().catch(() => {}); } catch { /* broken reader; the replacement won */ }
+              reader = replacement.body.getReader();
+              continue;
+            }
+          }
+          try { controller.error(err); } catch { /* already torn down */ }
+          return;
+        }
+      }
+    },
+    cancel(reason) {
+      try { void reader.cancel(reason).catch(() => {}); } catch { /* already torn down */ }
+    },
+  });
 }

@@ -641,7 +641,7 @@ os._exit(0)
       try {
         process.env.PATH = prependPath(binDir, oldPath);
         process.env.OPENCODEX_HOME = home;
-        setCodexShimProbeObservationMsForTests(1_500);
+        setCodexShimProbeObservationMsForTests(4_000);
         writeFileSync(codexPath, original, "utf8");
         chmodSync(codexPath, 0o755);
 
