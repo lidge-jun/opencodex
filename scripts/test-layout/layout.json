@@ -917,6 +917,7 @@
     "docs-developer-role-policy.test.ts": "ci-workflows",
     "docs-gui-screenshot-policy.test.ts": "ci-workflows",
     "docs-link-targets.test.ts": "ci-workflows",
+    "docs-gjc-reasoning-export.test.ts": "ci-workflows",
     "docs-provider-billing-claims.test.ts": "ci-workflows",
     "docs-provider-discovery-limits.test.ts": "ci-workflows",
     "docs-provider-preset-counts.test.ts": "ci-workflows",
