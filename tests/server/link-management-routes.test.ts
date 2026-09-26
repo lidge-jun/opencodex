@@ -215,6 +215,22 @@ describe("link management routes", () => {
     expect(h.store.links).toHaveLength(1);
   });
 
+  test("issue starts the supervisor once a recovered listener binds", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-issue-recover-"));
+    const h = harness();
+    h.setListenerState("failed");
+    const deps = {
+      ...h.deps,
+      linkListener: () => ({
+        ...h.listener,
+        ensureStarted: async () => { h.events.push("listener"); h.setListenerState("listening"); },
+      }),
+    };
+    const response = await call("/api/link/issue", "POST", { alias: "home", tunnelPort: 2200 }, deps, "admin-token", true, null, true, h.config);
+    expect(response?.status).toBe(200);
+    expect(h.events.indexOf("listener")).toBeLessThan(h.events.indexOf("supervisor"));
+  });
+
   test("rejects issue when ensureStarted leaves the listener failed and compensates", async () => {
     temp = mkdtempSync(join(tmpdir(), "ocx-link-listener-failed-"));
     const h = harness();
