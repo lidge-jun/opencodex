@@ -58,6 +58,13 @@ region-matched `/v1/api/openplatform/coding_plan/remains` endpoint. It publishes
 model's consumed 5-hour percentage and, when active, weekly percentage with their reset times;
 video quota rows are unrelated and omitted.
 
+Kiro's account quota cache persists quota and an optional exhaustion verdict under one
+opaque account key and a non-secret login identity. Hydration admits only matching live
+accounts and bounds quota and verdict independently by reset and ten-minute TTL; a failed
+probe keeps the same-login last-good display bar. The protected OAuth store rotates
+`ProviderAccount.loginId` on every explicit login, preserves it across credential refresh,
+and uses `addedAt` for legacy rows without one.
+
 The routed identity sentence a catalog row carries is model-neutral on disk: `base_instructions`,
 and a native capability alias's `model_messages.instructions_template`, hold `NEUTRAL_IDENTITY_LINE`
 rather than a model id, because Codex stores a session's instruction block once and replays it

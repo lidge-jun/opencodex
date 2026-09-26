@@ -2,6 +2,8 @@ import { effectiveCodexAuthAccountId, fetchMainAccountInfoSnapshot, listCodexAut
 import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
 import { getAccountCredential, getAccountSet } from "../../oauth/store";
+import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
+import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
 import { CLAUDE_CLI_USER_AGENT } from "../claude-cli-identity";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
@@ -363,8 +365,10 @@ export async function fetchAnthropicQuota(provider: string): Promise<ProviderQuo
  * concurrent account switch cannot file this answer under the wrong account.
  */
 export async function fetchKiroQuota(provider: string): Promise<ProviderQuotaReport | null> {
+  hydrateKiroAccountState();
   const probedAccountId = getAccountSet("kiro")?.activeAccountId;
   if (!probedAccountId) return null;
+  const identity = kiroProbeIdentity(probedAccountId);
   const probedAccountKey = accountCacheKey("kiro", probedAccountId);
   const writerGeneration = captureConfigGeneration();
   let snapshot: KiroUsageSnapshot | null;
@@ -374,9 +378,11 @@ export async function fetchKiroQuota(provider: string): Promise<ProviderQuotaRep
     return null;
   }
   if (!snapshot) return null;
+  if (!kiroProbeCurrent(probedAccountId, identity)) return null;
   if (mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-    accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota: snapshot.quota });
-    commitKiroAccountUsageState(probedAccountKey, snapshot);
+    accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota: snapshot.quota, identity });
+    commitKiroAccountUsageState(probedAccountKey, snapshot, identity);
+    persistKiroAccountState();
   }
   return report(provider, "kiro:usage-limits", snapshot.quota);
 }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { INTERNAL_DEADLINE_MS, STORE_BUDGET_MS } from "../helpers/test-budget";
-import { existsSync, lstatSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as atomicWrite from "../../src/config/atomic-write";
 import * as oauthStore from "../../src/oauth/store";
@@ -28,6 +29,7 @@ import {
   reconcileOAuthReauthState,
   removeAccount,
   removeCredential,
+  resetOAuthReauthReconcileStateForTests,
   replaceProviderAccountSet,
   saveAccountCredential,
   saveCredential,
@@ -39,7 +41,7 @@ import type { OAuthCredentials } from "../../src/oauth/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { recordOwnedConfigPath, removeOwnedConfigState } from "../../src/lib/config-ownership";
 
-const TEST_DIR = join(import.meta.dir, ".tmp-oauth-store-multi-test");
+let TEST_DIR: string;
 let previousOpencodexHome: string | undefined;
 const ICACLS_OK = { success: true, exitCode: 0, timedOut: false, stdout: "" };
 
@@ -48,6 +50,7 @@ async function cleanupOAuthStoreFixture(): Promise<void> {
   setIcaclsRunnerForTests(null);
   setAsyncIcaclsRunnerForTests(null);
   resetHardenedStateForTests();
+  resetOAuthReauthReconcileStateForTests();
   if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpencodexHome;
   if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
@@ -74,8 +77,7 @@ async function selectionAccounts() {
 describe("multi-account auth store", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
-    if (existsSync(TEST_DIR)) removeTreeWithRetry(TEST_DIR);
-    mkdirSync(TEST_DIR, { recursive: true });
+    TEST_DIR = mkdtempSync(join(tmpdir(), "ocx-oauth-store-multi-"));
     process.env.OPENCODEX_HOME = TEST_DIR;
     resetHardenedStateForTests();
     setIcaclsRunnerForTests(() => ICACLS_OK);
@@ -83,6 +85,44 @@ describe("multi-account auth store", () => {
   });
 
   afterEach(cleanupOAuthStoreFixture);
+
+  test("each login write rotates loginId even when account id is reused", async () => {
+    const first = await oauthStore.saveCredentialWithReceipt("kiro", cred());
+    const account = getAccountSet("kiro")!.accounts[0]!;
+    expect(account.loginId).toMatch(SELECTION_UUID);
+    const second = await oauthStore.saveCredentialWithReceipt("kiro", cred({ access: "second", refresh: "second" }));
+    expect(second!.accountId).toBe(first!.accountId);
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).not.toBe(account.loginId);
+  });
+
+  test("normalizeAuthStore keeps a valid loginId and drops an invalid one", async () => {
+    await saveCredential("kiro", cred());
+    const path = join(TEST_DIR, "auth.json");
+    const file = JSON.parse(readFileSync(path, "utf8"));
+    const valid = getAccountSet("kiro")!.accounts[0]!.loginId;
+    expect(valid).toMatch(SELECTION_UUID);
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBe(valid);
+    file.kiro.accounts[0].loginId = "invalid";
+    writeFileSync(path, JSON.stringify(file));
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBeUndefined();
+  });
+
+  test("refresh writers preserve loginId", async () => {
+    await saveCredential("kiro", cred());
+    const first = getAccountSet("kiro")!.accounts[0]!;
+    await saveAccountCredential("kiro", first.id, cred({ access: "refreshed" }));
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBe(first.loginId);
+    await mergeAccountCredential("kiro", first.id, cred({ access: "merged" }));
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBe(first.loginId);
+  });
+
+  test("replaceProviderAccountSet preserves loginId", async () => {
+    await saveCredential("kiro", cred());
+    const set = getAccountSet("kiro")!;
+    const loginId = set.accounts[0]!.loginId;
+    await replaceProviderAccountSet("kiro", set);
+    expect(getAccountSet("kiro")!.accounts[0]!.loginId).toBe(loginId);
+  });
 
   test("fixture cleanup waits for a held config-directory ACL flight before restoring home or deleting files", async () => {
     let release!: () => void;

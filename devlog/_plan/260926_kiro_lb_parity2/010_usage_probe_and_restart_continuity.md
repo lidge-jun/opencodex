@@ -615,3 +615,75 @@ At implementation time run the modified Kiro quota/rank/persistence tests, the n
 | Finding | Change in this document |
 | --- | --- |
 | r1-R2-1 High | Kiro state hydrates before a probe can persist over it, and failure no longer calls `commitKiroAccountUsageState(key, null)`; the proposed `quota.ts` hunk preserves only identity-matching, unexpired evidence without renewing either observation clock (lines 337-373, 522). The named `failed refresh preserves overage verdict before and after restart` test covers 100% overage success, null and thrown failures, routing on both sides of restart, a failed first probe after restart, original expiry, and login replacement (lines 533, 552). **rebase-verify at this layer's P** against #5937 and the implemented 010 cache/verdict store. |
+
+## wp2 P re-verification (2026-09-26, tree `ff06b29c50` on dev `c323ad2564`)
+
+This section is the executable plan for the 010 build and **overrides** any earlier hunk it
+contradicts. Architect proposal: `.tmp/kiro-lb-research/wp2-arch-proposal.md` (scratch).
+
+| ID | Disposition |
+|---|---|
+| D010-S1 | Accept. The checkout already contains #5937; read current files directly. |
+| D010-S2–S4, S9, S10 | Accept. Current anchors: `parseKiroUsage` `src/providers/kiro-usage.ts:116-162` (overage check 153-155, `exhausted:` 159); probe 172-205; commit 235; `getKiroAccountExhaustion` 253-266; clear/reconcile 268-287; `usageRegion` 87-95; `KiroUsageStateEntry` 64-68; `preferredInitialAccount` accounts 453-457; capped Kiro tests at `file-size-baseline.json:46-48`. |
+| D010-S5 | Accept, **fixed decision**: `src/providers/quota.ts` stays at ≤558 lines. The hydrate call folds into the existing line 426 condition (`provider === "anthropic" \|\| provider === "kiro"`). The identity capture, `kiroCurrent` guard, cached-row filter and joinable re-probe live in NEW `src/providers/quota/kiro-account-probe.ts`; `quota.ts` calls it through at most a net-zero change. C runs `wc -l src/providers/quota.ts` and the ratchet test. |
+| D010-S6/S7 | Accept: structure note after `structure/providers-and-adapters.md:59`; docs note after `docs-site/src/content/docs/reference/adapters.md:352`. |
+| D010-S8 | Accept: `fetchKiroQuota` (`src/providers/quota/vendor-probes-oauth.ts:365-382`) calls `hydrateKiroAccountState()` before its cache `set` at 378, so a post-restart persist cannot erase other providers' rows. |
+| D010-M1 | Accept: the in-memory `KiroUsageStateEntry` timestamp is renamed `ts` → `observedAt`, matching `KiroPersistedVerdict` and 030. |
+| D010-M2 | Accept: `replaceProviderAccountSet` (`src/oauth/store.ts:~1184`) copies `loginId`. `upsertCredentialByIdentity` (Antigravity importer only) is out of scope and recorded. |
+| D010-M3 | Accept: `kiroEvidenceIdentity` and the persisted types have no runtime imports; a test imports each of `kiro-usage.ts`, `kiro-account-state-disk.ts`, `quota/account-cache.ts` in isolation. |
+| D010-M4 | Accept: first Kiro routing read hydrates the whole disk cache; a test asserts a non-Kiro row keeps its TTL behaviour. |
+| D010-M5 | Accept: a Kiro fill-first threshold test through `preferredInitialAccount` proves callers pass the `accounts` map. |
+| D010-U1 | Accept: `kiroManagementHost` moves to 050. |
+| D010-U2 | Accept: the cross-layer handoff section and the 030/040/070 conditional-path rows are pointers only; 010's C runs no test that belongs to a later layer. |
+| D010-U3 | Accept, **decision**: `overageEnabled` is dropped from `KiroPersistedVerdict`; the persisted `exhausted` verdict already encodes overage. A later layer that needs it adds it with its own consumer. |
+
+Verifier set for 010's C (each read by the command named):
+`bun run typecheck`; `bun test tests/providers/kiro/` (the new `kiro-account-state-disk` and
+`kiro-usage-restart` files live there); `bun test tests/oauth/` subset touching `store` and
+`generic-account-failover`; `bun test tests/test-layout.test.ts tests/test-layout-tooling.test.ts`;
+`bun test tests/lab/core-lab-boundary.test.ts`; the file-size ratchet test; `bun run test:changed`;
+`bun run privacy:scan`; `bun run structure:check`.
+
+
+### Reflection fold (same architect: MISALIGNED → folded)
+
+1. S8 path corrected to `src/providers/quota/vendor-probes-oauth.ts`.
+2. M1/U3 are 010 contract changes; every earlier hunk in this doc that names the in-memory
+   `ts` field or `overageEnabled` is superseded by this section at build time. 030 (lines 4,
+   257, 271-272) and 040 (line 510) still name `ts`/`overageEnabled` and are corrected at
+   their own P re-verification against the landed 010 (recorded in 000's residual table).
+3. U1: the tests `Builder ID management host ignores service ARN region` and `Kiro management
+   host follows account region` move to 050 with `kiroManagementHost`; 020 line 9, 030 line
+   583 and 050's references to a 010 export are corrected at their P.
+4. M3 test: `tests/providers/kiro/kiro-account-state-imports.test.ts`, test `each Kiro evidence
+   module imports on its own` (spawns `bun -e 'await import(<module>)'` per module and asserts
+   exit 0), registered in both layout registries next to `kiro-account-state-disk`.
+5. Verifier set adds `tests/providers/provider-account-quota-persistence.test.ts`,
+   `tests/ci-workflows/file-size-ratchet.test.ts`, `tests/oauth/oauth-store-multi.test.ts`,
+   `tests/oauth/generic-oauth-failover.test.ts` by name.
+
+### wp2 A round 1 fold (reviewer 01a0de34: FAIL, 2 High + 1 Medium → folded)
+
+1. **High — percentage-only exhaustion.** For Kiro, `isAccountQuotaExhausted` and every
+   exclusion decision return *unknown* (never exhausted) when `kiroAccountEvidence(account).exhausted`
+   is absent; the quota percentage is used only for ranking. Test
+   `fresh 100% quota without a verdict ranks last but is not excluded` in
+   `tests/providers/kiro/kiro-usage-restart.test.ts`, driven through `preferredInitialAccount`
+   with the quota row and verdict on independent clocks (verdict expired, row fresh).
+2. **High — reconciliation persisting before hydration.** Every whole-cache persist path this layer
+   adds or reaches (`reconcile...` at `src/providers/quota/account-cache.ts:336`, the Kiro
+   clear/reconcile path, `fetchKiroQuota`, `fetchAccountQuota`) calls `hydrateAccountQuotaCache()`
+   before mutating, the same rule the observation writers follow at `account-cache.ts:240,287`.
+   Test `first post-restart reconciliation keeps unrelated disk rows` in
+   `tests/providers/kiro/kiro-account-state-disk.test.ts`.
+3. **Medium — future-timestamp rule scope.** The `updatedAt <= now` rejection in the disk reader
+   applies only to Kiro rows (cache key prefix `kiro\0`, `src/providers/quota/account-cache.ts:163`); other providers keep the current reader
+   behaviour (`src/providers/account-quota-disk.ts:47`). Test
+   `a future-dated non-Kiro row still loads` in the same file.
+
+
+## wp2 build notes
+
+- The no-ARN last-good test seeds a same-login quota bar before the forced probe. Removing a stored ARN from a previously successful credential would change the specified five-field evidence identity, so it cannot exercise same-login preservation.
+- Kiro quota hydration and rewrites retain only parser-owned percentage, reset, and fixed free-trial fields. This prevents malformed disk extras, including upstream message text, from being copied into a later whole-cache persist.
+- The OAuth store test fixture uses an OS temporary directory and resets its test-only reconciliation generation after each case. The former repository-local fixture path is inside the protected Codex home in this checkout, and the latter otherwise contaminated the requested grouped OAuth test run.

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { saveCredential } from "../../../src/oauth/store";
+import { getAccountSet, saveCredential } from "../../../src/oauth/store";
 import {
   clearAccountQuotaCache,
   clearProviderQuotaCache,
@@ -161,11 +161,11 @@ describe("Kiro per-account quota", () => {
     // assigned rather than assuming the seed value.
     const accountId = rows[0]!.accountId;
     const key = `kiro\u0000${accountId}`;
-    expect(getKiroAccountExhaustion(key)?.exhausted).toBe(true);
+    expect(getKiroAccountExhaustion(key, getAccountSet("kiro")!.accounts.find(a => a.id === accountId)!)?.exhausted).toBe(true);
     expect(getCachedProviderAccountQuota("kiro", accountId)?.monthlyPercent).toBe(100);
 
     clearAccountQuotaCache("kiro");
-    expect(getKiroAccountExhaustion(key)).toBeNull();
+    expect(getKiroAccountExhaustion(key, getAccountSet("kiro")!.accounts.find(a => a.id === accountId)!)).toBeNull();
     expect(getCachedProviderAccountQuota("kiro", accountId)).toBeNull();
   });
 
@@ -175,7 +175,7 @@ describe("Kiro per-account quota", () => {
 
     const rows = await fetchProviderAccountQuotas("kiro");
     const key = `kiro\u0000${rows[0]!.accountId}`;
-    expect(getKiroAccountExhaustion(key)?.exhausted).toBe(false);
+    expect(getKiroAccountExhaustion(key, getAccountSet("kiro")!.accounts.find(a => a.id === rows[0]!.accountId)!)?.exhausted).toBe(false);
   });
 });
 
@@ -222,7 +222,7 @@ describe("Kiro Builder ID usage probe", () => {
     expect(rows[0]!.quota?.monthlyPercent).toBeCloseTo(0.5042, 4);
   });
 
-  test("a non-Builder-ID account without a stored ARN still sends none", async () => {
+  test("a non-Builder-ID account without a stored ARN makes no usage request", async () => {
     await saveCredential("kiro", {
       access: "token-desk", refresh: "refresh-desk", expires: Date.now() + 60 * 60_000,
       accountId: "kiro-desk", email: "desk@example.com",
@@ -230,8 +230,6 @@ describe("Kiro Builder ID usage probe", () => {
     });
     const seen = captureProbe();
     await fetchProviderAccountQuotas("kiro");
-    expect(seen).toHaveLength(1);
-    expect(seen[0]!.arn).toBeNull();
-    expect(seen[0]!.bodyArn).toBeUndefined();
+    expect(seen).toHaveLength(0);
   });
 });

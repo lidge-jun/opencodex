@@ -8,12 +8,14 @@ import {
   schedulePersistAccountQuotas,
 } from "../../src/providers/account-quota-disk";
 import type { ProviderQuota } from "../../src/providers/quota-types";
+import { kiroEvidenceIdentity } from "../../src/providers/kiro-account-state-disk";
+import type { ProviderAccount } from "../../src/oauth/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const previousHome = process.env.OPENCODEX_HOME;
 let home: string;
 const FILE = "provider-account-quota-cache.json";
-const KEY = "kiro\u0000acct-a";
+const KEY = "cursor\u0000acct-a";
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 400));
 
@@ -35,6 +37,24 @@ const quota = (percent: number, updatedAt = Date.now()): ProviderQuota => ({
 });
 
 describe("provider account quota persistence", () => {
+  test("Kiro rows require a stable identity without exposing credential fields", async () => {
+    const account: ProviderAccount = { id: "acct-a", loginId: "11111111-1111-4111-8111-111111111111",
+      credential: { access: "secret-access", refresh: "secret-refresh", expires: 0,
+        email: "private@example.com", kiro: { profileArn: "arn:aws:codewhisperer:us-east-1:123456789012:profile/PRIVATE",
+          clientId: "secret-client" } } };
+    const key = "kiro\u0000acct-a";
+    const identity = kiroEvidenceIdentity(account);
+    schedulePersistAccountQuotas(() => [[key, { ...quota(45), identity }]]);
+    await settle();
+    const raw = readFileSync(join(home, FILE), "utf8");
+    expect(raw).toContain(identity);
+    expect(raw).toContain("monthlyPercent");
+    for (const secret of ["secret-access", "secret-refresh", "private@example.com", "profile/PRIVATE", "secret-client"])
+      expect(raw).not.toContain(secret);
+    schedulePersistAccountQuotas(() => [[key, quota(45)]]);
+    await settle();
+    expect(readPersistedAccountQuotas().has(key)).toBe(false);
+  });
   test("rows survive a restart", async () => {
     schedulePersistAccountQuotas(() => [[KEY, quota(15)]]);
     await settle();

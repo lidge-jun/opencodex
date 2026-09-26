@@ -350,6 +350,10 @@ MiMo model Command Code serves.
   unreadable or unrecognised response is reported as unknown rather than as zero usage, and
   an account whose overage is enabled is not treated as exhausted merely for passing its
   limit. The operation is undocumented by AWS, so treat the numbers as best-effort.
+  A non-Builder-ID account without a usable profile ARN makes no usage request; usage is
+  unavailable while an earlier same-login quota bar remains visible. Known quota and
+  exhaustion evidence survive restart only for the same login, each until its own reset
+  or ten-minute lifetime. Missing, old, or malformed evidence becomes unknown.
 - Participates in multi-account rotation. Two or more logged-in Kiro accounts enable
   automatic failover on a 429, and rotation prefers the account with the most known
   headroom; an account whose allowance is provably spent is cooled until its window resets

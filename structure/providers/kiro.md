@@ -30,6 +30,12 @@ before/after account-ID set.
 
 > Decision record: [ADR-0109](../decisions/ADR-0109-kiro-login-rollback-ownership.md)
 
+Kiro usage probing uses the same request-profile resolver as generation. A non-OIDC
+account without a formable ARN is not probed. Persisted quota and exhaustion evidence
+are bound independently by observation time, reset, and login identity, never by token
+or raw account label; removal, identity change, expiry, or malformed disk degrades routing
+evidence to unknown. Initial routing reads it through `kiroAccountEvidence`.
+
 ## Kiro client parallel-tool hint
 
 Kiro's wire remains serialized even when an OpenAI Responses client sends

@@ -15,6 +15,7 @@
  * Both are excluded by `isGenericFailoverProvider`.
  */
 import { getAccountSet } from "./store";
+import type { ProviderAccount } from "./types";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
 import {
   accountHeadroomPercent,
@@ -268,9 +269,9 @@ function stableGenericRoster(providerName: string): string[] {
  * statement about observed usage, and treating "no observation" as "spent" would evacuate every
  * quota-less provider off its active account on the very first request.
  */
-function isOverAutoSwitchThreshold(providerName: string, accountId: string, threshold: number, requestedModelId?: string | null): boolean {
+function isOverAutoSwitchThreshold(providerName: string, accountId: string, threshold: number, requestedModelId?: string | null, account?: ProviderAccount): boolean {
   if (threshold <= 0) return false;
-  const headroom = accountHeadroomPercent(providerName, accountId, requestedModelId);
+  const headroom = accountHeadroomPercent(providerName, accountId, requestedModelId, account);
   if (headroom === null) return false;
   return 100 - headroom >= threshold;
 }
@@ -285,6 +286,7 @@ function pickFillFirstGenericAccount(
   activeId: string | undefined,
   now: number,
   requestedModelId?: string | null,
+  accountRows?: ReadonlyMap<string, ProviderAccount>,
 ): string | null {
   const stableAll = stableGenericRoster(providerName);
   if (stableAll.length < 2) return null;
@@ -294,7 +296,7 @@ function pickFillFirstGenericAccount(
   const threshold = typeof stored === "number" && Number.isInteger(stored) && stored >= 0 && stored <= 100
     ? stored
     : DEFAULT_GENERIC_AUTO_SWITCH_THRESHOLD;
-  if (activeId && eligible.has(activeId) && !isOverAutoSwitchThreshold(providerName, activeId, threshold, requestedModelId)) {
+  if (activeId && eligible.has(activeId) && !isOverAutoSwitchThreshold(providerName, activeId, threshold, requestedModelId, accountRows?.get(activeId))) {
     return null;
   }
   const start = activeId ? stableAll.indexOf(activeId) : -1;
@@ -363,7 +365,7 @@ export function rotateGenericOAuthAccountOn429(
   // An account whose allowance is provably spent gets a reset-aligned cooldown instead of
   // the default minute: retrying it every 60s until the window rolls over is pure waste.
   // A Retry-After from upstream still wins — it is the server's own instruction.
-  const exhausted = parsed === undefined ? exhaustedCooldownMs(providerName, failedAccountId, now) : null;
+  const exhausted = parsed === undefined ? exhaustedCooldownMs(providerName, failedAccountId, now, set.accounts.find(account => account.id === failedAccountId)) : null;
   const cooldownMs = exhausted ?? parsed ?? DEFAULT_COOLDOWN_MS;
   const family = classifyModelFamilyForQuota(providerName, requestedModelId);
   health.set(healthKey(providerName, failedAccountId, family), {
@@ -411,7 +413,8 @@ export function rotateGenericOAuthAccountOn429(
   }
   // With no quota evidence this returns the ring untouched, so providers without
   // per-account quota keep exactly the traversal they have today.
-  return rankAccountsByHeadroom(providerName, candidates, requestedModelId)[0] ?? null;
+  return rankAccountsByHeadroom(providerName, candidates, requestedModelId,
+    new Map(set.accounts.map(account => [account.id, account])))[0] ?? null;
 }
 
 /**
@@ -454,6 +457,7 @@ export function preferredInitialAccount(
   const selected = getAccountSet(providerName);
   if (!selected) return null;
   const active = selected.activeAccountId;
+  const accountRows = new Map(selected.accounts.map(account => [account.id, account]));
   const order = selected.accounts.filter(account => account.needsReauth !== true).map(account => account.id);
   if (order.length < 2) return null;
 
@@ -477,21 +481,21 @@ export function preferredInitialAccount(
     return picked && picked !== active ? picked : null;
   }
   if (strategy === "fill-first") {
-    const picked = pickFillFirstGenericAccount(config, providerName, active, now, requestedModelId);
+    const picked = pickFillFirstGenericAccount(config, providerName, active, now, requestedModelId, accountRows);
     return picked && picked !== active ? picked : null;
   }
 
   const activeRow = selected.accounts.find(account => account.id === active);
   if (activeRow && activeRow.needsReauth !== true
     && !isCooled(providerName, activeRow.id, now, classifyModelFamilyForQuota(providerName, requestedModelId))
-    && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId)) return null;
+    && !isAccountQuotaExhausted(providerName, activeRow.id, requestedModelId, activeRow)) return null;
 
   // Evidence is required BEFORE eligibility narrows the field. Without this, a provider
   // with no quota data at all could still be redirected: cool the active account with a
   // 429 and the eligible list collapses to one candidate, which any ranking returns
   // unchanged — an answer that looks ranked but was never measured. The no-op guarantee
   // for quota-less providers has to be checked on the full roster.
-  if (!hasHeadroomEvidence(providerName, order, requestedModelId)) return null;
+  if (!hasHeadroomEvidence(providerName, order, requestedModelId, accountRows)) return null;
 
   // Cooldowns are respected here, unlike in the presence count: this picks the account to
   // send to right now, and one inside its 429 window is the single candidate we hold
@@ -505,7 +509,7 @@ export function preferredInitialAccount(
   const candidates = ring.filter(id => eligible.includes(id));
   if (candidates.length === 0) return null;
 
-  const best = rankAccountsByHeadroom(providerName, candidates, requestedModelId)[0] ?? null;
+  const best = rankAccountsByHeadroom(providerName, candidates, requestedModelId, accountRows)[0] ?? null;
   // Nothing to do when the ranking agrees with the account we would have used anyway.
   //
   // A proposal still needs guarded selection commit after credential resolution: a

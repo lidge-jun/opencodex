@@ -180,4 +180,4 @@ its doc against the landed lower layer anyway):
 | 050 | `requestedModelId` parameter name assumed on `rotateGenericOAuthAccountOnRefusal` | Match 030's landed signature |
 | 070 | Note at 070:390 names `tests/oauth/kiro-refusal-transport.test.ts` and `tests/oauth/kiro-account-capacity.test.ts`, which no layer registers | Point at the landed 030/040 test names instead |
 | 070 | Health projection omits the `family` argument to `isCooled` | Pass it for future-proofing |
-
+| 030/040/050/020 | 010 renamed the in-memory verdict timestamp to `observedAt`, dropped `overageEnabled`, and moved `kiroManagementHost` to 050 (wp2 P) | Correct 030:4,257,271-272; 040:510; 020:9; 030:583; 050 references at each layer's P |

@@ -79,6 +79,8 @@ export type OAuthCredentials = {
 export interface ProviderAccount {
   /** Stable short id, generated once at append time; never re-derived after rotation. */
   id: string;
+  /** Rotated on each explicit login and retained across token refreshes. */
+  loginId?: string;
   /** User-owned display label; never participates in auth identity or routing. */
   alias?: string;
   credential: OAuthCredentials;
