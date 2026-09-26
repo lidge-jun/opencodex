@@ -22,6 +22,10 @@ export function sanitizeKiroQuota(quota: ProviderQuota): ProviderQuota {
     && window.percent >= 0 && window.percent <= 100);
   return {
     monthlyPercent: quota.monthlyPercent,
+    ...(typeof quota.kiroCreditsUsed === "number" && Number.isFinite(quota.kiroCreditsUsed)
+      && quota.kiroCreditsUsed >= 0 ? { kiroCreditsUsed: quota.kiroCreditsUsed } : {}),
+    ...(typeof quota.kiroCreditsLimit === "number" && Number.isFinite(quota.kiroCreditsLimit)
+      && quota.kiroCreditsLimit > 0 ? { kiroCreditsLimit: quota.kiroCreditsLimit } : {}),
     ...(typeof quota.monthlyResetAt === "number" && Number.isFinite(quota.monthlyResetAt)
       && Number.isFinite(new Date(quota.monthlyResetAt).getTime())
       ? { monthlyResetAt: quota.monthlyResetAt } : {}),

@@ -117,7 +117,7 @@ import { setUsageLedgerRetention } from "./usage-ledger-retention";
 import { admitHttpWorkflowTurn, workflowDecisionRefusalResponse, type WorkflowRefusalLog } from "./workflow-refusal";
 export {
   addFinalRequestLog,
-  filterRequestLogs,
+  filterRequestLogs, queryRequestLogs,
   hydrateRequestLogsFromDisk,
   httpStatusForTerminalStatus,
   httpStatusFromTerminalError,

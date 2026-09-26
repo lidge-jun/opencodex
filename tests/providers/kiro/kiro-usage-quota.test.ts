@@ -66,6 +66,8 @@ describe("Kiro usage limits", () => {
     });
     const snapshot = await fetchKiroUsageSnapshot(baseContext);
     expect(snapshot?.quota.monthlyPercent).toBeCloseTo(14.782, 3);
+    expect(snapshot?.quota.kiroCreditsUsed).toBe(147.82);
+    expect(snapshot?.quota.kiroCreditsLimit).toBe(1000);
     expect(snapshot?.quota.monthlyResetAt).toBe(1785542400 * 1000);
     expect(snapshot?.exhausted).toBe(false);
   });
@@ -80,6 +82,14 @@ describe("Kiro usage limits", () => {
     const snapshot = await fetchKiroUsageSnapshot(baseContext);
     // Index 0 would report 90%; selecting by resourceType reports the credit pool.
     expect(snapshot?.quota.monthlyPercent).toBe(10);
+  });
+
+  test("a negative or non-finite used reading yields no quota", async () => {
+    for (const used of [-1, "Infinity", "NaN"]) {
+      stubUsageResponse({ usageBreakdownList: [breakdown({ currentUsageWithPrecision: used,
+        currentUsage: used })] });
+      expect(await fetchKiroUsageSnapshot(baseContext)).toBeNull();
+    }
   });
 
   test("reports unknown when no recognised resource type is present", async () => {

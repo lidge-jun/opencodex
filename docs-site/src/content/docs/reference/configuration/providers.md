@@ -198,7 +198,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `baseUrl` | `string` | Upstream API base URL. Most built-in fixed endpoints ignore a mismatch; collision-safe key presets preserve an older same-named custom destination. |
 | `proxy?` | `string \| null` | Per-provider egress route. Omit it to inherit the global proxy decision; use `"direct"` or `null` to force direct egress; or provide an absolute `http://`, `https://`, `socks5://`, or `socks5h://` proxy URL. An empty string is rejected. |
 | `noProxy?` | `string \| string[]` | Destinations this provider reaches directly, using `NO_PROXY` host-pattern syntax. A match bypasses both this provider's own proxy and an inherited global proxy. |
-| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, models? }` | Optional client-side outbound request-start pacing, separate from upstream usage, billing, and rate-limit indicators. RPM is converted to an even interval; `minIntervalMs` may impose a longer interval. Provider limits apply across all models, while `models` entries use exact upstream model IDs (for example `nvidia/llama-3.1-nemotron-ultra-253b-v1`) and can only add delay. Queue waits do not consume the upstream response-header timeout. HTTP, Responses WebSocket, and explicit adapter `fetchResponse`/`runTurn` dispatches are covered. |
+| `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models? }` | Optional client-side outbound request-start pacing, separate from upstream usage, billing, and rate-limit indicators. RPM is converted to an even interval; `minIntervalMs` may impose a longer interval. `maxConcurrentRequests` is a positive integer cap on in-flight requests. A provider or model rule may use the concurrency cap alone; provider limits apply across all models, while `models` entries use exact upstream model IDs (for example `nvidia/llama-3.1-nemotron-ultra-253b-v1`) and can only add delay or narrow concurrency. Queue waits do not consume the upstream response-header timeout. HTTP and explicit adapter `fetchResponse`/`runTurn` dispatches are covered. A concurrency-capped canonical Responses WebSocket turn uses HTTP/SSE so its lease can be released when the response body completes, errors, or is cancelled. For `runTurn` adapters, including Cursor, the cap counts active turns rather than physical sends: RunSSE and BidiAppend may overlap within one turn, while another turn waits. Follow-up sends still obey start intervals. |
 | `upstreamHttpVersion?` | `"auto" \| "http1.1" \| "h1" \| "http2" \| "h2"` | Pin the HTTP version used for upstream requests to this provider. Defaults to `auto`, which lets Bun negotiate. An explicit pin requires an HTTPS target and fails locally when it cannot be honored. Set `http1.1` when a provider's HTTP/2 SSE stream stalls instead of delivering events — the symptom is a long-running streaming request that produces nothing and eventually times out. For Cursor, `http1.1`/`h1` selects its `RunSSE` + `BidiAppend` compatibility transport for inference and also pins live model discovery. Management `POST`/`PATCH` accept `null` to clear it back to `auto`. |
 | `responsesPath?` | `string` | Relative resource path for key-auth `openai-responses` requests. It must start with `/` and contain no scheme, query, or fragment. |
 | `chatCompletionsPath?` | `string` | Relative resource path for `openai-chat` requests, the mirror of `responsesPath` and subject to the same shape rules. Needed when one upstream serves Chat Completions and Responses under different prefixes: a per-model wire override changes the adapter and leaves `baseUrl` alone, so without this an opted-in Chat request would be sent to the Responses base. Z.AI is the shipped example. |
@@ -302,6 +302,24 @@ row, set `modelReasoningEffortsAuthoritative: true` together with that model's
 `modelReasoningEfforts` list.
 
 Provider registration and replacement (`POST /api/providers`) validate `responsesPath` and `chatCompletionsPath` before changing live configuration or disk state. `PATCH /api/providers?name=<provider>` merges the request body with the stored provider; updates touching fields beyond `disabled` — except `requestPacing`-only updates — validate the merged provider's paths the same way before saving, and an invalid retained path returns `400` with the configuration unchanged. The same path rules apply when loading a configuration file.
+
+For example, this applies a provider-wide concurrency cap and a stricter cap to one exact model, without configuring an interval:
+
+```json
+{
+  "requestPacing": {
+    "enabled": true,
+    "maxConcurrentRequests": 8,
+    "models": {
+      "nvidia/llama-3.1-nemotron-ultra-253b-v1": {
+        "maxConcurrentRequests": 2
+      }
+    }
+  }
+}
+```
+
+The concurrency slot stays occupied until the upstream request finishes, including the final streamed response bytes. Requests above the applicable provider and model limits wait in the pacing queue; when a slot is released, the next eligible request is admitted. Queue waiting does not consume the upstream response-header timeout.
 
 ### What a provider save keeps
 

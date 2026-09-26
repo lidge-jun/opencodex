@@ -21,12 +21,12 @@ Native main reauthentication follows the [CLI JSON output contract](runtime.md#n
 
 The Codex restart command follows the [CLI restart scope contract](runtime.md#cli-codex-restart-scope).
 
-`src/cli/account-orca-import.ts` exposes an explicit-source, preview-first local import command.
-Apply adds pool configuration under the shared mutation lock; the
-[source-owned credential contract](codex-home.md#orca-source-owned-account-import) governs
-deduplication and credential storage separately from Codex config injection.
+`src/cli/account-orca-import.ts` exposes an explicit-source, preview-first local import command. Apply adds pool configuration under the shared mutation lock;
+the [source-owned credential contract](codex-home.md#orca-source-owned-account-import) governs deduplication and credential storage separately from Codex config injection.
 
 ## Config surface
+
+`src/config/schema/compaction-recovery.ts` strictly validates opt-in `compactionRecovery`; invalid disk values disable it with a warning, while candidate writes reject them. The [failure-only contract](transports/responses-failover.md) leaves provider identity, accounts and client compaction unchanged.
 
 Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject-lossy`.
 `ocx provider add --google-tool-schema-policy` is one authoring path and is accepted only when the
@@ -97,6 +97,7 @@ merge cannot turn them into a valid config while discarding the original bytes.
 | --- | --- | --- |
 | Listener | `port`, `hostname` | The listener owns the port; `runtime-port.json` reports where it actually landed. |
 | Routing | `defaultProvider`, `providers`, per-provider `selectedModels`, `combos` | Explicit `provider/model` wins over `defaultProvider`; combo dispatch uses the selected target's existing capability ladder and does not create a second catalog authority. For Kiro OAuth, the management API validates `providers.kiro.oauthAccountFailover.strategy` (`least-loaded`) and `maxConcurrentPerAccount` (1–100) only for Kiro; the cap persists, while active lease counts remain process-local. |
+| Request pacing | `providers.<name>.requestPacing`, `requestPacing.models.<model>` | Optional client-side request-start pacing supports interval limits and positive-integer `maxConcurrentRequests` caps. A provider or model rule may be concurrency-only; model entries target exact upstream IDs and can only add delay or narrow concurrency. |
 | Compaction routing | `compactionRouting.model`, optional `compactionRouting.reasoningEffort`, optional `compactionRouting.triggers` | Explicit Codex compaction metadata whose `compaction.trigger` is one the block names activates a request-local override; `triggers` defaults to `["manual"]`. See [Responses compaction](transports/responses-failover.md#compaction-routing-overrides). Invalid hand edits disable the block with a load warning without discarding providers; candidate writes reject invalid blocks. |
 | Catalog | `disabledModels`, `customModels`, `modelCacheTtlMs`, `providerContextCaps`, `contextCapValue`, per-provider `modelDisplayNames`, `codexAccountNamespaces`, `codexAccountPickerEnabled` | Catalog state is derived; config only records intent. Exact provider model display names are durable display only overlays. The picker flag is an explicit visibility override, while selector mappings remain the durable exact-routing contract. |
 | Retained state | `appOwnedMemoryBudgetMb` | Process-wide eviction target for app-owned logs, caches, blobs, and continuation payloads. Default 256 MiB, valid 64..4096; pinned state may temporarily exceed the target, but every pin-capable store has a finite local cap and their documented aggregate stays below `APP_OWNED_WORST_CASE_PINNED_BYTES` (512 MiB). Neither value caps RSS or native runtime memory. |
@@ -555,7 +556,6 @@ The OpenCode launcher resolves the existing local management origin from the liv
 Provider `autoReviewModel` and `autoReviewModelOverrides` accept validated final-catalog selectors. Per-model keys preserve case and accept the existing raw/encoded slash equivalence. File-load degradation removes malformed optional selectors only; management writes reject malformed shapes. Omitted provider saves preserve selectors, explicit clears remove them, and raw editor candidates adopt normalized values before persistence and live replacement. See [catalog ownership](catalog.md#provider-scoped-approval-reviewer).
 
 Display-name validation retains prototype-shaped model IDs as data; reviewer-target map validation remains separate and rejects its reserved keys.
-
 ## Explicit per-model capability declarations
 
 `modelCapabilities` on `src/types/provider.ts` stores exact model-ID entries with optional inputModalities, contextTier and video.processing axes. `src/config/provider-validation.ts` strictly validates writes and merges PATCH axes without sharing live objects; null map/model/axis/processing tombstones delete, while empty PATCH objects do nothing. Complete POST/PUT replacements reject tombstones. File reads retain valid axes; malformed explicit modalities restrict to text with a diagnostic. The two catalog writers receive explicit config and gather fingerprints include the map. This storage contract alone does not activate a context tier, advertise a larger window or enable video processing.

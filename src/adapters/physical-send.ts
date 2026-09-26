@@ -2,9 +2,14 @@ import type { AdapterFetchContext } from "./base";
 import type { SendClass } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { abortError, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import {
+  releaseProviderRequestSlot,
+  sendTrackingRequestSlot,
+  type ProviderRequestSlot,
+} from "../providers/request-pacing";
 
 type PacedFetch = typeof globalThis.fetch & {
-  waitForPacing?: (signal?: AbortSignal) => Promise<void>;
+  waitForPacing?: (signal?: AbortSignal) => Promise<ProviderRequestSlot | void>;
   unpacedFetch?: typeof globalThis.fetch;
 };
 
@@ -37,13 +42,15 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
       ctx.onPhysicalSend?.({ ordinal, ...(options.recovery ? { recovery: options.recovery } : {}) });
       return (executor.unpacedFetch ?? executor)(input, init);
     }) as typeof globalThis.fetch;
+    let slot: ProviderRequestSlot | undefined;
     try {
-      await executor.waitForPacing?.(ctx.abortSignal);
+      slot = (await executor.waitForPacing?.(ctx.abortSignal)) || undefined;
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       await options.beforeDispatch?.();
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
-      return await options.dispatch(physicalExecutor);
+      return await sendTrackingRequestSlot(slot, () => options.dispatch(physicalExecutor));
     } finally {
+      releaseProviderRequestSlot(slot);
       permit?.release();
     }
   };

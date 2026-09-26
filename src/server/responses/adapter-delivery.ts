@@ -78,12 +78,15 @@ export async function deliverAdapterResponse(
     // same mapping or the bridge catch reports this upstream timeout as a 500 proxy_error.
     const initialEventStream = (async function* (): AsyncGenerator<AdapterEvent> {
       try {
-        yield* readResponseStreamWithInactivity(
+        for await (const event of readResponseStreamWithInactivity(
           upstreamResponse,
           upstream.signal,
           bodyInactivityMs,
           response => transportState.activeAdapter.parseStream(response, translatorBudget, logCtx.activeTierMetadata),
-        );
+        )) {
+          options.onCompactionRecoveryAdapterEvent?.(event);
+          yield event;
+        }
       } catch (error) {
         if (error instanceof ResponseBodyInactivityError) {
           yield {
@@ -202,6 +205,7 @@ export async function deliverAdapterResponse(
         bodyInactivityMs,
         response => transportState.activeAdapter.parseResponse!(response, translatorBudget, logCtx.activeTierMetadata),
       );
+      for (const event of initialEvents) options.onCompactionRecoveryAdapterEvent?.(event);
       let guardedEvents: AdapterEvent[];
       if (terminalGuardEnabled) {
         guardedEvents = [];

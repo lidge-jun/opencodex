@@ -60,7 +60,7 @@ row records which one was verified and how.
 | P1/P2 | Healthy-account spreading | Quota-weighted random race (`kiro/account_manager.py:1162-1208,1288`) | Keeps a healthy active account; deterministic ordering (`src/oauth/account-quota-rank.ts:158-172`, `src/oauth/generic-account-failover.ts:443-484`) | ahead-lb on distribution | **Adopt, better** → 040: deterministic least-loaded choice among quota-healthy accounts, opt-in |
 | P3 | Per-account concurrency | Optional semaphore with bounded wait (`kiro/concurrency.py:2,95`, `kiro/http_client.py:554`) | Absent | ahead-lb | **Adopt** → 040 |
 | P10 | Affinity | Global last-success cursor (`kiro/account_manager.py:1444`) | None, documented | parity | Reject: a global cursor is not conversation affinity |
-| P8/J | Per-request credits | Records upstream credit frames per serving account (`kiro/usage_tracking.py:55,80`, `main.py:594`, `432c9b3`) | Kiro token usage is estimated; no credit field (`src/usage/log.ts:532`) | ahead-lb | **Adopt** → 070 |
+| P8/J | Per-request credits | Records upstream credit frames per serving account (`kiro/usage_tracking.py:55,80`, `main.py:594`, `432c9b3`) | At research time: no credit field. Since landed on dev outside this unit as `OcxUsage.providerCredits` from Kiro `meteringEvent` frames (`src/adapters/kiro-events.ts`, `src/adapters/kiro/stream.ts`, `src/usage/log.ts`), summed per physical send | parity | Landed upstream of 070; 070 adds quota gauges and auto-selection only |
 | U1 | Multiplier estimates | Coarse per-model estimates (`kiro/model_costs.py:8-22,108-132`) | None | ahead-lb (advisory) | Reject: 070 records measured credits; an estimate beside them would be a second, weaker number |
 
 ## Model capability and wire

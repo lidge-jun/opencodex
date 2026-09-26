@@ -202,6 +202,8 @@ veya Google Antigravity OAuth.
 **Kimlik Doğrulama:** Kiro kimlik bilgisinden bölge/profil meta verileriyle
 birlikte Bearer olarak Kiro OAuth erişim belirteci.
 
+`meteringEvent` kredileri `providerCredits` içinde ölçülür: bir fiziksel yanıttaki son değer tutulur, ayrı ücretlendirilen gönderimler ise isteğin toplam harcamasına eklenir. Tokenlardan kredi tahmini yapılmaz.
+
 Bir istek hesaba kabul edildikten sonra proxy, hesabın model listesini bölgesel yönetim
 hizmetinden arka planda okur. Gözlenen modeller yerleşik listeye eklenir; boş veya tanınmayan
 yanıt son geçerli listeyi korur. Üyelik yalnızca uygun hesaplar arasında tercih sağlar; bilinmeyen

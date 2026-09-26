@@ -27,6 +27,7 @@ import { createAdapterContinuations } from "./adapter-continuation";
 import { deliverAdapterResponse } from "./adapter-delivery";
 import { releaseUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
+import { runWithCompactionRecovery } from "./compaction-recovery";
 
 /** Public Responses entry and compatibility exports. Implementations live with their owners. */
 
@@ -47,7 +48,7 @@ export async function handleResponses(
   const release = () => { accountLoad.lease?.release(); accountLoad.lease = null; abortSignal.removeEventListener("abort", release); };
   abortSignal.addEventListener("abort", release, { once: true });
   try {
-    const response = await handleResponsesInner(req, config, logCtx, {
+    const response = await runWithCompactionRecovery(req, config, logCtx, {
       ...options,
       openAiSidecarAuth: options.openAiSidecarAuth === undefined
         ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
@@ -62,7 +63,7 @@ export async function handleResponses(
       accountLoad,
       // Once at ingress, spend observer included: a combo child inherits the parent's holder.
       sendBudget: options.sendBudget ?? createInferenceSendBudget(req, logCtx),
-    });
+    }, handleResponsesInner);
     const finalResponse = ownsBudget ? finalizeOwnedTranslatorBudget(response, translatorBudget) : response;
     if (!accountLoad.lease) { release(); return finalResponse; }
     return finalizeAccountLease(finalResponse, release);
@@ -109,6 +110,7 @@ async function handleResponsesInner(
     if (requestState instanceof Response) return requestState;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return transportState;
+    options.onCompactionRecoveryRoute?.(requestState.route);
     const sidecarState = await prepareResponsesSidecarAuth(requestContext, requestState, transportState);
     if (sidecarState instanceof Response) return sidecarState;
     const responseEffects = createResponsesEffects(

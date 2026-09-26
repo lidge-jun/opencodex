@@ -19,7 +19,7 @@ import {
 import { clientCancelledResponse, readDisplaySafeErrorText, normalizeUpstreamErrorText } from "./core-errors";
 import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
-import { waitForProviderRequestSlot } from "../../providers/request-pacing";
+import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import {
   transientRetryPolicyFor,
@@ -303,22 +303,23 @@ export async function prepareAdapterExchange(
   try {
     if (transportState.activeAdapter.fetchResponse) {
       transportState.noteRoutedAttemptSend(inputTokenEstimate);
-      await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
-      upstreamResponse = await transportState.activeAdapter.fetchResponse(builtInitialRequest, {
-        kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
-        abortSignal: upstream.signal,
-        timeoutMs: connectMs,
-        sendBudget: adapterDispatchBudget,
-        onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
-        onRecoveryWithheld: noteAdapterRecoveryWithheld,
-        stream: parsed.stream,
-        executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              pacingSlotAcquired: true,
-              dispatchOverride: oauthDispatch(builtInitialRequest),
-          providerName: route.providerName,
-          modelId: route.modelId,
-        }),
-      });
+      upstreamResponse = await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot =>
+        transportState.activeAdapter.fetchResponse!(builtInitialRequest, {
+          kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
+          abortSignal: upstream.signal,
+          timeoutMs: connectMs,
+          sendBudget: adapterDispatchBudget,
+          onPhysicalSend: send => noteAdapterPhysicalSend(inputTokenEstimate, send),
+          onRecoveryWithheld: noteAdapterRecoveryWithheld,
+          stream: parsed.stream,
+          executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+            pacingSlotAcquired: true,
+            pacingSlot,
+            dispatchOverride: oauthDispatch(builtInitialRequest),
+            providerName: route.providerName,
+            modelId: route.modelId,
+          }),
+        }));
     } else {
       // #1851 scope guard: transient-5xx retry on this generic adapter path is opt-in for
       // direct Google AI Studio only (Vertex/Antigravity use fetchResponse above). Other
@@ -328,11 +329,18 @@ export async function prepareAdapterExchange(
       // legacy direct-Google exception is preserved exactly; every other adapter still keeps
       // reset-only semantics so combo failover hops on the first 5xx.
       const transientPolicy = transientRetryPolicyFor(route.provider);
+      const compactPrepaid = options.compactionRecoveryAttempted ? sendBudgetState.pendingHopPermit : undefined;
+      if (compactPrepaid) sendBudgetState.pendingHopPermit = undefined;
+      let compactPrepaidUsed = false;
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
       upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
+          if (compactPrepaid && !compactPrepaidUsed) {
+            if (!compactPrepaid.use()) throw new SendBudgetExhaustedError(safeHostLabel(builtInitialRequest.url));
+            compactPrepaidUsed = true;
+          }
           transportState.noteRoutedAttemptSend(inputTokenEstimate, recovery);
           return fetchWithHeaderTimeout(builtInitialRequest.url, applyUpstreamRecoveryInit({
             method: builtInitialRequest.method,
@@ -348,12 +356,15 @@ export async function prepareAdapterExchange(
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url),
-          ...(transientPolicy
+          ...(transientPolicy || compactPrepaid
             // Draws the remainder, not the raw policy. A combo child inherits the parent's
             // holder but used to take a fresh full allowance on its own first send, so the
             // shared counter was inherited without ever being read as a limit.
             ? {
-              attempts: remainingTransientSendBudget(transientPolicy.attempts),
+              // The first emergency send is already paid for. Only retries consume the
+              // remaining allowance; treating the booking as unavailable blocks a cap of two.
+              attempts: Math.min(transientPolicy?.attempts ?? 1,
+                remainingTransientSendBudget(transientPolicy?.attempts ?? 1) + (compactPrepaid ? 1 : 0)),
               onSendsConsumed: noteTransientSends,
             }
             : {}),
@@ -471,30 +482,32 @@ export async function prepareAdapterExchange(
         try {
           if (transportState.activeAdapter.fetchResponse) {
             transportState.noteRoutedAttemptSend(retryEstimate, recovery);
-            await waitForProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal);
-            // The dispatch boundary is HERE, not before the pacing wait: that wait can reject for
-            // an abort, a saturated queue, an expired slot or a removed provider, and none of
-            // those reach the wire. Confirming earlier would hold the charge for a send that the
-            // pacer refused.
-            onDispatch?.();
-            return await transportState.activeAdapter.fetchResponse(retryRequest, {
-              kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
-              abortSignal: upstream.signal,
-              timeoutMs: connectMs,
-            sendBudget: adapterDispatchBudget,
-              onPhysicalSend: send => {
-                if (preserveFailureResponse) replacementAdmitted = true;
-                noteAdapterPhysicalSend(retryEstimate, send);
-                chargeFastDowngradeWorkflowSend();
-              },
-              onRecoveryWithheld: noteAdapterRecoveryWithheld,
-              stream: parsed.stream,
-              executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-                pacingSlotAcquired: true,
-              dispatchOverride: oauthDispatch(retryRequest),
-                providerName: route.providerName,
-                modelId: route.modelId,
-              }),
+            return await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot => {
+              // The dispatch boundary is HERE, not before the pacing wait: that wait can reject for
+              // an abort, a saturated queue, an expired slot or a removed provider, and none of
+              // those reach the wire. Confirming earlier would hold the charge for a send that the
+              // pacer refused.
+              onDispatch?.();
+              return transportState.activeAdapter.fetchResponse!(retryRequest, {
+                kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
+                abortSignal: upstream.signal,
+                timeoutMs: connectMs,
+                sendBudget: adapterDispatchBudget,
+                onPhysicalSend: send => {
+                  if (preserveFailureResponse) replacementAdmitted = true;
+                  noteAdapterPhysicalSend(retryEstimate, send);
+                  chargeFastDowngradeWorkflowSend();
+                },
+                onRecoveryWithheld: noteAdapterRecoveryWithheld,
+                stream: parsed.stream,
+                executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
+                  pacingSlotAcquired: true,
+                  pacingSlot,
+                  dispatchOverride: oauthDispatch(retryRequest),
+                  providerName: route.providerName,
+                  modelId: route.modelId,
+                }),
+              });
             });
           }
           // #2643 review: this leg used to call fetchWithHeaderTimeout directly, so an
@@ -1266,6 +1279,11 @@ export async function prepareAdapterExchange(
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");
       const normalized = normalizeUpstreamErrorText(errorText, "unknown error");
+      options.onCompactionRecoveryAdapterEvent?.({
+        type: "error", status: upstreamResponse.status,
+        errorType: normalized.type, code: normalized.code,
+        message: "Structured upstream failure observed before client formatting",
+      });
       const message = normalized.cyberPolicy
         ? normalized.message
           ?? (isCyberPolicyCode(normalized.code) ? CYBER_POLICY_FALLBACK_MESSAGE : normalized.safeText)

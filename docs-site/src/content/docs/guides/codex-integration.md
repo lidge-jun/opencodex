@@ -477,6 +477,42 @@ While the mode is active, the realtime voice sideband override
 (`experimental_realtime_ws_base_url`) is not injected — the dedicated provider-table form cannot
 carry it — so Codex Desktop voice uses its native endpoint rather than the proxy.
 
+### Emergency compaction model (opt-in)
+
+`compactionRecovery` leaves the initial compaction on the conversation's selected route. It
+permits one emergency attempt only after a supported, pre-output compaction failure. It is
+separate from `compactionRouting`, which chooses another model before compaction starts, and
+from `codexClientCompaction`, which changes Codex's provider form.
+
+```json
+{
+  "compactionRecovery": {
+    "enabled": true,
+    "model": "provider/emergency-model",
+    "allowDevinInvalidArgument": false
+  }
+}
+```
+
+Use an independently configured, authorized model with enough context for the failed input.
+Enabling recovery permits that model's provider to receive the compaction history and charge
+for the extra attempt when recovery runs; ordinary successful compactions incur no extra call.
+The option is off when absent or disabled. The existing authenticated management API accepts
+this block through `PUT /api/settings`; send `compactionRecovery: null` to remove it. A direct
+file edit should follow the normal stopped-proxy configuration workflow. This setting does not
+change sign-in, the conversation's ordinary model, Codex's provider ID, or the desktop composer.
+
+Recovery does not replay after cancellation, semantic output, tool side effects, an exhausted
+send budget, or an authentication, admission or policy refusal. Generic `400` errors do not
+enable fallback. The separately opted-in Devin `invalid_argument` case applies only to an
+identified compaction failure from that adapter. The emergency attempt shares the original
+request's send budget and never starts a second recovery attempt.
+
+Native encrypted compaction is outside this recovery path: its original error is retained.
+There is no automatic local truncation mode. A response being accepted is not proof that a
+long conversation retained its goals; verify the next turn on the original model before
+treating an emergency summary as a recovered task.
+
 ### Authless Codex Desktop (opt-in)
 
 In **Dashboard → Overview**, **Open Codex without signing in** controls this existing

@@ -3,12 +3,15 @@ import type { TranslatorBudget } from "../lib/translator-budget";
 import type { RequestExecutionBudget } from "../lib/request-execution-budget";
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../usage/log";
 import type { AdapterTierMetadata } from "../providers/fastwire";
+import type { ProviderRequestSlot } from "../providers/request-pacing";
 
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
   headers: Headers;
   translatorBudget: TranslatorBudget;
   abortSignal?: AbortSignal;
+  /** Lease acquired before the response is committed; the physical send transfers it to its body. */
+  pacingSlot?: ProviderRequestSlot;
   /** Combo children must surface a pre-output refusal so the selector can try the next target. */
   comboAttempt?: boolean;
   /**

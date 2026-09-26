@@ -384,6 +384,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const quotaMode = providerOAuthAccountQuotaMode(provider);
     const quotaProvider = config.providers[provider];
     const { getAccountSet } = await import("../../oauth/store");
+    const { kiroAutoSelection } = await import("../../oauth/generic-account-failover");
     const {
       oauthAccountHealthFields,
       projectOAuthAccountHealth,
@@ -402,7 +403,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
               needsReauth: summary.needsReauth === true,
               reauthReason: summary.needsReauth === true ? "refresh_failed" : undefined,
             });
-          return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode };
+          return { ...summary, ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
+            ...(provider === "kiro" && full ? kiroAutoSelection(full) : {}) };
         }),
       };
     };

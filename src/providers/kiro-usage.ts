@@ -130,7 +130,8 @@ function parseKiroUsage(body: unknown): KiroUsageSnapshot | null {
 
   const used = preciseNumber(breakdown, "currentUsageWithPrecision", "currentUsage");
   const limit = preciseNumber(breakdown, "usageLimitWithPrecision", "usageLimit");
-  if (used === undefined || limit === undefined || limit <= 0) return null;
+  if (used === undefined || !Number.isFinite(used) || used < 0
+    || limit === undefined || !Number.isFinite(limit) || limit <= 0) return null;
 
   const percent = normalizePercent((used / limit) * 100);
   if (percent === undefined) return null;
@@ -152,6 +153,8 @@ function parseKiroUsage(body: unknown): KiroUsageSnapshot | null {
 
   const quota: ProviderQuota = {
     monthlyPercent: percent,
+    kiroCreditsUsed: used,
+    kiroCreditsLimit: limit,
     ...(nextResetAt !== undefined ? { monthlyResetAt: nextResetAt } : {}),
     ...(customWindows.length > 0 ? { customWindows } : {}),
     updatedAt: Date.now(),
@@ -294,9 +297,11 @@ export function getKiroAccountExhaustion(
 }
 
 /** The only Kiro routing evidence read; each half expires on its own clock. */
-export function kiroAccountEvidence(account: ProviderAccount, now = Date.now()):
-  { quotaPercent?: number; exhausted?: boolean; resetAt?: number } {
-  hydrateKiroAccountState();
+export function kiroAccountEvidence(account: ProviderAccount, now = Date.now(), opts: { hydrate?: boolean } = {}):
+  { quotaPercent?: number; creditsUsed?: number; creditsLimit?: number; exhausted?: boolean; resetAt?: number } {
+  // Routing hydrates saved evidence on first use; the metrics scrape passes hydrate:false so a
+  // scrape never touches the disk snapshot and simply reports nothing until routing has loaded it.
+  if (opts.hydrate !== false) hydrateKiroAccountState();
   const key = accountCacheKey("kiro", account.id);
   const row = accountQuotaCache.get(key);
   const quota = row?.identity === kiroEvidenceIdentity(account) && row.quota
@@ -308,6 +313,10 @@ export function kiroAccountEvidence(account: ProviderAccount, now = Date.now()):
   const verdict = getKiroAccountExhaustion(key, account, now);
   return {
     ...(quota?.monthlyPercent !== undefined ? { quotaPercent: quota.monthlyPercent } : {}),
+    ...(typeof quota?.kiroCreditsUsed === "number" && Number.isFinite(quota.kiroCreditsUsed)
+      && quota.kiroCreditsUsed >= 0 ? { creditsUsed: quota.kiroCreditsUsed } : {}),
+    ...(typeof quota?.kiroCreditsLimit === "number" && Number.isFinite(quota.kiroCreditsLimit)
+      && quota.kiroCreditsLimit > 0 ? { creditsLimit: quota.kiroCreditsLimit } : {}),
     ...(verdict ? { exhausted: verdict.exhausted } : {}),
     ...(verdict?.nextResetAt !== undefined ? { resetAt: verdict.nextResetAt }
       : quota?.monthlyResetAt !== undefined ? { resetAt: quota.monthlyResetAt } : {}),
