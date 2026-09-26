@@ -1523,6 +1523,23 @@ export interface OcxCodexPoolConfig {
    * operator never meant to exclude.
    */
   excludedPlans?: string[];
+  /** Optional per-account response to fresh quota observations at or above a usage percentage. */
+  lowQuotaProtection?: CodexLowQuotaProtectionConfig;
+}
+
+/** Optional policy for pausing accounts and notifying when selected quota windows are low. */
+export interface CodexLowQuotaProtectionConfig {
+  enabled: boolean;
+  /** Inclusive usage percentage from 0 to 100. */
+  threshold: number;
+  actions: {
+    pause: boolean;
+    notify: boolean;
+  };
+  windows: {
+    short: boolean;
+    weekly: boolean;
+  };
 }
 
 /**
