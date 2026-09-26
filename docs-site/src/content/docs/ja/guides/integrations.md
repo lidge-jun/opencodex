@@ -35,6 +35,8 @@ modelProfile:
 
 通常の `gjc` 起動時に適用するには、選択した `modelProfile.default` を維持してください。管理対象の統合が所有するのは `models.yml` 内の `providers.opencodex` だけです。プロバイダーの更新や無効化でプリセットの選択は書き換わりません。出力するモデルの選択を変更した後は、統合を更新してください。
 
+対応する推論負荷の段階を持つ GJC モデルは、`reasoning: true`、`thinking.levels`、`compat.supportsReasoningEffort` を出力し、GJC で負荷を選べるようにします。ネイティブ Codex モデルでは、カタログに段階がなくても標準の段階を出力します。段階が不明なモデルではこれらの項目を省略します。`none` は負荷を送信せず、`ultra` は送信時に `max` に変換されるため、選択肢には含めません。モデルの選択肢を更新するには統合を更新してください。
+
 管理対象の OpenCode 統合は、`provider.opencodex`（opencode V1）と `providers.opencodex`（opencode V2）の 2 つの部分を所有します。モデルごとの推論負荷の選択肢は V2 ブロックだけに含まれるため、両方を書き込んで同期します。両者は同じプロバイダー ID とモデル ID を指定し、opencode V2 は 1 つのプロバイダー項目に統合します。Apply、Refresh、Disable、Restore は両方に作用し、他のプロバイダー、エージェント、キー割り当て、MCP 項目には触れません。
 
 管理対象の DSH 統合には **DSH 0.1.0-rc.6** 以降が必要です。OpenCodex が所有するのは `llm-pi-ai.providers.opencodex` のみです。Apply と Refresh はその部分を置き換え、Disable はその部分のみを削除し、Restore は記録されたスナップショットを戻します。DSH はプロバイダー変更をホットリロードします。これらの操作はユーザーのデフォルトモデルやネイティブの `deepseek-official` プロバイダーを変更しません。管理対象の DSH 統合は現在ループバック専用で、実際の認証情報は書き込みません。

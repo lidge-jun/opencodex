@@ -910,6 +910,32 @@ When an account leaves pool selection, the reason travels with the decision inst
 
 A main-account refresh that does not complete still answers `503` with `Retry-After`, because a retry may still succeed. The message now adds that a failure which persists means the main account needs reauthentication, rather than only asking for another attempt.
 
+### Optional idle-window steering
+
+`codexPool.startIdleWindows` is an optional boolean and defaults to `false`. When enabled, a new
+unbound real request may be placed on an eligible account whose observed short quota window is at
+0% with evidence that its five-hour clock has not started. This check runs after conversation and family affinity, so an existing
+binding remains authoritative; an explicit account pin or manual account preference also wins.
+Independent model quota scopes are skipped, and the shared active cursor is unchanged. After the
+idle-window choice, normal strategy selection resumes for other conversations.
+
+The observation must be no older than five minutes, and the short window must explicitly be
+18,000 seconds. Its reset must be observed within 60 seconds of `observation + 5h` (rather than an already ticking or elapsed reset). A synchronous,
+process-local reservation prevents duplicate selections for the same account and window. The
+reservation deadline is at least 5h plus one minute after selection; a fresh observation is
+required after that deadline before the same account can be steered again. Reservations are cleared when the proxy
+process restarts and are never persisted to disk.
+
+Enable it in your existing configuration:
+
+```json
+{
+  "codexPool": { "startIdleWindows": true }
+}
+```
+
+If no account meets the criteria, ordinary routing applies. This feature only steers an actual incoming request. It creates no synthetic request and no timer.
+
 ### Keeping a downgraded account out of rotation
 
 `codexPool.excludedPlans` lists plan keys that automatic pool selection skips, matched case-insensitively against the plan stored on each account. It is absent by default, so an existing install rotates exactly as before.

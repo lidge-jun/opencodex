@@ -239,6 +239,57 @@ test("invalid request and loopback are refused before consulting tunnel choice",
   expect(consulted).toBe(0);
 });
 
+test("restricted CONNECT admits only exact normalized authorities before tunnel selection", async () => {
+  const echo = await startEchoUpstream();
+  cleanups.push(echo.close);
+  const selected: string[] = [];
+  let blindDials = 0;
+  const allowedTargets = ["CHATGPT.COM.:443"];
+  const proxy = await startConnectProxy(0, {
+    interceptPort: echo.port,
+    interceptHosts: ["chatgpt.com"],
+    allowedTargets,
+    selectTunnel: (host, port) => { selected.push(`${host}:${port}`); return null; },
+    dialUpstream: () => { blindDials++; return connect({ host: "127.0.0.1", port: echo.port }); },
+  });
+  cleanups.push(proxy.close);
+  // A caller mutating its original array cannot broaden a running listener.
+  allowedTargets.push("other.example:443");
+  expect(await tunnelPayload(proxy.port, "ChatGPT.Com.")).toContain("echo:hello");
+  for (const authority of ["other.example:443", "chatgpt.com:8443", "child.chatgpt.com:443", "chatgpt.com.evil.example:443"]) {
+    expect(await rawRequest(proxy.port, `CONNECT ${authority} HTTP/1.1\r\nUser-Agent: Mozilla/test\r\n\r\npipelined`)).toStartWith("HTTP/1.1 403");
+  }
+  expect(selected).toEqual(["chatgpt.com:443"]);
+  expect(blindDials).toBe(0);
+});
+
+test("empty CONNECT allowlist denies all and cannot enter a failing selector", async () => {
+  let called = false;
+  const proxy = await startConnectProxy(0, {
+    interceptPort: 1,
+    allowedTargets: [],
+    selectTunnel: () => { called = true; throw new Error("must not run"); },
+  });
+  cleanups.push(proxy.close);
+  expect(await rawRequest(proxy.port, "CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 403");
+  expect(called).toBe(false);
+});
+
+test("destination restriction does not replace authentication or loopback refusal", async () => {
+  const proxy = await startConnectProxy(0, {
+    interceptPort: 1, authToken: AUTH_TOKEN, allowedTargets: ["chatgpt.com:443", "127.0.0.1:443"],
+  });
+  cleanups.push(proxy.close);
+  expect(await rawRequest(proxy.port, "CONNECT chatgpt.com:443 HTTP/1.1\r\n\r\n")).toStartWith("HTTP/1.1 407");
+  expect(await rawRequest(proxy.port, `CONNECT 127.0.0.1:443 HTTP/1.1\r\n${AUTH_HEADER}\r\n`)).toStartWith("HTTP/1.1 403");
+});
+
+test("malformed destination restrictions fail before a listener starts", () => {
+  for (const authority of ["", "*.example.com:443", "example.com", "example.com:0", "example.com:65536", "example.com:443\r\nX: value", "https://example.com:443"]) {
+    expect(() => startConnectProxy(0, { interceptPort: 1, allowedTargets: [authority] })).toThrow("Invalid CONNECT allowed target");
+  }
+});
+
 test("plain proxied HTTP, loopback targets and oversized heads are refused", async () => {
   const { proxy } = await startPair();
   expect(await rawRequest(proxy.port, "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")).toStartWith("HTTP/1.1 405");

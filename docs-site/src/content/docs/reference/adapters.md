@@ -296,6 +296,31 @@ MiMo model Command Code serves.
   `functionResponse` per representable call. Interrupted histories receive an explicit missing-result marker;
   duplicate or standalone results are preserved as marked text (and image siblings) rather than
   emitted as invalid unpaired `functionResponse` parts.
+- **Video input and agentic processing.** The OpenAI-compatible content part
+  `{"type": "video_url", "video_url": {"url": "…", "processing": "agentic"}}` is accepted on both
+  the Chat and Responses ingress routes. `url` is required; `processing` is optional and is
+  upper-cased onto the Gemini part as `media_processing` (`STATIC` is Gemini's default, `AGENTIC`
+  requests agentic video understanding). The field sits on the **part**, beside `inline_data` or
+  `file_data`, so it applies to inline bytes and fetched URIs alike — it is not the Interactions
+  API's `processing`. A request that omits `processing` gains no field, so existing callers are
+  unchanged.
+
+  Three URL forms are handled, and only three:
+
+  | `url` | sent as |
+  | --- | --- |
+  | `data:` URL | `inline_data` with the data URL's own media type |
+  | YouTube watch URL (`youtube.com`, `youtu.be`, `m.`/`music.`/`-nocookie` variants) | `file_data.file_uri` |
+  | `https://generativelanguage.googleapis.com/<version>/files/<id>` — the Files API resource form, where `<version>` is `v1`, `v1beta` or `v1alpha` | `file_data.file_uri` |
+
+  Any other remote URL is kept as the text marker `[video: <url>]`, because the adapter has no
+  media type for it and no evidence Gemini will fetch it. The allowlist is matched on the parsed
+  URL's host and path over HTTPS — not on a substring — so a look-alike host does not become a
+  `file_data` reference the proxy asks Gemini to fetch. The path is anchored at the start, so the
+  resumable-upload endpoint (`/upload/<version>/files/<id>`) is *not* accepted: it is not a
+  readable resource, and `file_data.file_uri` asks Gemini to dereference what it is given. `file_data` carries `file_uri` only; no
+  guessed `mime_type` is attached.
+
 - **Inline image output:** when the model is one of the explicit image-capable chat IDs
   (`gemini-3.1-flash-image`, `gemini-2.0-flash-preview-image-generation`, or
   `gemini-3-pro-image-preview`), the adapter sends `responseModalities: ["TEXT", "IMAGE"]`.

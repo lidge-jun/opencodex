@@ -140,6 +140,146 @@ describe("google adapter — Chat Completions video input", () => {
     });
     expect(JSON.stringify(contents)).not.toContain("file_data");
   });
+
+  test("a YouTube URL reaches Gemini as a video, carrying the agentic processing mode", async () => {
+    // #3271: the mode was dropped twice on the way in — z.object() strips an
+    // undeclared key, and the adapter then flattened the URL to a text marker,
+    // so agentic video understanding could not be requested at all.
+    const responsesBody = chatCompletionsToResponsesBody({
+      model: "google-antigravity/gemini-3.7-flash",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "When do the arms pick up the gear?" },
+          {
+            type: "video_url",
+            video_url: { url: "https://www.youtube.com/watch?v=example", processing: "agentic" },
+          },
+        ],
+      }],
+    });
+    const parsed = parseRequest(responsesBody);
+    parsed.modelId = "gemini-3.7-flash";
+
+    const contents = await geminiContents(parsed);
+
+    expect(contents).toContainEqual({
+      role: "user",
+      parts: [
+        { text: "When do the arms pick up the gear?" },
+        {
+          file_data: { file_uri: "https://www.youtube.com/watch?v=example" },
+          media_processing: "AGENTIC",
+        },
+      ],
+    });
+  });
+
+  test("a Files API uri is fetchable too, and without a mode nothing is added", async () => {
+    const responsesBody = chatCompletionsToResponsesBody({
+      model: "google-antigravity/gemini-3.7-flash",
+      messages: [{
+        role: "user",
+        content: [{
+          type: "video_url",
+          video_url: { url: "https://generativelanguage.googleapis.com/v1beta/files/abc123" },
+        }],
+      }],
+    });
+    const parsed = parseRequest(responsesBody);
+    parsed.modelId = "gemini-3.7-flash";
+
+    const contents = await geminiContents(parsed);
+
+    expect(contents).toContainEqual({
+      role: "user",
+      parts: [{
+        file_data: { file_uri: "https://generativelanguage.googleapis.com/v1beta/files/abc123" },
+      }],
+    });
+    // A caller who did not ask for a mode must not gain an unknown upstream field.
+    expect(JSON.stringify(contents)).not.toContain("media_processing");
+  });
+
+  test("inline video bytes carry the mode too — it rides on the part, not the uri", async () => {
+    // `media_processing` sits beside `inline_data`/`file_data`, so a data: URL is
+    // just as eligible. Emitting it on only the fetched-uri branch silently
+    // dropped agentic mode for callers who inline their clip.
+    const responsesBody = chatCompletionsToResponsesBody({
+      model: "google-antigravity/gemini-3.7-flash",
+      messages: [{
+        role: "user",
+        content: [{
+          type: "video_url",
+          video_url: { url: "data:video/mp4;base64,aGVsbG8=", processing: "agentic" },
+        }],
+      }],
+    });
+    const parsed = parseRequest(responsesBody);
+    parsed.modelId = "gemini-3.7-flash";
+
+    const contents = await geminiContents(parsed);
+
+    expect(contents).toContainEqual({
+      role: "user",
+      parts: [{
+        inline_data: { mime_type: "video/mp4", data: "aGVsbG8=" },
+        media_processing: "AGENTIC",
+      }],
+    });
+  });
+
+  test("the mode is sent as GenerateContent spells it, not the caller's spelling", async () => {
+    // The caller sends `processing: "agentic"` (the Interactions API spelling, and
+    // what #3271 asked for). GenerateContent reads `media_processing` with an
+    // upper-case enum; forwarding the caller's spelling verbatim would have looked
+    // like a pass-through while agentic mode never engaged.
+    const responsesBody = chatCompletionsToResponsesBody({
+      model: "google-antigravity/gemini-3.7-flash",
+      messages: [{
+        role: "user",
+        content: [{
+          type: "video_url",
+          video_url: { url: "https://youtu.be/example", processing: "agentic" },
+        }],
+      }],
+    });
+    const parsed = parseRequest(responsesBody);
+    parsed.modelId = "gemini-3.7-flash";
+
+    const wire = JSON.stringify(await geminiContents(parsed));
+
+    expect(wire).toContain('"media_processing":"AGENTIC"');
+    expect(wire).not.toContain('"processing":"agentic"');
+  });
+
+  test("a look-alike host is not treated as fetchable", async () => {
+    // The allowlist matches the host, not a substring: `file_data` asks Gemini to
+    // dereference the URL, so a near-miss must stay a marker rather than send
+    // Google after an attacker-chosen host.
+    for (const url of [
+      "https://youtube.com.evil.test/watch?v=x",
+      "https://notyoutube.com/watch?v=x",
+      "https://generativelanguage.googleapis.com.evil.test/v1beta/files/abc",
+      // The resumable-upload endpoint, not the resource: Gemini cannot read it back.
+      "https://generativelanguage.googleapis.com/upload/v1beta/files/abc",
+      // A files path nested under something else is not the resource form either.
+      "https://generativelanguage.googleapis.com/v1beta/tunedModels/x/files/abc",
+      "http://www.youtube.com/watch?v=x",
+    ]) {
+      const responsesBody = chatCompletionsToResponsesBody({
+        model: "google-antigravity/gemini-3.7-flash",
+        messages: [{ role: "user", content: [{ type: "video_url", video_url: { url, processing: "agentic" } }] }],
+      });
+      const parsed = parseRequest(responsesBody);
+      parsed.modelId = "gemini-3.7-flash";
+
+      const contents = await geminiContents(parsed);
+
+      expect(contents).toContainEqual({ role: "user", parts: [{ text: `[video: ${url}]` }] });
+      expect(JSON.stringify(contents)).not.toContain("file_data");
+    }
+  });
 });
 
 describe("google adapter — tool-call ids on the wire", () => {
