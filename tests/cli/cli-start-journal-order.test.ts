@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { createLocalAttestationSecret } from "../../src/lib/local-management-attestation";
+import { removeRuntimePort, writeRuntimePort } from "../../src/config/process-state";
+import { markSiblingStart, resetSiblingStartForTests, withSiblingMarker } from "../../src/codex/sibling-start";
+import { issueSiblingHandoff } from "../../src/codex/sibling-handoff";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -470,6 +474,21 @@ describe("a sibling instance leaves the live owner's client routing alone", () =
     }
   }, SIBLING_ROUTING_BUDGET_MS);
 
+  test("a direct start cannot claim sibling status with only a forged port env", async () => {
+    const fx = fixture();
+    const forgedOwnerPort = freeLoopbackPort();
+    const childPort = freeLoopbackPort();
+    const launched = await startSibling(
+      { ...fx.env, OCX_SIBLING_OF_PORT: String(forgedOwnerPort) },
+      fx.ocxHome,
+      childPort,
+      fx.root,
+    );
+    expect(launched.runtime.siblingOfPort).toBeUndefined();
+    launched.child.kill("SIGTERM");
+    await launched.child.exited;
+  }, JOURNAL_OWNERSHIP_BUDGET_MS);
+
   test("a sibling's replacement that starts while the owner is down stays a sibling", async () => {
     // A sibling's drain-and-restart or recycle spawns a fresh `ocx start` that re-probes. With the
     // owner down for that moment it used to start as an ordinary owner: it replayed the owner's
@@ -507,13 +526,26 @@ describe("a sibling instance leaves the live owner's client routing alone", () =
       defaultProvider: "openai",
     }));
     const siblingPort = freeLoopbackPort();
-    const replacement = await startSibling(
-      { ...fx.env, OPENCODEX_HOME: siblingHome, OCX_SIBLING_OF_PORT: String(ownerPort) },
-      siblingHome,
-      siblingPort,
-      fx.root,
-    );
+    const previousHome = process.env.OPENCODEX_HOME;
+    const replacementEnv = (() => {
+      try {
+        process.env.OPENCODEX_HOME = siblingHome;
+        // Model the previous sibling at the handoff boundary. The issued record is bound to its
+        // runtime PID, own port and home, then consumed by the real replacement CLI process.
+        writeRuntimePort({ pid: process.pid, port: siblingPort, siblingOfPort: ownerPort,
+          attestationSecret: createLocalAttestationSecret() });
+        markSiblingStart(ownerPort);
+        return withSiblingMarker({ ...fx.env, OPENCODEX_HOME: siblingHome }, issueSiblingHandoff);
+      } finally {
+        resetSiblingStartForTests();
+        removeRuntimePort(process.pid);
+        if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = previousHome;
+      }
+    })();
+    const replacement = await startSibling(replacementEnv, siblingHome, siblingPort, fx.root);
     expect(replacement.runtime.siblingOfPort).toBe(ownerPort);
+    expect(existsSync(join(siblingHome, `sibling-handoff-${replacementEnv.OCX_SIBLING_HANDOFF_NONCE}.json`))).toBe(false);
     expect(snapshot()).toEqual(before);
     expect((JSON.parse(readFileSync(siblingConfig, "utf8")) as { port?: number }).port).toBe(ownerPort);
 

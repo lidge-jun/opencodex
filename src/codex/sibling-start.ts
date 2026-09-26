@@ -29,9 +29,8 @@
  * The one hand-off is to this process's own replacement. A sibling's dashboard drain-and-restart and
  * its standalone recycle spawn a fresh `ocx start` that re-probes; if the owner is down for that
  * moment, the replacement used to start as an unmarked owner, re-point Codex at itself and persist
- * `config.port`. So those spawns carry {@link SIBLING_OF_PORT_ENV} ({@link withSiblingMarker}), and
- * `handleStart` honors it before any probe ({@link honorSiblingMarker}) and consumes it, so no other
- * child of the replacement inherits it.
+ * `config.port`. Those spawns carry a port plus a one-use record nonce from `sibling-handoff.ts`.
+ * `handleStart` consumes the record before any probe; an env port alone grants nothing.
  *
  * Deliberately import-free: the gate, the server and the CLI all read it, and a leaf cannot form a
  * cycle.
@@ -77,6 +76,7 @@ export function siblingRuntimeField(): { siblingOfPort?: number } {
 
 /** The env var a sibling hands its own replacement `ocx start`: the live owner's port. */
 export const SIBLING_OF_PORT_ENV = "OCX_SIBLING_OF_PORT";
+export const SIBLING_HANDOFF_NONCE_ENV = "OCX_SIBLING_HANDOFF_NONCE";
 
 type Env = Record<string, string | undefined>;
 
@@ -89,22 +89,27 @@ export function parseSiblingMarker(raw: string | undefined): number | null {
 }
 
 /**
- * Honor an inherited marker at the top of `handleStart`, before any probe decides ownership: a
- * valid one marks this process whether or not the owner answers right now. The marker is removed
- * from `env` either way, so only {@link withSiblingMarker} ever hands it on. Returns the owner port
- * when this call marked the process.
+ * Honor a port only when its one-use handoff record was consumed. Both env fields are stripped
+ * before any probe, including on refusal, so a later detached child cannot inherit them.
  */
-export function honorSiblingMarker(env: Env): number | null {
+export function honorSiblingMarker(env: Env, consumeHandoff: (port: number, nonce: string | undefined) => boolean): number | null {
   const port = parseSiblingMarker(env[SIBLING_OF_PORT_ENV]);
+  const nonce = env[SIBLING_HANDOFF_NONCE_ENV];
   delete env[SIBLING_OF_PORT_ENV];
-  if (port !== null) markSiblingStart(port);
+  delete env[SIBLING_HANDOFF_NONCE_ENV];
+  if (port === null || !consumeHandoff(port, nonce)) return null;
+  markSiblingStart(port);
   return port;
 }
 
-/** A copy of `env` for this process's own replacement: the marker exactly when this is a sibling. */
-export function withSiblingMarker<T extends Env>(env: T): T {
+/** A copy of `env` for this process's own replacement, with a one-use handoff when marked. */
+export function withSiblingMarker<T extends Env>(env: T, issueHandoff?: (port: number) => string): T {
   const next: Env = withoutSiblingMarker(env);
-  if (livePort !== null) next[SIBLING_OF_PORT_ENV] = String(livePort);
+  if (livePort !== null) {
+    if (!issueHandoff) throw new Error("Sibling replacement requires a one-use handoff issuer.");
+    next[SIBLING_OF_PORT_ENV] = String(livePort);
+    next[SIBLING_HANDOFF_NONCE_ENV] = issueHandoff(livePort);
+  }
   return next as T;
 }
 
@@ -112,6 +117,7 @@ export function withSiblingMarker<T extends Env>(env: T): T {
 export function withoutSiblingMarker<T extends Env>(env: T): T {
   const next: Env = { ...env };
   delete next[SIBLING_OF_PORT_ENV];
+  delete next[SIBLING_HANDOFF_NONCE_ENV];
   return next as T;
 }
 

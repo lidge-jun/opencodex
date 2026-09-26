@@ -6,12 +6,16 @@ import {
   markSiblingStart,
   parseSiblingMarker,
   resetSiblingStartForTests,
+  SIBLING_HANDOFF_NONCE_ENV,
   SIBLING_OF_PORT_ENV,
   siblingOfLivePort,
   siblingStopFoundOwner,
   withoutSiblingMarker,
   withSiblingMarker,
 } from "../../src/codex/sibling-start";
+import { consumeSiblingHandoff, issueSiblingHandoff } from "../../src/codex/sibling-handoff";
+import { removeRuntimePort, writeRuntimePort } from "../../src/config/process-state";
+import { createLocalAttestationSecret } from "../../src/lib/local-management-attestation";
 import type { CliDispatchDeps } from "../../src/cli/dispatch";
 import type { OcxConfig } from "../../src/types";
 import { runGuiCommand } from "../../src/cli/gui";
@@ -570,10 +574,12 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     const stop = slice("async function handleStopUnlocked(", "async function handleUninstall(");
     const findAt = stop.indexOf("const live = await findLiveProxy({ acceptPackageTreeFenced: true });");
     const askAt = stop.indexOf("if (siblingStopFoundOwner(siblingOfPort, live)) {");
+    const attestAt = stop.indexOf("} else if (live?.pid && !(await proveLiveProxyOwnedByHome(live))) {");
     expect(findAt).toBeGreaterThan(-1);
     expect(askAt).toBeGreaterThan(findAt);
-    expect(askAt).toBeLessThan(stop.indexOf("} else if (live?.pid) {"));
-    const branch = stop.slice(askAt, stop.indexOf("} else if (live?.pid) {"));
+    expect(askAt).toBeLessThan(attestAt);
+    expect(attestAt).toBeLessThan(stop.indexOf("} else if (live?.pid) {"));
+    const branch = stop.slice(askAt, attestAt);
     expect(branch).toContain('record.proxy = "not-running";');
     expect(branch).toContain("was left running.");
     expect(branch).not.toContain("stopFailed = true");
@@ -582,6 +588,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
 
   test("a sibling's replacement start inherits the mark through the env, and nothing else does", () => {
     expect(SIBLING_OF_PORT_ENV).toBe("OCX_SIBLING_OF_PORT");
+    expect(SIBLING_HANDOFF_NONCE_ENV).toBe("OCX_SIBLING_HANDOFF_NONCE");
     for (const [raw, port] of [["10100", 10100], [" 1 ", 1], ["65535", 65535]] as const) {
       expect(parseSiblingMarker(raw)).toBe(port);
     }
@@ -590,30 +597,33 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     }
     try {
       // Unmarked: a replacement env carries no marker, and a stale inherited one is dropped.
-      expect(withSiblingMarker({ PATH: "/bin", OCX_SIBLING_OF_PORT: "9" })).toEqual({ PATH: "/bin" });
-      // Honoring a valid marker marks this process before any probe and consumes the variable.
-      const env: Record<string, string | undefined> = { PATH: "/bin", OCX_SIBLING_OF_PORT: "10100" };
-      expect(honorSiblingMarker(env)).toBe(10100);
+      expect(withSiblingMarker({ PATH: "/bin", OCX_SIBLING_OF_PORT: "9", OCX_SIBLING_HANDOFF_NONCE: "stale" })).toEqual({ PATH: "/bin" });
+      // The leaf marks only after the supplied one-use verifier accepts both fields.
+      const env: Record<string, string | undefined> = { PATH: "/bin", OCX_SIBLING_OF_PORT: "10100", OCX_SIBLING_HANDOFF_NONCE: "one-use" };
+      expect(honorSiblingMarker(env, (port, nonce) => port === 10100 && nonce === "one-use")).toBe(10100);
       expect(siblingOfLivePort()).toBe(10100);
       expect(env).toEqual({ PATH: "/bin" });
       // Marked: the replacement env names the owner; an ordinary-owner child env never does.
       const source = { PATH: "/bin", OCX_SERVICE: "1" };
-      expect(withSiblingMarker(source)).toEqual({ PATH: "/bin", OCX_SERVICE: "1", OCX_SIBLING_OF_PORT: "10100" });
+      expect(withSiblingMarker(source, () => "one-use")).toEqual({ PATH: "/bin", OCX_SERVICE: "1", OCX_SIBLING_OF_PORT: "10100", OCX_SIBLING_HANDOFF_NONCE: "one-use" });
       expect(source).toEqual({ PATH: "/bin", OCX_SERVICE: "1" });
-      expect(withoutSiblingMarker({ PATH: "/bin", OCX_SIBLING_OF_PORT: "10100" })).toEqual({ PATH: "/bin" });
+      expect(withoutSiblingMarker({ PATH: "/bin", OCX_SIBLING_OF_PORT: "10100", OCX_SIBLING_HANDOFF_NONCE: "stale" })).toEqual({ PATH: "/bin" });
     } finally {
       resetSiblingStartForTests();
     }
     // A malformed marker marks nothing and is still consumed.
     const bad: Record<string, string | undefined> = { OCX_SIBLING_OF_PORT: "0" };
-    expect(honorSiblingMarker(bad)).toBeNull();
+    expect(honorSiblingMarker(bad, () => true)).toBeNull();
     expect(siblingOfLivePort()).toBeNull();
     expect(bad).toEqual({});
+    const forged: Record<string, string | undefined> = { OCX_SIBLING_OF_PORT: "10100" };
+    expect(honorSiblingMarker(forged, consumeSiblingHandoff)).toBeNull();
+    expect(forged).toEqual({});
 
     // Wiring: handleStart honors it before the first probe; both replacement spawns hand it on;
     // the ordinary-owner detached starts strip it.
     const start = slice("async function handleStart(", "function detachedStartEnvironment(");
-    const honorAt = start.indexOf("let siblingStart = honorSiblingMarker(process.env) !== null;");
+    const honorAt = start.indexOf("let siblingStart = honorSiblingMarker(process.env, consumeSiblingHandoff) !== null;");
     expect(honorAt).toBeGreaterThan(-1);
     expect(honorAt).toBeLessThan(start.indexOf("await findProxyOwnerBeforeJournalRecovery("));
     const owner = slice("async function findProxyOwnerBeforeJournalRecovery(", "async function handleStart(");
@@ -635,10 +645,40 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     }
     // The package launcher's own post-update restart cannot import the helper; it deletes inline.
     expect(readFileSync(repoPath("bin/ocx.mjs"), "utf8")).toContain("delete env.OCX_SIBLING_OF_PORT;");
+    expect(readFileSync(repoPath("bin/ocx.mjs"), "utf8")).toContain("delete env.OCX_SIBLING_HANDOFF_NONCE;");
     expect(readFileSync(repoPath("src/server/management/system-restart.ts"), "utf8"))
-      .toContain("const sourceEnv: NodeJS.ProcessEnv = withSiblingMarker(process.env);");
+      .toContain("const sourceEnv: NodeJS.ProcessEnv = withSiblingMarker(process.env, issueSiblingHandoff);");
     expect(readFileSync(repoPath("src/client/runtime.ts"), "utf8"))
-      .toContain("env: withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint)),");
+      .toContain("env: withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff),");
+  });
+
+  test("a sibling handoff is bound to its live runtime and home, then consumed once", () => {
+    const priorHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-sibling-handoff-"));
+    const otherHome = mkdtempSync(join(tmpdir(), "ocx-other-handoff-"));
+    try {
+      process.env.OPENCODEX_HOME = home;
+      markSiblingStart(10100);
+      expect(() => withSiblingMarker({ OPENCODEX_HOME: home }, issueSiblingHandoff)).toThrow();
+      writeRuntimePort({ pid: process.pid, port: 10199, siblingOfPort: 10100,
+        attestationSecret: createLocalAttestationSecret() });
+      const issued = withSiblingMarker({ OPENCODEX_HOME: home }, issueSiblingHandoff);
+      resetSiblingStartForTests();
+      process.env.OPENCODEX_HOME = otherHome;
+      expect(honorSiblingMarker({ ...issued }, consumeSiblingHandoff)).toBeNull();
+      process.env.OPENCODEX_HOME = home;
+      expect(honorSiblingMarker({ ...issued }, consumeSiblingHandoff)).toBe(10100);
+      resetSiblingStartForTests();
+      expect(honorSiblingMarker({ ...issued }, consumeSiblingHandoff)).toBeNull();
+    } finally {
+      resetSiblingStartForTests();
+      process.env.OPENCODEX_HOME = home;
+      removeRuntimePort(process.pid);
+      if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = priorHome;
+      removeTreeWithRetry(home);
+      removeTreeWithRetry(otherHome);
+    }
   });
 });
 

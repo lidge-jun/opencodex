@@ -163,9 +163,11 @@ manager: a sibling never runs under one, so an installed service is the live own
 recorded sibling no longer answers and discovery reaches the owner instead (`siblingStopFoundOwner`),
 the stop leaves that proxy running, clears the stale sibling records and exits 0. A clean sibling
 exit removes that record; a later `ocx stop` refuses a discovered listener unless it proves possession of this home's runtime-record secret through a fresh `/healthz` challenge, so the configured-port fallback cannot stop the owner. The sibling's own drain-and-restart (`src/server/management/system-restart.ts`) and standalone recycle
-(`src/client/runtime.ts`) hand the mark to their replacement through `OCX_SIBLING_OF_PORT`;
-`handleStart` honors and consumes it before any probe, so an owner that is down for that moment
-cannot turn the replacement into an owner, and the journal recovery in that probe stays skipped.
+(`src/client/runtime.ts`) hand the mark to their replacement through `OCX_SIBLING_OF_PORT` and
+`OCX_SIBLING_HANDOFF_NONCE`, backed by a one-use `src/codex/sibling-handoff.ts` record bound to the
+prior sibling runtime and `OPENCODEX_HOME`. `handleStart` consumes that record before any probe;
+a forged port env or replay grants no sibling status. A valid replacement stays a sibling while
+the owner is down, and its journal recovery remains skipped.
 Every other detached `ocx start` (`ocx ensure`, the tray, the `ocx claude`/`opencode`/`minimax`
 auto-start and the updater's restart) starts an ordinary owner and strips an inherited marker
 through `withoutSiblingMarker`.

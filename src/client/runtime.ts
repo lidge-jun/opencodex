@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import type { Server } from "bun";
 import { siblingRuntimeField, withSiblingMarker } from "../codex/sibling-start";
+import { issueSiblingHandoff } from "../codex/sibling-handoff";
 import { loadConfig } from "../config";
 import { removePid, removeRuntimePort, writePid, writeRuntimePort } from "../config/process-state";
 import { installCrashGuards } from "../lib/crash-guard";
@@ -92,7 +93,7 @@ async function recycleStandalone(disconnectedTokenFingerprint: string): Promise<
       stdio: "ignore",
       windowsHide: true,
       // A sibling's replacement stays a sibling even if the owner is down while it probes.
-      env: withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint)),
+      env: withSiblingMarker(standaloneRecycleEnv(process.env, disconnectedTokenFingerprint), issueSiblingHandoff),
     });
     child.unref();
   }

@@ -35,6 +35,7 @@ import {
 } from "../lifecycle";
 import { isServiceViable } from "../../service";
 import { withSiblingMarker } from "../../codex/sibling-start";
+import { issueSiblingHandoff } from "../../codex/sibling-handoff";
 import { readRuntimePort } from "../../config/process-state";
 import { withProcessRuntimeProvenance } from "../../lib/bun-runtime";
 import { selfLaunchArgv } from "../../lib/self-launch-argv";
@@ -248,7 +249,7 @@ function spawnDetachedStart(
     let child: ReturnType<typeof spawn>;
     try {
       // A sibling's replacement stays a sibling even if the owner is down while it probes.
-      const sourceEnv: NodeJS.ProcessEnv = withSiblingMarker(process.env);
+      const sourceEnv: NodeJS.ProcessEnv = withSiblingMarker(process.env, issueSiblingHandoff);
       delete sourceEnv.OCX_SERVICE;
       const env = spendLedgerRestartEnvironment(
         sourceEnv,

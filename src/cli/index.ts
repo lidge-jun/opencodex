@@ -130,6 +130,7 @@ import {
 import { syncModelsToCodex } from "../codex/sync";
 import { localClientSkipReason, shouldSyncGrokOnStart, syncCodexOnStartIfEnabled } from "../codex/desired-state";
 import { honorSiblingMarker, markSiblingStart, siblingOfLivePort, siblingRuntimeField, siblingStopFoundOwner, withoutSiblingMarker } from "../codex/sibling-start";
+import { consumeSiblingHandoff } from "../codex/sibling-handoff";
 import {
   reconcileClientStartupBeforeReady,
   syncClaudeAgentDefsAtProxyStartup,
@@ -417,9 +418,8 @@ async function handleStart(options: { block?: boolean } = {}) {
   // configured port. Without the probe, `start` shadowed a healthy proxy with an
   // ephemeral-port copy and re-pointed client config at the copy; the next sibling
   // shutdown then left no runtime record for discovery at all. `handleEnsure`
-  // already passes this; `handleStart` is the path that did not. A sibling's own replacement is
-  // marked before it (`honorSiblingMarker`): an owner down for that moment must not make it one.
-  let siblingStart = honorSiblingMarker(process.env) !== null;
+  // already passes this; `handleStart` also consumes a sibling replacement's handoff first.
+  let siblingStart = honorSiblingMarker(process.env, consumeSiblingHandoff) !== null;
   const owner = await findProxyOwnerBeforeJournalRecovery({ probeConfiguredPort: true });
   if (owner.live) {
     // Rationale and the full decision table live on `decideStartWithLiveOwner`.
