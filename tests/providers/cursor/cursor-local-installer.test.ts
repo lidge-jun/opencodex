@@ -1,5 +1,5 @@
-import { describe, expect, test } from "bun:test";
-import { buildCursorLocalInstallerHint, platformForHost, realCursorLocalHintDeps } from "../../../src/integrations/cursor-local-installer";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { buildCursorLocalInstallerHint, platformForHost, realCursorLocalHintDeps, resetCursorLocalInstallerCacheForTests } from "../../../src/integrations/cursor-local-installer";
 
 const MANIFEST_URL = "https://api2.cursor.sh/updates/api/update/win32-x64-user/cursor-local/0.0.0/manual-check/stable";
 const REPORTED_INSTALLER = "https://downloads.cursor.com/local-mode/c4730f7d93d787d9ab120af715999f0345ee5bc5/win32/x64/user-setup/CursorUserSetup-x64-3.21.18.exe";
@@ -17,6 +17,8 @@ function depsWith(manifest: unknown, opts: { fail?: boolean } = {}) {
 }
 
 describe("buildCursorLocalInstallerHint", () => {
+  beforeEach(() => resetCursorLocalInstallerCacheForTests());
+
   test("resolves the reported win32-x64-user manifest into an available hint", async () => {
     const hint = await buildCursorLocalInstallerHint(
       { regularInstalled: true, privateInferenceInstalled: false },
@@ -85,26 +87,76 @@ describe("buildCursorLocalInstallerHint", () => {
     expect(platformForHost("linux", "x64")).toBe("linux-x64");
     expect(platformForHost("linux", "arm64")).toBe("linux-arm64");
     expect(platformForHost("freebsd", "x64")).toBeNull();
+    for (const arch of ["ia32", "arm", "riscv64", "ppc64", "s390x"]) {
+      expect(platformForHost("linux", arch)).toBeNull();
+      expect(platformForHost("win32", arch)).toBeNull();
+    }
   });
 
-  test("on an unknown host OS the platforms are tried in order and the first usable answer wins", async () => {
-    const asked: string[] = [];
-    const hint = await buildCursorLocalInstallerHint(
-      { regularInstalled: true, privateInferenceInstalled: false },
-      {
-        platform: "freebsd",
-        arch: "x64",
-        fetchJson: async (url: string) => {
-          const platform = url.split("/update/")[1]!.split("/")[0]!;
-          asked.push(platform);
-          if (platform === "win32-x64-user") throw new Error("refused");
-          if (platform === "win32-arm64-user") return { version: "1" };
-          return { version: "3.21.18", url: REPORTED_INSTALLER };
-        },
+  test("a host Cursor ships no build for gets no link and makes no request", async () => {
+    for (const [platform, arch] of [["freebsd", "x64"], ["linux", "riscv64"], ["win32", "ia32"]] as const) {
+      const hint = await buildCursorLocalInstallerHint(
+        { regularInstalled: true, privateInferenceInstalled: false },
+        { platform, arch, fetchJson: async () => { throw new Error("must not fetch"); } },
+      );
+      expect(hint).toEqual({ available: false, url: null, version: null, reason: "unsupported-platform" });
+    }
+  });
+
+  test("a blank version is rejected like a missing one", async () => {
+    for (const version of ["", "   "]) {
+      resetCursorLocalInstallerCacheForTests();
+      const hint = await buildCursorLocalInstallerHint(
+        { regularInstalled: true, privateInferenceInstalled: false },
+        depsWith({ version, url: REPORTED_INSTALLER }),
+      );
+      expect(hint).toEqual({ available: false, url: null, version: null, reason: "unusable-response" });
+    }
+  });
+
+  test("answers are cached per platform: successes for 30 minutes, failures for 5", async () => {
+    let clock = 0;
+    let calls = 0;
+    let fail = true;
+    const deps = {
+      platform: "win32", arch: "x64", now: () => clock,
+      fetchJson: async () => {
+        calls += 1;
+        if (fail) throw new Error("down");
+        return { version: "3.21.18", url: REPORTED_INSTALLER };
       },
-    );
-    expect(asked).toEqual(["win32-x64-user", "win32-arm64-user", "win32-x64"]);
-    expect(hint).toEqual({ available: true, url: REPORTED_INSTALLER, version: "3.21.18", reason: null });
+    };
+    const installs = { regularInstalled: true, privateInferenceInstalled: false };
+    expect((await buildCursorLocalInstallerHint(installs, deps)).reason).toBe("unreachable");
+    clock += 4 * 60_000;
+    expect((await buildCursorLocalInstallerHint(installs, deps)).reason).toBe("unreachable");
+    expect(calls).toBe(1);
+    fail = false;
+    clock += 2 * 60_000;
+    expect((await buildCursorLocalInstallerHint(installs, deps)).available).toBe(true);
+    expect(calls).toBe(2);
+    clock += 29 * 60_000;
+    expect((await buildCursorLocalInstallerHint(installs, deps)).available).toBe(true);
+    expect(calls).toBe(2);
+    clock += 2 * 60_000;
+    await buildCursorLocalInstallerHint(installs, deps);
+    expect(calls).toBe(3);
+  });
+
+  test("concurrent lookups share one request", async () => {
+    let calls = 0;
+    let release: (value: unknown) => void = () => {};
+    const deps = {
+      platform: "win32", arch: "x64",
+      fetchJson: () => { calls += 1; return new Promise<unknown>(resolve => { release = resolve; }); },
+    };
+    const installs = { regularInstalled: true, privateInferenceInstalled: false };
+    const pending = [buildCursorLocalInstallerHint(installs, deps), buildCursorLocalInstallerHint(installs, deps), buildCursorLocalInstallerHint(installs, deps)];
+    await Bun.sleep(0);
+    release({ version: "3.21.18", url: REPORTED_INSTALLER });
+    const hints = await Promise.all(pending);
+    expect(calls).toBe(1);
+    expect(hints.every(hint => hint.available && hint.url === REPORTED_INSTALLER)).toBe(true);
   });
 
   test("real deps carry the host platform and architecture", () => {

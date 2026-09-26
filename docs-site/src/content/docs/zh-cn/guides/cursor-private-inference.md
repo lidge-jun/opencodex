@@ -70,7 +70,7 @@ Cursor Private Inference 是 GUI 应用，仅设置交互式 shell profile 并�
 
 opencodex 仪表盘在 Integrations 下有一个 **Cursor** 标签页（`/#integrations/cursor`）。它对 Cursor 只读：不会写入 Cursor 的设置数据库、钥匙串条目或应用 bundle，因此没有可以直接切换的开关。它会提供配置值，并显示配置是否生效。
 
-- **已安装版本。** 显示是否存在 Cursor Private Inference（含路径和版本）及普通 Cursor（仅路径）。如果只找到普通 Cursor，标签页会向 Cursor 自己的更新通道（`api2.cursor.sh` 上的 `cursor-local` 通道）查询它为当前平台和 CPU 提供的 local-mode 安装程序，显示该版本及指向 `downloads.cursor.com/local-mode/` 安装程序的链接，并链接回本页。opencodex 只显示链接，从不下载、启动或安装任何东西。如果通道无法访问或返回无法使用的内容，标签页会说明目前无法确定安装程序；无论哪种情况，下方的网关值都依然有效。普通 Cursor 本身仍然经由 Cursor 的服务器路由自定义端点，因此无法访问 loopback proxy。
+- **已安装版本。** 显示是否存在 Cursor Private Inference（含路径和版本）及普通 Cursor（仅路径）。如果只找到普通 Cursor，标签页会向 Cursor 自己的更新通道（`api2.cursor.sh` 上的 `cursor-local` 通道）查询它为当前平台和 CPU 提供的 local-mode 安装程序，显示该版本及指向 `downloads.cursor.com/local-mode/` 安装程序的链接，并链接回本页。opencodex 只显示链接，从不下载、启动或安装任何东西。结果会缓存 30 分钟（失败后为 5 分钟）。如果通道无法访问、返回无法使用的内容，或者 Cursor 没有为这台电脑提供版本（仅 Windows、macOS 和 Linux 的 x64 与 arm64 有），标签页会说明无法确定安装程序；无论哪种情况，下方的网关值都依然有效。普通 Cursor 本身仍然经由 Cursor 的服务器路由自定义端点，因此无法访问 loopback proxy。
 - **Gateway 配置值。** 显示 proxy 自身监听端口上的 Base URL（取自运行时记录，因此即使仪表盘经过反向代理，仍会显示本机 Cursor 可访问的端口），并提供 Copy 按钮。API Key 行取决于绑定方式：不需要凭据时显示可复制的 `opencodex-loopback`；启用了 API 认证，或配置了任何 opencodex API key 时，会提示使用自己的某个 key，并链接到 API Keys 标签页。任何已配置的 key 都可用，并不限于 `OPENCODEX_API_AUTH_TOKEN`。
 - **连接情况。** 显示 User-Agent 恰好为 `Cursor/<version>` 的最近一次 `/v1/models` 请求（Cursor 本地代理运行时发送的 header），包括时间和版本。在 Cursor 调用 proxy 前显示“never seen”；在 Cursor 中点击 **Refresh model list** 即会更新。标签页打开期间，卡片每 15 秒刷新一次。
 - **Cursor 将显示的内容。** 按下一节规则，预测 opencodex 所公布模型的 Model / Reasoning / Context 表（禁用模型和 provider 允许列表同原始列表一样生效）。这只是预测：Reasoning 档位由 Cursor 自身的表决定。

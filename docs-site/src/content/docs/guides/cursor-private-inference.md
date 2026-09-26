@@ -109,9 +109,11 @@ they took.
   own update channel which local-mode installer it advertises for this platform and CPU (the
   `cursor-local` channel on `api2.cursor.sh`) and shows that version with a link to the
   `downloads.cursor.com/local-mode/` installer, then links back here. opencodex only displays the
-  link: it never downloads, launches or installs anything. When the channel cannot be reached or
-  answers with something unusable, the tab says the installer could not be resolved right now;
-  the gateway values below stay valid either way. Regular Cursor itself still routes custom
+  link: it never downloads, launches or installs anything. The answer is cached for 30 minutes
+  (5 after a failure). When the channel cannot be reached, answers with something unusable, or
+  Cursor ships no build for this computer (only x64 and arm64 on Windows, macOS and Linux have
+  one), the tab says the installer could not be resolved; the gateway values below stay valid
+  either way. Regular Cursor itself still routes custom
   endpoints through Cursor's servers, so it cannot reach a loopback proxy.
 - **Gateway values.** The Base URL on the proxy's own listening port (from its runtime record,
   so a reverse-proxied dashboard still shows the port Cursor on this machine can reach), with a

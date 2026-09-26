@@ -163,6 +163,8 @@ test("regular Cursor alone without a resolvable installer says so instead of pro
   await mount();
   const text = textOf();
   expect(text).toContain("could not be resolved");
+  // The failure notice still says why regular Cursor needs the separate build.
+  expect(text).toContain("cannot reach this proxy");
   expect(container.querySelector("[data-cursor-installer-url]")).toBeNull();
   expect(container.querySelector("a[data-cursor-guide='notice']")).not.toBeNull();
 });
