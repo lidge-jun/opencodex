@@ -1610,6 +1610,7 @@
     "responses-tool-groups.test.ts": "responses",
     "responses-tool-search-repair.test.ts": "responses",
     "responses-undeclared-tool-guard.test.ts": "responses",
+    "zen-free-gate-redirect.test.ts": "responses",
     "responses-usage-passthrough.test.ts": "responses",
     "responses-xai-request-compat.test.ts": "responses",
     "restore-completes-shared-teardown.test.ts": "cli",

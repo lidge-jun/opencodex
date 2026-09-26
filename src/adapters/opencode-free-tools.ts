@@ -35,6 +35,40 @@ export type ZenFreeGateToolName = "shell" | "read";
 export const ZEN_FREE_GATE_DECLARATION =
   "Do not call this tool. It exists only for API compatibility and must never be invoked.";
 
+/** Gate names as a set for route-level checks. */
+export const ZEN_FREE_GATE_NAMES: ReadonlySet<string> = new Set(["shell", "read"]);
+
+/**
+ * Guidance text when the model calls a gate declaration anyway. Returns
+ * undefined when the call is legitimate: any other name, or a gate name the
+ * client actually declared (exact match — then it is the client's own tool,
+ * not the compatibility twin, and dispatch is their problem, not ours).
+ */
+export function zenFreeGateCallGuidance(
+  callName: string,
+  clientToolNames: Iterable<string> | undefined,
+): string | undefined {
+  if (!ZEN_FREE_GATE_NAMES.has(callName)) return undefined;
+  const catalog = [...(clientToolNames ?? [])];
+  for (const declared of catalog) {
+    if (declared === callName) return undefined;
+  }
+  return zenFreeGateGuidanceText(callName, catalog);
+}
+
+/** Static redirection text for a gate-named call. The turn stays alive. */
+export function zenFreeGateGuidanceText(callName: string, alternatives: readonly string[] = []): string {
+  const owned = alternatives.filter(name => name !== callName).slice(0, 4);
+  const instead = owned.length === 0
+    ? "Use one of this turn's other declared tools instead."
+    : owned.length === 1
+      ? `Use \`${owned[0]}\` instead.`
+      : `Use one of ${owned.map(name => `\`${name}\``).join(", ")} instead.`;
+  return (
+    `The \`${callName}\` tool is declared but cannot be executed in this session. ` + instead
+  );
+}
+
 /**
  * Which gate names are still missing from declared tool names. Matching is
  * exact lowercase, mirroring the gate: a capitalized `Shell` does not

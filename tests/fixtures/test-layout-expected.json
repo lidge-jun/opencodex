@@ -1791,5 +1791,6 @@
   "link-compensation.test.ts": "clients",
   "web-search-run-turn-loop.test.ts": "web-search",
   "responses-run-turn-web-search.test.ts": "responses",
+  "zen-free-gate-redirect.test.ts": "responses",
   "server-combo-cooldown-recording.test.ts": "server"
 }
