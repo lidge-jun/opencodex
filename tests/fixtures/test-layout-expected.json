@@ -1630,6 +1630,7 @@
   "upstream-http-version.test.ts": "server",
   "upstream-reachability.test.ts": "codex-integration",
   "upstream-retry.test.ts": "lib",
+  "upstream-retry-zero-output.test.ts": "lib",
   "upstream-transient-retry.test.ts": "providers",
   "url-normalization.test.ts": "config",
   "usage-aggregate-cache.test.ts": "usage",
