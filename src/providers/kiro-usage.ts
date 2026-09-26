@@ -12,7 +12,7 @@
  * the pool needs those two answers to decide how long to cool a 429'd account.
  */
 import { getValidAccessSnapshotForAccount } from "../oauth";
-import { KIRO_BUILDER_ID_SERVICE_PROFILE_ARN } from "../adapters/kiro-constants";
+import { resolveKiroRequestProfile } from "../oauth/kiro";
 import type { ProviderQuota, ProviderQuotaWindow } from "./quota-types";
 import {
   ACCOUNT_QUOTA_TTL_MS,
@@ -47,6 +47,8 @@ export interface KiroUsageContext {
   accountId: string;
   access: string;
   profileArn?: string;
+  /** The ARN is the Builder ID service profile, not the account's; it must not pick the region. */
+  builderIdFallback?: boolean;
   apiRegion?: string;
   ssoRegion?: string;
 }
@@ -84,8 +86,8 @@ function safeRegion(value: string | undefined): string | undefined {
  */
 function usageRegion(ctx: KiroUsageContext): string {
   // The Builder ID service profile is Amazon's fixed us-east-1 ARN, not the account's own, so it
-  // must not pin the region the same way kiro-constants.ts forbids for the runtime path.
-  const arnRegion = ctx.profileArn === KIRO_BUILDER_ID_SERVICE_PROFILE_ARN ? undefined : ctx.profileArn?.split(":")[3];
+  // must not pin the region, as kiro-constants.ts requires for the runtime path.
+  const arnRegion = ctx.builderIdFallback ? undefined : ctx.profileArn?.split(":")[3];
   return safeRegion(arnRegion)
     ?? safeRegion(ctx.apiRegion)
     ?? safeRegion(ctx.ssoRegion)
@@ -211,17 +213,19 @@ export async function fetchKiroUsageSnapshot(ctx: KiroUsageContext): Promise<Kir
  */
 export async function kiroUsageContextForAccount(accountId: string): Promise<KiroUsageContext> {
   const snapshot = await getValidAccessSnapshotForAccount("kiro", accountId);
+  // Builder ID accounts never get an account-scoped ARN, and GetUsageLimits rejects a missing one
+  // with 400 "Invalid profileArn". Ask the same resolver the runtime path uses, so the usage probe
+  // sends exactly the ARN a generation request would. An account object is always passed, so the
+  // accountless env/local-import fallbacks never apply to a pooled account.
+  const profile = resolveKiroRequestProfile({
+    profileArn: snapshot.kiro?.profileArn,
+    authType: snapshot.kiro?.authType,
+  });
   return {
     accountId,
     access: snapshot.accessToken,
-    // Builder ID accounts never get an account-scoped ARN, and GetUsageLimits rejects a missing one
-    // with 400 "Invalid profileArn". Send the same request-scoped service profile the runtime path
-    // sends (resolveKiroRequestProfile), so pooled Builder ID accounts report usage at all.
-    ...(snapshot.kiro?.profileArn
-      ? { profileArn: snapshot.kiro.profileArn }
-      : snapshot.kiro?.authType === "aws_sso_oidc"
-        ? { profileArn: KIRO_BUILDER_ID_SERVICE_PROFILE_ARN }
-        : {}),
+    ...(profile.profileArn ? { profileArn: profile.profileArn } : {}),
+    ...(profile.builderIdFallback ? { builderIdFallback: true } : {}),
     ...(snapshot.kiro?.apiRegion ? { apiRegion: snapshot.kiro.apiRegion } : {}),
     ...(snapshot.kiro?.ssoRegion ? { ssoRegion: snapshot.kiro.ssoRegion } : {}),
   };

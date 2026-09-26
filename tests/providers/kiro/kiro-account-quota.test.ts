@@ -189,7 +189,18 @@ describe("Kiro Builder ID usage probe", () => {
       const url = new URL(request.url);
       const body = await request.json() as Record<string, unknown>;
       seen.push({ host: url.host, arn: url.searchParams.get("profileArn"), bodyArn: body.profileArn });
-      return new Response(usagePayload(25.21, 5000), { status: 200, headers: { "content-type": "application/json" } });
+      // Builder ID accounts answer with a CREDIT-only breakdown (observed live), so this also pins
+      // the parser's fallback past AGENTIC_REQUEST.
+      return new Response(JSON.stringify({
+        usageBreakdownList: [{
+          resourceType: "CREDIT",
+          currentUsageWithPrecision: 25.21,
+          usageLimitWithPrecision: 5000,
+          unit: "CREDITS",
+        }],
+        overageConfiguration: { overageStatus: "DISABLED" },
+        nextDateReset: Math.floor(Date.now() / 1000) + 3 * 24 * 3600,
+      }), { status: 200, headers: { "content-type": "application/json" } });
     }) as typeof fetch;
     return seen;
   }
