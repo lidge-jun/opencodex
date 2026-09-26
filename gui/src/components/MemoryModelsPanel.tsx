@@ -137,15 +137,18 @@ function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: Mo
     || extractEffort !== (saved?.extract?.reasoningEffort ?? "")
     || consolidationModel !== (saved?.consolidation?.model ?? "")
     || consolidationEffort !== (saved?.consolidation?.reasoningEffort ?? "");
+  // The account notice is about the phase that stays on Codex's own model, so it is both
+  // true and useful only while exactly one of the two phases is routed.
+  const partiallyRouted = Boolean(extractModel) !== Boolean(consolidationModel);
   const info = t("memoryModels.info");
 
   const row = (phase: Phase, model: string, effort: string, setModel: (value: string) => void, setEffort: (value: string) => void) => (
-    <div className="spread" style={{ alignItems: "flex-start", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+    <div className="spread memory-models-row" style={{ flexWrap: "wrap", gap: 8, marginTop: 12 }}>
       <div style={{ flex: "1 1 18rem", minWidth: 0 }}>
         <div className="font-semibold">{t(`memoryModels.${phase}` as TKey)}</div>
         <div className="muted setting-hint">{t(`memoryModels.${phase}Hint` as TKey)}</div>
       </div>
-      <div className="dash-delegation-controls" style={{ flex: "0 1 auto" }}>
+      <div className="memory-models-controls">
         <Select id={`memory-models-${phase}`} value={model} options={options} disabled={disabled}
           label={t("memoryModels.model")}
           onChange={value => { setModel(value); if (!value) setEffort(""); setFeedback(null); }} />
@@ -160,9 +163,11 @@ function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: Mo
     <section className="panel" aria-labelledby="memory-models-title" aria-busy={busy || (saved === undefined && !loadError)}>
       <div className="font-semibold" id="memory-models-title">
         {t("memoryModels.title")}{" "}
-        <Tooltip content={info} side="top" maxWidth={360}>
-          <span style={{ cursor: "help" }} aria-label={t("memoryModels.infoLabel")} role="img">ⓘ</span>
-        </Tooltip>
+        <span className="memory-models-info">
+          <Tooltip content={info} side="top" maxWidth={360}>
+            <span className="memory-models-info-glyph" aria-label={t("memoryModels.infoLabel")} role="img">ⓘ</span>
+          </Tooltip>
+        </span>
       </div>
       <div className="muted setting-hint">{t("memoryModels.description")}</div>
       {row("extract", extractModel, extractEffort, setExtractModel, setExtractEffort)}
@@ -173,7 +178,7 @@ function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: Mo
           {busy ? t("common.saving") : t("common.save")}
         </button>
       </div>
-      {(extractModel || consolidationModel) && <div className="notice-warn" role="note" style={{ marginTop: 12 }}>
+      {partiallyRouted && <div className="notice-warn" role="note" style={{ marginTop: 12 }}>
         <IconAlert width={14} /> {t("memoryModels.accountNotice")}
       </div>}
       {loadError && <div className="notice notice-err" role="alert" style={{ marginTop: 12, marginBottom: 0 }}>{t("memoryModels.loadFailed")} <button type="button" className="btn btn-ghost btn-sm" onClick={() => { void load(); }}>{t("common.retry")}</button></div>}
@@ -182,4 +187,3 @@ function MemoryModelsControls({ apiBase, models }: { apiBase: string; models: Mo
     </section>
   );
 }
-

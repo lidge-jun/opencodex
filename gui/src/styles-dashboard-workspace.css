@@ -655,6 +655,65 @@
 .dash-shadow-controls > .custom-select { flex: 1; min-width: 0; }
 .dash-shadow-controls > .switch { order: 1; }
 
+/* Memory routing: one band, two equal shares. The pickers must not size themselves from
+   their own label — a long model id beside the short word "Medium" produced two
+   differently sized pills in the same panel, and the second row then repeated the
+   mismatch at its own widths.
+
+   A definite band with `flex: 1 1 0` children splits it in half whatever the labels are,
+   so the split is a property of the layout rather than of the selected value.
+
+   The band is sized from the WIDER of the two jobs, not from the row: a model id has to
+   stay readable (14rem holds "opencode-go/glm-5.3-flash" with room to spare, the same
+   ceiling the sidecar model pickers use), while the effort values are one short word. The
+   effort picker therefore carries empty width by design — that is the price of the two
+   pills lining up, and it is still the narrowest width at which the model stays readable.
+   A longer id ellipsizes inside its half instead of widening its own pill. */
+.memory-models-row { align-items: center; }
+
+.memory-models-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  flex: 0 0 min(100%, 28rem);
+  min-width: 0;
+}
+
+.memory-models-controls > .custom-select {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.memory-models-controls .select-trigger {
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+}
+
+.memory-models-controls .select-trigger > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The info glyph is one character wide, so the shared focus ring drew a box around a
+   single symbol that reads like a broken control. This one highlights itself instead:
+   the same colour step on hover and on keyboard focus, and no outline. */
+.memory-models-info-glyph {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+  cursor: help;
+  transition: color var(--motion-fast);
+}
+
+.memory-models-info .ocx-tooltip:focus-visible { outline: none; }
+
+.memory-models-info .ocx-tooltip:hover .memory-models-info-glyph,
+.memory-models-info .ocx-tooltip:focus-visible .memory-models-info-glyph { color: var(--text); }
+
 .dash-overview-stack .setting-hint,
 .dash-overview-stack .dash-sync-hint { max-width: 60ch; }
 

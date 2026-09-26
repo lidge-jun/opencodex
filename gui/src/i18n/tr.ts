@@ -445,7 +445,7 @@ export const tr: Record<TKey, string> = {
   "memoryModels.off": "Kapalı — Codex varsayılanı",
   "memoryModels.defaultEffort": "Codex varsayılanı",
   "memoryModels.dataNotice": "Seçilen model, Codex'in bellek için özetlediği oturum metnini alır.",
-  "memoryModels.accountNotice": "Burada seçim yapılmazsa bellek istekleri, diğer yerel modeller gibi OpenAI hesabınıza gider.",
+  "memoryModels.accountNotice": "Codex varsayılanında bırakılan aşama, diğer yerel modeller gibi OpenAI hesabınıza gider.",
   "memoryModels.loadFailed": "Bellek ayarları yüklenemedi.",
   "memoryModels.saved": "Bellek ayarları kaydedildi.",
   "memoryModels.saveFailed": "Kaydedilemedi. Değişiklikleriniz duruyor; tekrar deneyin.",
