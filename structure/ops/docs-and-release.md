@@ -205,7 +205,8 @@ it is promoted, so those files follow the promotion model rather than ordinary i
 
 `scripts/test.ts` owns `SERIAL_FULL_SUITE_FILES`, the shared process-isolation roster. Local
 full-suite runs, both macOS paths, and `scripts/ci/run-bun-test-batches.sh` execute those files
-alone with fresh process homes. Hosted batches assign shard membership by the per-file durations
+alone with fresh process homes. The history-lock suite runs alone so its child warm-up starts
+outside the long-lived isolate pool. Hosted batches assign shard membership by the per-file durations
 in `scripts/ci/test-durations.tsv` (sorted round-robin when nothing is recorded), run each shard's
 files in sorted order and split only process boundaries; every selected file still runs once.
 Ordinary macOS shards select 1/2 and 2/2 from the full file list; macOS control selects 1/1. Both
