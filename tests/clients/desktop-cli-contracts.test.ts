@@ -56,20 +56,35 @@ describe("desktop CLI contracts", () => {
 
   test("a live listener this app cannot manage is neither attached to nor started beside", () => {
     // Core's liveness predicate accepts a connected client's listener on purpose, so
-    // duplicate-start avoidance can see it; a caller that needs the management plane has to
-    // discriminate on the role rather than narrow that predicate.
+    // duplicate-start avoidance can see it; the shell discriminates on the role rather than
+    // narrow that predicate.
     expect(resolveTs).toContain("role?: string");
     const verdict = resolveRs.slice(resolveRs.indexOf("pub fn live_verdict("));
     const body = verdict.slice(0, verdict.indexOf("\n}"));
     expect(body).toContain('role.as_deref() == Some("client")');
     expect(body).toContain("LiveVerdict::Unusable");
-    // And an address this shell cannot reach on loopback is the same kind of answer.
-    expect(body).toContain("loopback_reachable(resolved.liveness.hostname.as_deref())");
+    // An address this shell cannot reach on loopback is unusable, whatever the role.
+    const loopback = body.indexOf("loopback_reachable(resolved.liveness.hostname.as_deref())");
+    expect(loopback).toBeGreaterThan(-1);
+    expect(body.indexOf("return LiveVerdict::Client;")).toBeGreaterThan(loopback);
     const startup = code(STARTUP);
     const unusable = startup.indexOf("resolve::LiveVerdict::Unusable(reason) =>");
     const spawn = startup.indexOf("spawn_runtime(app, endpoint, &watch)");
     expect(unusable).toBeGreaterThan(-1);
     expect(startup.slice(unusable, spawn)).toContain("return;");
+  });
+
+  test("a Child's client runtime is attached to without a takeover prompt, never started beside", () => {
+    // Refusing it failed every recovery on a Child whose runtime restarted outside the app.
+    const startup = code(STARTUP);
+    const client = startup.indexOf("resolve::LiveVerdict::Client =>");
+    const unusable = startup.indexOf("resolve::LiveVerdict::Unusable(reason) =>");
+    expect(client).toBeGreaterThan(-1);
+    const arm = startup.slice(client, unusable);
+    expect(arm).toContain("attach_as_guest(");
+    expect(arm).toContain("return;");
+    expect(arm).not.toContain("attach_plan(");
+    expect(arm).not.toContain("await_consent");
   });
 
   test("everything that can go wrong on this side folds into unknown", () => {

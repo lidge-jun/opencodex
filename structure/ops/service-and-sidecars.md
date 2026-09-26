@@ -306,6 +306,17 @@ for its supervisor. Coverage: `tests/server/restart-replacement.test.ts`,
 `tests/cli/cli-restart-handoff.test.ts`, `tests/server/system-restart.test.ts` and
 `tests/clients/client-runtime.test.ts`.
 
+A process the desktop app spawned spawns no replacement at all. The app sets
+`OCX_DESKTOP_SUPERVISED=1` on its sidecar; `handleStart` consumes it with the other start markers and
+records the parent pid (`src/lib/system-restart-contract.ts`). While that parent is still this
+process's parent and alive, the drain-and-restart (completed and deadline paths alike) marks
+recycling and exits 75, the standalone recycle exits 75 once its cleanup ran, and the app starts the
+replacement itself ([desktop shell](../desktop-shell.md#keeping-the-runtime-alive)). This check runs before the service
+rule, because that app, not a service manager, is the parent. An app that crashed leaves the runtime
+re-parented or its parent dead, and the restart falls back to the detached replacement. Every
+detached replacement's environment drops the marker. Coverage:
+`tests/clients/desktop-supervised-restart.test.ts`.
+
 ## Package cache refresh
 
 src/update/refresh-scheduler.ts owns the package cache timer and per-channel singleflight for the running proxy. Eligible npm, pnpm and Bun installs refresh missing or 20-hour-stale `version.json` after bind, check staleness hourly and retry failures with bounded backoff. Each server start owns one scheduler reference; the last matching stop disarms the timer. A stopped automatic lookup cannot write a late result, but an explicit check joining that lookup marks explicit interest and writes its successful result even if the last listener stops before it resolves. Source/mise installs and `OCX_DISABLE_UPDATE_CHECK=1` do not start automatic lookup; explicit requests remain available.

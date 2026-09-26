@@ -2,9 +2,16 @@ import { existsSync } from "node:fs";
 import type { Server } from "bun";
 import { siblingRuntimeField, withSiblingMarker } from "../codex/sibling-start";
 import { loadConfig } from "../config";
-import { removePid, removeRuntimePort, writePid, writeRuntimePort } from "../config/process-state";
+import { removePid, removeRuntimePort, writePid, writeRuntimePort, type RuntimePortState } from "../config/process-state";
 import { installCrashGuards } from "../lib/crash-guard";
+import { createLocalAttestationSecret } from "../lib/local-management-attestation";
 import { loadServiceTokenFromFile, serviceApiTokenFingerprint } from "../lib/service-secrets";
+import {
+  DESKTOP_RESTART_EXIT_CODE,
+  DESKTOP_SUPERVISED_ENV,
+  DESKTOP_SUPERVISED_PORT_WAIT_MS,
+  isDesktopSupervised,
+} from "../lib/system-restart-contract";
 import { findAvailablePort, isAddrInUse, PortUnavailableError, waitForPortAvailable } from "../server/ports";
 import type { ReplacementStartRequest } from "../server/restart-replacement";
 import type { OcxClientConnectionConfig } from "../types";
@@ -23,6 +30,18 @@ let recycleScheduled = false;
  * gives `reclaimListenPort` (`src/cli/index.ts`).
  */
 export const LINK_PORT_WAIT_MS = 60_000;
+
+/** How long a pinned port is re-probed after the reclaim wait before the start gives up on it. */
+export const PINNED_PREFER_RETRY_MS = 5_000;
+
+/**
+ * Link mode's port-reclaim budget. Under the desktop app the whole wait (this plus
+ * {@link PINNED_PREFER_RETRY_MS}) ends inside the app's 30-second startup deadline, so the app sees
+ * this start either serve or exit instead of giving up on it first.
+ */
+export function linkPortWaitMs(desktopSupervised: boolean = isDesktopSupervised()): number {
+  return desktopSupervised ? DESKTOP_SUPERVISED_PORT_WAIT_MS : LINK_PORT_WAIT_MS;
+}
 /** Bind attempts when the port is taken between the free-port probe and `Bun.serve`. */
 const LINK_BIND_ATTEMPTS = 3;
 
@@ -36,6 +55,7 @@ export interface StandaloneRecycleIo {
   spawnReplacement?: (request: ReplacementStartRequest) => Promise<void>;
   exitProcess?: (code: number) => void;
   configuredPort?: () => number | undefined;
+  isDesktopSupervised?: () => boolean;
 }
 
 function cleanup(): void {
@@ -43,11 +63,26 @@ function cleanup(): void {
   removeRuntimePort(process.pid);
 }
 
+/**
+ * What this runtime publishes in `runtime-port.json`. The attestation secret is what the desktop app
+ * reads to authenticate the runtime it started (`desktop/src-tauri/src/auth.rs`); a record without one
+ * reads as unusable there, the same as a standalone start's record would.
+ */
+export function clientRuntimeRecord(
+  pid: number,
+  port: number,
+  attestationSecret: string = createLocalAttestationSecret(),
+): RuntimePortState {
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...siblingRuntimeField() };
+}
+
 export function standaloneRecycleEnv(
   env: NodeJS.ProcessEnv,
   disconnectedTokenFingerprint: string,
 ): NodeJS.ProcessEnv {
   const childEnv = { ...env };
+  // A detached replacement is not the desktop app's child.
+  delete childEnv[DESKTOP_SUPERVISED_ENV];
   const admissionToken = childEnv.OPENCODEX_API_AUTH_TOKEN?.trim();
   if (admissionToken && serviceApiTokenFingerprint(admissionToken) !== disconnectedTokenFingerprint) {
     // A surviving env token shadows OCX_API_TOKEN_FILE entirely, so nothing below can
@@ -109,8 +144,14 @@ export async function recycleStandalone(
   }
   cleanup();
   // Recycling back to standalone after `ocx disconnect` must actually bring a standalone
-  // proxy back, under either launch shape.
+  // proxy back, under every launch shape.
   //
+  // Under the desktop app that spawned us: exit 75 and let the app start the standalone
+  // runtime, so it keeps owning it (tray Stop, Quit) instead of losing it to a detached child.
+  if ((io.isDesktopSupervised ?? isDesktopSupervised)()) {
+    exit(DESKTOP_RESTART_EXIT_CODE);
+    return;
+  }
   // Unsupervised: spawn the replacement ourselves and exit 0.
   //
   // Supervised (`OCX_SERVICE=1`): do NOT spawn — the supervisor owns the process, and a
@@ -167,7 +208,7 @@ export async function bindClientListener(
   io: ClientRuntimeIo = {},
 ): Promise<{ server: Server<unknown>; port: number }> {
   const { linkMode } = request;
-  const portWaitMs = io.portWaitMs ?? LINK_PORT_WAIT_MS;
+  const portWaitMs = io.portWaitMs ?? (linkMode ? linkPortWaitMs() : LINK_PORT_WAIT_MS);
   const deadline = Date.now() + portWaitMs;
   const busy = (cause: unknown) => new Error(
     `link mode needs port ${request.configuredPort}; free it or change port`,
@@ -186,7 +227,7 @@ export async function bindClientListener(
       });
     }
     port = await findAvailablePort(request.preferred, "127.0.0.1", {
-      preferRetryMs: request.explicitPort ? 5_000 : 750,
+      preferRetryMs: request.explicitPort ? PINNED_PREFER_RETRY_MS : 750,
       preferRetryIntervalMs: 50,
       allowEphemeralFallback: linkMode ? false : !request.explicitPort,
     });
@@ -241,7 +282,7 @@ export async function startClientRuntime(
   supervisor?.start();
   installCrashGuards();
   writePid(process.pid);
-  writeRuntimePort({ pid: process.pid, port: boundPort, hostname: "127.0.0.1", ...siblingRuntimeField() });
+  writeRuntimePort(clientRuntimeRecord(process.pid, boundPort));
 
   let shuttingDown = false;
   const shutdown = () => {

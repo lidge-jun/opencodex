@@ -49,6 +49,11 @@ ocx start --socks5-off
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
+While the OpenCodex desktop app is running, `ocx stop` does not keep the proxy down: the app treats
+it as an unexpected exit and starts a proxy again, within seconds for one it started and after about
+a minute for one it had only attached to. Use the app's tray **Stop proxy** (for a proxy the app
+started) or **Quit** to keep it stopped. For the same reason the dashboard's **Stop** button refuses
+with `desktop_supervised`, and changes nothing, for a proxy the app started.
 The web dashboard's **Stop** button runs the same action (`POST /api/stop`) on every backend
 except Windows Task Scheduler. There the wrapper can respawn the proxy after the task ends,
 and only a stop running outside the proxy can verify that restart window before restoring
@@ -86,6 +91,8 @@ When the proxy starts its own replacement (no background service supervises it) 
 finished normally, a replacement that exits before it answers is started again up to twice. What
 the replacement prints goes to `~/.opencodex/restart-handoff.log`, which stays near 256 KiB: a
 restart empties it once it reaches that size, and the running replacement checks it once a minute.
+A proxy the OpenCodex desktop app started does not start its own replacement: it exits, and the app
+starts the new proxy on the same port.
 If a live listener cannot be attested to a runtime PID (including a pre-update proxy), restart fails
 closed without an `ensure` or stop/start fallback. After confirming ownership, use `ocx stop` then
 `ocx start` for a standalone proxy. For a service-managed proxy, use `ocx stop` followed by

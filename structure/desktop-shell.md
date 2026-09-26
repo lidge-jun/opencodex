@@ -166,7 +166,10 @@ drains it and confirms the child is gone, and only then installs. The order is n
 pinned updater's Windows installer hands off to the installer process and ends this one, so a
 restart asked for after `install` is never reached, and the package would be replaced under a
 runtime still serving out of those files. A drain that did not complete refuses the install and
-leaves the update pending.
+leaves the update pending. Neither that refusal nor an install that fails after the drain strands
+the app: `ExitCoordinator::abort_restart` takes a coordinated restart's settled drain phase back to
+idle with no claimed reason, so a close hides again and Quit works, and when the drain had stopped
+the runtime the startup sequence brings one back in recovery mode. A quit's drain is never aborted.
 
 The Tauri updater also publishes a bounded desktop snapshot over its identity-bound ProxyClient. A random process-session id travels in the embedded dashboard URL, and the dashboard requests GET /api/update/badge?surface=desktop&session=<id>. A normal browser keeps the package badge. The shell posts each updater-state change and a 60-second heartbeat; if the proxy loses the snapshot or the shell stops, the desktop badge becomes unknown after 180 seconds. This display path never installs an update or replaces the signed Tauri result. The tray shows the same pending state: macOS draws a blue child NSView dot over the template status-item image; Windows/Linux swap a generated dotted PNG when a tray host exists. The Windows base glyph is unchanged.
 
@@ -205,6 +208,68 @@ Every tray menu setter dispatches to the main thread and waits for it, and the t
 main thread while holding the menu mutex, so the handles are copied out from under that mutex before
 any setter is called. Holding it across a setter is a cycle, and the symptom would be an app that
 stops answering Quit.
+
+## Keeping the runtime alive
+
+`desktop/src-tauri/src/supervisor.rs` brings back a runtime that went away without the app asking.
+The startup sequence used to run only at launch and from the failure page's retry, so a runtime that
+exited later — a crash, a terminal `ocx stop`, or a restart the runtime carried out by handing the
+port to a detached grandchild the app could not see — left the port refusing connections until the
+app was quit and reopened.
+
+The sidecar is spawned with `OCX_DESKTOP_SUPERVISED=1`. Under it the runtime's own restarts — a join
+into a Child, a memory or package restart, the recycle after a disconnect — exit 75 instead of
+spawning a replacement; the drain-and-restart marks recycling first, so exit cleanup keeps Codex
+routing ([restart handoff](ops/service-and-sidecars.md#restart-handoff)).
+The runtime honors the marker only while the app that set it is still its parent. A link-mode client
+runtime gives up on a busy port within 25 seconds under it, inside the 30-second startup deadline, and
+publishes an attestation secret in `runtime-port.json` like a standalone start, so the app can
+authenticate the runtime it started.
+
+`sidecar.rs` reports each child's exit to the supervisor once the exit is recorded. The pure `decide`
+brings a runtime back only when the exit belongs to the tracked child, the exit coordinator is idle,
+the app still wants a runtime and no ending is claimed; while a startup run is in flight, that run's
+outcome decides instead. Exit 75 goes after half a second when no recovery has run since the last
+120 healthy seconds; otherwise it takes the next backoff step like any other exit. Any other exit
+waits 3, 6, 12, 24 and then 30 seconds as recoveries repeat, and the count starts over after 120
+healthy seconds; the first step leaves a replacement or a service wrapper that owns the port time to
+bind first. A recovery drops the dead child's handle without signalling anything and runs the startup
+sequence in `Mode::Recover`: resolve is still the only authority, only a proven absence starts a
+runtime, and a runtime that answers is attached as a guest. A recovery never shows the window or the
+takeover prompt, and one that finishes while the window shows the update page leaves that page up. A
+failed recovery, or a failed run that swallowed an exit of this app's child, schedules the next
+attempt; any other failed launch still waits for the person's retry. The exception is a run that
+found the port held by a listener this app cannot use (one bound off loopback): another attempt would
+find the same listener, so the supervisor parks, and the watchdog below only asks whether the
+endpoint changed — a different process answering, or a holder that had answered going silent for
+about a minute.
+
+A Child's client runtime (`role: client` in the resolve answer) is attached to the same way, at
+launch and in a recovery, and never offered a takeover. It serves Codex and the Child's dashboard,
+not the management plane, so the tray's usage reads have nothing to show on it. When it is the child
+this app started, `bind` confirms ownership, so the tray's Stop and Quit reach it. A run also never
+spawns beside the child it already tracks: while that child has reported no exit and was spawned
+under 90 seconds ago (a 60-second port reclaim plus its retry fits), the run waits on it. Past that
+it is wedged, or its exit event is held up by a grandchild that kept its output pipes (the shell
+plugin reports an exit only once both close), and a start goes ahead.
+
+A watchdog asks `/healthz` every five seconds while a run is Ready and supervision is allowed. A
+different pid answering starts a recovery at once. Refused connections start one after three in a row
+for a runtime this app started, and after twelve (about a minute) for one it is only a guest on, so a
+service or an update restarting its own runtime gets there first. Timeouts and unauthorized or
+unreadable answers never count. It covers guest runtimes and an exit event that never arrived.
+
+The exit coordinator's `wanted` intent keeps this from fighting the person. It is true from launch;
+the tray's Stop (when it takes the phase), a quit's drain and an update's drain clear it before the
+runtime's exit can arrive, finishing a stop does not restore it, and the failure page's retry sets it
+again. A terminal
+`ocx stop` of the runtime this app started clears nothing, so the app starts it again after the
+backoff; the tray's Stop and Quit keep it stopped. The dashboard's own Stop, in the app's window or
+a browser, is refused with `desktop_supervised` while the app supervises the runtime
+(`src/server/stop-teardown.ts`): it would be undone within seconds, after a full native-Codex
+teardown. Only a dashboard session is refused; `ocx stop` authenticates with the admin token. Every
+decision is appended to
+`runtime-supervisor.log` in the app's log directory, emptied at 256 KiB, never through a symlink.
 
 ## Runtime ownership, from the app's side
 

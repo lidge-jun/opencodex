@@ -1,6 +1,8 @@
 import type { CodexNativeRestoreResult } from "../codex/inject";
 import { siblingOfLivePort, siblingSkipMessage } from "../codex/sibling-start";
 import { deferralMatchesReceipt } from "../config/pending-teardown";
+import { isDesktopSupervised } from "../lib/system-restart-contract";
+import type { ManagementPrincipal } from "./management-auth";
 
 /**
  * Shared-teardown decision and execution for `POST /api/stop` (#3008).
@@ -43,6 +45,31 @@ export type StopTeardownBody = {
 export function deferralHonored(url: URL, ownsReceipt: (nonce: string | null) => boolean): boolean {
   if (url.searchParams.get("deferSharedTeardown") !== "1") return false;
   return ownsReceipt(url.searchParams.get("teardownNonce"));
+}
+
+export type StopRefusalBody = { success: false; code: string; message: string };
+
+/**
+ * The dashboard's Stop, refused while the desktop app supervises this process.
+ *
+ * The app starts its runtime again after any exit it did not ask for
+ * (`desktop/src-tauri/src/supervisor.rs`), and a dashboard Stop is not the app asking: the proxy
+ * would restore native Codex and exit, and the app would start it again seconds later and reload
+ * the dashboard. Like the service-manager refusals it is refused before anything changes, and it
+ * names what does stop the proxy: the app's tray Stop proxy, or Quit. Only a dashboard session is
+ * refused. `ocx stop`, which the tray's Stop, Quit and an update's drain all run, authenticates
+ * with the admin token and is unaffected. Read only on this route, never on the request path.
+ */
+export function desktopSupervisedStopRefusal(
+  principal: ManagementPrincipal | null | undefined,
+  supervised: () => boolean = isDesktopSupervised,
+): StopRefusalBody | null {
+  if (principal !== "gui-session" || !supervised()) return null;
+  return {
+    success: false,
+    code: "desktop_supervised",
+    message: "The OpenCodex desktop app runs this proxy and starts it again after it exits, so the dashboard does not stop it. Use Stop proxy in the app's tray menu, or quit the app. Nothing was changed.",
+  };
 }
 
 /** Run (or skip) the shared teardown and describe the outcome truthfully. */
