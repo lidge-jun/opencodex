@@ -160,4 +160,37 @@ describe("bridge normalizes code-mode helper names against the declared catalog"
     expect(sse).not.toContain("tools.view_image");
     expect(sse).not.toContain('"name":"exec"');
   });
+
+  // Codex Desktop code mode declares only `exec`; routed models (observed: Kimi K3, GLM 5.3)
+  // sometimes call a nested host tool by its flattened `mcp__<server>__<tool>` name directly.
+  // The guard failed those turns closed, which the desktop surfaced as reconnect banners.
+  test("a direct mcp tool call is delivered as exec running the nested host call", async () => {
+    const sse = await drain(bridgeToResponsesSSE(
+      toolTurn("mcp__codex_app__get_usage_limits", "{}"),
+      "fixture-model",
+      undefined,
+      new Set(["exec"]),
+      undefined,
+      undefined,
+      50_000,
+      { declaredToolNames: new Set(["exec"]) },
+    ));
+    expect(sse).not.toContain("undeclared client tool");
+    expect(sse).toContain('"name":"exec"');
+    expect(sse).toContain('await tools.mcp__codex_app__get_usage_limits({})');
+  });
+
+  test("a malformed mcp-prefixed name still fails the turn", async () => {
+    const sse = await drain(bridgeToResponsesSSE(
+      toolTurn("mcp__solo", "{}"),
+      "fixture-model",
+      undefined,
+      new Set(["exec"]),
+      undefined,
+      undefined,
+      50_000,
+      { declaredToolNames: new Set(["exec"]) },
+    ));
+    expect(sse).toContain("undeclared client tool");
+  });
 });
