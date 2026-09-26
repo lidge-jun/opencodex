@@ -229,7 +229,7 @@ describe("claude inbound translation", () => {
       ...base,
       thinking: { type: "adaptive", display: "omitted" },
       output_config: { effort: "high" },
-    }))).toEqual({ summary: "auto", effort: "high" });
+    }))).toEqual({ summary: "none", effort: "high" });
     // effort passes through the whole known ladder
     for (const effort of ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]) {
       expect(reasoningOf(anthropicToResponsesBody({
