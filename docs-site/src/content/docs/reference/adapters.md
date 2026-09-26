@@ -525,7 +525,10 @@ configuration that names the old id is rewritten at startup.
   allowance in milliseconds to wait for the full stated delay and replay the same request up to twice.
   The allowance has a one-hour ceiling; an absent, empty, invalid, or negative value disables waiting.
   An opted-in wait keeps the HTTP turn and its shared active-turn slot open throughout the delay.
-  The adapter sends heartbeats during that wait so the response stream stays active.
+  Streaming turns start SSE on a safe cooldown heartbeat, then schedule heartbeats every 500 ms or less
+  during the wait so the stall watchdog stays fed. A later pre-output 429 may still rotate to another
+  eligible OAuth account; without one it is reported inside the already-open stream. Buffered Grok
+  turns retain an HTTP 429 and `Retry-After` on a final refusal.
   Delays exceeding the remaining allowance surface the original 429 without an early retry. The
   final 429 preserves the stated delay as a cooldown hint. A `~` in its message marks a delay recovered
   from a secondhand trailer sentence rather than an exact header value.

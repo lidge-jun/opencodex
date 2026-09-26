@@ -144,7 +144,7 @@ export async function* streamChatEventsWithResetRetry(
       const heartbeat = options?.onWaitHeartbeat;
       if (waitMs > 0) heartbeat?.();
       const beat = heartbeat && waitMs > 0
-        ? setInterval(heartbeat, Math.min(10_000, Math.max(100, Math.floor(waitMs / 2))))
+        ? setInterval(heartbeat, Math.min(500, Math.max(100, Math.floor(waitMs / 2))))
         : undefined;
       try {
         await sleep(waitMs, req.signal);

@@ -132,6 +132,7 @@ export interface AdapterEventPreflight {
   error?: Extract<AdapterEvent, { type: "error" }>;
   empty: boolean;
   replayUnsafe: boolean;
+  ready?: boolean;
   timedOut?: boolean;
 }
 
@@ -160,7 +161,7 @@ async function* replay(
 export async function preflightAdapterEvents(
   source: AsyncIterable<AdapterEvent>,
   classifyFirstEvent?: (event: AdapterEvent) => Extract<AdapterEvent, { type: "error" }> | undefined,
-  options?: { maxWaitMs?: number },
+  options?: { maxWaitMs?: number; honorReady?: boolean },
 ): Promise<AdapterEventPreflight> {
   const iterator = source[Symbol.asyncIterator]();
   const buffered: AdapterEvent[] = [];
@@ -194,8 +195,8 @@ export async function preflightAdapterEvents(
         replayUnsafe ||= next.value.replayUnsafe === true;
         // Preserve the latch in replay even after the original unsafe heartbeat is evicted.
         buffered.push(replayUnsafe ? { ...next.value, replayUnsafe: true } : next.value);
-        if (next.value.preflightReady === true) {
-          return { stream: replay(buffered, iterator), empty: false, replayUnsafe };
+        if (next.value.preflightReady === true && options?.honorReady !== false) {
+          return { stream: replay(buffered, iterator), empty: false, replayUnsafe, ready: true };
         }
         if (buffered.length > PREFLIGHT_HEARTBEAT_RETAIN_LIMIT) buffered.shift();
         continue;

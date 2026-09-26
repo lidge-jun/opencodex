@@ -278,6 +278,17 @@ describe("run-turn adapter event preflight", () => {
     expect(await collect(preflight.stream)).toEqual(values);
   });
 
+  test("buffered preflight continues past a cooldown heartbeat to the first refusal", async () => {
+    const ready: AdapterEvent = { type: "heartbeat", preflightReady: true };
+    const error: AdapterEvent = { type: "error", status: 429, message: "rate limited" };
+
+    const preflight = await preflightAdapterEvents(events([ready, error]), undefined, { honorReady: false });
+
+    expect(preflight.error).toEqual(error);
+    expect(preflight.ready).toBeUndefined();
+    expect(await collect(preflight.stream)).toEqual([ready, error]);
+  });
+
   test("queued heartbeat coalescing retains the cooldown preflight signal", async () => {
     const queue = createAdapterEventQueue();
     queue.push(heartbeat);

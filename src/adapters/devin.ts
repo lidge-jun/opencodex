@@ -664,7 +664,7 @@ export function createDevinAdapter(
           signal: incoming.abortSignal,
         }, {
           maxWaitMs: devinStatedResetWaitMs(),
-          onWaitHeartbeat: () => emit({ type: "heartbeat", preflightReady: true }),
+          onWaitHeartbeat: parsed.stream ? () => emit({ type: "heartbeat", preflightReady: true }) : undefined,
           execution: {
             executor: incoming.providerFetch,
             sendBudget: incoming.sendBudget,
