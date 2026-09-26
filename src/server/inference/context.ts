@@ -1,6 +1,14 @@
-import { createRequestExecutionBudget, type RequestExecutionBudget } from "../../lib/request-execution-budget";
+import { CODEX_TEXT_GUARDED_BUDGET_POLICY, createRequestExecutionBudget, type RequestExecutionBudget } from "../../lib/request-execution-budget";
+import { TRANSIENT_RETRY_MAX_ATTEMPTS, type TransientSendBudget } from "../../lib/upstream-retry";
 import type { RequestLogContext } from "../request-log";
 import { attachRequestSpendTracker } from "../responses/request-spend";
+
+// Only ingress owns an expandable policy. Exact caller budgets and combo-derived scopes
+// never enter this map, even when their policy happens to equal the default profile.
+const ingressPolicies = new WeakMap<TransientSendBudget, {
+  maxTotalModelSends: number;
+  baseSendAllowance: number;
+}>();
 
 /**
  * The one construction of an ingress-owned send budget: the default guarded policy, no logical
@@ -11,5 +19,20 @@ export function createInferenceSendBudget(
   req: Pick<Request, "headers">,
   logCtx: RequestLogContext,
 ): RequestExecutionBudget {
-  return createRequestExecutionBudget(undefined, undefined, attachRequestSpendTracker(req, logCtx));
+  const policy = { ...CODEX_TEXT_GUARDED_BUDGET_POLICY };
+  const budget = createRequestExecutionBudget(policy, undefined, attachRequestSpendTracker(req, logCtx));
+  ingressPolicies.set(budget, policy);
+  return budget;
+}
+
+/** Fund each account's normal transient ladder once, before the first physical send. */
+export function expandInferenceOAuthSendBudget(budget: TransientSendBudget | undefined, accounts: number): void {
+  if (!budget) return;
+  const policy = ingressPolicies.get(budget);
+  if (!policy || budget.used !== 0) return;
+  ingressPolicies.delete(budget);
+  if (accounts < 2 || !Number.isSafeInteger(accounts)) return;
+  const sends = accounts * TRANSIENT_RETRY_MAX_ATTEMPTS;
+  policy.baseSendAllowance = Math.max(policy.baseSendAllowance, sends);
+  policy.maxTotalModelSends = Math.max(policy.maxTotalModelSends, sends);
 }

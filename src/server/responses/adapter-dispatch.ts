@@ -54,7 +54,6 @@ import {
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
 import {
-  GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST,
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
   failoverAccountSnapshot,
@@ -124,6 +123,7 @@ export async function prepareAdapterExchange(
     | "commitResolvedOAuthSelection"
     | "genericFailoverAccountId"
     | "genericFailovers"
+    | "genericFailoverLimit"
     | "applyFailoverSnapshot"
     | "noteRoutedAttemptSend"
   >,
@@ -856,7 +856,7 @@ export async function prepareAdapterExchange(
       while (
         upstreamResponse.status === 429
         && transportState.genericFailoverAccountId
-        && transportState.genericFailovers < GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST
+        && transportState.genericFailovers < transportState.genericFailoverLimit
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
         // Intersection with the shared request budget. This arm re-sends through

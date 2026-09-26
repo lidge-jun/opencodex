@@ -1634,6 +1634,7 @@
     "server-combo-reasoning-replay-eligibility.test.ts": "server",
     "server-combo-zero-output-failover.test.ts": "server",
     "server-google-antigravity-oauth-401-replay.test.ts": "server",
+    "server-google-antigravity-oauth-429-budget.test.ts": "server",
     "server-gui-bundle-freshness.test.ts": "server",
     "server-images-bodyless-content-length.test.ts": "server",
     "server-images.test.ts": "server",

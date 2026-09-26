@@ -14,10 +14,10 @@ import {
   retryBackoffDelayMs,
   sleepWithAbort,
   SendBudgetExhaustedError,
+  TRANSIENT_RETRY_MAX_ATTEMPTS,
   isConnectionResetError,
 } from "../lib/upstream-retry";
 
-const GOOGLE_RETRY_ATTEMPTS = 3;
 const GOOGLE_RETRY_BASE_MS = 250;
 const GOOGLE_RETRY_MAX_MS = 2_000;
 
@@ -60,7 +60,7 @@ export async function fetchGoogleWithRetry(
   let retryDelayMs = 0;
   let sendClass: SendClass = "transient";
   let recovery: AttemptRecoveryKind | undefined;
-  for (let attempt = 0; attempt < GOOGLE_RETRY_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < TRANSIENT_RETRY_MAX_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     try {
       const res = await send({ url: activeRequest.url, sendClass, recovery,
@@ -105,7 +105,7 @@ export async function fetchGoogleWithRetry(
           continue;
         }
       }
-      if (!retryableGoogleStatus(res.status) || attempt === GOOGLE_RETRY_ATTEMPTS - 1) {
+      if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) {
         return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, ctx.abortSignal);
       }
       // A 429 may be a transient rate limit (retry) or hard quota exhaustion (do NOT retry —
@@ -141,7 +141,7 @@ export async function fetchGoogleWithRetry(
         throw err;
       }
       lastError = err;
-      if (attempt === GOOGLE_RETRY_ATTEMPTS - 1) throw err;
+      if (attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) throw err;
       sendClass = "transient";
       recovery = isConnectionResetError(err) ? "connection-reset" : undefined;
       retryDelayMs = retryBackoffDelayMs(attempt, {
