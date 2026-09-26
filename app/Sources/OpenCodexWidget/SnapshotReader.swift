@@ -6,12 +6,6 @@ public enum ReadFailure: String, Error, Equatable, Sendable {
     case corrupt
 }
 
-public extension WidgetSnapshot {
-    func isStale(now: Date = Date()) -> Bool {
-        now.timeIntervalSince1970 - generatedAt > 600
-    }
-}
-
 public struct SnapshotReader: Sendable {
     public init() {}
 

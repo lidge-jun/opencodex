@@ -114,6 +114,17 @@ public struct WidgetSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+public extension WidgetSnapshot {
+    /// The desktop app rewrites an unchanged snapshot every 15 minutes (`HEARTBEAT_SECONDS` in
+    /// desktop/src-tauri/src/widget.rs). Two missed heartbeats mean the app stopped writing.
+    static let staleAfter: TimeInterval = 30 * 60
+
+    /// The moment this snapshot starts reading as stale.
+    var staleDate: Date { Date(timeIntervalSince1970: generatedAt + Self.staleAfter) }
+
+    func isStale(now: Date = Date()) -> Bool { now >= staleDate }
+}
+
 public final class WidgetSnapshotStore: @unchecked Sendable {
     private let fileManager: FileManager
     private let homeDirectory: URL

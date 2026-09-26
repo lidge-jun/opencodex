@@ -65,6 +65,20 @@ to clear the title. The update dot is independent of companion usage and title f
 
 The native window/transport boundary remains in [Desktop shell](desktop-shell.md).
 
+## Widget refresh
+
+The Tauri app writes the widget snapshot from Rust (`desktop/src-tauri/src/widget.rs`) into the
+extension's container. A write happens when anything the widget displays changed, ignoring
+`generatedAt` and `lastUpdated`, or when the file on disk is older than a 15-minute heartbeat;
+the heartbeat reads the file's own `generatedAt`, so a restarted app decides the same way. After
+a write the host calls the NativeTray export `ocx_widget_reload_timelines`
+(`app/Sources/NativeTray/WidgetReload.swift`), which asks WidgetKit to reload the
+`OpenCodexWidget` kind on the main queue. WidgetKit's reload budget still applies, so the widget
+keeps a 15-minute fallback timeline, renders its "Updated" age as a self-updating relative date,
+and schedules a stale entry at `WidgetSnapshot.staleDate` (two heartbeats after the write, owned
+by `app/Sources/MenuBarCore/WidgetSnapshot.swift`). Coverage: `widget::macos` Rust tests and
+`WidgetSnapshotSuite`.
+
 Behavior coverage lives in `tests/usage/usage-timeline.test.ts`,
 `tests/server/companion-settings.test.ts`, the GUI companion utility/data tests, Rust inline tests,
 and `app/Sources/MenuBarCoreTests/TransportSuite.swift` and `WidgetSnapshotSuite.swift`.

@@ -251,7 +251,26 @@ mod macos {
     fn without_generated_at(snapshot: &Snapshot) -> Snapshot {
         let mut snapshot = snapshot.clone();
         snapshot.generated_at = 0.0;
+        // `last_updated` moves on every successful poll. Counting it as a change would rewrite
+        // the file, and ask WidgetKit for a reload, every five minutes even when nothing the
+        // widget shows has changed; the widget renders that age as a self-updating relative date.
+        snapshot.last_updated = None;
         snapshot
+    }
+
+    /// Rewrite an unchanged snapshot after this long, so the widget can still tell a live app from
+    /// one that stopped writing. The widget marks a snapshot stale after two heartbeats
+    /// (`WidgetSnapshot.staleAfter` in app/Sources/MenuBarCore/WidgetSnapshot.swift).
+    const HEARTBEAT_SECONDS: f64 = 15.0 * 60.0;
+
+    /// Whether `snapshot` should replace `previous` on disk. The heartbeat is measured from the
+    /// file's own `generated_at`, so a restarted app decides the same way as a running one.
+    fn should_write(previous: Option<&Snapshot>, snapshot: &Snapshot) -> bool {
+        let Some(previous) = previous else {
+            return true;
+        };
+        without_generated_at(previous) != without_generated_at(snapshot)
+            || snapshot.generated_at - previous.generated_at >= HEARTBEAT_SECONDS
     }
 
     fn write_if_changed(
@@ -259,7 +278,7 @@ mod macos {
         previous: Option<&Snapshot>,
         snapshot: &Snapshot,
     ) -> std::io::Result<bool> {
-        if previous.map(without_generated_at).as_ref() == Some(&without_generated_at(snapshot)) {
+        if !should_write(previous, snapshot) {
             return Ok(false);
         }
         let Some(directory) = path.parent() else {
@@ -279,6 +298,26 @@ mod macos {
         }
         fs::rename(temporary, path)?;
         Ok(true)
+    }
+
+    extern "C" {
+        fn ocx_widget_reload_timelines();
+    }
+
+    /// Persist the snapshot and, when it was actually written, ask WidgetKit to reload the widget.
+    fn publish(snapshot: &Snapshot) {
+        let path = snapshot_path();
+        let previous = fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Snapshot>(&bytes).ok());
+        match write_if_changed(&path, previous.as_ref(), snapshot) {
+            // SAFETY: a no-argument Swift export that only enqueues work on the main queue.
+            Ok(true) => unsafe { ocx_widget_reload_timelines() },
+            Ok(false) => {}
+            Err(error) => {
+                crate::logging::log_once("widget snapshot write failed", &error.to_string())
+            }
+        }
     }
 
     fn make_snapshot(
@@ -346,13 +385,7 @@ mod macos {
                     last_updated: None,
                     generated_at: now_seconds(),
                 };
-                let path = snapshot_path();
-                let previous = fs::read(&path)
-                    .ok()
-                    .and_then(|bytes| serde_json::from_slice::<Snapshot>(&bytes).ok());
-                if let Err(error) = write_if_changed(&path, previous.as_ref(), &snapshot) {
-                    crate::logging::log_once("widget snapshot write failed", &error.to_string());
-                }
+                publish(&snapshot);
                 crate::logging::log_once("widget snapshot health failed", state);
                 return;
             }
@@ -372,13 +405,7 @@ mod macos {
             quota_value.as_ref(),
             timeline_value.as_ref(),
         );
-        let path = snapshot_path();
-        let previous = fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Snapshot>(&bytes).ok());
-        if let Err(error) = write_if_changed(&path, previous.as_ref(), &snapshot) {
-            crate::logging::log_once("widget snapshot write failed", &error.to_string());
-        }
+        publish(&snapshot);
     }
 
     pub fn refresh(proxy: &ProxyClient) {
@@ -483,6 +510,63 @@ mod macos {
             changed.generated_at = 2.0;
             assert!(!write_if_changed(&path, Some(&snapshot), &changed).unwrap());
             let _ = fs::remove_file(path);
+        }
+
+        #[test]
+        fn only_visible_changes_or_the_heartbeat_rewrite_the_snapshot() {
+            let previous = Snapshot {
+                schema_version: 1,
+                state: "running".into(),
+                state_title: "Running".into(),
+                detail: None,
+                endpoint_display: "127.0.0.1:10100".into(),
+                menu_title: Some("12".into()),
+                today: None,
+                quotas: Vec::new(),
+                chart: None,
+                last_updated: Some(1_000.0),
+                generated_at: 1_000.0,
+            };
+            assert!(should_write(None, &previous), "first write");
+            // A later poll that only refreshed the timestamps is not a change.
+            let mut polled = previous.clone();
+            polled.generated_at = 1_300.0;
+            polled.last_updated = Some(1_300.0);
+            assert!(!should_write(Some(&previous), &polled));
+            // Anything the widget displays is.
+            let mut counted = polled.clone();
+            counted.menu_title = Some("13".into());
+            assert!(should_write(Some(&previous), &counted));
+            // An unchanged snapshot is rewritten once the heartbeat elapses, and not before.
+            let mut late = polled.clone();
+            late.generated_at = previous.generated_at + HEARTBEAT_SECONDS - 1.0;
+            assert!(!should_write(Some(&previous), &late));
+            late.generated_at = previous.generated_at + HEARTBEAT_SECONDS;
+            assert!(should_write(Some(&previous), &late));
+        }
+
+        #[test]
+        fn a_failed_write_reports_an_error_instead_of_a_write() {
+            // The parent is a file, so the directory cannot be created: `publish` must see an
+            // error here and never reach the reload call.
+            let blocker =
+                std::env::temp_dir().join(format!("ocx-widget-blocker-{}", std::process::id()));
+            fs::write(&blocker, b"x").unwrap();
+            let snapshot = Snapshot {
+                schema_version: 1,
+                state: "running".into(),
+                state_title: "Running".into(),
+                detail: None,
+                endpoint_display: "127.0.0.1:10100".into(),
+                menu_title: None,
+                today: None,
+                quotas: Vec::new(),
+                chart: None,
+                last_updated: None,
+                generated_at: 1.0,
+            };
+            assert!(write_if_changed(&blocker.join("snapshot.json"), None, &snapshot).is_err());
+            let _ = fs::remove_file(blocker);
         }
 
         #[test]
