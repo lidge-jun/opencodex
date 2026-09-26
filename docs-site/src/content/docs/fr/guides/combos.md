@@ -205,7 +205,7 @@ Les échecs d’un combo se répartissent entre ceux qui entraînent un **bascul
 | Premier appel d'outil d'un tour Responses exécuté par un adaptateur interne (`runTurn`) que la requête courante n'a pas déclaré, avant toute sortie et tout effet de bord non rejouable | Met la cible en refroidissement et bascule avec le même catalogue d'outils. Après une sortie visible ou un effet de bord non rejouable, le refus est définitif. Les requêtes Chat Completions et Anthropic Messages ne changent pas. |
 | Toute autre erreur non classifiée | Arrêtez et renvoyez l'erreur. |
 
-Une cible sautée entre en temps de recharge pendant 60 secondes par défaut. Si la réponse en amont inclut un
+Une cible sautée entre en temps de recharge pendant 60 secondes (10 minutes si le quota d’utilisation est épuisé, y compris HTTP 502) par défaut. Si la réponse en amont inclut un
 valeur `Retry-After` valide, opencodex l’utilise à la place. Les secondes numériques et les valeurs de date HTTP sont
 accepté, et un délai explicite `Retry-After` est plafonné à 24 heures ; les autres temps de recharge restent plafonnés à 10 minutes.
 
@@ -354,7 +354,7 @@ exécution d'une instance opencodex qui reçoit des requêtes de modèle.
 
 Chaque cible est actuellement inéligible : par exemple, son fournisseur est désactivé, il est en phase de refroidissement,
 elle a déjà été tentée pour cette requête, ou une tâche v2 chiffrée l'exclut. Vérifier la cible
-état du fournisseur et erreurs récentes en amont. Pour les temps de recharge, attendez la valeur par défaut de 60 secondes ou la
+état du fournisseur et erreurs récentes en amont. Pour les temps de recharge, attendez la valeur par défaut de 60 secondes (10 minutes si le quota d’utilisation est épuisé, y compris HTTP 502) ou la
 délai indiqué par `Retry-After` en amont (au maximum 24 heures pour un `Retry-After` explicite, contre 10 minutes pour les autres), puis réessayez.
 
 ### Pourquoi mon alias a-t-il été rejeté ?

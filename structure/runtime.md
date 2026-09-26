@@ -502,7 +502,7 @@ This is also why the classifier cannot duplicate visible output. Native byte str
 
 Regression coverage: `tests/responses/responses-forward-prompt-envelope.test.ts`, `tests/routing/router-combo-failover-classification.test.ts`, `tests/routing/routing-policy-fallback.test.ts`, `tests/helpers/combo-context-overflow-cases.ts`, and `tests/server/server-combo-failover-e2e.test.ts`.
 
-`src/combos/failover.ts` caps explicit upstream `Retry-After` target cooldowns at 24 hours while reset-derived, configured, and fallback cooldowns remain capped at 10 minutes.
+`src/combos/failover.ts` uses a 10-minute fallback for messages containing `usage limit reached` or `usage limit has been reached`, including HTTP 502. This duration does not change failure classification or cooldown scope; upstream retry/reset signals and configured durations retain precedence. It caps explicit upstream `Retry-After` target cooldowns at 24 hours while reset-derived, configured, and fallback cooldowns remain capped at 10 minutes.
 
 ## Combo default effort precedence
 

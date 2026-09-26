@@ -633,14 +633,50 @@ describe("combo target cooldowns", () => {
     expect(isComboTargetInCooldown("free", configuredPick.target, 1_000 + 7_000)).toBe(false);
   });
 
-  test("keeps the default cooldown for usage-window 1308", () => {
+  test("uses a ten-minute cooldown for usage-window 1308", () => {
     coolComboTarget("free", target, {
       now: 1_000,
       code: "1308",
       message: "Usage limit reached for 5 hour",
     });
-    expect(isComboTargetInCooldown("free", target, 1_000 + 59_999)).toBe(true);
-    expect(isComboTargetInCooldown("free", target, 1_000 + 60_000)).toBe(false);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 599_999)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + 600_000)).toBe(false);
+  });
+
+  test.each(["The usage limit has been reached", "Usage limit reached for 5 hour"])(
+    "cools a 502 quota failure for ten minutes: %s", (message) => {
+      const now = 1_000;
+      const config = baseConfig({ combos: { free: VALID_COMBO } });
+      const pick = pickComboTarget(config, "free", { now })!;
+      advanceComboAfterFailure(config, pick, {
+        now, status: 502, code: "upstream_server_error", message,
+      });
+      expect(comboFailureCooldownScope(502, message, { code: "upstream_server_error" })).toBe("target");
+      expect(isComboTargetInCooldown("free", pick.target, now + 599_999)).toBe(true);
+      expect(isComboTargetInCooldown("free", pick.target, now + 600_000)).toBe(false);
+    },
+  );
+
+  test.each([
+    { retryAfter: "0", cooldownMs: 5_000, expected: 1 },
+    { retryAfter: "30", cooldownMs: 5_000, expected: 30_000 },
+    { resetAt: 21, cooldownMs: 5_000, expected: 20_000 },
+    { cooldownMs: 5_000, expected: 5_000 },
+  ])("quota cooldown preserves explicit timing: %j", ({ expected, ...timing }) => {
+    coolComboTarget("free", target, {
+      now: 1_000, status: 502, code: "upstream_server_error",
+      message: "The usage limit has been reached", ...timing,
+    });
+    expect(isComboTargetInCooldown("free", target, 1_000 + expected - 1)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 1_000 + expected)).toBe(false);
+  });
+
+  test("generic 502 failures retain the default cooldown", () => {
+    coolComboTarget("free", target, {
+      now: 1_000, status: 502, code: "upstream_server_error", message: "Bad gateway",
+    });
+    expect(isComboTargetInCooldown("free", target, 60_999)).toBe(true);
+    expect(isComboTargetInCooldown("free", target, 61_000)).toBe(false);
   });
 
   test("honors explicit Retry-After over the request-rate default", () => {

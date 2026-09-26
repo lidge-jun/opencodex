@@ -230,6 +230,8 @@ export function coolComboTarget(
   const cooldownMs = serverDelayMs
     ?? parseResetCooldownMs(options?.resetAt, now)
     ?? options?.cooldownMs
+    // Quota exhaustion can arrive as 502; duration must not depend on failure scope.
+    ?? (/usage limit (?:has been )?reached/i.test(options?.message ?? "") ? MAX_COOLDOWN_MS : undefined)
     ?? (isTransientRequestRateLimit({
       status: options?.status,
       code: options?.code,

@@ -234,7 +234,7 @@ ikiye ayrılır.
 | Süreç içi bir bağdaştırıcının (`runTurn`) yürüttüğü Responses turunda, geçerli isteğin bildirmediği ilk araç çağrısı (herhangi bir çıktıdan ve yeniden oynatılamaz yan etkiden önce) | Hedefi bekleme süresine alır ve aynı araç kataloğuyla sonraki hedefe atlar. Görünür çıktıdan veya yeniden oynatılamaz bir yan etkiden sonra ret kesindir. Chat Completions ve Anthropic Messages istekleri değişmez. |
 | Diğer sınıflandırılmamış hatalar | Durun ve hatayı döndürün. |
 
-Atlanan bir hedef varsayılan olarak 60 saniye boyunca soğuma süresine girer.
+Atlanan bir hedef varsayılan olarak 60 saniye (HTTP 502 dahil kullanım kotası tükendiğinde 10 dakika) boyunca soğuma süresine girer.
 Yukarı akış yanıtı geçerli bir `Retry-After` değeri içeriyorsa opencodex bunun
 yerine onu kullanır. Sayısal saniyeler ve HTTP tarihi değerleri kabul edilir ve
 açık `Retry-After` gecikmesi en fazla 24 saat, sıfırlama kaynaklı, yapılandırılmış ve varsayılan soğuma süreleri en fazla 10 dakika ile sınırlandırılır.
@@ -389,7 +389,7 @@ yazdığını onaylayın.
 Her hedef şu anda uygun değildir: örneğin sağlayıcısı devre dışıdır,
 soğumaktadır, bu istek için zaten denenmiştir veya şifrelenmiş bir v2 görevi onu
 hariç tutmaktadır. Hedef sağlayıcı durumunu ve son yukarı akış hatalarını
-kontrol edin. Soğuma süreleri için 60 saniyelik varsayılanı veya yukarı akış
+kontrol edin. Soğuma süreleri için 60 saniye (HTTP 502 dahil kullanım kotası tükendiğinde 10 dakika)lik varsayılanı veya yukarı akış
 `Retry-After` süresini (açık `Retry-After` için en fazla 24 saat, diğer soğuma süreleri için en fazla 10 dakika) bekleyin, ardından
 yeniden deneyin.
 
