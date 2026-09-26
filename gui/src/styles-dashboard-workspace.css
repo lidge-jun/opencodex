@@ -701,22 +701,6 @@
   white-space: nowrap;
 }
 
-/* The info glyph is one character wide, so the shared focus ring drew a box around a
-   single symbol that reads like a broken control. This one highlights itself instead:
-   the same colour step on hover and on keyboard focus, and no outline. */
-.memory-models-info-glyph {
-  display: inline-flex;
-  align-items: center;
-  color: var(--muted);
-  cursor: help;
-  transition: color var(--motion-fast);
-}
-
-.memory-models-info .ocx-tooltip:focus-visible { outline: none; }
-
-.memory-models-info .ocx-tooltip:hover .memory-models-info-glyph,
-.memory-models-info .ocx-tooltip:focus-visible .memory-models-info-glyph { color: var(--text); }
-
 .dash-overview-stack .setting-hint,
 .dash-overview-stack .dash-sync-hint { max-width: 60ch; }
 
