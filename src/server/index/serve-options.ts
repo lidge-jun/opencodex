@@ -53,6 +53,7 @@ import {
 } from "../../codex/model-entitlements";
 import { resolveAdmittedCodexModelEntitlements } from "../../codex/model-entitlement-admission";
 import { CatalogGatherBusyError } from "../../codex/catalog/provider-fetch";
+import { chatgptBackendRelayRouteAllowed, relayChatGptBackendRequest } from "../chatgpt-backend-relay";
 import {
   registerCodexWebSocket,
   tryReserveCodexWebSocket,
@@ -323,6 +324,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           req,
           linkPolicyView!,
         );
+      }
+      // ChatGPT-account relay (quota mask). The allowlist above already gated this on the
+      // feature being effective; here it only needs the route shape.
+      if (ingress === "unauthenticated-loopback" && chatgptBackendRelayRouteAllowed(codexCompatibleUrl(req.url), req)) {
+        return withCors(await relayChatGptBackendRequest(req), req, loopbackPolicy());
       }
       // Tailscale Serve terminates only on this separately bound loopback socket. Reject before
       // dispatch so no data, readiness, health, WebSocket, or unknown-static handler can run.

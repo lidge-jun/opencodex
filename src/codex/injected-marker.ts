@@ -47,6 +47,18 @@ export function isRootRealtimeWsBaseUrlLine(line: string): boolean {
   return /^\s*experimental_realtime_ws_base_url\s*=/.test(line);
 }
 
+/**
+ * codex-rs root key that redirects every ChatGPT-account BackendClient call
+ * (profiles/me, settings, wham/usage, …) without touching provider HTTP. Written
+ * only by the quota-mask injection, pointed at the dedicated loopback listener
+ * so the proxy can relay those calls back to chatgpt.com.
+ */
+export const CHATGPT_BASE_URL_KEY = "chatgpt_base_url";
+
+export function isRootChatGptBaseUrlLine(line: string): boolean {
+  return /^\s*chatgpt_base_url\s*=/.test(line);
+}
+
 export function tomlStringPattern(key: string): RegExp {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const keyToken = `(?:${escaped}|"${escaped}"|'${escaped}')`;
@@ -101,8 +113,9 @@ export function stripJournaledOpenaiBaseUrl(
   content: string,
   injectedUrl: string | null,
   injectedRealtimeWsUrl: string | null = null,
+  injectedChatGptBaseUrl: string | null = null,
 ): string {
-  if (!injectedUrl && !injectedRealtimeWsUrl) return content;
+  if (!injectedUrl && !injectedRealtimeWsUrl && !injectedChatGptBaseUrl) return content;
   const lines = content.split(String.fromCharCode(10));
   const firstTable = lines.findIndex(l => /^\s*\[/.test(l));
   const rootEnd = firstTable === -1 ? lines.length : firstTable;
@@ -116,6 +129,8 @@ export function stripJournaledOpenaiBaseUrl(
       if (!injectedUrl || rootTomlString(line, "openai_base_url") !== injectedUrl) continue;
     } else if (isRootRealtimeWsBaseUrlLine(line)) {
       if (!injectedRealtimeWsUrl || rootTomlString(line, REALTIME_WS_BASE_URL_KEY) !== injectedRealtimeWsUrl) continue;
+    } else if (isRootChatGptBaseUrlLine(line)) {
+      if (!injectedChatGptBaseUrl || rootTomlString(line, CHATGPT_BASE_URL_KEY) !== injectedChatGptBaseUrl) continue;
     } else {
       continue;
     }

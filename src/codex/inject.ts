@@ -37,6 +37,7 @@ import {
   markJournalInjectedState,
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
+  journaledInjectedChatGptBaseUrl,
   removeJournal,
   writeJournal,
 } from "./journal";
@@ -49,6 +50,7 @@ import {
   type CodexHistoryJobOutcome,
 } from "./history-job";
 import {
+  CHATGPT_BASE_URL_KEY,
   REALTIME_WS_BASE_URL_KEY,
   hasInjectedCodexRouting,
   hasInjectedOpenaiBaseUrl,
@@ -355,10 +357,13 @@ async function injectCodexConfigImpl(
     // Value evidence survives an app rewrite that removes the ownership comments.
     const journaledBaseUrl = journaledInjectedOpenaiBaseUrl({ readOnly: true });
     const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl({ readOnly: true });
+    const journaledChatGptBaseUrl = journaledInjectedChatGptBaseUrl({ readOnly: true });
     const looksInjectedByValue =
       (journaledBaseUrl !== null && rootTomlString(nativeInput, "openai_base_url") === journaledBaseUrl)
       || (journaledRealtimeWsBaseUrl !== null
-        && rootTomlString(nativeInput, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
+        && rootTomlString(nativeInput, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl)
+      || (journaledChatGptBaseUrl !== null
+        && rootTomlString(nativeInput, CHATGPT_BASE_URL_KEY) === journaledChatGptBaseUrl);
     return !hasInjectedCodexRouting(nativeInput) && !looksInjectedByValue;
   };
   const readCurrentProfile = (): string | null => existsSync(CODEX_PROFILE_PATH)
@@ -477,6 +482,10 @@ async function injectCodexConfigImpl(
       // not durable) and the line we removed (so re-enabling the sidecar can return it).
       injectedRootWebSearch: plan.injectedRootWebSearch,
       replacedRootWebSearch: plan.replacedRootWebSearch,
+      // The account-URL override is ours only when the quota mask wrote it this pass.
+      injectedChatGptBaseUrl: plan.keptUserBaseUrl || plan.keptUserChatGptBaseUrl
+        ? null
+        : rootTomlString(plan.content, CHATGPT_BASE_URL_KEY),
       // This is the catalog artifact selected for this injection, even when config.toml
       // already points at that path and therefore needs no textual rewrite.
       injectedCatalogPath: plan.catalogPath,

@@ -19,6 +19,7 @@ import {
   journaledInjectedRealtimeWsBaseUrl,
   journaledInjectedRootWebSearch,
   journaledReplacedRootWebSearch,
+  journaledInjectedChatGptBaseUrl,
 } from "../journal";
 import { stripJournaledOpenaiBaseUrl } from "../injected-marker";
 import { CODEX_CONFIG_PATH, resolveCodexStateDbPath } from "../paths";
@@ -39,6 +40,7 @@ import {
   setRootModelProvider,
   setRootOpenaiBaseUrlForTarget,
   setRootRealtimeWsBaseUrl,
+  setRootChatGptBaseUrl,
   stripExistingModelProvider,
   stripInjectedOpenaiBaseUrl,
   stripOpencodexCatalogPath,
@@ -47,9 +49,11 @@ import {
 import { hasOcxProviderTable, removeOcxSection } from "./remove";
 import {
   configuredManagedSubagentDefaults,
+  routingTargetOrigin,
   usesProviderTable,
   type CodexRoutingTarget,
 } from "./routing-target";
+import { isEffectiveCodexQuotaMask } from "../loopback-target";
 import { applyPaginatedOpenaiCompat } from "./paginated-openai-compat";
 
 /** Everything the plan needs that is not the config.toml input text. */
@@ -81,6 +85,7 @@ export interface CodexInjectionPlanOk {
   injectedRootWebSearch: string | null;
   /** The user-owned root `web_search` line this plan removed, for the journal to carry. */
   replacedRootWebSearch: string | null;
+  keptUserChatGptBaseUrl: boolean;
   nativeSubagentDefaultsWarning: string | undefined;
   managedDefaultsMessage: string;
   /**
@@ -177,6 +182,7 @@ export function deriveCodexInjectionPlan(
     content,
     journaledInjectedOpenaiBaseUrl({ readOnly: ctx.journalReadOnly }),
     journaledInjectedRealtimeWsBaseUrl({ readOnly: ctx.journalReadOnly }),
+    journaledInjectedChatGptBaseUrl({ readOnly: ctx.journalReadOnly }),
   );
   // Whether this home already published the provider id that its thread rows may reference.
   // Design B strips the table below; it may only stay stripped if those rows can be relabeled.
@@ -242,6 +248,7 @@ export function deriveCodexInjectionPlan(
     && routingTarget.requiresAdmissionToken !== true;
   let keptUserBaseUrl = false;
   let keptUserRealtimeWsBaseUrl = false;
+  let keptUserChatGptBaseUrl = false;
   if (providerTableMode) {
     // Legacy (non-loopback) injection: the built-in openai provider cannot carry the
     // x-opencodex-api-key env header, so keep the opencodex provider table + root re-tag.
@@ -275,6 +282,20 @@ export function deriveCodexInjectionPlan(
       const realtime = setRootRealtimeWsBaseUrl(content, routingTarget);
       content = realtime.content;
       keptUserRealtimeWsBaseUrl = realtime.keptUserRealtimeWsBaseUrl;
+    }
+    // Quota-wall mask: Desktop stays signed in, but Codex asks {chatgpt_base_url}/wham/usage
+    // whether usage is allowed and blocks the composer on allowed:false — even when every
+    // model is routed to another provider. Point the account RPCs at the loopback relay,
+    // which forwards them and masks only that verdict. Design B only: the relay is served
+    // by the dedicated loopback listener, and a user-owned routing line means we inject
+    // nothing at all.
+    if (isEffectiveCodexQuotaMask(config) && !keptUserBaseUrl) {
+      const chatgpt = setRootChatGptBaseUrl(
+        content,
+        `${routingTargetOrigin(routingTarget)}/backend-api`,
+      );
+      content = chatgpt.content;
+      keptUserChatGptBaseUrl = chatgpt.keptUserChatGptBaseUrl;
     }
   }
 
@@ -388,6 +409,7 @@ export function deriveCodexInjectionPlan(
     keptUserRealtimeWsBaseUrl,
     injectedRootWebSearch: webSearch.wroteValue,
     replacedRootWebSearch: webSearch.replacedUserLine,
+    keptUserChatGptBaseUrl,
     nativeSubagentDefaultsWarning,
     managedDefaultsMessage,
     historyRelabelRefusal: observedHistoryRefusal,

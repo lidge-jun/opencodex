@@ -60,8 +60,14 @@ interface Journal {
    * for as long as the switch is off. Recording the exact line is what puts it back when the
    * sidecar is switched on again — including for a line the snapshot predates, which is the case
    * `ocx restore` alone cannot cover.
-   */
+  */
   replacedRootWebSearch?: string | null;
+  /**
+   * The root `chatgpt_base_url` the quota-mask injection wrote, when it wrote one. Same
+   * rationale as the realtime key: recorded on its own so a user-owned account-URL override
+   * can never be mistaken for ours. Null when the key was preserved or not injected.
+   */
+  injectedChatGptBaseUrl?: string | null;
   /**
    * The catalog path this injection actually wrote to.
    *
@@ -175,6 +181,7 @@ export function writeJournal(options: WriteJournalOptions = {}): void {
 export interface InjectedJournalOwnership {
   injectedOpenaiBaseUrl: string | null;
   injectedRealtimeWsBaseUrl: string | null;
+  injectedChatGptBaseUrl: string | null;
   injectedCatalogPath: string | null;
   /** Omitted by callers that inject no `web_search` line, which is the value it then records. */
   injectedRootWebSearch?: string | null;
@@ -203,6 +210,7 @@ export function markJournalInjectedState(
   journal.injectedRealtimeWsBaseUrl = ownership.injectedRealtimeWsBaseUrl;
   journal.injectedRootWebSearch = ownership.injectedRootWebSearch ?? null;
   journal.replacedRootWebSearch = ownership.replacedRootWebSearch ?? null;
+  journal.injectedChatGptBaseUrl = ownership.injectedChatGptBaseUrl;
   journal.injectedCatalogPath = ownership.injectedCatalogPath;
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal));
 }
@@ -232,6 +240,11 @@ export function journaledInjectedRootWebSearch(options: { readOnly?: boolean } =
 /** The user-owned root `web_search` line the last injection removed, or null when there was none. */
 export function journaledReplacedRootWebSearch(options: { readOnly?: boolean } = {}): string | null {
   return readJournal(options.readOnly !== true)?.replacedRootWebSearch ?? null;
+}
+
+/** The root `chatgpt_base_url` the last quota-mask injection wrote, or null. */
+export function journaledInjectedChatGptBaseUrl(options: { readOnly?: boolean } = {}): string | null {
+  return readJournal(options.readOnly !== true)?.injectedChatGptBaseUrl ?? null;
 }
 
 /** The catalog path the last injection wrote to, or null when none was recorded. */

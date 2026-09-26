@@ -528,6 +528,37 @@ This only changes the Desktop login gate. Non-loopback binds keep `requires_open
 the `env_key` admission credential regardless of the switch; it never exposes an OpenCodex listener
 without authentication.
 
+### Keep the ChatGPT login past the usage wall (opt-in)
+
+When the main ChatGPT account's usage window is exhausted, Codex Desktop shows "You're out of Codex
+and Work usage" and refuses **every** new chat — including turns that would route to external
+providers through OpenCodex and consume none of that quota. The gate comes from the account's own
+`wham/usage` verdict, which Desktop reads directly from `chatgpt.com`.
+
+`codexQuotaMask` keeps the ChatGPT login (so phone remote control, voice, and account surfaces keep
+working) while neutralizing only that verdict:
+
+```bash
+ocx system settings --quota-mask on        # or "codexQuotaMask": true in config.json
+ocx sync                                   # restart Desktop afterwards
+```
+
+Requirements and behavior:
+
+- Needs the dedicated unauthenticated loopback listener (`unauthenticatedLoopbackListener` with an
+  explicit port). Without it the flag is inert — the relay is served only by that listener.
+- `ocx sync` writes a root `chatgpt_base_url = "http://127.0.0.1:<listener port>/backend-api"`.
+  The listener relays `/backend-api/*` account GET/POST requests to `https://chatgpt.com` with the
+  caller's own Authorization header and masks only `wham/usage`: `allowed` becomes `true`,
+  `limit_reached` `false`, and the upsell fields are dropped. Identifying fields
+  (`account_id`, `user_id`) and usage windows pass through unchanged, so the usage display stays
+  truthful — only the hard block is lifted.
+- A user-owned `chatgpt_base_url` in `config.toml` wins: sync injects nothing. `ocx restore`
+  strips the injected line like any other managed routing override.
+- This grants no quota. Native-model requests still fail upstream while the window is exhausted;
+  the point is that chats using routed external providers, and Desktop itself, stay usable.
+
+## Thread identity and history
 ## Thread identity and history
 
 The default loopback form keeps new threads tagged with Codex's native `openai` provider, so normal

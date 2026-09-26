@@ -137,3 +137,16 @@ export function isEffectiveCodexClientCompaction(
     && config.runtimeRole !== "client"
     && !shouldInjectApiAuthHeader(config);
 }
+
+/**
+ * Is the Codex Desktop quota-wall mask active? True requires the dedicated loopback
+ * listener: the chatgpt_base_url relay is served only there, so a stored-on flag with the
+ * listener off must stay inert rather than point account RPCs at a socket that 404s them.
+ */
+export function isEffectiveCodexQuotaMask(
+  config: Pick<OcxConfig, "runtimeRole" | "unauthenticatedLoopbackListener" | "codexQuotaMask"> | undefined,
+): boolean {
+  return config?.codexQuotaMask === true
+    && config.runtimeRole !== "client"
+    && config.unauthenticatedLoopbackListener?.enabled === true;
+}

@@ -33,6 +33,7 @@ import { invalidateCodexModelsCacheWithPermit } from "../codex/catalog/sync";
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../service";
 import { shouldSyncCodexOnStart } from "../codex/desired-state";
 import { effectiveLoopbackListenerPort } from "../codex/loopback-target";
+import { chatgptBackendRelayEnabled, chatgptBackendRelayRouteAllowed } from "./chatgpt-backend-relay";
 import {
   createWindowsTaskListingCache,
   inspectNativeCodexOwnership,
@@ -401,6 +402,9 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
    */
   function loopbackRouteAllowed(url: URL, req: Request): boolean {
     const path = url.pathname;
+    // ChatGPT-account relay (quota mask): admitted only while the feature is effective,
+    // so the listener surface grows only for operators who turned it on.
+    if (chatgptBackendRelayEnabled(config) && chatgptBackendRelayRouteAllowed(url, req)) return true;
     if (path === "/v1/responses") {
       return req.method === "POST" || req.headers.get("upgrade")?.toLowerCase() === "websocket";
     }

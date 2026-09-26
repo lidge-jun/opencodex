@@ -12,6 +12,7 @@ import {
   journaledInjectedRealtimeWsBaseUrl,
   journaledInjectedRootWebSearch,
   journaledReplacedRootWebSearch,
+  journaledInjectedChatGptBaseUrl,
 } from "../journal";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, readRootTomlString } from "../paths";
 import { transformManagedSubagentDefaults } from "../subagent-defaults";
@@ -70,6 +71,7 @@ function stripOpencodexConfigResult(
   journaledRealtimeWsBaseUrl: string | null = null,
   journaledRootWebSearch: string | null = null,
   journaledReplacedWebSearch: string | null = null,
+  journaledChatGptBaseUrl: string | null = null,
 ): StripOpencodexConfigResult {
   let out = content;
   const hadRootOcxProvider =
@@ -87,7 +89,7 @@ function stripOpencodexConfigResult(
     injectedValue: journaledRootWebSearch,
     replacedUserLine: journaledReplacedWebSearch,
   }).content;
-  out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl, journaledRealtimeWsBaseUrl);
+  out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl, journaledRealtimeWsBaseUrl, journaledChatGptBaseUrl);
   if (hasOcxProviderTable(out)) {
     out = removeOcxSection(out);
   }
@@ -188,6 +190,7 @@ export function removeCodexConfig(
   const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl();
   const journaledRootWebSearch = journaledInjectedRootWebSearch();
   const journaledReplaced = journaledReplacedRootWebSearch();
+  const journaledChatGptBaseUrl = journaledInjectedChatGptBaseUrl();
   const had = hasOpencodexRouting(content)
     || (journaledBaseUrl !== null && rootTomlString(content, "openai_base_url") === journaledBaseUrl)
     || (journaledRealtimeWsBaseUrl !== null
@@ -198,6 +201,7 @@ export function removeCodexConfig(
     journaledRealtimeWsBaseUrl,
     journaledRootWebSearch,
     journaledReplaced,
+    journaledChatGptBaseUrl,
   );
   // Captured from the pre-strip bytes: the strip is what removes the table, so reading it
   // afterwards would find nothing.

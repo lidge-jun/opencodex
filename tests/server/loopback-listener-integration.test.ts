@@ -1073,3 +1073,85 @@ describe("loopback companion listener", () => {
     await rebound.stop(true);
   }, SERVER_BUDGET_MS);
 });
+
+describe("chatgpt backend relay (quota mask)", () => {
+  const exhaustedWhamBody = {
+    account_id: "11111111-2222-3333-4444-555555555555",
+    user_id: "user-1",
+    rate_limit: {
+      allowed: false,
+      limit_reached: true,
+      primary_window: { window_minutes: 300, used_percent: 100 },
+      secondary_window: { window_minutes: 10080, used_percent: 92 },
+    },
+    rate_limit_upsell: { experiment: "upsell-a" },
+    rate_limit_reached_type: "course_grain_rate_limit_reached",
+    credits: "0",
+  };
+
+  test("relays wham/usage to chatgpt.com with the account token and masks the verdict", async () => {
+    const loopbackPort = await freePort();
+    saveConfig({ ...baseConfig(loopbackPort), codexQuotaMask: true } as OcxConfig);
+    const server = await startLoopbackTestServer(loopbackPort);
+    const realFetch = globalThis.fetch;
+    const seen: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith("https://chatgpt.com/")) {
+        seen.push({ url, authorization: new Headers(init?.headers).get("authorization") });
+        return Response.json(exhaustedWhamBody);
+      }
+      return realFetch(input as Parameters<typeof fetch>[0], init);
+    }) as typeof fetch;
+    try {
+      const response = await fetch(`http://127.0.0.1:${loopbackPort}/backend-api/wham/usage`, {
+        headers: { authorization: "Bearer codex-account-token" },
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json() as typeof exhaustedWhamBody & {
+        rate_limit: { allowed: boolean; limit_reached: boolean };
+        rate_limit_upsell: unknown;
+        rate_limit_reached_type: unknown;
+      };
+      expect(body.rate_limit.allowed).toBe(true);
+      expect(body.rate_limit.limit_reached).toBe(false);
+      expect(body.rate_limit_upsell).toBeNull();
+      expect(body.rate_limit_reached_type).toBeNull();
+      // The app-server nulls account fields it cannot match, so identity must survive.
+      expect(body.account_id).toBe(exhaustedWhamBody.account_id);
+      expect(seen).toEqual([
+        { url: "https://chatgpt.com/backend-api/wham/usage", authorization: "Bearer codex-account-token" },
+      ]);
+    } finally {
+      globalThis.fetch = realFetch;
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("stays off the listener unless the mask is enabled", async () => {
+    const loopbackPort = await freePort();
+    saveConfig(baseConfig(loopbackPort));
+    const server = await startLoopbackTestServer(loopbackPort);
+    try {
+      const get = await fetch(`http://127.0.0.1:${loopbackPort}/backend-api/wham/usage`);
+      expect(get.status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("admits only account GET/POST routes while the mask is enabled", async () => {
+    const loopbackPort = await freePort();
+    saveConfig({ ...baseConfig(loopbackPort), codexQuotaMask: true } as OcxConfig);
+    const server = await startLoopbackTestServer(loopbackPort);
+    try {
+      const base = `http://127.0.0.1:${loopbackPort}`;
+      const deleted = await fetch(`${base}/backend-api/wham/usage`, { method: "DELETE" });
+      expect(deleted.status).toBe(404);
+      const outside = await fetch(`${base}/api/config`);
+      expect(outside.status).toBe(404);
+    } finally {
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+});

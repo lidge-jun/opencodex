@@ -6,9 +6,11 @@ import {
   OCX_SECTION_MARKER,
   OCX_ROUTING_MARKER_LINE,
   REALTIME_WS_BASE_URL_KEY,
+  CHATGPT_BASE_URL_KEY,
   isRootOpenaiBaseUrlLine,
   isRootRealtimeWsBaseUrlLine,
   rootTomlString,
+  isRootChatGptBaseUrlLine,
   tomlStringPattern,
 } from "../injected-marker";
 import {
@@ -181,6 +183,11 @@ function buildOpenaiBaseUrlLineForTarget(target: CodexRoutingTarget): string {
  */
 export function buildRealtimeWsBaseUrlLine(target: CodexRoutingTarget): string {
   return `${REALTIME_WS_BASE_URL_KEY} = ${tomlString(target.baseUrl)}`;
+}
+
+/** Quota-mask override: the value is the relay origin (loopback listener + /backend-api). */
+export function buildChatGptBaseUrlLine(baseUrl: string): string {
+  return `${CHATGPT_BASE_URL_KEY} = ${tomlString(baseUrl)}`;
 }
 
 /**
@@ -441,10 +448,45 @@ export function stripInjectedRootWebSearch(content: string, injectedValue?: stri
 }
 
 /**
+ * Companion to the realtime override for the ChatGPT-account base URL (quota mask). Same
+ * per-key ownership rule: ours only when the marker sits directly above it; a user's own
+ * line is kept and nothing is injected. Placement: after the last marker-owned base-url
+ * pair, so the injected root keys stay one contiguous block. Injects nothing when no
+ * marker-owned routing override exists — the quota mask rides on Design B routing.
+ */
+export function setRootChatGptBaseUrl(
+  content: string,
+  baseUrl: string,
+): { content: string; keptUserChatGptBaseUrl: boolean } {
+  const lines = content.split("\n");
+  const firstTable = lines.findIndex((line) => /^\s*\[/.test(line));
+  const rootEnd = firstTable === -1 ? lines.length : firstTable;
+  const key = buildChatGptBaseUrlLine(baseUrl);
+  for (let index = 0; index < rootEnd; index += 1) {
+    if (!isRootChatGptBaseUrlLine(lines[index])) continue;
+    const markerOwned = index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER);
+    if (!markerOwned) return { content, keptUserChatGptBaseUrl: true };
+    lines[index - 1] = OCX_ROUTING_MARKER_LINE;
+    lines[index] = key;
+    return { content: lines.join("\n"), keptUserChatGptBaseUrl: false };
+  }
+  let insertAfter = -1;
+  for (let index = 0; index < rootEnd; index += 1) {
+    const isInjectedKey = isRootOpenaiBaseUrlLine(lines[index]) || isRootRealtimeWsBaseUrlLine(lines[index]);
+    if (!isInjectedKey) continue;
+    if (index > 0 && lines[index - 1].includes(OCX_SECTION_MARKER)) insertAfter = index;
+  }
+  if (insertAfter === -1) return { content, keptUserChatGptBaseUrl: false };
+  lines.splice(insertAfter + 1, 0, OCX_ROUTING_MARKER_LINE, key);
+  return { content: lines.join("\n"), keptUserChatGptBaseUrl: false };
+}
+
+/**
  * Remove the marker-owned root `openai_base_url` (marker line + the key line right after it).
  * A user's own root override (no marker) survives; an orphaned marker with no key line after
  * it is dropped too so repeated strip/inject cycles cannot accumulate marker comments.
- * A marker-owned `experimental_realtime_ws_base_url` pair is removed by the same rule.
+ * A marker-owned `experimental_realtime_ws_base_url` or `chatgpt_base_url` pair is removed
+ * by the same rule.
  */
 export function stripInjectedOpenaiBaseUrl(content: string): string {
   const lines = content.split("\n");
@@ -453,7 +495,10 @@ export function stripInjectedOpenaiBaseUrl(content: string): string {
   const drop = new Set<number>();
   for (let i = 0; i < rootEnd; i++) {
     if (!lines[i].includes(OCX_SECTION_MARKER)) continue;
-    if (i + 1 < rootEnd && (isRootOpenaiBaseUrlLine(lines[i + 1]) || isRootRealtimeWsBaseUrlLine(lines[i + 1]))) {
+    if (i + 1 < rootEnd
+      && (isRootOpenaiBaseUrlLine(lines[i + 1])
+        || isRootRealtimeWsBaseUrlLine(lines[i + 1])
+        || isRootChatGptBaseUrlLine(lines[i + 1]))) {
       drop.add(i);
       drop.add(i + 1);
     } else if (i + 1 >= rootEnd || lines[i + 1].trim() === "") {

@@ -15,7 +15,7 @@ import {
 const USAGE = `Usage:
   ocx system [status] [--json]
   ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>]
-      [--desktop-authless <on|off>] [--client-compaction <on|off>] [--json]
+      [--desktop-authless <on|off>] [--client-compaction <on|off>] [--quota-mask <on|off>] [--json]
   ocx system startup <health|install-service|install-shim> [--json]
   ocx system diagnostics [--json]
   ocx system sync [--json]
@@ -30,7 +30,10 @@ const USAGE = `Usage:
 
 --client-compaction favors native replay portability for future compactions while
 keeping OpenCodeX routing active; the configured provider may process summaries
-and consume its quota.`;
+and consume its quota.
+--quota-mask keeps the Codex app signed in but relays its usage RPCs through OpenCodex,
+so an exhausted ChatGPT plan no longer blocks chats routed to other providers; requires
+the unauthenticated loopback listener.`;
 
 async function status(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const args = [...argv];
@@ -54,15 +57,18 @@ function desktopSwitchInertReason(reason: unknown): string {
   if (reason === "non_loopback_bind_requires_admission_token") {
     return "a non-loopback bind requires an admission token, so this flag is inert";
   }
+  if (reason === "loopback_listener_required") {
+    return "the unauthenticated loopback listener is disabled, so this flag is inert";
+  }
   return "the stored setting is not effective in the current runtime configuration";
 }
 
 
 function settingsUpdateLines(
   result: unknown,
-  changed: { desktopAuthless: boolean; clientCompaction: boolean },
+  changed: { desktopAuthless: boolean; clientCompaction: boolean; quotaMask: boolean },
 ): string[] {
-  if (!changed.desktopAuthless && !changed.clientCompaction) return ["System settings updated."];
+  if (!changed.desktopAuthless && !changed.clientCompaction && !changed.quotaMask) return ["System settings updated."];
   const switches = recordValue(recordValue(result)?.codexDesktopSwitches);
   if (!switches) return ["System settings updated."];
 
@@ -98,6 +104,9 @@ function settingsUpdateLines(
   if (changed.clientCompaction && !appendSwitch("codexClientCompaction", "Codex client compaction")) {
     return ["System settings updated."];
   }
+  if (changed.quotaMask && !appendSwitch("codexQuotaMask", "Codex quota mask")) {
+    return ["System settings updated."];
+  }
 
   const apply = recordValue(switches.apply);
   const authSource = recordValue(switches.authSource);
@@ -128,9 +137,10 @@ async function settings(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   const streamMode = takeOption(args, "--stream-mode");
   const desktopAuthless = takeBooleanOption(args, "--desktop-authless");
   const clientCompaction = takeBooleanOption(args, "--client-compaction");
+  const quotaMask = takeBooleanOption(args, "--quota-mask");
   rejectArgs(args, USAGE);
   if (autoStart === undefined && streamMode === undefined
-    && desktopAuthless === undefined && clientCompaction === undefined) {
+    && desktopAuthless === undefined && clientCompaction === undefined && quotaMask === undefined) {
     const result = await runtimeRequest("/api/settings", {}, deps);
     printData(result, wantsJson, summaryLines(result));
     return;
@@ -140,11 +150,13 @@ async function settings(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     ...(streamMode !== undefined ? { streamMode } : {}),
     ...(desktopAuthless !== undefined ? { codexDesktopAuthless: desktopAuthless } : {}),
     ...(clientCompaction !== undefined ? { codexClientCompaction: clientCompaction } : {}),
+    ...(quotaMask !== undefined ? { codexQuotaMask: quotaMask } : {}),
   };
   const result = await runtimeRequest("/api/settings", { method: "PUT", body: JSON.stringify(body) }, deps);
   printData(result, wantsJson, settingsUpdateLines(result, {
     desktopAuthless: desktopAuthless !== undefined,
     clientCompaction: clientCompaction !== undefined,
+    quotaMask: quotaMask !== undefined,
   }));
 }
 

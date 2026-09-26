@@ -4,11 +4,13 @@ import { tomlString } from "./paths";
 import {
   isEffectiveCodexClientCompaction,
   isEffectiveCodexDesktopAuthless,
+  isEffectiveCodexQuotaMask,
 } from "./loopback-target";
 
 export type CodexDesktopSwitchInertReason =
   | "client_role"
-  | "non_loopback_bind_requires_admission_token";
+  | "non_loopback_bind_requires_admission_token"
+  | "loopback_listener_required";
 
 export interface CodexDesktopSwitchState {
   stored: boolean;
@@ -37,6 +39,7 @@ export type CodexDesktopSwitchApply =
 export interface CodexDesktopSwitchReport {
   codexDesktopAuthless: CodexDesktopSwitchState;
   codexClientCompaction: CodexDesktopSwitchState;
+  codexQuotaMask: CodexDesktopSwitchState;
   apply: CodexDesktopSwitchApply;
   authSource: { presentsCodexAccount: boolean | null; summary: string };
 }
@@ -49,12 +52,14 @@ type DesktopSwitchConfig = Pick<
   | "unauthenticatedLoopbackListener"
   | "codexDesktopAuthless"
   | "codexClientCompaction"
+  | "codexQuotaMask"
 >;
 
 function describeSwitch(
   stored: boolean,
   effective: boolean | null,
   config: Pick<OcxConfig, "runtimeRole">,
+  nonClientInertReason: CodexDesktopSwitchInertReason = "non_loopback_bind_requires_admission_token",
 ): CodexDesktopSwitchState {
   if (effective === null) return { stored, effective };
   if (!stored || effective) return { stored, effective };
@@ -63,7 +68,7 @@ function describeSwitch(
     effective,
     inertReason: config.runtimeRole === "client"
       ? "client_role"
-      : "non_loopback_bind_requires_admission_token",
+      : nonClientInertReason,
   };
 }
 
@@ -81,10 +86,13 @@ export function describeCodexDesktopSwitches(
   const authlessEffective = effectiveWithheld ? null : isEffectiveCodexDesktopAuthless(config);
   const compactionStored = config.codexClientCompaction === true;
   const compactionEffective = effectiveWithheld ? null : isEffectiveCodexClientCompaction(config);
+  const quotaMaskStored = config.codexQuotaMask === true;
+  const quotaMaskEffective = effectiveWithheld ? null : isEffectiveCodexQuotaMask(config);
 
   return {
     codexDesktopAuthless: describeSwitch(authlessStored, authlessEffective, config),
     codexClientCompaction: describeSwitch(compactionStored, compactionEffective, config),
+    codexQuotaMask: describeSwitch(quotaMaskStored, quotaMaskEffective, config, "loopback_listener_required"),
     apply,
     authSource: externallyOwned
       ? {

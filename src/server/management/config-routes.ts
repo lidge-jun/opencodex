@@ -367,6 +367,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexDesktopAuthless: config.codexDesktopAuthless === true,
       // Absent keeps Design B remote compaction; true selects the dedicated provider identity.
       codexClientCompaction: config.codexClientCompaction === true,
+      codexQuotaMask: config.codexQuotaMask === true,
       codexDesktopSwitches: describeCodexDesktopSwitches(config, await observedCodexDesktopSwitchApply()),
       compactionRouting: config.compactionRouting ?? null,
       startupHealth: await readStartupHealthSnapshot(config),
@@ -460,6 +461,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       codexMainAccountHardLock?: unknown;
       codexDesktopAuthless?: unknown;
       codexClientCompaction?: unknown;
+      codexQuotaMask?: unknown;
       compactionRouting?: unknown;
     };
     if (body.codexAutoStart === undefined
@@ -473,8 +475,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       && body.codexMainAccountHardLock === undefined
       && body.codexDesktopAuthless === undefined
       && body.codexClientCompaction === undefined
+      && body.codexQuotaMask === undefined
       && body.compactionRouting === undefined) {
-      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, or compactionRouting" }, 400);
+      return jsonResponse({ error: "provide codexAutoStart, streamMode, appOwnedMemoryBudgetMb, codexAccountPickerEnabled, codexQuotaAutoRefresh, oauthOpenBrowser, ultraFastTier, fastRows, codexMainAccountHardLock, codexDesktopAuthless, codexClientCompaction, codexQuotaMask, or compactionRouting" }, 400);
     }
     if (body.codexAutoStart !== undefined && typeof body.codexAutoStart !== "boolean") {
       return jsonResponse({ error: "codexAutoStart boolean is required" }, 400);
@@ -503,6 +506,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     if (body.codexClientCompaction !== undefined && typeof body.codexClientCompaction !== "boolean") {
       return jsonResponse({ error: "codexClientCompaction boolean is required" }, 400);
+    }
+    if (body.codexQuotaMask !== undefined && typeof body.codexQuotaMask !== "boolean") {
+      return jsonResponse({ error: "codexQuotaMask boolean is required" }, 400);
     }
     const compactionRouting = body.compactionRouting == null
       ? body.compactionRouting
@@ -565,11 +571,14 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       hasCodexDesktopAuthless: Object.hasOwn(config, "codexDesktopAuthless"),
       codexClientCompaction: config.codexClientCompaction,
       hasCodexClientCompaction: Object.hasOwn(config, "codexClientCompaction"),
+      codexQuotaMask: config.codexQuotaMask,
+      hasCodexQuotaMask: Object.hasOwn(config, "codexQuotaMask"),
     };
     const pickerWasEnabled = codexAccountPickerEnabled(config);
     let pickerIsEnabled = pickerWasEnabled;
     const authlessWasEnabled = config.codexDesktopAuthless === true;
     const clientCompactionWasEnabled = config.codexClientCompaction === true;
+    const quotaMaskWasEnabled = config.codexQuotaMask === true;
     const fastRowsWasEnabled = config.fastRows !== false;
     try {
       if (typeof body.codexAutoStart === "boolean") {
@@ -608,6 +617,8 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
       if (body.codexClientCompaction === true) config.codexClientCompaction = true;
       else if (body.codexClientCompaction === false) deleteConfigTopLevelKey(config, "codexClientCompaction");
+      if (body.codexQuotaMask === true) config.codexQuotaMask = true;
+      else if (body.codexQuotaMask === false) deleteConfigTopLevelKey(config, "codexQuotaMask");
       if (compactionRouting === null) deleteConfigTopLevelKey(config, "compactionRouting");
       else if (compactionRouting?.success) config.compactionRouting = compactionRouting.data;
       if (quotaAutoRefreshChange) {
@@ -658,6 +669,9 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       if (previousSettings.hasCodexClientCompaction) {
         config.codexClientCompaction = previousSettings.codexClientCompaction;
       } else deleteConfigTopLevelKey(config, "codexClientCompaction");
+      if (previousSettings.hasCodexQuotaMask) {
+        config.codexQuotaMask = previousSettings.codexQuotaMask;
+      } else deleteConfigTopLevelKey(config, "codexQuotaMask");
       restoreCompactionRouting();
       throw error;
     }
@@ -667,10 +681,12 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
     }
     const authlessIsEnabled = config.codexDesktopAuthless === true;
     const clientCompactionIsEnabled = config.codexClientCompaction === true;
+    const quotaMaskIsEnabled = config.codexQuotaMask === true;
     const fastRowsIsEnabled = config.fastRows !== false;
     const fastRowsChanged = fastRowsWasEnabled !== fastRowsIsEnabled;
     const desktopSwitchesChanged = authlessWasEnabled !== authlessIsEnabled
-      || clientCompactionWasEnabled !== clientCompactionIsEnabled;
+      || clientCompactionWasEnabled !== clientCompactionIsEnabled
+      || quotaMaskWasEnabled !== quotaMaskIsEnabled;
     // Catalog convergence is not config injection, and the comment that used to sit here said
     // it was. `convergeCodexCatalog` rejects any scope but `catalog` and never reaches the
     // injector, which is why flipping either switch left `config.toml` in its old shape until
@@ -709,6 +725,7 @@ export async function handleConfigRoutes(ctx: ManagementContext): Promise<Respon
       fastRows: config.fastRows !== false,
       codexDesktopAuthless: authlessIsEnabled,
       codexClientCompaction: clientCompactionIsEnabled,
+      codexQuotaMask: quotaMaskIsEnabled,
       codexDesktopSwitches,
       compactionRouting: config.compactionRouting ?? null,
       codexMainAccountHardLock: isMainAccountHardLockEnabled(config),

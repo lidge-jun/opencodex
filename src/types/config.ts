@@ -928,6 +928,14 @@ export interface OcxConfig {
    */
   codexClientCompaction?: boolean;
   /**
+   * Mask the Codex Desktop usage wall while staying signed in (#quota-mask). Requires the
+   * unauthenticated loopback listener: the injected `chatgpt_base_url` points Codex's
+   * account RPCs at that listener, which relays them to chatgpt.com and reports usage as
+   * allowed, so an exhausted ChatGPT plan stops blocking chats routed to other providers.
+   * Default off; inert on a client role or without the listener.
+   */
+  codexQuotaMask?: boolean;
+  /**
    * Label Codex shows for the injected `opencodex` provider. Defaults to `OpenCodex Proxy`.
    *
    * Presentation only. Routing is keyed on the provider id `opencodex` — the root
