@@ -8,6 +8,7 @@ export {
   dottedToolName,
   namespacedToolName,
   normalizeDeclaredToolName,
+  isCodeModeMcpDirectName,
   toolChoiceAliases,
   createToolChoiceResolver,
   toolChoiceCandidates,
