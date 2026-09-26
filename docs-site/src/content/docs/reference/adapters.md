@@ -572,3 +572,11 @@ or a permission grant. Unmarked clients retain their existing behavior. This
 repair runs before the separate provider `responsesSnapshotRepair` option and
 does not enable that broader lifecycle repair. Existing tool-search, custom-tool,
 function-completion and undeclared-tool handling keep their established order.
+
+### DeepSeek and Claude Code Artifact
+
+For the official DeepSeek Chat Completions endpoint, opencodex relaxes regex and
+`anyOf` constraints in Claude Code’s built-in `Artifact` tool schema to avoid
+schema-validation HTTP 400 errors. Strict mode is omitted for this tool. Fields
+defined only inside an `anyOf` are no longer constrained by that union; the tool
+must validate its inputs. Other tools and providers retain their existing behavior.

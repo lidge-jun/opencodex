@@ -273,8 +273,95 @@ describe("claude inbound translation", () => {
       output_config: { format: { type: "json_schema", schema } },
     });
 
-    expect(body.text).toEqual({ format: { type: "json_schema", name: "response", schema } });
-    expect(parseRequest(body).options.textFormat).toEqual({ type: "json_schema", name: "response", schema });
+    expect(body.text).toEqual({ format: { type: "json_schema", name: "response", schema, strict: true } });
+    expect(parseRequest(body).options.textFormat).toEqual({ type: "json_schema", name: "response", schema, strict: true });
+  });
+
+  test("an optional property drops the strict claim instead of rewriting required", () => {
+    const optional = {
+      type: "object",
+      properties: { answer: { type: "string" }, note: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+      output_config: { format: { type: "json_schema", schema: optional } },
+    });
+
+    // OpenAI strict mode 400s on a schema whose `required` omits any property; Anthropic allows
+    // it. Say strict: false rather than leave the destination's default to decide -- and leave
+    // `required` exactly as the caller wrote it.
+    expect(body.text).toEqual({ format: { type: "json_schema", name: "response", schema: optional, strict: false } });
+    expect((body.text as { format: { schema: { required: string[] } } }).format.schema.required).toEqual(["answer"]);
+    expect(parseRequest(body).options.textFormat?.strict).toBe(false);
+  });
+
+  test("an open object drops the strict claim even when every property is required", () => {
+    // `isAnthropicOutputSchema` normalizes a CLONE, so an object that never stated
+    // `additionalProperties: false` is forwarded verbatim and refused by strict mode however
+    // complete its `required` is.
+    const open = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+    };
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+      output_config: { format: { type: "json_schema", schema: open } },
+    });
+
+    expect(body.text).toEqual({ format: { type: "json_schema", name: "response", schema: open, strict: false } });
+    expect(parseRequest(body).options.textFormat?.strict).toBe(false);
+  });
+
+  test("allOf drops the strict claim; strict Structured Outputs does not support it", () => {
+    const composed = {
+      type: "object",
+      properties: {
+        answer: { allOf: [{ type: "string" }, { type: "string", minLength: 1 }] },
+      },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+      output_config: { format: { type: "json_schema", schema: composed } },
+    });
+
+    expect(body.text).toEqual({ format: { type: "json_schema", name: "response", schema: composed, strict: false } });
+    expect(parseRequest(body).options.textFormat?.strict).toBe(false);
+  });
+
+  test("an object with no required array drops the strict claim", () => {
+    // Strict mode requires `required` to be supplied, even for an empty property map.
+    const bare = { type: "object", properties: {}, additionalProperties: false };
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+      output_config: { format: { type: "json_schema", schema: bare } },
+    });
+
+    expect(parseRequest(body).options.textFormat?.strict).toBe(false);
+  });
+
+  test("a root union drops the strict claim; strict mode needs an object root", () => {
+    const union = { anyOf: [{ type: "object", properties: {}, required: [], additionalProperties: false }] };
+    const body = anthropicToResponsesBody({
+      model: "claude-sonnet-5",
+      max_tokens: 256,
+      messages: [{ role: "user", content: "Return JSON" }],
+      output_config: { format: { type: "json_schema", schema: union } },
+    });
+
+    expect(parseRequest(body).options.textFormat?.strict).toBe(false);
   });
 
   test("structured output rejects unsupported schemas and preserves root references", () => {
@@ -300,7 +387,7 @@ describe("claude inbound translation", () => {
 
     expect(invalid.text).toBeUndefined();
     expect(referenced.text).toEqual({
-      format: { type: "json_schema", name: "response", schema: refSchema },
+      format: { type: "json_schema", name: "response", schema: refSchema, strict: false },
     });
   });
 

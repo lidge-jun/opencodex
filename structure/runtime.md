@@ -314,7 +314,7 @@ diagnostics only for a confirmed candidate and never reads adjacent auth state.
 Unix install-probe cleanup refusals retain their fail-closed behavior and report a bounded
 diagnostic suffix: a fixed probe phase, allowlisted native error/signal, and bounded exit status.
 Metadata contents, launcher paths and raw child errors never enter that suffix. Diagnostic
-classification does not grant process ownership or change rollback/termination policy.
+classification does not grant process ownership or change rollback/termination policy. An explicit `codex-shim install` (`src/cli/dispatch.ts`) exits nonzero when installation is refused or the resulting shim is unhealthy, printing the diagnostic summary; an already-installed healthy shim succeeds.
 
 Codex CLI update inspection is split from mutation. `system codex-cli-update check` makes no
 package-registry request and reads bounded provenance evidence for the configured launcher candidate, npm ownership layout,

@@ -15,6 +15,7 @@
  */
 
 import {
+  cacheControlOf,
   collectImageRefs,
   sniffImageDimensions,
   TOTAL_IMAGE_BASE64_BUDGET,
@@ -75,11 +76,11 @@ function mediaTypeOf(ref: ImageBlockRef): string {
 }
 
 function textify(ref: ImageBlockRef, text: string): void {
-  ref.container[ref.index] = { type: "text", text };
+  ref.container[ref.index] = { type: "text", text, ...cacheControlOf(ref) };
 }
 
 function replaceImage(ref: ImageBlockRef, data: string, mediaType: string): void {
-  ref.container[ref.index] = { type: "image", source: { type: "base64", media_type: mediaType, data } };
+  ref.container[ref.index] = { type: "image", source: { type: "base64", media_type: mediaType, data }, ...cacheControlOf(ref) };
 }
 
 function initialPosition(newestFirstIndex: number, bias: number): number {

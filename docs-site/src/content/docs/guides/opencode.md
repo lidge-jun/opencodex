@@ -61,7 +61,7 @@ the metadata the proxy reports at `GET /api/models`:
 ```json
 "gpt-5.6-luna": {
   "name": "gpt-5.6-luna (native)",
-  "limit": { "context": 272000, "output": 32000 },
+  "limit": { "context": 272000, "output": 128000 },
   "attachment": true,
   "modalities": { "input": ["text", "image"], "output": ["text"] }
 }
@@ -185,11 +185,7 @@ Nothing to undo — no generated config file is written under `~/.opencodex`. Ru
 `limit.context` is written only when the catalog reports an authoritative context window; when it
 does not, the whole `limit` block is omitted and opencode keeps its own defaults.
 
-opencode's schema rejects a `limit` block carrying `context` without `output`, and the catalog has
-no authoritative per-model output field, so an `output` budget of `32000` is emitted alongside it,
-clamped down to the context window so a small-context model is never given `output > context`.
-That figure exists to satisfy the schema — it is not a claim about any specific model's true
-maximum.
+Output limits use the model’s known maximum from catalog or generated metadata. Only unknown limits fall back to `32000`. The output limit is always clamped to the context window, including known limits below `32000`.
 
 The `opencodex` provider block is regenerated on every launch, so per-model tweaks made inside it
 will not survive. Keep custom entries under a provider key of your own instead.

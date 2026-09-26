@@ -338,6 +338,9 @@ of a line does the first `</tool_call>` close it, so a body can still carry lite
 If the gateway also prefixes the structured call's JSON
 arguments with the same freeform body, the adapter keeps the JSON suffix only when the block body,
 prefix, and wrapper's `input` value all agree. Mismatched markup and arguments remain byte-exact.
+MiMo V2 Chat IDs of `mimo-v2` or `mimo-v2.*` can send `{}` for a freeform call and put
+its input in one bare block; hyphenated IDs (`mimo-v2-pro`, `mimo-v2-omni`) are excluded. With no other text, one call and an exact wire-tool match, the adapter restores `input` and removes the block.
+Prose, fences, ordinary functions, multiple calls/blocks, and nonempty arguments remain inert. A malformed `<parameter=` opener is stripped only at that block's start; streaming recovery stops after earlier answer text is released.
 Two immediately adjacent identical bare blocks, with optional trailing whitespace after the pair,
 are suppressed only when exactly one structured call matches their function name and carries their
 body as `input` or exact raw arguments, or when one doubled `input` can be reduced to that body.
@@ -593,3 +596,5 @@ Canonical Responses identity sanitation and narrowly scoped pre-output combo rec
 Upstream API-key usage follows the [physical-attempt account attribution contract](../dashboard-and-usage.md#upstream-key-account-attribution), independently of subscription quota observations.
 
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
+
+DeepSeek Artifact compatibility: `src/adapters/openai-chat/tool-schema.ts` omits schema `pattern` and `anyOf` constraints and strict mode for unnamespaced `Artifact` tools on `api.deepseek.com`. Surrounding properties and required fields remain; union-only nodes become unconstrained, so tool execution must validate inputs. Property names, literal defaults/examples, and caller schemas are preserved; other tools and hosts retain existing normalization. `tests/providers/deepseek-artifact-tool-schema.test.ts` checks the serialized request.

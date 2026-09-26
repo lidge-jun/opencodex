@@ -42,7 +42,7 @@ export interface ZcodeStoreProviderRule {
   providerName: string;
   config: {
     group: string;
-    access: { apiKey: string };
+    access: { type: "api-key"; apiKey: string };
     api: { type: string; baseUrl: string };
     personalModelIds: string[];
     modelOrder: string[];
@@ -113,7 +113,7 @@ export function buildZcodeStoreProviderRule(ctx: ExportContext): ZcodeStoreProvi
     providerName: ZCODE_STORE_PROVIDER_NAME,
     config: {
       group: ZCODE_STORE_PROVIDER_GROUP,
-      access: { apiKey: LOOPBACK_API_KEY_PLACEHOLDER },
+      access: { type: "api-key", apiKey: LOOPBACK_API_KEY_PLACEHOLDER },
       api: { type: ZCODE_STORE_API_TYPE, baseUrl: `${ctx.baseUrl.replace(/\/v1\/?$/, "")}/v1` },
       personalModelIds: ids,
       /*
