@@ -31,8 +31,6 @@
 
 import type { CompatibilityFunctionTool } from "./provider-compatibility";
 
-export type ZenFreeGateToolName = "shell" | "read";
-
 /** OpenCode's compatibility-only wording, reused verbatim. */
 export const ZEN_FREE_GATE_DECLARATION =
   "Do not call this tool. It exists only for API compatibility and must never be invoked.";
@@ -51,16 +49,3 @@ export const ZEN_FREE_GATE_TOOLS: readonly CompatibilityFunctionTool[] = [
     parameters: { type: "object", properties: {} },
   },
 ];
-
-/**
- * Which gate names are still missing from declared tool names. Matching is
- * exact lowercase, mirroring the gate: a capitalized `Shell` does not
- * satisfy it, so it is not counted as present (the appended lowercase twin
- * is documented noise next to a client-known name, and beats a refusal).
- */
-export function missingZenFreeGateTools(names: Iterable<string> | undefined): ZenFreeGateToolName[] {
-  const declared = new Set(names ?? []);
-  return ZEN_FREE_GATE_TOOLS
-    .filter(tool => !(tool.satisfiedBy ?? [tool.name]).some(name => declared.has(name)))
-    .map(tool => tool.name as ZenFreeGateToolName);
-}

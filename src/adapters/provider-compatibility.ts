@@ -50,6 +50,17 @@ function serializeFunctionTool(tool: CompatibilityFunctionTool, chat: boolean): 
   return chat ? { type: "function", function: declaration } : { type: "function", ...declaration };
 }
 
+/** Return required declarations not satisfied by any name already on the wire. */
+export function missingCompatibilityFunctionTools(
+  required: readonly CompatibilityFunctionTool[],
+  names: Iterable<string> | undefined,
+): readonly CompatibilityFunctionTool[] {
+  const declared = new Set(names ?? []);
+  return required.filter(tool =>
+    !(tool.satisfiedBy ?? [tool.name]).some(name => declared.has(name))
+  );
+}
+
 /** Apply provider-owned compatibility after the selected wire serializes its request. */
 export function transformProviderRequest(
   provider: OcxProviderConfig,
@@ -78,7 +89,7 @@ export function transformProviderRequest(
     const name = functionToolName(tool, chat);
     if (name) names.add(name);
   }
-  const missing = required.filter(tool => !(tool.satisfiedBy ?? [tool.name]).some(name => names.has(name)));
+  const missing = missingCompatibilityFunctionTools(required, names);
   if (missing.length === 0) return { ...request, headers };
 
   return {

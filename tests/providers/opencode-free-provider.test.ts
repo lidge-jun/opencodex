@@ -4,7 +4,10 @@ import { providerConfigSeed, deriveKeyLoginMap, deriveFeaturedProviderIds } from
 import { createOpenAIChatAdapter } from "../../src/adapters/openai-chat";
 import { createRegisteredAdapter } from "../../src/adapters/registry";
 import { buildOpenAIChatPassthroughRequest } from "../../src/adapters/openai-chat/passthrough";
-import { transformProviderRequest } from "../../src/adapters/provider-compatibility";
+import {
+  missingCompatibilityFunctionTools,
+  transformProviderRequest,
+} from "../../src/adapters/provider-compatibility";
 import {
   ZEN_FREE_SESSION_RE,
   ZEN_FREE_USER_AGENT,
@@ -12,7 +15,7 @@ import {
 } from "../../src/adapters/opencode-free-session";
 import {
   ZEN_FREE_GATE_DECLARATION,
-  missingZenFreeGateTools,
+  ZEN_FREE_GATE_TOOLS,
 } from "../../src/adapters/opencode-free-tools";
 import { MODEL_ADAPTER_OVERRIDE_ALLOWED } from "../../src/types/wire";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -415,14 +418,16 @@ describe("opencode-free provider", () => {
 
   describe("keyless gate declarations (shell/read pair)", () => {
     test("missing-pair detection mirrors the gateway: exact lowercase only", () => {
-      expect(missingZenFreeGateTools(undefined)).toEqual(["shell", "read"]);
-      expect(missingZenFreeGateTools([])).toEqual(["shell", "read"]);
-      expect(missingZenFreeGateTools(["shell"])).toEqual(["read"]);
-      expect(missingZenFreeGateTools(["bash", "read"])).toEqual([]);
-      expect(missingZenFreeGateTools(["shell", "read", "exec"])).toEqual([]);
+      const missing = (names?: string[]) =>
+        missingCompatibilityFunctionTools(ZEN_FREE_GATE_TOOLS, names).map(tool => tool.name);
+      expect(missing()).toEqual(["shell", "read"]);
+      expect(missing([])).toEqual(["shell", "read"]);
+      expect(missing(["shell"])).toEqual(["read"]);
+      expect(missing(["bash", "read"])).toEqual([]);
+      expect(missing(["shell", "read", "exec"])).toEqual([]);
       // Capitalized Claude-style names do not satisfy the gate.
-      expect(missingZenFreeGateTools(["Bash", "Read"])).toEqual(["shell", "read"]);
-      expect(missingZenFreeGateTools(["exec", "wait"])).toEqual(["shell", "read"]);
+      expect(missing(["Bash", "Read"])).toEqual(["shell", "read"]);
+      expect(missing(["exec", "wait"])).toEqual(["shell", "read"]);
     });
 
     async function chatToolNames(provider: OcxProviderConfig, request: OcxParsedRequest): Promise<(string | undefined)[]> {
