@@ -31,6 +31,8 @@ import {
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { formatErrorResponse, bridgeToResponsesSSE, buildResponseJSON } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
+import { adapterFailureFromEvent } from "../../bridge/internal";
+import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { jsonUtf8Bytes } from "../../lib/json-byte-size";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import {
@@ -498,6 +500,25 @@ export async function executeResponsesRunTurn(
         // Preflight holds only heartbeats and the first meaningful event. A first-event 429 can be
         // replayed transparently; after any output reaches the bridge, a later error stays terminal.
         eventSource = await preflightRunTurnFailover(eventSource);
+      }
+      if (!options.comboAttempt && logCtx.surface === "grok" && inboundWire === "responses"
+        && transportState.runTurnAdapter.name === "devin") {
+        const preflight = await preflightAdapterEvents(eventSource);
+        eventSource = preflight.stream;
+        // Grok treats a failed HTTP 200 stream as 500; preserve a refusal before output commits.
+        if (!preflight.replayUnsafe && preflight.error?.status === 429
+          && preflight.error.code !== SEND_BUDGET_EXHAUSTED_CODE) {
+          const { httpStatus, error } = adapterFailureFromEvent(preflight.error);
+          cancelResponseCompletion();
+          runTurnAbort.abort();
+          queue.close();
+          cleanupRunTurnAbort();
+          releaseSearchProbeLease();
+          return formatErrorResponse(httpStatus, error.type, error.message, {
+            code: error.code,
+            retryAfter: resolveClientRetryAfter({ status: httpStatus, message: error.message }),
+          });
+        }
       }
       if (options.comboAttempt) {
         const preflight = await preflightAdapterEvents(eventSource, classifyUndeclaredFirstTool);
