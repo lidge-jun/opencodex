@@ -6,6 +6,9 @@ import type { ResponsesEffects } from "./response-effects";
 import type { ResponsesSendBudget } from "./request-send-budget";
 import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
+import { createAdvisorRuntimePlan } from "../../advisor/runtime";
+import { buildAdvisorTool } from "../../advisor/synthetic-tool";
+import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
   planVideoBridge,
@@ -50,6 +53,7 @@ export async function executeResponsesSidecars(
     | "inboundWire"
     | "selectedForwardHeaders"
     | "translatorBudget"
+    | "toolBridgeMaps"
     | "rememberKiroDeliveredFinalAnswer"
     | "responseStateOptions"
   >,
@@ -133,6 +137,23 @@ export async function executeResponsesSidecars(
         "tool result requires a non-empty string call_id",
       );
     }
+  }
+
+  // Advisor sidecar plan (optional subsystem; null when disabled, unconfigured, or when this
+  // request IS an advisor loopback consultation — the recursion fence). The plan carries
+  // request-scoped state only; the preflight pass below may inject a marked developer message
+  // before the worker is dispatched. Registration seam: the core path sees only
+  // `parsed._advisorGuard`; src/advisor is imported nowhere else in src/server/responses.
+  const advisorPlan = options.advisorInternal === true
+    ? null
+    : createAdvisorRuntimePlan({
+      config,
+      workerIdentity: `${route.modelId} (provider ${route.providerName})`,
+      workerModelId: route.modelId,
+      abortSignal: options.abortSignal,
+    });
+  if (advisorPlan) {
+    await advisorPlan.preflightInject(parsed);
   }
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
@@ -484,6 +505,19 @@ export async function executeResponsesSidecars(
       });
     }
     return wsResponse;
+  }
+
+  // Advisor synthetic tool + stream guard: attach ONLY when this function is about to hand the
+  // request back to the normal translated exchange (no sidecar loop claimed the turn, not a
+  // run-turn adapter, not compaction). The web-search/image loops own their own event handling;
+  // run-turn adapters execute their own loop; both would leak the synthetic tool call they
+  // cannot intercept. Preflight (above) still applies to those paths — only the tool does not.
+  if (advisorPlan && !routedCompaction && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
+    parsed.context.tools = [...(parsed.context.tools ?? []).filter(t => !t.advisor), buildAdvisorTool()];
+    // The advisor tool joined AFTER prepare computed the bridge maps; recompute so the tool is
+    // declared (undeclared-tool guard, tool_choice mapping, schema repair) on this turn.
+    requestState.toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
+    advisorPlan.attachGuard(parsed);
   }
 
   return undefined;
