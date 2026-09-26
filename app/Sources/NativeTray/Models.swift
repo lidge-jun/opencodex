@@ -12,6 +12,8 @@ public struct NativeTraySnapshot: Decodable {
     public let models: [NativeTrayModel]
     public let chart: NativeTrayChart?
     public let providers: [NativeTrayProvider]
+    /// Set on the publish that reports a failed account switch.
+    public let switchFailed: Bool?
 
     public static func decode(_ data: Data) throws -> Self {
         let snapshot = try JSONDecoder().decode(Self.self, from: data)

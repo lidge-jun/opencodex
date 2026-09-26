@@ -193,7 +193,8 @@ fn parse_accounts(body: &Value) -> Option<Vec<Value>> {
 
 /// Mirrors what the server itself refuses or drains, and nothing more. The 98% hard lock exists
 /// only on the main Codex account and is reported by the roster's `mainAccountHardLock`; a paused
-/// account is refused by the switch route. Everything else stays switchable, exhausted or not.
+/// account and a Codex account whose validation is pending (`health.reason`) are refused by the
+/// switch route with 409. Everything else stays switchable, exhausted or not.
 fn switch_state(row: &Value, active: bool) -> (&'static str, Option<&'static str>) {
     if active {
         ("active", None)
@@ -201,6 +202,8 @@ fn switch_state(row: &Value, active: bool) -> (&'static str, Option<&'static str
         ("blocked", Some("mainHardLock"))
     } else if row["paused"].as_bool() == Some(true) {
         ("blocked", Some("paused"))
+    } else if row["health"]["reason"].as_str() == Some("validation_pending") {
+        ("blocked", Some("validationPending"))
     } else {
         ("available", None)
     }
@@ -324,7 +327,9 @@ mod tests {
             {"id":"pool-b","quota":{"weeklyPercent":99}},
             {"id":"pool-c","paused":true,"quota":{"weeklyPercent":1}},
             {"id":"pool-d","plan":"pro","quota":{"fiveHourPercent":100,"weeklyPercent":20}},
-            {"id":"pool-e","plan":"free","quota":{"weeklyPercent":100,"monthlyPercent":40}}]}))
+            {"id":"pool-e","plan":"free","quota":{"weeklyPercent":100,"monthlyPercent":40}},
+            {"id":"pool-f","quota":{"weeklyPercent":3},
+             "health":{"status":"warning","reason":"validation_pending"}}]}))
         .unwrap();
         let state = |i: usize| {
             (
@@ -347,6 +352,11 @@ mod tests {
         // The burst window counts on every plan; a monthly-only plan ignores its weekly reading.
         assert_eq!(state(4), ("pool-d", "available", None, true));
         assert_eq!(state(5), ("pool-e", "available", None, false));
+        // The switch route answers 409 while validation is pending, so the panel does not offer it.
+        assert_eq!(
+            state(6),
+            ("pool-f", "blocked", Some("validationPending"), false)
+        );
         // A main account whose lock is off or ready stays switchable.
         let ready = parse_accounts(&json!({"accounts":[{"id":"__main__","quota":{},
             "mainAccountHardLock":{"enabled":true,"state":"ready"}}]}))

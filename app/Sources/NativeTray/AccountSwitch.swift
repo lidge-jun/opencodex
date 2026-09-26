@@ -7,6 +7,14 @@ public enum NativeTraySwitch {
         guard provider.switchable == true, account.canSwitch, let accountId = account.accountId else { return nil }
         return (provider.id, accountId)
     }
+
+    /// Whether `snapshot` answers the switch pending on `pendingRow`: the host reported the failure,
+    /// or a finished refresh shows that row active. Unrelated errors or an in-flight refresh do not.
+    public static func settles(snapshot: NativeTraySnapshot, pendingRow: String) -> Bool {
+        if snapshot.switchFailed == true { return true }
+        return !snapshot.refreshing
+            && snapshot.providers.contains { $0.accounts.contains { $0.id == pendingRow && $0.active } }
+    }
 }
 
 /// An account row's first line: label, plan, the active check, and the "Use" action.
@@ -57,7 +65,7 @@ struct NativeTrayAccountHeader: View {
             }
             .font(.caption)
             if account.switchState == "blocked" {
-                Text(account.blockedReason == "mainHardLock" ? "Blocked by 98% protection" : "Paused")
+                Text(Self.blockedText(account.blockedReason))
                     .font(.caption2).foregroundStyle(.orange)
             }
         }
@@ -66,6 +74,14 @@ struct NativeTrayAccountHeader: View {
         .accessibilityElement(children: .combine)
         .accessibilityActions {
             if offersUse && !busy { Button("Use this account", action: onUse) }
+        }
+    }
+
+    static func blockedText(_ reason: String?) -> String {
+        switch reason {
+        case "mainHardLock": return "Blocked by 98% protection"
+        case "validationPending": return "Validation pending"
+        default: return "Paused"
         }
     }
 }

@@ -71,7 +71,8 @@ nothing. Quota bars there use the dashboard strip's severity thresholds (warn 70
 Account rows in the native panel carry the provider's raw `accountId`, a `switchState`
 (`active`, `available`, `blocked`), a `blockedReason` and an `exhausted` flag, projected in
 `desktop/src-tauri/src/native_tray_accounts.rs`. They mirror the runtime and add no rule: only a
-main Codex account whose `mainAccountHardLock.state` is `blocked` and a paused account are blocked,
+main Codex account whose `mainAccountHardLock.state` is `blocked`, a paused account and a Codex
+account whose `health.reason` is `validation_pending` (the route answers 409) are blocked,
 and `exhausted` follows `isCodexQuotaExhausted` (100% in a governing window or the burst window).
 The "Use" action (`app/Sources/NativeTray/AccountSwitch.swift`) appears on hover, keyboard focus
 and as an accessibility action; an exhausted account stays switchable with a warning.

@@ -226,6 +226,9 @@ fn report_switch_failure(app: &AppHandle, message: &str) {
         .clone();
     snapshot["refreshing"] = json!(false);
     snapshot["errors"] = json!([message]);
+    // Tells the panel this publish answers its switch, so the row spinner stops even when the
+    // failure arrives immediately.
+    snapshot["switchFailed"] = json!(true);
     publish(
         app,
         state.generation.load(Ordering::Acquire),

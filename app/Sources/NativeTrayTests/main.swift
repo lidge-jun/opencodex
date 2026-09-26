@@ -125,4 +125,14 @@ check(NativeTraySwitch.request(provider: openai, account: openai.accounts[3]) ==
 let legacy = switching.providers[1]
 check(legacy.switchable == nil && NativeTraySwitch.request(provider: legacy, account: legacy.accounts[0]) == nil,
       "Snapshots from older hosts decode and offer no switch")
+// A pending switch ends on the host's failure marker or a finished refresh showing the row active.
+check(NativeTraySwitch.settles(snapshot: switching, pendingRow: "pool-a:0"), "A finished refresh with the row active settles")
+check(!NativeTraySwitch.settles(snapshot: switching, pendingRow: "pool-b:0"), "Another row being active does not settle")
+let refreshingSwitch = try decode(["refreshing": true, "providers": [["id": "openai", "label": "OpenAI", "unavailable": false,
+    "switchable": true, "accounts": [switchRow("pool-b", ["accountId": "pool-b", "active": true, "switchState": "active"])]]]])
+check(!NativeTraySwitch.settles(snapshot: refreshingSwitch, pendingRow: "pool-b:0"), "An in-flight refresh does not settle")
+let unrelatedError = try decode(["errors": ["Usage unavailable"], "providers": []])
+check(!NativeTraySwitch.settles(snapshot: unrelatedError, pendingRow: "pool-b:0"), "An unrelated error does not settle")
+let failedSwitch = try decode(["errors": ["The runtime refused that account right now."], "switchFailed": true, "refreshing": false, "providers": []])
+check(NativeTraySwitch.settles(snapshot: failedSwitch, pendingRow: "pool-b:0"), "The host's failure marker settles at once")
 print("PASS: \(assertions) native tray contract/formatting assertions")
